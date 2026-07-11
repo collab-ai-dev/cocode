@@ -4,31 +4,20 @@
 //! and the `cancelRequest` handler that evicts pending entries
 //! without delivery.
 
-use coco_types::ApprovalResolveParams;
-use coco_types::CoreEvent;
-use coco_types::ElicitationResolveParams;
-use coco_types::TurnId;
-use coco_types::TurnStartParams;
-use coco_types::UserInputResolveParams;
+use coco_types::{
+    ApprovalResolveParams, CoreEvent, ElicitationResolveParams, TurnId, TurnStartParams,
+    UserInputResolveParams,
+};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
-use tracing::warn;
+use tracing::{info, warn};
 
-use super::ActiveTurnHandles;
-use super::ActiveTurnStartError;
-use super::ActiveTurnStartState;
-use super::HandlerContext;
-use super::HandlerResult;
-use super::ShortcutTurnState;
-use super::TurnHandoff;
-use super::runtime;
-use super::session;
-use super::session::forward_turn_events;
-use crate::sdk_server::outbound::OutboundMessage;
-use crate::sdk_server::outbound::send_session_event;
-use crate::sdk_server::pending_map::ResolveOutcome;
+use super::{
+    ActiveTurnHandles, ActiveTurnStartError, ActiveTurnStartState, HandlerContext, HandlerResult,
+    SdkServerState, ShortcutTurnState, TurnHandoff, runtime, session, session::forward_turn_events,
+};
+use crate::sdk_server::outbound::{OutboundMessage, send_session_event};
 
 /// `turn/start` — begin a single agent turn in the active session.
 ///
@@ -76,13 +65,27 @@ pub(super) async fn handle_turn_start(
     }
 
     let runner = ctx.state.turn_runner_snapshot().await;
-    let Some((turn_session_id, _session_source)) = ctx.active_session_resolution().await else {
+    let Some(session) = ctx.resolve_runtime().await else {
+        return active_turn_start_error(ActiveTurnStartError::NoActiveSession);
+    };
+    let Some(app_server) = ctx.app_server.clone() else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "turn/start requires AppServer callback routing".to_string(),
+            data: None,
+        };
+    };
+    let Some(turn_session_id) = ctx.active_session_id().await else {
         return active_turn_start_error(ActiveTurnStartError::NoActiveSession);
     };
 
     let notif_tx = ctx.notif_tx.clone();
     let state_for_turn = ctx.state.clone();
-    let turn_id = match ctx.state.start_active_turn_for_session(
+    let session_for_start = session.clone();
+    let turn_session_id_for_error = turn_session_id.clone();
+    let turn_id = match start_active_turn_for_runtime(
+        &session,
+        &ctx.state,
         turn_session_id,
         move |start: ActiveTurnStartState| {
             let handoff = TurnHandoff {
@@ -117,6 +120,7 @@ pub(super) async fn handle_turn_start(
                 inner_rx,
                 notif_tx,
                 forwarder_state,
+                session_for_start.clone(),
                 handoff.session_id.clone(),
             ));
 
@@ -126,11 +130,15 @@ pub(super) async fn handle_turn_start(
             // — clearing it in this task raced the forwarder and could wipe a
             // fast next turn's freshly-installed handles.
             let turn_id_for_task = start.turn_id.clone();
+            let session_for_task = session_for_start.clone();
+            let app_server_for_task = Arc::clone(&app_server);
             let inner_tx_for_error = inner_tx.clone();
             let cancel_token_for_task = start.cancel_token.clone();
             let turn_handle = tokio::spawn(async move {
                 let run_result = runner
                     .run_turn(
+                        session_for_task,
+                        app_server_for_task,
                         params,
                         turn_id_for_task.clone(),
                         handoff,
@@ -139,7 +147,12 @@ pub(super) async fn handle_turn_start(
                     )
                     .await;
                 if let Err(e) = run_result {
-                    warn!(turn_id = %turn_id_for_task, error = %e, "turn runner failed");
+                    warn!(
+                        session_id = %turn_session_id_for_error,
+                        turn_id = %turn_id_for_task,
+                        error = %e,
+                        "turn runner failed"
+                    );
                     let _ = inner_tx_for_error
                         .send(CoreEvent::Protocol(
                             coco_types::ServerNotification::TurnEnded(
@@ -260,7 +273,7 @@ async fn handle_turn_start_rename_shortcut(
     let name = match rename {
         coco_commands::ParsedRename::Explicit(name) => name,
         coco_commands::ParsedRename::Auto => {
-            let runtime = ctx.state.session_runtime_snapshot().await;
+            let runtime = ctx.resolve_runtime().await;
             let Some(runtime) = runtime else {
                 warn!("SDK rename auto-gen ignored: no active session runtime");
                 return HandlerResult::ok(coco_types::TurnStartResult { turn_id });
@@ -275,7 +288,22 @@ async fn handle_turn_start_rename_shortcut(
         }
     };
 
-    match session::handle_session_rename(coco_types::SessionRenameParams { name }, ctx).await {
+    let Some(session_id) = ctx.target_session_id.clone() else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "session rename requires an explicitly targeted session".to_string(),
+            data: None,
+        };
+    };
+    match session::handle_session_rename(
+        coco_types::SessionRenameParams {
+            target: coco_types::SessionTarget { session_id },
+            name,
+        },
+        ctx,
+    )
+    .await
+    {
         HandlerResult::Ok(_) => {}
         HandlerResult::Err { message, .. } => {
             warn!(error = %message, "SDK rename persist failed");
@@ -297,7 +325,7 @@ async fn handle_turn_start_memory_shortcut(
         Err(error) => return error,
     };
 
-    let runtime = ctx.state.session_runtime_snapshot().await;
+    let runtime = ctx.resolve_runtime().await;
     let Some(runtime) = runtime else {
         match shortcut {
             TurnStartMemoryShortcut::Dream => {
@@ -370,7 +398,7 @@ async fn handle_turn_start_btw_shortcut(
         Err(error) => return error,
     };
 
-    let response_text = match ctx.state.session_runtime_snapshot().await {
+    let response_text = match ctx.resolve_runtime().await {
         None => "(fork dispatcher not installed — /btw requires CLI bootstrap)".to_string(),
         Some(runtime) => {
             let cache = match runtime.last_cache_safe_params().await {
@@ -424,7 +452,7 @@ async fn handle_turn_start_goal_shortcut(
     request: coco_commands::GoalCommandRequest,
     ctx: &HandlerContext,
 ) -> Result<TurnStartGoalShortcut, HandlerResult> {
-    let runtime_handle = match ctx.state.session_runtime_snapshot().await {
+    let runtime_handle = match ctx.resolve_runtime().await {
         Some(runtime) => runtime,
         None => {
             return Err(HandlerResult::Err {
@@ -442,7 +470,7 @@ async fn handle_turn_start_goal_shortcut(
                 data: None,
             });
         };
-        if ctx.state.has_active_turn(&session_id) {
+        if runtime_handle.has_active_turn() {
             return Err(HandlerResult::Err {
                 code: coco_types::error_codes::INVALID_REQUEST,
                 message: "a turn is already running; call turn/interrupt first".into(),
@@ -543,7 +571,7 @@ async fn handle_turn_start_compact_shortcut(
     request: coco_commands::handlers::compact::CompactRequest,
     ctx: &HandlerContext,
 ) -> HandlerResult {
-    let runtime = match ctx.state.session_runtime_snapshot().await {
+    let runtime = match ctx.resolve_runtime().await {
         Some(runtime) => runtime,
         None => {
             return HandlerResult::Err {
@@ -556,10 +584,13 @@ async fn handle_turn_start_compact_shortcut(
 
     let notif_tx = ctx.notif_tx.clone();
     let state_for_turn = ctx.state.clone();
-    let Some((turn_session_id, _session_source)) = ctx.active_session_resolution().await else {
+    let runtime_for_start = runtime.clone();
+    let Some(turn_session_id) = ctx.active_session_id().await else {
         return active_turn_start_error(ActiveTurnStartError::NoActiveSession);
     };
-    let turn_id = match ctx.state.start_active_turn_for_session(
+    let turn_id = match start_active_turn_for_runtime(
+        &runtime,
+        &ctx.state,
         turn_session_id,
         move |start: ActiveTurnStartState| {
             let history = start.handoff.history;
@@ -569,17 +600,19 @@ async fn handle_turn_start_compact_shortcut(
                 inner_rx,
                 notif_tx,
                 forwarder_state,
+                runtime_for_start.clone(),
                 start.session_id.clone(),
             ));
 
             let turn_id_for_task = start.turn_id.clone();
             let turn_id_for_log = turn_id_for_task.clone();
             let cancel_token_for_task = start.cancel_token.clone();
+            let runtime_for_task = runtime_for_start.clone();
             let turn_handle = tokio::spawn(async move {
                 // The active-turn record is cleared by the forwarder as it
                 // forwards the terminal `TurnEnded`, not here.
                 run_manual_compact_shortcut(
-                    runtime,
+                    runtime_for_task,
                     history,
                     request,
                     turn_id_for_task.clone(),
@@ -602,6 +635,29 @@ async fn handle_turn_start_compact_shortcut(
     };
 
     HandlerResult::ok(coco_types::TurnStartResult { turn_id })
+}
+
+fn start_active_turn_for_runtime(
+    session: &crate::session_runtime::SessionHandle,
+    state: &SdkServerState,
+    session_id: coco_types::SessionId,
+    build: impl FnOnce(ActiveTurnStartState) -> ActiveTurnHandles,
+) -> Result<coco_types::TurnId, ActiveTurnStartError> {
+    let Some(handoff) = state.session_handoff_snapshot(&session_id) else {
+        return Err(ActiveTurnStartError::MissingHandoff);
+    };
+    let plan_mode_instructions = state.session_plan_mode_instructions(&session_id);
+    session
+        .start_active_turn(move |turn_id, cancel_token| {
+            build(ActiveTurnStartState {
+                session_id,
+                turn_id,
+                cancel_token,
+                handoff,
+                plan_mode_instructions,
+            })
+        })
+        .map_err(|()| ActiveTurnStartError::TurnAlreadyRunning)
 }
 
 async fn run_manual_compact_shortcut(
@@ -795,14 +851,32 @@ async fn emit_shortcut_turn_lifecycle(
 }
 
 async fn mint_shortcut_turn(ctx: &HandlerContext) -> Result<ShortcutTurnState, HandlerResult> {
+    let runtime = ctx
+        .resolve_runtime()
+        .await
+        .ok_or(ActiveTurnStartError::NoActiveSession)
+        .map_err(active_turn_start_error)?;
+    if runtime.has_active_turn() {
+        return Err(active_turn_start_error(
+            ActiveTurnStartError::TurnAlreadyRunning,
+        ));
+    }
     let session_id = ctx
         .active_session_id()
         .await
         .ok_or(ActiveTurnStartError::NoActiveSession)
         .map_err(active_turn_start_error)?;
-    ctx.state
-        .mint_shortcut_turn_for_session(session_id)
-        .map_err(active_turn_start_error)
+    let turn_id = ctx.state.next_turn_id(&session_id);
+    let handoff = ctx
+        .state
+        .session_handoff_snapshot(&session_id)
+        .ok_or(ActiveTurnStartError::MissingHandoff)
+        .map_err(active_turn_start_error)?;
+    Ok(ShortcutTurnState {
+        session_id,
+        turn_id,
+        history: handoff.history,
+    })
 }
 
 fn active_turn_start_error(error: ActiveTurnStartError) -> HandlerResult {
@@ -860,14 +934,15 @@ fn decode_session_status_text(result: HandlerResult) -> Result<String, HandlerRe
 /// expected to observe `cancel.is_cancelled()` at tool boundaries and
 /// emit a `turn/failed` notification before exiting.
 pub(super) async fn handle_turn_interrupt(ctx: &HandlerContext) -> HandlerResult {
-    let Some(session_id) = ctx.active_session_id().await else {
+    let Some(session) = ctx.resolve_runtime().await else {
         return HandlerResult::Err {
             code: coco_types::error_codes::INVALID_REQUEST,
             message: "no active session".into(),
             data: None,
         };
     };
-    match ctx.state.active_turn_cancel_token(&session_id) {
+    let session_id = session.session_id().clone();
+    match session.active_turn_cancel_token() {
         Some(token) => {
             info!(session_id = %session_id, "SdkServer: turn/interrupt");
             token.cancel();
@@ -901,13 +976,17 @@ pub(super) async fn handle_approval_resolve(
 ) -> HandlerResult {
     let request_id = params.request_id.clone();
     let decision = params.decision;
-    let outcome = ctx
-        .state
-        .resolve_pending_approval(&request_id, params)
-        .await;
-    handle_resolve_outcome(outcome, "approval", &request_id, |state| {
-        info!(request_id = %state, decision = ?decision, "SdkServer: approval/resolve");
-    })
+    match resolve_app_server_request(
+        ctx,
+        coco_app_server::ServerRequestReply::Approval(params),
+        "approval",
+    ) {
+        Ok(()) => {
+            info!(request_id = %request_id, decision = ?decision, "SdkServer: approval/resolve");
+            HandlerResult::ok_empty()
+        }
+        Err(error) => error,
+    }
 }
 
 /// `elicitation/resolve` — resolve a pending MCP elicitation request
@@ -930,18 +1009,17 @@ pub(super) async fn handle_elicitation_resolve(
     let request_id = params.request_id.clone();
     let mcp_server = params.mcp_server_name.clone();
     let approved = params.approved;
-    let outcome = ctx
-        .state
-        .resolve_pending_elicitation(&request_id, params)
-        .await;
-    handle_resolve_outcome(outcome, "elicitation", &request_id, |id| {
-        info!(
-            request_id = %id,
-            mcp_server = %mcp_server,
-            approved = approved,
-            "SdkServer: elicitation/resolve"
-        );
-    })
+    match resolve_app_server_request(
+        ctx,
+        coco_app_server::ServerRequestReply::Elicitation(params),
+        "elicitation",
+    ) {
+        Ok(()) => {
+            info!(request_id = %request_id, mcp_server = %mcp_server, approved, "SdkServer: elicitation/resolve");
+            HandlerResult::ok_empty()
+        }
+        Err(error) => error,
+    }
 }
 
 /// `input/resolveUserInput` — resolve a pending `input/requestUserInput`
@@ -951,13 +1029,17 @@ pub(super) async fn handle_user_input_resolve(
     ctx: &HandlerContext,
 ) -> HandlerResult {
     let request_id = params.request_id.clone();
-    let outcome = ctx
-        .state
-        .resolve_pending_user_input(&request_id, params)
-        .await;
-    handle_resolve_outcome(outcome, "user input", &request_id, |id| {
-        info!(request_id = %id, "SdkServer: input/resolveUserInput");
-    })
+    match resolve_app_server_request(
+        ctx,
+        coco_app_server::ServerRequestReply::UserInput(params),
+        "user input",
+    ) {
+        Ok(()) => {
+            info!(request_id = %request_id, "SdkServer: input/resolveUserInput");
+            HandlerResult::ok_empty()
+        }
+        Err(error) => error,
+    }
 }
 
 /// `control/cancelRequest` — cancel a previously-issued ServerRequest.
@@ -973,29 +1055,16 @@ pub(super) async fn handle_user_input_resolve(
 /// up) as a protocol error.
 pub(super) async fn handle_cancel_request(
     params: coco_types::CancelRequestParams,
-    ctx: &HandlerContext,
+    _ctx: &HandlerContext,
 ) -> HandlerResult {
-    let request_id = params.request_id;
-    let reason = params.reason.as_deref().unwrap_or("(no reason given)");
-    // Try every pending map; the id is unique across categories so at most
-    // one hits. Hook and MCP-route requests are no longer pending-tracked
-    // — they ride the synchronous JSON-RPC reply path on `pending_server_requests`
-    // and the outer dispatcher cancels via that path.
-    let cancelled_kind = ctx.state.cancel_pending_client_request(&request_id).await;
-    match cancelled_kind {
-        Some(kind) => info!(
-            request_id = %request_id,
-            reason = %reason,
-            kind = kind,
-            "SdkServer: control/cancelRequest"
+    HandlerResult::Err {
+        code: coco_types::error_codes::INVALID_REQUEST,
+        message: format!(
+            "control/cancelRequest {} requires AppServer connection routing",
+            params.request_id
         ),
-        None => info!(
-            request_id = %request_id,
-            reason = %reason,
-            "SdkServer: control/cancelRequest — no pending request matched (already resolved?)"
-        ),
+        data: None,
     }
-    HandlerResult::ok_empty()
 }
 
 /// Translate a `ResolveOutcome` into a `HandlerResult` with consistent
@@ -1005,32 +1074,36 @@ pub(super) async fn handle_cancel_request(
 /// message and the receiver-dropped warning. `on_delivered` emits the
 /// happy-path structured log at info level; it runs with the request id
 /// only when the payload was actually handed to a live receiver.
-fn handle_resolve_outcome(
-    outcome: ResolveOutcome,
+fn resolve_app_server_request(
+    ctx: &HandlerContext,
+    reply: coco_app_server::ServerRequestReply,
     kind: &str,
-    request_id: &str,
-    on_delivered: impl FnOnce(&str),
-) -> HandlerResult {
-    match outcome {
-        ResolveOutcome::Delivered => {
-            on_delivered(request_id);
-            HandlerResult::ok_empty()
-        }
-        ResolveOutcome::ReceiverDropped => {
-            // Agent-side awaiter has been dropped (e.g. the turn was
-            // cancelled mid-request). Still acknowledge so the client
-            // doesn't hang.
-            warn!(
-                request_id = %request_id,
-                kind = kind,
-                "resolve: agent receiver dropped before delivery"
-            );
-            HandlerResult::ok_empty()
-        }
-        ResolveOutcome::NotFound => HandlerResult::Err {
+) -> Result<(), HandlerResult> {
+    let request_id = reply.request_id().to_string();
+    let Some(app_server) = &ctx.app_server else {
+        return Err(HandlerResult::Err {
             code: coco_types::error_codes::INVALID_REQUEST,
-            message: format!("no pending {kind} with request_id {request_id}"),
+            message: format!("{kind} resolve requires AppServer routing"),
             data: None,
-        },
-    }
+        });
+    };
+    let Some(session_id) = &ctx.target_session_id else {
+        return Err(HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: format!("{kind} resolve requires an interactive target"),
+            data: None,
+        });
+    };
+    app_server
+        .resolve_server_request(session_id, reply)
+        .map(|_| ())
+        .map_err(|error| HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: format!("cannot resolve pending {kind} request {request_id}: {error}"),
+            data: Some(serde_json::json!({
+                "kind": "pending_request_mismatch",
+                "request_id": request_id,
+                "session_id": session_id,
+            })),
+        })
 }

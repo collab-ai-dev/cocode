@@ -1,25 +1,16 @@
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use coco_types::ClientRequest;
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
-use coco_types::ServerRequest;
-use coco_types::ServerRequestUserInputParams;
-use coco_types::SessionEnvelope;
-use coco_types::SessionId;
-use coco_types::SessionState;
-use coco_types::TurnId;
+use coco_types::{
+    ClientRequest, CoreEvent, ServerNotification, ServerRequest, ServerRequestUserInputParams,
+    SessionEnvelope, SessionId, SessionState, TurnId,
+};
 
 use super::*;
-use crate::AppServer;
-use crate::AttachSurfaceOptions;
-use crate::ServerRequestReply;
-use crate::SurfaceCapabilities;
-use crate::SurfaceCapability;
-use crate::SurfaceRole;
-use coco_types::SurfaceLifecycleEffect;
-use coco_types::SurfaceLifecycleEffectKind;
+use crate::{
+    AppServer, AttachSurfaceOptions, ServerRequestReply, SurfaceCapabilities, SurfaceCapability,
+    SurfaceRole,
+};
+use coco_types::{SurfaceLifecycleEffect, SurfaceLifecycleEffectKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TestHandle(&'static str);
@@ -193,6 +184,10 @@ fn local_adapter_registers_request_and_lifecycle_channels() {
     );
 
     let reply = ServerRequestReply::UserInput(coco_types::UserInputResolveParams {
+        target: coco_types::InteractiveTarget {
+            session_id: surface.session_id.clone(),
+            surface_id: surface.surface_id.clone(),
+        },
         request_id: request_delivery.request_id.as_display(),
         answer: "yes".to_string(),
     });

@@ -17,38 +17,28 @@
 
 use std::sync::Arc;
 
-use coco_inference::LanguageModel;
-use coco_inference::ModelRuntimeRegistry;
-use coco_inference::PrebuiltLanguageModelSlot;
-use coco_query::QueryEngine;
-use coco_query::QueryEngineConfig;
-use coco_query::QueryResult;
-use coco_query::SessionBootstrap;
-use coco_tool_runtime::ToolPermissionBridge;
-use coco_tool_runtime::ToolPermissionBridgeRef;
-use coco_tool_runtime::ToolPermissionDecision;
-use coco_tool_runtime::ToolPermissionRequest;
-use coco_tool_runtime::ToolPermissionResolution;
-use coco_tool_runtime::ToolRegistry;
-use coco_tools::AgentTool;
-use coco_tools::BashTool;
-use coco_tools::EditTool;
-use coco_tools::EnterPlanModeTool;
-use coco_tools::ExitPlanModeTool;
-use coco_tools::GlobTool;
-use coco_tools::GrepTool;
-use coco_tools::ReadTool;
-use coco_tools::WriteTool;
-use coco_types::ModelRole;
-use coco_types::PermissionMode;
-use coco_types::ToolAppState;
+use coco_inference::{LanguageModel, ModelRuntimeRegistry, PrebuiltLanguageModelSlot};
+use coco_query::{QueryEngine, QueryEngineConfig, QueryResult, SessionBootstrap};
+use coco_tool_runtime::{
+    ToolPermissionBridge, ToolPermissionBridgeRef, ToolPermissionDecision, ToolPermissionRequest,
+    ToolPermissionResolution, ToolRegistry,
+};
+use coco_tools::{
+    AgentTool, BashTool, EditTool, EnterPlanModeTool, ExitPlanModeTool, GlobTool, GrepTool,
+    ReadTool, WriteTool,
+};
+use coco_types::{ModelRole, PermissionMode, ToolAppState};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 #[allow(unused_imports)]
-pub use coco_test_harness::model::{
-    MockModelBuilder, MockResponse, MockToolEmission, ScriptedMock,
-};
+pub use coco_test_harness::model::MockModelBuilder;
+#[allow(unused_imports)]
+pub use coco_test_harness::model::MockResponse;
+#[allow(unused_imports)]
+pub use coco_test_harness::model::MockToolEmission;
+#[allow(unused_imports)]
+pub use coco_test_harness::model::ScriptedMock;
 
 // ─── AllowAllPermissionBridge ───
 

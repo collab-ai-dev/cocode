@@ -7,12 +7,10 @@
 
 use std::sync::Arc;
 
-use coco_app_server_transport::JsonRpcFrame;
 use tokio::sync::Mutex;
 use tracing::info;
 
-use super::HandlerContext;
-use super::HandlerResult;
+use super::{HandlerContext, HandlerResult};
 
 /// `mcp/status` — report MCP server connection status.
 ///
@@ -20,8 +18,18 @@ use super::HandlerResult;
 /// state for every registered server. Otherwise returns an empty list
 /// (persistence disabled).
 pub(super) async fn handle_mcp_status(ctx: &HandlerContext) -> HandlerResult {
+    let runtime = match ctx.resolve_runtime().await {
+        Some(runtime) => runtime,
+        None => {
+            return HandlerResult::Err {
+                code: coco_types::error_codes::INVALID_REQUEST,
+                message: "mcp/status requires a live targeted session".to_string(),
+                data: None,
+            };
+        }
+    };
     let manager = {
-        let Some(manager) = ctx.state.mcp_manager_snapshot().await else {
+        let Some(manager) = runtime.mcp_manager().await else {
             info!("SdkServer: mcp/status (no MCP manager wired, returning empty)");
             return HandlerResult::ok(coco_types::McpStatusResult {
                 mcp_servers: Vec::new(),
@@ -57,17 +65,18 @@ pub(super) async fn handle_mcp_status(ctx: &HandlerContext) -> HandlerResult {
         // v4.2: prefer the **registered** count (what the model can call) from
         // the last registration report; fall back to the advertised count when
         // no report exists (e.g. agent-inline connects bypassing the SDK path).
-        let report = ctx
-            .state
-            .mcp_registration_status_projection(name, advertised)
-            .await;
+        let registration = runtime.mcp_registration_status(name).await;
         statuses.push(coco_types::McpServerStatus {
             name: name.clone(),
             status,
-            tool_count: report.tool_count,
+            tool_count: registration
+                .as_ref()
+                .map_or(advertised, |report| report.tool_count),
             error,
-            skipped_tools: report.skipped_tools,
-            tombstoned_tools: report.tombstoned_tools,
+            skipped_tools: registration
+                .as_ref()
+                .map_or_else(Vec::new, |report| report.skipped_tools.clone()),
+            tombstoned_tools: registration.map_or_else(Vec::new, |report| report.tombstoned_tools),
         });
     }
     info!(server_count = statuses.len(), "SdkServer: mcp/status");
@@ -120,13 +129,11 @@ async fn register_server_tools(
     server_name: &str,
     schemas: Vec<coco_tool_runtime::McpToolSchema>,
 ) {
-    let Some(rt) = ctx.state.session_runtime_snapshot().await else {
+    let Some(rt) = ctx.resolve_runtime().await else {
         return;
     };
     let report = coco_tools::register_mcp_tools(rt.tools(), server_name, schemas);
-    ctx.state
-        .record_mcp_registration_report(server_name, report)
-        .await;
+    rt.record_mcp_registration_report(server_name, report).await;
 }
 
 /// Surface the per-server `mcp__<server>__authenticate` pseudo-tool for a
@@ -139,7 +146,7 @@ async fn register_server_auth_tool(
     transport: &str,
     url: Option<&str>,
 ) {
-    let Some(rt) = ctx.state.session_runtime_snapshot().await else {
+    let Some(rt) = ctx.resolve_runtime().await else {
         return;
     };
     coco_tools::register_mcp_auth_tool(rt.tools(), server_name, transport, url);
@@ -164,10 +171,10 @@ async fn needs_auth_descriptor(
 
 /// Deregister all tools for an MCP server from the shared `ToolRegistry`.
 async fn deregister_server_tools(ctx: &HandlerContext, server_name: &str) {
-    if let Some(rt) = ctx.state.session_runtime_snapshot().await {
+    if let Some(rt) = ctx.resolve_runtime().await {
         coco_tools::deregister_mcp_server(rt.tools(), server_name);
+        rt.clear_mcp_registration_status(server_name).await;
     }
-    ctx.state.clear_mcp_registration_report(server_name).await;
 }
 
 /// `SendElicitation` factory for SDK-driven MCP connects.
@@ -184,17 +191,24 @@ async fn build_send_elicitation(
     ctx: &HandlerContext,
     server_name: &str,
 ) -> coco_mcp::SendElicitation {
-    build_send_elicitation_for_state(ctx.state.clone(), server_name.to_string()).await
+    let Some(session) = ctx.resolve_runtime().await else {
+        return unavailable_elicitation_bridge();
+    };
+    let Some(app_server) = ctx.app_server.clone() else {
+        return unavailable_elicitation_bridge();
+    };
+    build_send_elicitation_for_session(session, app_server, server_name.to_string()).await
 }
 
-pub(crate) async fn build_send_elicitation_for_state(
-    state: Arc<super::SdkServerState>,
+pub(crate) async fn build_send_elicitation_for_session(
+    session: crate::session_runtime::SessionHandle,
+    app_server: Arc<coco_app_server::AppServer<crate::sdk_server::LocalAppSessionHandle>>,
     server_name: String,
 ) -> coco_mcp::SendElicitation {
-    use std::future::Future;
-    use std::pin::Pin;
+    use std::{future::Future, pin::Pin};
     let server_name_for_base = server_name.clone();
-    let base_state = state.clone();
+    let base_server = Arc::clone(&app_server);
+    let base_session_id = session.session_id().clone();
     let base: coco_mcp::SendElicitation = Box::new(
         move |_request_id,
               elicitation|
@@ -208,15 +222,15 @@ pub(crate) async fn build_send_elicitation_for_state(
                     > + Send,
             >,
         > {
-            let state = base_state.clone();
+            let app_server = Arc::clone(&base_server);
+            let session_id = base_session_id.clone();
             let server_name = server_name_for_base.clone();
             Box::pin(async move {
-                bridge_elicitation_to_sdk_client(&state, &server_name, elicitation).await
+                bridge_elicitation_to_sdk_client(&app_server, session_id, &server_name, elicitation)
+                    .await
             })
         },
     );
-    let session = state.session_runtime_snapshot().await;
-    let Some(session) = session else { return base };
     let registry = session.hook_registry();
     let factory = session.orchestration_ctx_factory();
     // Phase 7: pull the elicitation counter Arc so the wrapper holds
@@ -237,6 +251,16 @@ pub(crate) async fn build_send_elicitation_for_state(
     )
 }
 
+fn unavailable_elicitation_bridge() -> coco_mcp::SendElicitation {
+    Box::new(|_, _| {
+        Box::pin(async {
+            Err(coco_mcp::RmcpClientError::generic(
+                "elicitation requires a live targeted AppServer session",
+            ))
+        })
+    })
+}
+
 /// Bridge a single MCP-server-initiated elicitation to the SDK client.
 ///
 /// Allocates a fresh `request_id`, serializes the rmcp `Elicitation`
@@ -245,21 +269,11 @@ pub(crate) async fn build_send_elicitation_for_state(
 /// the rmcp [`coco_mcp::ElicitationResponse`] shape. The SDK client is
 /// the ultimate authority for MCP elicitations in SDK mode.
 async fn bridge_elicitation_to_sdk_client(
-    state: &Arc<super::SdkServerState>,
+    app_server: &Arc<coco_app_server::AppServer<crate::sdk_server::LocalAppSessionHandle>>,
+    session_id: coco_types::SessionId,
     server_name: &str,
     elicitation: impl serde::Serialize,
 ) -> std::result::Result<coco_mcp::ElicitationResponse, coco_mcp::RmcpClientError> {
-    // Grab the cached transport handle — must be present (the AppServer bridge
-    // publishes it at `SdkServer::run_app_server_connection` startup).
-    let transport = match state.sdk_transport_snapshot().await {
-        Some(t) => t,
-        None => {
-            return Err(coco_mcp::RmcpClientError::generic(
-                "elicitation bridge: SDK transport not initialized yet",
-            ));
-        }
-    };
-
     let request_id = uuid::Uuid::new_v4().to_string();
     let elicitation_json = serde_json::to_value(&elicitation).map_err(|e| {
         coco_mcp::RmcpClientError::generic(format!("serialize elicitation payload: {e}"))
@@ -269,24 +283,25 @@ async fn bridge_elicitation_to_sdk_client(
         mcp_server_name: server_name.to_string(),
         elicitation: elicitation_json,
     };
-    let params_json = serde_json::to_value(&params).map_err(|e| {
-        coco_mcp::RmcpClientError::generic(format!("serialize RequestElicitationParams: {e}"))
-    })?;
-
-    let reply = state
-        .send_server_request(&transport, "mcp/requestElicitation", params_json)
+    let reply = app_server
+        .route_server_request_with_reply(
+            session_id,
+            coco_app_server::SurfaceCapability::Interactive,
+            None,
+            coco_types::ServerRequest::RequestElicitation(params),
+        )
+        .map_err(|error| {
+            coco_mcp::RmcpClientError::generic(format!("route elicitation: {error:?}"))
+        })?
         .await
-        .map_err(|e| {
-            coco_mcp::RmcpClientError::generic(format!("send mcp/requestElicitation: {e}"))
-        })?;
+        .map_err(|_| coco_mcp::RmcpClientError::generic("elicitation reply channel closed"))?;
 
-    let resolved: coco_types::ElicitationResolveParams = match reply {
-        JsonRpcFrame::Success(success) => serde_json::from_value(success.result)
-            .map_err(|e| coco_mcp::RmcpClientError::generic(format!("parse SDK reply: {e}")))?,
-        JsonRpcFrame::Error(e) => {
+    let resolved = match reply {
+        coco_app_server::ServerRequestReply::Elicitation(resolved) => resolved,
+        coco_app_server::ServerRequestReply::Error(e) => {
             return Err(coco_mcp::RmcpClientError::generic(format!(
                 "SDK client returned error for mcp/requestElicitation: {} ({})",
-                e.error.message, e.error.code
+                e.message, e.code
             )));
         }
         other => {
@@ -319,8 +334,15 @@ async fn bridge_elicitation_to_sdk_client(
 async fn require_mcp_manager(
     ctx: &HandlerContext,
 ) -> Result<Arc<Mutex<coco_mcp::McpConnectionManager>>, HandlerResult> {
-    match ctx.state.mcp_manager_snapshot().await {
-        Some(m) => Ok(m),
+    let Some(runtime) = ctx.resolve_runtime().await else {
+        return Err(HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "MCP operation requires a live targeted session".into(),
+            data: None,
+        });
+    };
+    match runtime.mcp_manager().await {
+        Some(manager) => Ok(manager),
         None => Err(HandlerResult::Err {
             code: coco_types::error_codes::INVALID_REQUEST,
             message: "MCP manager not enabled on this server".into(),

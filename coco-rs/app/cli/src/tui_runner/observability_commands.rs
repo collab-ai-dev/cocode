@@ -145,7 +145,10 @@ pub(super) async fn run_tasks_command(
                 .await;
             match local_app_server_bridge
                 .client()
-                .task_list(local_app_server_bridge.handler())
+                .task_list(
+                    local_app_server_bridge.handler(),
+                    interactive_session(local_app_server_bridge),
+                )
                 .await
             {
                 Ok(result) => {
@@ -176,6 +179,7 @@ pub(super) async fn run_tasks_command(
                 .task_detail(
                     local_app_server_bridge.handler(),
                     coco_types::TaskDetailParams {
+                        target: session_target(local_app_server_bridge),
                         task_id: task_id.to_string(),
                     },
                 )
@@ -204,6 +208,7 @@ pub(super) async fn run_tasks_command(
                 .stop_task(
                     local_app_server_bridge.handler(),
                     coco_types::StopTaskParams {
+                        target: interactive_target(local_app_server_bridge),
                         task_id: task_id.to_string(),
                     },
                 )
@@ -250,6 +255,12 @@ pub(super) async fn toggle_fast_mode_through_app_server(
         .await;
     let bridge_session_id = runtime.current_typed_session_id().await;
     if let Err(error) =
+        local_app_server_bridge.ensure_interactive_surface(bridge_session_id.clone())
+    {
+        warn!(%error, "TUI ToggleFastMode could not attach interactive AppServer surface");
+        return;
+    }
+    if let Err(error) =
         local_app_server_bridge.start_passive_event_pump(bridge_session_id, event_tx.clone())
     {
         warn!(%error, "TUI ToggleFastMode could not attach local AppServer event pump");
@@ -262,7 +273,10 @@ pub(super) async fn toggle_fast_mode_through_app_server(
         .client()
         .config_apply_flags(
             local_app_server_bridge.handler(),
-            coco_types::ConfigApplyFlagsParams { settings },
+            coco_types::ConfigApplyFlagsParams {
+                target: interactive_target(local_app_server_bridge),
+                settings,
+            },
         )
         .await
     {
@@ -289,6 +303,12 @@ pub(super) async fn set_thinking_level_through_app_server(
         .await;
     let bridge_session_id = runtime.current_typed_session_id().await;
     if let Err(error) =
+        local_app_server_bridge.ensure_interactive_surface(bridge_session_id.clone())
+    {
+        warn!(%error, "TUI SetThinkingLevel could not attach interactive AppServer surface");
+        return;
+    }
+    if let Err(error) =
         local_app_server_bridge.start_passive_event_pump(bridge_session_id, event_tx.clone())
     {
         warn!(%error, "TUI SetThinkingLevel could not attach local AppServer event pump");
@@ -300,6 +320,7 @@ pub(super) async fn set_thinking_level_through_app_server(
         .set_thinking(
             local_app_server_bridge.handler(),
             coco_types::SetThinkingParams {
+                target: interactive_target(local_app_server_bridge),
                 thinking_level: Some(coco_types::ThinkingLevel {
                     effort,
                     budget_tokens: None,
@@ -385,5 +406,7 @@ use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use super::MAX_FILE_HISTORY_DIFF_CHARS;
-use super::emit_slash_text;
+use super::{
+    MAX_FILE_HISTORY_DIFF_CHARS, emit_slash_text, interactive_session, interactive_target,
+    session_target,
+};

@@ -1,59 +1,28 @@
-use std::future::Future;
-use std::sync::Arc;
-use std::sync::RwLock;
-use std::time::Instant;
+use std::{
+    future::Future,
+    sync::{Arc, RwLock},
+    time::Instant,
+};
 
-use coco_error::ErrorExt;
-use coco_error::Location;
-use coco_error::StatusCode;
-use coco_error::stack_trace_debug;
-use coco_types::ApprovalResolveParams;
-use coco_types::ElicitationResolveParams;
-use coco_types::RequestId;
-use coco_types::ServerRequest;
-use coco_types::SessionEnvelope;
-use coco_types::SessionId;
-use coco_types::SurfaceId;
-use coco_types::SurfaceLifecycleEffect;
-use coco_types::SurfaceLifecycleEffectKind;
-use coco_types::TurnId;
-use coco_types::UserInputResolveParams;
-use snafu::ResultExt;
-use snafu::Snafu;
+use coco_error::{ErrorExt, Location, StatusCode, stack_trace_debug};
+use coco_types::{
+    ApprovalResolveParams, ElicitationResolveParams, InteractiveTarget, RequestId, ServerRequest,
+    SessionEnvelope, SessionId, SurfaceId, SurfaceLifecycleEffect, SurfaceLifecycleEffectKind,
+    TurnId, UserInputResolveParams,
+};
+use snafu::{ResultExt, Snafu};
 
-use crate::ArchiveSessionOutcome;
-use crate::AttachError;
-use crate::AttachSurfaceOptions;
-use crate::CloseCompletion;
-use crate::CloseStart;
-use crate::CompleteServerRequestError;
-use crate::ConnectionKey;
-use crate::DetachSurfaceOutcome;
-use crate::DisconnectOutcome;
-use crate::LifecycleRouteOutcome;
-use crate::LiveSessionRegistry;
-use crate::LoadCompletion;
-use crate::LoadStart;
-use crate::OutboundSender;
-use crate::PendingServerRequest;
-use crate::PendingServerRequestReplay;
-use crate::ReplaceStart;
-use crate::ReplaceSurfaceOutcome;
-use crate::RouteOutcome;
-use crate::RoutingState;
-use crate::ServerRequestRouteError;
-use crate::ServerRequestRouteOutcome;
-use crate::ServerRequestSender;
-use crate::SessionActivityTracker;
-use crate::SessionSurfaceCounts;
-use crate::SubscribeReplay;
-use crate::SurfaceCapability;
-use crate::SurfaceLifecycleSender;
-use crate::SurfaceLimits;
-use crate::registry::CloseState;
-use crate::registry::ClosingState;
-use crate::registry::RegistryError;
-use crate::registry::SessionSlot;
+use crate::{
+    ArchiveSessionOutcome, AttachError, AttachSurfaceOptions, CloseCompletion, CloseStart,
+    CompleteServerRequestError, ConnectionKey, DetachSurfaceOutcome, DisconnectOutcome,
+    LifecycleRouteOutcome, LiveSessionRegistry, LoadCompletion, LoadStart, OutboundSender,
+    PendingServerRequest, PendingServerRequestReplay, ReplaceStart, ReplaceSurfaceOutcome,
+    RouteOutcome, RoutingState, ServerRequestRouteError, ServerRequestRouteOutcome,
+    ServerRequestSender, SessionActivityTracker, SessionSurfaceCounts, SubscribeReplay,
+    SurfaceAttachment, SurfaceCapability, SurfaceLifecycleSender, SurfaceLimits, SurfaceRole,
+    SurfaceState,
+    registry::{CloseState, ClosingState, RegistryError, SessionSlot},
+};
 
 /// App-server state holder for registry + routing lock ordering.
 ///
@@ -64,6 +33,9 @@ pub struct AppServer<H> {
     registry: LiveSessionRegistry<H>,
     routing: RwLock<RoutingState>,
     activity: SessionActivityTracker,
+    server_request_waiters: std::sync::Mutex<
+        std::collections::HashMap<RequestId, tokio::sync::oneshot::Sender<ServerRequestReply>>,
+    >,
 }
 
 impl<H: Clone> AppServer<H> {
@@ -87,11 +59,128 @@ impl<H: Clone> AppServer<H> {
                 surface_limits,
             )),
             activity: SessionActivityTracker::default(),
+            server_request_waiters: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
     pub fn registry(&self) -> &LiveSessionRegistry<H> {
         &self.registry
+    }
+
+    /// Resolve one explicitly targeted interactive capability while holding
+    /// the registry/routing locks in their canonical order. The returned
+    /// handle is opaque to AppServer and remains subject to its own draining
+    /// state after this short validation section ends.
+    pub fn validate_interactive_target(
+        &self,
+        connection: ConnectionKey,
+        target: &InteractiveTarget,
+    ) -> Result<ValidatedInteractiveSession<H>, AppServerError> {
+        let sessions = self
+            .registry
+            .sessions
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let routing = self
+            .routing
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let attachment = routing
+            .surface_attachment(&target.surface_id)
+            .ok_or_else(|| {
+                CallingSurfaceNotAttachedSnafu {
+                    surface_id: target.surface_id.clone(),
+                }
+                .build()
+            })?;
+        if attachment.connection != connection {
+            return CallingSurfaceWrongConnectionSnafu {
+                surface_id: target.surface_id.clone(),
+            }
+            .fail();
+        }
+        if attachment.state != SurfaceState::Attached || attachment.role != SurfaceRole::Interactive
+        {
+            return CallingSurfaceNotInteractiveSnafu {
+                surface_id: target.surface_id.clone(),
+            }
+            .fail();
+        }
+        if attachment.session_id != target.session_id {
+            return CallingSurfaceWrongSessionSnafu {
+                surface_id: target.surface_id.clone(),
+                expected_session_id: target.session_id.clone(),
+                actual_session_id: attachment.session_id.clone(),
+            }
+            .fail();
+        }
+        let handle = match sessions.get(&target.session_id) {
+            Some(SessionSlot::Live(handle)) => handle.clone(),
+            Some(SessionSlot::Loading(_)) => {
+                return TargetSessionNotLiveSnafu {
+                    session_id: target.session_id.clone(),
+                    state: "loading",
+                }
+                .fail();
+            }
+            Some(SessionSlot::Closing(_)) => {
+                return TargetSessionNotLiveSnafu {
+                    session_id: target.session_id.clone(),
+                    state: "closing",
+                }
+                .fail();
+            }
+            None => {
+                return TargetSessionNotLiveSnafu {
+                    session_id: target.session_id.clone(),
+                    state: "missing",
+                }
+                .fail();
+            }
+        };
+        Ok(ValidatedInteractiveSession {
+            handle,
+            attachment: attachment.clone(),
+        })
+    }
+
+    pub fn validate_orphan_archive_target(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<H, AppServerError> {
+        let sessions = self
+            .registry
+            .sessions
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let routing = self
+            .routing
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if routing.interactive_owner(session_id).is_some() {
+            return InteractiveOwnerConflictSnafu {
+                session_id: session_id.clone(),
+            }
+            .fail();
+        }
+        match sessions.get(session_id) {
+            Some(SessionSlot::Live(handle)) => Ok(handle.clone()),
+            Some(SessionSlot::Loading(_)) => TargetSessionNotLiveSnafu {
+                session_id: session_id.clone(),
+                state: "loading",
+            }
+            .fail(),
+            Some(SessionSlot::Closing(_)) => TargetSessionNotLiveSnafu {
+                session_id: session_id.clone(),
+                state: "closing",
+            }
+            .fail(),
+            None => TargetSessionNotLiveSnafu {
+                session_id: session_id.clone(),
+                state: "missing",
+            }
+            .fail(),
+        }
     }
 
     pub fn routing(&self) -> &RwLock<RoutingState> {
@@ -175,9 +264,94 @@ impl<H: Clone> AppServer<H> {
         let routing_outcome = routing
             .replace_calling_surface(calling_surface, new_session_id.clone())
             .expect("calling surface was validated under the routing lock");
+        self.cancel_server_request_waiters(&routing_outcome.cancelled_requests);
         let lifecycle_effects = replace_lifecycle_effects(&routing_outcome);
         self.activity.touch(new_session_id.clone());
 
+        Ok(AppReplaceCommit {
+            old_handle,
+            old_close_completion,
+            routing_outcome,
+            lifecycle_effects,
+        })
+    }
+
+    /// Atomically repoint a source interactive surface to an already-live,
+    /// orphaned destination and move the source session into `Closing`.
+    pub fn commit_replace_to_live_for_surface(
+        &self,
+        old_session_id: &SessionId,
+        new_session_id: &SessionId,
+        calling_surface: &SurfaceId,
+    ) -> Result<AppReplaceCommit<H>, AppServerError> {
+        let mut sessions = self
+            .registry
+            .sessions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let old_handle = match sessions.get(old_session_id) {
+            Some(SessionSlot::Live(handle)) => handle.clone(),
+            _ => {
+                return crate::registry::OldNotReadySnafu {
+                    session_id: old_session_id.clone(),
+                }
+                .fail()
+                .context(RegistrySnafu);
+            }
+        };
+        if !matches!(sessions.get(new_session_id), Some(SessionSlot::Live(_))) {
+            return crate::registry::SlotConflictSnafu {
+                session_id: new_session_id.clone(),
+                expected: "Live",
+            }
+            .fail()
+            .context(RegistrySnafu);
+        }
+
+        let mut routing = self
+            .routing
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(actual_session_id) = routing.surface_session(calling_surface).cloned() else {
+            return CallingSurfaceNotAttachedSnafu {
+                surface_id: calling_surface.clone(),
+            }
+            .fail();
+        };
+        if &actual_session_id != old_session_id {
+            return CallingSurfaceWrongSessionSnafu {
+                surface_id: calling_surface.clone(),
+                expected_session_id: old_session_id.clone(),
+                actual_session_id,
+            }
+            .fail();
+        }
+        if routing.interactive_owner(new_session_id).is_some() {
+            return InteractiveOwnerConflictSnafu {
+                session_id: new_session_id.clone(),
+            }
+            .fail();
+        }
+
+        let old_close = CloseState::new();
+        let old_close_completion = old_close.completion();
+        sessions.insert(
+            old_session_id.clone(),
+            SessionSlot::Closing(ClosingState {
+                handle: old_handle.clone(),
+                close: old_close,
+            }),
+        );
+        #[expect(
+            clippy::expect_used,
+            reason = "calling surface validated under the routing lock above"
+        )]
+        let routing_outcome = routing
+            .replace_calling_surface(calling_surface, new_session_id.clone())
+            .expect("calling surface was validated under the routing lock");
+        self.cancel_server_request_waiters(&routing_outcome.cancelled_requests);
+        let lifecycle_effects = replace_lifecycle_effects(&routing_outcome);
+        self.activity.touch(new_session_id.clone());
         Ok(AppReplaceCommit {
             old_handle,
             old_close_completion,
@@ -212,6 +386,7 @@ impl<H: Clone> AppServer<H> {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let routing_outcome = routing.archive_session(session_id);
+        self.cancel_server_request_waiters(&routing_outcome.cancelled_requests);
         let lifecycle_effects = archive_lifecycle_effects(session_id, &routing_outcome);
         let _ = close_sender.send(true);
         sessions.remove(session_id);
@@ -279,6 +454,7 @@ impl<H: Clone> AppServer<H> {
             }),
         );
         let archive_outcome = routing.archive_session(old_session_id);
+        self.cancel_server_request_waiters(&archive_outcome.cancelled_requests);
         let lifecycle_effects =
             replaced_lifecycle_effects(old_session_id, new_session_id, &archive_outcome);
         self.activity.touch(new_session_id.clone());
@@ -303,6 +479,15 @@ impl<H: Clone> AppServer<H> {
         let pending = routing
             .complete_server_request(&request_id, session_id)
             .map_err(AppServerError::from)?;
+        drop(routing);
+        if let Some(waiter) = self
+            .server_request_waiters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&request_id)
+        {
+            let _ = waiter.send(reply.clone());
+        }
         Ok(ResolvedServerRequest { pending, reply })
     }
 
@@ -318,7 +503,33 @@ impl<H: Clone> AppServer<H> {
         let pending = routing
             .complete_server_request_by_id(request_id)
             .map_err(AppServerError::from)?;
+        drop(routing);
+        if let Some(waiter) = self
+            .server_request_waiters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(request_id)
+        {
+            let _ = waiter.send(reply.clone());
+        }
         Ok(ResolvedServerRequest { pending, reply })
+    }
+
+    pub fn cancel_server_request_for_connection(
+        &self,
+        connection: ConnectionKey,
+        request_id: &RequestId,
+    ) -> Result<PendingServerRequest, AppServerError> {
+        let mut routing = self
+            .routing
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let pending = routing
+            .cancel_server_request_for_connection(request_id, connection)
+            .map_err(AppServerError::from)?;
+        drop(routing);
+        self.cancel_server_request_waiters(std::slice::from_ref(request_id));
+        Ok(pending)
     }
 
     pub fn connect_with_request_and_lifecycle_senders(
@@ -411,6 +622,7 @@ impl<H: Clone> AppServer<H> {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let session_ids = routing.connection_session_ids(connection);
         let outcome = routing.disconnect(connection);
+        self.cancel_server_request_waiters(&outcome.cancelled_requests);
         drop(routing);
         for session_id in session_ids {
             self.activity.touch(session_id);
@@ -429,6 +641,7 @@ impl<H: Clone> AppServer<H> {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let session_id = routing.surface_session(surface_id).cloned();
         let outcome = routing.detach_surface_for_connection(connection, surface_id);
+        self.cancel_server_request_waiters(&outcome.cancelled_requests);
         drop(routing);
         if outcome.detached_surface.is_some()
             && let Some(session_id) = session_id
@@ -472,16 +685,6 @@ impl<H: Clone> AppServer<H> {
         summaries
     }
 
-    pub fn sole_interactive_session_for_connection(
-        &self,
-        connection: ConnectionKey,
-    ) -> Option<SessionId> {
-        self.routing
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .sole_interactive_session_for_connection(connection)
-    }
-
     pub fn route_server_request(
         &self,
         session_id: SessionId,
@@ -493,6 +696,39 @@ impl<H: Clone> AppServer<H> {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .route_server_request(session_id, capability, turn_id, request)
+    }
+
+    pub fn route_server_request_with_reply(
+        &self,
+        session_id: SessionId,
+        capability: SurfaceCapability,
+        turn_id: Option<TurnId>,
+        request: ServerRequest,
+    ) -> Result<tokio::sync::oneshot::Receiver<ServerRequestReply>, ServerRequestRouteError> {
+        let mut routing = self
+            .routing
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let outcome = routing.route_server_request(session_id, capability, turn_id, request)?;
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.server_request_waiters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(outcome.pending.request_id, sender);
+        Ok(receiver)
+    }
+
+    fn cancel_server_request_waiters(&self, request_ids: &[RequestId]) {
+        if request_ids.is_empty() {
+            return;
+        }
+        let mut waiters = self
+            .server_request_waiters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for request_id in request_ids {
+            waiters.remove(request_id);
+        }
     }
 
     pub fn pending_server_request_replays_for_surface(
@@ -514,6 +750,12 @@ impl<H: Clone> AppServer<H> {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .route_lifecycle_effects(effects)
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidatedInteractiveSession<H> {
+    pub handle: H,
+    pub attachment: SurfaceAttachment,
 }
 
 impl<H> AppServer<H>
@@ -634,6 +876,73 @@ where
             }
             CloseStart::Closing { completion, .. } => Ok(AppCloseStart::Closing(completion)),
         }
+    }
+
+    pub fn spawn_close_orphan<C, Fut>(
+        self: &Arc<Self>,
+        session_id: SessionId,
+        close: C,
+    ) -> Result<AppCloseStart, AppServerError>
+    where
+        C: FnOnce(H) -> Fut + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let (handle, completion) = {
+            let mut sessions = self
+                .registry
+                .sessions
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let routing = self
+                .routing
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if routing.interactive_owner(&session_id).is_some() {
+                return InteractiveOwnerConflictSnafu { session_id }.fail();
+            }
+            let handle = match sessions.remove(&session_id) {
+                Some(SessionSlot::Live(handle)) => handle,
+                Some(slot) => {
+                    sessions.insert(session_id.clone(), slot);
+                    return TargetSessionNotLiveSnafu {
+                        session_id: session_id.clone(),
+                        state: "not_live",
+                    }
+                    .fail();
+                }
+                None => {
+                    return TargetSessionNotLiveSnafu {
+                        session_id: session_id.clone(),
+                        state: "missing",
+                    }
+                    .fail();
+                }
+            };
+            let close_state = CloseState::new();
+            let completion = close_state.completion();
+            sessions.insert(
+                session_id.clone(),
+                SessionSlot::Closing(ClosingState {
+                    handle: handle.clone(),
+                    close: close_state,
+                }),
+            );
+            (handle, completion)
+        };
+
+        let server = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut guard = OwnerGuard::new(
+                Arc::clone(&server),
+                OwnerGuardAction::Close(session_id.clone()),
+            );
+            close(handle).await;
+            if let Ok(commit) = server.complete_close_and_archive_surfaces(&session_id) {
+                server.route_lifecycle_effects(commit.lifecycle_effects);
+            }
+            guard.disarm();
+        });
+        Ok(AppCloseStart::Started { completion })
     }
 
     pub fn spawn_replace<F, Close, CloseFut>(
@@ -1042,6 +1351,31 @@ pub enum AppServerError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("calling surface belongs to another connection: {surface_id}"))]
+    CallingSurfaceWrongConnection {
+        surface_id: SurfaceId,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("calling surface is not an attached interactive surface: {surface_id}"))]
+    CallingSurfaceNotInteractive {
+        surface_id: SurfaceId,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("session already has an interactive owner: {session_id}"))]
+    InteractiveOwnerConflict {
+        session_id: SessionId,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("target session is not live ({state}): {session_id}"))]
+    TargetSessionNotLive {
+        session_id: SessionId,
+        state: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("server request was not found: {request_id:?}"))]
     ServerRequestNotFound {
         request_id: RequestId,
@@ -1058,17 +1392,28 @@ pub enum AppServerError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("server request belongs to another connection: {request_id:?}"))]
+    ServerRequestWrongConnection {
+        request_id: RequestId,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 impl ErrorExt for AppServerError {
     fn status_code(&self) -> StatusCode {
         match self {
             Self::Registry { source, .. } => source.status_code(),
-            Self::CallingSurfaceNotAttached { .. } | Self::CallingSurfaceWrongSession { .. } => {
+            Self::CallingSurfaceNotAttached { .. }
+            | Self::CallingSurfaceWrongSession { .. }
+            | Self::CallingSurfaceWrongConnection { .. }
+            | Self::CallingSurfaceNotInteractive { .. }
+            | Self::InteractiveOwnerConflict { .. } => StatusCode::InvalidArguments,
+            Self::TargetSessionNotLive { .. } => StatusCode::Cancelled,
+            Self::ServerRequestNotFound { .. } => StatusCode::FileNotFound,
+            Self::ServerRequestWrongSession { .. } | Self::ServerRequestWrongConnection { .. } => {
                 StatusCode::InvalidArguments
             }
-            Self::ServerRequestNotFound { .. } => StatusCode::FileNotFound,
-            Self::ServerRequestWrongSession { .. } => StatusCode::InvalidArguments,
         }
     }
 
@@ -1093,6 +1438,9 @@ impl From<CompleteServerRequestError> for AppServerError {
                 actual_session_id,
             }
             .build(),
+            CompleteServerRequestError::WrongConnection { request_id } => {
+                ServerRequestWrongConnectionSnafu { request_id }.build()
+            }
         }
     }
 }

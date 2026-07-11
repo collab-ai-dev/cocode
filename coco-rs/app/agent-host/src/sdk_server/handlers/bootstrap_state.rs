@@ -1,7 +1,10 @@
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use tokio::sync::RwLock;
 
@@ -11,7 +14,6 @@ use super::InitializeBootstrap;
 pub(super) struct BootstrapState {
     initialize_bootstrap: RwLock<Option<Arc<dyn InitializeBootstrap>>>,
     startup_cwd: RwLock<Option<PathBuf>>,
-    agent_progress_summaries_enabled: AtomicBool,
     bypass_permissions_available: AtomicBool,
 }
 
@@ -44,15 +46,6 @@ impl BootstrapState {
             return Some(bootstrap.cwd().await);
         }
         self.startup_cwd.read().await.clone()
-    }
-
-    pub(super) fn enable_agent_progress_summaries(&self) {
-        self.agent_progress_summaries_enabled
-            .store(true, Ordering::SeqCst);
-    }
-
-    pub(super) fn agent_progress_summaries_enabled(&self) -> bool {
-        self.agent_progress_summaries_enabled.load(Ordering::SeqCst)
     }
 
     pub(super) fn set_bypass_permissions_available(&self, available: bool) {

@@ -28,7 +28,10 @@ pub(super) async fn dispatch_context(
         .await;
     match local_app_server_bridge
         .client()
-        .context_usage(local_app_server_bridge.handler())
+        .context_usage(
+            local_app_server_bridge.handler(),
+            session_target(local_app_server_bridge),
+        )
         .await
     {
         Ok(result) => {
@@ -178,7 +181,7 @@ pub(super) async fn handle_rewind(
     rewound_turn: i32,
     event_tx: &mpsc::Sender<CoreEvent>,
     session: &crate::session_runtime::SessionHandle,
-    local_app_server_bridge: &coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &mut coco_agent_host::sdk_server::AppServerLocalBridge,
 ) {
     let runtime = session;
     use coco_tui::state::RestoreType;
@@ -216,11 +219,17 @@ pub(super) async fn handle_rewind(
         local_app_server_bridge
             .install_session_runtime(session.clone())
             .await;
+        let session_id = runtime.current_typed_session_id().await;
+        if let Err(error) = local_app_server_bridge.ensure_interactive_surface(session_id) {
+            tracing::warn!(%error, "rewind could not attach interactive AppServer surface");
+            return;
+        }
         match local_app_server_bridge
             .client()
             .rewind_files(
                 local_app_server_bridge.handler(),
                 coco_types::RewindFilesParams {
+                    target: interactive_target(local_app_server_bridge),
                     user_message_id: message_id.to_string(),
                     dry_run: false,
                 },
@@ -513,7 +522,15 @@ pub(super) fn spawn_auto_title_task(
             return;
         }
         let _ = client
-            .session_rename(&handler, coco_types::SessionRenameParams { name })
+            .session_rename(
+                &handler,
+                coco_types::SessionRenameParams {
+                    target: coco_types::SessionTarget {
+                        session_id: session_id.clone(),
+                    },
+                    name,
+                },
+            )
             .await;
     });
 }

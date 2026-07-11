@@ -12,7 +12,7 @@ use coco_types::SessionId;
 use coco_types::ThinkingLevel;
 use tempfile::TempDir;
 
-use super::SessionRuntime;
+use super::SessionHandle;
 use super::SessionRuntimeBootstrap;
 use super::SessionRuntimeBootstrapSource;
 use super::SessionRuntimeFactory;
@@ -21,15 +21,11 @@ use super::resolve_model_selection_from_runtime_config;
 use super::thinking_level_for_effort_from;
 use crate::AgentHostOptions;
 
-async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
+async fn build_runtime(home: &TempDir) -> SessionHandle {
     build_runtime_with_main(home, "anthropic", "claude-opus-4-7").await
 }
 
-async fn build_runtime_with_main(
-    home: &TempDir,
-    provider: &str,
-    model_id: &str,
-) -> Arc<SessionRuntime> {
+async fn build_runtime_with_main(home: &TempDir, provider: &str, model_id: &str) -> SessionHandle {
     try_build_runtime_with_main(home, provider, model_id, None)
         .await
         .expect("build SessionRuntime")
@@ -40,7 +36,7 @@ async fn try_build_runtime_with_main(
     provider: &str,
     model_id: &str,
     session_id_override: Option<SessionId>,
-) -> anyhow::Result<Arc<SessionRuntime>> {
+) -> anyhow::Result<SessionHandle> {
     let settings = SettingsWithSource {
         merged: Settings {
             models: coco_config::ModelSelectionSettings {
@@ -98,10 +94,7 @@ async fn try_build_runtime_with_main(
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         is_non_interactive: false,
     });
-    factory
-        .build(session_id_override)
-        .await
-        .map(|handle| handle.runtime().clone())
+    factory.build(session_id_override).await
 }
 
 #[tokio::test]

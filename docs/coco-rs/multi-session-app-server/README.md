@@ -1,6 +1,6 @@
 # Multi-Session AppServer
 
-Status: active design, reviewed against the production tree on 2026-07-11.
+Status: implemented and release-validated on 2026-07-11.
 
 This directory is the single source of truth for coco-rs multi-session
 AppServer architecture. It replaces the former
@@ -10,9 +10,9 @@ and unimplemented proposals, so neither was reliable as a current design.
 
 ## Executive decision
 
-The project should continue the multi-session AppServer work. The product goal
-is valuable and the existing crate split is worth keeping, but the end-to-end
-goal is not complete.
+The breaking multi-session AppServer refactor is implemented across protocol,
+server, clients, host lifecycle, and session runtime ownership. The existing
+crate split remains intact.
 
 The server already has useful multi-session infrastructure:
 
@@ -24,22 +24,12 @@ The server already has useful multi-session infrastructure:
 - separate server, remote client, transport, application host, and runtime
   crates with the intended dependency direction.
 
-The remaining correctness boundary is more fundamental than an optimization:
-
-- session-scoped requests do not carry an explicit target;
-- a connection with multiple interactive surfaces cannot select one;
-- initialize inputs, outbound writers, and request correlation do not yet have
-  a complete per-connection owner;
-- production turn execution can use the last process-installed runtime rather
-  than the runtime selected by the request;
-- MCP, file history, and reload ownership still contain process-singleton
-  paths;
-- closing-session resume does not implement the documented wait-and-reopen
-  behavior.
-
-Until those items are fixed and covered by end-to-end tests, the SDK process
-may store several live sessions but must not be described as safely executing
-them concurrently.
+Session commands now carry typed targets, accepted connections own immutable
+profiles and callback correlation, and every interactive handler receives the
+`SessionHandle` selected by AppServer validation. MCP, history, reload,
+sandbox, hooks, approvals, active turns, and file rewind are session-owned.
+Closing resume waits and retries, replacement is explicit and atomic, and
+orphan archive has a dedicated authority type.
 
 ## Documents
 
@@ -61,21 +51,21 @@ defines only the cross-cutting session ownership, routing, and host boundaries.
 | Area | Status | Decision |
 |---|---|---|
 | Crate boundaries | Landed | Keep |
-| Registry and lifecycle owner tasks | Landed with a closing-resume gap | Fix gap; keep model |
+| Registry and lifecycle owner tasks | Landed | Keep model |
 | Event envelope, sequence, replay, fan-out | Landed | Keep |
 | Surface routing and passive observation | Landed | Keep |
 | Per-session cwd/config fold | Landed | Keep |
 | Project catalog/config cache | Landed | Keep; describe honestly |
-| One connection controlling several sessions | Not functional | Add explicit request targets |
-| Multiple initialized connections | Not isolated | Add one handler and `ConnectionProfile` per accepted connection |
-| Concurrent turn/runtime isolation | Not functional | Resolve runtime from the registry for every request |
-| Session-scoped MCP/file history/reload | Partial | Move behind the selected session handle |
-| SDK process session slots | Migration residue, still functional | Preserve each feature while relocating ownership; remove only redundant slots |
+| One connection controlling several sessions | Landed | Explicit `InteractiveTarget` authority |
+| Multiple initialized connections | Landed | One immutable `ConnectionProfile` per connection |
+| Concurrent turn/runtime isolation | Landed | Registry-selected `SessionHandle` on every turn/control |
+| Session-scoped MCP/file history/reload | Landed | Owned below `SessionHandle` |
+| SDK process session slots | Reduced to keyed projections | No runtime-selection authority |
 | Whole-runtime actor | Not implemented and not required | Reject as a v1 prerequisite |
 | `ProjectHeavyServices` | Not implemented and poorly named | Reject; add capability-named services only when needed |
 | Web/Desktop/IM product adapters | Deferred | Keep outside v1 and outside AppServer core |
 
-## Amendments (2026-07-11 verification pass)
+## Landed amendments (2026-07-11)
 
 An independent line-level verification of this directory against the
 production tree confirmed every finding in [review.md](review.md) and added
@@ -107,3 +97,25 @@ Multi-session is complete only when tests prove that two independently
 targeted sessions can run concurrently with different cwd, configuration,
 tools, MCP state, histories, controls, events, and shutdown lifecycles without
 cross-session reads or writes. Slot count alone is not completion.
+
+## Final validation (2026-07-11)
+
+The breaking refactor meets the completion rule. Final validation covered the
+entire workspace and the production AppServer path:
+
+- `just quick-check` passed, including all seam checks and
+  `cargo clippy --workspace --all-features --tests` with zero warnings;
+- `cargo nextest run --workspace --no-fail-fast` passed all 13,606 executed
+  tests; four tests were skipped by their existing test configuration;
+- the host integration suite passed six production-handler scenarios covering
+  multi-session authority, cross-connection rejection, orphan lifecycle, and
+  event/replay identity;
+- focused agent-host, app-server, app-server-client, and types tests passed
+  309, 89, 34, and 300 tests respectively;
+- `git diff --check` and the removed-architecture symbol audit passed.
+
+The full validation pass exposed one final TUI/local-bridge defect: queue
+turns, fast-mode changes, thinking-level changes, and file rewind could build
+an interactive target before attaching the local bridge surface. Those paths
+now explicitly attach the selected session before dispatch. All 88 TUI runner
+tests and the full workspace suite passed after the fix.

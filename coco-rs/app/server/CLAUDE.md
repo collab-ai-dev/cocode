@@ -126,10 +126,9 @@ the production routing/facade/adapter files below the workspace line limit.
 - Keep `SurfaceAttachment` and `interactive_owners` in sync with those maps.
 - Passive surfaces can share a session; a second interactive surface returns
   `InteractiveOwnerConflict` with owner metadata. Takeover is not implemented.
-- `sole_interactive_session_for_connection` returns a session id only when the
-  connection has exactly one attached interactive surface. It deliberately
-  returns `None` for zero or multiple interactive surfaces so higher layers do
-  not recreate a per-connection active-session default.
+- Session commands carry an explicit typed target. Validate that target against
+  the connection, surface role, session attachment, and live registry entry;
+  never derive a command target from a connection-level active-session default.
 - `subscribe` must read the retention ring and attach the surface in one
   `RoutingState` mutation so replay-to-live has no gap.
 - Only durable `SessionEnvelope`s enter the ring. Ephemeral envelopes are

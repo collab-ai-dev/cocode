@@ -27,6 +27,7 @@ from coco_sdk.generated.protocol import (
     ElicitationResolveRequest,
     HookCallbackMatcher,
     InitializeRequest,
+    InteractiveTarget,
     KeepAliveRequest,
     McpConnectionStatus,
     McpReconnectRequest,
@@ -50,7 +51,10 @@ from coco_sdk.generated.protocol import (
     SessionReadRequest,
     SessionReadResult,
     SessionResumeRequest,
+    SessionResumeResult,
     SessionStartRequest,
+    SessionStartResult,
+    SessionTarget,
     SetModelRequest,
     SetPermissionModeRequest,
     SetThinkingRequest,
@@ -216,6 +220,8 @@ class CocoClient:
         self._tool_registry: dict[str, "ToolDefinition"] = {}
         self._router: MessageRouter | None = None
         self._started = False
+        self._session_id: str | None = None
+        self._surface_id: str | None = None
 
         if tools:
             for tool_def in tools:
@@ -256,8 +262,8 @@ class CocoClient:
             self._router.start()
 
             sdk_mcp_servers = await self._send_initialize()
-            await self._wait_for_sdk_mcp_servers(sdk_mcp_servers)
             await self._send_session_start()
+            await self._wait_for_sdk_mcp_servers(sdk_mcp_servers)
             await self._send_turn_start(self._initial_prompt)
             self._started = True
         except BaseException:
@@ -352,11 +358,17 @@ class CocoClient:
             append_system_prompt=self._append_system_prompt,
         )
         request = SessionStartRequest(params=params)
-        await self._request(request)
+        result = SessionStartResult.model_validate(await self._request(request))
+        if result.surface_id is None:
+            raise RuntimeError("session/start did not attach an interactive surface")
+        self._session_id = result.session_id
+        self._surface_id = result.surface_id
 
     async def _send_turn_start(self, prompt: str) -> None:
         request = TurnStartRequest(
-            params=TurnStartRequest.TurnStartRequestParams(prompt=prompt)
+            params=TurnStartRequest.TurnStartRequestParams(
+                target=self._interactive_target(), prompt=prompt
+            )
         )
         await self._request(request)
 
@@ -400,7 +412,9 @@ class CocoClient:
     async def send(self, text: str) -> AsyncIterator[ServerNotification]:
         """Send a follow-up message and yield events from the new turn."""
         request = TurnStartRequest(
-            params=TurnStartRequest.TurnStartRequestParams(prompt=text)
+            params=TurnStartRequest.TurnStartRequestParams(
+                target=self._interactive_target(), prompt=text
+            )
         )
         await self._start_turn_with_retry(request)
         async for event in self.events():
@@ -451,6 +465,7 @@ class CocoClient:
         (``user``/``project``/``local``/``session``).
         """
         params = ApprovalResolveRequest.ApprovalResolveRequestParams(
+            target=self._interactive_target(),
             request_id=request_id,
             decision=decision,
             feedback=feedback,
@@ -464,6 +479,7 @@ class CocoClient:
         """Respond to a user-input request (AskUserQuestion)."""
         request = UserInputResolveRequest(
             params=UserInputResolveRequest.UserInputResolveRequestParams(
+                target=self._interactive_target(),
                 request_id=request_id,
                 answer=answer,
             )
@@ -480,6 +496,7 @@ class CocoClient:
         """Resolve an MCP elicitation form (e.g. OAuth credentials)."""
         request = ElicitationResolveRequest(
             params=ElicitationResolveRequest.ElicitationResolveRequestParams(
+                target=self._interactive_target(),
                 request_id=request_id,
                 mcp_server_name=mcp_server_name,
                 approved=approved,
@@ -491,14 +508,18 @@ class CocoClient:
     async def interrupt(self) -> None:
         """Interrupt the current turn."""
         request = TurnInterruptRequest(
-            params=TurnInterruptRequest.TurnInterruptRequestParams()
+            params=TurnInterruptRequest.TurnInterruptRequestParams(
+                **self._interactive_target().model_dump()
+            )
         )
         await self._notify(request)
 
     async def set_models_main(self, models_main: str | ModelSpec) -> None:
         """Change the main model for subsequent turns."""
         request = SetModelRequest(
-            params=SetModelRequest.SetModelRequestParams(model=str(models_main))
+            params=SetModelRequest.SetModelRequestParams(
+                target=self._interactive_target(), model=str(models_main)
+            )
         )
         await self._notify(request)
 
@@ -507,7 +528,9 @@ class CocoClient:
         if isinstance(mode, str):
             mode = PermissionMode(mode)
         request = SetPermissionModeRequest(
-            params=SetPermissionModeRequest.SetPermissionModeRequestParams(mode=mode)
+            params=SetPermissionModeRequest.SetPermissionModeRequestParams(
+                target=self._interactive_target(), mode=mode
+            )
         )
         await self._notify(request)
 
@@ -518,21 +541,27 @@ class CocoClient:
         :func:`coco_sdk.types.thinking` to build the level.
         """
         request = SetThinkingRequest(
-            params=SetThinkingRequest.SetThinkingRequestParams(thinking_level=level)
+            params=SetThinkingRequest.SetThinkingRequestParams(
+                target=self._interactive_target(), thinking_level=level
+            )
         )
         await self._notify(request)
 
     async def stop_task(self, task_id: str) -> None:
         """Stop a running background task."""
         request = StopTaskRequest(
-            params=StopTaskRequest.StopTaskRequestParams(task_id=task_id)
+            params=StopTaskRequest.StopTaskRequestParams(
+                target=self._interactive_target(), task_id=task_id
+            )
         )
         await self._notify(request)
 
     async def update_env(self, env: dict[str, str]) -> None:
         """Update environment variables exposed to tool execution."""
         request = UpdateEnvRequest(
-            params=UpdateEnvRequest.UpdateEnvRequestParams(env=env)
+            params=UpdateEnvRequest.UpdateEnvRequestParams(
+                target=self._interactive_target(), env=env
+            )
         )
         await self._notify(request)
 
@@ -546,6 +575,7 @@ class CocoClient:
         """
         request = RewindFilesRequest(
             params=RewindFilesRequest.RewindFilesRequestParams(
+                target=self._interactive_target(),
                 user_message_id=user_message_id,
                 dry_run=dry_run,
             )
@@ -596,7 +626,9 @@ class CocoClient:
     async def read_session(self, session_id: str) -> SessionReadResult:
         """Read a session's items by ID without resuming (typed response)."""
         request = SessionReadRequest(
-            params=SessionReadRequest.SessionReadRequestParams(session_id=session_id)
+            params=SessionReadRequest.SessionReadRequestParams(
+                target=SessionTarget(session_id=session_id)
+            )
         )
         raw = await self._send_and_await_response(request)
         return SessionReadResult.model_validate(raw)
@@ -605,7 +637,7 @@ class CocoClient:
         """Archive a session."""
         request = SessionArchiveRequest(
             params=SessionArchiveRequest.SessionArchiveRequestParams(
-                session_id=session_id
+                target=self._archive_target(session_id)
             )
         )
         await self._notify(request)
@@ -614,10 +646,14 @@ class CocoClient:
         """Resume an existing session by ID and yield events."""
         request = SessionResumeRequest(
             params=SessionResumeRequest.SessionResumeRequestParams(
-                session_id=session_id,
+                target=SessionTarget(session_id=session_id),
             )
         )
-        await self._request(request)
+        result = SessionResumeResult.model_validate(await self._request(request))
+        if result.surface_id is None:
+            raise RuntimeError("session/resume did not attach an interactive surface")
+        self._session_id = result.session.session_id
+        self._surface_id = result.surface_id
         async for event in self.events():
             yield event
 
@@ -625,7 +661,11 @@ class CocoClient:
 
     async def read_config(self) -> ConfigReadResult:
         """Read the merged effective configuration (typed response)."""
-        request = ConfigReadRequest(params=ConfigReadRequest.ConfigReadRequestParams())
+        request = ConfigReadRequest(
+            params=ConfigReadRequest.ConfigReadRequestParams(
+                target={"session": self._session_target()}
+            )
+        )
         raw = await self._send_and_await_response(request)
         return ConfigReadResult.model_validate(raw)
 
@@ -635,7 +675,7 @@ class CocoClient:
         """Write a single configuration value."""
         request = ConfigWriteRequest(
             params=ConfigWriteRequest.ConfigWriteRequestParams(
-                key=key, value=value, scope=scope
+                key=key, value=value, target=self._config_write_target(scope)
             )
         )
         await self._notify(request)
@@ -644,7 +684,7 @@ class CocoClient:
         """Apply runtime feature-flag settings."""
         request = ConfigApplyFlagsRequest(
             params=ConfigApplyFlagsRequest.ConfigApplyFlagsRequestParams(
-                settings=settings
+                target=self._interactive_target(), settings=settings
             )
         )
         await self._notify(request)
@@ -653,7 +693,11 @@ class CocoClient:
 
     async def mcp_status(self) -> McpStatusResult:
         """Query the connection status of every MCP server (typed response)."""
-        request = McpStatusRequest(params=McpStatusRequest.McpStatusRequestParams())
+        request = McpStatusRequest(
+            params=McpStatusRequest.McpStatusRequestParams(
+                **self._session_target().model_dump()
+            )
+        )
         raw = await self._send_and_await_response(request)
         return McpStatusResult.model_validate(raw)
 
@@ -670,7 +714,9 @@ class CocoClient:
             for name, cfg in servers.items()
         }
         request = McpSetServersRequest(
-            params=McpSetServersRequest.McpSetServersRequestParams(servers=wire_servers)
+            params=McpSetServersRequest.McpSetServersRequestParams(
+                target=self._interactive_target(), servers=wire_servers
+            )
         )
         raw = await self._send_and_await_response(request)
         return McpSetServersResult.model_validate(raw)
@@ -683,7 +729,7 @@ class CocoClient:
         """
         request = McpReconnectRequest(
             params=McpReconnectRequest.McpReconnectRequestParams(
-                server_name=server_name
+                target=self._interactive_target(), server_name=server_name
             )
         )
         await self._send_and_await_response(request)
@@ -695,7 +741,9 @@ class CocoClient:
         """
         request = McpToggleRequest(
             params=McpToggleRequest.McpToggleRequestParams(
-                server_name=server_name, enabled=enabled
+                target=self._interactive_target(),
+                server_name=server_name,
+                enabled=enabled,
             )
         )
         await self._send_and_await_response(request)
@@ -703,7 +751,9 @@ class CocoClient:
     async def plugin_reload(self) -> PluginReloadResult:
         """Reload plugin definitions from disk (typed response)."""
         request = PluginReloadRequest(
-            params=PluginReloadRequest.PluginReloadRequestParams()
+            params=PluginReloadRequest.PluginReloadRequestParams(
+                **self._interactive_target().model_dump()
+            )
         )
         raw = await self._send_and_await_response(request)
         return PluginReloadResult.model_validate(raw)
@@ -711,7 +761,9 @@ class CocoClient:
     async def context_usage(self) -> ContextUsageResult:
         """Return the current context-window breakdown (typed response)."""
         request = ContextUsageRequest(
-            params=ContextUsageRequest.ContextUsageRequestParams()
+            params=ContextUsageRequest.ContextUsageRequestParams(
+                **self._session_target().model_dump()
+            )
         )
         raw = await self._send_and_await_response(request)
         return ContextUsageResult.model_validate(raw)
@@ -788,6 +840,31 @@ class CocoClient:
             )
             self._router.start()
         return self._router
+
+    def _session_target(self) -> SessionTarget:
+        if self._session_id is None:
+            raise RuntimeError("no active session target")
+        return SessionTarget(session_id=self._session_id)
+
+    def _interactive_target(self) -> InteractiveTarget:
+        if self._session_id is None or self._surface_id is None:
+            raise RuntimeError("no active interactive session target")
+        return InteractiveTarget(
+            session_id=self._session_id,
+            surface_id=self._surface_id,
+        )
+
+    def _archive_target(self, session_id: str) -> dict[str, Any]:
+        if session_id == self._session_id and self._surface_id is not None:
+            return {"interactive": self._interactive_target()}
+        return {"orphaned": SessionTarget(session_id=session_id)}
+
+    def _config_write_target(self, scope: str | None) -> Any:
+        if scope is None or scope == "user":
+            return "user"
+        if scope in {"project", "local"}:
+            return {scope: self._interactive_target()}
+        raise ValueError("config scope must be one of: user, project, local")
 
     async def _request(self, request: Any) -> dict[str, Any]:
         return await self._require_router().request(request)

@@ -1,16 +1,17 @@
-use std::sync::Arc;
-use std::time::Duration;
-use std::time::Instant;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use coco_app_server::AppServer;
 use coco_types::SessionId;
-use futures::StreamExt;
-use futures::stream::FuturesUnordered;
+use futures::{StreamExt, stream::FuturesUnordered};
 use tokio::task::JoinHandle;
 
-use super::app_server_bridge::LocalAppSessionHandle;
-use super::handlers::SdkServerState;
-use super::session_lifecycle::close_local_app_server_session;
+use super::{
+    app_server_bridge::LocalAppSessionHandle, handlers::SdkServerState,
+    session_lifecycle::close_local_app_server_session,
+};
 
 /// Spawn the optional event-driven idle-session auto-archive supervisor.
 ///
@@ -38,10 +39,12 @@ pub fn spawn_idle_session_sweep(
 
             for summary in &live {
                 let session_id = &summary.session_id;
-                let command_queue = app_server
+                let runtime = app_server
                     .registry()
                     .get(session_id)
-                    .and_then(|handle| handle.runtime().cloned())
+                    .and_then(|handle| handle.runtime().cloned());
+                let command_queue = runtime
+                    .as_ref()
                     .map(|runtime| runtime.command_queue().clone());
                 if let Some(queue) = &command_queue {
                     queue_changes.push(queue.subscribe_changes());
@@ -52,7 +55,9 @@ pub fn spawn_idle_session_sweep(
                     None => false,
                 };
                 if summary.surface_counts.attached != 0
-                    || state.has_active_turn(session_id)
+                    || runtime
+                        .as_ref()
+                        .is_some_and(crate::session_runtime::SessionHandle::has_active_turn)
                     || queued
                 {
                     continue;
@@ -127,15 +132,19 @@ async fn idle_session_is_due(
     else {
         return false;
     };
-    if summary.surface_counts.attached != 0 || state.has_active_turn(session_id) {
+    let runtime = app_server
+        .registry()
+        .get(session_id)
+        .and_then(|handle| handle.runtime().cloned());
+    if summary.surface_counts.attached != 0
+        || runtime
+            .as_ref()
+            .is_some_and(crate::session_runtime::SessionHandle::has_active_turn)
+    {
         return false;
     }
 
-    let command_queue = app_server
-        .registry()
-        .get(session_id)
-        .and_then(|handle| handle.runtime().cloned())
-        .map(|runtime| runtime.command_queue().clone());
+    let command_queue = runtime.map(|runtime| runtime.command_queue().clone());
     if let Some(queue) = &command_queue
         && !queue.is_empty().await
     {

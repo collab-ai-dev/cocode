@@ -18,6 +18,7 @@ pub(super) struct ActiveTurnCancel {
         coco_agent_host::sdk_server::LocalAppSessionHandle,
     >,
     pub(super) handler: coco_agent_host::sdk_server::AppServerSdkHandler,
+    pub(super) target: coco_types::InteractiveTarget,
 }
 
 /// Always-fires completion signaller for spawned turn tasks.
@@ -111,8 +112,12 @@ pub(super) async fn drain_active_turn(
 ) {
     let state = { slot.lock().await.take() };
     if let Some(s) = state {
-        let ActiveTurnCancel { client, handler } = &s.cancel;
-        if let Err(error) = client.turn_interrupt(handler).await {
+        let ActiveTurnCancel {
+            client,
+            handler,
+            target,
+        } = &s.cancel;
+        if let Err(error) = client.turn_interrupt(handler, target.clone()).await {
             tracing::warn!(%error, "drain_active_turn: AppServer turn/interrupt failed");
         }
         match mode {
@@ -224,6 +229,7 @@ pub(super) async fn run_local_app_server_shortcut_turn(
         }
     };
     let params = coco_types::TurnStartParams {
+        target: interactive_target(local_app_server_bridge),
         prompt,
         history_override: Vec::new(),
         images: Vec::new(),
@@ -266,6 +272,7 @@ pub(super) async fn run_local_app_server_shortcut_turn(
         cancel: ActiveTurnCancel {
             client: interrupt_client,
             handler,
+            target: interactive_target(local_app_server_bridge),
         },
     });
 }
@@ -604,7 +611,10 @@ pub(super) async fn run_session_rename(
         .client()
         .session_rename(
             local_app_server_bridge.handler(),
-            coco_types::SessionRenameParams { name: name.clone() },
+            coco_types::SessionRenameParams {
+                target: session_target(local_app_server_bridge),
+                name: name.clone(),
+            },
         )
         .await
     {
@@ -635,7 +645,10 @@ pub(super) async fn run_reload_plugins(
     let runtime = session;
     let result = match local_app_server_bridge
         .client()
-        .plugin_reload(local_app_server_bridge.handler())
+        .plugin_reload(
+            local_app_server_bridge.handler(),
+            interactive_session(local_app_server_bridge),
+        )
         .await
     {
         Ok(result) => result,
@@ -672,7 +685,10 @@ pub(super) async fn run_reload_hooks(
 ) {
     let body = match local_app_server_bridge
         .client()
-        .hook_reload(local_app_server_bridge.handler())
+        .hook_reload(
+            local_app_server_bridge.handler(),
+            interactive_session(local_app_server_bridge),
+        )
         .await
     {
         Ok(result) => format!(
@@ -690,7 +706,10 @@ pub(super) async fn run_show_cost(
 ) {
     match local_app_server_bridge
         .client()
-        .session_cost(local_app_server_bridge.handler())
+        .session_cost(
+            local_app_server_bridge.handler(),
+            session_target(local_app_server_bridge),
+        )
         .await
     {
         Ok(result) => emit_slash_text(event_tx, "cost", "", &result.text).await,
@@ -707,7 +726,10 @@ pub(super) async fn run_show_status(
 ) {
     match local_app_server_bridge
         .client()
-        .session_status(local_app_server_bridge.handler())
+        .session_status(
+            local_app_server_bridge.handler(),
+            session_target(local_app_server_bridge),
+        )
         .await
     {
         Ok(result) => {
@@ -868,6 +890,7 @@ pub(super) async fn run_session_tag(
         .session_toggle_tag(
             local_app_server_bridge.handler(),
             coco_types::SessionToggleTagParams {
+                target: session_target(local_app_server_bridge),
                 tag: tag.to_string(),
             },
         )
@@ -969,10 +992,9 @@ pub(super) async fn dispatch_permissions_mutation(
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &coco_agent_host::sdk_server::AppServerLocalBridge,
 ) -> Option<SlashOutcome> {
-    use coco_types::PermissionBehavior;
-    use coco_types::PermissionRule;
-    use coco_types::PermissionRuleSource;
-    use coco_types::PermissionRuleValue;
+    use coco_types::{
+        PermissionBehavior, PermissionRule, PermissionRuleSource, PermissionRuleValue,
+    };
 
     // Empty `allow` / `deny` (no tool name) is a usage error — surface
     // the hint without falling through to the registry handler. The

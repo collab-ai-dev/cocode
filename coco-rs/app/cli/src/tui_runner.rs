@@ -13,38 +13,28 @@
 //! FileHistoryState
 //! ```
 
-use std::collections::HashMap;
-use std::path::Path;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::Result;
-use tokio::sync::Mutex;
-use tokio::sync::RwLock;
-use tokio::sync::mpsc;
-use tracing::debug;
-use tracing::info;
-use tracing::warn;
+use tokio::sync::{Mutex, RwLock, mpsc};
+use tracing::{debug, info, warn};
 
-use coco_config::EnvKey;
-use coco_config::env;
-use coco_query::CoreEvent;
-use coco_query::QueuePriority;
-use coco_query::QueuedCommand;
-use coco_query::QueuedImage;
-use coco_query::ServerNotification;
+use coco_config::{EnvKey, env};
+use coco_query::{CoreEvent, QueuePriority, QueuedCommand, QueuedImage, ServerNotification};
 use coco_system_reminder::QueueOrigin;
-use coco_tui::App;
-use coco_tui::UserCommand;
-use coco_tui::app::create_channels;
-use coco_types::SlashCommandStatusKind;
-use coco_types::TuiOnlyEvent;
+use coco_tui::{App, UserCommand, app::create_channels};
+use coco_types::{SlashCommandStatusKind, TuiOnlyEvent};
 use tokio_util::sync::CancellationToken;
 
-use coco_agent_host::resume_resolver::ResumePlan;
-use coco_agent_host::session_bootstrap::build_engine_resources;
-use coco_agent_host::session_bootstrap::install_session_late_binds;
+use coco_agent_host::{
+    resume_resolver::ResumePlan,
+    session_bootstrap::{build_engine_resources, install_session_late_binds},
+};
 use coco_app_runtime::ProcessRuntime;
 
 mod bootstrap;
@@ -78,6 +68,27 @@ use turn_operations::*;
 use turn_postprocessing::*;
 
 pub(super) type SharedSessionHandle = Arc<RwLock<crate::session_runtime::SessionHandle>>;
+
+fn interactive_session(
+    bridge: &coco_agent_host::sdk_server::AppServerLocalBridge,
+) -> &coco_agent_host::local_client::LocalSessionClient {
+    let Some(session) = bridge.interactive_session() else {
+        panic!("TUI command requires an attached interactive AppServer surface");
+    };
+    session
+}
+
+fn interactive_target(
+    bridge: &coco_agent_host::sdk_server::AppServerLocalBridge,
+) -> coco_types::InteractiveTarget {
+    interactive_session(bridge).interactive_target()
+}
+
+fn session_target(
+    bridge: &coco_agent_host::sdk_server::AppServerLocalBridge,
+) -> coco_types::SessionTarget {
+    interactive_session(bridge).session_target()
+}
 
 #[cfg(test)]
 #[path = "tui_runner.test.rs"]

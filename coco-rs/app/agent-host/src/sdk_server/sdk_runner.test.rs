@@ -17,7 +17,7 @@ use super::*;
 fn runner_is_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<QueryEngineRunner>();
-    assert_send_sync::<StateQueryEngineRunner>();
+    assert_send_sync::<SessionTurnExecutor>();
 }
 
 #[test]

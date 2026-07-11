@@ -13,88 +13,47 @@ mod registry;
 mod session_data;
 mod session_seq;
 
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::collections::VecDeque;
-use std::sync::atomic::AtomicI64;
-use std::sync::atomic::Ordering;
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    sync::atomic::{AtomicI64, Ordering},
+};
 
-use chrono::DateTime;
-use chrono::Utc;
-use coco_error::ErrorExt;
-use coco_error::Location;
-use coco_error::StatusCode;
-use coco_error::stack_trace_debug;
-use coco_types::RequestId;
-use coco_types::ServerRequest;
-use coco_types::ServerRequestDelivery;
-use coco_types::SessionEnvelope;
-use coco_types::SessionId;
-use coco_types::SurfaceDelivery;
-use coco_types::SurfaceId;
-use coco_types::SurfaceLifecycleEffect;
-use coco_types::SurfaceLifecycleEffectKind;
-use coco_types::TurnId;
+use chrono::{DateTime, Utc};
+use coco_error::{ErrorExt, Location, StatusCode, stack_trace_debug};
+use coco_types::{
+    RequestId, ServerRequest, ServerRequestDelivery, SessionEnvelope, SessionId, SurfaceDelivery,
+    SurfaceId, SurfaceLifecycleEffect, SurfaceLifecycleEffectKind, TurnId,
+};
 use snafu::Snafu;
 
 pub use activity::SessionActivityTracker;
-pub use app_server::AppArchiveCommit;
-pub use app_server::AppCloseStart;
-pub use app_server::AppLiveSessionSummary;
-pub use app_server::AppLoadStart;
-pub use app_server::AppReplaceCommit;
-pub use app_server::AppReplaceStart;
-pub use app_server::AppServer;
-pub use app_server::AppServerError;
-pub use app_server::AppShutdownSession;
-pub use app_server::AppShutdownStart;
-pub use app_server::ResolvedServerRequest;
-pub use app_server::ServerRequestErrorReply;
-pub use app_server::ServerRequestReply;
-pub use json_rpc_adapter::JsonRpcAdapter;
-pub use json_rpc_adapter::JsonRpcAdapterConnection;
-pub use json_rpc_adapter::JsonRpcAdapterError;
-pub use json_rpc_adapter::JsonRpcConnectionOwnerError;
-pub use json_rpc_adapter::JsonRpcDispatchError;
-pub use json_rpc_adapter::JsonRpcRequestContext;
-pub use json_rpc_adapter::JsonRpcRequestFuture;
-pub use json_rpc_adapter::JsonRpcRequestHandler;
-pub use json_rpc_adapter::JsonRpcServerRequestResponse;
-pub use json_rpc_adapter::PendingJsonRpcServerRequest;
-pub use local_client_adapter::LocalClientAdapter;
-pub use local_client_adapter::LocalClientConnection;
-pub use local_client_adapter::LocalClientDispatchError;
-pub use local_client_adapter::LocalClientRequestContext;
-pub use local_client_adapter::LocalClientRequestFuture;
-pub use local_client_adapter::LocalClientRequestHandler;
-pub use local_client_adapter::LocalClientSubscribeOutcome;
-pub use local_client_adapter::LocalClientSubscription;
-pub use local_client_adapter::LocalClientSurface;
-pub use registry::CloseCompletion;
-pub use registry::CloseStart;
-pub use registry::LiveSessionRegistry;
-pub use registry::LoadCompletion;
-pub use registry::LoadStart;
-pub use registry::RegistryError;
-pub use registry::ReplaceCommit;
-pub use registry::ReplaceStart;
-pub use session_data::AppSessionDataError;
-pub use session_data::AppSessionDataHandle;
-pub use session_data::AppSessionDataRequest;
-pub use session_data::AppSessionDataSource;
-pub use session_data::LiveSessionDataMessage;
-pub use session_data::LiveSessionDataSnapshot;
-pub use session_data::SessionDataProjectionError;
-pub use session_data::SessionPage;
-pub use session_data::TranscriptTurnEntry;
-pub use session_data::derive_session_turn_summaries;
-pub use session_data::page_session_items;
-pub use session_data::parse_session_data_cursor;
-pub use session_data::parse_session_data_limit;
-pub use session_data::session_data_page;
-pub use session_seq::SessionSeqAllocator;
-pub use session_seq::SessionSeqPersistHook;
-pub use session_seq::WATERMARK_PERSIST_INTERVAL;
+pub use app_server::{
+    AppArchiveCommit, AppCloseStart, AppLiveSessionSummary, AppLoadStart, AppReplaceCommit,
+    AppReplaceStart, AppServer, AppServerError, AppShutdownSession, AppShutdownStart,
+    ResolvedServerRequest, ServerRequestErrorReply, ServerRequestReply,
+    ValidatedInteractiveSession,
+};
+pub use json_rpc_adapter::{
+    JsonRpcAdapter, JsonRpcAdapterConnection, JsonRpcAdapterError, JsonRpcConnectionHandlerFactory,
+    JsonRpcConnectionOwnerError, JsonRpcDispatchError, JsonRpcRequestContext, JsonRpcRequestFuture,
+    JsonRpcRequestHandler, JsonRpcServerRequestResponse, PendingJsonRpcServerRequest,
+};
+pub use local_client_adapter::{
+    LocalClientAdapter, LocalClientConnection, LocalClientDispatchError, LocalClientRequestContext,
+    LocalClientRequestFuture, LocalClientRequestHandler, LocalClientSubscribeOutcome,
+    LocalClientSubscription, LocalClientSurface,
+};
+pub use registry::{
+    CloseCompletion, CloseStart, LiveSessionRegistry, LoadCompletion, LoadStart, RegistryError,
+    ReplaceCommit, ReplaceStart,
+};
+pub use session_data::{
+    AppSessionDataError, AppSessionDataHandle, AppSessionDataRequest, AppSessionDataSource,
+    LiveSessionDataMessage, LiveSessionDataSnapshot, SessionDataProjectionError, SessionPage,
+    TranscriptTurnEntry, derive_session_turn_summaries, page_session_items,
+    parse_session_data_cursor, parse_session_data_limit, session_data_page,
+};
+pub use session_seq::{SessionSeqAllocator, SessionSeqPersistHook, WATERMARK_PERSIST_INTERVAL};
 
 static NEXT_CONNECTION_KEY: AtomicI64 = AtomicI64::new(1);
 static NEXT_SERVER_REQUEST_ID: AtomicI64 = AtomicI64::new(1);
@@ -138,6 +97,7 @@ pub struct SurfaceCapabilities {
 impl SurfaceCapabilities {
     pub fn includes(self, capability: SurfaceCapability) -> bool {
         match capability {
+            SurfaceCapability::Interactive => true,
             SurfaceCapability::FilePicker => self.file_picker,
             SurfaceCapability::Keychain => self.keychain,
             SurfaceCapability::Attestation => self.attestation,
@@ -148,6 +108,7 @@ impl SurfaceCapabilities {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SurfaceCapability {
+    Interactive,
     FilePicker,
     Keychain,
     Attestation,
@@ -369,6 +330,9 @@ pub enum CompleteServerRequestError {
         request_id: RequestId,
         expected_session_id: SessionId,
         actual_session_id: SessionId,
+    },
+    WrongConnection {
+        request_id: RequestId,
     },
 }
 
@@ -774,6 +738,7 @@ impl RoutingState {
         self.pending_server_request_payloads
             .insert(pending.request_id.clone(), request.clone());
         let delivery = ServerRequestDelivery {
+            session_id: pending.session_id.clone(),
             surface_id: surface_id.clone(),
             request_id: pending.request_id.clone(),
             request,
@@ -819,6 +784,27 @@ impl RoutingState {
         &mut self,
         request_id: &RequestId,
     ) -> Result<PendingServerRequest, CompleteServerRequestError> {
+        self.remove_pending_server_request(request_id)
+            .ok_or_else(|| CompleteServerRequestError::NotFound {
+                request_id: request_id.clone(),
+            })
+    }
+
+    pub fn cancel_server_request_for_connection(
+        &mut self,
+        request_id: &RequestId,
+        connection: ConnectionKey,
+    ) -> Result<PendingServerRequest, CompleteServerRequestError> {
+        let Some(pending) = self.pending_server_requests.get(request_id) else {
+            return Err(CompleteServerRequestError::NotFound {
+                request_id: request_id.clone(),
+            });
+        };
+        if self.surface_to_connection.get(&pending.surface_id) != Some(&connection) {
+            return Err(CompleteServerRequestError::WrongConnection {
+                request_id: request_id.clone(),
+            });
+        }
         self.remove_pending_server_request(request_id)
             .ok_or_else(|| CompleteServerRequestError::NotFound {
                 request_id: request_id.clone(),
@@ -970,28 +956,6 @@ impl RoutingState {
 
     pub fn interactive_owner(&self, session_id: &SessionId) -> Option<&SurfaceId> {
         self.interactive_owners.get(session_id)
-    }
-
-    pub fn sole_interactive_session_for_connection(
-        &self,
-        connection: ConnectionKey,
-    ) -> Option<SessionId> {
-        let mut found = None;
-        for surface_id in self.connection_to_surfaces.get(&connection)? {
-            let Some(attachment) = self.attachments.get(surface_id) else {
-                continue;
-            };
-            if attachment.state != SurfaceState::Attached
-                || attachment.role != SurfaceRole::Interactive
-            {
-                continue;
-            }
-            if found.is_some() {
-                return None;
-            }
-            found = Some(attachment.session_id.clone());
-        }
-        found
     }
 
     pub fn connection_session_ids(&self, connection: ConnectionKey) -> HashSet<SessionId> {

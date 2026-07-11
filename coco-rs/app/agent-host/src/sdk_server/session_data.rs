@@ -2,18 +2,13 @@ use std::sync::Arc;
 
 use futures::future::BoxFuture;
 
-use coco_app_server::AppServer;
-use coco_app_server::AppSessionDataError;
-use coco_app_server::AppSessionDataHandle;
-use coco_app_server::AppSessionDataRequest;
-use coco_app_server::AppSessionDataSource;
-use coco_app_server::JsonRpcDispatchError;
-use coco_app_server::LiveSessionDataMessage;
-use coco_app_server::LiveSessionDataSnapshot;
+use coco_app_server::{
+    AppServer, AppSessionDataError, AppSessionDataHandle, AppSessionDataRequest,
+    AppSessionDataSource, JsonRpcDispatchError, LiveSessionDataMessage, LiveSessionDataSnapshot,
+};
 use coco_types::SessionId;
 
-use super::app_server_bridge::LocalAppSessionHandle;
-use super::handlers::SdkServerState;
+use super::{app_server_bridge::LocalAppSessionHandle, handlers::SdkServerState};
 
 pub(crate) type PersistedSessionDataError = AppSessionDataError;
 
@@ -161,7 +156,7 @@ pub(crate) async fn persisted_session_read(
     let cursor = parse_persisted_session_data_cursor("session/read", params.cursor.as_deref())?;
     let limit = parse_persisted_session_data_limit("session/read", params.limit)?;
     let manager = session_manager_or_invalid(manager)?;
-    let session_id = params.session_id.as_str().to_string();
+    let session_id = params.target.session_id.as_str().to_string();
     let read_result = tokio::task::spawn_blocking(move || {
         let session = manager
             .load(&session_id)
@@ -202,7 +197,7 @@ pub(crate) async fn persisted_session_turns_list(
         parse_persisted_session_data_cursor("session/turns/list", params.cursor.as_deref())?;
     let limit = parse_persisted_session_data_limit("session/turns/list", params.limit)?;
     let manager = session_manager_or_invalid(manager)?;
-    let session_id = params.session_id.as_str().to_string();
+    let session_id = params.target.session_id.as_str().to_string();
     let list_result = tokio::task::spawn_blocking(move || {
         let session = manager
             .load(&session_id)

@@ -1,77 +1,28 @@
-use std::collections::HashMap;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
-use coco_app_server::AttachSurfaceOptions;
-use coco_app_server::DetachSurfaceOutcome;
-use coco_app_server::DisconnectOutcome;
-use coco_app_server::LocalClientAdapter;
-use coco_app_server::LocalClientConnection;
-use coco_app_server::LocalClientDispatchError;
-use coco_app_server::LocalClientRequestHandler;
-use coco_app_server::LocalClientSubscribeOutcome;
-use coco_app_server::SessionSurfaceCounts;
-use coco_app_server::SurfaceRole;
-use coco_types::AgentInterruptCurrentWorkParams;
-use coco_types::ApplyPermissionUpdateParams;
-use coco_types::ApprovalResolveParams;
-use coco_types::BackgroundAllTasksResult;
-use coco_types::CancelRequestParams;
-use coco_types::ClientRequest;
-use coco_types::ConfigApplyFlagsParams;
-use coco_types::ConfigReadResult;
-use coco_types::ConfigWriteParams;
-use coco_types::ContextUsageResult;
-use coco_types::ElicitationResolveParams;
-use coco_types::HookReloadResult;
-use coco_types::InitializeParams;
-use coco_types::InitializeResult;
-use coco_types::McpReconnectParams;
-use coco_types::McpSetServersParams;
-use coco_types::McpSetServersResult;
-use coco_types::McpStatusResult;
-use coco_types::McpToggleParams;
-use coco_types::PluginReloadResult;
-use coco_types::ResetSessionPermissionRulesResult;
-use coco_types::RewindFilesParams;
-use coco_types::RewindFilesResult;
-use coco_types::ServerRequestDelivery;
-use coco_types::SessionArchiveParams;
-use coco_types::SessionCostResult;
-use coco_types::SessionEnvelope;
-use coco_types::SessionId;
-use coco_types::SessionListResult;
-use coco_types::SessionReadParams;
-use coco_types::SessionReadResult;
-use coco_types::SessionRenameParams;
-use coco_types::SessionRenameResult;
-use coco_types::SessionResumeParams;
-use coco_types::SessionResumeResult;
-use coco_types::SessionStartParams;
-use coco_types::SessionStartResult;
-use coco_types::SessionStatusResult;
-use coco_types::SessionSubscribeParams;
-use coco_types::SessionSubscribeResult;
-use coco_types::SessionToggleTagParams;
-use coco_types::SessionToggleTagResult;
-use coco_types::SessionTurnsListParams;
-use coco_types::SessionTurnsListResult;
-use coco_types::SetAgentColorParams;
-use coco_types::SetModelParams;
-use coco_types::SetModelRoleParams;
-use coco_types::SetModelRoleResult;
-use coco_types::SetPermissionModeParams;
-use coco_types::SetThinkingParams;
-use coco_types::StopTaskParams;
-use coco_types::SurfaceDelivery;
-use coco_types::SurfaceId;
-use coco_types::SurfaceLifecycleEffect;
-use coco_types::TaskDetailParams;
-use coco_types::TaskDetailResult;
-use coco_types::TaskListResult;
-use coco_types::TurnStartParams;
-use coco_types::TurnStartResult;
-use coco_types::UpdateEnvParams;
-use coco_types::UserInputResolveParams;
+use coco_app_server::{
+    AttachSurfaceOptions, DetachSurfaceOutcome, DisconnectOutcome, LocalClientAdapter,
+    LocalClientConnection, LocalClientDispatchError, LocalClientRequestHandler,
+    LocalClientSubscribeOutcome, SessionSurfaceCounts, SurfaceRole,
+};
+use coco_types::{
+    AgentInterruptCurrentWorkParams, ApplyPermissionUpdateParams, ApprovalResolveParams,
+    ArchiveTarget, BackgroundAllTasksResult, CancelRequestParams, ClientRequest,
+    ConfigApplyFlagsParams, ConfigReadParams, ConfigReadResult, ConfigWriteParams,
+    ContextUsageResult, ElicitationResolveParams, HookReloadResult, InitializeParams,
+    InitializeResult, InteractiveTarget, McpReconnectParams, McpSetServersParams,
+    McpSetServersResult, McpStatusResult, McpToggleParams, PluginReloadResult,
+    ResetSessionPermissionRulesResult, RewindFilesParams, RewindFilesResult, ServerRequestDelivery,
+    SessionArchiveParams, SessionCostResult, SessionEnvelope, SessionId, SessionListResult,
+    SessionReadParams, SessionReadResult, SessionRenameParams, SessionRenameResult,
+    SessionResumeParams, SessionResumeResult, SessionStartParams, SessionStartResult,
+    SessionStatusResult, SessionSubscribeParams, SessionSubscribeResult, SessionTarget,
+    SessionToggleTagParams, SessionToggleTagResult, SessionTurnsListParams, SessionTurnsListResult,
+    SetAgentColorParams, SetModelParams, SetModelRoleParams, SetModelRoleResult,
+    SetPermissionModeParams, SetThinkingParams, StopTaskParams, SurfaceDelivery, SurfaceId,
+    SurfaceLifecycleEffect, TaskDetailParams, TaskDetailResult, TaskListResult, TurnStartParams,
+    TurnStartResult, UpdateEnvParams, UserInputResolveParams,
+};
 
 use coco_app_server_client::ClientError;
 
@@ -102,6 +53,10 @@ impl<H: Clone> LocalServerClient<H> {
             request_buffers: HashMap::new(),
             lifecycle_buffers: HashMap::new(),
         }
+    }
+
+    pub fn disconnect(self) -> coco_app_server::DisconnectOutcome {
+        self.connection.disconnect()
     }
 
     pub async fn send_client_request<Handler>(
@@ -268,6 +223,18 @@ impl<H: Clone> LocalServerClient<H> {
             .await
     }
 
+    async fn session_replace<Handler>(
+        &self,
+        handler: &Handler,
+        params: coco_types::SessionReplaceParams,
+    ) -> Result<coco_types::SessionReplaceResult, ClientError>
+    where
+        Handler: LocalClientRequestHandler,
+    {
+        self.send_typed_client_request(handler, ClientRequest::SessionReplace(Box::new(params)))
+            .await
+    }
+
     pub async fn session_rename<Handler>(
         &self,
         handler: &Handler,
@@ -295,22 +262,24 @@ impl<H: Clone> LocalServerClient<H> {
     pub async fn session_cost<Handler>(
         &self,
         handler: &Handler,
+        target: SessionTarget,
     ) -> Result<SessionCostResult, ClientError>
     where
         Handler: LocalClientRequestHandler,
     {
-        self.send_typed_client_request(handler, ClientRequest::SessionCost)
+        self.send_typed_client_request(handler, ClientRequest::SessionCost(target))
             .await
     }
 
     pub async fn session_status<Handler>(
         &self,
         handler: &Handler,
+        target: SessionTarget,
     ) -> Result<SessionStatusResult, ClientError>
     where
         Handler: LocalClientRequestHandler,
     {
-        self.send_typed_client_request(handler, ClientRequest::SessionStatus)
+        self.send_typed_client_request(handler, ClientRequest::SessionStatus(target))
             .await
     }
 
@@ -326,35 +295,41 @@ impl<H: Clone> LocalServerClient<H> {
             .await
     }
 
-    pub async fn turn_interrupt<Handler>(&self, handler: &Handler) -> Result<(), ClientError>
+    pub async fn turn_interrupt<Handler>(
+        &self,
+        handler: &Handler,
+        target: InteractiveTarget,
+    ) -> Result<(), ClientError>
     where
         Handler: LocalClientRequestHandler,
     {
-        self.send_typed_client_request(handler, ClientRequest::TurnInterrupt)
+        self.send_typed_client_request(handler, ClientRequest::TurnInterrupt(target))
             .await
     }
 
     pub async fn query_session<Handler>(
         &self,
         handler: &Handler,
-        _session: &LocalSessionClient,
-        params: TurnStartParams,
+        session: &LocalSessionClient,
+        mut params: TurnStartParams,
     ) -> Result<TurnStartResult, ClientError>
     where
         Handler: LocalClientRequestHandler,
     {
+        params.target = session.interactive_target();
         self.turn_start(handler, params).await
     }
 
     pub async fn interrupt_session<Handler>(
         &self,
         handler: &Handler,
-        _session: &LocalSessionClient,
+        session: &LocalSessionClient,
     ) -> Result<(), ClientError>
     where
         Handler: LocalClientRequestHandler,
     {
-        self.turn_interrupt(handler).await
+        self.turn_interrupt(handler, session.interactive_target())
+            .await
     }
 
     pub async fn close_session<Handler>(
@@ -366,7 +341,7 @@ impl<H: Clone> LocalServerClient<H> {
         Handler: LocalClientRequestHandler,
     {
         let params = SessionArchiveParams {
-            session_id: session.session_id.clone(),
+            target: ArchiveTarget::Interactive(session.interactive_target()),
         };
         match self.session_archive(handler, params).await {
             Ok(()) => {
@@ -386,11 +361,19 @@ impl<H: Clone> LocalServerClient<H> {
     where
         Handler: LocalClientRequestHandler,
     {
-        let old_surface_id = session.surface_id.clone();
-        match self.session_start(handler, params).await {
-            Ok(started) => Ok(LocalSessionClient {
-                session_id: started.session_id,
-                surface_id: started.surface_id.unwrap_or(old_surface_id),
+        match self
+            .session_replace(
+                handler,
+                coco_types::SessionReplaceParams {
+                    source: session.interactive_target(),
+                    destination: coco_types::SessionReplacement::Fresh(params),
+                },
+            )
+            .await
+        {
+            Ok(replaced) => Ok(LocalSessionClient {
+                session_id: replaced.session_id,
+                surface_id: replaced.surface_id,
             }),
             Err(error) => Err((session, error)),
         }
@@ -405,11 +388,19 @@ impl<H: Clone> LocalServerClient<H> {
     where
         Handler: LocalClientRequestHandler,
     {
-        let old_surface_id = session.surface_id.clone();
-        match self.session_resume(handler, params).await {
-            Ok(resumed) => Ok(LocalSessionClient {
-                session_id: resumed.session.session_id,
-                surface_id: resumed.surface_id.unwrap_or(old_surface_id),
+        match self
+            .session_replace(
+                handler,
+                coco_types::SessionReplaceParams {
+                    source: session.interactive_target(),
+                    destination: coco_types::SessionReplacement::Resume(params.target),
+                },
+            )
+            .await
+        {
+            Ok(replaced) => Ok(LocalSessionClient {
+                session_id: replaced.session_id,
+                surface_id: replaced.surface_id,
             }),
             Err(error) => Err((session, error)),
         }
@@ -428,7 +419,7 @@ impl<H: Clone> LocalServerClient<H> {
         self.session_read(
             handler,
             SessionReadParams {
-                session_id: session.session_id.clone(),
+                target: session.session_target(),
                 cursor,
                 limit,
             },
@@ -449,7 +440,7 @@ impl<H: Clone> LocalServerClient<H> {
         self.session_turns_list(
             handler,
             SessionTurnsListParams {
-                session_id: session.session_id.clone(),
+                target: session.session_target(),
                 cursor,
                 limit,
             },
@@ -568,12 +559,16 @@ impl<H: Clone> LocalServerClient<H> {
     pub async fn reset_session_permission_rules<Handler>(
         &self,
         handler: &Handler,
+        session: &LocalSessionClient,
     ) -> Result<ResetSessionPermissionRulesResult, ClientError>
     where
         Handler: LocalClientRequestHandler,
     {
-        self.send_typed_client_request(handler, ClientRequest::ResetSessionPermissionRules)
-            .await
+        self.send_typed_client_request(
+            handler,
+            ClientRequest::ResetSessionPermissionRules(session.interactive_target()),
+        )
+        .await
     }
 
     pub async fn stop_task<Handler>(
@@ -588,11 +583,15 @@ impl<H: Clone> LocalServerClient<H> {
             .await
     }
 
-    pub async fn task_list<Handler>(&self, handler: &Handler) -> Result<TaskListResult, ClientError>
+    pub async fn task_list<Handler>(
+        &self,
+        handler: &Handler,
+        session: &LocalSessionClient,
+    ) -> Result<TaskListResult, ClientError>
     where
         Handler: LocalClientRequestHandler,
     {
-        self.send_typed_client_request(handler, ClientRequest::TaskList)
+        self.send_typed_client_request(handler, ClientRequest::TaskList(session.session_target()))
             .await
     }
 
@@ -611,12 +610,16 @@ impl<H: Clone> LocalServerClient<H> {
     pub async fn background_all_tasks<Handler>(
         &self,
         handler: &Handler,
+        session: &LocalSessionClient,
     ) -> Result<BackgroundAllTasksResult, ClientError>
     where
         Handler: LocalClientRequestHandler,
     {
-        self.send_typed_client_request(handler, ClientRequest::BackgroundAllTasks)
-            .await
+        self.send_typed_client_request(
+            handler,
+            ClientRequest::BackgroundAllTasks(session.interactive_target()),
+        )
+        .await
     }
 
     pub async fn rewind_files<Handler>(
@@ -670,11 +673,12 @@ impl<H: Clone> LocalServerClient<H> {
     pub async fn config_read<Handler>(
         &self,
         handler: &Handler,
+        params: ConfigReadParams,
     ) -> Result<ConfigReadResult, ClientError>
     where
         Handler: LocalClientRequestHandler,
     {
-        self.send_typed_client_request(handler, ClientRequest::ConfigRead)
+        self.send_typed_client_request(handler, ClientRequest::ConfigRead(params))
             .await
     }
 
@@ -693,22 +697,24 @@ impl<H: Clone> LocalServerClient<H> {
     pub async fn mcp_status<Handler>(
         &self,
         handler: &Handler,
+        target: SessionTarget,
     ) -> Result<McpStatusResult, ClientError>
     where
         Handler: LocalClientRequestHandler,
     {
-        self.send_typed_client_request(handler, ClientRequest::McpStatus)
+        self.send_typed_client_request(handler, ClientRequest::McpStatus(target))
             .await
     }
 
     pub async fn context_usage<Handler>(
         &self,
         handler: &Handler,
+        target: SessionTarget,
     ) -> Result<ContextUsageResult, ClientError>
     where
         Handler: LocalClientRequestHandler,
     {
-        self.send_typed_client_request(handler, ClientRequest::ContextUsage)
+        self.send_typed_client_request(handler, ClientRequest::ContextUsage(target))
             .await
     }
 
@@ -751,23 +757,31 @@ impl<H: Clone> LocalServerClient<H> {
     pub async fn plugin_reload<Handler>(
         &self,
         handler: &Handler,
+        session: &LocalSessionClient,
     ) -> Result<PluginReloadResult, ClientError>
     where
         Handler: LocalClientRequestHandler,
     {
-        self.send_typed_client_request(handler, ClientRequest::PluginReload)
-            .await
+        self.send_typed_client_request(
+            handler,
+            ClientRequest::PluginReload(session.interactive_target()),
+        )
+        .await
     }
 
     pub async fn hook_reload<Handler>(
         &self,
         handler: &Handler,
+        session: &LocalSessionClient,
     ) -> Result<HookReloadResult, ClientError>
     where
         Handler: LocalClientRequestHandler,
     {
-        self.send_typed_client_request(handler, ClientRequest::HookReload)
-            .await
+        self.send_typed_client_request(
+            handler,
+            ClientRequest::HookReload(session.interactive_target()),
+        )
+        .await
     }
 
     pub async fn config_apply_flags<Handler>(
@@ -1063,6 +1077,19 @@ pub struct LocalSessionClient {
 }
 
 impl LocalSessionClient {
+    pub fn session_target(&self) -> SessionTarget {
+        SessionTarget {
+            session_id: self.session_id.clone(),
+        }
+    }
+
+    pub fn interactive_target(&self) -> InteractiveTarget {
+        InteractiveTarget {
+            session_id: self.session_id.clone(),
+            surface_id: self.surface_id.clone(),
+        }
+    }
+
     pub fn session_id(&self) -> &SessionId {
         &self.session_id
     }
@@ -1090,6 +1117,12 @@ pub struct LocalPassiveSessionClient {
 }
 
 impl LocalPassiveSessionClient {
+    fn session_target(&self) -> SessionTarget {
+        SessionTarget {
+            session_id: self.session_id.clone(),
+        }
+    }
+
     pub fn session_id(&self) -> &SessionId {
         &self.session_id
     }

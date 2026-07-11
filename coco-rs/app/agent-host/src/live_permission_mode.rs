@@ -1,18 +1,18 @@
 use std::sync::Arc;
 
-use coco_types::CoreEvent;
-use coco_types::PermissionMode;
-use coco_types::PermissionModeChangedParams;
-use coco_types::PermissionRulesBySource;
-use coco_types::ServerNotification;
-use coco_types::ToolAppState;
-use tokio::sync::RwLock;
-use tokio::sync::mpsc;
+use coco_types::{
+    CoreEvent, PermissionMode, PermissionModeChangedParams, PermissionRulesBySource,
+    ServerNotification, ToolAppState,
+};
+use tokio::sync::{RwLock, mpsc};
 
-use crate::sdk_server::handlers::SdkServerState;
-use crate::sdk_server::outbound::OutboundMessage;
-use crate::sdk_server::outbound::send_session_event;
-use crate::session_runtime::SessionHandle;
+use crate::{
+    sdk_server::{
+        handlers::SdkServerState,
+        outbound::{OutboundMessage, send_session_event},
+    },
+    session_runtime::SessionHandle,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LivePermissionModeChange {
@@ -113,20 +113,6 @@ pub async fn publish_outbound_if_changed(
         CoreEvent::Protocol(permission_mode_changed(mode, bypass_available)),
     )
     .await;
-}
-
-pub async fn publish_sdk_state_outbound_if_changed(
-    state: &SdkServerState,
-    mode: PermissionMode,
-    changed: bool,
-) {
-    let Some(tx) = state.sdk_outbound_tx_snapshot().await else {
-        return;
-    };
-    let Some(session_id) = state.runtime_or_active_session_id().await else {
-        return;
-    };
-    publish_outbound_if_changed(&tx, session_id, mode, sdk_bypass_available(state), changed).await;
 }
 
 fn permission_mode_changed(mode: PermissionMode, bypass_available: bool) -> ServerNotification {

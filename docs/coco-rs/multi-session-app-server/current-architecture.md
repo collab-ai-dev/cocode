@@ -1,7 +1,7 @@
 # Current Architecture
 
-This document describes the production tree as reviewed on 2026-07-11. It is
-descriptive, not aspirational.
+This document describes the production tree after the breaking refactor on
+2026-07-11. It is descriptive, not aspirational.
 
 ## Runtime composition
 
@@ -124,9 +124,9 @@ The object is shared behind `Arc`. Independent fields use `Mutex`, `RwLock`,
 atomics, watch channels, cancellation tokens, or immutable `Arc` snapshots as
 appropriate. It is not driven by one actor mailbox.
 
-`SessionHandle` adds an immutable session-id snapshot but currently exposes the
-underlying runtime through `runtime()` and `Deref`. Consequently it is a
-convenient shared pointer, not a strict capability boundary.
+`SessionHandle` adds an immutable session-id snapshot and focused capability
+methods. Its `Arc<SessionRuntime>` is private: there is no `Deref` or public
+`runtime()` escape hatch.
 
 ## State ownership
 
@@ -140,17 +140,14 @@ There is no useful process-global `AppState`.
 | live slot lifecycle | `LiveSessionRegistry` | process registry, keyed by `SessionId` |
 | connection/surface/replay routing | `RoutingState` | AppServer process |
 | SDK handoff/accounting/active-turn maps | `SdkServerState` | keyed by `SessionId` |
-| installed runtime/MCP/file-history/reload slots | `SdkServerState` | process singleton, problematic |
-| initialize metadata and SDK construction inputs | `InitializeState` in shared `SdkServerState` | process singleton, but semantically per connection |
-| transport writer and outbound queue | `ConnectionState` in shared `SdkServerState` | process singleton, but semantically per connection |
-| pending callback/request maps | `PendingClientRequestState` and `ServerRequestState` | shared, with incomplete connection/surface correlation |
-| MCP registration reports | `McpRegistrationState` keyed only by server name | process singleton, but semantically per session |
+| immutable initialize inputs | per-connection `ConnectionProfile` | one accepted connection |
+| transport writer and outbound queues | connection runner / adapter | one accepted connection |
+| pending callback correlation | AppServer + connection adapter, keyed by request/session/connection | one originating request |
+| MCP manager and registration reports | `SessionRuntime` integration resources | one root session |
 
-The singleton and incompletely keyed rows are ownership defects. A keyed
-handoff does not make execution session-safe when engine services are selected
-from process-singleton slots. Likewise, accepting several transports is not
-connection-safe when `initialize` can overwrite construction inputs or a
-server request can select a shared writer without its originating connection.
+`SdkServerState` retains keyed wire projections and process services, but it no
+longer owns a selectable runtime, MCP manager, file history, reload slot,
+connection writer, or pending callback singleton.
 
 ## AppServer registry and lifecycle
 
@@ -172,9 +169,9 @@ no await while locked, validates before mutation, and atomically updates live
 slots plus surface routing. This is an appropriate use of synchronous locks:
 critical sections are short and contain no asynchronous work.
 
-Current gap: when host loading observes `Closing`, the close completion is
-discarded and an internal error is returned. Reopen-after-close is therefore
-not implemented above the registry.
+When resume observes `Closing`, the host waits for its completion with a
+bounded timeout and retries the load. Orphan close checks routing and moves the
+registry slot to `Closing` under the canonical registry-then-routing lock order.
 
 ## Connections and surfaces
 
@@ -193,36 +190,27 @@ AppServer supports:
 - per-connection outbound channels carrying per-surface-addressed event and
   server-request deliveries.
 
-This routing model is internally coherent. The defect is at the request DTO
-boundary: session commands do not identify which interactive surface issued
-them.
+Interactive request DTOs carry both `session_id` and `surface_id`. AppServer
+validates session, surface, role, and connection ownership before returning a
+live handle. Persisted-only requests carry `SessionTarget`; archive uses the
+typed interactive-or-orphan `ArchiveTarget`.
 
-The listener composition has a second boundary defect. Accepted connections
-share the same `AppServerSdkHandler` and `SdkServerState`; `InitializeState`
-therefore represents the latest initialize call rather than one immutable
-connection profile. `ConnectionState` also contains a single transport/writer
-slot. The target must create one connection handler and callback-correlation
-owner for every accepted connection while retaining the shared AppServer
-registry and routing state.
+Every accepted transport calls the JSON handler factory and receives a fresh
+handler with an empty initialize cell. Exactly one `initialize` freezes its
+`ConnectionProfile`; local in-process clients use an explicitly preinitialized
+handler. Writers and synchronous reply correlation remain connection-owned.
 
 ## Request dispatch today
 
-For a session-scoped request without an explicit id, the handler tries:
+`request_scope` exhaustively classifies every `ClientRequest`. The handler
+adapter resolves explicit targets before dispatch and constructs a
+`SessionRequestContext` whose id and `SessionHandle` came from the same
+AppServer validation. Interactive handlers cannot fall back to a sole surface,
+process runtime, or sole handoff.
 
-1. the sole interactive session attached to the request connection;
-2. the process-installed `SessionRuntime`;
-3. a sole keyed SDK handoff.
-
-This fallback chain preserves old single-session behavior but is ambiguous by
-construction. When one connection owns two interactive surfaces, step 1
-returns no result. When two connections own distinct sessions, step 1 can
-select the correct handoff, but the production runner still reads the runtime
-from step 2.
-
-Runtime-control handlers that call `HandlerContext::resolve_runtime` are
-better: they prefer the registry-resolved `scoped_runtime`. That improvement
-is incomplete because turn execution, shortcuts, MCP, rewind, approvals, and
-some session handlers still read process slots directly.
+`SessionTurnExecutor` receives that selected handle on every call. Shortcuts,
+MCP, rewind, approvals, sandbox changes, hooks, config, reload, active-turn
+interrupt, and shutdown use focused capabilities on the same handle.
 
 ## Event flow
 
@@ -243,23 +231,30 @@ producers. Outbound channels are per connection, so overflow disconnects the
 whole connection and detaches all of its surfaces; recovery is reconnect plus
 replay.
 
-This design is substantially landed. Event correctness still depends on turn
-execution selecting the right runtime and stamping with the selected session
-id; routing cannot repair an event produced from mixed session state.
+Event production takes identity from the selected handle and active turn.
+Server-initiated requests carry the originating session id; typed replies are
+accepted only from their owning connection and session.
 
 ## Test coverage today
 
-Existing tests prove the individual registry, lifecycle, routing, replay,
-surface, client-demux, project-cache, and shutdown mechanisms.
+Package tests cover target classification, connection isolation, registry
+lifecycle, replacement, closing retry, orphan archive, callback correlation,
+slow-consumer disconnect, replay, client authority injection, session-owned
+capabilities, and multi-session shutdown. The release-blocking host integration
+suite uses public clients and production handlers for multi-session authority,
+cross-connection rejection, orphan lifecycle, and event/replay identity.
 
-They do not prove the product invariant. There is no production-path test that
-uses public client handles to:
+The integration suite contains six production-handler scenarios. Local TUI
+coverage also verifies that command-queue turns, fast-mode and thinking-level
+controls, and file rewind attach an interactive surface before constructing a
+typed target.
 
-1. create two real runtimes;
-2. retain both interactive surfaces;
-3. run turns concurrently through the same or different connections;
-4. assert each engine used its own cwd/config/tools/history/MCP state;
-5. assert controls and events stayed isolated.
+The final 2026-07-11 release-validation snapshot is:
 
-The absence of this test explains why correct routing components coexist with
-an incorrect end-to-end runtime selection path.
+- all seam checks and workspace clippy passed with every feature and test
+  target enabled;
+- all 13,606 executed workspace tests passed under nextest, with four tests
+  skipped by existing configuration;
+- all 88 TUI runner tests passed;
+- focused totals were 309 agent-host, 89 app-server, 34 app-server-client, and
+  300 types tests, all passing.

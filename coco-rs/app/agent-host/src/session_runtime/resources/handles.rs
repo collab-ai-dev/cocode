@@ -1,10 +1,11 @@
-use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
+use std::{
+    collections::HashMap,
+    sync::{Arc, atomic::AtomicU64},
+};
 
 use coco_messages::MessageHistory;
 use coco_tool_runtime::AgentHandleRef;
-use tokio::sync::Mutex;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 /// Shared handle to a `QueryEngine`'s post-turn cache-safe-params slot, as
 /// returned by `QueryEngine::cache_safe_params_handle`. Kept as an alias so
@@ -21,6 +22,13 @@ pub(in crate::session_runtime) struct SessionIntegrationResources {
     pub(in crate::session_runtime) mcp_reconnect_key: Arc<AtomicU64>,
     /// Late-bound LSP handle installed on every per-turn engine.
     pub(in crate::session_runtime) lsp_handle: Arc<RwLock<Option<coco_tool_runtime::LspHandleRef>>>,
+    pub(in crate::session_runtime) reload_supervisor:
+        Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    /// Last successful tool-registration outcome for each MCP server. This is
+    /// session-owned because two live sessions may connect the same server
+    /// name while exposing different tool catalogs.
+    pub(in crate::session_runtime) mcp_registration_reports:
+        Arc<RwLock<HashMap<String, crate::session_runtime::McpRegistrationStatus>>>,
 }
 
 impl SessionIntegrationResources {
@@ -29,12 +37,15 @@ impl SessionIntegrationResources {
         mcp_manager: Arc<RwLock<Option<Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>>>>,
         mcp_reconnect_key: Arc<AtomicU64>,
         lsp_handle: Arc<RwLock<Option<coco_tool_runtime::LspHandleRef>>>,
+        reload_supervisor: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     ) -> Self {
         Self {
             mcp_handle,
             mcp_manager,
             mcp_reconnect_key,
             lsp_handle,
+            reload_supervisor,
+            mcp_registration_reports: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -58,6 +69,18 @@ impl SessionIntegrationResources {
         &self,
     ) -> &Arc<RwLock<Option<coco_tool_runtime::LspHandleRef>>> {
         &self.lsp_handle
+    }
+
+    pub(in crate::session_runtime) fn reload_supervisor(
+        &self,
+    ) -> &Arc<Mutex<Option<tokio::task::JoinHandle<()>>>> {
+        &self.reload_supervisor
+    }
+
+    pub(in crate::session_runtime) fn mcp_registration_reports(
+        &self,
+    ) -> &Arc<RwLock<HashMap<String, crate::session_runtime::McpRegistrationStatus>>> {
+        &self.mcp_registration_reports
     }
 }
 

@@ -110,12 +110,20 @@ def _sent_methods(transport: MockTransport) -> list[str]:
     return [json.loads(line)["method"] for line in transport.sent_lines]
 
 
+def _mark_started(
+    client: CocoClient, session_id: str = "s1", surface_id: str = "surface-1"
+) -> None:
+    client._started = True
+    client._session_id = session_id
+    client._surface_id = surface_id
+
+
 @pytest.mark.asyncio
 async def test_client_sends_initialize_session_start_turn_start() -> None:
     transport = MockTransport(
         responses=[
             _response(1, {}),
-            _response(2, {"session_id": "s1"}),
+            _response(2, {"session_id": "s1", "surface_id": "surface-1"}),
             _response(3, {"turn_id": "t1"}),
             _session_started(session_id="s1"),
             _notif(
@@ -163,7 +171,7 @@ async def test_client_send_follow_up() -> None:
     )
 
     client = CocoClient(prompt="init", transport=transport)
-    client._started = True
+    _mark_started(client)
     events = [event async for event in client.send("follow up")]
 
     sent = json.loads(transport.sent_lines[0])
@@ -235,7 +243,7 @@ async def test_client_auto_approval() -> None:
         return ApprovalDecision.allow
 
     client = CocoClient(prompt="test", transport=transport, can_use_tool=auto_approve)
-    client._started = True
+    _mark_started(client)
     events = [event async for event in client.events()]
 
     assert len(events) == 1
@@ -276,7 +284,7 @@ async def test_client_denies_approval_without_callback() -> None:
     )
 
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     events = [event async for event in client.events()]
 
     assert len(events) == 1
@@ -296,7 +304,7 @@ async def test_client_denies_approval_without_callback() -> None:
 async def test_client_interrupt() -> None:
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     await client.interrupt()
 
     sent = json.loads(transport.sent_lines[0])
@@ -307,7 +315,7 @@ async def test_client_interrupt() -> None:
 async def test_client_set_models_main_string() -> None:
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     await client.set_models_main("anthropic/claude-opus-4-7")
 
     sent = json.loads(transport.sent_lines[0])
@@ -321,7 +329,7 @@ async def test_client_set_models_main_spec() -> None:
 
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     await client.set_models_main(DEEPSEEK.flash_openai)
 
     sent = json.loads(transport.sent_lines[0])
@@ -335,7 +343,7 @@ async def test_client_set_thinking() -> None:
 
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     await client.set_thinking(thinking(ReasoningEffort.high, budget_tokens=8000))
 
     sent = json.loads(transport.sent_lines[0])
@@ -348,7 +356,7 @@ async def test_client_set_thinking() -> None:
 async def test_client_rewind_files() -> None:
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     await client.rewind_files("msg_42", dry_run=True)
 
     sent = json.loads(transport.sent_lines[0])
@@ -381,7 +389,7 @@ async def test_client_sdk_hook_output_serializes_camelcase_wire_shape() -> None:
 async def test_client_respond_to_question_uses_answer_field() -> None:
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     await client.respond_to_question("r1", "yes")
 
     sent = json.loads(transport.sent_lines[0])
@@ -394,7 +402,7 @@ async def test_client_respond_to_question_uses_answer_field() -> None:
 async def test_client_cancel_request() -> None:
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     await client.cancel_request("req_42", reason="user_aborted")
 
     sent = json.loads(transport.sent_lines[0])
@@ -415,7 +423,7 @@ async def test_client_mcp_status_returns_typed_response() -> None:
 
     transport = MockTransport(responses=[_response(1, {"mcpServers": []})])
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     result = await client.mcp_status()
 
     assert isinstance(result, McpStatusResult)
@@ -446,7 +454,7 @@ async def test_client_context_usage_returns_typed_response() -> None:
         ]
     )
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     result = await client.context_usage()
 
     assert isinstance(result, ContextUsageResult)
@@ -459,7 +467,7 @@ async def test_client_context_usage_returns_typed_response() -> None:
 async def test_client_mcp_toggle() -> None:
     transport = MockTransport(responses=[_response(1, {})])
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     await client.mcp_toggle("filesystem", enabled=False)
 
     sent = json.loads(transport.sent_lines[0])
@@ -472,7 +480,7 @@ async def test_client_mcp_toggle() -> None:
 async def test_client_resolve_elicitation() -> None:
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     await client.resolve_elicitation(
         request_id="elic_1",
         mcp_server_name="github",
@@ -499,7 +507,7 @@ async def test_client_initialize_includes_hooks_map() -> None:
     transport = MockTransport(
         responses=[
             _response(1, {}),
-            _response(2, {"session_id": "s1"}),
+            _response(2, {"session_id": "s1", "surface_id": "surface-1"}),
             _response(3, {"turn_id": "t1"}),
         ]
     )
@@ -519,7 +527,7 @@ async def test_client_initialize_includes_hooks_map() -> None:
 
 
 @pytest.mark.asyncio
-async def test_client_waits_for_sdk_mcp_servers_before_session_start() -> None:
+async def test_client_waits_for_sdk_mcp_servers_after_session_start() -> None:
     from coco_sdk import tool
 
     @tool(name="ping", description="Ping")
@@ -529,13 +537,13 @@ async def test_client_waits_for_sdk_mcp_servers_before_session_start() -> None:
     transport = MockTransport(
         responses=[
             _response(1, {}),
+            _response(2, {"session_id": "s1", "surface_id": "surface-1"}),
             _response(
-                2, {"mcpServers": [{"name": ping.server_name, "status": "pending"}]}
+                3, {"mcpServers": [{"name": ping.server_name, "status": "pending"}]}
             ),
             _response(
-                3, {"mcpServers": [{"name": ping.server_name, "status": "connected"}]}
+                4, {"mcpServers": [{"name": ping.server_name, "status": "connected"}]}
             ),
-            _response(4, {"session_id": "s1"}),
             _response(5, {"turn_id": "t1"}),
         ]
     )
@@ -544,9 +552,9 @@ async def test_client_waits_for_sdk_mcp_servers_before_session_start() -> None:
 
     assert _sent_methods(transport) == [
         ClientRequestMethod.INITIALIZE.value,
-        ClientRequestMethod.MCP_STATUS.value,
-        ClientRequestMethod.MCP_STATUS.value,
         ClientRequestMethod.SESSION_START.value,
+        ClientRequestMethod.MCP_STATUS.value,
+        ClientRequestMethod.MCP_STATUS.value,
         ClientRequestMethod.TURN_START.value,
     ]
 
@@ -556,7 +564,7 @@ async def test_client_context_manager() -> None:
     transport = MockTransport(
         responses=[
             _response(1, {}),
-            _response(2, {"session_id": "s1"}),
+            _response(2, {"session_id": "s1", "surface_id": "surface-1"}),
             _response(3, {"turn_id": "t1"}),
             _session_started(session_id="s1"),
             _notif(
@@ -583,7 +591,7 @@ async def test_client_set_permission_mode_string_coerced() -> None:
 
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     await client.set_permission_mode("auto")
 
     sent = json.loads(transport.sent_lines[0])
@@ -597,7 +605,7 @@ async def test_client_set_permission_mode_enum() -> None:
 
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     await client.set_permission_mode(PermissionMode.plan)
 
     sent = json.loads(transport.sent_lines[0])
@@ -608,7 +616,7 @@ async def test_client_set_permission_mode_enum() -> None:
 async def test_client_stop_task() -> None:
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     await client.stop_task("task-42")
 
     sent = json.loads(transport.sent_lines[0])
@@ -620,7 +628,7 @@ async def test_client_stop_task() -> None:
 async def test_client_update_env() -> None:
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     await client.update_env({"FOO": "bar", "BAZ": "qux"})
 
     sent = json.loads(transport.sent_lines[0])
@@ -632,7 +640,7 @@ async def test_client_update_env() -> None:
 async def test_client_keep_alive_with_timestamp() -> None:
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     await client.keep_alive(timestamp=1700000000)
 
     sent = json.loads(transport.sent_lines[0])
@@ -644,7 +652,7 @@ async def test_client_keep_alive_with_timestamp() -> None:
 async def test_client_keep_alive_without_timestamp() -> None:
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     await client.keep_alive()
 
     sent = json.loads(transport.sent_lines[0])
@@ -682,7 +690,7 @@ async def test_client_list_sessions_returns_typed_response() -> None:
         ]
     )
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     result = await client.list_sessions(limit=10)
 
     sent = json.loads(transport.sent_lines[0])
@@ -714,12 +722,12 @@ async def test_client_read_session_returns_typed_response() -> None:
         ]
     )
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     result = await client.read_session("s1")
 
     sent = json.loads(transport.sent_lines[0])
     assert sent["method"] == ClientRequestMethod.SESSION_READ
-    assert sent["params"]["session_id"] == "s1"
+    assert sent["params"]["target"]["session_id"] == "s1"
     assert isinstance(result, SessionReadResult)
     assert result.session.session_id == "s1"
 
@@ -728,12 +736,12 @@ async def test_client_read_session_returns_typed_response() -> None:
 async def test_client_archive_session() -> None:
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     await client.archive_session("s1")
 
     sent = json.loads(transport.sent_lines[0])
     assert sent["method"] == ClientRequestMethod.SESSION_ARCHIVE
-    assert sent["params"]["session_id"] == "s1"
+    assert sent["params"]["target"]["interactive"]["session_id"] == "s1"
 
 
 @pytest.mark.asyncio
@@ -745,7 +753,7 @@ async def test_client_read_config_returns_typed_response() -> None:
         responses=[_response(1, {"config": {"theme": "dark"}, "sources": {}})]
     )
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     result = await client.read_config()
 
     sent = json.loads(transport.sent_lines[0])
@@ -758,21 +766,21 @@ async def test_client_read_config_returns_typed_response() -> None:
 async def test_client_write_config_with_scope() -> None:
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     await client.write_config("theme", "light", scope="user")
 
     sent = json.loads(transport.sent_lines[0])
     assert sent["method"] == ClientRequestMethod.CONFIG_VALUE_WRITE
     assert sent["params"]["key"] == "theme"
     assert sent["params"]["value"] == "light"
-    assert sent["params"]["scope"] == "user"
+    assert sent["params"]["target"] == "user"
 
 
 @pytest.mark.asyncio
 async def test_client_apply_config_flags() -> None:
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     await client.apply_config_flags({"feature.x": True, "feature.y": False})
 
     sent = json.loads(transport.sent_lines[0])
@@ -791,7 +799,7 @@ async def test_client_mcp_set_servers() -> None:
         responses=[_response(1, {"added": ["fs"], "removed": [], "errors": {}})]
     )
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     result = await client.mcp_set_servers(
         {"fs": StdioMcpServerConfig(command="fs-server")}
     )
@@ -808,7 +816,7 @@ async def test_client_mcp_set_servers() -> None:
 async def test_client_mcp_reconnect() -> None:
     transport = MockTransport(responses=[_response(1, None)])
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     await client.mcp_reconnect("fs")
 
     sent = json.loads(transport.sent_lines[0])
@@ -835,7 +843,7 @@ async def test_client_plugin_reload() -> None:
         ]
     )
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     result = await client.plugin_reload()
 
     sent = json.loads(transport.sent_lines[0])
@@ -862,7 +870,7 @@ async def test_send_and_await_raises_on_error_frame() -> None:
         ]
     )
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
 
     with pytest.raises(ProcessError) as exc_info:
         await client.mcp_status()
@@ -884,7 +892,7 @@ async def test_send_and_await_skips_other_request_ids() -> None:
         ]
     )
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     result = await client.mcp_status()
 
     assert result.mcp_servers == []
@@ -905,7 +913,7 @@ async def test_concurrent_control_query_and_events_share_reader() -> None:
         ]
     )
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
 
     status_task = asyncio.create_task(client.mcp_status())
     events_task = asyncio.create_task(client.wait_for_turn_ended())
@@ -921,7 +929,7 @@ async def test_concurrent_control_query_and_events_share_reader() -> None:
 async def test_stdout_close_fails_pending_request() -> None:
     transport = MockTransport(responses=[])
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
 
     from coco_sdk.errors import TransportClosedError
 
@@ -938,7 +946,7 @@ async def test_fire_and_forget_response_is_discarded() -> None:
         ]
     )
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
 
     await client.interrupt()
     status = await client.mcp_status()
@@ -964,7 +972,7 @@ async def test_events_loop_drops_error_frames() -> None:
         ]
     )
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
 
     events = [e async for e in client.events()]
     assert len(events) == 1
@@ -986,7 +994,7 @@ async def test_events_loop_drops_response_frames() -> None:
         ]
     )
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
 
     events = [e async for e in client.events()]
     assert len(events) == 1
@@ -1021,7 +1029,7 @@ async def test_hook_callback_dispatches_to_registered_handler() -> None:
         ]
     )
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     client.on_hook("cb_xyz", my_handler)
 
     events = [e async for e in client.events()]
@@ -1081,7 +1089,7 @@ async def test_hook_callback_handler_exception_falls_back_to_empty_output() -> N
         ]
     )
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     client.on_hook("cb_x", boom)
 
     _ = [e async for e in client.events()]
@@ -1112,7 +1120,7 @@ async def test_hook_callback_unregistered_id_yields_event() -> None:
         ]
     )
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
     # No handler registered — expect the request to be yielded as a parsed notification.
 
     events = [e async for e in client.events()]
@@ -1149,7 +1157,7 @@ async def test_stream_text_yields_only_deltas() -> None:
         ]
     )
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
 
     chunks = [chunk async for chunk in client.stream_text()]
     assert chunks == ["Hello ", "world"]
@@ -1180,7 +1188,7 @@ async def test_get_final_text_concatenates_deltas() -> None:
         ]
     )
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
 
     text = await client.get_final_text()
     assert text == "Hello world"
@@ -1205,7 +1213,7 @@ async def test_wait_for_turn_ended_returns_params() -> None:
         ]
     )
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
 
     completed = await client.wait_for_turn_ended()
     assert completed is not None
@@ -1218,7 +1226,18 @@ async def test_resume_emits_session_resume_then_streams() -> None:
     """`resume` sends a session/resume request and yields the resulting events."""
     transport = MockTransport(
         responses=[
-            _response(1, {"session_id": "s_old"}),
+            _response(
+                1,
+                {
+                    "session": {
+                        "session_id": "s_old",
+                        "model": "m",
+                        "cwd": "/",
+                        "created_at": "2025-01-01T00:00:00Z",
+                    },
+                    "surface_id": "surface-old",
+                },
+            ),
             _session_started(session_id="s_old"),
             _notif(
                 NotificationMethod.TURN_ENDED,
@@ -1229,13 +1248,13 @@ async def test_resume_emits_session_resume_then_streams() -> None:
         ]
     )
     client = CocoClient(prompt="test", transport=transport)
-    client._started = True
+    _mark_started(client)
 
     events = [e async for e in client.resume("s_old")]
     sent_methods = _sent_methods(transport)
     assert sent_methods[0] == ClientRequestMethod.SESSION_RESUME
     sent = json.loads(transport.sent_lines[0])
-    assert sent["params"]["session_id"] == "s_old"
+    assert sent["params"]["target"]["session_id"] == "s_old"
     assert any(e.method == NotificationMethod.TURN_ENDED for e in events)
 
 
@@ -1269,7 +1288,7 @@ async def test_can_use_tool_deny_flows_through_approve() -> None:
         return ApprovalDecision.deny
 
     client = CocoClient(prompt="test", transport=transport, can_use_tool=deny_dangerous)
-    client._started = True
+    _mark_started(client)
     _ = [e async for e in client.events()]
 
     sent = [json.loads(line) for line in transport.sent_lines]

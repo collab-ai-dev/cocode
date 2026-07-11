@@ -7,6 +7,7 @@
     "initialize",
     "session/start",
     "session/resume",
+    "session/replace",
     "session/list",
     "session/read",
     "session/turns/list",

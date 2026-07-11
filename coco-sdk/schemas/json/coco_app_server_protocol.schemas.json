@@ -85,9 +85,13 @@
       "properties": {
         "agent_id": {
           "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
+        "target",
         "agent_id"
       ],
       "type": "object"
@@ -588,11 +592,15 @@
     "ApplyPermissionUpdateParams": {
       "description": "Params for `control/applyPermissionUpdate`.",
       "properties": {
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
+        },
         "update": {
           "$ref": "#/$defs/PermissionUpdate"
         }
       },
       "required": [
+        "target",
         "update"
       ],
       "type": "object"
@@ -641,15 +649,47 @@
         "request_id": {
           "type": "string"
         },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
+        },
         "updated_input": {
           "description": "Optional rewritten tool input the SDK client supplies at\napproval time. When `Some`, the engine substitutes this for the\nmodel-emitted input before invoking the tool. Used by\n`AskUserQuestion` to ship user-selected `answers` (and optional\n`annotations`) back into the tool's data envelope.\n\nIn-process equivalent is `coco_tool_runtime::ToolPermissionResolution.updated_input`\n(TUI mode). Consumed by `app/agent-host/src/sdk_server/approval_bridge.rs`."
         }
       },
       "required": [
+        "target",
         "request_id",
         "decision"
       ],
       "type": "object"
+    },
+    "ArchiveTarget": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "interactive": {
+              "$ref": "#/$defs/InteractiveTarget"
+            }
+          },
+          "required": [
+            "interactive"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "orphaned": {
+              "$ref": "#/$defs/SessionTarget"
+            }
+          },
+          "required": [
+            "orphaned"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "AskForApprovalParams": {
       "properties": {
@@ -1317,7 +1357,7 @@
       "title": "Capability"
     },
     "ClientRequest": {
-      "description": "Bidirectional control protocol \u2014 client-initiated requests.\n\nEach variant carries a unique `method` string used on the wire. The method is the discriminator; params are the variant-specific payload.\n\nSee `event-system-design.md` \u00a75.1 for the base variants and \u00a75.4 for gap additions. 45 total.",
+      "description": "Bidirectional control protocol \u2014 client-initiated requests.\n\nEach variant carries a unique `method` string used on the wire. The method is the discriminator; params are the variant-specific payload.\n\nSee `event-system-design.md` \u00a75.1 for the base variants and \u00a75.4 for gap additions.",
       "oneOf": [
         {
           "properties": {
@@ -1359,6 +1399,22 @@
             },
             "params": {
               "$ref": "#/$defs/SessionResumeParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "session/replace",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionReplaceParams"
             }
           },
           "required": [
@@ -1480,10 +1536,14 @@
             "method": {
               "const": "session/cost",
               "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionTarget"
             }
           },
           "required": [
-            "method"
+            "method",
+            "params"
           ],
           "type": "object"
         },
@@ -1492,10 +1552,14 @@
             "method": {
               "const": "session/status",
               "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionTarget"
             }
           },
           "required": [
-            "method"
+            "method",
+            "params"
           ],
           "type": "object"
         },
@@ -1520,10 +1584,14 @@
             "method": {
               "const": "turn/interrupt",
               "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/InteractiveTarget"
             }
           },
           "required": [
-            "method"
+            "method",
+            "params"
           ],
           "type": "object"
         },
@@ -1532,10 +1600,14 @@
             "method": {
               "const": "task/list",
               "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionTarget"
             }
           },
           "required": [
-            "method"
+            "method",
+            "params"
           ],
           "type": "object"
         },
@@ -1705,10 +1777,14 @@
             "method": {
               "const": "control/resetSessionPermissionRules",
               "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/InteractiveTarget"
             }
           },
           "required": [
-            "method"
+            "method",
+            "params"
           ],
           "type": "object"
         },
@@ -1765,10 +1841,14 @@
             "method": {
               "const": "control/backgroundAllTasks",
               "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/InteractiveTarget"
             }
           },
           "required": [
-            "method"
+            "method",
+            "params"
           ],
           "type": "object"
         },
@@ -1822,10 +1902,14 @@
             "method": {
               "const": "config/read",
               "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/ConfigReadParams"
             }
           },
           "required": [
-            "method"
+            "method",
+            "params"
           ],
           "type": "object"
         },
@@ -1851,10 +1935,14 @@
             "method": {
               "const": "mcp/status",
               "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionTarget"
             }
           },
           "required": [
-            "method"
+            "method",
+            "params"
           ],
           "type": "object"
         },
@@ -1864,10 +1952,14 @@
             "method": {
               "const": "context/usage",
               "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionTarget"
             }
           },
           "required": [
-            "method"
+            "method",
+            "params"
           ],
           "type": "object"
         },
@@ -1928,10 +2020,14 @@
             "method": {
               "const": "plugin/reload",
               "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/InteractiveTarget"
             }
           },
           "required": [
-            "method"
+            "method",
+            "params"
           ],
           "type": "object"
         },
@@ -1941,10 +2037,14 @@
             "method": {
               "const": "hook/reload",
               "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/InteractiveTarget"
             }
           },
           "required": [
-            "method"
+            "method",
+            "params"
           ],
           "type": "object"
         },
@@ -1974,6 +2074,7 @@
         "initialize",
         "session/start",
         "session/resume",
+        "session/replace",
         "session/list",
         "session/read",
         "session/turns/list",
@@ -2323,10 +2424,25 @@
         "settings": {
           "additionalProperties": true,
           "type": "object"
+        },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
+        "target",
         "settings"
+      ],
+      "type": "object"
+    },
+    "ConfigReadParams": {
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/ConfigReadTarget"
+        }
+      },
+      "required": [
+        "target"
       ],
       "type": "object"
     },
@@ -2349,26 +2465,79 @@
       "title": "ConfigReadResult",
       "type": "object"
     },
+    "ConfigReadTarget": {
+      "oneOf": [
+        {
+          "enum": [
+            "process"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "session": {
+              "$ref": "#/$defs/SessionTarget"
+            }
+          },
+          "required": [
+            "session"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ConfigWriteParams": {
       "description": "Params for `config/value/write`.",
       "properties": {
         "key": {
           "type": "string"
         },
-        "scope": {
-          "description": "Optional scope: \"user\" | \"project\" | \"local\".",
-          "type": [
-            "string",
-            "null"
-          ]
+        "target": {
+          "$ref": "#/$defs/ConfigWriteTarget"
         },
         "value": true
       },
       "required": [
+        "target",
         "key",
         "value"
       ],
       "type": "object"
+    },
+    "ConfigWriteTarget": {
+      "oneOf": [
+        {
+          "enum": [
+            "user"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "project": {
+              "$ref": "#/$defs/InteractiveTarget"
+            }
+          },
+          "required": [
+            "project"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "local": {
+              "$ref": "#/$defs/InteractiveTarget"
+            }
+          },
+          "required": [
+            "local"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "ContentDeltaParams": {
       "properties": {
@@ -2852,6 +3021,9 @@
           "description": "Correlation id matching the `ServerRequest` the agent sent.",
           "type": "string"
         },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
+        },
         "values": {
           "additionalProperties": true,
           "default": {},
@@ -2860,6 +3032,7 @@
         }
       },
       "required": [
+        "target",
         "request_id",
         "mcp_server_name",
         "approved"
@@ -4251,6 +4424,22 @@
       },
       "type": "object"
     },
+    "InteractiveTarget": {
+      "description": "Selects one live interactive surface and its immutable session identity.",
+      "properties": {
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        },
+        "surface_id": {
+          "$ref": "#/$defs/SurfaceId"
+        }
+      },
+      "required": [
+        "session_id",
+        "surface_id"
+      ],
+      "type": "object"
+    },
     "InterruptedOutcome": {
       "description": "Payload for [`TurnOutcome::Interrupted`]. `abort_reason`\ndistinguishes user Ctrl+C, submit interrupt, permission abort, and\nsystem pre-empt. Never carries a model `stop_reason`.",
       "properties": {
@@ -4719,9 +4908,13 @@
       "properties": {
         "server_name": {
           "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
+        "target",
         "server_name"
       ],
       "type": "object"
@@ -4819,9 +5012,13 @@
           "additionalProperties": true,
           "description": "Server configs keyed by name.",
           "type": "object"
+        },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
+        "target",
         "servers"
       ],
       "type": "object"
@@ -4933,9 +5130,13 @@
         },
         "server_name": {
           "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
+        "target",
         "server_name",
         "enabled"
       ],
@@ -7180,11 +7381,15 @@
           "default": false,
           "type": "boolean"
         },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
+        },
         "user_message_id": {
           "type": "string"
         }
       },
       "required": [
+        "target",
         "user_message_id"
       ],
       "type": "object"
@@ -9295,12 +9500,12 @@
     "SessionArchiveParams": {
       "description": "Params for `session/archive`.",
       "properties": {
-        "session_id": {
-          "$ref": "#/$defs/SessionId"
+        "target": {
+          "$ref": "#/$defs/ArchiveTarget"
         }
       },
       "required": [
-        "session_id"
+        "target"
       ],
       "type": "object"
     },
@@ -9491,12 +9696,12 @@
             "null"
           ]
         },
-        "session_id": {
-          "$ref": "#/$defs/SessionId"
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
-        "session_id"
+        "target"
       ],
       "type": "object"
     },
@@ -9534,12 +9739,60 @@
       "properties": {
         "name": {
           "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
+        "target",
         "name"
       ],
       "type": "object"
+    },
+    "SessionReplaceParams": {
+      "properties": {
+        "destination": {
+          "$ref": "#/$defs/SessionReplacement"
+        },
+        "source": {
+          "$ref": "#/$defs/InteractiveTarget"
+        }
+      },
+      "required": [
+        "source",
+        "destination"
+      ],
+      "type": "object"
+    },
+    "SessionReplacement": {
+      "description": "Destination selected by explicit `session/replace`.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fresh": {
+              "$ref": "#/$defs/SessionStartParams"
+            }
+          },
+          "required": [
+            "fresh"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "resume": {
+              "$ref": "#/$defs/SessionTarget"
+            }
+          },
+          "required": [
+            "resume"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "SessionResultParams": {
       "description": "Matches TS `SDKResultMessageSchema` (coreSchemas.ts:1407-1451).\nTS has two subtype variants (success/error) unified here with `is_error` flag.",
@@ -9637,12 +9890,12 @@
     "SessionResumeParams": {
       "description": "Params for `session/resume`.",
       "properties": {
-        "session_id": {
-          "$ref": "#/$defs/SessionId"
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
-        "session_id"
+        "target"
       ],
       "type": "object"
     },
@@ -9900,6 +10153,18 @@
             "null"
           ]
         },
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
+    },
+    "SessionTarget": {
+      "description": "Selects persisted or live state without proving interactive ownership.",
+      "properties": {
         "session_id": {
           "$ref": "#/$defs/SessionId"
         }
@@ -9914,9 +10179,13 @@
       "properties": {
         "tag": {
           "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
+        "target",
         "tag"
       ],
       "type": "object"
@@ -9938,12 +10207,12 @@
             "null"
           ]
         },
-        "session_id": {
-          "$ref": "#/$defs/SessionId"
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
-        "session_id"
+        "target"
       ],
       "type": "object"
     },
@@ -10200,8 +10469,14 @@
               "type": "null"
             }
           ]
+        },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
+      "required": [
+        "target"
+      ],
       "type": "object"
     },
     "SetModelParams": {
@@ -10213,8 +10488,14 @@
             "string",
             "null"
           ]
+        },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
+      "required": [
+        "target"
+      ],
       "type": "object"
     },
     "SetModelRoleParams": {
@@ -10238,9 +10519,13 @@
         },
         "role": {
           "$ref": "#/$defs/ModelRole"
+        },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
+        "target",
         "role",
         "provider",
         "model_id"
@@ -10252,9 +10537,13 @@
       "properties": {
         "mode": {
           "$ref": "#/$defs/PermissionMode"
+        },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
+        "target",
         "mode"
       ],
       "type": "object"
@@ -10262,6 +10551,9 @@
     "SetThinkingParams": {
       "description": "Params for `control/setThinking`.\nUses `ThinkingLevel` which includes effort level and per-provider options.",
       "properties": {
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
+        },
         "thinking_level": {
           "anyOf": [
             {
@@ -10273,6 +10565,9 @@
           ]
         }
       },
+      "required": [
+        "target"
+      ],
       "type": "object"
     },
     "SharedV4FileData": {
@@ -11070,11 +11365,15 @@
     "StopTaskParams": {
       "description": "Params for `control/stopTask`.",
       "properties": {
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
+        },
         "task_id": {
           "type": "string"
         }
       },
       "required": [
+        "target",
         "task_id"
       ],
       "type": "object"
@@ -11782,11 +12081,15 @@
     "TaskDetailParams": {
       "description": "Params for `task/detail`.",
       "properties": {
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
+        },
         "task_id": {
           "type": "string"
         }
       },
       "required": [
+        "target",
         "task_id"
       ],
       "type": "object"
@@ -14900,6 +15203,9 @@
             "null"
           ]
         },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
+        },
         "thinking_level": {
           "anyOf": [
             {
@@ -14913,6 +15219,7 @@
         }
       },
       "required": [
+        "target",
         "prompt"
       ],
       "type": "object"
@@ -14995,9 +15302,13 @@
             "type": "string"
           },
           "type": "object"
+        },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
+        "target",
         "env"
       ],
       "type": "object"
@@ -15072,9 +15383,13 @@
         },
         "request_id": {
           "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
+        "target",
         "request_id",
         "answer"
       ],

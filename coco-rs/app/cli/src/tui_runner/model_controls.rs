@@ -87,8 +87,7 @@ pub(super) fn model_catalog_infos(
 pub(super) fn build_provider_statuses(
     runtime_config: &coco_config::RuntimeConfig,
 ) -> std::collections::HashMap<String, coco_tui::state::ProviderStatus> {
-    use coco_tui::state::ProviderStatus;
-    use coco_tui::state::ProviderUnavailableReason;
+    use coco_tui::state::{ProviderStatus, ProviderUnavailableReason};
 
     let resolver = coco_agent_host::provider_login::shared_resolver();
     runtime_config
@@ -254,6 +253,7 @@ pub(super) async fn apply_role_through_app_server(
         .set_model_role(
             local_app_server_bridge.handler(),
             coco_types::SetModelRoleParams {
+                target: interactive_target(local_app_server_bridge),
                 role,
                 provider: provider.clone(),
                 model_id: model_id.clone(),
@@ -352,5 +352,5 @@ pub(super) fn build_remote_model_change_reminder(
         ),
     ))
 }
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
+use super::interactive_target;
+use coco_types::{CoreEvent, ServerNotification};

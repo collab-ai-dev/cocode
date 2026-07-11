@@ -19,23 +19,18 @@
 //! that state; both runners construct runtimes through the shared factory, then
 //! call [`SessionRuntime::build_engine`] per turn.
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use tokio::sync::RwLock;
 
 use coco_commands::CommandRegistry;
 use coco_config::RuntimeConfig;
 use coco_session::SessionManager;
-use coco_tool_runtime::ToolPermissionBridgeRef;
-use coco_tool_runtime::ToolRegistry;
-use coco_types::ModelSpec;
-use coco_types::PermissionMode;
-use coco_types::SessionId;
+use coco_tool_runtime::{ToolPermissionBridgeRef, ToolRegistry};
+use coco_types::{ModelSpec, PermissionMode, SessionId};
 
 use crate::AgentHostOptions;
-use coco_app_runtime::ProcessRuntime;
-use coco_app_runtime::ProjectServices;
+use coco_app_runtime::{ProcessRuntime, ProjectServices};
 
 mod agent_catalog;
 mod build;
@@ -51,11 +46,12 @@ mod roles;
 mod sandbox;
 mod session_handle;
 mod state;
+mod turn;
 
 pub use coco_app_runtime::SessionRuntimeBootstrap;
-pub use factory::SessionRuntimeBootstrapSource;
-pub use factory::SessionRuntimeFactory;
-pub use factory::SessionRuntimeFactoryOpts;
+pub use factory::{
+    SessionRuntimeBootstrapSource, SessionRuntimeFactory, SessionRuntimeFactoryOpts,
+};
 pub use hooks::spawn_current_session_config_change_watcher;
 pub(crate) use permissions::live_permissions;
 pub use resources::SessionRuntime;
@@ -64,9 +60,16 @@ pub use roles::RoleOverride;
 pub(crate) use roles::resolve_model_selection_from_runtime_config;
 #[cfg(test)]
 pub(crate) use roles::thinking_level_for_effort_from;
-pub(crate) use sandbox::build_sandbox_state;
-pub(crate) use sandbox::sandbox_settings_deny_paths;
+pub(crate) use sandbox::{build_sandbox_state, sandbox_settings_deny_paths};
 pub use session_handle::SessionHandle;
+pub(crate) use turn::{ActiveTurnHandles, SessionTurnCoordinator};
+
+#[derive(Clone)]
+pub(crate) struct McpRegistrationStatus {
+    pub(crate) tool_count: i32,
+    pub(crate) skipped_tools: Vec<coco_types::McpSkippedToolStatus>,
+    pub(crate) tombstoned_tools: Vec<String>,
+}
 
 fn clone_std_rwlock<T: Clone>(lock: &std::sync::RwLock<T>) -> T {
     match lock.read() {

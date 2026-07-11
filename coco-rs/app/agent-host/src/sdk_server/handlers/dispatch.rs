@@ -1,17 +1,10 @@
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use coco_types::ClientRequest;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use super::SdkServerState;
-use super::config;
-use super::mcp;
-use super::rewind;
-use super::runtime;
-use super::session;
-use super::turn;
+use super::{SdkServerState, config, mcp, rewind, runtime, session, turn};
 use crate::sdk_server::outbound::OutboundMessage;
 
 /// Per-request context passed to handlers.
@@ -25,75 +18,58 @@ pub struct HandlerContext {
     /// Shared server state across requests.
     pub state: Arc<SdkServerState>,
 
-    /// AppServer-derived session scope for the request connection.
-    ///
-    /// Set only when the connection has exactly one attached interactive
-    /// surface. Handlers fall back to the installed runtime's scoped state,
-    /// then to a sole keyed handoff when this is absent.
-    pub scoped_session_id: Option<coco_types::SessionId>,
+    /// Immutable initialize snapshot owned by this accepted connection.
+    pub connection_profile: Arc<coco_types::ConnectionProfile>,
 
-    /// Runtime resolved BY the routed session id via the AppServer registry
-    ///. Runtime-control handlers prefer this so they
-    /// mutate the routed session rather than whichever runtime happens to be
-    /// installed during a replacement window. `None` for legacy no-registry
-    /// sessions, which fall back to the installed singleton.
-    pub scoped_runtime: Option<crate::session_runtime::SessionHandle>,
+    pub app_server:
+        Option<Arc<coco_app_server::AppServer<crate::sdk_server::LocalAppSessionHandle>>>,
+
+    /// Explicit protocol target, including persisted-session requests that do
+    /// not require a live runtime.
+    pub target_session_id: Option<coco_types::SessionId>,
+
+    /// Validated live-session capability. Whenever present, the id and handle
+    /// were resolved together from AppServer; they cannot describe different
+    /// sessions.
+    pub session: Option<SessionRequestContext>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ActiveSessionSource {
-    Scoped,
-    Runtime,
-    ScopedState,
+#[derive(Clone)]
+pub struct SessionRequestContext {
+    pub session_id: coco_types::SessionId,
+    pub runtime: crate::session_runtime::SessionHandle,
 }
 
 impl HandlerContext {
     pub fn has_scoped_session(&self) -> bool {
-        self.scoped_session_id.is_some()
-    }
-
-    pub(super) async fn active_session_resolution(
-        &self,
-    ) -> Option<(coco_types::SessionId, ActiveSessionSource)> {
-        if let Some(session_id) = &self.scoped_session_id {
-            return Some((session_id.clone(), ActiveSessionSource::Scoped));
-        }
-        let runtime = self.state.session_runtime_snapshot().await;
-        if let Some(runtime) = runtime {
-            let session_id = runtime.current_typed_session_id().await;
-            if self.state.session_handoff_snapshot(&session_id).is_some() {
-                return Some((session_id, ActiveSessionSource::Runtime));
-            }
-        }
-        if let Some(session_id) = self.state.sole_session_handoff_id() {
-            return Some((session_id, ActiveSessionSource::ScopedState));
-        }
-        None
+        self.session.is_some()
     }
 
     pub async fn active_session_id(&self) -> Option<coco_types::SessionId> {
-        self.active_session_resolution()
-            .await
-            .map(|(session_id, _)| session_id)
+        self.session
+            .as_ref()
+            .map(|session| session.session_id.clone())
     }
 
-    /// Resolve the runtime a runtime-control handler should act on:
-    /// the registry-resolved runtime for the routed session id when present,
-    /// else the installed singleton for legacy no-registry sessions.
+    /// Resolve only the runtime selected and validated by AppServer routing.
     pub(super) async fn resolve_runtime(&self) -> Option<crate::session_runtime::SessionHandle> {
-        if let Some(runtime) = &self.scoped_runtime {
-            return Some(runtime.clone());
-        }
-        self.state.session_runtime_snapshot().await
+        self.session.as_ref().map(|session| session.runtime.clone())
     }
 
     pub(super) async fn workspace_cwd(&self) -> Result<PathBuf, HandlerResult> {
-        if let Some(session_id) = &self.scoped_session_id
+        if let Some(session) = &self.session {
+            return Ok(session.runtime.original_cwd().clone());
+        }
+        if let Some(session_id) = &self.target_session_id
             && let Some(metadata) = self.state.session_metadata_snapshot(session_id)
         {
             return Ok(PathBuf::from(metadata.cwd));
         }
-        self.state.workspace_cwd().await
+        Err(HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "request requires an explicitly targeted session workspace".to_string(),
+            data: None,
+        })
     }
 }
 
@@ -141,6 +117,11 @@ pub async fn dispatch_client_request(req: ClientRequest, ctx: HandlerContext) ->
         ClientRequest::Initialize(params) => session::handle_initialize(params, &ctx).await,
         ClientRequest::SessionStart(params) => session::handle_session_start(*params, &ctx).await,
         ClientRequest::SessionResume(params) => session::handle_session_resume(params, &ctx).await,
+        ClientRequest::SessionReplace(_) => HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "session/replace requires AppServer lifecycle routing".to_string(),
+            data: None,
+        },
         ClientRequest::SessionList => session::handle_session_list(&ctx).await,
         ClientRequest::SessionRead(params) => session::handle_session_read(params, &ctx).await,
         ClientRequest::SessionTurnsList(params) => {
@@ -158,15 +139,15 @@ pub async fn dispatch_client_request(req: ClientRequest, ctx: HandlerContext) ->
         ClientRequest::SessionToggleTag(params) => {
             session::handle_session_toggle_tag(params, &ctx).await
         }
-        ClientRequest::SessionCost => runtime::handle_session_cost(&ctx).await,
-        ClientRequest::SessionStatus => runtime::handle_session_status(&ctx).await,
+        ClientRequest::SessionCost(_) => runtime::handle_session_cost(&ctx).await,
+        ClientRequest::SessionStatus(_) => runtime::handle_session_status(&ctx).await,
 
         // === Turn control ===
         ClientRequest::TurnStart(params) => turn::handle_turn_start(params, &ctx).await,
-        ClientRequest::TurnInterrupt => turn::handle_turn_interrupt(&ctx).await,
+        ClientRequest::TurnInterrupt(_) => turn::handle_turn_interrupt(&ctx).await,
 
         // === Running task observability ===
-        ClientRequest::TaskList => runtime::handle_task_list(&ctx).await,
+        ClientRequest::TaskList(_) => runtime::handle_task_list(&ctx).await,
         ClientRequest::TaskDetail(params) => runtime::handle_task_detail(params, &ctx).await,
 
         // === Approval + user input + elicitation ===
@@ -189,13 +170,13 @@ pub async fn dispatch_client_request(req: ClientRequest, ctx: HandlerContext) ->
         ClientRequest::ApplyPermissionUpdate(params) => {
             runtime::handle_apply_permission_update(params, &ctx).await
         }
-        ClientRequest::ResetSessionPermissionRules => {
+        ClientRequest::ResetSessionPermissionRules(_) => {
             runtime::handle_reset_session_permission_rules(&ctx).await
         }
         ClientRequest::StopTask(params) => runtime::handle_stop_task(params, &ctx).await,
         ClientRequest::RewindFiles(params) => rewind::handle_rewind_files(params, &ctx).await,
         ClientRequest::UpdateEnv(params) => runtime::handle_update_env(params, &ctx).await,
-        ClientRequest::BackgroundAllTasks => runtime::handle_background_all_tasks(&ctx).await,
+        ClientRequest::BackgroundAllTasks(_) => runtime::handle_background_all_tasks(&ctx).await,
 
         // `keepAlive` is the simplest handler — respond with empty ok so
         // clients using it as a heartbeat get immediate acknowledgement.
@@ -207,17 +188,17 @@ pub async fn dispatch_client_request(req: ClientRequest, ctx: HandlerContext) ->
         }
 
         // === Config ===
-        ClientRequest::ConfigRead => config::handle_config_read(&ctx).await,
+        ClientRequest::ConfigRead(params) => config::handle_config_read(params, &ctx).await,
         ClientRequest::ConfigWrite(params) => config::handle_config_write(params, &ctx).await,
 
         // === TS P1 gap additions ===
-        ClientRequest::McpStatus => mcp::handle_mcp_status(&ctx).await,
-        ClientRequest::ContextUsage => runtime::handle_context_usage(&ctx).await,
+        ClientRequest::McpStatus(_) => mcp::handle_mcp_status(&ctx).await,
+        ClientRequest::ContextUsage(_) => runtime::handle_context_usage(&ctx).await,
         ClientRequest::McpSetServers(params) => mcp::handle_mcp_set_servers(params, &ctx).await,
         ClientRequest::McpReconnect(params) => mcp::handle_mcp_reconnect(params, &ctx).await,
         ClientRequest::McpToggle(params) => mcp::handle_mcp_toggle(params, &ctx).await,
-        ClientRequest::PluginReload => runtime::handle_plugin_reload(&ctx).await,
-        ClientRequest::HookReload => runtime::handle_hook_reload(&ctx).await,
+        ClientRequest::PluginReload(_) => runtime::handle_plugin_reload(&ctx).await,
+        ClientRequest::HookReload(_) => runtime::handle_hook_reload(&ctx).await,
         ClientRequest::ConfigApplyFlags(params) => {
             runtime::handle_config_apply_flags(params, &ctx).await
         }

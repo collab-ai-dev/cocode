@@ -224,6 +224,7 @@ pub(super) async fn run_agent_driver(
                     }
                 };
                 let params = coco_types::TurnStartParams {
+                    target: interactive_target(&local_app_server_bridge),
                     prompt: effective_content,
                     history_override: Vec::new(),
                     images: image_data_to_turn_start(&images),
@@ -315,6 +316,7 @@ pub(super) async fn run_agent_driver(
                     cancel: ActiveTurnCancel {
                         client: interrupt_client,
                         handler,
+                        target: interactive_target(&local_app_server_bridge),
                     },
                 });
             }
@@ -652,7 +654,7 @@ pub(super) async fn run_agent_driver(
                             rewound_turn,
                             &event_tx,
                             &session,
-                            &local_app_server_bridge,
+                            &mut local_app_server_bridge,
                         )
                         .await;
                     }
@@ -764,8 +766,12 @@ pub(super) async fn run_agent_driver(
                 // Some until the turn naturally emits its terminal event; the
                 // next SubmitInput or driver shutdown drains it if needed.
                 if let Some(state) = active_turn.lock().await.as_ref() {
-                    let ActiveTurnCancel { client, handler } = &state.cancel;
-                    match client.turn_interrupt(handler).await {
+                    let ActiveTurnCancel {
+                        client,
+                        handler,
+                        target,
+                    } = &state.cancel;
+                    match client.turn_interrupt(handler, target.clone()).await {
                         Ok(()) => info!("Interrupt: cancelled AppServer active turn"),
                         Err(error) => {
                             tracing::warn!(%error, "Interrupt: AppServer turn/interrupt failed")
@@ -783,6 +789,7 @@ pub(super) async fn run_agent_driver(
                     .agent_interrupt_current_work(
                         local_app_server_bridge.handler(),
                         coco_types::AgentInterruptCurrentWorkParams {
+                            target: interactive_target(&local_app_server_bridge),
                             agent_id: agent_id.clone(),
                         },
                     )
@@ -877,6 +884,7 @@ pub(super) async fn run_agent_driver(
                     .stop_task(
                         local_app_server_bridge.handler(),
                         coco_types::StopTaskParams {
+                            target: interactive_target(&local_app_server_bridge),
                             task_id: task_id.clone(),
                         },
                     )
@@ -1095,7 +1103,10 @@ pub(super) async fn run_agent_driver(
                     .client()
                     .set_permission_mode(
                         local_app_server_bridge.handler(),
-                        coco_types::SetPermissionModeParams { mode },
+                        coco_types::SetPermissionModeParams {
+                            target: interactive_target(&local_app_server_bridge),
+                            mode,
+                        },
                     )
                     .await
                 {

@@ -1,9 +1,7 @@
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
-use coco_types::ServerRequest;
-use coco_types::ServerRequestUserInputParams;
-use coco_types::SessionState;
-use coco_types::TuiOnlyEvent;
+use coco_types::{
+    CoreEvent, ServerNotification, ServerRequest, ServerRequestUserInputParams, SessionState,
+    TuiOnlyEvent,
+};
 
 use super::*;
 
@@ -284,58 +282,6 @@ fn passive_surfaces_can_share_session_with_interactive_owner() {
 
     assert_eq!(routing.interactive_owner(&session_id), Some(&interactive));
     assert_eq!(routing.surface_session(&passive), Some(&session_id));
-}
-
-#[test]
-fn sole_interactive_session_for_connection_requires_unique_attached_interactive_surface() {
-    let mut routing = RoutingState::new(8);
-    let first_session_id = test_session_id("sess-1");
-    let second_session_id = test_session_id("sess-2");
-    let (tx, _rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let passive = SurfaceId::from("surface-passive");
-    let first_interactive = SurfaceId::from("surface-interactive-1");
-    let second_interactive = SurfaceId::from("surface-interactive-2");
-    routing.connect(connection, tx);
-    routing
-        .attach_surface(connection, passive, first_session_id.clone())
-        .expect("attach passive");
-    assert_eq!(
-        routing.sole_interactive_session_for_connection(connection),
-        None
-    );
-
-    routing
-        .attach_surface_with_options(
-            connection,
-            first_interactive,
-            first_session_id.clone(),
-            AttachSurfaceOptions {
-                role: SurfaceRole::Interactive,
-                ..AttachSurfaceOptions::default()
-            },
-        )
-        .expect("attach first interactive");
-    assert_eq!(
-        routing.sole_interactive_session_for_connection(connection),
-        Some(first_session_id)
-    );
-
-    routing
-        .attach_surface_with_options(
-            connection,
-            second_interactive,
-            second_session_id,
-            AttachSurfaceOptions {
-                role: SurfaceRole::Interactive,
-                ..AttachSurfaceOptions::default()
-            },
-        )
-        .expect("attach second interactive for a different session");
-    assert_eq!(
-        routing.sole_interactive_session_for_connection(connection),
-        None
-    );
 }
 
 #[test]

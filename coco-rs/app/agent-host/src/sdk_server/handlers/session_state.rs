@@ -1,10 +1,8 @@
-use std::collections::HashMap;
-use std::sync::Mutex as StdMutex;
+use std::{collections::HashMap, sync::Mutex as StdMutex};
 
 use coco_types::SessionId;
 
-use super::SessionHandoffState;
-use super::SessionMetadata;
+use super::{SessionHandoffState, SessionMetadata};
 
 #[derive(Default)]
 pub(super) struct ScopedSessionState {
@@ -28,34 +26,6 @@ impl ScopedSessionState {
             Err(poisoned) => poisoned.into_inner(),
         };
         handoffs.get(session_id).cloned()
-    }
-
-    pub(super) fn sole_handoff_snapshot(&self) -> Option<(SessionId, SessionHandoffState)> {
-        let handoffs = match self.handoffs.lock() {
-            Ok(handoffs) => handoffs,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if handoffs.len() == 1 {
-            handoffs
-                .iter()
-                .next()
-                .map(|(session_id, handoff)| (session_id.clone(), handoff.clone()))
-        } else {
-            None
-        }
-    }
-
-    pub(super) fn has_handoffs(&self) -> bool {
-        let handoffs = match self.handoffs.lock() {
-            Ok(handoffs) => handoffs,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        !handoffs.is_empty()
-    }
-
-    pub(super) fn sole_handoff_id(&self) -> Option<SessionId> {
-        self.sole_handoff_snapshot()
-            .map(|(session_id, _)| session_id)
     }
 
     pub(super) fn clear_handoff(&self, session_id: &SessionId) {

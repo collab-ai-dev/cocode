@@ -1,28 +1,18 @@
-use super::SessionAgentCatalogResources;
-use super::SessionCatalogResources;
-use super::SessionCommandResources;
-use super::SessionConfigResources;
-use super::SessionEngineConfigResources;
-use super::SessionEngineStateResources;
-use super::SessionExecutionResources;
-use super::SessionHandleResources;
-use super::SessionHistoryResources;
-use super::SessionHookResources;
-use super::SessionIntegrationResources;
-use super::SessionLifecycleResources;
-use super::SessionMemoryResources;
-use super::SessionPermissionResources;
-use super::SessionPersistenceResources;
-use super::SessionProjectResources;
-use super::SessionSandboxResources;
-use super::SessionTitleResources;
-use super::SessionTurnResources;
-use super::SessionWorkspaceResources;
+use super::{
+    SessionAgentCatalogResources, SessionCatalogResources, SessionCommandResources,
+    SessionConfigResources, SessionEngineConfigResources, SessionEngineStateResources,
+    SessionExecutionResources, SessionHandleResources, SessionHistoryResources,
+    SessionHookResources, SessionIntegrationResources, SessionLifecycleResources,
+    SessionMemoryResources, SessionPermissionResources, SessionPersistenceResources,
+    SessionProjectResources, SessionSandboxResources, SessionTitleResources, SessionTurnResources,
+    SessionWorkspaceResources,
+};
 
 /// All per-session state shared by both runners. Construction at startup
 /// is done once via [`SessionRuntime::build`]; per-turn engines are
 /// assembled via [`SessionRuntime::build_engine`].
 pub struct SessionRuntime {
+    pub(in crate::session_runtime) turn_coordinator: crate::session_runtime::SessionTurnCoordinator,
     pub(in crate::session_runtime) execution: SessionExecutionResources,
     pub(in crate::session_runtime) catalog_resources: SessionCatalogResources,
     pub(in crate::session_runtime) config_resources: SessionConfigResources,

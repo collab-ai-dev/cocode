@@ -1,18 +1,12 @@
-use std::collections::HashMap;
-use std::sync::Mutex as StdMutex;
+use std::{collections::HashMap, sync::Mutex as StdMutex};
 
-use coco_types::SessionId;
-use tokio_util::sync::CancellationToken;
-
-use super::ActiveTurnHandles;
-use super::ActiveTurnStartError;
 use super::SessionAccounting;
+use coco_types::SessionId;
 
 #[derive(Default)]
 pub(super) struct TurnState {
     counters: StdMutex<HashMap<SessionId, i32>>,
     accounting: StdMutex<HashMap<SessionId, SessionAccounting>>,
-    active_turns: StdMutex<HashMap<SessionId, ActiveTurnHandles>>,
 }
 
 impl TurnState {
@@ -74,84 +68,5 @@ impl TurnState {
             .entry(session_id.clone())
             .or_insert_with(SessionAccounting::new);
         entry.stats.accumulate(params);
-    }
-
-    pub(super) fn has_active_turn(&self, session_id: &SessionId) -> bool {
-        let active_turns = match self.active_turns.lock() {
-            Ok(active_turns) => active_turns,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        active_turns.contains_key(session_id)
-    }
-
-    pub(super) fn active_turn_cancel_token(
-        &self,
-        session_id: &SessionId,
-    ) -> Option<CancellationToken> {
-        let active_turns = match self.active_turns.lock() {
-            Ok(active_turns) => active_turns,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        active_turns
-            .get(session_id)
-            .map(|turn| turn.cancel_token.clone())
-    }
-
-    /// Test-only blind install. Production turn start goes through
-    /// [`Self::start_active_turn`], which check-and-installs atomically.
-    #[cfg(test)]
-    pub(super) fn install_active_turn(
-        &self,
-        session_id: SessionId,
-        active_turn: ActiveTurnHandles,
-    ) {
-        let mut active_turns = match self.active_turns.lock() {
-            Ok(active_turns) => active_turns,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        active_turns.insert(session_id, active_turn);
-    }
-
-    /// Atomically check-and-install the per-session active turn under one lock
-    ///. Holding the `active_turns` lock across the
-    /// occupancy check AND the insert closes the race where two connections
-    /// each pass a separate `has_active_turn` check and the second blind insert
-    /// leaks the first turn's cancel token (an uninterruptible concurrent turn).
-    /// `mint_and_build` runs inside the critical section; on failure (missing
-    /// handoff) nothing is inserted and the slot stays free.
-    pub(super) fn start_active_turn<F>(
-        &self,
-        session_id: &SessionId,
-        mint_and_build: F,
-    ) -> Result<coco_types::TurnId, ActiveTurnStartError>
-    where
-        F: FnOnce() -> Result<(coco_types::TurnId, ActiveTurnHandles), ActiveTurnStartError>,
-    {
-        let mut active_turns = match self.active_turns.lock() {
-            Ok(active_turns) => active_turns,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if active_turns.contains_key(session_id) {
-            return Err(ActiveTurnStartError::TurnAlreadyRunning);
-        }
-        let (turn_id, active_turn) = mint_and_build()?;
-        active_turns.insert(session_id.clone(), active_turn);
-        Ok(turn_id)
-    }
-
-    pub(super) fn take_active_turn(&self, session_id: &SessionId) -> Option<ActiveTurnHandles> {
-        let mut active_turns = match self.active_turns.lock() {
-            Ok(active_turns) => active_turns,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        active_turns.remove(session_id)
-    }
-
-    pub(super) fn clear_active_turn(&self, session_id: &SessionId) -> bool {
-        let mut active_turns = match self.active_turns.lock() {
-            Ok(active_turns) => active_turns,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        active_turns.remove(session_id).is_some()
     }
 }

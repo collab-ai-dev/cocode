@@ -3,60 +3,35 @@
 //! This keeps runtime semantics in `coco-agent-host` while allowing
 //! `coco-app-server` to own JSON-RPC connection dispatch and routing.
 
-use std::future::Future;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{future::Future, path::PathBuf, sync::Arc, time::Duration};
 
-use crate::local_client::LocalServerClient;
-use crate::local_client::LocalSessionClient;
-use coco_app_server::AppServer;
-use coco_app_server::AttachSurfaceOptions;
-use coco_app_server::DisconnectOutcome;
-use coco_app_server::JsonRpcAdapterConnection;
-use coco_app_server::JsonRpcAdapterError;
-use coco_app_server::JsonRpcDispatchError;
-use coco_app_server::JsonRpcRequestContext;
-use coco_app_server::JsonRpcRequestFuture;
-use coco_app_server::JsonRpcRequestHandler;
-use coco_app_server::LocalClientAdapter;
-use coco_app_server::LocalClientRequestContext;
-use coco_app_server::LocalClientRequestFuture;
-use coco_app_server::LocalClientRequestHandler;
-use coco_app_server::SurfaceLimits;
+use crate::local_client::{LocalServerClient, LocalSessionClient};
+use coco_app_server::{
+    AppServer, AttachSurfaceOptions, DisconnectOutcome, JsonRpcAdapterConnection,
+    JsonRpcAdapterError, JsonRpcDispatchError, JsonRpcRequestContext, JsonRpcRequestFuture,
+    JsonRpcRequestHandler, LocalClientAdapter, LocalClientRequestContext, LocalClientRequestFuture,
+    LocalClientRequestHandler, SurfaceLimits,
+};
 use coco_app_server_client::ClientError;
 use coco_app_server_transport::JsonRpcFrame;
 use coco_hub_connector::HubConnectorSender;
-use coco_types::ClientRequest;
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
-use coco_types::SessionEnvelope;
-use coco_types::SessionId;
-use coco_types::SurfaceId;
-use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
+use coco_types::{
+    ClientRequest, CoreEvent, ServerNotification, SessionEnvelope, SessionId, SurfaceId,
+};
+use tokio::{sync::mpsc, task::JoinHandle};
 use tracing::warn;
 
 use super::session_lifecycle::*;
-use crate::sdk_server::dispatcher::spawn_sdk_outbound_writer;
-use crate::sdk_server::handlers::HandlerContext;
-use crate::sdk_server::handlers::HandlerResult;
-use crate::sdk_server::handlers::SdkServerState;
-use crate::sdk_server::handlers::SessionHandoffState;
-use crate::sdk_server::handlers::SessionMetadata;
-use crate::sdk_server::handlers::dispatch_client_request;
-use crate::sdk_server::handlers::session;
-use crate::sdk_server::outbound::OutboundMessage;
-use crate::sdk_server::outbound::ProcessEvent;
-use crate::sdk_server::outbound::event_agent_id;
-#[cfg(test)]
-use crate::sdk_server::outbound::send_session_event;
-use crate::sdk_server::session_data::LocalSessionDataRequest;
-use crate::sdk_server::session_data::LocalSessionDataView;
-#[cfg(test)]
-use crate::sdk_server::session_data::live_sdk_session_summary_and_history;
-use crate::sdk_server::transport::SdkTransport;
-use crate::sdk_server::transport::TransportError;
+use crate::sdk_server::{
+    dispatcher::spawn_sdk_outbound_writer,
+    handlers::{
+        HandlerContext, HandlerResult, SdkServerState, SessionHandoffState, SessionMetadata,
+        dispatch_client_request, session,
+    },
+    outbound::{OutboundMessage, ProcessEvent, event_agent_id},
+    session_data::{LocalSessionDataRequest, LocalSessionDataView},
+    transport::{SdkTransport, TransportError},
+};
 
 const APP_SERVER_SDK_FRAME_CHANNEL_CAPACITY: usize = 128;
 const APP_SERVER_LOCAL_CHANNEL_CAPACITY: usize = 128;
@@ -106,6 +81,8 @@ pub struct AppServerSdkHandler {
     notif_tx: mpsc::Sender<OutboundMessage>,
     local_app_server: Option<Arc<AppServer<LocalAppSessionHandle>>>,
     turn_drain_timeout: Duration,
+    connection_profile: Arc<std::sync::OnceLock<coco_types::ConnectionProfile>>,
+    require_initialize: bool,
 }
 
 /// Local AppServer registry handle for the current application-host bridge.
@@ -149,7 +126,7 @@ impl LocalAppSessionHandle {
         self.runtime.is_some()
     }
 
-    pub(super) fn into_runtime(self) -> Option<crate::session_runtime::SessionHandle> {
+    pub fn into_session(self) -> Option<crate::session_runtime::SessionHandle> {
         self.runtime
     }
 
@@ -158,7 +135,7 @@ impl LocalAppSessionHandle {
         action: &str,
     ) -> Result<crate::session_runtime::SessionHandle, JsonRpcDispatchError> {
         let session_id = self.session_id.clone();
-        self.into_runtime().ok_or_else(|| JsonRpcDispatchError {
+        self.into_session().ok_or_else(|| JsonRpcDispatchError {
             code: coco_types::error_codes::INTERNAL_ERROR,
             message: format!(
                 "local AppServer session {session_id} {action} without a runtime handle"
@@ -172,7 +149,7 @@ impl LocalAppSessionHandle {
         action: &str,
     ) -> anyhow::Result<crate::session_runtime::SessionHandle> {
         let session_id = self.session_id.clone();
-        self.into_runtime().ok_or_else(|| {
+        self.into_session().ok_or_else(|| {
             anyhow::anyhow!(
                 "local AppServer session {session_id} {action} without a runtime handle"
             )
@@ -221,6 +198,8 @@ impl AppServerSdkHandler {
             notif_tx,
             local_app_server: None,
             turn_drain_timeout: APP_SERVER_TURN_DRAIN_TIMEOUT,
+            connection_profile: Arc::new(std::sync::OnceLock::new()),
+            require_initialize: true,
         }
     }
 
@@ -243,12 +222,66 @@ impl AppServerSdkHandler {
         app_server: Arc<AppServer<LocalAppSessionHandle>>,
         turn_drain_timeout: Duration,
     ) -> Self {
+        let connection_profile = Arc::new(std::sync::OnceLock::new());
+        let profile = match coco_types::ConnectionProfile::try_from(
+            coco_types::InitializeParams::default(),
+        ) {
+            Ok(profile) => profile,
+            Err(error) => panic!("invalid built-in local connection profile: {error}"),
+        };
+        let _ = connection_profile.set(profile);
         Self {
             state,
             notif_tx,
             local_app_server: Some(app_server),
             turn_drain_timeout,
+            connection_profile,
+            require_initialize: false,
         }
+    }
+
+    fn profile_for_request(
+        &self,
+        request: &ClientRequest,
+    ) -> Result<Arc<coco_types::ConnectionProfile>, JsonRpcDispatchError> {
+        if let ClientRequest::Initialize(params) = request {
+            if self.connection_profile.get().is_some() {
+                return Err(JsonRpcDispatchError {
+                    code: coco_types::error_codes::INVALID_REQUEST,
+                    message: "connection is already initialized".to_string(),
+                    data: Some(serde_json::json!({ "kind": "already_initialized" })),
+                });
+            }
+            let profile =
+                coco_types::ConnectionProfile::try_from(params.clone()).map_err(|error| {
+                    JsonRpcDispatchError {
+                        code: coco_types::error_codes::INVALID_PARAMS,
+                        message: error.to_string(),
+                        data: None,
+                    }
+                })?;
+            self.connection_profile
+                .set(profile)
+                .map_err(|_| JsonRpcDispatchError {
+                    code: coco_types::error_codes::INVALID_REQUEST,
+                    message: "connection is already initialized".to_string(),
+                    data: Some(serde_json::json!({ "kind": "already_initialized" })),
+                })?;
+        }
+        self.connection_profile
+            .get()
+            .cloned()
+            .map(Arc::new)
+            .ok_or_else(|| JsonRpcDispatchError {
+                code: coco_types::error_codes::INVALID_REQUEST,
+                message: if self.require_initialize {
+                    "connection is not initialized"
+                } else {
+                    "local connection profile is unavailable"
+                }
+                .to_string(),
+                data: Some(serde_json::json!({ "kind": "not_initialized" })),
+            })
     }
 }
 
@@ -258,6 +291,10 @@ impl JsonRpcRequestHandler for AppServerSdkHandler {
         context: JsonRpcRequestContext,
         request: ClientRequest,
     ) -> JsonRpcRequestFuture {
+        let connection_profile = match self.profile_for_request(&request) {
+            Ok(profile) => profile,
+            Err(error) => return Box::pin(async move { Err(error) }),
+        };
         let local_app_server = self.local_app_server.clone();
         if let (Some(app_server), ClientRequest::SessionSubscribe(params)) =
             (local_app_server.clone(), &request)
@@ -266,6 +303,25 @@ impl JsonRpcRequestHandler for AppServerSdkHandler {
             let connection = context.connection;
             return Box::pin(async move {
                 subscribe_local_app_server_session(app_server, connection, params).await
+            });
+        }
+        if let (Some(app_server), ClientRequest::CancelRequest(params)) =
+            (local_app_server.clone(), &request)
+        {
+            let request_id = coco_types::RequestId::String(params.request_id.clone());
+            let connection = context.connection;
+            return Box::pin(async move {
+                app_server
+                    .cancel_server_request_for_connection(connection, &request_id)
+                    .map(|_| serde_json::Value::Null)
+                    .map_err(|error| JsonRpcDispatchError {
+                        code: coco_types::error_codes::INVALID_REQUEST,
+                        message: error.to_string(),
+                        data: Some(serde_json::json!({
+                            "kind": "pending_request_mismatch",
+                            "request_id": request_id,
+                        })),
+                    })
             });
         }
         let lifecycle_request = local_app_server
@@ -299,6 +355,7 @@ impl JsonRpcRequestHandler for AppServerSdkHandler {
                         state,
                         connection,
                         params,
+                        Arc::clone(&connection_profile),
                         replacement,
                         turn_drain_timeout,
                     )
@@ -309,6 +366,7 @@ impl JsonRpcRequestHandler for AppServerSdkHandler {
                     state,
                     connection,
                     params,
+                    Arc::clone(&connection_profile),
                     turn_drain_timeout,
                 )
                 .await
@@ -329,6 +387,7 @@ impl JsonRpcRequestHandler for AppServerSdkHandler {
                         state,
                         connection,
                         params,
+                        Arc::clone(&connection_profile),
                         replacement,
                         turn_drain_timeout,
                     )
@@ -339,21 +398,54 @@ impl JsonRpcRequestHandler for AppServerSdkHandler {
                     state,
                     connection,
                     params,
+                    Arc::clone(&connection_profile),
                     turn_drain_timeout,
                 )
                 .await
             });
         }
-        let scoped_session_id = local_app_server.as_ref().and_then(|app_server| {
-            app_server.sole_interactive_session_for_connection(context.connection)
-        });
-        let scoped_runtime =
-            resolve_scoped_runtime(local_app_server.as_ref(), scoped_session_id.as_ref());
+        if let (Some(app_server), ClientRequest::SessionReplace(params)) =
+            (local_app_server.clone(), &request)
+        {
+            let params = params.as_ref().clone();
+            let connection = context.connection;
+            let state = Arc::clone(&self.state);
+            let turn_drain_timeout = self.turn_drain_timeout;
+            return Box::pin(async move {
+                let replacement = state.runtime_replacement_snapshot().await.ok_or_else(|| {
+                    JsonRpcDispatchError {
+                        code: coco_types::error_codes::INVALID_REQUEST,
+                        message: "session/replace requires a runtime factory".to_string(),
+                        data: None,
+                    }
+                })?;
+                replace_sdk_session_with_runtime(
+                    app_server,
+                    state,
+                    connection,
+                    params,
+                    connection_profile,
+                    replacement,
+                    turn_drain_timeout,
+                )
+                .await
+            });
+        }
+        let (target_session_id, session) = match resolve_request_runtime(
+            local_app_server.as_ref(),
+            context.connection,
+            &request,
+        ) {
+            Ok(resolved) => resolved,
+            Err(error) => return Box::pin(async move { Err(error) }),
+        };
         let ctx = HandlerContext {
             notif_tx: self.notif_tx.clone(),
             state: Arc::clone(&self.state),
-            scoped_session_id,
-            scoped_runtime,
+            connection_profile,
+            app_server: local_app_server.clone(),
+            target_session_id,
+            session,
         };
         let state = Arc::clone(&self.state);
         let turn_drain_timeout = self.turn_drain_timeout;
@@ -384,6 +476,10 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
         context: LocalClientRequestContext,
         request: ClientRequest,
     ) -> LocalClientRequestFuture {
+        let connection_profile = match self.profile_for_request(&request) {
+            Ok(profile) => profile,
+            Err(error) => return Box::pin(async move { Err(error) }),
+        };
         let local_app_server = self.local_app_server.clone();
         if let (Some(app_server), ClientRequest::SessionSubscribe(params)) =
             (local_app_server.clone(), &request)
@@ -392,6 +488,25 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
             let connection = context.connection_key();
             return Box::pin(async move {
                 subscribe_local_app_server_session(app_server, connection, params).await
+            });
+        }
+        if let (Some(app_server), ClientRequest::CancelRequest(params)) =
+            (local_app_server.clone(), &request)
+        {
+            let request_id = coco_types::RequestId::String(params.request_id.clone());
+            let connection = context.connection_key();
+            return Box::pin(async move {
+                app_server
+                    .cancel_server_request_for_connection(connection, &request_id)
+                    .map(|_| serde_json::Value::Null)
+                    .map_err(|error| JsonRpcDispatchError {
+                        code: coco_types::error_codes::INVALID_REQUEST,
+                        message: error.to_string(),
+                        data: Some(serde_json::json!({
+                            "kind": "pending_request_mismatch",
+                            "request_id": request_id,
+                        })),
+                    })
             });
         }
         let lifecycle_request = local_app_server.as_ref().and_then(|_| {
@@ -425,6 +540,7 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
                         state,
                         connection,
                         params,
+                        Arc::clone(&connection_profile),
                         replacement,
                         turn_drain_timeout,
                     )
@@ -435,6 +551,7 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
                     state,
                     connection,
                     params,
+                    Arc::clone(&connection_profile),
                     turn_drain_timeout,
                 )
                 .await
@@ -455,6 +572,7 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
                         state,
                         connection,
                         params,
+                        Arc::clone(&connection_profile),
                         replacement,
                         turn_drain_timeout,
                     )
@@ -465,21 +583,54 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
                     state,
                     connection,
                     params,
+                    Arc::clone(&connection_profile),
                     turn_drain_timeout,
                 )
                 .await
             });
         }
-        let scoped_session_id = local_app_server.as_ref().and_then(|app_server| {
-            app_server.sole_interactive_session_for_connection(context.connection_key())
-        });
-        let scoped_runtime =
-            resolve_scoped_runtime(local_app_server.as_ref(), scoped_session_id.as_ref());
+        if let (Some(app_server), ClientRequest::SessionReplace(params)) =
+            (local_app_server.clone(), &request)
+        {
+            let params = params.as_ref().clone();
+            let connection = context.connection_key();
+            let state = Arc::clone(&self.state);
+            let turn_drain_timeout = self.turn_drain_timeout;
+            return Box::pin(async move {
+                let replacement = state.runtime_replacement_snapshot().await.ok_or_else(|| {
+                    JsonRpcDispatchError {
+                        code: coco_types::error_codes::INVALID_REQUEST,
+                        message: "session/replace requires a runtime factory".to_string(),
+                        data: None,
+                    }
+                })?;
+                replace_sdk_session_with_runtime(
+                    app_server,
+                    state,
+                    connection,
+                    params,
+                    connection_profile,
+                    replacement,
+                    turn_drain_timeout,
+                )
+                .await
+            });
+        }
+        let (target_session_id, session) = match resolve_request_runtime(
+            local_app_server.as_ref(),
+            context.connection_key(),
+            &request,
+        ) {
+            Ok(resolved) => resolved,
+            Err(error) => return Box::pin(async move { Err(error) }),
+        };
         let ctx = HandlerContext {
             notif_tx: self.notif_tx.clone(),
             state: Arc::clone(&self.state),
-            scoped_session_id,
-            scoped_runtime,
+            connection_profile,
+            app_server: local_app_server.clone(),
+            target_session_id,
+            session,
         };
         let state = Arc::clone(&self.state);
         let turn_drain_timeout = self.turn_drain_timeout;
@@ -504,6 +655,86 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
     }
 }
 
+impl coco_app_server::JsonRpcConnectionHandlerFactory for AppServerSdkHandler {
+    type Handler = Self;
+
+    fn open(&self, _connection: coco_app_server::ConnectionKey) -> Arc<Self::Handler> {
+        Arc::new(Self {
+            state: Arc::clone(&self.state),
+            notif_tx: self.notif_tx.clone(),
+            local_app_server: self.local_app_server.clone(),
+            turn_drain_timeout: self.turn_drain_timeout,
+            connection_profile: Arc::new(std::sync::OnceLock::new()),
+            require_initialize: true,
+        })
+    }
+}
+
+fn resolve_request_runtime(
+    app_server: Option<&Arc<AppServer<LocalAppSessionHandle>>>,
+    connection: coco_app_server::ConnectionKey,
+    request: &ClientRequest,
+) -> Result<
+    (
+        Option<SessionId>,
+        Option<crate::sdk_server::handlers::SessionRequestContext>,
+    ),
+    JsonRpcDispatchError,
+> {
+    if let ClientRequest::SessionArchive(params) = request {
+        return Ok((Some(params.target.session_id().clone()), None));
+    }
+    let Some(target) = request.interactive_target() else {
+        let Some(target) = request.session_target() else {
+            return Ok((None, None));
+        };
+        let runtime = app_server
+            .and_then(|server| server.registry().get(&target.session_id))
+            .and_then(LocalAppSessionHandle::into_session);
+        return Ok((
+            Some(target.session_id.clone()),
+            runtime.map(
+                |runtime| crate::sdk_server::handlers::SessionRequestContext {
+                    session_id: target.session_id.clone(),
+                    runtime,
+                },
+            ),
+        ));
+    };
+    let app_server = app_server.ok_or_else(|| JsonRpcDispatchError {
+        code: coco_types::error_codes::INVALID_REQUEST,
+        message: "interactive request requires AppServer routing".to_string(),
+        data: None,
+    })?;
+    let validated = app_server
+        .validate_interactive_target(connection, target)
+        .map_err(|error| {
+            crate::sdk_server::session_lifecycle::app_server_lifecycle_error(
+                "resolve request target",
+                error,
+            )
+        })?;
+    let runtime = validated
+        .handle
+        .runtime()
+        .cloned()
+        .ok_or_else(|| JsonRpcDispatchError {
+            code: coco_types::error_codes::INTERNAL_ERROR,
+            message: format!(
+                "targeted AppServer session {} has no runtime handle",
+                target.session_id
+            ),
+            data: None,
+        })?;
+    Ok((
+        Some(target.session_id.clone()),
+        Some(crate::sdk_server::handlers::SessionRequestContext {
+            session_id: target.session_id.clone(),
+            runtime,
+        }),
+    ))
+}
+
 pub struct AppServerLocalBridge {
     app_server: Arc<AppServer<LocalAppSessionHandle>>,
     client: LocalServerClient<LocalAppSessionHandle>,
@@ -517,6 +748,10 @@ pub struct AppServerLocalBridge {
 }
 
 impl AppServerLocalBridge {
+    pub fn interactive_session(&self) -> Option<&LocalSessionClient> {
+        self.interactive_surface.as_ref()
+    }
+
     pub fn new(state: Arc<SdkServerState>) -> Self {
         Self::with_channel_capacity(state, APP_SERVER_LOCAL_CHANNEL_CAPACITY)
     }
@@ -935,13 +1170,14 @@ impl AppServerLocalBridge {
     pub async fn start_turn_and_wait_for_end(
         &mut self,
         session_id: SessionId,
-        params: coco_types::TurnStartParams,
+        mut params: coco_types::TurnStartParams,
     ) -> Result<AppServerLocalTurnCompletion, ClientError> {
         self.ensure_interactive_surface(session_id)?;
         let surface = self
             .interactive_surface
             .clone()
             .ok_or_else(|| ClientError::InvalidArgument("interactive surface missing".into()))?;
+        params.target = surface.interactive_target();
         let handler = self.handler.clone();
         let started = self.client.turn_start(&handler, params).await?;
         loop {
@@ -959,9 +1195,14 @@ impl AppServerLocalBridge {
     pub async fn start_turn(
         &mut self,
         session_id: SessionId,
-        params: coco_types::TurnStartParams,
+        mut params: coco_types::TurnStartParams,
     ) -> Result<coco_types::TurnStartResult, ClientError> {
         self.ensure_interactive_surface(session_id)?;
+        let surface = self
+            .interactive_surface
+            .as_ref()
+            .ok_or_else(|| ClientError::InvalidArgument("interactive surface missing".into()))?;
+        params.target = surface.interactive_target();
         self.client.turn_start(&self.handler, params).await
     }
 
@@ -971,7 +1212,7 @@ impl AppServerLocalBridge {
         {
             session_id
         } else {
-            self.handler.state.runtime_or_active_session_id().await?
+            return None;
         };
         Some(session::build_aggregated_session_result(
             &session_id,
@@ -1051,21 +1292,17 @@ impl AppServerLocalBridge {
 
     pub async fn install_session_runtime(&self, session: crate::session_runtime::SessionHandle) {
         crate::sdk_server::sdk_hooks::install_runtime_callback(
-            Arc::clone(&self.handler.state),
+            Arc::clone(&self.app_server),
             &session,
         );
         let (
             session_id,
             cwd,
             model,
-            max_turns,
-            system_prompt,
             bypass_permissions_available,
             app_state,
             history,
             session_manager,
-            file_history,
-            config_home,
         ) = {
             let runtime = &session;
             let session_id = session.session_id().clone();
@@ -1081,14 +1318,10 @@ impl AppServerLocalBridge {
                 session_id,
                 cwd,
                 config.model_id.clone(),
-                config.max_turns,
-                config.system_prompt.clone(),
                 config.permission_mode_availability.bypass_permissions,
                 Arc::clone(runtime.app_state()),
                 history,
                 Arc::clone(runtime.session_manager()),
-                runtime.file_history().cloned(),
-                runtime.config_home().clone(),
             )
         };
         if let Err(error) = register_local_app_server_session(
@@ -1121,21 +1354,14 @@ impl AppServerLocalBridge {
             .set_bypass_permissions_available(bypass_permissions_available);
         self.handler
             .state
-            .install_turn_runner(Arc::new(crate::sdk_server::QueryEngineRunner::new(
-                session.clone(),
-                max_turns,
-                system_prompt,
+            .install_turn_runner(Arc::new(crate::sdk_server::SessionTurnExecutor::new(
+                None, None,
             )))
             .await;
         self.handler
             .state
             .install_session_manager(session_manager)
             .await;
-        self.handler
-            .state
-            .install_file_history(file_history, Some(config_home))
-            .await;
-        self.handler.state.install_session_runtime(session).await;
     }
 }
 
@@ -1254,31 +1480,6 @@ fn route_local_outbound_event<H>(
     }
 }
 
-#[cfg(test)]
-fn decode_client_request(
-    method: impl Into<String>,
-    params: Option<serde_json::Value>,
-) -> Result<ClientRequest, serde_json::Error> {
-    let method = method.into();
-    let mut object = serde_json::Map::new();
-    object.insert(
-        "method".to_string(),
-        serde_json::Value::String(method.clone()),
-    );
-    if let Some(params) = params {
-        object.insert("params".to_string(), params);
-    }
-
-    let with_params = serde_json::Value::Object(object);
-    match serde_json::from_value(with_params) {
-        Ok(request) => Ok(request),
-        Err(with_params_error) => {
-            let without_params = serde_json::json!({ "method": method });
-            serde_json::from_value(without_params).map_err(|_| with_params_error)
-        }
-    }
-}
-
 pub async fn dispatch_sdk_client_request(
     request: ClientRequest,
     ctx: HandlerContext,
@@ -1300,54 +1501,6 @@ pub async fn dispatch_sdk_client_request(
     }
 }
 
-#[cfg(test)]
-#[allow(dead_code)]
-async fn run_app_server_connection_over_sdk_transport<H, Handler>(
-    connection: JsonRpcAdapterConnection<H>,
-    transport: Arc<dyn SdkTransport>,
-    handler: Arc<Handler>,
-) -> Result<DisconnectOutcome, SdkAppServerBridgeError>
-where
-    H: Clone + Send + Sync + 'static,
-    Handler: JsonRpcRequestHandler,
-{
-    run_app_server_connection_over_sdk_transport_inner(connection, transport, handler, None, None)
-        .await
-}
-
-#[cfg(test)]
-async fn run_app_server_sdk_state_over_sdk_transport(
-    connection: JsonRpcAdapterConnection<LocalAppSessionHandle>,
-    transport: Arc<dyn SdkTransport>,
-    state: Arc<SdkServerState>,
-) -> Result<DisconnectOutcome, SdkAppServerBridgeError> {
-    run_app_server_sdk_state_over_sdk_transport_with_external_notifications(
-        connection,
-        transport,
-        state,
-        Vec::new(),
-    )
-    .await
-}
-
-#[cfg(test)]
-async fn run_app_server_sdk_state_over_sdk_transport_with_external_notifications(
-    connection: JsonRpcAdapterConnection<LocalAppSessionHandle>,
-    transport: Arc<dyn SdkTransport>,
-    state: Arc<SdkServerState>,
-    external_notifications: Vec<mpsc::Receiver<CoreEvent>>,
-) -> Result<DisconnectOutcome, SdkAppServerBridgeError> {
-    run_app_server_sdk_state_over_sdk_transport_with_external_notifications_and_hub_connector(
-        connection,
-        transport,
-        state,
-        external_notifications,
-        None,
-        APP_SERVER_TURN_DRAIN_TIMEOUT,
-    )
-    .await
-}
-
 pub async fn run_app_server_sdk_state_over_sdk_transport_with_external_notifications_and_hub_connector(
     connection: JsonRpcAdapterConnection<LocalAppSessionHandle>,
     transport: Arc<dyn SdkTransport>,
@@ -1358,19 +1511,6 @@ pub async fn run_app_server_sdk_state_over_sdk_transport_with_external_notificat
 ) -> Result<DisconnectOutcome, SdkAppServerBridgeError> {
     let app_server = connection.app_server();
     let (outbound_tx, outbound_rx) = mpsc::channel::<OutboundMessage>(256);
-    state.install_sdk_transport(Arc::clone(&transport)).await;
-    state.install_sdk_outbound_tx(outbound_tx.clone()).await;
-
-    let mcp_manager = state.mcp_manager_snapshot().await;
-    if let Some(manager) = mcp_manager {
-        crate::sdk_server::sdk_mcp::install_route(
-            manager,
-            Arc::clone(&state),
-            Arc::clone(&transport),
-        )
-        .await;
-    }
-
     let mut external_forwarders = Vec::new();
     for mut rx in external_notifications {
         let forwarded_tx = outbound_tx.clone();
@@ -1398,24 +1538,25 @@ pub async fn run_app_server_sdk_state_over_sdk_transport_with_external_notificat
         Arc::clone(state.session_seq_allocator()),
         hub_connector,
     );
-    let handler = Arc::new(
-        AppServerSdkHandler::with_local_app_server_and_turn_drain_timeout(
-            Arc::clone(&state),
-            outbound_tx.clone(),
-            Arc::clone(&app_server),
-            turn_drain_timeout,
-        ),
+    let handler_factory = AppServerSdkHandler::with_local_app_server_and_turn_drain_timeout(
+        Arc::clone(&state),
+        outbound_tx.clone(),
+        Arc::clone(&app_server),
+        turn_drain_timeout,
+    );
+    let handler = coco_app_server::JsonRpcConnectionHandlerFactory::open(
+        &handler_factory,
+        connection.connection_key(),
     );
     let result = run_app_server_connection_over_sdk_transport_inner(
         connection,
         transport,
         handler,
         Some(outbound_tx.clone()),
-        Some(Arc::clone(&state)),
     )
     .await;
+    drop(handler_factory);
 
-    state.clear_sdk_outbound_tx().await;
     for forwarder in external_forwarders {
         forwarder.abort();
         let _ = forwarder.await;
@@ -1430,7 +1571,6 @@ async fn run_app_server_connection_over_sdk_transport_inner<H, Handler>(
     transport: Arc<dyn SdkTransport>,
     handler: Arc<Handler>,
     outbound_messages: Option<mpsc::Sender<OutboundMessage>>,
-    server_request_state: Option<Arc<SdkServerState>>,
 ) -> Result<DisconnectOutcome, SdkAppServerBridgeError>
 where
     H: Clone + Send + Sync + 'static,
@@ -1447,11 +1587,6 @@ where
             let Some(frame) = reader_transport.recv_frame().await? else {
                 break Ok(());
             };
-            if let Some(state) = &server_request_state
-                && state.resolve_server_request_frame(frame.clone()).await
-            {
-                continue;
-            }
             if inbound_tx.send(frame).await.is_err() {
                 break Ok(());
             }

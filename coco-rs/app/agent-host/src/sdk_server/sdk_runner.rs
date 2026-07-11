@@ -19,22 +19,16 @@
 //! The SDK client drives the cadence via multiple `turn/start` calls
 //! per session.
 
-use std::pin::Pin;
-use std::sync::Arc;
+use std::{pin::Pin, sync::Arc};
 
 use coco_inference::ModelRuntimeSource;
 use coco_query::QueryEngineConfig;
-use coco_types::CoreEvent;
-use coco_types::ModelRole;
-use coco_types::TurnStartParams;
+use coco_types::{CoreEvent, ModelRole, TurnStartParams};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
-use tracing::warn;
+use tracing::{info, warn};
 
-use crate::sdk_server::handlers::SdkServerState;
-use crate::sdk_server::handlers::TurnHandoff;
-use crate::sdk_server::handlers::TurnRunner;
+use crate::sdk_server::handlers::{TurnHandoff, TurnRunner};
 
 /// `TurnRunner` implementation that spawns a fresh `QueryEngine` per
 /// turn.
@@ -44,7 +38,6 @@ use crate::sdk_server::handlers::TurnRunner;
 /// `session.build_engine_from_config(...)` so SDK and TUI share the
 /// `with_*` install list.
 pub struct QueryEngineRunner {
-    session: crate::session_runtime::SessionHandle,
     /// Max internal agent turns (tool-use iterations) per SDK turn.
     /// `None` = unbounded unless `max_turns` is supplied in the request
     /// or `loop.max_turns` in settings.
@@ -53,13 +46,9 @@ pub struct QueryEngineRunner {
     system_prompt: Option<String>,
 }
 
-/// `TurnRunner` that resolves the active [`SessionHandle`] at turn start.
-///
-/// This is the compatibility bridge for AppServer-owned session replacement:
-/// callers install a new runtime through `SdkServerState`, and subsequent
-/// turns use the new runtime without replacing the runner object itself.
-pub struct StateQueryEngineRunner {
-    state: Arc<SdkServerState>,
+/// Process-stateless executor. Every call receives the AppServer-selected
+/// session capability explicitly.
+pub struct SessionTurnExecutor {
     max_turns: Option<i32>,
     system_prompt: Option<String>,
 }
@@ -69,26 +58,20 @@ impl QueryEngineRunner {
     /// already owns the client / tools / fallbacks / hook registry / all
     /// session subsystems).
     pub fn new(
-        session: crate::session_runtime::SessionHandle,
+        _session: crate::session_runtime::SessionHandle,
         max_turns: Option<i32>,
         system_prompt: Option<String>,
     ) -> Self {
         Self {
-            session,
             max_turns,
             system_prompt,
         }
     }
 }
 
-impl StateQueryEngineRunner {
-    pub fn new(
-        state: Arc<SdkServerState>,
-        max_turns: Option<i32>,
-        system_prompt: Option<String>,
-    ) -> Self {
+impl SessionTurnExecutor {
+    pub fn new(max_turns: Option<i32>, system_prompt: Option<String>) -> Self {
         Self {
-            state,
             max_turns,
             system_prompt,
         }
@@ -139,6 +122,8 @@ fn create_slash_metadata_message(metadata: &str) -> coco_messages::Message {
 impl TurnRunner for QueryEngineRunner {
     fn run_turn<'a>(
         &'a self,
+        session: crate::session_runtime::SessionHandle,
+        app_server: Arc<coco_app_server::AppServer<crate::sdk_server::LocalAppSessionHandle>>,
         params: TurnStartParams,
         turn_id: coco_types::TurnId,
         handoff: TurnHandoff,
@@ -146,7 +131,8 @@ impl TurnRunner for QueryEngineRunner {
         cancel: CancellationToken,
     ) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
         run_turn_with_session(
-            self.session.clone(),
+            session,
+            app_server,
             self.max_turns,
             self.system_prompt.clone(),
             params,
@@ -158,24 +144,23 @@ impl TurnRunner for QueryEngineRunner {
     }
 }
 
-impl TurnRunner for StateQueryEngineRunner {
+impl TurnRunner for SessionTurnExecutor {
     fn run_turn<'a>(
         &'a self,
+        session: crate::session_runtime::SessionHandle,
+        app_server: Arc<coco_app_server::AppServer<crate::sdk_server::LocalAppSessionHandle>>,
         params: TurnStartParams,
         turn_id: coco_types::TurnId,
         handoff: TurnHandoff,
         event_tx: mpsc::Sender<CoreEvent>,
         cancel: CancellationToken,
     ) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
-        let state = Arc::clone(&self.state);
         let max_turns = self.max_turns;
         let system_prompt = self.system_prompt.clone();
         Box::pin(async move {
-            let session = state.session_runtime_snapshot().await.ok_or_else(|| {
-                anyhow::anyhow!("SdkServer was constructed without a SessionRuntime")
-            })?;
             run_turn_with_session(
                 session,
+                app_server,
                 max_turns,
                 system_prompt,
                 params,
@@ -192,6 +177,7 @@ impl TurnRunner for StateQueryEngineRunner {
 #[allow(clippy::too_many_arguments)]
 fn run_turn_with_session(
     session: crate::session_runtime::SessionHandle,
+    app_server: Arc<coco_app_server::AppServer<crate::sdk_server::LocalAppSessionHandle>>,
     max_turns: Option<i32>,
     system_prompt: Option<String>,
     params: TurnStartParams,
@@ -207,13 +193,17 @@ fn run_turn_with_session(
     let model_selection_override = params.model_selection.clone();
     let permission_mode_override = params.permission_mode;
     let thinking_level_override = params.thinking_level;
-    let history_handle = handoff.history.clone();
+    let session_id = session.session_id().clone();
+    let app_state = Arc::clone(session.app_state());
     // Keep our own handle on the cancel token. The engine consumes
     // its copy; we still need to know post-run whether the user
     // requested an interrupt so the wire stream gets `turn/interrupted`
     // rather than `turn/failed`.
     let cancel_for_terminal = cancel.clone();
     Box::pin(async move {
+        let history_handle = Arc::new(tokio::sync::Mutex::new(
+            session.history().lock().await.to_vec(),
+        ));
         // Re-use the SessionRuntime's already-loaded `RuntimeConfig`
         // instead of re-running `RuntimeConfigBuilder::from_process`
         // per turn. The runtime's config is the canonical session-
@@ -246,7 +236,7 @@ fn run_turn_with_session(
             .map(|selection| selection.model_id.clone())
             .unwrap_or_else(|| current_engine_config.model_id.clone());
         info!(
-            session_id = %handoff.session_id,
+            session_id = %session_id,
             model = %model_id,
             cwd = %turn_cwd.display(),
             "QueryEngineRunner: run_turn"
@@ -281,7 +271,7 @@ fn run_turn_with_session(
                 }),
             system_prompt: system_prompt.or_else(|| current_engine_config.system_prompt.clone()),
             streaming_tool_execution: runtime_config.loop_config.enable_streaming_tools,
-            session_id: handoff.session_id.clone(),
+            session_id: session_id.clone(),
             tool_config: runtime_config.tool.clone(),
             sandbox_config: runtime_config.sandbox.clone(),
             sandbox_state: session.sandbox_state(),
@@ -323,7 +313,7 @@ fn run_turn_with_session(
         // build from --add-dir + settings additionalDirectories, plus any
         // runtime /add-dir) so per-turn SDK rebuilds don't drop it (P17).
         {
-            let mut guard = handoff.app_state.write().await;
+            let mut guard = app_state.write().await;
             refresh_live_permissions_for_turn(
                 &mut guard,
                 SdkTurnPermissionInputs {
@@ -344,8 +334,12 @@ fn run_turn_with_session(
         }
 
         let engine = session
-            .build_engine_from_config(config, cancel, Some(handoff.app_state.clone()))
+            .build_engine_from_config(config, cancel, Some(app_state.clone()))
             .await
+            .with_permission_bridge(Arc::new(crate::sdk_server::SdkPermissionBridge::new(
+                Arc::clone(&app_server),
+                session.clone(),
+            )))
             .with_model_runtime_source(model_runtime_source);
 
         // Snapshot the prior history, append a fresh user message,
@@ -538,11 +532,11 @@ fn run_turn_with_session(
         // Clone the event channel so we can still emit on the
         // error path (the engine takes ownership of the original).
         let event_tx_for_error = event_tx.clone();
-        let session_id_for_error = handoff.session_id.clone();
+        let session_id_for_error = session_id.clone();
         let (core_event_tx, mut core_event_rx) = mpsc::channel::<CoreEvent>(256);
         let event_tx_forward = event_tx.clone();
         let session_manager_for_forward = Arc::clone(session.session_manager());
-        let session_id_for_forward = handoff.session_id.clone();
+        let session_id_for_forward = session_id.clone();
         let forward_handle = tokio::spawn(async move {
             while let Some(event) = core_event_rx.recv().await {
                 if matches!(

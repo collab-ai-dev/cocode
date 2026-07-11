@@ -6,8 +6,7 @@
 
 use tracing::info;
 
-use super::HandlerContext;
-use super::HandlerResult;
+use super::{HandlerContext, HandlerResult};
 
 /// `config/read` — return the merged effective configuration plus a
 /// per-source breakdown keyed by source name.
@@ -17,11 +16,20 @@ use super::HandlerResult;
 /// runtime cwd fallback. Returns the JSON-serialized merged view and a
 /// per-source map suitable for clients that want to display or override
 /// specific layers.
-pub(super) async fn handle_config_read(ctx: &HandlerContext) -> HandlerResult {
+pub(super) async fn handle_config_read(
+    params: coco_types::ConfigReadParams,
+    ctx: &HandlerContext,
+) -> HandlerResult {
     // Project/local roots matter for clients that have multiple repos open.
-    let cwd = match ctx.workspace_cwd().await {
-        Ok(cwd) => cwd,
-        Err(err) => return err,
+    let cwd = match params.target {
+        coco_types::ConfigReadTarget::Process => match ctx.state.process_cwd().await {
+            Ok(cwd) => cwd,
+            Err(err) => return err,
+        },
+        coco_types::ConfigReadTarget::Session(_) => match ctx.workspace_cwd().await {
+            Ok(cwd) => cwd,
+            Err(err) => return err,
+        },
     };
 
     // `load_settings` reads up to 6 layered JSON files synchronously; run
@@ -93,24 +101,29 @@ pub(super) async fn handle_config_write(
     params: coco_types::ConfigWriteParams,
     ctx: &HandlerContext,
 ) -> HandlerResult {
-    let scope = params.scope.as_deref().unwrap_or("user");
-    let cwd = match ctx.workspace_cwd().await {
-        Ok(cwd) => cwd,
-        Err(err) => return err,
-    };
-
-    let target_path = match scope {
-        "user" => coco_config::global_config::user_settings_path(),
-        "project" => coco_config::global_config::project_settings_path(&cwd),
-        "local" => coco_config::global_config::local_settings_path(&cwd),
-        other => {
-            return HandlerResult::Err {
-                code: coco_types::error_codes::INVALID_PARAMS,
-                message: format!(
-                    "config/value/write: invalid scope {other:?}; expected user|project|local"
-                ),
-                data: None,
+    let (scope, target_path) = match params.target {
+        coco_types::ConfigWriteTarget::User => {
+            ("user", coco_config::global_config::user_settings_path())
+        }
+        coco_types::ConfigWriteTarget::Project(_) => {
+            let cwd = match ctx.workspace_cwd().await {
+                Ok(cwd) => cwd,
+                Err(err) => return err,
             };
+            (
+                "project",
+                coco_config::global_config::project_settings_path(&cwd),
+            )
+        }
+        coco_types::ConfigWriteTarget::Local(_) => {
+            let cwd = match ctx.workspace_cwd().await {
+                Ok(cwd) => cwd,
+                Err(err) => return err,
+            };
+            (
+                "local",
+                coco_config::global_config::local_settings_path(&cwd),
+            )
         }
     };
 

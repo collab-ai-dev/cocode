@@ -46,9 +46,33 @@ fn spawn_app_server_bridge(server: SdkServer) -> tokio::task::JoinHandle<()> {
     })
 }
 
+async fn initialize_connection(client: &InMemoryTransport) {
+    client
+        .send(req(
+            0,
+            "initialize",
+            serde_json::to_value(coco_types::InitializeParams::default())
+                .expect("serialize initialize params"),
+        ))
+        .await
+        .expect("send initialize");
+    let reply = client
+        .recv()
+        .await
+        .expect("receive initialize")
+        .expect("frame");
+    match reply {
+        JsonRpcMessage::Response(response) => {
+            assert_eq!(response.request_id, RequestId::Integer(0));
+        }
+        other => panic!("expected initialize response, got {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn keep_alive_returns_empty_ok_response() {
     let (server_task, client) = spawn_server().await;
+    initialize_connection(&client).await;
 
     client
         .send(req(1, "control/keepAlive", serde_json::json!({})))
@@ -79,6 +103,7 @@ async fn keep_alive_returns_empty_ok_response() {
 #[tokio::test]
 async fn unknown_method_returns_invalid_params_error() {
     let (server_task, client) = spawn_server().await;
+    initialize_connection(&client).await;
 
     // "nonexistent/method" is not in the ClientRequest enum, so the
     // dispatcher's serde parse will fail → INVALID_PARAMS.
@@ -103,6 +128,7 @@ async fn unknown_method_returns_invalid_params_error() {
 #[tokio::test]
 async fn server_exits_on_eof() {
     let (server_task, client) = spawn_server().await;
+    initialize_connection(&client).await;
     // Immediately drop the client → server sees EOF → exits cleanly.
     drop(client);
     tokio::time::timeout(std::time::Duration::from_secs(2), server_task)
@@ -114,6 +140,7 @@ async fn server_exits_on_eof() {
 #[tokio::test]
 async fn multiple_requests_are_processed_concurrently() {
     let (server_task, client) = spawn_server().await;
+    initialize_connection(&client).await;
 
     for id in [1, 2, 3] {
         client
@@ -161,6 +188,7 @@ async fn app_server_bridge_entrypoint_dispatches_and_forwards_external_notificat
     let connection = adapter.connect();
     let server_task =
         tokio::spawn(async move { sdk_server.run_app_server_connection(connection).await });
+    initialize_connection(&client).await;
 
     client
         .send(req(7, "control/keepAlive", serde_json::json!({})))

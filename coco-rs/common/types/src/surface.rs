@@ -1,8 +1,4 @@
-use crate::RequestId;
-use crate::ServerRequest;
-use crate::SessionEnvelope;
-use crate::SessionId;
-use crate::SurfaceId;
+use crate::{RequestId, ServerRequest, SessionEnvelope, SessionId, SurfaceId};
 
 /// One outbound session event targeted to a client surface.
 #[derive(Debug, Clone)]
@@ -14,6 +10,7 @@ pub struct SurfaceDelivery {
 /// One actionable server request targeted to a client surface.
 #[derive(Debug, Clone)]
 pub struct ServerRequestDelivery {
+    pub session_id: SessionId,
     pub surface_id: SurfaceId,
     pub request_id: RequestId,
     pub request: ServerRequest,

@@ -1,25 +1,14 @@
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use coco_app_server::AppServer;
-use coco_app_server::AttachSurfaceOptions;
-use coco_app_server::ConnectionKey;
-use coco_app_server::LocalClientAdapter;
-use coco_app_server::LocalClientDispatchError;
-use coco_app_server::LocalClientRequestContext;
-use coco_app_server::LocalClientRequestFuture;
-use coco_app_server::LocalClientRequestHandler;
-use coco_app_server::SessionSurfaceCounts;
-use coco_app_server::SurfaceCapabilities;
-use coco_app_server::SurfaceCapability;
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
-use coco_types::ServerRequest;
-use coco_types::ServerRequestUserInputParams;
-use coco_types::SessionEnvelope;
-use coco_types::SessionState;
-use coco_types::SurfaceLifecycleEffectKind;
-use coco_types::TurnId;
+use coco_app_server::{
+    AppServer, AttachSurfaceOptions, ConnectionKey, LocalClientAdapter, LocalClientDispatchError,
+    LocalClientRequestContext, LocalClientRequestFuture, LocalClientRequestHandler,
+    SessionSurfaceCounts, SurfaceCapabilities, SurfaceCapability,
+};
+use coco_types::{
+    CoreEvent, ServerNotification, ServerRequest, ServerRequestUserInputParams, SessionEnvelope,
+    SessionState, SurfaceLifecycleEffectKind, TurnId,
+};
 
 use super::*;
 
@@ -135,6 +124,10 @@ impl LocalClientRequestHandler for RecordingClientRequestHandler {
 
 fn minimal_turn_params(prompt: &str) -> TurnStartParams {
     TurnStartParams {
+        target: coco_types::InteractiveTarget {
+            session_id: test_session_id("placeholder-session"),
+            surface_id: SurfaceId::from("placeholder-surface"),
+        },
         prompt: prompt.to_string(),
         history_override: Vec::new(),
         images: Vec::new(),
@@ -172,10 +165,15 @@ async fn local_server_client_typed_methods_dispatch_and_decode_results() {
     }
 
     let unit_handler = RecordingLocalRequestHandler::default();
+    let typed_session = LocalSessionClient {
+        session_id: session_id.clone(),
+        surface_id: SurfaceId::from("surface-local-typed-client"),
+    };
     client
         .user_input_resolve(
             &unit_handler,
             UserInputResolveParams {
+                target: typed_session.interactive_target(),
                 request_id: "input-1".to_string(),
                 answer: "yes".to_string(),
             },
@@ -198,7 +196,7 @@ async fn local_server_client_typed_methods_dispatch_and_decode_results() {
         ..RecordingLocalRequestHandler::default()
     };
     let cost = client
-        .session_cost(&cost_handler)
+        .session_cost(&cost_handler, typed_session.session_target())
         .await
         .expect("session cost succeeds");
     assert_eq!(cost.text, "No usage yet.");
@@ -214,7 +212,7 @@ async fn local_server_client_typed_methods_dispatch_and_decode_results() {
         ..RecordingLocalRequestHandler::default()
     };
     let task_list = client
-        .task_list(&task_list_handler)
+        .task_list(&task_list_handler, &typed_session)
         .await
         .expect("task list succeeds");
     assert!(task_list.tasks.is_empty());
@@ -232,7 +230,7 @@ async fn local_server_client_typed_methods_dispatch_and_decode_results() {
         ..RecordingLocalRequestHandler::default()
     };
     let backgrounded = client
-        .background_all_tasks(&background_handler)
+        .background_all_tasks(&background_handler, &typed_session)
         .await
         .expect("background-all succeeds");
     assert_eq!(backgrounded.task_ids, vec!["task-1".to_string()]);
@@ -285,7 +283,7 @@ async fn local_session_handle_helpers_dispatch_session_requests() {
         .expect("interrupt succeeds");
     assert!(matches!(
         &interrupt_handler.calls.lock().expect("calls lock")[0],
-        ClientRequest::TurnInterrupt
+        ClientRequest::TurnInterrupt(_)
     ));
 
     let read_handler = RecordingClientRequestHandler::ok(serde_json::json!({
@@ -313,7 +311,10 @@ async fn local_session_handle_helpers_dispatch_session_requests() {
         let ClientRequest::SessionRead(params) = &calls[0] else {
             panic!("expected session/read request");
         };
-        assert_eq!(params.session_id, test_session_id("sess-local-handle"));
+        assert_eq!(
+            params.target.session_id,
+            test_session_id("sess-local-handle")
+        );
         assert_eq!(params.cursor.as_deref(), Some("4"));
         assert_eq!(params.limit, Some(2));
     }
@@ -344,7 +345,10 @@ async fn local_session_handle_helpers_dispatch_session_requests() {
         let ClientRequest::SessionTurnsList(params) = &calls[0] else {
             panic!("expected session/turns/list request");
         };
-        assert_eq!(params.session_id, test_session_id("sess-local-handle"));
+        assert_eq!(
+            params.target.session_id,
+            test_session_id("sess-local-handle")
+        );
         assert_eq!(params.cursor.as_deref(), Some("1"));
         assert_eq!(params.limit, Some(1));
     }
@@ -383,7 +387,7 @@ async fn local_close_session_returns_handle_on_failure() {
     let ClientRequest::SessionArchive(params) = &calls[0] else {
         panic!("expected session/archive request");
     };
-    assert_eq!(params.session_id, session_id);
+    assert_eq!(params.target.session_id(), &session_id);
 }
 
 #[tokio::test]
@@ -422,25 +426,21 @@ async fn local_replace_session_helpers_return_new_handle_or_original_on_failure(
     );
     {
         let calls = start_handler.calls.lock().expect("calls lock");
-        assert!(matches!(&calls[0], ClientRequest::SessionStart(_)));
+        assert!(matches!(&calls[0], ClientRequest::SessionReplace(_)));
     }
 
     let resume_handler = RecordingClientRequestHandler::ok(serde_json::json!({
-        "session": {
-            "session_id": "sess-replace-resumed",
-            "model": "gpt-test",
-            "cwd": "/tmp",
-            "created_at": "2026-07-08T00:00:00Z",
-            "message_count": 0,
-            "total_tokens": 0
-        }
+        "session_id": "sess-replace-resumed",
+        "surface_id": "surface-replace-started"
     }));
     let resumed = client
         .replace_session_with_resume(
             &resume_handler,
             started,
             SessionResumeParams {
-                session_id: test_session_id("sess-replace-resumed"),
+                target: coco_types::SessionTarget {
+                    session_id: test_session_id("sess-replace-resumed"),
+                },
             },
         )
         .await
@@ -462,7 +462,9 @@ async fn local_replace_session_helpers_return_new_handle_or_original_on_failure(
             &failing_handler,
             resumed,
             SessionResumeParams {
-                session_id: test_session_id("sess-replace-fail"),
+                target: coco_types::SessionTarget {
+                    session_id: test_session_id("sess-replace-fail"),
+                },
             },
         )
         .await

@@ -16,29 +16,22 @@
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use anyhow::Context;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 
-use coco_agent_host::headless::build_runtime_config_for_cli;
-use coco_agent_host::headless::resolve_main_model;
-use coco_agent_host::resume_resolver;
-use coco_agent_host::resume_resolver::ResumePlan;
-use coco_agent_host::sdk_server::SdkServer;
-use coco_agent_host::sdk_server::StateQueryEngineRunner;
-use coco_agent_host::sdk_server::StdioTransport;
-use coco_agent_host::sdk_server::cli_bootstrap::CliInitializeBootstrap;
-use coco_agent_host::sdk_server::spawn_app_server_local_outbound_forwarder;
-use coco_agent_host::session_bootstrap::build_engine_resources;
-use coco_agent_host::session_bootstrap::install_session_late_binds;
-use coco_cli::Cli;
-use coco_cli::Commands;
-use coco_cli::McpAction;
-use coco_cli::tracing_init;
+use coco_agent_host::{
+    headless::{build_runtime_config_for_cli, resolve_main_model},
+    resume_resolver,
+    resume_resolver::ResumePlan,
+    sdk_server::{
+        SdkServer, SessionTurnExecutor, StdioTransport, cli_bootstrap::CliInitializeBootstrap,
+        spawn_app_server_local_outbound_forwarder,
+    },
+    session_bootstrap::{build_engine_resources, install_session_late_binds},
+};
+use coco_cli::{Cli, Commands, McpAction, tracing_init};
 use coco_config::global_config;
 use coco_hub_connector::HubConnectorSender;
 use coco_session::SessionManager;
@@ -46,8 +39,7 @@ use tokio::task::JoinHandle;
 
 mod bin_handlers;
 mod tui_runner;
-use coco_agent_host::conversation_export;
-use coco_agent_host::session_runtime;
+use coco_agent_host::{conversation_export, session_runtime};
 
 /// Stack size for tokio worker + blocking threads (default: 2 MiB).
 ///
@@ -1046,10 +1038,6 @@ async fn run_sdk_mode(
         server_config_usize(runtime_config.server.event_retention_per_session, 1024) as i64,
     );
 
-    let bridge: Arc<dyn coco_tool_runtime::ToolPermissionBridge> = Arc::new(
-        coco_agent_host::sdk_server::SdkPermissionBridge::new(state.clone()),
-    );
-
     #[cfg(unix)]
     let sdk_unix_socket_path = sdk_unix_socket_path(&runtime_config);
     let sdk_websocket_bind = sdk_websocket_bind(&runtime_config);
@@ -1096,7 +1084,7 @@ async fn run_sdk_mode(
             model_runtimes: None,
             session_manager: session_manager_for_runtime,
             fast_model_spec: None,
-            permission_bridge: Some(bridge),
+            permission_bridge: None,
             process_runtime: process_runtime.clone(),
             // Interactive sessions get the full built-in roster;
             // SDK noninteractive paths can override.
@@ -1121,7 +1109,6 @@ async fn run_sdk_mode(
             &session_handle.runtime_config().mcp,
         ),
     ));
-    state.install_mcp_manager(mcp_manager.clone()).await;
     let sdk_event_hub_connector = {
         let session_id = session_handle.current_typed_session_id().await;
         coco_agent_host::event_hub::RuntimeEventHubConnector::spawn_for_session(
@@ -1192,14 +1179,10 @@ async fn run_sdk_mode(
     coco_agent_host::sdk_server::install_sdk_session_runtime_state(
         state.clone(),
         session_handle.clone(),
+        Arc::clone(&app_server),
     )
     .await;
 
-    let file_history_for_server = session_handle.file_history().cloned().unwrap_or_else(|| {
-        Arc::new(tokio::sync::RwLock::new(
-            coco_context::FileHistoryState::new(),
-        ))
-    });
     state
         .install_runtime_replacement(coco_agent_host::sdk_server::RuntimeReplacementContext {
             startup_session_id: startup_session_id.clone(),
@@ -1209,18 +1192,13 @@ async fn run_sdk_mode(
             requires_structured_output,
         })
         .await;
-    let server = server.with_file_history(file_history_for_server, global_config::config_home());
     let server = if let Some(connector) = &sdk_event_hub_connector {
         server.with_hub_connector_sender(connector.sender())
     } else {
         server
     };
 
-    let runner = Arc::new(StateQueryEngineRunner::new(
-        state.clone(),
-        cli.max_turns,
-        system_prompt,
-    ));
+    let runner = Arc::new(SessionTurnExecutor::new(cli.max_turns, system_prompt));
     server.set_turn_runner(runner).await;
 
     tracing::info!(
@@ -1286,6 +1264,12 @@ async fn run_sdk_mode(
     shutdown_sdk_websocket_listener(sdk_websocket_listener, app_server_shutdown_timeout).await;
     #[cfg(windows)]
     shutdown_sdk_named_pipe_listener(sdk_named_pipe_listener, app_server_shutdown_timeout).await;
+    let shutdown_runtimes = app_server
+        .list_live_sessions()
+        .into_iter()
+        .filter_map(|summary| app_server.registry().get(&summary.session_id))
+        .filter_map(coco_agent_host::sdk_server::LocalAppSessionHandle::into_session)
+        .collect::<Vec<_>>();
     let app_server_for_shutdown = Arc::clone(&app_server);
     let state_for_shutdown = state.clone();
     let app_server_shutdown = coco_agent_host::shutdown::drain_with_timeout_or_signal(
@@ -1326,8 +1310,7 @@ async fn run_sdk_mode(
     // we exit so partial writes aren't dropped on process shutdown. Done
     // after the SDK AppServer bridge exits so the dispatch loop has
     // already stopped accepting new turns.
-    let session_runtime = state.session_runtime_snapshot().await;
-    if let Some(session_runtime) = session_runtime.as_ref() {
+    for session_runtime in &shutdown_runtimes {
         // Persist coordinator mode at exit so a later `--resume` re-derives the
         // role (R2). The SDK leader path previously never wrote it, silently
         // dropping the coordinator role on resume.
@@ -1337,13 +1320,11 @@ async fn run_sdk_mode(
             &session_id,
             &session_runtime.runtime_config().features,
         );
-    }
-    if let Some(session_runtime) = session_runtime.as_ref()
-        && let Some(memory_runtime) = session_runtime.memory_runtime()
-    {
-        let _ = memory_runtime
-            .drain(coco_memory::service::extract::DEFAULT_DRAIN_TIMEOUT)
-            .await;
+        if let Some(memory_runtime) = session_runtime.memory_runtime() {
+            let _ = memory_runtime
+                .drain(coco_memory::service::extract::DEFAULT_DRAIN_TIMEOUT)
+                .await;
+        }
     }
 
     let event_hub_shutdown = if let Some(connector) = sdk_event_hub_connector {

@@ -7,38 +7,29 @@
 //! The dispatch loop reads stdin, routes control requests, and enqueues
 //! messages to stdout.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use coco_app_server::AppServer;
-use coco_app_server::SessionSeqAllocator;
-use coco_app_server_transport::JsonRpcFrame;
-use coco_app_server_transport::JsonRpcNotification as TransportJsonRpcNotification;
+use coco_app_server::{AppServer, SessionSeqAllocator};
+use coco_app_server_transport::{
+    JsonRpcFrame, JsonRpcNotification as TransportJsonRpcNotification,
+};
 use coco_hub_connector::HubConnectorSender;
 use coco_query::StreamAccumulator;
-use coco_types::AgentId;
-use coco_types::AgentStreamEvent;
-use coco_types::CoreEvent;
-use coco_types::JSONRPC_VERSION;
-use coco_types::JsonRpcNotification as LegacyJsonRpcNotification;
-use coco_types::ServerNotification;
-use coco_types::SessionEnvelope;
-use coco_types::SessionId;
-use coco_types::SurfaceId;
-use coco_types::TurnId;
+use coco_types::{
+    AgentId, AgentStreamEvent, CoreEvent, JSONRPC_VERSION,
+    JsonRpcNotification as LegacyJsonRpcNotification, ServerNotification, SessionEnvelope,
+    SessionId, SurfaceId, TurnId,
+};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::mpsc;
-use tracing::debug;
-use tracing::info;
-use tracing::warn;
+use tracing::{debug, info, warn};
 
-use crate::sdk_server::handlers::SdkServerState;
-use crate::sdk_server::handlers::TurnRunner;
-use crate::sdk_server::outbound::OutboundMessage;
-use crate::sdk_server::outbound::event_agent_id;
-use crate::sdk_server::transport::SdkTransport;
+use crate::sdk_server::{
+    handlers::{SdkServerState, TurnRunner},
+    outbound::{OutboundMessage, event_agent_id},
+    transport::SdkTransport,
+};
 
 /// The SDK server — owns the transport, dispatches ClientRequests, and
 /// forwards CoreEvent notifications to the client.
@@ -70,15 +61,8 @@ pub struct SdkServer {
 impl SdkServer {
     /// Create a new SDK server bound to a transport.
     ///
-    /// The transport is published onto SDK connection state immediately so
-    /// code paths that read it (e.g. [`crate::sdk_server::SdkPermissionBridge`])
-    /// see a populated slot without waiting for
-    /// [`Self::run_app_server_connection`] to start.
-    /// This avoids a startup race where a bridge consulted between
-    /// `new()` and `run_app_server_connection()` would erroneously see `None`.
     pub fn new(transport: Arc<dyn SdkTransport>) -> Self {
         let state = Arc::new(SdkServerState::default());
-        state.install_sdk_transport_for_startup(transport.clone());
         Self {
             transport,
             state,
@@ -140,33 +124,6 @@ impl SdkServer {
         self
     }
 
-    /// Install a [`coco_context::FileHistoryState`] + config home so
-    /// the `control/rewindFiles` handler can preview and apply file
-    /// rewinds. Without this, the handler errors with
-    /// `INVALID_REQUEST` ("file history not enabled").
-    pub fn with_file_history(
-        self,
-        history: Arc<tokio::sync::RwLock<coco_context::FileHistoryState>>,
-        config_home: std::path::PathBuf,
-    ) -> Self {
-        self.state
-            .install_file_history_for_startup(history, config_home);
-        self
-    }
-
-    /// Install an [`coco_mcp::McpConnectionManager`] so the
-    /// `mcp/setServers`, `mcp/reconnect`, `mcp/toggle` handlers can
-    /// register configs and drive connection lifecycle. Without this,
-    /// those handlers reply with `INVALID_REQUEST` ("MCP manager not
-    /// enabled").
-    pub fn with_mcp_manager(
-        self,
-        manager: Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>,
-    ) -> Self {
-        self.state.install_mcp_manager_for_startup(manager);
-        self
-    }
-
     /// Install an [`InitializeBootstrap`] provider so `handle_initialize`
     /// returns real data (commands, agents, account, output styles) instead
     /// of empty / default values. Without this, `initialize` still succeeds
@@ -184,16 +141,6 @@ impl SdkServer {
     /// arrive. SDK handlers use it when no active session/runtime exists yet.
     pub fn with_startup_cwd(self, cwd: std::path::PathBuf) -> Self {
         self.state.install_startup_cwd(cwd);
-        self
-    }
-
-    /// Install the process-shared [`SessionHandle`]. Production SDK
-    /// `session/start` / `session/resume` must pair this with a
-    /// [`crate::sdk_server::RuntimeReplacementContext`] so new client sessions
-    /// build replacement runtimes instead of rotating this one in place.
-    pub fn with_session_handle(self, session: crate::session_runtime::SessionHandle) -> Self {
-        crate::sdk_server::sdk_hooks::install_runtime_callback(self.state.clone(), &session);
-        self.state.install_session_runtime_for_startup(session);
         self
     }
 

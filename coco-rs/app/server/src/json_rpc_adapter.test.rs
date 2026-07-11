@@ -1,39 +1,26 @@
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
-use coco_app_server_transport::JsonRpcNotification;
-use coco_app_server_transport::JsonRpcSuccess;
-use coco_app_server_transport::NdjsonDuplexConnection;
-use coco_types::ClientRequestMethod;
-use coco_types::ServerNotification;
-use coco_types::ServerRequest;
-use coco_types::ServerRequestUserInputParams;
-use coco_types::SessionEnvelope;
-use coco_types::SessionId;
-use coco_types::SessionState;
-use coco_types::SurfaceId;
-use coco_types::TurnId;
-use futures::SinkExt;
-use futures::StreamExt;
-use tokio::io::AsyncWriteExt;
-use tokio::io::BufReader;
-use tokio::io::split;
+use coco_app_server_transport::{JsonRpcNotification, JsonRpcSuccess, NdjsonDuplexConnection};
+use coco_types::{
+    ClientRequestMethod, ServerNotification, ServerRequest, ServerRequestUserInputParams,
+    SessionEnvelope, SessionId, SessionState, SurfaceId, TurnId,
+};
+use futures::{SinkExt, StreamExt};
+use tokio::io::{AsyncWriteExt, BufReader, split};
 use tokio_tungstenite::tungstenite::Message as WebSocketMessage;
 
 use super::*;
-use crate::AppServer;
-use crate::AttachSurfaceOptions;
-use crate::SurfaceCapabilities;
-use crate::SurfaceCapability;
-use crate::SurfaceRole;
+use crate::{AppServer, AttachSurfaceOptions, SurfaceCapabilities, SurfaceCapability, SurfaceRole};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TestHandle(&'static str);
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct RecordingHandler {
-    methods: Mutex<Vec<ClientRequestMethod>>,
+    methods: Arc<Mutex<Vec<ClientRequestMethod>>>,
 }
 
 #[derive(Default)]
@@ -59,6 +46,14 @@ impl JsonRpcRequestHandler for RecordingHandler {
             .expect("handler lock")
             .push(request.method());
         Box::pin(async { Ok(serde_json::json!({ "ok": true })) })
+    }
+}
+
+impl JsonRpcConnectionHandlerFactory for RecordingHandler {
+    type Handler = Self;
+
+    fn open(&self, _connection: ConnectionKey) -> Arc<Self::Handler> {
+        Arc::new(self.clone())
     }
 }
 
@@ -208,7 +203,10 @@ async fn json_rpc_adapter_dispatches_client_request_to_handler() {
             JsonRpcRequest::new(
                 JsonRpcId::String("req-1".to_string()),
                 "turn/interrupt",
-                None,
+                Some(serde_json::json!({
+                    "session_id": "session-a",
+                    "surface_id": "surface-a",
+                })),
             ),
             &handler,
         )
@@ -460,7 +458,7 @@ async fn frame_channel_dispatch_does_not_block_fast_request_behind_slow_request(
             JsonRpcId::Number(1),
             "session/read",
             Some(serde_json::json!({
-                "session_id": "sess-slow",
+                "target": { "session_id": "sess-slow" },
             })),
         )))
         .await

@@ -658,7 +658,10 @@ pub(super) async fn dispatch_branch(
                     .client()
                     .session_rename(
                         local_app_server_bridge.handler(),
-                        coco_types::SessionRenameParams { name: title },
+                        coco_types::SessionRenameParams {
+                            target: session_target(local_app_server_bridge),
+                            name: title,
+                        },
                     )
                     .await
                 {
@@ -868,24 +871,19 @@ pub(super) async fn runtime_session_plan_file_path(
         &session_id,
     )
 }
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use coco_agent_host::goal_command;
-use coco_agent_host::resume_resolver::ResumePlan;
-use coco_agent_host::session_bootstrap::install_session_late_binds;
+use coco_agent_host::{
+    goal_command, resume_resolver::ResumePlan, session_bootstrap::install_session_late_binds,
+};
 use coco_app_runtime::ProcessRuntime;
-use coco_messages::AssistantContent;
-use coco_messages::LlmMessage;
-use coco_messages::Message;
+use coco_messages::{AssistantContent, LlmMessage, Message};
 use coco_query::CoreEvent;
 use coco_types::TuiOnlyEvent;
-use tokio::sync::Mutex;
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 use tracing::warn;
 
-use super::SharedSessionHandle;
-use super::SlashOutcome;
-use super::TuiRuntimeReloadSubscriptions;
-use super::emit_slash_text;
-use super::workspace_trust_rejected;
+use super::{
+    SharedSessionHandle, SlashOutcome, TuiRuntimeReloadSubscriptions, emit_slash_text,
+    session_target, workspace_trust_rejected,
+};
