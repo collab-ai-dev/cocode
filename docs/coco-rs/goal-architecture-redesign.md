@@ -38,20 +38,24 @@ scheduling, wake conditions, recovery, or cross-surface concurrency.
 The target decision is:
 
 1. Make a goal a first-class session aggregate.
-2. Make `QueryEngine` execute exactly one logical turn.
-3. Give a session-scoped `GoalSupervisor` sole ownership of autonomous continuation.
-4. Start each continuation as a new logical turn in the same session; do not fork the
+2. Require one storage-owned cross-process write lease for every writable session
+   materialization; multiple sessions may still share a workspace.
+3. Make `QueryEngine` execute exactly one logical turn.
+4. Give a session-scoped `GoalSupervisor` sole ownership of autonomous continuation.
+5. Start each continuation as a new logical turn in the same session; do not fork the
    worker conversation for ordinary goal progress.
-5. Keep the durable goal snapshot outside model-visible conversation history and
+6. Keep the durable goal snapshot outside model-visible conversation history and
    outside compaction summaries.
-6. Re-inject the authoritative objective, budget, plan reference, and completion
+7. Re-inject the authoritative objective, budget, plan reference, and completion
    contract on every autonomous goal turn through one typed goal-context reminder.
-7. Run a mandatory `GoalCompletionCoordinator` after every goal-owned turn. Workers
+8. Run a mandatory `GoalCompletionCoordinator` after every goal-owned turn. Workers
    submit candidates, while only `GoalCompletionGate` may validate evidence and
    persist completion. Natural turn termination is never proof of completion.
-8. Treat the plan file as durable working memory and a requirement index, not as the
+9. Bind completion proof through runtime-generated durable evidence records; workers
+   may cite evidence but cannot mint or rebind its provenance.
+10. Treat the plan file as durable working memory and a requirement index, not as the
    authority for goal status or proof of completion.
-9. Remove the existing `ActiveGoal + ManagedHookKind::Goal + GoalStatusPayload`
+11. Remove the existing `ActiveGoal + ManagedHookKind::Goal + GoalStatusPayload`
    compatibility semantics. Backward compatibility is out of scope.
 
 There is no transitional Stop Hook design. Implementation proceeds directly to the
@@ -91,7 +95,9 @@ In this document, execution strength means observable runtime properties:
 - **Recoverability:** wait, failure, compaction, and restart have explicit re-entry
   paths.
 - **Convergence:** terminal claims, budgets, and anti-loop policies are defined.
-- **Preemption:** human input and explicit interruption always take priority.
+- **Preemption:** committed human turns take priority at idle admission; explicit
+  interruption cancels autonomous work, while opt-in mid-turn steering remains
+  attached to the running turn.
 - **Context fidelity:** the worker retains or reconstructs the information required
   to pursue the original objective.
 - **Verifiability:** completion is supported by authoritative evidence.
@@ -484,6 +490,25 @@ guarantee.
 The target architecture should reuse the existing plan file but define its role
 precisely.
 
+The current plan subsystem is path-based: it derives a Markdown path from the
+session slug and reads or writes that file directly. It does not yet provide an
+artifact id, monotonic revision, atomic content-plus-digest observation, or an
+external-edit subscription. Those capabilities are therefore an explicit extension
+of the plan subsystem, not behavior that the goal runtime may assume already exists.
+
+A small session-owned `PlanArtifactService` should be the only adapter that maps a
+`PlanArtifactId` to the current plan path. It should:
+
+- mint or recover the stable id for the session's current plan artifact;
+- read bounded content and compute its digest from the same byte snapshot;
+- maintain a monotonic observed revision when a new digest is accepted;
+- expose fork-copy and resume-recovery through the existing plan lifecycle;
+- report external edits as level-triggered digest changes rather than relying only
+  on a lossy file-watch edge.
+
+Goal code consumes this service and never invents a second path registry. The service
+does not make the plan a goal-status authority.
+
 #### Goal-to-plan reference
 
 The durable goal snapshot may contain a bounded reference, not the plan body:
@@ -500,9 +525,9 @@ pub struct GoalPlanRef {
 The exact public type belongs in the appropriate crate documentation when
 implemented. The design invariants are:
 
-- `artifact_id` is a session-owned opaque identifier. The existing plan subsystem
-  resolves it to a path; neither the model nor protocol clients can persist an
-  arbitrary filesystem path as the goal's plan.
+- `artifact_id` is a session-owned opaque identifier. `PlanArtifactService` resolves
+  it to the session-owned path; neither the model nor protocol clients can persist
+  an arbitrary filesystem path as the goal's plan.
 - The goal store never duplicates the Markdown body.
 - The digest detects change and stale excerpts; it is not a security boundary.
 - Plan revision changes do not implicitly change goal spec revision or objective.
@@ -675,10 +700,10 @@ state, while the cost of removing it is bounded discovery latency.
 
 | Property | Per-turn judge (Hermes) | This design |
 |---|---|---|
-| Completion discovery latency | Same turn | Same turn with a worker report or contract hit; otherwise bounded by the completion-probe interval or the nearest audit boundary |
-| Evidence quality | Final ~4 KB assistant prose; no tools | Durable evidence records, deterministic checks, optional tool-capable verifier |
+| Completion discovery latency | Same turn | Same turn with a worker report or contract hit; otherwise the probe creates a bounded re-check opportunity, while guaranteed stopping remains the nearest hard boundary |
+| Evidence quality | Final ~4 KB assistant prose; no tools | Durable evidence records, deterministic checks, candidate-time evidence review, and an optional stricter contract verifier |
 | False completion risk | Judge can mark DONE from prose; no blocked verdict exists, so an impasse can terminate as done | Gate validates identity, coverage, and evidence ownership; prose can never complete |
-| Failure mode | Fail-open on parse/API error erases the boundary it was meant to provide | Coordinator is deterministic and cannot fail open; only optional verification can be unavailable |
+| Failure mode | Fail-open on parse/API error erases the boundary it was meant to provide | Coordinator is deterministic and cannot fail open; candidate-time verification can be unavailable without erasing the coordinator boundary |
 | Marginal cost | One model call of latency and tokens on every goal turn | Zero model calls on ordinary progress turns |
 
 The bounded-latency claim must be stated honestly:
@@ -694,7 +719,7 @@ The bounded-latency claim must be stated honestly:
   is to prevent a wrong pause when gate-checkable coverage and evidence already
   exist, and otherwise to surface unverified-completion detail alongside the
   original stop transition. The backstop is only as strong as the persisted
-  policy: deterministic contracts and the optional verifier give it teeth, and
+  policy: deterministic contracts and configured semantic verification give it teeth, and
   users who need unattended completion detection should configure one of them
   (section 12.3).
 
@@ -713,9 +738,9 @@ prose-level evidence is the weakest input the gate could receive. What is adopte
 instead is a bounded periodic completion probe (section 12.5) for goals without
 deterministic check coverage: every N autonomous turns (default five), one model
 assessment over structured durable state nudges an apparently finished worker to
-report. The probe has no terminal authority and its failure is a safe no-op, so
-it narrows worst-case discovery latency from the turn cap to the probe interval
-without recreating the Hermes failure modes.
+report. The probe has no terminal authority and its failure is a safe no-op. It
+creates a completion-discovery opportunity at the probe interval without claiming a
+hard latency bound that the default free-form evidence policy cannot always prove.
 
 ## 7. Defect proof for the current `coco-rs` implementation
 
@@ -862,16 +887,81 @@ as session-owned artifacts before the goal commit, following the useful Codex
 `goal_files` pattern. The snapshot stores bounded text and opaque artifact ids, never
 ephemeral TUI paste handles or arbitrary model-supplied paths.
 
-The existing append-only session JSONL is sufficient because `SessionRuntime` is the
-single writer for a materialized session. A new SQLite dependency is not justified
-only to imitate Codex. If multi-process writers are introduced later, the session
-store itself must gain a lease/CAS protocol; goal code must not invent a private
-database workaround.
+The existing append-only session JSONL remains sufficient, but the single-writer
+assumption must be enforced by session storage rather than inferred from one process's
+`SessionRuntime` registry. Two coco processes may share a workspace, but they must not
+materialize the same session for mutation at the same time. This is a session-wide
+rule, not a goal-specific workaround: it also protects transcript appends, metadata,
+resume recovery, usage snapshots, plan binding, and every future session mutation.
+
+#### Session write lease
+
+Following the existing focused-store-trait pattern, `coco-session` should add a lease
+capability and include it in the combined `SessionStore` boundary, conceptually:
+
+```rust
+pub trait SessionLeaseStore: Send + Sync {
+    fn require_write_lease(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<SessionWriteLease, SessionLeaseError>;
+}
+
+pub trait SessionStore:
+    TranscriptIo + AgentTranscriptStore + UsageSnapshotStore + SessionLeaseStore
+{}
+```
+
+The exact trait placement remains crate-doc owned, but the semantics are fixed:
+
+1. `SessionCatalog::resolve` may first locate the storage namespace without reading
+   mutable session state. Runtime construction then acquires the lease before reading
+   state that resume may repair or mutate and reloads the latest transcript under the
+   lease. Loading state first and locking afterward is an invalid
+   time-of-check/time-of-use sequence.
+2. `SessionRuntime` owns the RAII lease for its full writable lifetime. AppServer
+   surfaces attached to that runtime share the lease; they do not acquire competing
+   leases.
+3. Every mutating session-store operation requires either the matching
+   `SessionWriteLease` or a writable store handle that encapsulates it. The lock is a
+   capability enforced by the API, not an advisory caller convention.
+4. Read-only listing, search, transcript inspection, and status discovery do not need
+   the lease. An attempted writable resume of an already-owned session fails with a
+   typed `session_in_use` error and owner diagnostics when available.
+5. The lease is released only after turn admission stops, live turns drain or are
+   persisted as resumable state, pending writes flush, and the runtime closes.
+6. Explicit forks use a new session id and therefore a different lease. A branch
+   never shares the parent's session lease.
+
+For the file-backed `TranscriptStore`, use an OS-backed exclusive advisory lock on a
+stable lock file such as `<project>/.session-locks/<session_id>.lock`. The lock file is
+not removed during ordinary session deletion or close, avoiding inode-replacement
+races. The kernel lock is authoritative; bounded contents such as pid,
+process-instance id, and acquisition time are diagnostics only. Acquisition should be
+non-blocking by default so TUI, SDK, and headless callers can surface the owner instead
+of hanging. Process
+death releases the OS lock automatically. A process-local registry keyed by the
+normalized lock path supplements the OS lock so two runtimes in one process cannot
+depend on platform-specific same-process lock semantics. `InMemoryStore` provides an
+equivalent process-local exclusive lease.
+
+The storage backend must advertise whether its lock is reliable for the configured
+filesystem. If an OS or remote filesystem cannot provide the required exclusive-lock
+semantics, writable materialization fails closed with `session_lock_unsupported`;
+silently degrading to an unlocked writer is prohibited. A future remote session-store
+backend may implement the same lease contract with a service-side lease instead of a
+local file lock.
+
+A new SQLite dependency is not justified only to imitate Codex. If concurrent writers
+to one session are ever required, `coco-session` must replace this exclusive lease
+contract with a real CAS/transaction protocol. Goal code must never add a private
+database or private lock that bypasses the session store.
 
 #### Resume matrix
 
 | Persisted state | Resume behavior |
 |---|---|
+| Session write lease held by another process | Reject writable resume as `session_in_use`; offer read-only inspection or opening a fork with a new session id |
 | `active` and execution mode | Restore plan/context, publish snapshot, then schedule at idle after pending human work |
 | `active` while Plan or Review mode is selected | Normalize to `waiting(mode_gate)` and register a mode-change wake |
 | `waiting(deadline)` | Re-register the timer; wake immediately when the persisted deadline is already due |
@@ -956,7 +1046,7 @@ preferred over indicator replacement.
 | Hard turn-finalization mechanism | `GoalManager.evaluate_after_turn()` after every turn | Active goal is continued by thread lifecycle; no automatic completion probe | `GoalCompletionCoordinator` runs after every goal-owned turn |
 | Completion candidate | Judge returns `done` | Worker calls `update_goal(complete)` | Worker report, deterministic contract, or boundary audit |
 | Terminal authority | GoalManager persists `done` | Controlled tool handler persists `complete` | Only `GoalCompletionGate` persists `completed` |
-| Current-state tools | Judge has none | Worker has normal tools | Worker provides evidence; deterministic checks and optional verifier inspect current state |
+| Current-state tools | Judge has none | Worker has normal tools | Worker cites runtime-owned evidence; deterministic checks, candidate-time evidence review, and optional contract verification inspect current state |
 | Judge/model outage | Continue | Not in the hot path | Coordinator is non-LLM; verifier outage pauses a worker candidate, while a boundary audit falls back to its original stop transition |
 | Plan as proof | Contract may be quoted in response | `update_plan` is advisory | Plan is an audit index, never sufficient proof |
 | Blocked behavior | Blocked/unachievable may become `DONE` | Worker self-reports after a prompt-defined repeated blocker | Separate typed blocked claim; never conflate blocked with completed |
@@ -1080,8 +1170,9 @@ The detail view displays:
   prompt explaining what must change.
 - `Ctrl+C` during a goal-owned turn atomically pauses the goal before cancelling the
   turn, preventing an immediate idle restart.
-- A normal human message preempts but does not pause the goal. The goal waits for the
-  next idle edge.
+- A new ordinary human-turn request does not pause the goal and wins the next idle
+  admission. Explicit mid-turn steering is a separate action and stays bound to the
+  current goal lease.
 - Objective/contract/budget edits include expected spec revision. Pause, clear, and
   interrupt target the current goal id and apply to the latest state, so frequent
   usage updates do not make safety controls spuriously stale. A real stale-id/spec
@@ -1101,21 +1192,23 @@ are also required:
 
 | Concern | Failure if omitted | Final decision |
 |---|---|---|
+| Session write ownership | Two processes resume one session and append conflicting state versions | `SessionStore::require_write_lease` grants one writable runtime per session id across processes |
 | Single scheduling owner | Duplicate or missing turns | Only `GoalSupervisor` starts autonomous work |
 | Context and compaction | Objective or plan drift after summary | Re-materialize durable goal and plan context every autonomous turn |
-| Human preemption | Goal competes with user work | Human-triggered work always wins idle admission |
+| Human preemption | Goal competes with user work | A committed human-turn request wins idle admission; explicit mid-turn steering remains part of the running goal lease |
 | Budgets and cost | Runaway spend | Default 20 autonomous turns; optional explicit token budget; total input+output accounting |
 | Background tasks and deadlines | Active-but-idle waits | Durable typed wait plus registered task/timer wake |
 | Permission prompts | Autonomous work hangs or bypasses authority | Persist `waiting(permission)`; never weaken normal tool permissions |
 | Provider/rate-limit errors | Silent loop or silent stop | Typed retry policy and explicit limited/blocked/paused transitions |
 | Idempotency | Duplicate accounting, completion, or starts | Goal id, spec revision, state version, lease id, and effect id on lifecycle writes |
 | Multi-session isolation | Work starts in the wrong session | Every command, event, lease, and turn port call carries explicit session id |
-| Cross-session fairness | One goal monopolizes provider/tool capacity | A small global autonomous-admission semaphore uses FIFO/round-robin session fairness |
-| Shared workspace conflicts | Two session goals edit the same checkout concurrently | Admit at most one autonomous turn per canonical workspace; separate worktrees may run concurrently |
+| Cross-session fairness | One goal monopolizes provider/tool capacity | A small process-wide autonomous-admission semaphore uses FIFO/round-robin fairness among sessions in that process |
+| Shared workspace concurrency | Two independent sessions or processes may intentionally use one checkout | Workspace sharing is allowed and is not a correctness lock; sessions remain isolated by session id, and current-state evidence is revalidated before completion |
 | Sub-agents | Child completes or mutates parent goal incorrectly | Parent supervisor owns the goal; children return evidence/progress only unless explicitly delegated a scoped child contract |
 | Explicit conversation fork | Two autonomous workers mutate the same workspace | Copy plan, do not auto-clone active goal; explicit paused clone only |
 | Prompt injection | Objective/plan gains system authority | Escape and label user-authored data; keep static instructions separate |
 | Rich objective attachments | Paste/image inputs disappear on resume | Materialize session-owned artifacts before goal commit and persist opaque references |
+| Evidence provenance | A worker cites stale or borrowed tool output as proof | Runtime-generated `GoalEvidenceRecord`s bind durable results to goal, lease, turn, and tool/artifact identity |
 | Model/tool configuration | Goal tools disappear mid-run | Recompute tool visibility per turn; pause if required goal tools are unavailable |
 | Time accounting | Wall-clock jumps corrupt budgets | Use monotonic time while live and persist committed duration deltas |
 | Empty-turn livelock | Model repeatedly stops without tools or progress | Track typed progress signals; three consecutive signal-free goal turns pause as `no_progress` |
@@ -1142,23 +1235,26 @@ signals is not a no-progress turn (section 12.2).
 2. Scheduling, state transition, context rendering, and completion verification are
    separate responsibilities.
 3. Durable state is committed before live projections and notifications change.
-4. Every autonomous turn has an explicit session id, goal id, spec revision, and lease id.
-5. Human work wins every scheduling race.
-6. Goal context is reconstructed from durable state; it is not trusted to compaction.
-7. Plan content remains a separate durable artifact.
-8. Status transitions use exhaustive Rust enums and reducer tests.
-9. The design reuses existing session, task, reminder, usage, and transcript
+4. One OS-backed session write lease protects every writable materialization of a
+   session id across processes.
+5. Every autonomous turn has an explicit session id, goal id, spec revision, and lease id.
+6. A committed human turn wins idle admission; explicit mid-turn steering has separate
+   lease-bound semantics.
+7. Goal context is reconstructed from durable state; it is not trusted to compaction.
+8. Plan content remains a separate durable artifact.
+9. Status transitions use exhaustive Rust enums and reducer tests.
+10. The design reuses existing session, task, reminder, usage, and transcript
    infrastructure. It does not introduce a general actor framework or generic
    extension platform for one feature.
 
 ### 10.2 Component boundaries
 
 ```text
-                        user / SDK / TUI
-                               |
-                       GoalCommandService
-                               |
-                        GoalRuntimeHandle
+ SessionStore -- required SessionWriteLease --> SessionRuntime
+                                                   ^
+ user / SDK / TUI -> GoalCommandService -----------|
+                                                   |
+                                           GoalRuntimeHandle
                   durable commit | live projection
                                v
  Session metadata <---- GoalSnapshot + GoalEvent ----> protocol/TUI
@@ -1175,7 +1271,7 @@ signals is not a no-progress turn (section 12.2).
                                   |
                         GoalContextMaterializer
                          |        |         |
-                  GoalSnapshot  plan file  task/todo state
+                  GoalSnapshot  PlanArtifactService  task/todo state
                                   |
                        typed goal reminder
 ```
@@ -1208,6 +1304,8 @@ and commits the snapshot; the domain crate never performs I/O.
 
 Owned by `SessionRuntime`, this component should:
 
+- borrow the runtime's matching `SessionWriteLease`; it cannot exist in writable form
+  without that lease;
 - serialize mutations with a Tokio mutex;
 - validate goal id, spec revision, state transition, lease id, and effect id as
   appropriate for each command;
@@ -1235,23 +1333,49 @@ It performs an atomic claim using `(goal_id, lease_id)` under the goal transitio
 and starts work through `SessionTurnPort`. No TUI, SDK handler, hook, or command queue
 may independently run an autonomous goal turn.
 
-Queued and running ownership is represented by a durable lease record. Starting a
-turn transitions `queued(lease_id)` to `running(lease_id, turn_id)` under the current
-state version. An unfinished turn commits the next queued lease as part of its stop
-transition. Resume treats a persisted running lease as stale, reconciles any known
-turn result, and otherwise replaces it with a new queued lease. This closes the
-persist-then-schedule crash window rather than merely detecting it later.
+Queued and running ownership is represented by a durable lease record. This goal
+lease is distinct from the session write lease: the session lease excludes a second
+writer process, while the goal lease identifies one autonomous work attempt inside
+the owning runtime. Starting a turn transitions `queued(lease_id)` to
+`running(lease_id, turn_id)` under the current state version. An unfinished turn
+commits the next queued lease as part of its stop transition. Resume treats a
+persisted running lease as stale, reconciles any known turn result, and otherwise
+replaces it with a new queued lease. This closes the persist-then-schedule crash
+window rather than merely detecting it later.
+
+The supervisor is level-triggered, not dependent on receiving every lifecycle edge.
+Whenever session activity, a turn task, or a wake watcher changes, it reconciles the
+durable snapshot against the AppServer turn slot and registered wake table. Missing or
+duplicated notifications therefore cause an idempotent reconciliation rather than an
+ownerless state.
 
 #### `SessionTurnPort`: explicit session scheduling seam
 
-The port starts a turn for an explicit `session_id` with typed contextual input. A
-first version may adapt the existing local AppServer bridge or `QueryEngineRunner`.
-The multi-session target resolves a `SessionHandle` through AppServer.
+The port starts a turn for an explicit `session_id` with typed contextual input. It
+returns an owned handle rather than only a `turn_id`:
+
+```rust
+pub struct GoalTurnHandle {
+    pub turn_id: TurnId,
+    pub cancel: TurnCancelHandle,
+    pub completion: GoalTurnCompletion,
+}
+```
+
+`GoalTurnCompletion` resolves exactly once in memory to an exhaustive
+`GoalTurnOutcome`, including completed, interrupted, provider/tool error, runner
+panic, and event-channel closure. The port wrapper synthesizes an error outcome when
+the underlying runner exits without `TurnEnded`; the supervisor must not infer turn
+completion only from an optional protocol event. A first version may adapt the
+existing local AppServer bridge or `QueryEngineRunner`. The multi-session target
+resolves a `SessionHandle` through AppServer.
 
 Before starting, the port passes through one small process-wide
-`AutonomousAdmission` service. It provides bounded cross-session concurrency,
-round-robin fairness, and a canonical-workspace execution lease. It does not own goal
-state or continuation policy; it only admits an already-durable queued lease.
+`AutonomousAdmission` service. It provides bounded cross-session concurrency and
+round-robin fairness for sessions in that process. It does not serialize by
+workspace: distinct sessions and processes may intentionally share a checkout. It
+does not own goal state or continuation policy; it only admits an already-durable
+queued lease.
 
 Do not repurpose `CommandQueue` as the idle scheduler. It is a mid-turn steering queue
 and can contribute priority/origin information, but it does not own thread-idle turn
@@ -1280,6 +1404,35 @@ pub struct GoalTurnContext {
 The reminder adapter escapes untrusted fields and renders stable instructions
 separately.
 
+#### `GoalEvidenceRecord`: runtime-owned provenance
+
+Completion evidence cannot be ownership-checked from the current transcript shape
+alone. Tool output, artifacts, tests, and external observations used as proof must
+therefore receive a bounded durable envelope when the runtime accepts them:
+
+```rust
+pub struct GoalEvidenceRecord {
+    pub evidence_id: EvidenceId,
+    pub goal_id: GoalId,
+    pub lease_id: GoalLeaseId,
+    pub turn_id: TurnId,
+    pub source: EvidenceSource,
+    pub result_ref: DurableResultRef,
+    pub content_digest: Option<ContentDigest>,
+    pub observed_at: SystemTime,
+}
+```
+
+The runtime creates these records from accepted tool completion, artifact writes,
+deterministic checks, or registered external-state observations. The model may cite an
+`EvidenceId` but cannot mint or rebind one. A report-time wrapper around an old tool
+result is insufficient: provenance is captured when the result is produced. Existing
+large tool output remains in its current durable storage; the evidence record is the
+bounded ownership and integrity index. Provenance does not freeze mutable workspace or
+external state: the gate re-runs approved checks or compares a fresh digest/observation
+before completion, so another session's later workspace edit can invalidate otherwise
+well-owned evidence.
+
 #### `GoalCompletionCoordinator` and `GoalCompletionGate`
 
 `GoalCompletionCoordinator` is invoked by `GoalSupervisor` for every goal-owned turn
@@ -1287,16 +1440,24 @@ result. It is deterministic orchestration, not an LLM judge. It normalizes the w
 report, synthesizes `Unreported`, evaluates changed contract signals, creates mandatory
 boundary-audit candidates, and routes the result.
 
-Invocation is exactly once by idempotency key
-`(goal_id, lease_id, turn_id, finalization_effect_id)`. Duplicate stop/error delivery
-replays the committed coordinator decision rather than running a second verifier or
-emitting another transition.
+Lifecycle delivery is at least once. The durable coordinator decision is idempotent by
+key `(goal_id, lease_id, turn_id, finalization_effect_id)`: duplicate stop/error
+delivery replays a committed decision rather than emitting another transition.
+External verifier execution cannot be guaranteed exactly once across a crash after
+the call but before persistence. Each attempt therefore has a durable
+`VerificationAttemptId`; completed results are persisted and reused, while recovery
+may safely retry an attempt whose result was never committed. Correctness depends on
+the idempotent durable transition, not on exactly-once model invocation.
 
 `GoalCompletionGate` is the only component allowed to request the reducer's completed
 transition. It validates identity, lease, plan observation, requirement coverage, and
-evidence ownership before running the persisted completion policy. The coordinator
-guarantees that completion handling occurs; the gate guarantees that a candidate is
-not equivalent to completion.
+evidence ownership before running the persisted completion policy. The normal public
+`GoalCommand` set does not contain a directly constructible completed transition;
+the runtime accepts only a sealed `CompletionAuthorization` produced by the gate's
+domain validation path. Exact module privacy belongs in the crate design, but the
+authority must be enforced by the Rust API rather than only by a comment. The
+coordinator guarantees that completion handling occurs; the gate guarantees that a
+candidate is not equivalent to completion.
 
 ### 10.3 `QueryEngine` boundary
 
@@ -1312,9 +1473,11 @@ goal semantics. Goal execution cannot be disabled by generic hook policy.
 
 ## 11. Goal state machine
 
-The Rust model should make ownerless active and wake-less waiting states
-unrepresentable. The following is an illustrative internal shape, not the final public
-DTO definition:
+The Rust model should make ownerless active and a waiting state without a durable wake
+identity unrepresentable. A Rust value cannot prove that a volatile watcher task is
+alive, so the live `waiting => watcher registered or being reconciled` invariant is
+enforced by `GoalSupervisor`, not claimed by the DTO alone. The following is an
+illustrative internal shape, not the final public DTO definition:
 
 ```rust
 pub enum GoalLifecycle {
@@ -1323,7 +1486,7 @@ pub enum GoalLifecycle {
     Paused { reason: PauseReason },
     Blocked { evidence: BlockerEvidence },
     UsageLimited { reason: UsageLimitReason },
-    BudgetLimited { usage: GoalUsage },
+    BudgetLimited { kind: BudgetKind, usage: GoalUsage },
     Completed { evidence: CompletionEvidenceSummary },
 }
 
@@ -1343,11 +1506,11 @@ Recommended closed status set:
 | Status | Automatic work | Entry cause | Exit |
 |---|---|---|---|
 | `active` | Running or queued | Create, resume, wake | Complete, block, pause, wait, limit |
-| `waiting` | No turn; registered wake | Live task, deadline, permission, Plan/Review mode, provider backoff, user acceptance, external condition | Wake to active; user pause/clear |
-| `paused` | No | User interrupt, turn cap, no progress, unavailable context/verifier/scheduler | User resume |
+| `waiting` | No turn; durable wake identity plus registered/recoverable watcher | Live task, deadline, permission, Plan/Review mode, provider backoff, user acceptance, external condition | Wake to active; user pause/clear |
+| `paused` | No | User interrupt, no progress, unavailable context/verifier/scheduler | User resume |
 | `blocked` | No | Typed, evidenced impasse or terminal execution error | User resume/edit |
 | `usage_limited` | No | Provider/account quota | Reset wake or user resume |
-| `budget_limited` | No | Goal token budget | Increase budget/resume or complete |
+| `budget_limited` | No | Autonomous-turn or token budget | Increase the exhausted budget and resume, or complete |
 | `completed` | No | Gate-authorized completion candidate | New goal replaces it |
 
 ```text
@@ -1355,11 +1518,11 @@ none --create--> active --accepted completion--> completed
   \--create while mode-gated---------------------> waiting
                    |  \
                    |   +--repeated impasse/error--> blocked --------resume--------> active
-                   +--interrupt/turn cap----------> paused  --------resume--------> active
+                   +--interrupt/no-progress-------> paused  --------resume--------> active
                    +--task/deadline/mode/approval-> waiting --------wake----------> active
                    +--transient provider failure--> waiting(provider_backoff) --wake--> active
                    +--usage limit-----------------> usage_limited --reset wake/resume--> active
-                   +--token budget----------------> budget_limited --budget edit/resume--> active
+                   +--turn/token budget-----------> budget_limited --budget edit/resume--> active
 ```
 
 Clearing removes the current snapshot but appends an audit event. A recoverable
@@ -1400,16 +1563,23 @@ budget.
 
 When a goal-owned turn ends with live `TaskManager` work:
 
-1. Prepare a task/deadline subscription and allocate a wake id.
-2. Persist `waiting` with task ids, condition, and that wake id; unsubscribe if the
-   commit fails.
-3. Release the running lease only through that same transition.
-4. Do not run a completion judge and do not spend a continuation turn.
-5. Transition back to active with a queued lease when the condition is satisfied.
-6. Start a turn at the next idle edge with a typed wait-resolution attachment.
+1. Allocate a wake id and prepare a watcher that is not yet allowed to mutate goal
+   state.
+2. Persist `waiting` with task ids, condition, and that wake id; discard the prepared
+   watcher if the commit fails.
+3. Activate the watcher only after commit, then immediately re-read its current
+   task/deadline predicate. This closes the race where completion occurs between
+   subscription creation and the durable `waiting` transition.
+4. Release the running lease only through that same transition.
+5. Do not run a completion judge and do not spend a continuation turn.
+6. Transition back to active with a queued lease when the condition is satisfied.
+7. Start a turn at the next idle edge with a typed wait-resolution attachment.
 
 Deadlines require a durable timer owner or restart-time deadline scan. A textual
-"wait" reason without a wake handle is invalid.
+"wait" reason without a wake handle is invalid. `waiting { wake_id }` proves the
+durable obligation to register a wake, not that a volatile watcher is currently
+alive; supervisor reconciliation must recreate missing watchers and re-check their
+level-triggered predicate after restart, watcher failure, or task-registry change.
 
 ### 11.3 Resume and re-run semantics
 
@@ -1423,7 +1593,7 @@ action.
 | `paused` | User resume | Validate context/plan, commit `active` plus queued lease, schedule at idle |
 | `blocked` | User resume or objective/contract edit | Same as paused; the next turn's materialized context includes the bounded blocker evidence and stop cause so the worker does not blindly repeat the failing action |
 | `usage_limited` | Registered reset wake, or user resume | The wake commits `active` plus queued lease automatically when the persisted reset deadline passes |
-| `budget_limited` | Budget edit (or explicit completion decision) | Raising the budget commits `active` plus queued lease; resume without a budget change is rejected with a typed error |
+| `budget_limited` | Budget edit (or explicit completion decision) | Raising the exhausted turn/token budget commits `active` plus queued lease; resume without a sufficient budget change is rejected with a typed error |
 | `waiting` | Registered wake owns re-entry | An explicit user resume forces the wake early; it does not bypass wake validation |
 | `completed` | Not resumable | A new goal receives a new `GoalId` |
 
@@ -1442,8 +1612,10 @@ Resume rules:
    no-op and never an unanchored turn.
 4. Resume resets the no-progress streak, the unreported streak, and transient
    scheduler/provider retry counters. It does not reset turn, token, or time
-   usage; budgets span the goal lifetime. A resume prompt may offer a budget
-   raise when the turn cap caused the pause.
+   usage; budgets span the goal lifetime. Exhausting the default autonomous-turn
+   cap enters `budget_limited(kind=turns)`, not generic `paused`, so a plain resume
+   cannot create an immediately exhausted queued lease. The user must raise the turn
+   budget through the same atomic budget-edit-and-resume path used for token limits.
 5. A goal stopped by a provider error is re-runnable by design: transient
    failures wait under `waiting(provider_backoff)` and retry automatically, and
    non-retryable failures persist `blocked(execution_error)` and re-run after one
@@ -1524,8 +1696,12 @@ signal still increments `no_progress_streak`, because prose is not a signal. Thi
 makes the after-turn protocol hard even though model tool use cannot be
 guaranteed.
 
-Evidence references contain command/test/artifact/external-state identity plus a short
-summary. Large output stays in existing persisted tool output or transcript storage.
+Evidence references contain a runtime-issued `EvidenceId` plus a short summary. The
+referenced `GoalEvidenceRecord` binds command/test/artifact/external-state identity to
+the current session, goal, lease, and turn when the source result is accepted. Large
+output stays in existing persisted tool output or transcript storage. The worker can
+cite a record but cannot create one or wrap an old result at report time to acquire
+fresh provenance.
 
 A report is recorded when the tool call succeeds and is evaluated once, at turn
 finalization, by the coordinator and gate in the same finalization pass. A worker
@@ -1553,7 +1729,7 @@ artifact, plan, and external-state records. It does not reinterpret the final
 assistant prose as proof. If the configured policy cannot establish completion, the
 original pause/block/budget transition proceeds with explicit missing-evidence detail.
 
-### 12.3 Optional verifier
+### 12.3 Candidate-time evidence review and optional contract verifier
 
 The completion policy is selected at goal creation and persisted:
 
@@ -1714,9 +1890,11 @@ goal turn finalizes
                                              accept -> persist completed
                                              reject -> persist active + reasons + queued lease
          rejected worker candidate -> persist active + reasons + queued lease
-         rejected boundary audit   -> commit original blocked/limited/system-paused transition
+         rejected stop-boundary audit -> commit original blocked/limited/system-paused transition
+         rejected probe audit      -> persist active + queued lease + probe cooldown
          unavailable at worker candidate -> persist paused(verification_unavailable)
-         unavailable at boundary audit   -> commit original transition + audit-skipped note
+         unavailable at stop-boundary audit -> commit original transition + audit-skipped note
+         unavailable at probe audit -> persist active + queued lease + probe cooldown
 ```
 
 ### 12.5 Completion probe: bounded discovery aid
@@ -1752,7 +1930,10 @@ Effects are steering only; the probe has no terminal authority:
   the worker to submit a completion candidate with evidence or state what
   remains. If the following turn again ends without a candidate and without new
   requirement work, the coordinator raises a probe-escalated audit through the
-  ordinary boundary-audit path and gate.
+  ordinary gate. A rejected, unverifiable, or unavailable probe audit has no
+  original pause/block transition to commit: it persists `active` with the next
+  queued lease and a probe cooldown. Hard turn/no-progress/token boundaries still
+  apply independently.
 - `Circling`: inject a one-shot replan nudge. Pausing still requires the
   deterministic no-progress counter; a model impression alone never pauses the
   goal.
@@ -1760,17 +1941,24 @@ Effects are steering only; the probe has no terminal authority:
   not load-bearing, so fail-open here is safe by construction, unlike the Hermes
   judge whose fail-open erased the completion boundary itself.
 
-The probe narrows worst-case completion discovery for free-form goals from the
-turn cap to roughly the probe interval, at the cost of one bounded model call
-per N turns.
+The probe creates a bounded completion-discovery opportunity roughly every N turns at
+the cost of one bounded model call per interval. It does not guarantee completion by
+that interval for a free-form goal whose durable evidence cannot establish coverage;
+the turn, token, and no-progress boundaries remain the hard convergence guarantees.
 
 ## 13. Persistence and protocol
 
 ### 13.1 Single source of truth
 
 Reuse append-only session JSONL metadata. A new database is not required solely for
-goals. Persist a complete versioned `GoalSnapshot`; the highest valid state version is the
-authority.
+goals. Persist a complete versioned `GoalSnapshot`; under the session write lease, the
+highest valid state version is the authority. `StateVersion` orders writes inside that
+exclusive session writer; it is not a substitute for the cross-process session lease.
+
+Writable session materialization fails before goal recovery when
+`require_write_lease(session_id)` reports another owner. After acquiring the lease,
+resume reloads the transcript and latest snapshot so no pre-lock read becomes the
+runtime's authority.
 
 Remove these authorities:
 
@@ -1822,7 +2010,8 @@ or a typed stale-spec/invalid-transition/persistence error.
 Goal and plan state are independent from compacted message history:
 
 ```text
-load latest GoalSnapshot
+require session write lease
+  -> reload transcript and latest GoalSnapshot under the lease
   -> resolve and recover referenced session plan file
   -> create GoalRuntimeHandle
   -> emit current snapshot
@@ -1841,7 +2030,8 @@ Because backward compatibility is explicitly excluded, old `GoalStatusPayload` a
 
 | Race | Required rule |
 |---|---|
-| Human message vs goal continuation | Human queue wins; goal waits for the next idle edge |
+| Two processes resume the same session | `SessionStore::require_write_lease` admits one writable runtime; the loser receives `session_in_use` before recovery or mutation |
+| Committed human turn vs queued goal continuation | AppServer admission linearizes the two requests; a human turn committed before the autonomous claim wins, and the goal waits for the next idle edge |
 | Pause/clear vs queued continuation | Under the goal transition lock, revoke lease and persist status; stale start is rejected |
 | Objective edit vs running turn | Spec revision increments and the running lease is revoked; next turn uses the new objective |
 | Plan edit vs queued turn | Re-materialize on claim or reject stale plan digest |
@@ -1849,6 +2039,28 @@ Because backward compatibility is explicitly excluded, old `GoalStatusPayload` a
 | Old usage event vs replacement goal | Goal id/lease id/effect id mismatch rejects accounting |
 | Crash after persist before schedule | Resume/idle replays scheduling from durable active state |
 | Event emission failure | Durable state remains; reconnect sends current snapshot |
+
+Two different session ids may be materialized by different processes in the same
+workspace. The goal runtime does not turn the workspace into a global mutex. Such
+sessions may observe each other's file changes, so completion evidence and plan
+digests are revalidated against current state; ordinary filesystem and version-control
+conflict behavior remains visible to the workers and users.
+
+Human-turn requests and mid-turn steering are distinct operations:
+
+- `QueueHumanTurn` requests a new ordinary turn. It remains outside goal accounting
+  and participates in the AppServer idle-admission arbitration above.
+- `SteerCurrentTurn` uses the existing `CommandQueue` behavior. When accepted during a
+  goal-owned turn it is injected at the safe internal boundary, inherits that turn's
+  goal lease, and consumes its accounting. The UI/API must label this as steering,
+  not promise that it will run first as a separate turn.
+
+The linearization point is the AppServer per-session turn-admission critical section,
+not the goal mutex alone. A human request that arrives after a goal turn has already
+started does not retroactively win that admission; it either explicitly steers the
+running turn or waits as the next human turn. This is the precise meaning of human
+priority and avoids an impossible "wins every race" promise across two independent
+queues.
 
 For a running goal turn, pause/clear/Plan-mode entry first revokes the durable lease
 under the transition lock, then requests turn cancellation. Already-started external
@@ -1859,15 +2071,18 @@ follow-up scheduling events from the revoked lease are rejected.
 
 | Runtime outcome | Goal transition |
 |---|---|
+| Writable resume while session lease is held | No goal transition; reject runtime materialization with typed `session_in_use` and optional owner diagnostics |
+| Storage backend cannot guarantee the session lease | No goal transition; fail closed with `session_lock_unsupported` |
 | Explicit user interrupt | `paused(user_interrupted)` |
-| Human steering arrives | Do not pause; human work runs first, then goal resumes at idle |
+| New human-turn request arrives | Do not pause; queue the unbound human turn, which wins the next eligible admission before the goal resumes |
+| Explicit mid-turn steering arrives | Inject at a safe internal boundary under the running goal lease; do not represent it as an unbound human turn |
 | Provider usage limit | `usage_limited`; register a reset wake when the provider reports a reset time |
 | Retryable provider error exhausted in-turn | `waiting(provider_backoff)` with a deadline wake; at most three consecutive backoff waits, then `blocked(execution_error)` |
 | Non-retryable provider/tool-loop error | `blocked(execution_error)`; resumable per section 11.3 |
 | Transient start failure below retry cap | Remain scheduled; bounded retry |
 | Transient start failure at cap | `paused(scheduler_unavailable)` |
 | Query max-turn | Goal remains active; supervisor starts a new turn unless goal turn cap is reached |
-| Goal turn cap | Boundary audit, then `completed` or `paused(turn_budget_exhausted)` |
+| Goal turn cap | Boundary audit, then `completed` or `budget_limited(kind=turns)` |
 | Goal token budget | Boundary audit, then `completed` or `budget_limited` |
 | Three signal-free turns | Boundary audit, then `completed` or `paused(no_progress)` |
 | Context or plan materialization failure | `paused(context_unavailable)` |
@@ -1910,9 +2125,9 @@ the goal domain, supervisor, adapters, and protocol are new.
 
 | Concern | Hermes lesson | Codex lesson | Chosen design |
 |---|---|---|---|
-| Durable state | Session-scoped persistence survives resume and compression rotation | First-class typed goal row and identity prevent projection drift | Versioned session snapshot with goal/spec/state/lease identities |
+| Durable state | Session-scoped persistence survives resume and compression rotation | First-class typed goal row and identity prevent projection drift | Versioned session snapshot with goal/spec/state/lease identities under one storage-owned session write lease |
 | Continuation | New normal turns improve preemption and observability | Thread idle lifecycle is the correct single owner | Session-scoped supervisor starts same-session logical turns |
-| Completion | Mandatory after-turn orchestration catches omitted claims, but the model judge sees weak evidence | Controlled terminal tool and active-goal continuation provide a hard gate, but discovery is worker-driven | Mandatory non-LLM coordinator plus multi-source candidates and exclusive evidence gate |
+| Completion | Mandatory after-turn orchestration catches omitted claims, but the model judge sees weak evidence | Controlled terminal tool and active-goal continuation provide a hard gate, but discovery is worker-driven | Mandatory non-LLM coordinator plus multi-source candidates, runtime-owned evidence records, and exclusive evidence gate |
 | Runaway control | Default 20 turns is an effective guard | Token/time accounting and mid-turn budget steering are strong | Default 20 autonomous turns plus optional token budget and total-token accounting |
 | Error stop and resume | API failure fails open to continue, which preserves liveness but is unbounded | Turn error becomes blocked; external `set(Active)` immediately re-arms continuation and the TUI prompts to resume Paused/Blocked/UsageLimited goals, but abort leaves an idle Active goal and BudgetLimited is terminal | Transient errors wait under a bounded backoff wake; non-retryable errors block but resume with one action committing a queued lease atomically; interrupt pauses explicitly |
 | Completion ergonomics | Every-turn judge needs no user setup but pays per turn and can mis-terminate | `update_goal` self-report is friction-free but can spin indefinitely when the worker never claims | Self-report stays primary with no mandatory contract review; checks veto cheaply; a bounded N-turn probe nudges without authority; hard boundaries stop |
@@ -1920,7 +2135,8 @@ the goal domain, supervisor, adapters, and protocol are new.
 | Plan mode | No direct reference | Do not schedule or account goal work in Plan mode | Persist `waiting(mode_gate)` and wake on execution-mode entry |
 | Waiting | Typed process/deadline barriers are useful, but need a wake owner | Lifecycle owner avoids surface-specific loops | Durable typed waits owned by supervisor task/timer subscriptions |
 | TUI | Transient status makes progress visible | Full snapshot protocol, footer state, edit/pause/resume/clear, replacement confirmation | Codex-style control plane plus plan/wake details and simultaneous Plan+Goal indicators |
-| Persistence backend | Session database is sufficient for session state | SQLite gives strong typed queries but is not the essential lesson | Reuse append-only session metadata; do not add a database only for goals |
+| Persistence backend | Session database is sufficient for session state | SQLite gives strong typed queries but is not the essential lesson | Reuse append-only session metadata, but enforce one cross-process writable owner through `SessionStore::require_write_lease`; do not add a database only for goals |
+| Workspace sharing | Multiple adapters may act on shared external state | Threads remain isolated even when their tools target the same checkout | Permit different sessions/processes to share a workspace; isolate session state and revalidate evidence instead of imposing a workspace mutex |
 | Extensibility | Surface glue demonstrates the cost of duplicated owners | Extension isolation is clean but broad | Add goal-specific ports, not a general extension framework |
 
 ## 17. Delivery phases
@@ -1929,51 +2145,80 @@ the goal domain, supervisor, adapters, and protocol are new.
 
 Add red tests for:
 
-1. an unfinished logical turn automatically schedules the next goal turn;
-2. provider errors always retry or enter an explicit status;
-3. query limits cannot leave an orphan active goal;
-4. background task completion wakes the goal;
-5. resume of an active goal starts continuation;
-6. Plan mode prevents goal scheduling and accounting, then wakes on exit;
-7. user interrupt does not immediately bounce into another turn;
-8. clear racing a queued continuation rejects stale work;
-9. compaction followed by continuation re-injects objective and plan reference;
-10. external plan edit is observed before the next goal turn;
-11. completion cannot be inferred solely from completed plan checkboxes;
-12. TUI receives the same snapshot as SDK and headless surfaces.
+1. a second process/store instance cannot acquire the write lease for the same
+   session while the first writable runtime is alive;
+2. an unfinished logical turn automatically schedules the next goal turn;
+3. a runner that exits, panics, or closes its event channel without `TurnEnded`
+   still produces one supervisor outcome;
+4. provider errors always retry or enter an explicit status;
+5. query limits cannot leave an orphan active goal;
+6. background task completion, including completion during wait commit, wakes the
+   goal exactly once at the durable transition boundary;
+7. resume of an active goal starts continuation;
+8. Plan mode prevents goal scheduling and accounting, then wakes on exit;
+9. user interrupt does not immediately bounce into another turn;
+10. clear racing a queued continuation rejects stale work;
+11. a committed human turn wins idle admission, while explicit steering remains
+    bound to the running goal lease;
+12. compaction followed by continuation re-injects objective and plan reference;
+13. external plan edit is observed before the next goal turn;
+14. completion cannot be inferred solely from completed plan checkboxes;
+15. evidence from another goal, lease, or turn is rejected;
+16. exhausting the autonomous-turn budget requires an atomic budget raise before
+    resume;
+17. TUI receives the same snapshot as SDK and headless surfaces.
 
 ### Phase 1: domain and durable state
 
+- Add `SessionLeaseStore::require_write_lease` semantics and the file-backed
+  `TranscriptStore` OS-lock implementation; acquire before writable resume/load and
+  thread the lease capability through every session mutation.
 - Add canonical goal DTOs and ids in `coco-types`.
 - Add pure `coco-goals` reducer and exhaustive transition tests.
 - Add versioned goal snapshot metadata to `coco-session`.
+- Add `GoalEvidenceRecord` metadata and sealed completion-authorization types.
+- Extend the existing plan subsystem with `PlanArtifactService`, stable artifact
+  identity, atomic digest observation, and observed revisions.
 - Install `GoalRuntimeHandle` in `SessionRuntime`.
-- Add `GoalPlanRef` using the existing session plan path.
-- Make protocol and TUI consume the new snapshot contract.
+- Add `GoalPlanRef` through `PlanArtifactService`.
+- Build protocol and TUI projection support for the new snapshot contract behind the
+  same construction-only development gate; shipped surfaces remain on the old
+  authority until Phase 4.
 
-### Phase 2: supervisor and turn scheduling
+### Phase 2: minimal vertical goal runtime
 
 - Implement session-scoped `GoalSupervisor`.
-- Add explicit-session `SessionTurnPort`.
-- Connect session resume/idle and turn lifecycle.
-- Add human priority, durable lease claims, and duplicate-idle suppression.
+- Add explicit-session `SessionTurnPort` returning an owned `GoalTurnHandle` whose
+  completion covers normal stop, abort, error, panic, and channel closure.
+- Connect session resume/idle, level-triggered reconciliation, and turn lifecycle.
+- Implement the mandatory coordinator and exclusive gate with the minimal persisted
+  completion policy needed for vertical tests; no caller can write completed directly.
+- Register lease-bound `get_goal` and `report_goal_turn`.
+- Add AppServer-linearized human-turn priority, explicit steering semantics, durable
+  goal-lease claims, and duplicate-idle suppression.
 - Add default goal-turn cap and total-token accounting.
+- Add deadline-wake prepare/commit/activate/recheck infrastructure.
 - Add typed provider-error mapping with bounded `waiting(provider_backoff)` wakes.
+- Inject a minimal authoritative objective/budget/completion-contract context so no
+  autonomous turn starts unanchored.
 
 Exit criterion: the active-goal invariant passes model/property tests, and TUI,
-headless, and SDK each pass one multi-turn end-to-end test.
+headless, and SDK each pass one multi-turn end-to-end test behind a construction-only
+development gate. The old Stop Hook remains the only shipped authority until Phase 4;
+the two runtimes never own one materialized session simultaneously.
 
-### Phase 3: context, plans, waiting, and tools
+### Phase 3: evidence, plans, waits, and advanced completion
 
 - Implement `GoalContextMaterializer`.
-- Implement mandatory `GoalCompletionCoordinator` and exclusive
-  `GoalCompletionGate`.
 - Add mandatory `goal_context` reminder and one-shot delta reminders.
 - Materialize bounded plan headings, active steps, and verification commands.
-- Register `get_goal`, `create_goal`, and `report_goal_turn`.
+- Register runtime-generated evidence producers for tool results, artifacts,
+  deterministic checks, and external-state observations.
+- Add `create_goal` on explicit user/system request.
 - Add task-terminal and deadline wake paths.
 - Add budget-limit mid-turn steering.
-- Add optional verify-on-complete policy.
+- Add candidate-time evidence review, optional contract verifier, compiled checks,
+  user acceptance, and the bounded completion probe.
 - Add resume actions for paused/blocked/usage-limited and the usage-limit reset
   wake.
 
@@ -1997,21 +2242,25 @@ Do not keep a compatibility shim, dual-write bridge, or runtime fallback.
 - stale goal id, spec revision, lease, and effect ids are rejected;
 - turn/token/time accounting is not duplicated;
 - budget boundaries fire exactly once;
+- `budget_limited(kind=turns)` rejects plain resume and accepts an atomic sufficient
+  budget raise plus resume;
 - clear/recreate generates a new identity;
 - `active => running || queued`;
-- `waiting => registered_wake`;
+- `waiting => durable wake identity and condition`;
+- only sealed gate authorization can construct the completed transition;
 - plan revision cannot alter objective/status implicitly.
 
 ### 18.2 Runtime integration tests
 
 1. A first turn stops without completion; a second turn starts automatically.
 2. A worker completion candidate can only complete through `GoalCompletionGate`.
-3. Default goal-turn cap enters paused state.
+3. Default goal-turn cap enters `budget_limited(kind=turns)`.
 4. Token budget enters `budget_limited` and injects only one wrap-up.
 5. Provider usage limit enters `usage_limited`.
 6. Terminal execution error enters `blocked`.
 7. Background work does not burn continuation turns and wakes on completion.
-8. Human message races continuation and runs first.
+8. A committed human-turn request races continuation and wins the next admission;
+   explicit mid-turn steering remains bound to the running goal lease.
 9. Clear after queueing prevents stale continuation start.
 10. Restart/resume automatically continues an active goal.
 11. Compaction cannot change the goal snapshot.
@@ -2027,13 +2276,16 @@ Do not keep a compatibility shim, dual-write bridge, or runtime fallback.
 21. An explicit branch copies the plan but does not clone an active goal.
 22. Three signal-free goal turns pause with `no_progress` rather than loop.
 23. Two background session goals receive fair admission.
-24. Two goals targeting the same canonical workspace do not run turns concurrently.
+24. Two different sessions may run in the same workspace, keep independent goal
+    state, and revalidate evidence against current shared-workspace state.
 25. A turn without `report_goal_turn` becomes `Unreported` and continues safely.
 26. A deterministic contract can complete without a worker claim.
 27. No-progress, budget, blocked-candidate, and system-pause boundaries run a
     completion audit first; explicit human pause does not wait.
 28. Only `GoalCompletionGate` can emit the completed transition.
-29. Duplicate turn-finalization events invoke one idempotent coordinator decision.
+29. Duplicate turn-finalization events commit one idempotent coordinator decision;
+    verifier delivery is allowed to retry only when no result was committed for its
+    durable attempt id.
 30. `Unreported` and assistant prose alone can never produce completed state.
 31. Resume from `blocked(execution_error)` commits a queued lease in the same
     transaction and automatically re-runs a turn.
@@ -2074,16 +2326,43 @@ Do not keep a compatibility shim, dual-write bridge, or runtime fallback.
 47. A candidate on a goal without deterministic coverage spends exactly one
     evidence review; review rejection returns `active` with per-requirement
     gaps, and no review runs on ordinary progress turns.
+48. A second writable materialization of the same session id fails with
+    `session_in_use`; releasing the lease or terminating the owner process allows a
+    fresh process to acquire the OS lock and reload the latest state.
+49. Session reads and listing remain available while another process holds the write
+    lease, but no mutating store API is callable without the matching lease capability.
+50. A runner panic or event-channel close without `TurnEnded` resolves its owned
+    `GoalTurnHandle` to an error outcome and cannot leave a durable running lease.
+51. A task or deadline satisfied between watcher preparation and waiting-state commit
+    is observed by the post-commit predicate recheck and queues one continuation.
+52. A missing or failed volatile wake watcher is recreated by level-triggered
+    supervisor reconciliation from the durable wake identity.
+53. Evidence created under another goal id, lease id, turn id, or session cannot pass
+    ownership validation; the model cannot mint a valid `GoalEvidenceRecord`.
+54. A rejected or unavailable probe-escalated audit returns to `active` with one
+    queued lease and cooldown; it never tries to commit a nonexistent original pause
+    transition.
+55. `PlanArtifactService` observes content and digest atomically, advances revision
+    only on accepted digest change, and resolves only session-owned artifact ids.
+56. A file/remote storage backend that cannot guarantee exclusive session locking
+    rejects writable materialization with `session_lock_unsupported` rather than
+    silently continuing unlocked.
 
 ### 18.3 Fault injection
 
+- session write-lease contention from a second process;
+- owner process exit while holding the session lock, followed by recovery acquisition;
 - event channel full or closed;
+- turn runner panic or return without a terminal event;
 - transcript append failure;
 - AppServer turn start rejected or busy;
 - plan file missing, unreadable, oversized, or changed during materialization;
+- shared-workspace file change between evidence creation and completion validation;
 - task watcher disconnect;
+- task/deadline satisfaction between watcher preparation and waiting-state commit;
 - deadline timer recovery after restart;
 - verifier timeout or invalid output;
+- crash after verifier response but before result persistence;
 - duplicate idle notification;
 - late usage event from a previous goal;
 - cancellation between persist and schedule.
@@ -2092,6 +2371,8 @@ Do not keep a compatibility shim, dual-write bridge, or runtime fallback.
 
 Metrics must exclude objective and plan content. Record:
 
+- session write-lease acquisition, contention, owner process kind, and hold duration
+  without persisting user content;
 - goal created/resumed/completed/blocked/paused/cleared;
 - continuation queued/started/rejected/retried;
 - active and waiting duration;
@@ -2099,6 +2380,7 @@ Metrics must exclude objective and plan content. Record:
 - plan materialization success/failure and digest change;
 - budget, usage, verifier, context, and scheduler stop reasons;
 - stale continuation rejection;
+- synthesized turn outcomes for panic/channel-close paths and wake reconciliation;
 - persistence failure and invariant violation.
 
 Invariant violations require an error log and counter. Silent self-healing is not
@@ -2108,9 +2390,14 @@ sufficient observability.
 
 The refactor is complete only when all conditions hold:
 
+- At most one writable `SessionRuntime` owns a session id across processes; a second
+  writable resume fails before recovery or mutation, while read-only inspection
+  remains available.
 - Every active goal identifies a running turn or queued lease; every waiting goal has
-  a registered wake.
-- Every `QueryEngine` terminal/error variant has a tested supervisor transition.
+  a durable wake identity whose volatile watcher is registered or recoverable by
+  level-triggered supervisor reconciliation.
+- Every `QueryEngine` terminal/error variant, runner panic, and missing-terminal-event
+  path has a tested supervisor transition.
 - Work advances across multiple logical turns without user input.
 - Ordinary continuation never forks the worker session.
 - Plan/Review mode never runs or accounts autonomous goal work.
@@ -2122,6 +2409,8 @@ The refactor is complete only when all conditions hold:
 - User interrupt produces an explicit paused state.
 - Every non-terminal stopped status resumes through one validated path that
   commits a queued lease in the same transaction.
+- Exhausted turn/token budgets cannot resume without a sufficient atomic budget edit;
+  lifetime usage is never silently reset.
 - Transient provider failures wait with a registered wake or become an explicit
   resumable status; they never silently end autonomous work.
 - Background tasks and deadlines wake the supervisor.
@@ -2132,11 +2421,15 @@ The refactor is complete only when all conditions hold:
 - The plan file is durable working memory, not a competing status authority.
 - Completion is a gated candidate backed by current-state evidence; deterministic
   contracts may create the candidate without a worker claim.
+- Completion evidence is runtime-owned and durably bound to session, goal, lease,
+  turn, and source identity before the worker cites it.
 - Every goal-owned turn reaches `GoalCompletionCoordinator`, including turns where
   the worker omits its report.
 - No tool, surface, verifier, or worker can persist completed state except through
   `GoalCompletionGate`.
 - No surface-specific autonomous loop remains.
+- Different sessions may share one workspace without sharing session state or write
+  leases; completion revalidates current shared-workspace evidence.
 - Old goal Hook and sentinel recovery code is deleted.
 - No transitional Stop Hook goal path or dual authority remains.
 - Relevant tests, seam guards, error-policy checks, formatting, and Clippy pass.
@@ -2147,25 +2440,34 @@ The refactor is complete only when all conditions hold:
 2. A continuation is a new logical turn in the same session, not a query-local retry
    and not a full worker fork.
 3. `GoalSupervisor` is the only automatic continuation owner.
-4. A durable snapshot is the single goal source of truth; runtime, UI, events, and
+4. `SessionStore::require_write_lease` permits one writable materialization of a
+   session id across processes; the session lease belongs to storage, not to goals.
+5. A durable snapshot is the single goal source of truth; runtime, UI, events, and
    transcript messages are projections.
-5. Conversation compaction may summarize prior turns, but it cannot summarize away
+6. Conversation compaction may summarize prior turns, but it cannot summarize away
    goal control state or the plan reference.
-6. The existing plan file is reused as mutable execution memory. It is referenced and
-   re-materialized, not copied into the goal row.
-7. One mandatory typed goal reminder re-injects objective, budget, plan state, wait
+7. The existing plan file is reused as mutable execution memory through
+   `PlanArtifactService`. It is referenced and re-materialized, not copied into the
+   goal row.
+8. One mandatory typed goal reminder re-injects objective, budget, plan state, wait
    results, and completion policy on every autonomous turn.
-8. Every goal turn passes through `GoalCompletionCoordinator`; worker reports,
+9. Every goal turn passes through `GoalCompletionCoordinator`; worker reports,
    deterministic contracts, and boundary audits produce candidates, and only
    `GoalCompletionGate` may persist completion.
-9. The default autonomous-turn budget is 20; token budget is explicit-only.
-10. Human work always wins, and stale autonomous work is rejected by goal id and lease
-    id.
-11. Plan/Review mode gates autonomous work and goal accounting without hiding or
+10. Runtime-owned evidence records bind proof to session, goal, lease, turn, and
+    source before the worker cites it.
+11. The default autonomous-turn budget is 20; token budget is explicit-only, and
+    exhausted budgets require an atomic raise before resume.
+12. A committed human turn wins the next idle admission; explicit mid-turn steering
+    remains bound to the current goal lease. Stale autonomous work is rejected by
+    goal id and lease id.
+13. Plan/Review mode gates autonomous work and goal accounting without hiding or
     clearing the goal.
-12. TUI is a snapshot-driven control plane with explicit plan, wait, budget, and
+14. TUI is a snapshot-driven control plane with explicit plan, wait, budget, and
     evidence visibility.
-13. Every turn end commits a queued lease, registered wait, or non-active status.
+15. Every turn end commits a queued lease, durable recoverable wait, or non-active status.
     Active-but-idle is invalid.
-14. Cut directly to the final runtime. Do not add any new goal behavior to the managed
+16. Different sessions and processes may share a workspace; workspace sharing never
+    permits two writable owners of the same session id.
+17. Cut directly to the final runtime. Do not add any new goal behavior to the managed
     Stop Hook and do not ship dual authorities.
