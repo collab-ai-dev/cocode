@@ -20,15 +20,12 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use coco_app_server_transport::JsonRpcFrame;
 use coco_sandbox::{
     SandboxApprovalBridge, SandboxApprovalDecision, SandboxApprovalRequest, SandboxOperation,
 };
-use coco_types::{ApprovalDecision, ApprovalResolveParams, ServerAskForApprovalParams};
+use coco_types::{ApprovalDecision, ServerAskForApprovalParams};
 use tracing::warn;
 use uuid::Uuid;
-
-use crate::sdk_server::handlers::SdkServerState;
 
 /// Synthetic tool name surfaced to SDK clients so sandbox approvals
 /// reuse the regular tool-permission UI / handlers without a separate
@@ -43,40 +40,29 @@ pub const SANDBOX_PATH_ACCESS_TOOL_NAME: &str = "SandboxPathAccess";
 
 /// SDK-backed sandbox approval bridge.
 ///
-/// Construction is cheap — just an `Arc<SdkServerState>` clone. The
-/// SDK transport must be initialised (`SdkServer::run_app_server_connection`)
-/// before the first sandbox deny lands; otherwise we surface
-/// `SandboxApprovalDecision::Rejected` so the underlying deny error
-/// stands. Fail-closed by construction.
+/// The bridge is bound to the same session capability whose sandbox
+/// produced the request. AppServer selects that session's interactive
+/// surface and owns reply correlation.
 pub struct SdkSandboxApprovalBridge {
-    state: Arc<SdkServerState>,
+    app_server: Arc<coco_app_server::AppServer<super::LocalAppSessionHandle>>,
+    session: crate::session_runtime::SessionHandle,
 }
 
 impl SdkSandboxApprovalBridge {
-    pub fn new(state: Arc<SdkServerState>) -> Self {
-        Self { state }
+    pub fn new(
+        app_server: Arc<coco_app_server::AppServer<super::LocalAppSessionHandle>>,
+        session: crate::session_runtime::SessionHandle,
+    ) -> Self {
+        Self {
+            app_server,
+            session,
+        }
     }
 }
 
 #[async_trait]
 impl SandboxApprovalBridge for SdkSandboxApprovalBridge {
     async fn request_approval(&self, request: SandboxApprovalRequest) -> SandboxApprovalDecision {
-        // Read the transport handle the dispatcher published at
-        // startup. Missing transport → Rejected (preserves the
-        // sandbox's deny error). Same fail-closed semantics
-        // `SdkPermissionBridge` uses.
-        let transport = match self.state.sdk_transport_snapshot().await {
-            Some(t) => t,
-            None => {
-                warn!(
-                    operation = request.operation.as_str(),
-                    path = %request.path,
-                    "SdkSandboxApprovalBridge: SDK transport unavailable; rejecting"
-                );
-                return SandboxApprovalDecision::Rejected;
-            }
-        };
-
         // `SandboxOperation` is `#[non_exhaustive]`; future kinds
         // (subprocess spawn, etc.) need an explicit wire mapping. We
         // route unknown kinds through the path-access tool with a
@@ -124,74 +110,65 @@ impl SandboxApprovalBridge for SdkSandboxApprovalBridge {
             cwd: None,
             permission_suggestions: Vec::new(),
         };
-        let params = match serde_json::to_value(&params) {
-            Ok(v) => v,
-            Err(e) => {
-                warn!(error = %e, "SdkSandboxApprovalBridge: failed to serialise params");
-                return SandboxApprovalDecision::Rejected;
-            }
-        };
-
         // Fire the Notification hook before blocking on the SDK client so
         // the same hook fires regardless of whether the prompt comes from
         // a regular tool or a sandbox-level deny. Best-effort — runtime
         // not yet installed (e.g. tests) leaves the hook unfired.
-        if let Some(runtime) = self.state.session_runtime_snapshot().await {
-            let title = format!("Sandbox prompt: {tool_name}");
-            runtime
-                .fire_notification_hooks(
-                    "permission_prompt",
-                    "Coco needs your permission for a sandboxed operation",
-                    Some(&title),
-                )
-                .await;
-        }
+        let title = format!("Sandbox prompt: {tool_name}");
+        self.session
+            .fire_notification_hooks(
+                "permission_prompt",
+                "Coco needs your permission for a sandboxed operation",
+                Some(&title),
+            )
+            .await;
 
-        let reply = match self
-            .state
-            .send_server_request(&transport, "approval/askForApproval", params)
-            .await
-        {
-            Ok(r) => r,
+        let reply = match self.app_server.route_server_request_with_reply(
+            self.session.session_id().clone(),
+            coco_app_server::SurfaceCapability::Interactive,
+            None,
+            coco_types::ServerRequest::AskForApproval(params),
+        ) {
+            Ok(receiver) => match receiver.await {
+                Ok(reply) => reply,
+                Err(_) => {
+                    warn!(
+                        session_id = %self.session.session_id(),
+                        "SdkSandboxApprovalBridge: reply channel closed; rejecting"
+                    );
+                    return SandboxApprovalDecision::Rejected;
+                }
+            },
             Err(e) => {
                 warn!(
-                    error = %e,
-                    "SdkSandboxApprovalBridge: send_server_request failed; rejecting"
+                    error = ?e,
+                    session_id = %self.session.session_id(),
+                    "SdkSandboxApprovalBridge: route failed; rejecting"
                 );
                 return SandboxApprovalDecision::Rejected;
             }
         };
 
         match reply {
-            JsonRpcFrame::Success(success) => {
-                let parsed: ApprovalResolveParams = match serde_json::from_value(success.result) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        warn!(error = %e, "SdkSandboxApprovalBridge: invalid response shape");
-                        return SandboxApprovalDecision::Rejected;
-                    }
-                };
-                match parsed.decision {
-                    ApprovalDecision::Allow => SandboxApprovalDecision::Approved,
-                    ApprovalDecision::Deny => SandboxApprovalDecision::Rejected,
-                }
-            }
-            JsonRpcFrame::Error(e) => {
+            coco_app_server::ServerRequestReply::Approval(parsed) => match parsed.decision {
+                ApprovalDecision::Allow => SandboxApprovalDecision::Approved,
+                ApprovalDecision::Deny => SandboxApprovalDecision::Rejected,
+            },
+            coco_app_server::ServerRequestReply::Error(e) => {
                 warn!(
-                    code = e.error.code,
-                    message = %e.error.message,
+                    code = e.code,
+                    message = %e.message,
                     "SdkSandboxApprovalBridge: client returned error; rejecting"
                 );
                 SandboxApprovalDecision::Rejected
             }
             other => {
-                warn!(?other, "SdkSandboxApprovalBridge: unexpected reply variant");
+                warn!(
+                    ?other,
+                    "SdkSandboxApprovalBridge: unexpected reply; rejecting"
+                );
                 SandboxApprovalDecision::Rejected
             }
         }
     }
 }
-
-#[cfg(test)]
-#[path = "sandbox_approval_bridge.test.rs"]
-mod tests;

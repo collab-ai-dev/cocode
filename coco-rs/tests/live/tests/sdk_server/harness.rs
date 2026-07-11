@@ -67,11 +67,7 @@ pub struct LiveSdkServer {
     /// reminder assertions go through the server-state path, not
     /// this field directly.
     #[allow(dead_code)]
-    pub session_runtime: Arc<coco_agent_host::session_runtime::SessionRuntime>,
-    /// `Arc<SdkServer>` retained so the harness can peek at the active
-    /// `SessionHandle.history` (which is what `QueryEngineRunner` writes
-    /// per-turn — `runtime.history` is not the live SDK history).
-    pub server: Arc<SdkServer>,
+    pub session_runtime: SessionHandle,
     /// Resolved (provider, model) for the harness, for diagnostic use.
     /// Underscore-prefixed because no test reads them today; future
     /// failure messages may want to grab them via field access.
@@ -107,11 +103,7 @@ impl LiveSdkServer {
     }
 
     async fn history_snapshot_now(&self) -> Vec<coco_messages::Message> {
-        let state = self.server.state();
-        let Some(handle) = state.session_runtime_snapshot().await else {
-            return Vec::new();
-        };
-        handle
+        self.session_runtime
             .history()
             .lock()
             .await
@@ -311,23 +303,12 @@ pub async fn build_live_server_with_options(
 
     // Wire the in-memory transport pair.
     let (server_end, client_end) = InMemoryTransport::pair(64);
-    // Match `run_sdk_mode`'s wiring: install file_history (empty
-    // placeholder when the runtime has none) AND `with_session_handle`
-    // BEFORE building the runner. Without `with_session_handle`, the
-    // server's per-turn engine path can't reach the runtime's wired
-    // subsystems.
-    let file_history_for_server = session_handle.file_history().cloned().unwrap_or_else(|| {
-        Arc::new(tokio::sync::RwLock::new(
-            coco_context::FileHistoryState::new(),
-        ))
-    });
     let server = SdkServer::new(server_end)
         .with_session_manager(session_manager)
         .with_initialize_bootstrap(bootstrap)
-        .with_file_history(file_history_for_server, std::env::temp_dir())
-        .with_session_handle(session_handle.clone());
+        .with_startup_cwd(cwd.clone());
 
-    let session_runtime = session_handle.runtime().clone();
+    let session_runtime = session_handle.clone();
     let runner = Arc::new(QueryEngineRunner::new(
         session_handle,
         cli.max_turns.or(Some(8)),
@@ -335,8 +316,6 @@ pub async fn build_live_server_with_options(
     ));
     server.set_turn_runner(runner).await;
 
-    // Hold an `Arc<SdkServer>` so the harness can peek at server.state()
-    // (active SessionHandle) without consuming the server in the spawn.
     let server_arc = Arc::new(server);
     let server_for_task = server_arc.clone();
     let server_task = tokio::spawn(async move {
@@ -351,7 +330,6 @@ pub async fn build_live_server_with_options(
     Ok(LiveSdkServer {
         client: client_end,
         server_task,
-        server: server_arc,
         _sessions_dir: sessions_dir,
         _cwd_dir: cwd_dir,
         session_runtime,

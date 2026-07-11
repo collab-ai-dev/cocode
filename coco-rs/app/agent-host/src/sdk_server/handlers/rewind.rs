@@ -1,12 +1,11 @@
 //! `control/rewindFiles` — restore tracked files to a named snapshot.
 //!
-//! Requires a `FileHistoryState` + `config_home` to be wired on the
-//! `SdkServerState`; both go via `SdkServer::with_file_history()`.
+//! File history and `config_home` are resolved from the request's targeted
+//! session runtime.
 
 use tracing::info;
 
-use super::HandlerContext;
-use super::HandlerResult;
+use super::{HandlerContext, HandlerResult};
 
 /// `control/rewindFiles` — restore tracked files to a snapshot keyed
 /// by `user_message_id`.
@@ -18,7 +17,7 @@ use super::HandlerResult;
 ///
 /// Requires:
 /// - An active session (for the session_id used to key file backups)
-/// - A `FileHistoryState` installed via `SdkServer::with_file_history()`
+/// - File history enabled on the targeted session runtime
 ///
 /// Errors:
 /// - `INVALID_REQUEST` if no active session
@@ -38,21 +37,21 @@ pub(super) async fn handle_rewind_files(
         };
     };
 
-    // Resolve the file history + config home.
-    let Some(history_arc) = ctx.state.file_history_snapshot().await else {
+    let Some(runtime) = ctx.resolve_runtime().await else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "control/rewindFiles requires a live targeted session".into(),
+            data: None,
+        };
+    };
+    let Some(history_arc) = runtime.file_history().cloned() else {
         return HandlerResult::Err {
             code: coco_types::error_codes::INVALID_REQUEST,
             message: "control/rewindFiles: file history not enabled on this server".into(),
             data: None,
         };
     };
-    let Some(config_home) = ctx.state.file_history_config_home_snapshot().await else {
-        return HandlerResult::Err {
-            code: coco_types::error_codes::INVALID_REQUEST,
-            message: "control/rewindFiles: file history config home not set".into(),
-            data: None,
-        };
-    };
+    let config_home = runtime.config_home().clone();
 
     // Verify the snapshot exists before attempting the operation —
     // gives a clearer error than "rewind failed: not found".

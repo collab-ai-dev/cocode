@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ClientRequest",
-  "description": "Bidirectional control protocol — client-initiated requests.\n\nEach variant carries a unique `method` string used on the wire. The method is the discriminator; params are the variant-specific payload.\n\nSee `event-system-design.md` §5.1 for the base variants and §5.4 for gap additions. 45 total.",
+  "description": "Bidirectional control protocol — client-initiated requests.\n\nEach variant carries a unique `method` string used on the wire. The method is the discriminator; params are the variant-specific payload.\n\nSee `event-system-design.md` §5.1 for the base variants and §5.4 for gap additions.",
   "oneOf": [
     {
       "type": "object",
@@ -44,6 +44,22 @@
         },
         "params": {
           "$ref": "#/$defs/SessionResumeParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "session/replace"
+        },
+        "params": {
+          "$ref": "#/$defs/SessionReplaceParams"
         }
       },
       "required": [
@@ -165,10 +181,14 @@
         "method": {
           "type": "string",
           "const": "session/cost"
+        },
+        "params": {
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
-        "method"
+        "method",
+        "params"
       ]
     },
     {
@@ -177,10 +197,14 @@
         "method": {
           "type": "string",
           "const": "session/status"
+        },
+        "params": {
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
-        "method"
+        "method",
+        "params"
       ]
     },
     {
@@ -205,10 +229,14 @@
         "method": {
           "type": "string",
           "const": "turn/interrupt"
+        },
+        "params": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
-        "method"
+        "method",
+        "params"
       ]
     },
     {
@@ -217,10 +245,14 @@
         "method": {
           "type": "string",
           "const": "task/list"
+        },
+        "params": {
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
-        "method"
+        "method",
+        "params"
       ]
     },
     {
@@ -390,10 +422,14 @@
         "method": {
           "type": "string",
           "const": "control/resetSessionPermissionRules"
+        },
+        "params": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
-        "method"
+        "method",
+        "params"
       ]
     },
     {
@@ -450,10 +486,14 @@
         "method": {
           "type": "string",
           "const": "control/backgroundAllTasks"
+        },
+        "params": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
-        "method"
+        "method",
+        "params"
       ]
     },
     {
@@ -507,10 +547,14 @@
         "method": {
           "type": "string",
           "const": "config/read"
+        },
+        "params": {
+          "$ref": "#/$defs/ConfigReadParams"
         }
       },
       "required": [
-        "method"
+        "method",
+        "params"
       ]
     },
     {
@@ -536,10 +580,14 @@
         "method": {
           "type": "string",
           "const": "mcp/status"
+        },
+        "params": {
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
-        "method"
+        "method",
+        "params"
       ]
     },
     {
@@ -549,10 +597,14 @@
         "method": {
           "type": "string",
           "const": "context/usage"
+        },
+        "params": {
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
-        "method"
+        "method",
+        "params"
       ]
     },
     {
@@ -613,10 +665,14 @@
         "method": {
           "type": "string",
           "const": "plugin/reload"
+        },
+        "params": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
-        "method"
+        "method",
+        "params"
       ]
     },
     {
@@ -626,10 +682,14 @@
         "method": {
           "type": "string",
           "const": "hook/reload"
+        },
+        "params": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
-        "method"
+        "method",
+        "params"
       ]
     },
     {
@@ -671,9 +731,13 @@
       "properties": {
         "agent_id": {
           "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
+        "target",
         "agent_id"
       ]
     },
@@ -695,11 +759,15 @@
       "description": "Params for `control/applyPermissionUpdate`.",
       "type": "object",
       "properties": {
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
+        },
         "update": {
           "$ref": "#/$defs/PermissionUpdate"
         }
       },
       "required": [
+        "target",
         "update"
       ]
     },
@@ -747,13 +815,45 @@
         "request_id": {
           "type": "string"
         },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
+        },
         "updated_input": {
           "description": "Optional rewritten tool input the SDK client supplies at\napproval time. When `Some`, the engine substitutes this for the\nmodel-emitted input before invoking the tool. Used by\n`AskUserQuestion` to ship user-selected `answers` (and optional\n`annotations`) back into the tool's data envelope.\n\nIn-process equivalent is `coco_tool_runtime::ToolPermissionResolution.updated_input`\n(TUI mode). Consumed by `app/agent-host/src/sdk_server/approval_bridge.rs`."
         }
       },
       "required": [
+        "target",
         "request_id",
         "decision"
+      ]
+    },
+    "ArchiveTarget": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "interactive": {
+              "$ref": "#/$defs/InteractiveTarget"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "interactive"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "orphaned": {
+              "$ref": "#/$defs/SessionTarget"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "orphaned"
+          ]
+        }
       ]
     },
     "CancelRequestParams": {
@@ -781,10 +881,47 @@
         "settings": {
           "type": "object",
           "additionalProperties": true
+        },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
+        "target",
         "settings"
+      ]
+    },
+    "ConfigReadParams": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/ConfigReadTarget"
+        }
+      },
+      "required": [
+        "target"
+      ]
+    },
+    "ConfigReadTarget": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "process"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "session": {
+              "$ref": "#/$defs/SessionTarget"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "session"
+          ]
+        }
       ]
     },
     "ConfigWriteParams": {
@@ -794,18 +931,49 @@
         "key": {
           "type": "string"
         },
-        "scope": {
-          "description": "Optional scope: \"user\" | \"project\" | \"local\".",
-          "type": [
-            "string",
-            "null"
-          ]
+        "target": {
+          "$ref": "#/$defs/ConfigWriteTarget"
         },
         "value": true
       },
       "required": [
+        "target",
         "key",
         "value"
+      ]
+    },
+    "ConfigWriteTarget": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "user"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "project": {
+              "$ref": "#/$defs/InteractiveTarget"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "project"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "local": {
+              "$ref": "#/$defs/InteractiveTarget"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "local"
+          ]
+        }
       ]
     },
     "ElicitationResolveParams": {
@@ -824,6 +992,9 @@
           "description": "Correlation id matching the `ServerRequest` the agent sent.",
           "type": "string"
         },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
+        },
         "values": {
           "description": "The collected field values keyed by field name. Each value is\nan opaque JSON payload so typed/untyped fields share the wire\nformat. Empty when `approved=false`.",
           "type": "object",
@@ -832,6 +1003,7 @@
         }
       },
       "required": [
+        "target",
         "request_id",
         "mcp_server_name",
         "approved"
@@ -1101,15 +1273,35 @@
         }
       }
     },
+    "InteractiveTarget": {
+      "description": "Selects one live interactive surface and its immutable session identity.",
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        },
+        "surface_id": {
+          "$ref": "#/$defs/SurfaceId"
+        }
+      },
+      "required": [
+        "session_id",
+        "surface_id"
+      ]
+    },
     "McpReconnectParams": {
       "description": "Params for `mcp/reconnect`.",
       "type": "object",
       "properties": {
         "server_name": {
           "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
+        "target",
         "server_name"
       ]
     },
@@ -1121,9 +1313,13 @@
           "description": "Server configs keyed by name.",
           "type": "object",
           "additionalProperties": true
+        },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
+        "target",
         "servers"
       ]
     },
@@ -1136,9 +1332,13 @@
         },
         "server_name": {
           "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
+        "target",
         "server_name",
         "enabled"
       ]
@@ -1497,11 +1697,15 @@
           "type": "boolean",
           "default": false
         },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
+        },
         "user_message_id": {
           "type": "string"
         }
       },
       "required": [
+        "target",
         "user_message_id"
       ]
     },
@@ -1636,12 +1840,12 @@
       "description": "Params for `session/archive`.",
       "type": "object",
       "properties": {
-        "session_id": {
-          "$ref": "#/$defs/SessionId"
+        "target": {
+          "$ref": "#/$defs/ArchiveTarget"
         }
       },
       "required": [
-        "session_id"
+        "target"
       ]
     },
     "SessionId": {
@@ -1666,12 +1870,12 @@
           ],
           "format": "int32"
         },
-        "session_id": {
-          "$ref": "#/$defs/SessionId"
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
-        "session_id"
+        "target"
       ]
     },
     "SessionRenameParams": {
@@ -1680,22 +1884,70 @@
       "properties": {
         "name": {
           "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
+        "target",
         "name"
+      ]
+    },
+    "SessionReplaceParams": {
+      "type": "object",
+      "properties": {
+        "destination": {
+          "$ref": "#/$defs/SessionReplacement"
+        },
+        "source": {
+          "$ref": "#/$defs/InteractiveTarget"
+        }
+      },
+      "required": [
+        "source",
+        "destination"
+      ]
+    },
+    "SessionReplacement": {
+      "description": "Destination selected by explicit `session/replace`.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "fresh": {
+              "$ref": "#/$defs/SessionStartParams"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "fresh"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "resume": {
+              "$ref": "#/$defs/SessionTarget"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "resume"
+          ]
+        }
       ]
     },
     "SessionResumeParams": {
       "description": "Params for `session/resume`.",
       "type": "object",
       "properties": {
-        "session_id": {
-          "$ref": "#/$defs/SessionId"
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
-        "session_id"
+        "target"
       ]
     },
     "SessionStartParams": {
@@ -1771,6 +2023,18 @@
           ],
           "format": "int64"
         },
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
+        }
+      },
+      "required": [
+        "target"
+      ]
+    },
+    "SessionTarget": {
+      "description": "Selects persisted or live state without proving interactive ownership.",
+      "type": "object",
+      "properties": {
         "session_id": {
           "$ref": "#/$defs/SessionId"
         }
@@ -1785,9 +2049,13 @@
       "properties": {
         "tag": {
           "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
+        "target",
         "tag"
       ]
     },
@@ -1809,12 +2077,12 @@
           ],
           "format": "int32"
         },
-        "session_id": {
-          "$ref": "#/$defs/SessionId"
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
-        "session_id"
+        "target"
       ]
     },
     "SetAgentColorParams": {
@@ -1830,8 +2098,14 @@
               "type": "null"
             }
           ]
+        },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
-      }
+      },
+      "required": [
+        "target"
+      ]
     },
     "SetModelParams": {
       "description": "Params for `control/setModel`.",
@@ -1843,8 +2117,14 @@
             "string",
             "null"
           ]
+        },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
-      }
+      },
+      "required": [
+        "target"
+      ]
     },
     "SetModelRoleParams": {
       "description": "Params for `control/setModelRole`.",
@@ -1868,9 +2148,13 @@
         },
         "role": {
           "$ref": "#/$defs/ModelRole"
+        },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
+        "target",
         "role",
         "provider",
         "model_id"
@@ -1882,9 +2166,13 @@
       "properties": {
         "mode": {
           "$ref": "#/$defs/PermissionMode"
+        },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
+        "target",
         "mode"
       ]
     },
@@ -1892,6 +2180,9 @@
       "description": "Params for `control/setThinking`.\nUses `ThinkingLevel` which includes effort level and per-provider options.",
       "type": "object",
       "properties": {
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
+        },
         "thinking_level": {
           "anyOf": [
             {
@@ -1902,29 +2193,44 @@
             }
           ]
         }
-      }
+      },
+      "required": [
+        "target"
+      ]
     },
     "StopTaskParams": {
       "description": "Params for `control/stopTask`.",
       "type": "object",
       "properties": {
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
+        },
         "task_id": {
           "type": "string"
         }
       },
       "required": [
+        "target",
         "task_id"
       ]
+    },
+    "SurfaceId": {
+      "description": "Branded surface attachment identifier.\n\nA surface is a client-visible attachment to a live session. It is\ngenerated by the server, used for routing/capability checks, and is\nnever persisted as transcript identity.",
+      "type": "string"
     },
     "TaskDetailParams": {
       "description": "Params for `task/detail`.",
       "type": "object",
       "properties": {
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
+        },
         "task_id": {
           "type": "string"
         }
       },
       "required": [
+        "target",
         "task_id"
       ]
     },
@@ -2002,6 +2308,9 @@
             "null"
           ]
         },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
+        },
         "thinking_level": {
           "description": "Optional turn-scoped thinking override.",
           "anyOf": [
@@ -2015,6 +2324,7 @@
         }
       },
       "required": [
+        "target",
         "prompt"
       ]
     },
@@ -2027,9 +2337,13 @@
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
+        "target",
         "env"
       ]
     },
@@ -2043,9 +2357,13 @@
         },
         "request_id": {
           "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/InteractiveTarget"
         }
       },
       "required": [
+        "target",
         "request_id",
         "answer"
       ]

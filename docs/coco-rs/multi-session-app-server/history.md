@@ -83,3 +83,30 @@ The replacement documents were written after re-reading the production DTO,
 client, adapter, handler, runner, registry, runtime, project-service, and test
 paths on 2026-07-11. The most important correction is that multi-slot storage
 and surface routing do not by themselves prove multi-session execution.
+
+## Breaking refactor landed (2026-07-11)
+
+- added exhaustive request scopes and required typed targets;
+- isolated initialize state, writers, and callback correlation per connection;
+- made AppServer validation the only interactive runtime selector;
+- moved active turns, MCP, file history, reload, hooks, sandbox, and approvals
+  behind `SessionHandle`;
+- added explicit replacement, closing-resume retry, atomic orphan close, and
+  multi-runtime shutdown;
+- removed singleton runtime/capability state and the implicit sole-session
+  fallback APIs;
+- hardened `SessionHandle` into an opaque focused capability and enabled
+  `clippy::await_holding_lock` workspace-wide.
+
+## Release validation completed (2026-07-11)
+
+The final workspace validation exposed four related local AppServer call paths
+that installed a runtime but could construct an `InteractiveTarget` before the
+local bridge had attached its interactive surface: queued history turns,
+fast-mode changes, thinking-level changes, and explicit file rewind. Each path
+now explicitly attaches the selected session before dispatch.
+
+After that correction, all seam checks and workspace clippy passed, all 88 TUI
+runner tests passed, and nextest passed all 13,606 executed workspace tests
+(four tests remained skipped by their existing configuration). The focused
+agent-host, app-server, app-server-client, and types suites also passed in full.

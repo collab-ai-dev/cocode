@@ -207,16 +207,10 @@ async fn serve(args: Args) -> Result<()> {
     );
 
     let transport = StdioTransport::new();
-    let file_history_for_server = session_handle.file_history().cloned().unwrap_or_else(|| {
-        Arc::new(tokio::sync::RwLock::new(
-            coco_context::FileHistoryState::new(),
-        ))
-    });
     let server = SdkServer::new(transport)
         .with_session_manager(session_manager)
         .with_initialize_bootstrap(bootstrap)
-        .with_file_history(file_history_for_server, std::env::temp_dir())
-        .with_session_handle(session_handle.clone());
+        .with_startup_cwd(cwd.clone());
 
     let runner = Arc::new(QueryEngineRunner::new(
         session_handle,

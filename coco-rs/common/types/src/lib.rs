@@ -57,347 +57,151 @@ mod wire_tagged;
 // === Re-exports ===
 
 // App-state (cross-turn shared state carried on ToolUseContext)
-pub use app_state::ActiveGoal;
-pub use app_state::ActiveWorktreeState;
-pub use app_state::AppStatePatch;
-pub use app_state::AppStateReadHandle;
-pub use app_state::ElicitationGuard;
-pub use app_state::LiveToolPermissionState;
-pub use app_state::PendingPermissionGuard;
-pub use app_state::PendingPlanVerificationState;
-pub use app_state::ToolAppState;
+pub use app_state::{
+    ActiveGoal, ActiveWorktreeState, AppStatePatch, AppStateReadHandle, ElicitationGuard,
+    LiveToolPermissionState, PendingPermissionGuard, PendingPlanVerificationState, ToolAppState,
+};
 
 // Per-provider rate-limit state (lives on `ToolAppState.rate_limits`).
 pub use rate_limit::RateLimitEntry;
 
 // Attachment taxonomy (full `AttachmentKind` catalog + coverage)
-pub use attachment_kind::AttachmentEvent;
-pub use attachment_kind::AttachmentKind;
-pub use attachment_kind::Coverage;
-pub use attachment_kind::SdkConsumption;
-pub use attachment_kind::coverage_of;
-pub use attachment_kind::sdk_consumption_of;
+pub use attachment_kind::{
+    AttachmentEvent, AttachmentKind, Coverage, SdkConsumption, coverage_of, sdk_consumption_of,
+};
 
 // Prompt-cache shared types (consumed by services/inference + app/query;
 // adapter mirrors live in vercel-ai-anthropic — see prompt-cache-design.md §7)
-pub use cache::AccountKind;
-pub use cache::BetaCapability;
-pub use cache::CacheScope;
-pub use cache::CacheTtl;
-pub use cache::PromptCacheConfig;
-pub use cache::PromptCacheMode;
+pub use cache::{
+    AccountKind, BetaCapability, CacheScope, CacheTtl, PromptCacheConfig, PromptCacheMode,
+};
 
 // Agent types
-pub use agent::AgentColorName;
-pub use agent::AgentDefinition;
-pub use agent::AgentIsolation;
-pub use agent::AgentMcpServerSpec;
-pub use agent::AgentSource;
-pub use agent::AgentTypeId;
-pub use agent::MemoryScope;
-pub use agent::ModelInheritance;
-pub use agent::ModelSource;
-pub use agent::SubagentType;
-pub use agent::ToolAllowList;
-pub use agent::WorkerBadge;
+pub use agent::{
+    AgentColorName, AgentDefinition, AgentIsolation, AgentMcpServerSpec, AgentSource, AgentTypeId,
+    MemoryScope, ModelInheritance, ModelSource, SubagentType, ToolAllowList, WorkerBadge,
+};
 
 // Inter-agent IPC (mailbox protocol + sub-agent state snapshots)
-pub use agent_ipc::IdleReason;
-pub use agent_ipc::StandaloneAgentContext;
-pub use agent_ipc::SubAgentState;
-pub use agent_ipc::SubAgentStatus;
-pub use agent_ipc::SubagentRuntimeSnapshot;
-pub use agent_ipc::TaskEntry;
-pub use agent_ipc::TeammateProtocolContent;
-pub use agent_ipc::TeammateProtocolMessage;
+pub use agent_ipc::{
+    IdleReason, StandaloneAgentContext, SubAgentState, SubAgentStatus, SubagentRuntimeSnapshot,
+    TaskEntry, TeammateProtocolContent, TeammateProtocolMessage,
+};
 
 // Apply-patch UI preview DTOs.
-pub use apply_patch_preview::ApplyPatchPreview;
-pub use apply_patch_preview::ApplyPatchPreviewAction;
-pub use apply_patch_preview::ApplyPatchPreviewRow;
-pub use apply_patch_preview::ApplyPatchPreviewSign;
-pub use apply_patch_preview::AskUserQuestionAnswered;
-pub use apply_patch_preview::AskUserQuestionResult;
-pub use apply_patch_preview::ExitPlanModeResult;
-pub use apply_patch_preview::ToolDisplayData;
+pub use apply_patch_preview::{
+    ApplyPatchPreview, ApplyPatchPreviewAction, ApplyPatchPreviewRow, ApplyPatchPreviewSign,
+    AskUserQuestionAnswered, AskUserQuestionResult, ExitPlanModeResult, ToolDisplayData,
+};
 
 // Event types (three-layer CoreEvent system; see event-system-design.md)
-pub use event::ActiveGoalChangedParams;
-pub use event::AgentInfo;
-pub use event::AgentStreamEvent;
-pub use event::AgentsDialogEntry;
-pub use event::AgentsDialogPayload;
-pub use event::AgentsKilledParams;
-pub use event::CompactionFailedParams;
-pub use event::CompactionHookType;
-pub use event::CompactionPhase;
-pub use event::CompactionPhaseParams;
-pub use event::ContentDeltaParams;
-pub use event::ContextClearedParams;
-pub use event::ContextCompactedParams;
-pub use event::ContextUsageWarningParams;
-pub use event::CoreEvent;
-pub use event::CostWarningParams;
-pub use event::ElicitationCompleteParams;
-pub use event::ErrorCode;
-pub use event::ErrorParams;
-pub use event::ErrorPayload;
-pub use event::EventReplayPolicy;
-pub use event::FastModeState;
-pub use event::FileChangeInfo;
-pub use event::FileChangeKind;
-pub use event::FilesPersistedParams;
-pub use event::HistoryReplaceReason;
-pub use event::HookOutcomeStatus;
-pub use event::HookProgressParams;
-pub use event::HookResponseParams;
-pub use event::HookStartedParams;
-pub use event::IdeDiagnosticsUpdatedParams;
-pub use event::IdeSelectionChangedParams;
-pub use event::ItemStatus;
-pub use event::LocalCommandOutputParams;
-pub use event::McpServerInit;
-pub use event::McpStartupCompleteParams;
-pub use event::McpStartupStatusParams;
-pub use event::MemoryDialogEntry;
-pub use event::MemoryDialogRowKind;
-pub use event::MemoryDialogScope;
-pub use event::MoaAggregatingParams;
-pub use event::MoaReferenceParams;
-pub use event::ModelFallbackParams;
-pub use event::ModelRoleChangedParams;
-pub use event::NotificationMethod;
-pub use event::PermissionDenialInfo;
-pub use event::PermissionDisplayInput;
-pub use event::PermissionModeChangedParams;
-pub use event::PermissionsEditorDir;
-pub use event::PermissionsEditorPayload;
-pub use event::PermissionsEditorRule;
-pub use event::PersistedFileError;
-pub use event::PersistedFileInfo;
-pub use event::PlanApprovalRequestedParams;
-pub use event::PluginDialogAction;
-pub use event::PluginDialogErrorRow;
-pub use event::PluginDialogInstalledRow;
-pub use event::PluginDialogMarketplaceRow;
-pub use event::PluginDialogMcpServerRow;
-pub use event::PluginDialogMcpToolRow;
-pub use event::PluginDialogOptionRow;
-pub use event::PluginDialogPayload;
-pub use event::PluginDialogSkillRow;
-pub use event::PluginDialogSkillUsage;
-pub use event::PluginInit;
-pub use event::QueuedCommandEditImage;
-pub use event::RateLimitParams;
-pub use event::RateLimitStatus;
-pub use event::ReasoningMetadataAttachedParams;
-pub use event::RewindCompletedParams;
-pub use event::RewindDiffStatsPayload;
-pub use event::RewindRowMetadata;
-pub use event::SandboxStateChangedParams;
-pub use event::ServerNotification;
-pub use event::ServerNotificationIdentity;
-pub use event::SessionEndedParams;
-pub use event::SessionEnvelope;
-pub use event::SessionModelUsage;
-pub use event::SessionResultParams;
-pub use event::SessionStartedParams;
-pub use event::SessionState;
-pub use event::SkillLock;
-pub use event::SkillLockSource;
-pub use event::SkillOverrideState;
-pub use event::SkillOverridesSaveErrorKind;
-pub use event::SkillOverridesSaveResult;
-pub use event::SkillsDialogEntry;
-pub use event::SkillsDialogPayload;
-pub use event::SkillsDialogSource;
-pub use event::SlashCommandStatusKind;
-pub use event::SummarizeCompletedParams;
-pub use event::TaskCompletedParams;
-pub use event::TaskCompletionStatus;
-pub use event::TaskPanelChangedParams;
-pub use event::TaskProgressParams;
-pub use event::TaskStartedParams;
-pub use event::TaskUsage;
-pub use event::ThreadItem;
-pub use event::ThreadItemDetails;
-pub use event::ToolAbortReasonPayload;
-pub use event::ToolProgressParams;
-pub use event::ToolUseSummaryParams;
-pub use event::TuiOnlyEvent;
-pub use event::TurnAbortReason;
-pub use event::TurnEndedParams;
-pub use event::TurnOutcome;
-pub use event::TurnStartedParams;
-pub use event::WorkflowDialogEntry;
-pub use event::WorkflowDialogPayload;
-pub use event::WorktreeEnteredParams;
-pub use event::WorktreeExitedParams;
+pub use event::{
+    ActiveGoalChangedParams, AgentInfo, AgentStreamEvent, AgentsDialogEntry, AgentsDialogPayload,
+    AgentsKilledParams, CompactionFailedParams, CompactionHookType, CompactionPhase,
+    CompactionPhaseParams, ContentDeltaParams, ContextClearedParams, ContextCompactedParams,
+    ContextUsageWarningParams, CoreEvent, CostWarningParams, ElicitationCompleteParams, ErrorCode,
+    ErrorParams, ErrorPayload, EventReplayPolicy, FastModeState, FileChangeInfo, FileChangeKind,
+    FilesPersistedParams, HistoryReplaceReason, HookOutcomeStatus, HookProgressParams,
+    HookResponseParams, HookStartedParams, IdeDiagnosticsUpdatedParams, IdeSelectionChangedParams,
+    ItemStatus, LocalCommandOutputParams, McpServerInit, McpStartupCompleteParams,
+    McpStartupStatusParams, MemoryDialogEntry, MemoryDialogRowKind, MemoryDialogScope,
+    MoaAggregatingParams, MoaReferenceParams, ModelFallbackParams, ModelRoleChangedParams,
+    NotificationMethod, PermissionDenialInfo, PermissionDisplayInput, PermissionModeChangedParams,
+    PermissionsEditorDir, PermissionsEditorPayload, PermissionsEditorRule, PersistedFileError,
+    PersistedFileInfo, PlanApprovalRequestedParams, PluginDialogAction, PluginDialogErrorRow,
+    PluginDialogInstalledRow, PluginDialogMarketplaceRow, PluginDialogMcpServerRow,
+    PluginDialogMcpToolRow, PluginDialogOptionRow, PluginDialogPayload, PluginDialogSkillRow,
+    PluginDialogSkillUsage, PluginInit, QueuedCommandEditImage, RateLimitParams, RateLimitStatus,
+    ReasoningMetadataAttachedParams, RewindCompletedParams, RewindDiffStatsPayload,
+    RewindRowMetadata, SandboxStateChangedParams, ServerNotification, ServerNotificationIdentity,
+    SessionEndedParams, SessionEnvelope, SessionModelUsage, SessionResultParams,
+    SessionStartedParams, SessionState, SkillLock, SkillLockSource, SkillOverrideState,
+    SkillOverridesSaveErrorKind, SkillOverridesSaveResult, SkillsDialogEntry, SkillsDialogPayload,
+    SkillsDialogSource, SlashCommandStatusKind, SummarizeCompletedParams, TaskCompletedParams,
+    TaskCompletionStatus, TaskPanelChangedParams, TaskProgressParams, TaskStartedParams, TaskUsage,
+    ThreadItem, ThreadItemDetails, ToolAbortReasonPayload, ToolProgressParams,
+    ToolUseSummaryParams, TuiOnlyEvent, TurnAbortReason, TurnEndedParams, TurnOutcome,
+    TurnStartedParams, WorkflowDialogEntry, WorkflowDialogPayload, WorktreeEnteredParams,
+    WorktreeExitedParams,
+};
 
 // Surface delivery DTOs shared by server routing and client adapters.
-pub use surface::ServerRequestDelivery;
-pub use surface::SurfaceDelivery;
-pub use surface::SurfaceLifecycleEffect;
-pub use surface::SurfaceLifecycleEffectKind;
+pub use surface::{
+    ServerRequestDelivery, SurfaceDelivery, SurfaceLifecycleEffect, SurfaceLifecycleEffectKind,
+};
 
 // Client request types (Phase 2 — SDK control protocol, SDK → agent)
-pub use client_request::AgentInterruptCurrentWorkParams;
-pub use client_request::ApplyPermissionUpdateParams;
-pub use client_request::ApprovalDecision;
-pub use client_request::ApprovalResolveParams;
-pub use client_request::BackgroundAllTasksResult;
-pub use client_request::CancelRequestParams;
-pub use client_request::ClientRequest;
-pub use client_request::ClientRequestMethod;
-pub use client_request::ConfigApplyFlagsParams;
-pub use client_request::ConfigWriteParams;
-pub use client_request::ElicitationResolveParams;
-pub use client_request::HookCallbackMatcher;
-pub use client_request::InitializeParams;
-pub use client_request::McpReconnectParams;
-pub use client_request::McpSetServersParams;
-pub use client_request::McpToggleParams;
-pub use client_request::ResetSessionPermissionRulesResult;
-pub use client_request::RewindFilesParams;
-pub use client_request::SdkAgentDefinition;
-pub use client_request::SessionArchiveParams;
-pub use client_request::SessionCostResult;
-pub use client_request::SessionReadParams;
-pub use client_request::SessionRenameParams;
-pub use client_request::SessionRenameResult;
-pub use client_request::SessionResumeParams;
-pub use client_request::SessionStartParams;
-pub use client_request::SessionStatusResult;
-pub use client_request::SessionSubscribeParams;
-pub use client_request::SessionToggleTagParams;
-pub use client_request::SessionToggleTagResult;
-pub use client_request::SessionTurnsListParams;
-pub use client_request::SetAgentColorParams;
-pub use client_request::SetModelParams;
-pub use client_request::SetModelRoleParams;
-pub use client_request::SetPermissionModeParams;
-pub use client_request::SetThinkingParams;
-pub use client_request::StopTaskParams;
-pub use client_request::TaskDetailParams;
-pub use client_request::TaskDetailResult;
-pub use client_request::TaskListResult;
-pub use client_request::TurnStartParams;
-pub use client_request::UpdateEnvParams;
-pub use client_request::UserInputResolveParams;
+pub use client_request::{
+    AgentInterruptCurrentWorkParams, ApplyPermissionUpdateParams, ApprovalDecision,
+    ApprovalResolveParams, ArchiveTarget, BackgroundAllTasksResult, CancelRequestParams,
+    ClientRequest, ClientRequestMethod, ConfigApplyFlagsParams, ConfigReadParams, ConfigReadTarget,
+    ConfigWriteParams, ConfigWriteTarget, ConnectionProfile, ConnectionProfileError,
+    ElicitationResolveParams, HookCallbackMatcher, InitializeParams, InteractiveTarget,
+    McpReconnectParams, McpSetServersParams, McpToggleParams, RequestScope,
+    ResetSessionPermissionRulesResult, RewindFilesParams, SdkAgentDefinition, SessionArchiveParams,
+    SessionCallbackRequirements, SessionCostResult, SessionReadParams, SessionRenameParams,
+    SessionRenameResult, SessionReplaceParams, SessionReplacement, SessionResumeParams,
+    SessionStartParams, SessionStatusResult, SessionSubscribeParams, SessionTarget,
+    SessionToggleTagParams, SessionToggleTagResult, SessionTurnsListParams, SetAgentColorParams,
+    SetModelParams, SetModelRoleParams, SetPermissionModeParams, SetThinkingParams, StopTaskParams,
+    TaskDetailParams, TaskDetailResult, TaskListResult, TurnStartParams, UpdateEnvParams,
+    UserInputResolveParams, request_scope,
+};
 
 // SDK hook callback output (stable wire format; mirrors
 // `hookJSONOutputSchema`). Single source of truth for the SDK
 // boundary and for hook orchestration's stdout parser.
-pub use sdk_hook_output::ElicitationAction;
-pub use sdk_hook_output::HookCallbackResult;
-pub use sdk_hook_output::HookDecision;
-pub use sdk_hook_output::HookSpecificOutput;
-pub use sdk_hook_output::McpRouteMessageResult;
-pub use sdk_hook_output::PermissionRequestDecision;
-pub use sdk_hook_output::SdkHookOutput;
+pub use sdk_hook_output::{
+    ElicitationAction, HookCallbackResult, HookDecision, HookSpecificOutput, McpRouteMessageResult,
+    PermissionRequestDecision, SdkHookOutput,
+};
 
 // Server request types (Phase 2 — SDK control protocol, agent → SDK)
-pub use context_usage::ContextCategoryKind;
-pub use context_usage::ContextSuggestion;
-pub use context_usage::GridCell;
-pub use context_usage::GridCellKind;
-pub use context_usage::SourceGroup;
-pub use context_usage::SuggestionSeverity;
-pub use context_usage::build_grid;
-pub use context_usage::build_suggestions;
-pub use context_usage::fmt_token_compact;
-pub use context_usage::group_by_source;
-pub use context_usage::source_group;
-pub use server_request::ApiProvider as SdkApiProvider;
-pub use server_request::AskForApprovalParams as ServerAskForApprovalParams;
-pub use server_request::AttachmentTypeBreakdown;
-pub use server_request::ConfigReadResult;
-pub use server_request::ContextAgent;
-pub use server_request::ContextMcpTool;
-pub use server_request::ContextMemoryFile;
-pub use server_request::ContextSkill;
-pub use server_request::ContextUsageCategory;
-pub use server_request::ContextUsageResult;
-pub use server_request::EffortLevel as SdkEffortLevel;
-pub use server_request::HookCallbackParams as ServerHookCallbackParams;
-pub use server_request::HookReloadResult;
-pub use server_request::InitializeResult;
-pub use server_request::McpConnectionStatus;
-pub use server_request::McpRouteMessageParams as ServerMcpRouteMessageParams;
-pub use server_request::McpServerStatus;
-pub use server_request::McpSetServersResult;
-pub use server_request::McpSkippedToolStatus;
-pub use server_request::McpStatusResult;
-pub use server_request::MessageBreakdown;
-pub use server_request::PluginReloadResult;
-pub use server_request::RequestElicitationParams as ServerRequestElicitationParams;
-pub use server_request::RequestUserInputParams as ServerRequestUserInputParams;
-pub use server_request::RewindFilesResult;
-pub use server_request::SdkAccountInfo;
-pub use server_request::SdkAgentInfo;
-pub use server_request::SdkModelInfo;
-pub use server_request::SdkSessionSummary;
-pub use server_request::SdkSessionTurnSummary;
-pub use server_request::SdkSlashCommand;
-pub use server_request::ServerCancelRequestParams;
-pub use server_request::ServerRequest;
-pub use server_request::ServerRequestMethod;
-pub use server_request::SessionListResult;
-pub use server_request::SessionReadResult;
-pub use server_request::SessionResumeResult;
-pub use server_request::SessionStartResult;
-pub use server_request::SessionSubscribeEnvelope;
-pub use server_request::SessionSubscribeResult;
-pub use server_request::SessionTurnsListResult;
-pub use server_request::SetModelRoleResult;
-pub use server_request::ToolTypeBreakdown;
-pub use server_request::TurnStartResult;
+pub use context_usage::{
+    ContextCategoryKind, ContextSuggestion, GridCell, GridCellKind, SourceGroup,
+    SuggestionSeverity, build_grid, build_suggestions, fmt_token_compact, group_by_source,
+    source_group,
+};
+pub use server_request::{
+    ApiProvider as SdkApiProvider, AskForApprovalParams as ServerAskForApprovalParams,
+    AttachmentTypeBreakdown, ConfigReadResult, ContextAgent, ContextMcpTool, ContextMemoryFile,
+    ContextSkill, ContextUsageCategory, ContextUsageResult, EffortLevel as SdkEffortLevel,
+    HookCallbackParams as ServerHookCallbackParams, HookReloadResult, InitializeResult,
+    McpConnectionStatus, McpRouteMessageParams as ServerMcpRouteMessageParams, McpServerStatus,
+    McpSetServersResult, McpSkippedToolStatus, McpStatusResult, MessageBreakdown,
+    PluginReloadResult, RequestElicitationParams as ServerRequestElicitationParams,
+    RequestUserInputParams as ServerRequestUserInputParams, RewindFilesResult, SdkAccountInfo,
+    SdkAgentInfo, SdkModelInfo, SdkSessionSummary, SdkSessionTurnSummary, SdkSlashCommand,
+    ServerCancelRequestParams, ServerRequest, ServerRequestMethod, SessionListResult,
+    SessionReadResult, SessionReplaceResult, SessionResumeResult, SessionStartResult,
+    SessionSubscribeEnvelope, SessionSubscribeResult, SessionTurnsListResult, SetModelRoleResult,
+    ToolTypeBreakdown, TurnStartResult,
+};
 
 // JSON-RPC envelope types (Phase 2 — wire format)
-pub use jsonrpc::JSONRPC_VERSION;
-pub use jsonrpc::JsonRpcError;
-pub use jsonrpc::JsonRpcErrorObject;
-pub use jsonrpc::JsonRpcMessage;
-pub use jsonrpc::JsonRpcNotification;
-pub use jsonrpc::JsonRpcRequest;
-pub use jsonrpc::JsonRpcResponse;
-pub use jsonrpc::RequestId;
-pub use jsonrpc::error_codes;
+pub use jsonrpc::{
+    JSONRPC_VERSION, JsonRpcError, JsonRpcErrorObject, JsonRpcMessage, JsonRpcNotification,
+    JsonRpcRequest, JsonRpcResponse, RequestId, error_codes,
+};
 
 // Command types
-pub use command::CommandArgumentKind;
-pub use command::CommandAvailability;
-pub use command::CommandBase;
-pub use command::CommandContext;
-pub use command::CommandSafety;
-pub use command::CommandSource;
-pub use command::CommandType;
-pub use command::CommandTypeTag;
-pub use command::LocalCommandData;
-pub use command::PromptCommandData;
-pub use command::SkillProvenanceBadge;
-pub use command::SlashCommandInfo;
+pub use command::{
+    CommandArgumentKind, CommandAvailability, CommandBase, CommandContext, CommandSafety,
+    CommandSource, CommandType, CommandTypeTag, LocalCommandData, PromptCommandData,
+    SkillProvenanceBadge, SlashCommandInfo,
+};
 
 // Hook types
-pub use hook::HookEventType;
-pub use hook::HookOutcome;
-pub use hook::HookScope;
+pub use hook::{HookEventType, HookOutcome, HookScope};
 
 // ID types
-pub use id::AgentId;
-pub use id::SessionId;
-pub use id::SurfaceId;
-pub use id::TaskId;
-pub use id::TurnId;
+pub use id::{AgentId, SessionId, SurfaceId, TaskId, TurnId};
 
 // Log types
-pub use log::Entrypoint;
-pub use log::LogOption;
-pub use log::UserType;
+pub use log::{Entrypoint, LogOption, UserType};
 
 // Tool selection / identity types
-pub use tool::ActiveShellTool;
-pub use tool::ModelShellToolType;
+pub use tool::{ActiveShellTool, ModelShellToolType};
 
 /// How compaction was triggered.
 /// Stays in `coco-types` (rather than `coco-messages`) because
@@ -419,153 +223,78 @@ pub enum CompactTrigger {
 }
 
 // Permission types
-pub use permission::AdditionalWorkingDir;
-pub use permission::ClassifierBehavior;
-pub use permission::ClassifierMode;
-pub use permission::ClassifierUsage;
-pub use permission::ExitPlanChoice;
-pub use permission::ExitPlanModeAllowedPrompt;
-pub use permission::ExitPlanModeOutcome;
-pub use permission::PendingClassifierCheck;
-pub use permission::PermissionAbortReason;
-pub use permission::PermissionAskChoice;
-pub use permission::PermissionBehavior;
-pub use permission::PermissionDecision;
-pub use permission::PermissionDecisionReason;
-pub use permission::PermissionRequestDetail;
-pub use permission::PermissionResolutionDetail;
-pub use permission::PermissionRule;
-pub use permission::PermissionRuleSource;
-pub use permission::PermissionRuleValue;
-pub use permission::PermissionRulesBySource;
-pub use permission::PermissionUpdate;
-pub use permission::PermissionUpdateDestination;
-pub use permission::ToolCheckResult;
-pub use permission::ToolPermissionContext;
-pub use permission::WorkingDirectorySource;
-pub use permission::content_matches;
-pub use permission::matches_rule;
-pub use permission::parse_rule_pattern;
-pub use permission::tool_matches_pattern;
+pub use permission::{
+    AdditionalWorkingDir, ClassifierBehavior, ClassifierMode, ClassifierUsage, ExitPlanChoice,
+    ExitPlanModeAllowedPrompt, ExitPlanModeOutcome, PendingClassifierCheck, PermissionAbortReason,
+    PermissionAskChoice, PermissionBehavior, PermissionDecision, PermissionDecisionReason,
+    PermissionRequestDetail, PermissionResolutionDetail, PermissionRule, PermissionRuleSource,
+    PermissionRuleValue, PermissionRulesBySource, PermissionUpdate, PermissionUpdateDestination,
+    ToolCheckResult, ToolPermissionContext, WorkingDirectorySource, content_matches, matches_rule,
+    parse_rule_pattern, tool_matches_pattern,
+};
 
 // Plugin types
 pub use plugin::BuiltinPluginDefinition;
 
 // Provider & model types
-pub use provider::ApplyPatchToolType;
-pub use provider::Capability;
-pub use provider::CapabilitySet;
-pub use provider::LlmModelSelection;
-pub use provider::LoginEntryInfo;
-pub use provider::ModelCatalogInfo;
-pub use provider::ModelRole;
-pub use provider::ModelSpec;
-pub use provider::OAuthFlowId;
-pub use provider::ProviderApi;
-pub use provider::ProviderModelSelection;
-pub use provider::ProviderStatusInfo;
-pub use provider::ProviderUnavailableReason;
-pub use provider::WireApi;
-pub use provider_auth_status::AuthReadinessLevel;
-pub use provider_auth_status::AuthRefreshSupport;
-pub use provider_auth_status::AuthState;
+pub use provider::{
+    ApplyPatchToolType, Capability, CapabilitySet, LlmModelSelection, LoginEntryInfo,
+    ModelCatalogInfo, ModelRole, ModelSpec, OAuthFlowId, ProviderApi, ProviderModelSelection,
+    ProviderStatusInfo, ProviderUnavailableReason, WireApi,
+};
+pub use provider_auth_status::{AuthReadinessLevel, AuthRefreshSupport, AuthState};
 
 // Sandbox types
 pub use sandbox::SandboxMode;
 
 // Feature gates
-pub use features::Feature;
-pub use features::FeatureSpec;
-pub use features::Features;
-pub use features::Stage as FeatureStage;
-pub use features::all_features;
-pub use features::feature_for_key;
-pub use features::is_known_feature_key;
+pub use features::{
+    Feature, FeatureSpec, Features, Stage as FeatureStage, all_features, feature_for_key,
+    is_known_feature_key,
+};
 
 // Fork-label discriminator (used by logs / telemetry / transcripts to
 // identify framework-spawned, cache-shared side-channel queries).
 pub use fork_label::ForkLabel;
 
 // Tool filter pipeline (Layers 2 + 4)
-pub use tool_filter::ToolFilter;
-pub use tool_filter::ToolOverrides;
+pub use tool_filter::{ToolFilter, ToolOverrides};
 
 // Side-query types (data only; async trait in coco-tool-runtime)
-pub use side_query::CacheSafeParams;
-pub use side_query::SideQueryMessage;
-pub use side_query::SideQueryOutputFormat;
-pub use side_query::SideQueryRequest;
-pub use side_query::SideQueryResponse;
-pub use side_query::SideQueryRole;
-pub use side_query::SideQueryStopReason;
-pub use side_query::SideQueryToolDef;
-pub use side_query::SideQueryToolUse;
-pub use side_query::SideQueryUsage;
+pub use side_query::{
+    CacheSafeParams, SideQueryMessage, SideQueryOutputFormat, SideQueryRequest, SideQueryResponse,
+    SideQueryRole, SideQueryStopReason, SideQueryToolDef, SideQueryToolUse, SideQueryUsage,
+};
 
 // Stream types
-pub use stream::RequestStartEvent;
-pub use stream::StreamEvent;
-pub use stream::StreamingThinking;
-pub use stream::StreamingToolUse;
-pub use stream::TaskBudget;
+pub use stream::{RequestStartEvent, StreamEvent, StreamingThinking, StreamingToolUse, TaskBudget};
 
 // Task types
-pub use task::BackendType;
-pub use task::BgAgentExtras;
-pub use task::DreamExtras;
-pub use task::FieldUpdate;
-pub use task::MessageRole;
-pub use task::RemoteTeammateExtras;
-pub use task::ShellExtras;
-pub use task::TaskActivity;
-pub use task::TaskExtras;
-pub use task::TaskIdentity;
-pub use task::TaskKilledBy;
-pub use task::TaskProgress;
-pub use task::TaskStateBase;
-pub use task::TaskStatus;
-pub use task::TaskType;
-pub use task::TeammateExtras;
-pub use task::TeammateRef;
-pub use task::TeammateTaskMessage;
-pub use task::WorkflowAgentState;
-pub use task::WorkflowProgressEvent;
-pub use task::generate_bg_agent_id;
-pub use task::generate_task_id;
-pub use task::task_type_wire;
-pub use task_list::ExpandedView;
-pub use task_list::TaskClaimOutcome;
-pub use task_list::TaskListStatus;
-pub use task_list::TaskRecord;
-pub use task_list::TaskRecordUpdate;
-pub use task_list::TodoRecord;
+pub use task::{
+    BackendType, BgAgentExtras, DreamExtras, FieldUpdate, MessageRole, RemoteTeammateExtras,
+    ShellExtras, TaskActivity, TaskExtras, TaskIdentity, TaskKilledBy, TaskProgress, TaskStateBase,
+    TaskStatus, TaskType, TeammateExtras, TeammateRef, TeammateTaskMessage, WorkflowAgentState,
+    WorkflowProgressEvent, generate_bg_agent_id, generate_task_id, task_type_wire,
+};
+pub use task_list::{
+    ExpandedView, TaskClaimOutcome, TaskListStatus, TaskRecord, TaskRecordUpdate, TodoRecord,
+};
 
 // Thinking types
-pub use thinking::ReasoningEffort;
-pub use thinking::ThinkingLevel;
+pub use thinking::{ReasoningEffort, ThinkingLevel};
 
 // Token types
-pub use token::InputTokens;
-pub use token::ModelUsage;
-pub use token::OutputTokens;
-pub use token::SessionModelUsageEntry;
-pub use token::SessionUsageSnapshot;
-pub use token::SessionUsageSourceEntry;
-pub use token::SessionUsageTotals;
-pub use token::TokenUsage;
-pub use token::UsageAttribution;
-pub use token::UsageSource;
-pub use token::UsageSourceGroup;
+pub use token::{
+    InputTokens, ModelUsage, OutputTokens, SessionModelUsageEntry, SessionUsageSnapshot,
+    SessionUsageSourceEntry, SessionUsageTotals, TokenUsage, UsageAttribution, UsageSource,
+    UsageSourceGroup,
+};
 
 // Tool types (ToolResult moved to coco-messages because new_messages: Vec<Message>)
-pub use tool::AGENT_WORKTREE_BRANCH_PREFIX;
-pub use tool::MCP_TOOL_PREFIX;
-pub use tool::MCP_TOOL_SEPARATOR;
-pub use tool::ToolId;
-pub use tool::ToolName;
-pub use tool::ToolProgress;
-pub use tool::legacy_tool_name_aliases_of;
-pub use tool::normalize_legacy_tool_name;
+pub use tool::{
+    AGENT_WORKTREE_BRANCH_PREFIX, MCP_TOOL_PREFIX, MCP_TOOL_SEPARATOR, ToolId, ToolName,
+    ToolProgress, legacy_tool_name_aliases_of, normalize_legacy_tool_name,
+};
 
 // Extended types (ported from TS hooks.ts, command.ts, permissions.ts, logs.ts)
 pub use extended::{

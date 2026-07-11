@@ -9,100 +9,51 @@
 mod remote_demux;
 mod remote_transport;
 
-pub use remote_demux::RemoteEventDemux;
-pub use remote_demux::RemoteJsonRpcEvent;
-pub use remote_demux::RemoteOwnedSurfaceStream;
-pub use remote_demux::RemoteSurfaceStream;
-pub use remote_transport::RemoteDefaultWebSocketConnection;
-pub use remote_transport::RemoteNdjsonConnection;
+pub use remote_demux::{
+    RemoteEventDemux, RemoteJsonRpcEvent, RemoteOwnedSurfaceStream, RemoteSurfaceStream,
+};
 #[cfg(windows)]
 pub use remote_transport::RemoteNdjsonNamedPipeConnection;
 #[cfg(unix)]
 pub use remote_transport::RemoteNdjsonUnixConnection;
-pub use remote_transport::RemoteWebSocketConnection;
+pub use remote_transport::{
+    RemoteDefaultWebSocketConnection, RemoteNdjsonConnection, RemoteWebSocketConnection,
+};
 
-use remote_demux::decode_session_subscribe_envelope;
-use remote_demux::remote_event_from_notification;
+use remote_demux::{decode_session_subscribe_envelope, remote_event_from_notification};
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::MutexGuard;
-use std::sync::PoisonError;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicI64;
-use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, Mutex, MutexGuard, PoisonError,
+        atomic::{AtomicBool, AtomicI64, Ordering},
+    },
+    time::Duration,
+};
 
-use coco_app_server_transport::JsonRpcErrorObject;
-use coco_app_server_transport::JsonRpcErrorResponse;
-use coco_app_server_transport::JsonRpcFrame;
-use coco_app_server_transport::JsonRpcId;
-use coco_app_server_transport::JsonRpcRequest;
-use coco_app_server_transport::JsonRpcSuccess;
-use coco_app_server_transport::NdjsonDuplexConnection;
-use coco_app_server_transport::TransportFrameError;
-use coco_types::AgentInterruptCurrentWorkParams;
-use coco_types::ApplyPermissionUpdateParams;
-use coco_types::ApprovalResolveParams;
-use coco_types::BackgroundAllTasksResult;
-use coco_types::CancelRequestParams;
-use coco_types::ClientRequest;
-use coco_types::ConfigApplyFlagsParams;
-use coco_types::ConfigReadResult;
-use coco_types::ConfigWriteParams;
-use coco_types::ContextUsageResult;
-use coco_types::ElicitationResolveParams;
-use coco_types::HookReloadResult;
-use coco_types::InitializeParams;
-use coco_types::InitializeResult;
-use coco_types::McpReconnectParams;
-use coco_types::McpSetServersParams;
-use coco_types::McpSetServersResult;
-use coco_types::McpStatusResult;
-use coco_types::McpToggleParams;
-use coco_types::PluginReloadResult;
-use coco_types::ResetSessionPermissionRulesResult;
-use coco_types::RewindFilesParams;
-use coco_types::RewindFilesResult;
-use coco_types::SessionArchiveParams;
-use coco_types::SessionCostResult;
-use coco_types::SessionEnvelope;
-use coco_types::SessionId;
-use coco_types::SessionListResult;
-use coco_types::SessionReadParams;
-use coco_types::SessionReadResult;
-use coco_types::SessionRenameParams;
-use coco_types::SessionRenameResult;
-use coco_types::SessionResumeParams;
-use coco_types::SessionResumeResult;
-use coco_types::SessionStartParams;
-use coco_types::SessionStartResult;
-use coco_types::SessionStatusResult;
-use coco_types::SessionSubscribeParams;
-use coco_types::SessionSubscribeResult;
-use coco_types::SessionToggleTagParams;
-use coco_types::SessionToggleTagResult;
-use coco_types::SessionTurnsListParams;
-use coco_types::SessionTurnsListResult;
-use coco_types::SetAgentColorParams;
-use coco_types::SetModelParams;
-use coco_types::SetModelRoleParams;
-use coco_types::SetModelRoleResult;
-use coco_types::SetPermissionModeParams;
-use coco_types::SetThinkingParams;
-use coco_types::StopTaskParams;
-use coco_types::SurfaceId;
-use coco_types::SurfaceLifecycleEffect;
-use coco_types::TaskDetailParams;
-use coco_types::TaskDetailResult;
-use coco_types::TaskListResult;
-use coco_types::TurnStartParams;
-use coco_types::TurnStartResult;
-use coco_types::UpdateEnvParams;
-use coco_types::UserInputResolveParams;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
+use coco_app_server_transport::{
+    JsonRpcErrorObject, JsonRpcErrorResponse, JsonRpcFrame, JsonRpcId, JsonRpcRequest,
+    JsonRpcSuccess, NdjsonDuplexConnection, TransportFrameError,
+};
+use coco_types::{
+    AgentInterruptCurrentWorkParams, ApplyPermissionUpdateParams, ApprovalResolveParams,
+    ArchiveTarget, BackgroundAllTasksResult, CancelRequestParams, ClientRequest,
+    ConfigApplyFlagsParams, ConfigReadParams, ConfigReadResult, ConfigReadTarget,
+    ConfigWriteParams, ContextUsageResult, ElicitationResolveParams, HookReloadResult,
+    InitializeParams, InitializeResult, InteractiveTarget, McpReconnectParams, McpSetServersParams,
+    McpSetServersResult, McpStatusResult, McpToggleParams, PluginReloadResult,
+    ResetSessionPermissionRulesResult, RewindFilesParams, RewindFilesResult, SessionArchiveParams,
+    SessionCostResult, SessionEnvelope, SessionId, SessionListResult, SessionReadParams,
+    SessionReadResult, SessionRenameParams, SessionRenameResult, SessionReplaceParams,
+    SessionReplaceResult, SessionReplacement, SessionResumeParams, SessionResumeResult,
+    SessionStartParams, SessionStartResult, SessionStatusResult, SessionSubscribeParams,
+    SessionSubscribeResult, SessionTarget, SessionToggleTagParams, SessionToggleTagResult,
+    SessionTurnsListParams, SessionTurnsListResult, SetAgentColorParams, SetModelParams,
+    SetModelRoleParams, SetModelRoleResult, SetPermissionModeParams, SetThinkingParams,
+    StopTaskParams, SurfaceId, SurfaceLifecycleEffect, TaskDetailParams, TaskDetailResult,
+    TaskListResult, TurnStartParams, TurnStartResult, UpdateEnvParams, UserInputResolveParams,
+};
+use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::connect_async;
 
 const DEFAULT_REMOTE_EVENT_CHANNEL_CAPACITY: usize = 128;
@@ -562,6 +513,14 @@ impl RemoteJsonRpcClient {
             .await
     }
 
+    async fn session_replace(
+        &self,
+        params: SessionReplaceParams,
+    ) -> Result<SessionReplaceResult, ClientError> {
+        self.send_typed_client_request(ClientRequest::SessionReplace(Box::new(params)))
+            .await
+    }
+
     pub async fn session_resume_handle(
         &self,
         demux: &mut RemoteEventDemux,
@@ -618,7 +577,7 @@ impl RemoteJsonRpcClient {
     ) -> Result<RemotePassiveSessionClient, ClientError> {
         let subscribed = self
             .session_subscribe(SessionSubscribeParams {
-                session_id,
+                target: SessionTarget { session_id },
                 after_seq,
             })
             .await?;
@@ -656,43 +615,43 @@ impl RemoteJsonRpcClient {
             .await
     }
 
-    pub async fn session_cost(&self) -> Result<SessionCostResult, ClientError> {
-        self.send_typed_client_request(ClientRequest::SessionCost)
-            .await
-    }
-
-    pub async fn session_status(&self) -> Result<SessionStatusResult, ClientError> {
-        self.send_typed_client_request(ClientRequest::SessionStatus)
-            .await
-    }
-
-    pub async fn turn_start(
+    pub async fn session_cost(
         &self,
-        params: TurnStartParams,
-    ) -> Result<TurnStartResult, ClientError> {
+        target: SessionTarget,
+    ) -> Result<SessionCostResult, ClientError> {
+        self.send_typed_client_request(ClientRequest::SessionCost(target))
+            .await
+    }
+
+    pub async fn session_status(
+        &self,
+        target: SessionTarget,
+    ) -> Result<SessionStatusResult, ClientError> {
+        self.send_typed_client_request(ClientRequest::SessionStatus(target))
+            .await
+    }
+
+    async fn turn_start(&self, params: TurnStartParams) -> Result<TurnStartResult, ClientError> {
         self.send_typed_client_request(ClientRequest::TurnStart(params))
             .await
     }
 
-    pub async fn turn_interrupt(&self) -> Result<(), ClientError> {
-        self.send_typed_client_request(ClientRequest::TurnInterrupt)
+    async fn turn_interrupt(&self, target: InteractiveTarget) -> Result<(), ClientError> {
+        self.send_typed_client_request(ClientRequest::TurnInterrupt(target))
             .await
     }
 
-    pub async fn approval_resolve(&self, params: ApprovalResolveParams) -> Result<(), ClientError> {
+    async fn approval_resolve(&self, params: ApprovalResolveParams) -> Result<(), ClientError> {
         self.send_typed_client_request(ClientRequest::ApprovalResolve(params))
             .await
     }
 
-    pub async fn user_input_resolve(
-        &self,
-        params: UserInputResolveParams,
-    ) -> Result<(), ClientError> {
+    async fn user_input_resolve(&self, params: UserInputResolveParams) -> Result<(), ClientError> {
         self.send_typed_client_request(ClientRequest::UserInputResolve(params))
             .await
     }
 
-    pub async fn elicitation_resolve(
+    async fn elicitation_resolve(
         &self,
         params: ElicitationResolveParams,
     ) -> Result<(), ClientError> {
@@ -700,12 +659,12 @@ impl RemoteJsonRpcClient {
             .await
     }
 
-    pub async fn set_model(&self, params: SetModelParams) -> Result<(), ClientError> {
+    async fn set_model(&self, params: SetModelParams) -> Result<(), ClientError> {
         self.send_typed_client_request(ClientRequest::SetModel(params))
             .await
     }
 
-    pub async fn set_model_role(
+    async fn set_model_role(
         &self,
         params: SetModelRoleParams,
     ) -> Result<SetModelRoleResult, ClientError> {
@@ -713,7 +672,7 @@ impl RemoteJsonRpcClient {
             .await
     }
 
-    pub async fn set_permission_mode(
+    async fn set_permission_mode(
         &self,
         params: SetPermissionModeParams,
     ) -> Result<(), ClientError> {
@@ -721,17 +680,17 @@ impl RemoteJsonRpcClient {
             .await
     }
 
-    pub async fn set_thinking(&self, params: SetThinkingParams) -> Result<(), ClientError> {
+    async fn set_thinking(&self, params: SetThinkingParams) -> Result<(), ClientError> {
         self.send_typed_client_request(ClientRequest::SetThinking(params))
             .await
     }
 
-    pub async fn set_agent_color(&self, params: SetAgentColorParams) -> Result<(), ClientError> {
+    async fn set_agent_color(&self, params: SetAgentColorParams) -> Result<(), ClientError> {
         self.send_typed_client_request(ClientRequest::SetAgentColor(params))
             .await
     }
 
-    pub async fn apply_permission_update(
+    async fn apply_permission_update(
         &self,
         params: ApplyPermissionUpdateParams,
     ) -> Result<(), ClientError> {
@@ -739,20 +698,21 @@ impl RemoteJsonRpcClient {
             .await
     }
 
-    pub async fn reset_session_permission_rules(
+    async fn reset_session_permission_rules(
         &self,
+        target: InteractiveTarget,
     ) -> Result<ResetSessionPermissionRulesResult, ClientError> {
-        self.send_typed_client_request(ClientRequest::ResetSessionPermissionRules)
+        self.send_typed_client_request(ClientRequest::ResetSessionPermissionRules(target))
             .await
     }
 
-    pub async fn stop_task(&self, params: StopTaskParams) -> Result<(), ClientError> {
+    async fn stop_task(&self, params: StopTaskParams) -> Result<(), ClientError> {
         self.send_typed_client_request(ClientRequest::StopTask(params))
             .await
     }
 
-    pub async fn task_list(&self) -> Result<TaskListResult, ClientError> {
-        self.send_typed_client_request(ClientRequest::TaskList)
+    pub async fn task_list(&self, target: SessionTarget) -> Result<TaskListResult, ClientError> {
+        self.send_typed_client_request(ClientRequest::TaskList(target))
             .await
     }
 
@@ -764,12 +724,15 @@ impl RemoteJsonRpcClient {
             .await
     }
 
-    pub async fn background_all_tasks(&self) -> Result<BackgroundAllTasksResult, ClientError> {
-        self.send_typed_client_request(ClientRequest::BackgroundAllTasks)
+    async fn background_all_tasks(
+        &self,
+        target: InteractiveTarget,
+    ) -> Result<BackgroundAllTasksResult, ClientError> {
+        self.send_typed_client_request(ClientRequest::BackgroundAllTasks(target))
             .await
     }
 
-    pub async fn rewind_files(
+    async fn rewind_files(
         &self,
         params: RewindFilesParams,
     ) -> Result<RewindFilesResult, ClientError> {
@@ -777,7 +740,7 @@ impl RemoteJsonRpcClient {
             .await
     }
 
-    pub async fn update_env(&self, params: UpdateEnvParams) -> Result<(), ClientError> {
+    async fn update_env(&self, params: UpdateEnvParams) -> Result<(), ClientError> {
         self.send_typed_client_request(ClientRequest::UpdateEnv(params))
             .await
     }
@@ -787,7 +750,7 @@ impl RemoteJsonRpcClient {
             .await
     }
 
-    pub async fn agent_interrupt_current_work(
+    async fn agent_interrupt_current_work(
         &self,
         params: AgentInterruptCurrentWorkParams,
     ) -> Result<(), ClientError> {
@@ -795,8 +758,11 @@ impl RemoteJsonRpcClient {
             .await
     }
 
-    pub async fn config_read(&self) -> Result<ConfigReadResult, ClientError> {
-        self.send_typed_client_request(ClientRequest::ConfigRead)
+    pub async fn config_read(
+        &self,
+        params: ConfigReadParams,
+    ) -> Result<ConfigReadResult, ClientError> {
+        self.send_typed_client_request(ClientRequest::ConfigRead(params))
             .await
     }
 
@@ -805,17 +771,20 @@ impl RemoteJsonRpcClient {
             .await
     }
 
-    pub async fn mcp_status(&self) -> Result<McpStatusResult, ClientError> {
-        self.send_typed_client_request(ClientRequest::McpStatus)
+    pub async fn mcp_status(&self, target: SessionTarget) -> Result<McpStatusResult, ClientError> {
+        self.send_typed_client_request(ClientRequest::McpStatus(target))
             .await
     }
 
-    pub async fn context_usage(&self) -> Result<ContextUsageResult, ClientError> {
-        self.send_typed_client_request(ClientRequest::ContextUsage)
+    pub async fn context_usage(
+        &self,
+        target: SessionTarget,
+    ) -> Result<ContextUsageResult, ClientError> {
+        self.send_typed_client_request(ClientRequest::ContextUsage(target))
             .await
     }
 
-    pub async fn mcp_set_servers(
+    async fn mcp_set_servers(
         &self,
         params: McpSetServersParams,
     ) -> Result<McpSetServersResult, ClientError> {
@@ -823,30 +792,33 @@ impl RemoteJsonRpcClient {
             .await
     }
 
-    pub async fn mcp_reconnect(&self, params: McpReconnectParams) -> Result<(), ClientError> {
+    async fn mcp_reconnect(&self, params: McpReconnectParams) -> Result<(), ClientError> {
         self.send_typed_client_request(ClientRequest::McpReconnect(params))
             .await
     }
 
-    pub async fn mcp_toggle(&self, params: McpToggleParams) -> Result<(), ClientError> {
+    async fn mcp_toggle(&self, params: McpToggleParams) -> Result<(), ClientError> {
         self.send_typed_client_request(ClientRequest::McpToggle(params))
             .await
     }
 
-    pub async fn plugin_reload(&self) -> Result<PluginReloadResult, ClientError> {
-        self.send_typed_client_request(ClientRequest::PluginReload)
-            .await
-    }
-
-    pub async fn hook_reload(&self) -> Result<HookReloadResult, ClientError> {
-        self.send_typed_client_request(ClientRequest::HookReload)
-            .await
-    }
-
-    pub async fn config_apply_flags(
+    async fn plugin_reload(
         &self,
-        params: ConfigApplyFlagsParams,
-    ) -> Result<(), ClientError> {
+        target: InteractiveTarget,
+    ) -> Result<PluginReloadResult, ClientError> {
+        self.send_typed_client_request(ClientRequest::PluginReload(target))
+            .await
+    }
+
+    async fn hook_reload(
+        &self,
+        target: InteractiveTarget,
+    ) -> Result<HookReloadResult, ClientError> {
+        self.send_typed_client_request(ClientRequest::HookReload(target))
+            .await
+    }
+
+    async fn config_apply_flags(&self, params: ConfigApplyFlagsParams) -> Result<(), ClientError> {
         self.send_typed_client_request(ClientRequest::ConfigApplyFlags(params))
             .await
     }
@@ -940,6 +912,19 @@ impl RemoteJsonRpcClient {
 }
 
 impl RemoteSessionClient {
+    fn session_target(&self) -> SessionTarget {
+        SessionTarget {
+            session_id: self.session_id.clone(),
+        }
+    }
+
+    fn interactive_target(&self) -> InteractiveTarget {
+        InteractiveTarget {
+            session_id: self.session_id.clone(),
+            surface_id: self.surface_id.clone(),
+        }
+    }
+
     pub fn session_id(&self) -> &SessionId {
         &self.session_id
     }
@@ -978,12 +963,181 @@ impl RemoteSessionClient {
         demux.next_lifecycle(&self.surface_id).await
     }
 
-    pub async fn query(&self, params: TurnStartParams) -> Result<TurnStartResult, ClientError> {
+    pub async fn query(&self, mut params: TurnStartParams) -> Result<TurnStartResult, ClientError> {
+        params.target = self.interactive_target();
         self.client.turn_start(params).await
     }
 
     pub async fn interrupt(&self) -> Result<(), ClientError> {
-        self.client.turn_interrupt().await
+        self.client.turn_interrupt(self.interactive_target()).await
+    }
+
+    pub async fn approval_resolve(
+        &self,
+        mut params: ApprovalResolveParams,
+    ) -> Result<(), ClientError> {
+        params.target = self.interactive_target();
+        self.client.approval_resolve(params).await
+    }
+
+    pub async fn user_input_resolve(
+        &self,
+        mut params: UserInputResolveParams,
+    ) -> Result<(), ClientError> {
+        params.target = self.interactive_target();
+        self.client.user_input_resolve(params).await
+    }
+
+    pub async fn elicitation_resolve(
+        &self,
+        mut params: ElicitationResolveParams,
+    ) -> Result<(), ClientError> {
+        params.target = self.interactive_target();
+        self.client.elicitation_resolve(params).await
+    }
+
+    pub async fn cost(&self) -> Result<SessionCostResult, ClientError> {
+        self.client.session_cost(self.session_target()).await
+    }
+
+    pub async fn status(&self) -> Result<SessionStatusResult, ClientError> {
+        self.client.session_status(self.session_target()).await
+    }
+
+    pub async fn task_list(&self) -> Result<TaskListResult, ClientError> {
+        self.client.task_list(self.session_target()).await
+    }
+
+    pub async fn mcp_status(&self) -> Result<McpStatusResult, ClientError> {
+        self.client.mcp_status(self.session_target()).await
+    }
+
+    pub async fn context_usage(&self) -> Result<ContextUsageResult, ClientError> {
+        self.client.context_usage(self.session_target()).await
+    }
+
+    pub async fn config_read(&self) -> Result<ConfigReadResult, ClientError> {
+        self.client
+            .config_read(ConfigReadParams {
+                target: ConfigReadTarget::Session(self.session_target()),
+            })
+            .await
+    }
+
+    pub async fn set_model(&self, mut params: SetModelParams) -> Result<(), ClientError> {
+        params.target = self.interactive_target();
+        self.client.set_model(params).await
+    }
+
+    pub async fn set_model_role(
+        &self,
+        mut params: SetModelRoleParams,
+    ) -> Result<SetModelRoleResult, ClientError> {
+        params.target = self.interactive_target();
+        self.client.set_model_role(params).await
+    }
+
+    pub async fn set_permission_mode(
+        &self,
+        mut params: SetPermissionModeParams,
+    ) -> Result<(), ClientError> {
+        params.target = self.interactive_target();
+        self.client.set_permission_mode(params).await
+    }
+
+    pub async fn set_thinking(&self, mut params: SetThinkingParams) -> Result<(), ClientError> {
+        params.target = self.interactive_target();
+        self.client.set_thinking(params).await
+    }
+
+    pub async fn set_agent_color(
+        &self,
+        mut params: SetAgentColorParams,
+    ) -> Result<(), ClientError> {
+        params.target = self.interactive_target();
+        self.client.set_agent_color(params).await
+    }
+
+    pub async fn apply_permission_update(
+        &self,
+        mut params: ApplyPermissionUpdateParams,
+    ) -> Result<(), ClientError> {
+        params.target = self.interactive_target();
+        self.client.apply_permission_update(params).await
+    }
+
+    pub async fn reset_session_permission_rules(
+        &self,
+    ) -> Result<ResetSessionPermissionRulesResult, ClientError> {
+        self.client
+            .reset_session_permission_rules(self.interactive_target())
+            .await
+    }
+
+    pub async fn stop_task(&self, mut params: StopTaskParams) -> Result<(), ClientError> {
+        params.target = self.interactive_target();
+        self.client.stop_task(params).await
+    }
+
+    pub async fn background_all_tasks(&self) -> Result<BackgroundAllTasksResult, ClientError> {
+        self.client
+            .background_all_tasks(self.interactive_target())
+            .await
+    }
+
+    pub async fn rewind_files(
+        &self,
+        mut params: RewindFilesParams,
+    ) -> Result<RewindFilesResult, ClientError> {
+        params.target = self.interactive_target();
+        self.client.rewind_files(params).await
+    }
+
+    pub async fn update_env(&self, mut params: UpdateEnvParams) -> Result<(), ClientError> {
+        params.target = self.interactive_target();
+        self.client.update_env(params).await
+    }
+
+    pub async fn agent_interrupt_current_work(
+        &self,
+        mut params: AgentInterruptCurrentWorkParams,
+    ) -> Result<(), ClientError> {
+        params.target = self.interactive_target();
+        self.client.agent_interrupt_current_work(params).await
+    }
+
+    pub async fn mcp_set_servers(
+        &self,
+        mut params: McpSetServersParams,
+    ) -> Result<McpSetServersResult, ClientError> {
+        params.target = self.interactive_target();
+        self.client.mcp_set_servers(params).await
+    }
+
+    pub async fn mcp_reconnect(&self, mut params: McpReconnectParams) -> Result<(), ClientError> {
+        params.target = self.interactive_target();
+        self.client.mcp_reconnect(params).await
+    }
+
+    pub async fn mcp_toggle(&self, mut params: McpToggleParams) -> Result<(), ClientError> {
+        params.target = self.interactive_target();
+        self.client.mcp_toggle(params).await
+    }
+
+    pub async fn plugin_reload(&self) -> Result<PluginReloadResult, ClientError> {
+        self.client.plugin_reload(self.interactive_target()).await
+    }
+
+    pub async fn hook_reload(&self) -> Result<HookReloadResult, ClientError> {
+        self.client.hook_reload(self.interactive_target()).await
+    }
+
+    pub async fn config_apply_flags(
+        &self,
+        mut params: ConfigApplyFlagsParams,
+    ) -> Result<(), ClientError> {
+        params.target = self.interactive_target();
+        self.client.config_apply_flags(params).await
     }
 
     pub async fn replace_with_start(
@@ -991,24 +1145,19 @@ impl RemoteSessionClient {
         demux: &mut RemoteEventDemux,
         params: SessionStartParams,
     ) -> Result<Self, (Self, ClientError)> {
-        let old_surface_id = self.surface_id.clone();
-        match self.client.session_start(params).await {
-            Ok(started) => {
-                // Drop stale buffered deliveries for the replaced surface before
-                // waiting for / minting the successor handle.
-                demux.purge_surface(&old_surface_id);
-                let surface_id = match started.surface_id {
-                    Some(surface_id) => surface_id,
-                    None => {
-                        let Some(delivery) =
-                            demux.next_session_activation(&started.session_id).await
-                        else {
-                            return Err((self, ClientError::Disconnected));
-                        };
-                        delivery.surface_id
-                    }
-                };
-                Ok(self.client.session_handle(started.session_id, surface_id))
+        match self
+            .client
+            .session_replace(SessionReplaceParams {
+                source: self.interactive_target(),
+                destination: SessionReplacement::Fresh(params),
+            })
+            .await
+        {
+            Ok(replaced) => {
+                demux.purge_surface(&self.surface_id);
+                Ok(self
+                    .client
+                    .session_handle(replaced.session_id, replaced.surface_id))
             }
             Err(error) => Err((self, error)),
         }
@@ -1019,24 +1168,19 @@ impl RemoteSessionClient {
         demux: &mut RemoteEventDemux,
         params: SessionResumeParams,
     ) -> Result<Self, (Self, ClientError)> {
-        let old_surface_id = self.surface_id.clone();
-        match self.client.session_resume(params).await {
-            Ok(resumed) => {
-                // Drop stale buffered deliveries for the replaced surface before
-                // waiting for / minting the successor handle.
-                demux.purge_surface(&old_surface_id);
-                let session_id = resumed.session.session_id;
-                let surface_id = match resumed.surface_id {
-                    Some(surface_id) => surface_id,
-                    None => {
-                        let Some(delivery) = demux.next_session_activation(&session_id).await
-                        else {
-                            return Err((self, ClientError::Disconnected));
-                        };
-                        delivery.surface_id
-                    }
-                };
-                Ok(self.client.session_handle(session_id, surface_id))
+        match self
+            .client
+            .session_replace(SessionReplaceParams {
+                source: self.interactive_target(),
+                destination: SessionReplacement::Resume(params.target),
+            })
+            .await
+        {
+            Ok(replaced) => {
+                demux.purge_surface(&self.surface_id);
+                Ok(self
+                    .client
+                    .session_handle(replaced.session_id, replaced.surface_id))
             }
             Err(error) => Err((self, error)),
         }
@@ -1044,7 +1188,7 @@ impl RemoteSessionClient {
 
     pub async fn close(self) -> Result<(), (Self, ClientError)> {
         let params = SessionArchiveParams {
-            session_id: self.session_id.clone(),
+            target: ArchiveTarget::Interactive(self.interactive_target()),
         };
         match self.client.session_archive(params).await {
             Ok(()) => Ok(()),
@@ -1054,6 +1198,11 @@ impl RemoteSessionClient {
 }
 
 impl RemotePassiveSessionClient {
+    fn session_target(&self) -> SessionTarget {
+        SessionTarget {
+            session_id: self.session_id.clone(),
+        }
+    }
     pub fn session_id(&self) -> &SessionId {
         &self.session_id
     }
@@ -1103,7 +1252,7 @@ impl RemotePassiveSessionClient {
     ) -> Result<SessionReadResult, ClientError> {
         self.client
             .session_read(SessionReadParams {
-                session_id: self.session_id.clone(),
+                target: self.session_target(),
                 cursor,
                 limit,
             })
@@ -1117,7 +1266,7 @@ impl RemotePassiveSessionClient {
     ) -> Result<SessionTurnsListResult, ClientError> {
         self.client
             .session_turns_list(SessionTurnsListParams {
-                session_id: self.session_id.clone(),
+                target: self.session_target(),
                 cursor,
                 limit,
             })

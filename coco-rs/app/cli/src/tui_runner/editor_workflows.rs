@@ -423,6 +423,7 @@ pub(super) async fn apply_and_persist_permission_update(
         .apply_permission_update(
             local_app_server_bridge.handler(),
             coco_types::ApplyPermissionUpdateParams {
+                target: interactive_target(local_app_server_bridge),
                 update: update.clone(),
             },
         )
@@ -449,7 +450,10 @@ pub(super) async fn reset_session_permission_rules(
 ) -> bool {
     if let Err(error) = local_app_server_bridge
         .client()
-        .reset_session_permission_rules(local_app_server_bridge.handler())
+        .reset_session_permission_rules(
+            local_app_server_bridge.handler(),
+            interactive_session(local_app_server_bridge),
+        )
         .await
     {
         let _ = event_tx
@@ -475,7 +479,10 @@ pub(super) async fn set_agent_color(
         .client()
         .set_agent_color(
             local_app_server_bridge.handler(),
-            coco_types::SetAgentColorParams { color },
+            coco_types::SetAgentColorParams {
+                target: interactive_target(local_app_server_bridge),
+                color,
+            },
         )
         .await
     {
@@ -657,10 +664,9 @@ pub(super) fn truncate_output(text: String, max_bytes: usize, max_lines: usize) 
     truncated
 }
 use anyhow::Result;
-use coco_query::CoreEvent;
-use coco_query::ServerNotification;
+use coco_query::{CoreEvent, ServerNotification};
 use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use super::PendingEditorRequest;
+use super::{PendingEditorRequest, interactive_session, interactive_target};

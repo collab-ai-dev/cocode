@@ -1,38 +1,34 @@
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
+use std::{future::Future, pin::Pin, sync::Arc};
 
-use coco_types::ClientRequest;
-use coco_types::ServerRequestDelivery;
-use coco_types::SessionEnvelope;
-use coco_types::SessionId;
-use coco_types::SurfaceDelivery;
-use coco_types::SurfaceId;
-use coco_types::SurfaceLifecycleEffect;
+use coco_types::{
+    ClientRequest, RequestScope, ServerRequestDelivery, SessionEnvelope, SessionId,
+    SurfaceDelivery, SurfaceId, SurfaceLifecycleEffect, request_scope,
+};
 
-use crate::AppLiveSessionSummary;
-use crate::AppServer;
-use crate::AttachError;
-use crate::AttachSurfaceOptions;
-use crate::ConnectionKey;
-use crate::DetachSurfaceOutcome;
-use crate::DisconnectOutcome;
-use crate::SubscribeReplay;
+use crate::{
+    AppLiveSessionSummary, AppServer, AttachError, AttachSurfaceOptions, ConnectionKey,
+    DetachSurfaceOutcome, DisconnectOutcome, SubscribeReplay,
+};
 
 const DEFAULT_LOCAL_CHANNEL_CAPACITY: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocalClientRequestContext {
     connection: ConnectionKey,
+    scope: RequestScope,
 }
 
 impl LocalClientRequestContext {
-    pub fn new(connection: ConnectionKey) -> Self {
-        Self { connection }
+    pub fn new(connection: ConnectionKey, scope: RequestScope) -> Self {
+        Self { connection, scope }
     }
 
     pub fn connection_key(&self) -> ConnectionKey {
         self.connection
+    }
+
+    pub fn request_scope(&self) -> RequestScope {
+        self.scope
     }
 }
 
@@ -125,8 +121,12 @@ impl<H: Clone> LocalClientConnection<H> {
     where
         Handler: LocalClientRequestHandler,
     {
+        let scope = request_scope(request.method());
         handler
-            .handle_local_client_request(LocalClientRequestContext::new(self.connection), request)
+            .handle_local_client_request(
+                LocalClientRequestContext::new(self.connection, scope),
+                request,
+            )
             .await
     }
 

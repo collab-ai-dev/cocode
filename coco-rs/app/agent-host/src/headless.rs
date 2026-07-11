@@ -15,43 +15,36 @@
 #[path = "headless_support.rs"]
 mod support;
 
-use std::path::Path;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::AtomicI32;
-use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicI32, Ordering},
+    },
+    time::Duration,
+};
 
 use anyhow::Result;
-use coco_inference::AISdkError;
-use coco_inference::LanguageModel;
-use coco_inference::LanguageModelCallOptions;
-use coco_inference::LanguageModelGenerateResult;
-use coco_inference::LanguageModelStreamResult;
-use coco_llm_types::AssistantContentPart;
-use coco_llm_types::FinishReason;
-use coco_llm_types::StopReason;
-use coco_llm_types::TextPart;
-use coco_llm_types::Usage;
+use coco_inference::{
+    AISdkError, LanguageModel, LanguageModelCallOptions, LanguageModelGenerateResult,
+    LanguageModelStreamResult,
+};
+use coco_llm_types::{AssistantContentPart, FinishReason, StopReason, TextPart, Usage};
 use coco_messages::CostTracker;
 use coco_query::ContinueReason;
 use coco_tool_runtime::ToolRegistry;
 use coco_types::TokenUsage;
 use tokio_util::sync::CancellationToken;
 
-use crate::AgentHostOptions;
-use crate::shutdown::ShutdownDrainOutcome;
+use crate::{AgentHostOptions, shutdown::ShutdownDrainOutcome};
 use coco_app_runtime::ProcessRuntime;
-use support::append_headless_goal_status;
-use support::append_headless_slash_text;
-use support::build_tool_filter;
-use support::headless_local_goal_text_outcome;
-use support::headless_text_outcome;
-use support::parse_headless_goal_slash;
-use support::persist_headless_local_transcript_messages;
 pub(crate) use support::resolve_additional_dirs;
 pub use support::resolve_additional_dirs_display;
-use support::summarize_tool_filter;
+use support::{
+    append_headless_goal_status, append_headless_slash_text, build_tool_filter,
+    headless_local_goal_text_outcome, headless_text_outcome, parse_headless_goal_slash,
+    persist_headless_local_transcript_messages, summarize_tool_filter,
+};
 
 /// Fallback base instructions used when a resolved `ModelInfo`
 /// declares no `base_instructions` (e.g. Claude built-ins and any
@@ -1007,6 +1000,11 @@ pub async fn run_chat_with_options(
     local_app_server_bridge
         .install_session_runtime(session_handle.clone())
         .await;
+    local_app_server_bridge.ensure_interactive_surface(session_id.clone())?;
+    let interactive_target = local_app_server_bridge
+        .interactive_session()
+        .map(crate::local_client::LocalSessionClient::interactive_target)
+        .ok_or_else(|| anyhow::anyhow!("interactive surface was not installed"))?;
     local_app_server_bridge
         .client()
         .keep_alive(local_app_server_bridge.handler())
@@ -1276,12 +1274,13 @@ pub async fn run_chat_with_options(
         let cancel = cancel.clone();
         let client = local_app_server_bridge.connect_local_client();
         let handler = local_app_server_bridge.handler().clone();
+        let target = interactive_target.clone();
         tokio::spawn(async move {
             tokio::select! {
                 () = cancel.cancelled() => {}
                 () = crate::shutdown::os_interrupt_signal() => {}
             }
-            let _ = client.turn_interrupt(&handler).await;
+            let _ = client.turn_interrupt(&handler, target).await;
         })
     };
 
@@ -1289,6 +1288,7 @@ pub async fn run_chat_with_options(
         .start_turn_and_wait_for_end(
             session_id.clone(),
             coco_types::TurnStartParams {
+                target: interactive_target,
                 prompt: effective_prompt,
                 history_override: Vec::new(),
                 images: Vec::new(),

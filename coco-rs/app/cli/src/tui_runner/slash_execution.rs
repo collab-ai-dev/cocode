@@ -8,7 +8,10 @@ pub(super) async fn background_all_tasks_through_app_server(
         .await;
     local_app_server_bridge
         .client()
-        .background_all_tasks(local_app_server_bridge.handler())
+        .background_all_tasks(
+            local_app_server_bridge.handler(),
+            interactive_session(local_app_server_bridge),
+        )
         .await
         .map(|result| result.task_ids)
 }
@@ -151,6 +154,10 @@ pub(super) async fn spawn_history_turn(
     local_app_server_bridge
         .install_session_runtime(session.clone())
         .await;
+    if let Err(error) = local_app_server_bridge.ensure_interactive_surface(session_id.clone()) {
+        tracing::warn!(%error, "history turn could not attach interactive AppServer surface");
+        return;
+    }
     if let Err(error) =
         local_app_server_bridge.start_passive_event_pump(session_id.clone(), event_tx.clone())
     {
@@ -166,6 +173,7 @@ pub(super) async fn spawn_history_turn(
         }
     };
     let params = coco_types::TurnStartParams {
+        target: interactive_target(&local_app_server_bridge),
         prompt: String::new(),
         history_override,
         images: Vec::new(),
@@ -190,6 +198,7 @@ pub(super) async fn spawn_history_turn(
     let protocol_turn_id = started.turn_id.clone();
     let interrupt_client = local_app_server_bridge.connect_local_client();
     let handler = local_app_server_bridge.handler().clone();
+    let interrupt_target = interactive_target(&local_app_server_bridge);
     let task = tokio::spawn(async move {
         let _bridge = local_app_server_bridge;
         let _done = TurnDoneGuard {
@@ -210,6 +219,7 @@ pub(super) async fn spawn_history_turn(
         cancel: ActiveTurnCancel {
             client: interrupt_client,
             handler,
+            target: interrupt_target,
         },
     });
 }
@@ -257,6 +267,7 @@ pub(super) async fn spawn_slash_run_engine_turn(
         }
     };
     let params = coco_types::TurnStartParams {
+        target: interactive_target(local_app_server_bridge),
         prompt: content,
         history_override: Vec::new(),
         images: Vec::new(),
@@ -318,6 +329,7 @@ pub(super) async fn spawn_slash_run_engine_turn(
         cancel: ActiveTurnCancel {
             client: interrupt_client,
             handler,
+            target: interactive_target(local_app_server_bridge),
         },
     });
 }
@@ -629,9 +641,7 @@ pub(super) async fn dispatch_slash_command(
         }
     };
 
-    use coco_commands::CommandResult;
-    use coco_commands::DialogSpec;
-    use coco_commands::PromptPart;
+    use coco_commands::{CommandResult, DialogSpec, PromptPart};
     match result {
         CommandResult::Skip => SlashOutcome::Handled,
         CommandResult::Text(text) => {

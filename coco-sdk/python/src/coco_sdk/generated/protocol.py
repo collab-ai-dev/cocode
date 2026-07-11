@@ -667,6 +667,8 @@ class WorkflowAgentState(str, Enum):
 # One entry in `AgentDefinition.mcp_servers`:
 AgentMcpServerSpec = str | dict[str, Any]
 
+ArchiveTarget = Union["dict[str, InteractiveTarget]", "dict[str, SessionTarget]"]
+
 # Assistant message content parts.
 AssistantContentPart = Union[
     "TextPart",
@@ -691,6 +693,10 @@ AttachmentExtras = Union[
     "MentionSummaryPayload",
 ]
 
+ConfigReadTarget = Union["str", "dict[str, SessionTarget]"]
+
+ConfigWriteTarget = Union["str", "dict[str, InteractiveTarget]"]
+
 # Top-level JSON-RPC 2.0 message.
 JsonRpcMessage = Union[
     "JsonRpcRequest", "JsonRpcResponse", "JsonRpcNotification", "JsonRpcError"
@@ -712,6 +718,9 @@ PermissionRequestDetail = dict[str, Any]
 
 # Request identifier. Can be a string or integer per JSON-RPC 2.0.
 RequestId = int | str
+
+# Destination selected by explicit `session/replace`.
+SessionReplacement = Union["dict[str, SessionStartParams]", "dict[str, SessionTarget]"]
 
 # Typed payload for silent attachment kinds.
 SilentPayload = Union[
@@ -892,6 +901,14 @@ class ClientRequestSessionResume(BaseModel):
     params: SessionResumeParams
 
 
+class ClientRequestSessionReplace(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/replace"] = Field(
+        default="session/replace", alias="method"
+    )
+    params: SessionReplaceParams
+
+
 class ClientRequestSessionList(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["session/list"] = Field(default="session/list", alias="method")
@@ -944,11 +961,13 @@ class ClientRequestSessionToggleTag(BaseModel):
 class ClientRequestSessionCost(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["session/cost"] = Field(default="session/cost", alias="method")
+    params: SessionTarget
 
 
 class ClientRequestSessionStatus(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["session/status"] = Field(default="session/status", alias="method")
+    params: SessionTarget
 
 
 class ClientRequestTurnStart(BaseModel):
@@ -960,11 +979,13 @@ class ClientRequestTurnStart(BaseModel):
 class ClientRequestTurnInterrupt(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["turn/interrupt"] = Field(default="turn/interrupt", alias="method")
+    params: InteractiveTarget
 
 
 class ClientRequestTaskList(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["task/list"] = Field(default="task/list", alias="method")
+    params: SessionTarget
 
 
 class ClientRequestTaskDetail(BaseModel):
@@ -1050,6 +1071,7 @@ class ClientRequestControlResetSessionPermissionRules(BaseModel):
     method: Literal["control/resetSessionPermissionRules"] = Field(
         default="control/resetSessionPermissionRules", alias="method"
     )
+    params: InteractiveTarget
 
 
 class ClientRequestControlStopTask(BaseModel):
@@ -1081,6 +1103,7 @@ class ClientRequestControlBackgroundAllTasks(BaseModel):
     method: Literal["control/backgroundAllTasks"] = Field(
         default="control/backgroundAllTasks", alias="method"
     )
+    params: InteractiveTarget
 
 
 class ClientRequestControlKeepAlive(BaseModel):
@@ -1109,6 +1132,7 @@ class ClientRequestAgentInterruptCurrentWork(BaseModel):
 class ClientRequestConfigRead(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["config/read"] = Field(default="config/read", alias="method")
+    params: ConfigReadParams
 
 
 class ClientRequestConfigValueWrite(BaseModel):
@@ -1122,11 +1146,13 @@ class ClientRequestConfigValueWrite(BaseModel):
 class ClientRequestMcpStatus(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["mcp/status"] = Field(default="mcp/status", alias="method")
+    params: SessionTarget
 
 
 class ClientRequestContextUsage(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["context/usage"] = Field(default="context/usage", alias="method")
+    params: SessionTarget
 
 
 class ClientRequestMcpSetServers(BaseModel):
@@ -1150,11 +1176,13 @@ class ClientRequestMcpToggle(BaseModel):
 class ClientRequestPluginReload(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["plugin/reload"] = Field(default="plugin/reload", alias="method")
+    params: InteractiveTarget
 
 
 class ClientRequestHookReload(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["hook/reload"] = Field(default="hook/reload", alias="method")
+    params: InteractiveTarget
 
 
 class ClientRequestConfigApplyFlags(BaseModel):
@@ -1170,6 +1198,7 @@ ClientRequest = Annotated[
         ClientRequestInitialize,
         ClientRequestSessionStart,
         ClientRequestSessionResume,
+        ClientRequestSessionReplace,
         ClientRequestSessionList,
         ClientRequestSessionRead,
         ClientRequestSessionTurnsList,
@@ -4128,15 +4157,18 @@ McpServerConfig = StdioMcpServerConfig | SseMcpServerConfig | HttpMcpServerConfi
 
 class AgentInterruptCurrentWorkParams(BaseModel):
     agent_id: str
+    target: InteractiveTarget
 
 
 class ApplyPermissionUpdateParams(BaseModel):
+    target: InteractiveTarget
     update: PermissionUpdate
 
 
 class ApprovalResolveParams(BaseModel):
     decision: ApprovalDecision
     request_id: str
+    target: InteractiveTarget
     content_blocks: list[Any] | None = None
     feedback: str | None = None
     permission_update: PermissionUpdate | None = None
@@ -4150,18 +4182,24 @@ class CancelRequestParams(BaseModel):
 
 class ConfigApplyFlagsParams(BaseModel):
     settings: dict[str, Any]
+    target: InteractiveTarget
+
+
+class ConfigReadParams(BaseModel):
+    target: ConfigReadTarget
 
 
 class ConfigWriteParams(BaseModel):
     key: str
+    target: ConfigWriteTarget
     value: Any
-    scope: str | None = None
 
 
 class ElicitationResolveParams(BaseModel):
     approved: bool
     mcp_server_name: str
     request_id: str
+    target: InteractiveTarget
     values: dict[str, Any] = {}
 
 
@@ -4181,40 +4219,55 @@ class InitializeParams(BaseModel):
     system_prompt: str | None = None
 
 
+class InteractiveTarget(BaseModel):
+    session_id: SessionId
+    surface_id: SurfaceId
+
+
 class McpReconnectParams(BaseModel):
     server_name: str
+    target: InteractiveTarget
 
 
 class McpSetServersParams(BaseModel):
     servers: dict[str, Any]
+    target: InteractiveTarget
 
 
 class McpToggleParams(BaseModel):
     enabled: bool
     server_name: str
+    target: InteractiveTarget
 
 
 class RewindFilesParams(BaseModel):
+    target: InteractiveTarget
     user_message_id: str
     dry_run: bool = False
 
 
 class SessionArchiveParams(BaseModel):
-    session_id: SessionId
+    target: ArchiveTarget
 
 
 class SessionReadParams(BaseModel):
-    session_id: SessionId
+    target: SessionTarget
     cursor: str | None = None
     limit: int | None = None
 
 
 class SessionRenameParams(BaseModel):
     name: str
+    target: SessionTarget
+
+
+class SessionReplaceParams(BaseModel):
+    destination: SessionReplacement
+    source: InteractiveTarget
 
 
 class SessionResumeParams(BaseModel):
-    session_id: SessionId
+    target: SessionTarget
 
 
 class SessionStartParams(BaseModel):
@@ -4229,25 +4282,32 @@ class SessionStartParams(BaseModel):
 
 
 class SessionSubscribeParams(BaseModel):
-    session_id: SessionId
+    target: SessionTarget
     after_seq: int | None = None
+
+
+class SessionTarget(BaseModel):
+    session_id: SessionId
 
 
 class SessionToggleTagParams(BaseModel):
     tag: str
+    target: SessionTarget
 
 
 class SessionTurnsListParams(BaseModel):
-    session_id: SessionId
+    target: SessionTarget
     cursor: str | None = None
     limit: int | None = None
 
 
 class SetAgentColorParams(BaseModel):
+    target: InteractiveTarget
     color: AgentColorName | None = None
 
 
 class SetModelParams(BaseModel):
+    target: InteractiveTarget
     model: str | None = None
 
 
@@ -4255,27 +4315,33 @@ class SetModelRoleParams(BaseModel):
     model_id: str
     provider: str
     role: ModelRole
+    target: InteractiveTarget
     effort: ReasoningEffort | None = None
 
 
 class SetPermissionModeParams(BaseModel):
     mode: PermissionMode
+    target: InteractiveTarget
 
 
 class SetThinkingParams(BaseModel):
+    target: InteractiveTarget
     thinking_level: ThinkingLevel | None = None
 
 
 class StopTaskParams(BaseModel):
+    target: InteractiveTarget
     task_id: str
 
 
 class TaskDetailParams(BaseModel):
+    target: SessionTarget
     task_id: str
 
 
 class TurnStartParams(BaseModel):
     prompt: str
+    target: InteractiveTarget
     history_override: list[Any] | None = None
     images: list[QueuedCommandEditImage] | None = None
     model_selection: ProviderModelSelection | None = None
@@ -4286,11 +4352,13 @@ class TurnStartParams(BaseModel):
 
 class UpdateEnvParams(BaseModel):
     env: dict[str, str]
+    target: InteractiveTarget
 
 
 class UserInputResolveParams(BaseModel):
     answer: str
     request_id: str
+    target: InteractiveTarget
 
 
 # ---------------------------------------------------------------------------
@@ -4304,6 +4372,7 @@ class ClientRequestMethod(str, Enum):
     INITIALIZE = "initialize"
     SESSION_START = "session/start"
     SESSION_RESUME = "session/resume"
+    SESSION_REPLACE = "session/replace"
     SESSION_LIST = "session/list"
     SESSION_READ = "session/read"
     SESSION_TURNS_LIST = "session/turns/list"
@@ -4385,6 +4454,18 @@ class SessionResumeRequest(BaseModel):
 
 
 SessionResumeRequestParams = SessionResumeRequest.SessionResumeRequestParams
+
+
+class SessionReplaceRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/replace"] = Field(default="session/replace")
+    params: SessionReplaceRequestParams
+
+    class SessionReplaceRequestParams(SessionReplaceParams):
+        pass
+
+
+SessionReplaceRequestParams = SessionReplaceRequest.SessionReplaceRequestParams
 
 
 class SessionListRequest(BaseModel):
@@ -4476,8 +4557,8 @@ class SessionCostRequest(BaseModel):
     method: Literal["session/cost"] = Field(default="session/cost")
     params: SessionCostRequestParams
 
-    class SessionCostRequestParams(BaseModel):
-        model_config = {"extra": "allow"}
+    class SessionCostRequestParams(SessionTarget):
+        pass
 
 
 SessionCostRequestParams = SessionCostRequest.SessionCostRequestParams
@@ -4488,8 +4569,8 @@ class SessionStatusRequest(BaseModel):
     method: Literal["session/status"] = Field(default="session/status")
     params: SessionStatusRequestParams
 
-    class SessionStatusRequestParams(BaseModel):
-        model_config = {"extra": "allow"}
+    class SessionStatusRequestParams(SessionTarget):
+        pass
 
 
 SessionStatusRequestParams = SessionStatusRequest.SessionStatusRequestParams
@@ -4512,8 +4593,8 @@ class TurnInterruptRequest(BaseModel):
     method: Literal["turn/interrupt"] = Field(default="turn/interrupt")
     params: TurnInterruptRequestParams
 
-    class TurnInterruptRequestParams(BaseModel):
-        model_config = {"extra": "allow"}
+    class TurnInterruptRequestParams(InteractiveTarget):
+        pass
 
 
 TurnInterruptRequestParams = TurnInterruptRequest.TurnInterruptRequestParams
@@ -4524,8 +4605,8 @@ class TaskListRequest(BaseModel):
     method: Literal["task/list"] = Field(default="task/list")
     params: TaskListRequestParams
 
-    class TaskListRequestParams(BaseModel):
-        model_config = {"extra": "allow"}
+    class TaskListRequestParams(SessionTarget):
+        pass
 
 
 TaskListRequestParams = TaskListRequest.TaskListRequestParams
@@ -4666,8 +4747,8 @@ class ResetSessionPermissionRulesRequest(BaseModel):
     )
     params: ResetSessionPermissionRulesRequestParams
 
-    class ResetSessionPermissionRulesRequestParams(BaseModel):
-        model_config = {"extra": "allow"}
+    class ResetSessionPermissionRulesRequestParams(InteractiveTarget):
+        pass
 
 
 ResetSessionPermissionRulesRequestParams = (
@@ -4718,8 +4799,8 @@ class BackgroundAllTasksRequest(BaseModel):
     )
     params: BackgroundAllTasksRequestParams
 
-    class BackgroundAllTasksRequestParams(BaseModel):
-        model_config = {"extra": "allow"}
+    class BackgroundAllTasksRequestParams(InteractiveTarget):
+        pass
 
 
 BackgroundAllTasksRequestParams = (
@@ -4772,8 +4853,8 @@ class ConfigReadRequest(BaseModel):
     method: Literal["config/read"] = Field(default="config/read")
     params: ConfigReadRequestParams
 
-    class ConfigReadRequestParams(BaseModel):
-        model_config = {"extra": "allow"}
+    class ConfigReadRequestParams(ConfigReadParams):
+        pass
 
 
 ConfigReadRequestParams = ConfigReadRequest.ConfigReadRequestParams
@@ -4796,8 +4877,8 @@ class McpStatusRequest(BaseModel):
     method: Literal["mcp/status"] = Field(default="mcp/status")
     params: McpStatusRequestParams
 
-    class McpStatusRequestParams(BaseModel):
-        model_config = {"extra": "allow"}
+    class McpStatusRequestParams(SessionTarget):
+        pass
 
 
 McpStatusRequestParams = McpStatusRequest.McpStatusRequestParams
@@ -4808,8 +4889,8 @@ class ContextUsageRequest(BaseModel):
     method: Literal["context/usage"] = Field(default="context/usage")
     params: ContextUsageRequestParams
 
-    class ContextUsageRequestParams(BaseModel):
-        model_config = {"extra": "allow"}
+    class ContextUsageRequestParams(SessionTarget):
+        pass
 
 
 ContextUsageRequestParams = ContextUsageRequest.ContextUsageRequestParams
@@ -4856,8 +4937,8 @@ class PluginReloadRequest(BaseModel):
     method: Literal["plugin/reload"] = Field(default="plugin/reload")
     params: PluginReloadRequestParams
 
-    class PluginReloadRequestParams(BaseModel):
-        model_config = {"extra": "allow"}
+    class PluginReloadRequestParams(InteractiveTarget):
+        pass
 
 
 PluginReloadRequestParams = PluginReloadRequest.PluginReloadRequestParams
@@ -4868,8 +4949,8 @@ class HookReloadRequest(BaseModel):
     method: Literal["hook/reload"] = Field(default="hook/reload")
     params: HookReloadRequestParams
 
-    class HookReloadRequestParams(BaseModel):
-        model_config = {"extra": "allow"}
+    class HookReloadRequestParams(InteractiveTarget):
+        pass
 
 
 HookReloadRequestParams = HookReloadRequest.HookReloadRequestParams
@@ -4891,6 +4972,7 @@ ClientRequest = Annotated[
         InitializeRequest,
         SessionStartRequest,
         SessionResumeRequest,
+        SessionReplaceRequest,
         SessionListRequest,
         SessionReadRequest,
         SessionTurnsListRequest,

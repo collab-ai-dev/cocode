@@ -1,49 +1,28 @@
-//! `ToolPermissionBridge` implementation backed by the SDK server.
-//!
-//! When the agent hits a `PermissionDecision::Ask` during tool
-//! execution, the engine calls `ctx.permission_bridge.request_permission`.
-//! This module provides the bridge impl used in SDK mode: it issues a
-//! `ServerRequest::AskForApproval` on the transport via
-//! [`SdkServerState::send_server_request`] and translates the client's
-//! `ApprovalResolveParams` reply back into [`ToolPermissionResolution`].
-//!
-//! The SDK client is the ultimate authority for any tool gated on
-//! `ask` semantics.
-//!
-//! See `event-system-design.md` §6.
+//! Session-targeted SDK tool permission bridge.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use coco_app_server_transport::JsonRpcFrame;
-use coco_tool_runtime::ToolPermissionBridge;
-use coco_tool_runtime::ToolPermissionDecision;
-use coco_tool_runtime::ToolPermissionRequest;
-use coco_tool_runtime::ToolPermissionResolution;
-use coco_types::ApprovalDecision;
-use coco_types::ApprovalResolveParams;
-use coco_types::ServerAskForApprovalParams;
-use tracing::debug;
-use tracing::warn;
+use coco_tool_runtime::{
+    ToolPermissionBridge, ToolPermissionDecision, ToolPermissionRequest, ToolPermissionResolution,
+};
+use coco_types::{ApprovalDecision, ServerAskForApprovalParams};
+use tracing::{debug, warn};
 
-use crate::sdk_server::handlers::SdkServerState;
-
-/// Bridge the engine's permission gate to the SDK control protocol.
-///
-/// Holds a reference to the shared `SdkServerState` so it can:
-/// - Read the cached transport handle
-/// - Issue a `ServerRequest::AskForApproval` via `send_server_request`
-/// - Translate the response into a `ToolPermissionResolution`
-///
-/// Construction is cheap — just an `Arc` clone. Install one per turn
-/// on `QueryEngineConfig` / `ToolUseContext`.
 pub struct SdkPermissionBridge {
-    state: Arc<SdkServerState>,
+    app_server: Arc<coco_app_server::AppServer<super::LocalAppSessionHandle>>,
+    session: crate::session_runtime::SessionHandle,
 }
 
 impl SdkPermissionBridge {
-    pub fn new(state: Arc<SdkServerState>) -> Self {
-        Self { state }
+    pub fn new(
+        app_server: Arc<coco_app_server::AppServer<super::LocalAppSessionHandle>>,
+        session: crate::session_runtime::SessionHandle,
+    ) -> Self {
+        Self {
+            app_server,
+            session,
+        }
     }
 }
 
@@ -53,24 +32,7 @@ impl ToolPermissionBridge for SdkPermissionBridge {
         &self,
         mut request: ToolPermissionRequest,
     ) -> Result<ToolPermissionResolution, String> {
-        // In-process teammates inherit the leader's bridge — badge them from
-        // the live task-local identity (same as the TUI bridge).
         crate::leader_permission::enrich_in_process_worker_badge(&mut request);
-
-        // Read the transport handle the dispatcher published at startup.
-        let transport = match self.state.sdk_transport_snapshot().await {
-            Some(t) => t,
-            None => {
-                return Err("SdkPermissionBridge: transport not initialized; \
-                     SdkServer::run_app_server_connection() must be running before the bridge \
-                     is consulted"
-                    .into());
-            }
-        };
-
-        // Build the `approval/askForApproval` params via the typed struct so
-        // the serde schema stays the single source of truth (any new optional
-        // field shows up here automatically).
         let params = ServerAskForApprovalParams {
             request_id: request.id.clone(),
             tool_name: request.tool_name.clone(),
@@ -86,72 +48,47 @@ impl ToolPermissionBridge for SdkPermissionBridge {
             permission_suggestions: request
                 .suggestions
                 .iter()
-                .filter_map(|s| serde_json::to_value(s).ok())
+                .filter_map(|suggestion| serde_json::to_value(suggestion).ok())
                 .collect(),
         };
-        let params = serde_json::to_value(&params)
-            .map_err(|e| format!("serialize ServerAskForApprovalParams: {e}"))?;
-
         debug!(
+            session_id = %self.session.session_id(),
             request_id = %request.id,
             tool = %request.tool_name,
-            "SdkPermissionBridge: asking client for approval"
+            "asking targeted SDK surface for approval"
         );
-
-        // Fire the Notification hook before blocking on the client's reply.
-        // Best-effort — a runtime not yet installed (e.g. tests) leaves
-        // the hook unfired.
-        if let Some(runtime) = self.state.session_runtime_snapshot().await {
-            let title = format!("Permission request: {}", request.tool_name);
-            runtime
-                .fire_notification_hooks(
-                    "permission_prompt",
-                    "Coco needs your permission to use a tool",
-                    Some(&title),
-                )
-                .await;
-        }
-
-        // Issue the outbound ServerRequest and await the reply.
+        let title = format!("Permission request: {}", request.tool_name);
+        self.session
+            .fire_notification_hooks(
+                "permission_prompt",
+                "Coco needs your permission to use a tool",
+                Some(&title),
+            )
+            .await;
         let reply = self
-            .state
-            .send_server_request(&transport, "approval/askForApproval", params)
+            .app_server
+            .route_server_request_with_reply(
+                self.session.session_id().clone(),
+                coco_app_server::SurfaceCapability::Interactive,
+                None,
+                coco_types::ServerRequest::AskForApproval(params),
+            )
+            .map_err(|error| format!("route approval request failed: {error:?}"))?
             .await
-            .map_err(|e| format!("send_server_request failed: {e}"))?;
-
-        // Interpret the reply — parse the `ApprovalResolveParams` shape.
+            .map_err(|_| "approval reply channel closed".to_string())?;
         match reply {
-            JsonRpcFrame::Success(success) => {
-                let parsed: ApprovalResolveParams = serde_json::from_value(success.result)
-                    .map_err(|e| format!("invalid approval response: {e}"))?;
+            coco_app_server::ServerRequestReply::Approval(parsed) => {
                 let approved = matches!(parsed.decision, ApprovalDecision::Allow);
                 let decision = if approved {
                     ToolPermissionDecision::Approved
                 } else {
                     ToolPermissionDecision::Rejected
                 };
-                // Apply any rule the SDK client authorized ("always allow")
-                // through the SAME unified entry the TUI dialog uses (base
-                // config + live overlay + disk). The live overlay write is
-                // what gives in-cycle parity with TUI: the approved rule takes
-                // effect for the remaining tool calls of THIS cycle, not just
-                // the next build. `applied_updates` echoes it for audit.
                 let applied_updates = match (approved, parsed.permission_update) {
                     (true, Some(update)) => {
-                        match self.state.session_runtime_snapshot().await {
-                            Some(runtime) => {
-                                runtime
-                                    .apply_permission_updates_everywhere(std::slice::from_ref(
-                                        &update,
-                                    ))
-                                    .await;
-                            }
-                            None => warn!(
-                                request_id = %request.id,
-                                "SDK approval carried permission_update but session_runtime \
-                                 is not installed; rule not applied"
-                            ),
-                        }
+                        self.session
+                            .apply_permission_updates_everywhere(std::slice::from_ref(&update))
+                            .await;
                         vec![update]
                     }
                     _ => Vec::new(),
@@ -160,42 +97,29 @@ impl ToolPermissionBridge for SdkPermissionBridge {
                     decision,
                     feedback: parsed.feedback,
                     applied_updates,
-                    // The protocol carries updated input on
-                    // `ApprovalResolveParams`; SDK clients ship
-                    // `AskUserQuestion` answers (and any other pre-tool
-                    // input rewrite) here.
                     updated_input: parsed.updated_input,
-                    // Image attachments pasted alongside the answer ride
-                    // this slot.
                     content_blocks: parsed.content_blocks,
                     detail: None,
                 })
             }
-            JsonRpcFrame::Error(e) => {
+            coco_app_server::ServerRequestReply::Error(error) => {
                 warn!(
+                    session_id = %self.session.session_id(),
                     request_id = %request.id,
-                    code = e.error.code,
-                    message = %e.error.message,
-                    "SdkPermissionBridge: client returned error for approval ask"
+                    code = error.code,
+                    message = %error.message,
+                    "SDK client returned approval error"
                 );
-                // Client-side error on the approval path is treated as a
-                // rejection — safer default than blocking execution.
                 Ok(ToolPermissionResolution {
                     decision: ToolPermissionDecision::Rejected,
-                    feedback: Some(format!("approval error: {}", e.error.message)),
+                    feedback: Some(format!("approval error: {}", error.message)),
                     applied_updates: Vec::new(),
                     updated_input: None,
                     content_blocks: None,
                     detail: None,
                 })
             }
-            other => Err(format!(
-                "unexpected reply variant for approval ask: {other:?}"
-            )),
+            other => Err(format!("unexpected approval reply: {other:?}")),
         }
     }
 }
-
-#[cfg(test)]
-#[path = "approval_bridge.test.rs"]
-mod tests;

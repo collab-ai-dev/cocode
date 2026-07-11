@@ -23,16 +23,13 @@
 
 use std::sync::Arc;
 
-use coco_bridge::ControlError;
-use coco_bridge::ControlRequest;
-use coco_bridge::ControlRequestHandler;
+use coco_bridge::{ControlError, ControlRequest, ControlRequestHandler};
 use coco_types::ClientRequest;
 
-use super::handlers::HandlerContext;
-use super::handlers::HandlerResult;
-use super::handlers::SdkServerState;
-use super::handlers::dispatch_client_request;
-use super::outbound::OutboundMessage;
+use super::{
+    handlers::{HandlerContext, HandlerResult, SdkServerState, dispatch_client_request},
+    outbound::OutboundMessage,
+};
 
 /// Production handler for REPL-bridge control requests. Holds an
 /// `Arc<SdkServerState>` so it can read the bypass capability, mutate
@@ -41,15 +38,47 @@ use super::outbound::OutboundMessage;
 /// `sdk_server::handlers::runtime::handle_set_permission_mode`.
 pub struct SdkBridgeControlHandler {
     state: Arc<SdkServerState>,
+    session: std::sync::RwLock<
+        Option<(
+            coco_types::InteractiveTarget,
+            crate::session_runtime::SessionHandle,
+        )>,
+    >,
 }
 
 impl SdkBridgeControlHandler {
     pub fn new(state: Arc<SdkServerState>) -> Self {
-        Self { state }
+        Self {
+            state,
+            session: std::sync::RwLock::new(None),
+        }
+    }
+
+    pub fn bind_session(
+        &self,
+        target: coco_types::InteractiveTarget,
+        session: crate::session_runtime::SessionHandle,
+    ) {
+        *self
+            .session
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((target, session));
+    }
+
+    fn selected_session(
+        &self,
+    ) -> Option<(
+        coco_types::InteractiveTarget,
+        crate::session_runtime::SessionHandle,
+    )> {
+        self.session
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     async fn current_session_id(&self) -> Option<coco_types::SessionId> {
-        self.state.runtime_or_active_session_id().await
+        self.selected_session().map(|(target, _)| target.session_id)
     }
 
     async fn set_permission_mode(
@@ -103,12 +132,7 @@ impl SdkBridgeControlHandler {
             coco_permissions::PlanModeAutoOptions::default(),
         )
         .await;
-        crate::live_permission_mode::publish_sdk_state_outbound_if_changed(
-            &self.state,
-            mode,
-            change.changed,
-        )
-        .await;
+        let _ = change;
 
         Ok(serde_json::Value::Null)
     }
@@ -122,15 +146,32 @@ impl SdkBridgeControlHandler {
         // here are single-shot controls/reads, while permission-mode changes
         // keep their explicit state-outbound path above.
         let (notif_tx, _notif_rx) = tokio::sync::mpsc::channel::<OutboundMessage>(16);
-        let scoped_session_id = self.current_session_id().await;
+        let selected = self.selected_session();
+        let target_session_id = selected
+            .as_ref()
+            .map(|(target, _)| target.session_id.clone());
+        let session =
+            selected.map(
+                |(target, runtime)| crate::sdk_server::handlers::SessionRequestContext {
+                    session_id: target.session_id,
+                    runtime,
+                },
+            );
+        let connection_profile =
+            coco_types::ConnectionProfile::try_from(coco_types::InitializeParams::default())
+                .map_err(|error| {
+                    ControlError::new(
+                        coco_types::error_codes::INTERNAL_ERROR,
+                        format!("invalid built-in bridge connection profile: {error}"),
+                    )
+                })?;
         let ctx = HandlerContext {
             notif_tx,
             state: self.state.clone(),
-            scoped_session_id,
-            // REPL bridge has no AppServer registry handle here; fall back to the
-            // installed runtime singleton. Registry resolution happens on the
-            // AppServer request paths.
-            scoped_runtime: None,
+            connection_profile: Arc::new(connection_profile),
+            app_server: None,
+            target_session_id,
+            session,
         };
         match dispatch_client_request(request, ctx).await {
             HandlerResult::Ok(value) => Ok(value),
@@ -150,6 +191,16 @@ impl SdkBridgeControlHandler {
 #[async_trait::async_trait]
 impl ControlRequestHandler for SdkBridgeControlHandler {
     async fn handle(&self, request: ControlRequest) -> Result<serde_json::Value, ControlError> {
+        let interactive_target = || {
+            self.selected_session()
+                .map(|(target, _)| target)
+                .ok_or_else(|| {
+                    ControlError::new(
+                        coco_types::error_codes::INVALID_REQUEST,
+                        "bridge control requires an explicitly bound interactive session",
+                    )
+                })
+        };
         match request {
             ControlRequest::Initialize { system_prompt } => {
                 self.dispatch_sdk_request(ClientRequest::Initialize(coco_types::InitializeParams {
@@ -159,19 +210,30 @@ impl ControlRequestHandler for SdkBridgeControlHandler {
                 .await
             }
             ControlRequest::Interrupt => {
-                self.dispatch_sdk_request(ClientRequest::TurnInterrupt)
+                self.dispatch_sdk_request(ClientRequest::TurnInterrupt(interactive_target()?))
                     .await
             }
             ControlRequest::SetModel { model } => {
                 self.dispatch_sdk_request(ClientRequest::SetModel(coco_types::SetModelParams {
+                    target: interactive_target()?,
                     model,
                 }))
                 .await
             }
             ControlRequest::SetPermissionMode { mode } => self.set_permission_mode(mode).await,
-            ControlRequest::McpStatus => self.dispatch_sdk_request(ClientRequest::McpStatus).await,
+            ControlRequest::McpStatus => {
+                let target = interactive_target()?;
+                self.dispatch_sdk_request(ClientRequest::McpStatus(coco_types::SessionTarget {
+                    session_id: target.session_id,
+                }))
+                .await
+            }
             ControlRequest::GetContextUsage => {
-                self.dispatch_sdk_request(ClientRequest::ContextUsage).await
+                let target = interactive_target()?;
+                self.dispatch_sdk_request(ClientRequest::ContextUsage(coco_types::SessionTarget {
+                    session_id: target.session_id,
+                }))
+                .await
             }
             ControlRequest::RewindFiles {
                 user_message_id,
@@ -179,6 +241,7 @@ impl ControlRequestHandler for SdkBridgeControlHandler {
             } => {
                 self.dispatch_sdk_request(ClientRequest::RewindFiles(
                     coco_types::RewindFilesParams {
+                        target: interactive_target()?,
                         user_message_id,
                         dry_run,
                     },
@@ -188,7 +251,3 @@ impl ControlRequestHandler for SdkBridgeControlHandler {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "bridge_control.test.rs"]
-mod tests;

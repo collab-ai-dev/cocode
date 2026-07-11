@@ -1,57 +1,36 @@
-use std::collections::HashMap;
-use std::future::Future;
 #[cfg(unix)]
 use std::path::Path;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Duration};
 
-use coco_app_server_transport::JsonRpcErrorObject;
-use coco_app_server_transport::JsonRpcErrorResponse;
-use coco_app_server_transport::JsonRpcFrame;
-use coco_app_server_transport::JsonRpcId;
-use coco_app_server_transport::JsonRpcNotification;
-use coco_app_server_transport::JsonRpcRequest;
-use coco_app_server_transport::JsonRpcSuccess;
-use coco_app_server_transport::NdjsonDuplexConnection;
-use coco_app_server_transport::NdjsonFrameWriter;
 #[cfg(windows)]
 use coco_app_server_transport::NdjsonNamedPipeListener;
 #[cfg(unix)]
 use coco_app_server_transport::NdjsonUnixListener;
-use coco_app_server_transport::TransportFrameError;
 #[cfg(windows)]
 use coco_app_server_transport::bind_ndjson_named_pipe_listener;
 #[cfg(unix)]
 use coco_app_server_transport::bind_ndjson_unix_listener;
-use coco_types::ClientRequest;
-use coco_types::CoreEvent;
-use coco_types::RequestId;
-use coco_types::ServerRequest;
-use coco_types::ServerRequestDelivery;
-use coco_types::SurfaceDelivery;
-use coco_types::SurfaceId;
-use coco_types::SurfaceLifecycleEffect;
-use coco_types::SurfaceLifecycleEffectKind;
-use coco_types::error_codes;
-use futures::SinkExt;
-use futures::StreamExt;
-use snafu::ResultExt;
-use snafu::Snafu;
-use tokio::io::AsyncBufRead;
-use tokio::io::AsyncRead;
-use tokio::io::AsyncWrite;
-use tokio::task::JoinSet;
-use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::tungstenite::Message as WebSocketMessage;
+use coco_app_server_transport::{
+    JsonRpcErrorObject, JsonRpcErrorResponse, JsonRpcFrame, JsonRpcId, JsonRpcNotification,
+    JsonRpcRequest, JsonRpcSuccess, NdjsonDuplexConnection, NdjsonFrameWriter, TransportFrameError,
+};
+use coco_types::{
+    ClientRequest, CoreEvent, RequestId, RequestScope, ServerRequest, ServerRequestDelivery,
+    SessionId, SurfaceDelivery, SurfaceId, SurfaceLifecycleEffect, SurfaceLifecycleEffectKind,
+    error_codes, request_scope,
+};
+use futures::{SinkExt, StreamExt};
+use snafu::{ResultExt, Snafu};
+use tokio::{
+    io::{AsyncBufRead, AsyncRead, AsyncWrite},
+    task::JoinSet,
+};
+use tokio_tungstenite::{WebSocketStream, tungstenite::Message as WebSocketMessage};
 
-use crate::AppServer;
-use crate::AppServerError;
-use crate::ConnectionKey;
-use crate::DisconnectOutcome;
-use crate::ResolvedServerRequest;
-use crate::ServerRequestErrorReply;
-use crate::ServerRequestReply;
+use crate::{
+    AppServer, AppServerError, ConnectionKey, DisconnectOutcome, ResolvedServerRequest,
+    ServerRequestErrorReply, ServerRequestReply,
+};
 
 const DEFAULT_JSON_RPC_CHANNEL_CAPACITY: usize = 128;
 const DEFAULT_JSON_RPC_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -135,35 +114,36 @@ impl<H: Clone> JsonRpcAdapter<H> {
     }
 
     #[cfg(unix)]
-    pub async fn accept_unix_connection<Handler>(
+    pub async fn accept_unix_connection<Factory>(
         &self,
         listener: &NdjsonUnixListener,
-        handler: Arc<Handler>,
+        factory: Arc<Factory>,
     ) -> Result<
         tokio::task::JoinHandle<Result<DisconnectOutcome, JsonRpcConnectionOwnerError>>,
         JsonRpcConnectionOwnerError,
     >
     where
         H: Send + Sync + 'static,
-        Handler: JsonRpcRequestHandler,
+        Factory: JsonRpcConnectionHandlerFactory,
     {
         let transport = listener.accept().await.context(TransportSnafu)?;
         let connection = self.connect();
+        let handler = factory.open(connection.connection_key());
         Ok(tokio::spawn(async move {
             connection.run_ndjson_transport(transport, handler).await
         }))
     }
 
     #[cfg(unix)]
-    pub async fn run_unix_listener_until_shutdown<Handler>(
+    pub async fn run_unix_listener_until_shutdown<Factory>(
         &self,
         listener: NdjsonUnixListener,
-        handler: Arc<Handler>,
+        factory: Arc<Factory>,
         mut shutdown: tokio::sync::oneshot::Receiver<()>,
     ) -> Result<(), JsonRpcListenerError>
     where
         H: Send + Sync + 'static,
-        Handler: JsonRpcRequestHandler,
+        Factory: JsonRpcConnectionHandlerFactory,
     {
         let mut owners = JoinSet::new();
 
@@ -175,7 +155,7 @@ impl<H: Clone> JsonRpcAdapter<H> {
                 accepted = listener.accept() => {
                     let transport = accepted.context(AcceptTransportSnafu)?;
                     let connection = self.connect();
-                    let handler = Arc::clone(&handler);
+                    let handler = factory.open(connection.connection_key());
                     owners.spawn(async move {
                         connection.run_ndjson_transport(transport, handler).await
                     });
@@ -197,31 +177,31 @@ impl<H: Clone> JsonRpcAdapter<H> {
     }
 
     #[cfg(unix)]
-    pub async fn bind_and_run_unix_listener_until_shutdown<Handler>(
+    pub async fn bind_and_run_unix_listener_until_shutdown<Factory>(
         &self,
         path: impl AsRef<Path>,
-        handler: Arc<Handler>,
+        factory: Arc<Factory>,
         shutdown: tokio::sync::oneshot::Receiver<()>,
     ) -> Result<(), JsonRpcListenerError>
     where
         H: Send + Sync + 'static,
-        Handler: JsonRpcRequestHandler,
+        Factory: JsonRpcConnectionHandlerFactory,
     {
         let listener = bind_ndjson_unix_listener(path).context(BindTransportSnafu)?;
-        self.run_unix_listener_until_shutdown(listener, handler, shutdown)
+        self.run_unix_listener_until_shutdown(listener, factory, shutdown)
             .await
     }
 
     #[cfg(windows)]
-    pub async fn run_named_pipe_listener_until_shutdown<Handler>(
+    pub async fn run_named_pipe_listener_until_shutdown<Factory>(
         &self,
         mut listener: NdjsonNamedPipeListener,
-        handler: Arc<Handler>,
+        factory: Arc<Factory>,
         mut shutdown: tokio::sync::oneshot::Receiver<()>,
     ) -> Result<(), JsonRpcListenerError>
     where
         H: Send + Sync + 'static,
-        Handler: JsonRpcRequestHandler,
+        Factory: JsonRpcConnectionHandlerFactory,
     {
         let mut owners = JoinSet::new();
 
@@ -233,7 +213,7 @@ impl<H: Clone> JsonRpcAdapter<H> {
                 accepted = listener.accept() => {
                     let transport = accepted.context(AcceptTransportSnafu)?;
                     let connection = self.connect();
-                    let handler = Arc::clone(&handler);
+                    let handler = factory.open(connection.connection_key());
                     owners.spawn(async move {
                         connection.run_ndjson_transport(transport, handler).await
                     });
@@ -255,30 +235,30 @@ impl<H: Clone> JsonRpcAdapter<H> {
     }
 
     #[cfg(windows)]
-    pub async fn bind_and_run_named_pipe_listener_until_shutdown<Handler>(
+    pub async fn bind_and_run_named_pipe_listener_until_shutdown<Factory>(
         &self,
         pipe_name: impl AsRef<str>,
-        handler: Arc<Handler>,
+        factory: Arc<Factory>,
         shutdown: tokio::sync::oneshot::Receiver<()>,
     ) -> Result<(), JsonRpcListenerError>
     where
         H: Send + Sync + 'static,
-        Handler: JsonRpcRequestHandler,
+        Factory: JsonRpcConnectionHandlerFactory,
     {
         let listener = bind_ndjson_named_pipe_listener(pipe_name).context(BindTransportSnafu)?;
-        self.run_named_pipe_listener_until_shutdown(listener, handler, shutdown)
+        self.run_named_pipe_listener_until_shutdown(listener, factory, shutdown)
             .await
     }
 
-    pub async fn run_websocket_listener_until_shutdown<Handler>(
+    pub async fn run_websocket_listener_until_shutdown<Factory>(
         &self,
         listener: tokio::net::TcpListener,
-        handler: Arc<Handler>,
+        factory: Arc<Factory>,
         mut shutdown: tokio::sync::oneshot::Receiver<()>,
     ) -> Result<(), JsonRpcListenerError>
     where
         H: Send + Sync + 'static,
-        Handler: JsonRpcRequestHandler,
+        Factory: JsonRpcConnectionHandlerFactory,
     {
         let mut owners = JoinSet::new();
 
@@ -290,7 +270,7 @@ impl<H: Clone> JsonRpcAdapter<H> {
                 accepted = listener.accept() => {
                     let (stream, _) = accepted.context(AcceptWebSocketSnafu)?;
                     let connection = self.connect();
-                    let handler = Arc::clone(&handler);
+                    let handler = factory.open(connection.connection_key());
                     owners.spawn(async move {
                         let websocket = tokio_tungstenite::accept_async(stream)
                             .await
@@ -357,6 +337,7 @@ impl<H: Clone> JsonRpcAdapterConnection<H> {
         self.pending_server_requests.insert(
             id.clone(),
             PendingJsonRpcServerRequest {
+                session_id: delivery.session_id,
                 surface_id: delivery.surface_id,
                 request_id: delivery.request_id,
                 request: delivery.request,
@@ -700,6 +681,7 @@ impl<H: Clone> JsonRpcAdapterConnection<H> {
                                 let handler = Arc::clone(&handler);
                                 let context = JsonRpcRequestContext {
                                     connection: self.connection,
+                                    scope: request_scope(request.method()),
                                 };
                                 dispatches.spawn(async move {
                                     let _ = handler.handle_json_rpc_request(context, request).await;
@@ -762,6 +744,7 @@ impl<H: Clone> JsonRpcAdapterConnection<H> {
                 {
                     let context = JsonRpcRequestContext {
                         connection: self.connection,
+                        scope: request_scope(request.method()),
                     };
                     let _ = handler.handle_json_rpc_request(context, request).await;
                 }
@@ -792,7 +775,10 @@ async fn dispatch_client_request_for_connection(
     let id = request.id.clone();
     let response = match client_request_from_json_rpc(&request) {
         Ok(request) => {
-            let context = JsonRpcRequestContext { connection };
+            let context = JsonRpcRequestContext {
+                connection,
+                scope: request_scope(request.method()),
+            };
             handler.handle_json_rpc_request(context, request).await
         }
         Err(error) => Err(error.into_dispatch_error()),
@@ -808,6 +794,7 @@ async fn dispatch_client_request_for_connection(
 
 #[derive(Debug, Clone)]
 pub struct PendingJsonRpcServerRequest {
+    pub session_id: SessionId,
     pub surface_id: SurfaceId,
     pub request_id: RequestId,
     pub request: ServerRequest,
@@ -887,6 +874,7 @@ pub enum JsonRpcListenerError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct JsonRpcRequestContext {
     pub connection: ConnectionKey,
+    pub scope: RequestScope,
 }
 
 pub type JsonRpcRequestFuture =
@@ -898,6 +886,13 @@ pub trait JsonRpcRequestHandler: Send + Sync + 'static {
         context: JsonRpcRequestContext,
         request: ClientRequest,
     ) -> JsonRpcRequestFuture;
+}
+
+/// Constructs isolated request state for one accepted transport connection.
+pub trait JsonRpcConnectionHandlerFactory: Send + Sync + 'static {
+    type Handler: JsonRpcRequestHandler;
+
+    fn open(&self, connection: ConnectionKey) -> Arc<Self::Handler>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -998,15 +993,15 @@ fn server_request_reply_from_success(
 ) -> Result<ServerRequestReply, JsonRpcAdapterError> {
     match &pending.request {
         ServerRequest::AskForApproval(params) => {
-            decode_reply_with_request_id(result, &params.request_id)
+            decode_targeted_reply(result, &params.request_id, pending)
                 .map(ServerRequestReply::Approval)
         }
         ServerRequest::RequestUserInput(params) => {
-            decode_reply_with_request_id(result, &params.request_id)
+            decode_targeted_reply(result, &params.request_id, pending)
                 .map(ServerRequestReply::UserInput)
         }
         ServerRequest::RequestElicitation(params) => {
-            decode_reply_with_request_id(result, &params.request_id)
+            decode_targeted_reply(result, &params.request_id, pending)
                 .map(ServerRequestReply::Elicitation)
         }
         ServerRequest::McpRouteMessage(_) => Ok(ServerRequestReply::McpRouteMessage {
@@ -1024,14 +1019,24 @@ fn server_request_reply_from_success(
     }
 }
 
-fn decode_reply_with_request_id<T>(
+fn decode_targeted_reply<T>(
     result: serde_json::Value,
     request_id: &str,
+    pending: &PendingJsonRpcServerRequest,
 ) -> Result<T, JsonRpcAdapterError>
 where
     T: serde::de::DeserializeOwned,
 {
-    let result = ensure_request_id(result, request_id);
+    let mut result = ensure_request_id(result, request_id);
+    if let serde_json::Value::Object(object) = &mut result {
+        object.insert(
+            "target".to_string(),
+            serde_json::json!({
+                "session_id": pending.session_id,
+                "surface_id": pending.surface_id,
+            }),
+        );
+    }
     serde_json::from_value(result).context(DecodeServerRequestReplySnafu)
 }
 

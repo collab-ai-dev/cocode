@@ -1,10 +1,7 @@
 use futures::future::BoxFuture;
 
-use crate::AppServer;
-use crate::JsonRpcDispatchError;
-use coco_types::ClientRequest;
-use coco_types::SdkSessionTurnSummary;
-use coco_types::SessionId;
+use crate::{AppServer, JsonRpcDispatchError};
+use coco_types::{ClientRequest, SdkSessionTurnSummary, SessionId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppSessionDataError {
@@ -174,10 +171,13 @@ where
     where
         S: AppSessionDataSource + ?Sized,
     {
-        if self.registry().get(&params.session_id).is_none() {
+        if self.registry().get(&params.target.session_id).is_none() {
             return Ok(None);
         }
-        let Some(snapshot) = self.live_session_data(&params.session_id, source).await? else {
+        let Some(snapshot) = self
+            .live_session_data(&params.target.session_id, source)
+            .await?
+        else {
             return Ok(None);
         };
         let cursor = parse_session_data_cursor("session/read", params.cursor.as_deref())
@@ -206,10 +206,13 @@ where
     where
         S: AppSessionDataSource + ?Sized,
     {
-        if self.registry().get(&params.session_id).is_none() {
+        if self.registry().get(&params.target.session_id).is_none() {
             return Ok(None);
         }
-        let Some(snapshot) = self.live_session_data(&params.session_id, source).await? else {
+        let Some(snapshot) = self
+            .live_session_data(&params.target.session_id, source)
+            .await?
+        else {
             return Ok(None);
         };
         let cursor = parse_session_data_cursor("session/turns/list", params.cursor.as_deref())

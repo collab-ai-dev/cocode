@@ -1,18 +1,27 @@
 use coco_app_server_transport::JsonRpcNotification;
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
-use coco_types::SessionEnvelope;
-use coco_types::SessionState;
-use coco_types::SurfaceDelivery;
-use coco_types::SurfaceLifecycleEffectKind;
-use coco_types::TurnId;
-use tokio::io::BufReader;
-use tokio::io::split;
+use coco_types::{
+    CoreEvent, ServerNotification, SessionEnvelope, SessionState, SurfaceDelivery,
+    SurfaceLifecycleEffectKind, TurnId,
+};
+use tokio::io::{BufReader, split};
 
 use super::*;
 
 fn test_session_id(value: &str) -> SessionId {
     SessionId::try_new(value).expect("valid test session id")
+}
+
+fn test_session_target(value: &str) -> SessionTarget {
+    SessionTarget {
+        session_id: test_session_id(value),
+    }
+}
+
+fn test_interactive_target() -> InteractiveTarget {
+    InteractiveTarget {
+        session_id: test_session_id("sess-typed-client"),
+        surface_id: SurfaceId::from("surface-typed-client"),
+    }
 }
 
 fn durable_envelope(session_id: SessionId, seq: i64) -> SessionEnvelope {
@@ -90,7 +99,11 @@ async fn remote_json_rpc_client_typed_methods_encode_and_decode_results() {
     );
 
     let interrupt_client = client.clone();
-    let interrupt_task = tokio::spawn(async move { interrupt_client.turn_interrupt().await });
+    let interrupt_task = tokio::spawn(async move {
+        interrupt_client
+            .turn_interrupt(test_interactive_target())
+            .await
+    });
     let JsonRpcFrame::Request(interrupt_request) =
         outbound_rx.recv().await.expect("outbound turn/interrupt")
     else {
@@ -113,6 +126,7 @@ async fn remote_json_rpc_client_typed_methods_encode_and_decode_results() {
     let input_task = tokio::spawn(async move {
         input_client
             .user_input_resolve(UserInputResolveParams {
+                target: test_interactive_target(),
                 request_id: "input-1".to_string(),
                 answer: "yes".to_string(),
             })
@@ -137,7 +151,11 @@ async fn remote_json_rpc_client_typed_methods_encode_and_decode_results() {
         .expect("input resolve succeeds");
 
     let status_client = client.clone();
-    let status_task = tokio::spawn(async move { status_client.mcp_status().await });
+    let status_task = tokio::spawn(async move {
+        status_client
+            .mcp_status(test_session_target("sess-typed-client"))
+            .await
+    });
     let JsonRpcFrame::Request(status_request) =
         outbound_rx.recv().await.expect("outbound mcp/status")
     else {
@@ -161,8 +179,11 @@ async fn remote_json_rpc_client_typed_methods_encode_and_decode_results() {
     );
 
     let session_status_client = client.clone();
-    let session_status_task =
-        tokio::spawn(async move { session_status_client.session_status().await });
+    let session_status_task = tokio::spawn(async move {
+        session_status_client
+            .session_status(test_session_target("sess-typed-client"))
+            .await
+    });
     let JsonRpcFrame::Request(session_status_request) =
         outbound_rx.recv().await.expect("outbound session/status")
     else {
@@ -190,7 +211,9 @@ async fn remote_json_rpc_client_typed_methods_encode_and_decode_results() {
     let turns_task = tokio::spawn(async move {
         turns_client
             .session_turns_list(SessionTurnsListParams {
-                session_id: turns_session_id,
+                target: SessionTarget {
+                    session_id: turns_session_id,
+                },
                 cursor: Some("1".to_string()),
                 limit: Some(2),
             })
@@ -248,6 +271,7 @@ async fn remote_json_rpc_client_typed_methods_encode_and_decode_results() {
     let task_detail_task = tokio::spawn(async move {
         task_detail_client
             .task_detail(TaskDetailParams {
+                target: test_session_target("sess-typed-client"),
                 task_id: "task-1".to_string(),
             })
             .await
@@ -282,6 +306,7 @@ async fn remote_json_rpc_client_typed_methods_encode_and_decode_results() {
     let apply_task = tokio::spawn(async move {
         apply_client
             .config_apply_flags(ConfigApplyFlagsParams {
+                target: test_interactive_target(),
                 settings: HashMap::new(),
             })
             .await
@@ -1281,7 +1306,7 @@ async fn remote_session_resume_handle_accepts_replaced_lifecycle() {
             .session_resume_handle(
                 &mut demux,
                 SessionResumeParams {
-                    session_id: test_session_id("sess-remote-resume-handle"),
+                    target: test_session_target("sess-remote-resume-handle"),
                 },
             )
             .await
@@ -1349,56 +1374,35 @@ async fn remote_session_replace_resume_uses_lifecycle_fallback() {
             .replace_with_resume(
                 &mut demux,
                 SessionResumeParams {
-                    session_id: test_session_id("sess-remote-replace-new"),
+                    target: test_session_target("sess-remote-replace-new"),
                 },
             )
             .await
     });
 
-    let JsonRpcFrame::Request(resume_request) = outbound_rx.recv().await.expect("resume request")
+    let JsonRpcFrame::Request(resume_request) = outbound_rx.recv().await.expect("replace request")
     else {
         panic!("expected resume request");
     };
-    assert_eq!(resume_request.method, "session/resume");
+    assert_eq!(resume_request.method, "session/replace");
     let new_session_id = test_session_id("sess-remote-replace-new");
     incoming
         .handle_frame(JsonRpcFrame::Success(JsonRpcSuccess::new(
             resume_request.id,
             serde_json::json!({
-                "session": {
-                    "session_id": new_session_id,
-                    "model": "gpt-test",
-                    "cwd": "/tmp",
-                    "created_at": "2026-07-08T00:00:00Z",
-                    "message_count": 0,
-                    "total_tokens": 0
-                }
+                "session_id": new_session_id,
+                "surface_id": "surface-remote-replace-old"
             }),
         )))
         .await
         .expect("handle resume response");
-    incoming
-        .handle_frame(JsonRpcFrame::Notification(JsonRpcNotification::new(
-            "session/lifecycle",
-            Some(serde_json::json!({
-                "surface_id": "surface-remote-replace-new",
-                "effect": {
-                    "type": "session_replaced",
-                    "old_session_id": "sess-remote-replace-old",
-                    "new_session_id": new_session_id,
-                },
-            })),
-        )))
-        .await
-        .expect("handle replace lifecycle");
-
     let Ok(replaced) = replace_task.await.expect("replace task") else {
         panic!("expected replace success");
     };
     assert_eq!(replaced.session_id(), &new_session_id);
     assert_eq!(
         replaced.surface_id(),
-        &SurfaceId::from("surface-remote-replace-new")
+        &SurfaceId::from("surface-remote-replace-old")
     );
 }
 
@@ -1420,7 +1424,7 @@ async fn remote_session_replace_start_returns_original_handle_on_failure() {
     else {
         panic!("expected start request");
     };
-    assert_eq!(start_request.method, "session/start");
+    assert_eq!(start_request.method, "session/replace");
     incoming
         .handle_frame(JsonRpcFrame::Error(JsonRpcErrorResponse::new(
             start_request.id,
@@ -1453,6 +1457,7 @@ async fn remote_session_handle_forwards_query_interrupt_and_close() {
     let query_task = tokio::spawn(async move {
         query_session
             .query(TurnStartParams {
+                target: test_interactive_target(),
                 prompt: "hello".to_string(),
                 history_override: Vec::new(),
                 images: Vec::new(),
@@ -1514,7 +1519,7 @@ async fn remote_session_handle_forwards_query_interrupt_and_close() {
         close_request
             .params
             .as_ref()
-            .and_then(|params| params.get("session_id")),
+            .and_then(|params| params.pointer("/target/interactive/session_id")),
         Some(&serde_json::json!(session_id))
     );
     incoming
@@ -1554,7 +1559,7 @@ async fn remote_passive_handle_reads_session_snapshot() {
         read_request
             .params
             .as_ref()
-            .and_then(|params| params.get("session_id")),
+            .and_then(|params| params.pointer("/target/session_id")),
         Some(&serde_json::json!(session_id))
     );
     assert_eq!(
@@ -1614,7 +1619,7 @@ async fn remote_subscribe_session_returns_passive_handle_with_replay() {
         subscribe_request
             .params
             .as_ref()
-            .and_then(|params| params.get("session_id")),
+            .and_then(|params| params.pointer("/target/session_id")),
         Some(&serde_json::json!(session_id))
     );
     assert_eq!(

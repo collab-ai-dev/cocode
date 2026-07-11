@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use super::NotImplementedRunner;
-use super::TurnRunner;
+use super::{NotImplementedRunner, TurnRunner};
 
 pub(super) struct TurnRunnerState {
     runner: RwLock<Arc<dyn TurnRunner>>,
@@ -32,12 +31,5 @@ impl TurnRunnerState {
 
     pub(super) async fn snapshot(&self) -> Arc<dyn TurnRunner> {
         self.runner.read().await.clone()
-    }
-
-    /// Revert to the fail-closed runner when the backing session runtime is torn
-    /// down. A later `session/start` reinstalls a real runner.
-    pub(super) async fn clear(&self) {
-        let mut slot = self.runner.write().await;
-        *slot = Arc::new(NotImplementedRunner) as Arc<dyn TurnRunner>;
     }
 }

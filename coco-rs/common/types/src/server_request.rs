@@ -2,13 +2,13 @@
 //!
 //! See `event-system-design.md` §5.2.
 
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::context_usage::ContextCategoryKind;
-use crate::context_usage::ContextSuggestion;
-use crate::wire_tagged::wire_tagged_enum;
+use crate::{
+    context_usage::{ContextCategoryKind, ContextSuggestion},
+    wire_tagged::wire_tagged_enum,
+};
 
 wire_tagged_enum! {
     method_enum = ServerRequestMethod,
@@ -693,6 +693,15 @@ pub struct SessionStartResult {
     pub session_id: crate::SessionId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surface_id: Option<crate::SurfaceId>,
+}
+
+/// Response to explicit `session/replace`. The source surface keeps its
+/// identity and is atomically repointed to the destination session.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionReplaceResult {
+    pub session_id: crate::SessionId,
+    pub surface_id: crate::SurfaceId,
 }
 
 /// Response to `ClientRequest::TurnStart`.

@@ -1,18 +1,17 @@
-use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use coco_types::ServerRequestUserInputParams;
 
 use coco_error::ErrorExt;
 
 use super::*;
-use crate::AttachSurfaceOptions;
-use crate::ConnectionKey;
-use crate::SurfaceCapabilities;
-use crate::SurfaceCapability;
-use crate::SurfaceLimits;
-use crate::SurfaceRole;
+use crate::{
+    AttachSurfaceOptions, ConnectionKey, SurfaceCapabilities, SurfaceCapability, SurfaceLimits,
+    SurfaceRole,
+};
 
 fn test_session_id(value: &str) -> SessionId {
     SessionId::try_new(value).expect("valid test session id")
@@ -1109,6 +1108,10 @@ fn resolve_server_request_completes_pending_reply() {
         .expect("route request");
     let delivery = request_rx.try_recv().expect("request delivery");
     let reply = ServerRequestReply::UserInput(UserInputResolveParams {
+        target: coco_types::InteractiveTarget {
+            session_id: session_id.clone(),
+            surface_id: surface_id.clone(),
+        },
         request_id: delivery.request_id.as_display(),
         answer: "yes".to_string(),
     });
@@ -1165,6 +1168,10 @@ fn resolve_server_request_rejects_wrong_session_and_keeps_pending() {
         .expect("route request");
     let delivery = request_rx.try_recv().expect("request delivery");
     let reply = ServerRequestReply::UserInput(UserInputResolveParams {
+        target: coco_types::InteractiveTarget {
+            session_id: routed.pending.session_id.clone(),
+            surface_id: surface_id.clone(),
+        },
         request_id: delivery.request_id.as_display(),
         answer: "yes".to_string(),
     });

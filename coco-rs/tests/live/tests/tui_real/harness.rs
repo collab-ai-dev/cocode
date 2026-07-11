@@ -33,7 +33,6 @@ use coco_agent_host::session_bootstrap::EngineResources;
 use coco_agent_host::session_bootstrap::build_engine_resources;
 use coco_agent_host::session_bootstrap::install_session_late_binds;
 use coco_agent_host::session_runtime::SessionHandle;
-use coco_agent_host::session_runtime::SessionRuntime;
 use coco_agent_host::session_runtime::SessionRuntimeBuildOpts;
 use coco_agent_host::tui_permission_bridge::PendingApprovals;
 use coco_agent_host::tui_permission_bridge::TuiPermissionBridge;
@@ -224,7 +223,7 @@ pub struct RealTuiHarness {
     pending_approvals: PendingApprovals,
     /// Per-session subsystems. Tests reach in via [`Self::history_snapshot`]
     /// to read injected reminder attachments.
-    runtime: Arc<SessionRuntime>,
+    runtime: SessionHandle,
     /// Sender side of the `event_rx` we hand out via the harness; held
     /// so future tests can hand additional emitters into engine methods
     /// run outside the driver task.
@@ -386,7 +385,7 @@ impl RealTuiHarness {
         // settings.json hook entries surface as `hook_*` reminders on
         // the first turn.
         runtime.fire_session_start_hooks("startup").await;
-        let runtime = runtime.runtime().clone();
+        let runtime = runtime.clone();
 
         // Spawn the driver. Handles SubmitInput / ApprovalResponse /
         // Interrupt / Shutdown — the subset every real-LLM scenario in
@@ -832,7 +831,7 @@ impl Drop for RealTuiHarness {
 async fn run_real_agent_driver(
     mut command_rx: mpsc::Receiver<UserCommand>,
     event_tx: mpsc::Sender<CoreEvent>,
-    runtime: Arc<SessionRuntime>,
+    runtime: SessionHandle,
     pending_approvals: PendingApprovals,
 ) {
     // Active turn slot: `Interrupt` reads this to fire the per-turn

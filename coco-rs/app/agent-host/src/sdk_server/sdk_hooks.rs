@@ -18,16 +18,19 @@
 
 use std::sync::Arc;
 
-use coco_app_server_transport::JsonRpcFrame;
 use tracing::warn;
 
-use crate::sdk_server::handlers::SdkServerState;
-use crate::session_runtime::SessionHandle;
+use crate::{sdk_server::LocalAppSessionHandle, session_runtime::SessionHandle};
 
-pub fn install_runtime_callback(state: Arc<SdkServerState>, session: &SessionHandle) {
+pub fn install_runtime_callback(
+    app_server: Arc<coco_app_server::AppServer<LocalAppSessionHandle>>,
+    session: &SessionHandle,
+) {
+    let callback_session = session.clone();
     let callback: coco_hooks::SdkHookCallback = Arc::new(move |request| {
-        let state = state.clone();
-        Box::pin(async move { route_hook_callback(state, request).await })
+        let app_server = Arc::clone(&app_server);
+        let session = callback_session.clone();
+        Box::pin(async move { route_hook_callback(app_server, session, request).await })
     });
     session.hook_registry().set_sdk_hook_callback(callback);
 }
@@ -71,46 +74,47 @@ pub fn register_initialize_hooks(
 }
 
 async fn route_hook_callback(
-    state: Arc<SdkServerState>,
+    app_server: Arc<coco_app_server::AppServer<LocalAppSessionHandle>>,
+    session: SessionHandle,
     request: coco_hooks::SdkHookCallbackRequest,
 ) -> coco_hooks::Result<coco_types::SdkHookOutput> {
-    let transport = state.sdk_transport_snapshot().await.ok_or_else(|| {
-        coco_hooks::HooksError::generic("SDK hook bridge transport not initialized")
-    })?;
-
     let params = coco_types::ServerHookCallbackParams {
         callback_id: request.callback_id,
         event_type: request.event,
         input: request.input,
         tool_use_id: request.tool_use_id,
     };
-    let params_json = serde_json::to_value(params).map_err(|e| {
-        coco_hooks::HooksError::generic(format!("serialize hook/callback params: {e}"))
-    })?;
-
-    let reply = state
-        .send_server_request(&transport, "hook/callback", params_json)
+    let reply = app_server
+        .route_server_request_with_reply(
+            session.session_id().clone(),
+            coco_app_server::SurfaceCapability::Interactive,
+            None,
+            coco_types::ServerRequest::HookCallback(params),
+        )
+        .map_err(|e| coco_hooks::HooksError::generic(format!("route hook/callback: {e:?}")))?
         .await
-        .map_err(|e| coco_hooks::HooksError::generic(format!("send hook/callback: {e}")))?;
+        .map_err(|_| coco_hooks::HooksError::generic("hook/callback reply channel closed"))?;
 
     match reply {
-        JsonRpcFrame::Success(response) => {
+        coco_app_server::ServerRequestReply::HookCallback { result, .. } => {
             // Strict typed parse — bad payload fails here instead of
             // getting silently re-interpreted by the legacy
             // `parse_hook_output` permissive parser. The typed output
             // flows end-to-end: callback → orchestration spawn loop
             // → `HookExecutionResult::SdkOutput` → `apply_sdk_hook_output`.
             // No JSON `Value` round-trip on this path.
-            let result: coco_types::HookCallbackResult = serde_json::from_value(response.result)
-                .map_err(|e| {
+            let result: coco_types::HookCallbackResult =
+                serde_json::from_value(result).map_err(|e| {
                     coco_hooks::HooksError::generic(format!("parse hook/callback response: {e}"))
                 })?;
             Ok(result.output)
         }
-        JsonRpcFrame::Error(error) => Err(coco_hooks::HooksError::generic(format!(
-            "SDK client returned hook/callback error: {} ({})",
-            error.error.message, error.error.code
-        ))),
+        coco_app_server::ServerRequestReply::Error(error) => {
+            Err(coco_hooks::HooksError::generic(format!(
+                "SDK client returned hook/callback error: {} ({})",
+                error.message, error.code
+            )))
+        }
         other => {
             warn!(?other, "unexpected hook/callback reply");
             Err(coco_hooks::HooksError::generic(

@@ -529,6 +529,7 @@ winapi = { version = "0.3.9", features = [
 rust = {}
 
 [workspace.lints.clippy]
+await_holding_lock = "deny"
 expect_used = "deny"
 identity_op = "deny"
 manual_clamp = "deny"

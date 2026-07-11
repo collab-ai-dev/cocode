@@ -1,52 +1,32 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::{
+    collections::HashMap,
+    sync::{Arc, atomic::AtomicBool},
+};
 
 use anyhow::Result;
-use coco_context::FileHistorySnapshotSink;
-use coco_context::FileHistoryState;
-use coco_context::FileReadState;
+use coco_context::{FileHistorySnapshotSink, FileHistoryState, FileReadState};
 use coco_hooks::HookRegistry;
 use coco_messages::MessageHistory;
 use coco_query::QueryEngineConfig;
 use coco_session::TranscriptStore;
 use coco_tool_runtime::MailboxHandleRef;
-use coco_types::ModelRole;
-use coco_types::SessionId;
-use coco_types::ToolAppState;
-use tokio::sync::Mutex;
-use tokio::sync::RwLock;
+use coco_types::{ModelRole, SessionId, ToolAppState};
+use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
-use tracing::info;
-use tracing::warn;
+use tracing::{info, warn};
 
-use super::SessionAgentCatalogResources;
-use super::SessionCatalogResources;
-use super::SessionCommandResources;
-use super::SessionConfigResources;
-use super::SessionEngineConfigResources;
-use super::SessionEngineStateResources;
-use super::SessionExecutionResources;
-use super::SessionHandleResources;
-use super::SessionHistoryResources;
-use super::SessionHookResources;
-use super::SessionIntegrationResources;
-use super::SessionLifecycleResources;
-use super::SessionMemoryResources;
-use super::SessionPermissionResources;
-use super::SessionPersistenceResources;
-use super::SessionProjectResources;
-use super::SessionRuntime;
-use super::SessionRuntimeBuildOpts;
-use super::SessionSandboxResources;
-use super::SessionTitleResources;
-use super::SessionTurnResources;
-use super::SessionWorkspaceResources;
-use super::build_sandbox_state;
-use super::hooks::populate_hook_registry;
-use super::live_permissions;
-use super::state::TranscriptFileHistorySink;
-use super::state::file_checkpointing_enabled;
+use super::{
+    SessionAgentCatalogResources, SessionCatalogResources, SessionCommandResources,
+    SessionConfigResources, SessionEngineConfigResources, SessionEngineStateResources,
+    SessionExecutionResources, SessionHandleResources, SessionHistoryResources,
+    SessionHookResources, SessionIntegrationResources, SessionLifecycleResources,
+    SessionMemoryResources, SessionPermissionResources, SessionPersistenceResources,
+    SessionProjectResources, SessionRuntime, SessionRuntimeBuildOpts, SessionSandboxResources,
+    SessionTitleResources, SessionTurnResources, SessionWorkspaceResources, build_sandbox_state,
+    hooks::populate_hook_registry,
+    live_permissions,
+    state::{TranscriptFileHistorySink, file_checkpointing_enabled},
+};
 
 impl SessionRuntime {
     /// Build the full session runtime. Constructs every subsystem
@@ -745,6 +725,7 @@ impl SessionRuntime {
             Arc::new(RwLock::new(None)),
             Arc::new(std::sync::atomic::AtomicU64::new(0)),
             Arc::new(RwLock::new(None)),
+            Arc::new(tokio::sync::Mutex::new(None)),
         );
         let handle_resources = SessionHandleResources::new(swarm_agent_handle);
         let permission_resources = SessionPermissionResources::new();
@@ -766,6 +747,7 @@ impl SessionRuntime {
         })));
 
         let runtime = Self {
+            turn_coordinator: crate::session_runtime::SessionTurnCoordinator::default(),
             execution,
             catalog_resources,
             config_resources,

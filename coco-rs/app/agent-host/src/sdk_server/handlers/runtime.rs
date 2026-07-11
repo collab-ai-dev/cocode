@@ -7,9 +7,7 @@ use std::sync::Arc;
 
 use tracing::info;
 
-use super::DEFAULT_SDK_MODEL;
-use super::HandlerContext;
-use super::HandlerResult;
+use super::{DEFAULT_SDK_MODEL, HandlerContext, HandlerResult};
 use crate::sdk_server::outbound::send_session_event;
 use coco_tool_runtime::TaskHandle;
 
@@ -519,14 +517,14 @@ pub(super) async fn handle_stop_task(
     }
 
     let token = {
-        let Some(session_id) = ctx.active_session_id().await else {
+        let Some(session) = ctx.resolve_runtime().await else {
             return HandlerResult::Err {
                 code: coco_types::error_codes::INVALID_REQUEST,
                 message: "no active session".into(),
                 data: None,
             };
         };
-        ctx.state.active_turn_cancel_token(&session_id)
+        session.active_turn_cancel_token()
     };
 
     match token {
@@ -779,10 +777,7 @@ pub(super) async fn handle_plugin_reload(ctx: &HandlerContext) -> HandlerResult 
         });
     };
 
-    let cwd = match ctx.state.workspace_cwd().await {
-        Ok(cwd) => cwd,
-        Err(err) => return err,
-    };
+    let cwd = runtime.original_cwd().clone();
     let command_count = runtime.reload_plugins(&cwd).await;
     runtime.reload_agent_catalog().await;
     runtime.reload_lsp_servers().await;

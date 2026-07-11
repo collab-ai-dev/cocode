@@ -481,9 +481,7 @@ def is_union_alias_schema(schema: dict) -> bool:
     variants = schema.get("anyOf") or schema.get("oneOf")
     if not variants:
         return False
-    return all(
-        isinstance(v, dict) and not has_enum_or_const(v) for v in variants
-    )
+    return all(isinstance(v, dict) for v in variants)
 
 
 def _sanitize_const_for_class_name(const: str) -> str:
@@ -1001,7 +999,10 @@ def _derive_request_wrapper_name(variant: dict) -> str:
          `CancelRequestRequest`).
     """
     params_ref = variant.get("params_ref")
-    if params_ref:
+    # Target-only params are intentionally shared by many wire methods. Name
+    # those wrappers from the method so every generated class stays unique
+    # (`TurnInterruptRequest`, `McpStatusRequest`, etc.).
+    if params_ref and params_ref not in {"InteractiveTarget", "SessionTarget"}:
         base = params_ref.removesuffix("Params")
     else:
         wire = variant["wire"]

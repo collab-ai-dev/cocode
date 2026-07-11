@@ -1,39 +1,32 @@
-use std::future::Future;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{future::Future, path::PathBuf, sync::Arc, time::Duration};
 
-use coco_app_server::AppCloseStart;
-use coco_app_server::AppLoadStart;
-use coco_app_server::AppServer;
-use coco_app_server::AttachSurfaceOptions;
-use coco_app_server::ConnectionKey;
-use coco_app_server::JsonRpcDispatchError;
-use coco_app_server::SubscribeReplay;
-use coco_app_server::SurfaceRole;
-use coco_types::ClientRequest;
-use coco_types::CoreEvent;
-use coco_types::SessionEnvelope;
-use coco_types::SessionId;
-use coco_types::SurfaceId;
-use tracing::debug;
-use tracing::warn;
+use coco_app_server::{
+    AppCloseStart, AppLoadStart, AppServer, AttachSurfaceOptions, ConnectionKey,
+    JsonRpcDispatchError, SubscribeReplay, SurfaceRole,
+};
+use coco_types::{ClientRequest, CoreEvent, SessionEnvelope, SessionId, SurfaceId};
+use tracing::{debug, warn};
 
-use super::app_server_bridge::LocalAppSessionHandle;
-use super::handlers::HandlerResult;
-use super::handlers::PriorSessionCleanup;
-use super::handlers::ReplacementSessionState;
-use super::handlers::RuntimeReplacementContext;
-use super::handlers::SdkServerState;
-use super::handlers::SessionHandoffState;
-use super::handlers::SessionMetadata;
-use super::handlers::session;
+use super::{
+    app_server_bridge::{APP_SERVER_TURN_DRAIN_TIMEOUT, LocalAppSessionHandle},
+    handlers::{
+        HandlerResult, PriorSessionCleanup, ReplacementSessionState, RuntimeReplacementContext,
+        SdkServerState, SessionHandoffState, SessionMetadata, session,
+    },
+};
 
 #[derive(Debug, Clone)]
 pub(super) enum LocalLifecycleRequest {
-    Start { connection: ConnectionKey },
-    Resume { connection: ConnectionKey },
-    Archive(SessionId),
+    Start {
+        connection: ConnectionKey,
+    },
+    Resume {
+        connection: ConnectionKey,
+    },
+    Archive {
+        connection: ConnectionKey,
+        target: coco_types::ArchiveTarget,
+    },
 }
 
 impl LocalLifecycleRequest {
@@ -47,26 +40,13 @@ impl LocalLifecycleRequest {
         match request {
             ClientRequest::SessionStart(_) => Some(Self::Start { connection }),
             ClientRequest::SessionResume(_) => Some(Self::Resume { connection }),
-            ClientRequest::SessionArchive(params) => Some(Self::Archive(params.session_id.clone())),
+            ClientRequest::SessionArchive(params) => Some(Self::Archive {
+                connection,
+                target: params.target.clone(),
+            }),
             _ => None,
         }
     }
-}
-
-/// Resolve the routed session's runtime handle from the AppServer registry
-///. Handlers use this scoped runtime before falling back to the
-/// installed singleton, so runtime-control requests target the routed session
-/// instead of whichever runtime happens to be installed during a replacement
-/// window. Returns `None` for legacy no-registry sessions, which then fall back
-/// to the installed slot.
-pub(super) fn resolve_scoped_runtime(
-    app_server: Option<&Arc<AppServer<LocalAppSessionHandle>>>,
-    session_id: Option<&SessionId>,
-) -> Option<crate::session_runtime::SessionHandle> {
-    app_server?
-        .registry()
-        .get(session_id?)
-        .and_then(LocalAppSessionHandle::into_runtime)
 }
 
 pub(super) async fn start_sdk_session_with_scoped_state(
@@ -74,18 +54,10 @@ pub(super) async fn start_sdk_session_with_scoped_state(
     state: Arc<SdkServerState>,
     connection: ConnectionKey,
     params: coco_types::SessionStartParams,
+    connection_profile: Arc<coco_types::ConnectionProfile>,
     turn_drain_timeout: Duration,
 ) -> Result<serde_json::Value, JsonRpcDispatchError> {
-    if state.has_session_runtime().await {
-        return Err(JsonRpcDispatchError {
-            code: coco_types::error_codes::INVALID_REQUEST,
-            message:
-                "session/start requires AppServer runtime replacement when a runtime is already installed"
-                    .to_string(),
-            data: None,
-        });
-    }
-    let prepared = session::prepare_session_start(params, &state, false)
+    let prepared = session::prepare_session_start(params, &state, &connection_profile)
         .await
         .map_err(handler_result_to_dispatch_error)?;
 
@@ -118,36 +90,12 @@ pub(super) async fn resume_sdk_session_with_scoped_state(
     state: Arc<SdkServerState>,
     connection: ConnectionKey,
     params: coco_types::SessionResumeParams,
+    connection_profile: Arc<coco_types::ConnectionProfile>,
     turn_drain_timeout: Duration,
 ) -> Result<serde_json::Value, JsonRpcDispatchError> {
     let loaded = session::load_resume_session(params, &state)
         .await
         .map_err(handler_result_to_dispatch_error)?;
-    let matching_runtime = if let Some(runtime) = state.session_runtime_snapshot().await {
-        let runtime_session_id = runtime.current_typed_session_id().await;
-        if runtime_session_id != loaded.session_id {
-            return Err(JsonRpcDispatchError {
-                code: coco_types::error_codes::INVALID_REQUEST,
-                message: "session/resume requires AppServer runtime replacement when the installed runtime belongs to a different session".to_string(),
-                data: None,
-            });
-        }
-        Some(runtime)
-    } else {
-        None
-    };
-
-    if let Some(runtime) = &matching_runtime {
-        session::hydrate_runtime_for_resume_messages(
-            runtime,
-            &loaded.session_id,
-            &loaded.conversation.messages,
-        )
-        .await;
-        runtime.fire_session_start_hooks("resume").await;
-        install_sdk_session_runtime_state(Arc::clone(&state), runtime.clone()).await;
-    }
-
     let mut result = encode_session_resume_result(&loaded.session, None)?;
     if let Some(surface_id) = apply_local_lifecycle_request(
         app_server,
@@ -160,24 +108,14 @@ pub(super) async fn resume_sdk_session_with_scoped_state(
     {
         inject_surface_id(&mut result, surface_id)?;
     }
-    if let Some(runtime) = matching_runtime {
-        install_runtime_backed_resumed_sdk_session_state(
-            &state,
-            &loaded.session,
-            loaded.session_id.clone(),
-            &runtime,
-            &loaded.conversation.messages,
-        )
-        .await;
-    } else {
-        session::install_scoped_resumed_session_state(
-            &state,
-            &loaded.session,
-            loaded.session_id.clone(),
-            &loaded.conversation.messages,
-        )
-        .await;
-    }
+    session::install_scoped_resumed_session_state(
+        &state,
+        &loaded.session,
+        loaded.session_id.clone(),
+        &loaded.conversation.messages,
+        &connection_profile,
+    )
+    .await;
     Ok(result)
 }
 
@@ -186,10 +124,11 @@ pub(super) async fn start_sdk_session_with_runtime_replacement(
     state: Arc<SdkServerState>,
     connection: ConnectionKey,
     params: coco_types::SessionStartParams,
+    connection_profile: Arc<coco_types::ConnectionProfile>,
     replacement: RuntimeReplacementContext,
     turn_drain_timeout: Duration,
 ) -> Result<serde_json::Value, JsonRpcDispatchError> {
-    let prepared = session::prepare_session_start(params, &state, false)
+    let prepared = session::prepare_session_start(params, &state, &connection_profile)
         .await
         .map_err(handler_result_to_dispatch_error)?;
     let started_session_id = prepared.session_id.clone();
@@ -199,11 +138,19 @@ pub(super) async fn start_sdk_session_with_runtime_replacement(
         let state = Arc::clone(&state);
         let replacement = replacement.clone();
         let prepared = prepared.clone();
+        let connection_profile = Arc::clone(&connection_profile);
+        let app_server = Arc::clone(&app_server);
         async move {
             let session_id = prepared.session_id.clone();
-            let runtime = build_sdk_runtime_for_start(replacement, state, prepared)
-                .await
-                .map_err(|error| coco_app_server::RegistryError::load_failed(error.to_string()))?;
+            let runtime = build_sdk_runtime_for_start(
+                replacement,
+                state,
+                connection_profile,
+                prepared,
+                app_server,
+            )
+            .await
+            .map_err(|error| coco_app_server::RegistryError::load_failed(error.to_string()))?;
             Ok::<LocalAppSessionHandle, coco_app_server::RegistryError>(
                 LocalAppSessionHandle::from_runtime(session_id, runtime),
             )
@@ -235,7 +182,8 @@ pub(super) async fn start_sdk_session_with_runtime_replacement(
         };
     let runtime = handle.require_runtime("started")?;
 
-    install_sdk_session_runtime_state(Arc::clone(&state), runtime.clone()).await;
+    install_sdk_session_runtime_state(Arc::clone(&state), runtime.clone(), Arc::clone(&app_server))
+        .await;
     session::install_scoped_started_session_state(
         &state,
         &prepared,
@@ -245,6 +193,7 @@ pub(super) async fn start_sdk_session_with_runtime_replacement(
 
     let surface_id =
         attach_local_app_server_surface(&app_server, connection, started_session_id.clone())?;
+    configure_sdk_mcp(&connection_profile, &runtime, Arc::clone(&app_server)).await;
     serde_json::to_value(coco_types::SessionStartResult {
         session_id: started_session_id,
         surface_id: Some(surface_id),
@@ -261,6 +210,7 @@ pub(super) async fn resume_sdk_session_with_runtime_replacement(
     state: Arc<SdkServerState>,
     connection: ConnectionKey,
     params: coco_types::SessionResumeParams,
+    connection_profile: Arc<coco_types::ConnectionProfile>,
     replacement: RuntimeReplacementContext,
     turn_drain_timeout: Duration,
 ) -> Result<serde_json::Value, JsonRpcDispatchError> {
@@ -271,29 +221,26 @@ pub(super) async fn resume_sdk_session_with_runtime_replacement(
     let resumed_cwd = loaded.session.working_dir.clone();
     let prior_messages = loaded.conversation.messages.clone();
 
-    if let Some(current_runtime) = state.session_runtime_snapshot().await {
-        let current_session_id = current_runtime.current_typed_session_id().await;
-        if current_session_id == resumed_session_id {
-            session::hydrate_runtime_for_resume_messages(
-                &current_runtime,
-                &resumed_session_id,
-                &prior_messages,
-            )
-            .await;
-            current_runtime.fire_session_start_hooks("resume").await;
-            install_sdk_session_runtime_state(Arc::clone(&state), current_runtime.clone()).await;
-            install_runtime_backed_resumed_sdk_session_state(
-                &state,
-                &loaded.session,
-                resumed_session_id.clone(),
-                &current_runtime,
-                &prior_messages,
-            )
-            .await;
-            let surface_id =
-                attach_local_app_server_surface(&app_server, connection, resumed_session_id)?;
-            return encode_session_resume_result(&loaded.session, Some(surface_id));
+    if let Some(handle) = app_server.registry().get(&resumed_session_id) {
+        let runtime = handle.require_runtime("resumed")?;
+        if !runtime
+            .callback_requirements()
+            .is_satisfied_by(&connection_profile)
+        {
+            return Err(JsonRpcDispatchError {
+                code: coco_types::error_codes::INVALID_REQUEST,
+                message:
+                    "connection profile does not satisfy the live session callback requirements"
+                        .to_string(),
+                data: Some(serde_json::json!({
+                    "kind": "connection_profile_mismatch",
+                    "session_id": resumed_session_id,
+                })),
+            });
         }
+        let surface_id =
+            attach_local_app_server_surface(&app_server, connection, resumed_session_id)?;
+        return encode_session_resume_result(&loaded.session, Some(surface_id));
     }
 
     let make_factory = || {
@@ -302,13 +249,17 @@ pub(super) async fn resume_sdk_session_with_runtime_replacement(
         let session_id = resumed_session_id.clone();
         let cwd = resumed_cwd.clone();
         let prior_messages = prior_messages.clone();
+        let connection_profile = Arc::clone(&connection_profile);
+        let app_server = Arc::clone(&app_server);
         async move {
             let runtime = build_sdk_runtime_for_resume(
                 replacement,
                 state,
+                connection_profile,
                 session_id.clone(),
                 cwd,
                 prior_messages,
+                app_server,
             )
             .await
             .map_err(|error| coco_app_server::RegistryError::load_failed(error.to_string()))?;
@@ -318,91 +269,266 @@ pub(super) async fn resume_sdk_session_with_runtime_replacement(
         }
     };
 
-    // resume replaces ONLY the requesting connection's own current
-    // session (its sole interactive surface), never a process-wide close-others.
-    // With no own current session, this is a plain load into a new slot.
-    let own_current = app_server
-        .sole_interactive_session_for_connection(connection)
-        .filter(|previous| *previous != resumed_session_id);
-    let mut replacement_surface_id = None;
-    let mut replacement_handle = None;
-    if let Some(previous_session_id) = own_current {
-        if let Some((handle, surface_id)) = replace_local_app_server_session_with_factory(
+    let handle = if registered_detached_session(
+        &app_server,
+        &replacement.startup_session_id,
+        &resumed_session_id,
+    ) {
+        replace_detached_local_app_server_session_with_factory(
             Arc::clone(&app_server),
             Arc::clone(&state),
-            previous_session_id.clone(),
+            replacement.startup_session_id.clone(),
             resumed_session_id.clone(),
             make_factory(),
             turn_drain_timeout,
         )
         .await?
-        {
-            replacement_handle = Some(handle);
-            replacement_surface_id = Some(surface_id);
-        } else {
-            replacement_handle = Some(
-                replace_detached_local_app_server_session_with_factory(
-                    Arc::clone(&app_server),
-                    Arc::clone(&state),
-                    previous_session_id,
-                    resumed_session_id.clone(),
-                    make_factory(),
-                    turn_drain_timeout,
-                )
-                .await?,
-            );
-        }
-    } else if registered_detached_session(
-        &app_server,
-        &replacement.startup_session_id,
-        &resumed_session_id,
-    ) {
-        replacement_handle = Some(
-            replace_detached_local_app_server_session_with_factory(
-                Arc::clone(&app_server),
-                Arc::clone(&state),
-                replacement.startup_session_id.clone(),
-                resumed_session_id.clone(),
-                make_factory(),
-                turn_drain_timeout,
-            )
-            .await?,
-        );
-    }
-
-    let handle = match replacement_handle {
-        Some(handle) => handle,
-        None => {
-            load_local_app_server_session_with_factory(
-                &app_server,
-                resumed_session_id.clone(),
-                make_factory(),
-            )
-            .await?
-        }
+    } else {
+        load_local_app_server_session_with_retrying_factory(
+            &app_server,
+            resumed_session_id.clone(),
+            make_factory,
+            turn_drain_timeout,
+        )
+        .await?
     };
     let runtime = handle.require_runtime("resumed")?;
-    install_sdk_session_runtime_state(Arc::clone(&state), runtime.clone()).await;
+    install_sdk_session_runtime_state(Arc::clone(&state), runtime.clone(), Arc::clone(&app_server))
+        .await;
     install_runtime_backed_resumed_sdk_session_state(
         &state,
         &loaded.session,
         resumed_session_id.clone(),
         &runtime,
         &prior_messages,
+        &connection_profile,
     )
     .await;
 
-    let surface_id = match replacement_surface_id {
-        Some(surface_id) => surface_id,
-        None => attach_local_app_server_surface(&app_server, connection, resumed_session_id)?,
-    };
+    let surface_id = attach_local_app_server_surface(&app_server, connection, resumed_session_id)?;
+    configure_sdk_mcp(&connection_profile, &runtime, Arc::clone(&app_server)).await;
     encode_session_resume_result(&loaded.session, Some(surface_id))
+}
+
+pub(super) async fn replace_sdk_session_with_runtime(
+    app_server: Arc<AppServer<LocalAppSessionHandle>>,
+    state: Arc<SdkServerState>,
+    connection: ConnectionKey,
+    params: coco_types::SessionReplaceParams,
+    connection_profile: Arc<coco_types::ConnectionProfile>,
+    replacement: RuntimeReplacementContext,
+    turn_drain_timeout: Duration,
+) -> Result<serde_json::Value, JsonRpcDispatchError> {
+    app_server
+        .validate_interactive_target(connection, &params.source)
+        .map_err(|error| app_server_lifecycle_error("validate replacement source", error))?;
+    let source_session_id = params.source.session_id.clone();
+    let source_surface_id = params.source.surface_id.clone();
+
+    let (destination_id, destination_handle, configure_profile) = match params.destination {
+        coco_types::SessionReplacement::Fresh(start_params) => {
+            let prepared =
+                session::prepare_session_start(start_params, &state, &connection_profile)
+                    .await
+                    .map_err(handler_result_to_dispatch_error)?;
+            let destination_id = prepared.session_id.clone();
+            let factory = {
+                let factory_session_id = destination_id.clone();
+                let state = Arc::clone(&state);
+                let replacement = replacement.clone();
+                let profile = Arc::clone(&connection_profile);
+                let app_server = Arc::clone(&app_server);
+                async move {
+                    let runtime = build_sdk_runtime_for_start(
+                        replacement,
+                        state,
+                        profile,
+                        prepared,
+                        app_server,
+                    )
+                    .await
+                    .map_err(|error| {
+                        coco_app_server::RegistryError::load_failed(error.to_string())
+                    })?;
+                    Ok::<_, coco_app_server::RegistryError>(LocalAppSessionHandle::from_runtime(
+                        factory_session_id,
+                        runtime,
+                    ))
+                }
+            };
+            let handle = load_local_app_server_session_with_factory(
+                &app_server,
+                destination_id.clone(),
+                factory,
+            )
+            .await?;
+            (destination_id, handle, true)
+        }
+        coco_types::SessionReplacement::Resume(target) => {
+            if target.session_id == source_session_id {
+                return Err(JsonRpcDispatchError {
+                    code: coco_types::error_codes::INVALID_PARAMS,
+                    message: "session/replace destination must differ from its source".to_string(),
+                    data: Some(serde_json::json!({ "kind": "same_session_replace" })),
+                });
+            }
+            let loaded = session::load_resume_session(
+                coco_types::SessionResumeParams {
+                    target: target.clone(),
+                },
+                &state,
+            )
+            .await
+            .map_err(handler_result_to_dispatch_error)?;
+            let destination_id = loaded.session_id.clone();
+            if let Some(handle) = app_server.registry().get(&destination_id) {
+                let runtime = handle.clone().require_runtime("replacement destination")?;
+                if !runtime
+                    .callback_requirements()
+                    .is_satisfied_by(&connection_profile)
+                {
+                    return Err(JsonRpcDispatchError {
+                        code: coco_types::error_codes::INVALID_REQUEST,
+                        message: "connection profile does not satisfy the live destination callback requirements".to_string(),
+                        data: Some(serde_json::json!({
+                            "kind": "connection_profile_mismatch",
+                            "session_id": destination_id,
+                        })),
+                    });
+                }
+                (destination_id, handle, false)
+            } else {
+                let cwd = loaded.session.working_dir.clone();
+                let prior_messages = loaded.conversation.messages.clone();
+                let make_factory = || {
+                    let state = Arc::clone(&state);
+                    let replacement = replacement.clone();
+                    let profile = Arc::clone(&connection_profile);
+                    let session_id = destination_id.clone();
+                    let cwd = cwd.clone();
+                    let prior_messages = prior_messages.clone();
+                    let app_server = Arc::clone(&app_server);
+                    async move {
+                        let runtime = build_sdk_runtime_for_resume(
+                            replacement,
+                            state,
+                            profile,
+                            session_id.clone(),
+                            cwd,
+                            prior_messages,
+                            app_server,
+                        )
+                        .await
+                        .map_err(|error| {
+                            coco_app_server::RegistryError::load_failed(error.to_string())
+                        })?;
+                        Ok::<_, coco_app_server::RegistryError>(
+                            LocalAppSessionHandle::from_runtime(session_id, runtime),
+                        )
+                    }
+                };
+                let handle = load_local_app_server_session_with_retrying_factory(
+                    &app_server,
+                    destination_id.clone(),
+                    make_factory,
+                    turn_drain_timeout,
+                )
+                .await?;
+                (destination_id, handle, true)
+            }
+        }
+    };
+
+    let destination_runtime = destination_handle.require_runtime("replacement destination")?;
+    if configure_profile {
+        install_sdk_runtime_reload_subscription(&destination_runtime, Arc::clone(&app_server))
+            .await;
+        configure_sdk_mcp(
+            &connection_profile,
+            &destination_runtime,
+            Arc::clone(&app_server),
+        )
+        .await;
+    }
+
+    let commit = match app_server.commit_replace_to_live_for_surface(
+        &source_session_id,
+        &destination_id,
+        &source_surface_id,
+    ) {
+        Ok(commit) => commit,
+        Err(error) => {
+            // Freshly loaded replacement destinations have no owner until the
+            // atomic commit succeeds. Do not leak that orphan when validation
+            // races with a disconnect or another lifecycle operation.
+            if configure_profile {
+                let _ = close_local_app_server_session(
+                    Arc::clone(&app_server),
+                    Arc::clone(&state),
+                    destination_id.clone(),
+                    turn_drain_timeout,
+                )
+                .await;
+            }
+            return Err(app_server_lifecycle_error("commit replacement", error));
+        }
+    };
+    app_server.route_lifecycle_effects(commit.lifecycle_effects);
+    let close_server = Arc::clone(&app_server);
+    let close_state = Arc::clone(&state);
+    tokio::spawn(async move {
+        close_sdk_session_state_for_app_server(
+            &close_state,
+            &source_session_id,
+            turn_drain_timeout,
+        )
+        .await;
+        close_local_session_handle_with_reason(
+            commit.old_handle,
+            coco_hooks::orchestration::ExitReason::Other,
+        )
+        .await;
+        if let Ok(archive) = close_server.complete_close_and_archive_surfaces(&source_session_id) {
+            close_server.route_lifecycle_effects(archive.lifecycle_effects);
+        }
+    });
+
+    serde_json::to_value(coco_types::SessionReplaceResult {
+        session_id: destination_id,
+        surface_id: source_surface_id,
+    })
+    .map_err(|error| JsonRpcDispatchError {
+        code: coco_types::error_codes::INTERNAL_ERROR,
+        message: format!("session/replace result encode failed: {error}"),
+        data: None,
+    })
+}
+
+async fn configure_sdk_mcp(
+    profile: &coco_types::ConnectionProfile,
+    session: &crate::session_runtime::SessionHandle,
+    app_server: Arc<AppServer<LocalAppSessionHandle>>,
+) {
+    let Some(server_names) = profile.initialize().sdk_mcp_servers.clone() else {
+        return;
+    };
+    if server_names.is_empty() {
+        return;
+    }
+    if let Err(error) =
+        crate::sdk_server::sdk_mcp::register_and_connect(session.clone(), app_server, server_names)
+            .await
+    {
+        warn!(session_id = %session.session_id(), %error, "SDK MCP registration failed");
+    }
 }
 
 pub(super) async fn build_sdk_runtime_for_start(
     replacement: RuntimeReplacementContext,
     state: Arc<SdkServerState>,
+    connection_profile: Arc<coco_types::ConnectionProfile>,
     prepared: session::PreparedStartSession,
+    app_server: Arc<AppServer<LocalAppSessionHandle>>,
 ) -> anyhow::Result<crate::session_runtime::SessionHandle> {
     let session = replacement
         .runtime_factory
@@ -411,7 +537,14 @@ pub(super) async fn build_sdk_runtime_for_start(
             session_build_cwd_from_str(&replacement.cwd, &prepared.cwd),
         )
         .await?;
-    setup_sdk_replacement_runtime(&replacement, state, &session).await?;
+    setup_sdk_replacement_runtime(
+        &replacement,
+        state,
+        connection_profile,
+        &session,
+        app_server,
+    )
+    .await?;
     session.fire_session_start_hooks("startup").await;
     Ok(session)
 }
@@ -434,9 +567,11 @@ pub(super) fn session_build_cwd(
 pub(super) async fn build_sdk_runtime_for_resume(
     replacement: RuntimeReplacementContext,
     state: Arc<SdkServerState>,
+    connection_profile: Arc<coco_types::ConnectionProfile>,
     session_id: SessionId,
     cwd: std::path::PathBuf,
     prior_messages: Vec<coco_messages::Message>,
+    app_server: Arc<AppServer<LocalAppSessionHandle>>,
 ) -> anyhow::Result<crate::session_runtime::SessionHandle> {
     let session = replacement
         .runtime_factory
@@ -445,7 +580,14 @@ pub(super) async fn build_sdk_runtime_for_resume(
             session_build_cwd(&replacement.cwd, &cwd),
         )
         .await?;
-    setup_sdk_replacement_runtime(&replacement, state, &session).await?;
+    setup_sdk_replacement_runtime(
+        &replacement,
+        state,
+        connection_profile,
+        &session,
+        app_server,
+    )
+    .await?;
     session::hydrate_runtime_for_resume_messages(&session, &session_id, &prior_messages).await;
     session.fire_session_start_hooks("resume").await;
     Ok(session)
@@ -453,21 +595,30 @@ pub(super) async fn build_sdk_runtime_for_resume(
 
 pub(super) async fn setup_sdk_replacement_runtime(
     replacement: &RuntimeReplacementContext,
-    state: Arc<SdkServerState>,
+    _state: Arc<SdkServerState>,
+    connection_profile: Arc<coco_types::ConnectionProfile>,
     session: &crate::session_runtime::SessionHandle,
+    app_server: Arc<AppServer<LocalAppSessionHandle>>,
 ) -> anyhow::Result<()> {
     let runtime = session;
+    runtime.install_callback_requirements(connection_profile.callback_requirements());
     let session_cwd = runtime.original_cwd().clone();
     if replacement.requires_structured_output {
         runtime
             .update_engine_config(|cfg| cfg.requires_structured_output = true)
             .await;
     }
-    crate::sdk_server::sdk_hooks::install_runtime_callback(Arc::clone(&state), session);
-    if let Some(hooks) = state.sdk_initialize_hooks().await {
-        crate::sdk_server::sdk_hooks::register_initialize_hooks(session, &hooks);
+    crate::sdk_server::sdk_hooks::install_runtime_callback(Arc::clone(&app_server), session);
+    if let Some(hooks) = &connection_profile.initialize().hooks {
+        crate::sdk_server::sdk_hooks::register_initialize_hooks(session, hooks);
     }
-    let sdk_agents = state.pending_sdk_agents().await;
+    let sdk_agents = connection_profile
+        .initialize()
+        .agents
+        .as_ref()
+        .map(crate::sdk_server::cli_bootstrap::parse_sdk_agent_definitions)
+        .map(|(accepted, _)| accepted)
+        .unwrap_or_default();
     if !sdk_agents.is_empty() {
         session.set_sdk_supplied_agents(sdk_agents).await;
     }
@@ -487,11 +638,10 @@ pub(super) async fn setup_sdk_replacement_runtime(
         None,
     )
     .await?;
-    let mcp_manager = state.mcp_manager_snapshot().await;
     crate::session_bootstrap::bootstrap_session_mcp(
         session,
         &session_cwd,
-        mcp_manager,
+        None,
         /*await_connect*/ false,
     )
     .await;
@@ -502,41 +652,34 @@ pub(super) async fn setup_sdk_replacement_runtime(
 pub async fn install_sdk_session_runtime_state(
     state: Arc<SdkServerState>,
     session: crate::session_runtime::SessionHandle,
+    app_server: Arc<AppServer<LocalAppSessionHandle>>,
 ) {
-    crate::sdk_server::sdk_hooks::install_runtime_callback(Arc::clone(&state), &session);
+    crate::sdk_server::sdk_hooks::install_runtime_callback(Arc::clone(&app_server), &session);
     let runtime = &session;
     let session_manager = Arc::clone(runtime.session_manager());
-    let file_history = runtime.file_history().cloned();
-    let file_history_config_home = runtime
-        .file_history()
-        .map(|_| runtime.config_home().clone());
-    install_sdk_runtime_reload_subscription(Arc::clone(&state), &session).await;
-    state.install_session_runtime(session).await;
+    install_sdk_runtime_reload_subscription(&session, app_server).await;
+    let _ = session;
     state.install_session_manager(session_manager).await;
-    state
-        .install_file_history(file_history, file_history_config_home)
-        .await;
 }
 
 pub(super) async fn install_sdk_runtime_reload_subscription(
-    state: Arc<SdkServerState>,
     session: &crate::session_runtime::SessionHandle,
+    app_server: Arc<AppServer<LocalAppSessionHandle>>,
 ) {
     let runtime = session;
-    state.abort_sdk_runtime_reload_subscription().await;
-
     let Some(sandbox_state) = runtime.sandbox_state() else {
         return;
     };
     sandbox_state.set_approval_bridge(Arc::new(crate::sdk_server::SdkSandboxApprovalBridge::new(
-        Arc::clone(&state),
+        app_server,
+        session.clone(),
     )));
 
     let Some(publisher) = runtime.runtime_publisher() else {
         return;
     };
-    state
-        .install_sdk_runtime_reload_subscription(crate::sandbox_reload::spawn_sandbox_reload(
+    session
+        .install_reload_supervisor(crate::sandbox_reload::spawn_sandbox_reload(
             sandbox_state,
             &publisher,
             runtime.original_cwd().clone(),
@@ -550,8 +693,12 @@ pub(super) async fn install_runtime_backed_resumed_sdk_session_state(
     session_id: SessionId,
     runtime_handle: &crate::session_runtime::SessionHandle,
     prior_messages: &[coco_messages::Message],
+    connection_profile: &coco_types::ConnectionProfile,
 ) {
-    let plan_mode_instructions = state.pending_plan_mode_instructions().await;
+    let plan_mode_instructions = connection_profile
+        .initialize()
+        .plan_mode_instructions
+        .clone();
     let runtime = runtime_handle;
     let history = prior_messages
         .iter()
@@ -560,7 +707,7 @@ pub(super) async fn install_runtime_backed_resumed_sdk_session_state(
         .collect::<Vec<_>>();
 
     state.install_scoped_replacement_session_state(ReplacementSessionState {
-        session_id: session_id.clone(),
+        session_id,
         metadata: SessionMetadata {
             cwd: session.working_dir.to_string_lossy().into_owned(),
             model: session.model.clone(),
@@ -572,7 +719,6 @@ pub(super) async fn install_runtime_backed_resumed_sdk_session_state(
         plan_mode_instructions,
         prior_cleanup: PriorSessionCleanup::ActiveTurnAndHandoff,
         reset_accounting: false,
-        cancel_reason: "runtime-backed session/resume",
     });
 }
 
@@ -604,6 +750,49 @@ where
         .wait()
         .await
         .map_err(|error| local_lifecycle_error("load session", error))
+}
+
+pub(super) async fn load_local_app_server_session_with_retrying_factory<Make, F>(
+    app_server: &Arc<AppServer<LocalAppSessionHandle>>,
+    session_id: SessionId,
+    make_factory: Make,
+    close_wait_timeout: Duration,
+) -> Result<LocalAppSessionHandle, JsonRpcDispatchError>
+where
+    Make: Fn() -> F,
+    F: Future<Output = Result<LocalAppSessionHandle, coco_app_server::RegistryError>>
+        + Send
+        + 'static,
+{
+    loop {
+        match app_server
+            .spawn_load(session_id.clone(), make_factory())
+            .map_err(|error| local_lifecycle_error("load session", error))?
+        {
+            AppLoadStart::Started { mut completion } | AppLoadStart::Loading(mut completion) => {
+                return completion
+                    .wait()
+                    .await
+                    .map_err(|error| local_lifecycle_error("load session", error));
+            }
+            AppLoadStart::Live(handle) => return Ok(handle),
+            AppLoadStart::Closing(mut completion) => {
+                tokio::time::timeout(close_wait_timeout, completion.wait())
+                    .await
+                    .map_err(|_| JsonRpcDispatchError {
+                        code: coco_types::error_codes::INTERNAL_ERROR,
+                        message: format!(
+                            "timed out waiting for closing session {session_id} before resume"
+                        ),
+                        data: Some(serde_json::json!({
+                            "kind": "session_close_timeout",
+                            "session_id": session_id,
+                        })),
+                    })?
+                    .map_err(|error| local_lifecycle_error("wait for closing session", error))?;
+            }
+        }
+    }
 }
 
 pub async fn load_local_app_server_session_runtime(
@@ -731,36 +920,6 @@ pub(super) async fn apply_local_lifecycle_request(
                     data: None,
                 })?;
             let resumed_session_id = resumed.session.session_id;
-            // replace ONLY the requesting connection's own current
-            // session (its sole interactive surface); never a process-wide
-            // close-others. With none, this is a plain register + attach.
-            let own_current = app_server
-                .sole_interactive_session_for_connection(connection)
-                .filter(|previous| *previous != resumed_session_id);
-            if let Some(previous_session_id) = own_current {
-                if let Some(surface_id) = replace_local_app_server_session(
-                    Arc::clone(&app_server),
-                    Arc::clone(&state),
-                    previous_session_id.clone(),
-                    LocalAppSessionHandle::snapshot(resumed_session_id.clone()),
-                    turn_drain_timeout,
-                )
-                .await?
-                {
-                    return Ok(Some(surface_id));
-                }
-                replace_detached_local_app_server_session(
-                    Arc::clone(&app_server),
-                    Arc::clone(&state),
-                    previous_session_id,
-                    LocalAppSessionHandle::snapshot(resumed_session_id.clone()),
-                    turn_drain_timeout,
-                )
-                .await?;
-                let surface_id =
-                    attach_local_app_server_surface(&app_server, connection, resumed_session_id)?;
-                return Ok(Some(surface_id));
-            }
             let new_handle = LocalAppSessionHandle::snapshot(resumed_session_id.clone());
             if let Some(placeholder) =
                 single_session_detached_placeholder(&app_server, &resumed_session_id)
@@ -780,7 +939,27 @@ pub(super) async fn apply_local_lifecycle_request(
                 attach_local_app_server_surface(&app_server, connection, resumed_session_id)?;
             Ok(Some(surface_id))
         }
-        LocalLifecycleRequest::Archive(session_id) => {
+        LocalLifecycleRequest::Archive { connection, target } => {
+            let session_id = target.session_id().clone();
+            match &target {
+                coco_types::ArchiveTarget::Interactive(target) => {
+                    app_server
+                        .validate_interactive_target(connection, target)
+                        .map_err(|error| {
+                            app_server_lifecycle_error("validate archive target", error)
+                        })?;
+                }
+                coco_types::ArchiveTarget::Orphaned(target) => {
+                    close_orphan_local_app_server_session(
+                        app_server,
+                        state,
+                        target.session_id.clone(),
+                        turn_drain_timeout,
+                    )
+                    .await?;
+                    return Ok(None);
+                }
+            }
             close_local_app_server_session(app_server, state, session_id, turn_drain_timeout)
                 .await?;
             Ok(None)
@@ -863,7 +1042,7 @@ pub(super) fn attach_local_app_server_surface(
     };
     app_server
         .attach_surface_with_options(connection, surface_id.clone(), session_id, options)
-        .map_err(|error| local_lifecycle_error("attach session surface", error))?;
+        .map_err(|error| attach_lifecycle_error("attach session surface", error))?;
     Ok(surface_id)
 }
 
@@ -881,7 +1060,7 @@ pub(super) async fn subscribe_local_app_server_session(
         .subscribe_surface_with_options(
             connection,
             surface_id.clone(),
-            params.session_id.clone(),
+            params.target.session_id.clone(),
             params.after_seq,
             options,
         )
@@ -893,7 +1072,7 @@ pub(super) async fn subscribe_local_app_server_session(
                 .map(encode_session_subscribe_envelope)
                 .collect();
             serde_json::to_value(coco_types::SessionSubscribeResult {
-                session_id: params.session_id,
+                session_id: params.target.session_id,
                 surface_id,
                 replayed,
             })
@@ -936,26 +1115,6 @@ pub(super) fn encode_session_subscribe_envelope(
         session_seq: envelope.session_seq,
         event,
     }
-}
-
-pub(super) async fn replace_local_app_server_session(
-    app_server: Arc<AppServer<LocalAppSessionHandle>>,
-    state: Arc<SdkServerState>,
-    old_session_id: SessionId,
-    new_handle: LocalAppSessionHandle,
-    turn_drain_timeout: Duration,
-) -> Result<Option<SurfaceId>, JsonRpcDispatchError> {
-    let new_session_id = new_handle.session_id().clone();
-    replace_local_app_server_session_with_factory(
-        app_server,
-        state,
-        old_session_id,
-        new_session_id,
-        async { Ok::<LocalAppSessionHandle, coco_app_server::RegistryError>(new_handle) },
-        turn_drain_timeout,
-    )
-    .await
-    .map(|replacement| replacement.map(|(_, surface)| surface))
 }
 
 pub(super) async fn replace_local_app_server_session_with_factory<F>(
@@ -1018,7 +1177,7 @@ where
                 close_local_session_handle_with_reason(handle, close_reason).await;
             },
         )
-        .map_err(|error| local_lifecycle_error("replace session", error))?
+        .map_err(|error| app_server_lifecycle_error("replace session", error))?
     {
         coco_app_server::AppReplaceStart::Started { completion } => completion,
     };
@@ -1078,7 +1237,7 @@ where
                 close_local_session_handle(handle).await;
             },
         )
-        .map_err(|error| local_lifecycle_error("replace detached session", error))?
+        .map_err(|error| app_server_lifecycle_error("replace detached session", error))?
     {
         coco_app_server::AppReplaceStart::Started { completion } => completion,
     };
@@ -1168,6 +1327,31 @@ pub(super) async fn close_local_app_server_session(
         .map_err(|error| local_lifecycle_error("archive session", error))
 }
 
+async fn close_orphan_local_app_server_session(
+    app_server: Arc<AppServer<LocalAppSessionHandle>>,
+    state: Arc<SdkServerState>,
+    session_id: SessionId,
+    turn_drain_timeout: Duration,
+) -> Result<(), JsonRpcDispatchError> {
+    let close_state = Arc::clone(&state);
+    let mut completion = app_server
+        .spawn_close_orphan(session_id, move |handle| async move {
+            close_sdk_session_state_for_app_server(
+                &close_state,
+                handle.session_id(),
+                turn_drain_timeout,
+            )
+            .await;
+            close_local_session_handle(handle).await;
+        })
+        .map_err(|error| local_lifecycle_error("archive orphan session", error))?
+        .completion();
+    completion
+        .wait()
+        .await
+        .map_err(|error| local_lifecycle_error("archive orphan session", error))
+}
+
 pub async fn shutdown_local_app_server_sessions(
     app_server: Arc<AppServer<LocalAppSessionHandle>>,
     state: Arc<SdkServerState>,
@@ -1219,7 +1403,7 @@ pub(super) async fn close_local_session_handle_with_reason(
     let has_runtime = handle.runtime().is_some();
     if let Some(runtime) = handle.runtime()
         && let Some(current_session_id) = runtime
-            .close_if_current_session(handle.session_id(), reason)
+            .close_if_current_session(handle.session_id(), reason, APP_SERVER_TURN_DRAIN_TIMEOUT)
             .await
     {
         debug!(
@@ -1279,15 +1463,6 @@ pub(super) async fn close_sdk_session_state_for_app_server(
             ),
         }
     }
-
-    // also clear the installed process singletons when this closing id
-    // is the one they back, so an archived / idle-swept session id can no longer
-    // receive stamps, hub egress, or "successful" control mutations against a
-    // shut-down runtime. The match is gated by id, so a concurrent replacement
-    // swap that already installed a different runtime is left untouched.
-    state
-        .clear_installed_singletons_if_matches(session_id)
-        .await;
 }
 
 /// Persist the exact `session_seq` high-water mark before a session closes so a
@@ -1307,7 +1482,7 @@ pub(super) async fn persist_session_seq_watermark_on_close(
     let id = session_id.as_str().to_string();
     let _ = tokio::task::spawn_blocking(move || {
         if let Err(error) = manager.persist_session_seq_watermark(&id, high_water) {
-            tracing::debug!(%error, "failed to persist session_seq watermark at close");
+            tracing::debug!(session_id = %id, %error, "failed to persist session_seq watermark at close");
         }
     })
     .await;
@@ -1321,5 +1496,149 @@ pub(super) fn local_lifecycle_error(
         code: coco_types::error_codes::INTERNAL_ERROR,
         message: format!("local AppServer {operation} failed: {error}"),
         data: None,
+    }
+}
+
+pub(super) fn app_server_lifecycle_error(
+    operation: &'static str,
+    error: coco_app_server::AppServerError,
+) -> JsonRpcDispatchError {
+    use coco_app_server::AppServerError;
+
+    let (code, data) = match &error {
+        AppServerError::Registry { source, .. } => {
+            return registry_lifecycle_error(operation, source.clone());
+        }
+        AppServerError::CallingSurfaceNotAttached { surface_id, .. } => (
+            coco_types::error_codes::INVALID_PARAMS,
+            serde_json::json!({ "kind": "surface_not_attached", "surface_id": surface_id }),
+        ),
+        AppServerError::CallingSurfaceWrongSession {
+            surface_id,
+            expected_session_id,
+            actual_session_id,
+            ..
+        } => (
+            coco_types::error_codes::INVALID_PARAMS,
+            serde_json::json!({
+                "kind": "surface_wrong_session",
+                "surface_id": surface_id,
+                "expected_session_id": expected_session_id,
+                "actual_session_id": actual_session_id,
+            }),
+        ),
+        AppServerError::CallingSurfaceWrongConnection { surface_id, .. } => (
+            coco_types::error_codes::PERMISSION_DENIED,
+            serde_json::json!({ "kind": "surface_wrong_connection", "surface_id": surface_id }),
+        ),
+        AppServerError::CallingSurfaceNotInteractive { surface_id, .. } => (
+            coco_types::error_codes::INVALID_PARAMS,
+            serde_json::json!({ "kind": "surface_not_interactive", "surface_id": surface_id }),
+        ),
+        AppServerError::InteractiveOwnerConflict { session_id, .. } => (
+            coco_types::error_codes::INVALID_REQUEST,
+            serde_json::json!({ "kind": "interactive_owner_conflict", "session_id": session_id }),
+        ),
+        AppServerError::TargetSessionNotLive {
+            session_id, state, ..
+        } => (
+            coco_types::error_codes::INVALID_REQUEST,
+            serde_json::json!({ "kind": "target_session_not_live", "session_id": session_id, "state": state }),
+        ),
+        AppServerError::ServerRequestNotFound { request_id, .. } => (
+            coco_types::error_codes::INVALID_REQUEST,
+            serde_json::json!({ "kind": "server_request_not_found", "request_id": request_id }),
+        ),
+        AppServerError::ServerRequestWrongSession {
+            request_id,
+            expected_session_id,
+            actual_session_id,
+            ..
+        } => (
+            coco_types::error_codes::PERMISSION_DENIED,
+            serde_json::json!({
+                "kind": "server_request_wrong_session",
+                "request_id": request_id,
+                "expected_session_id": expected_session_id,
+                "actual_session_id": actual_session_id,
+            }),
+        ),
+        AppServerError::ServerRequestWrongConnection { request_id, .. } => (
+            coco_types::error_codes::PERMISSION_DENIED,
+            serde_json::json!({ "kind": "server_request_wrong_connection", "request_id": request_id }),
+        ),
+    };
+    JsonRpcDispatchError {
+        code,
+        message: format!("local AppServer {operation} failed: {error}"),
+        data: Some(data),
+    }
+}
+
+fn attach_lifecycle_error(
+    operation: &'static str,
+    error: coco_app_server::AttachError,
+) -> JsonRpcDispatchError {
+    let (code, data) = match &error {
+        coco_app_server::AttachError::InteractiveOwnerConflict { session_id, .. } => (
+            coco_types::error_codes::INVALID_REQUEST,
+            serde_json::json!({ "kind": "interactive_owner_conflict", "session_id": session_id }),
+        ),
+        coco_app_server::AttachError::SurfaceLimit { .. } => (
+            coco_types::error_codes::INVALID_REQUEST,
+            serde_json::json!({ "kind": "surface_limit" }),
+        ),
+        coco_app_server::AttachError::SessionClosing { session_id, .. } => (
+            coco_types::error_codes::INVALID_REQUEST,
+            serde_json::json!({ "kind": "target_session_not_live", "session_id": session_id, "state": "closing" }),
+        ),
+    };
+    JsonRpcDispatchError {
+        code,
+        message: format!("local AppServer {operation} failed: {error}"),
+        data: Some(data),
+    }
+}
+
+fn registry_lifecycle_error(
+    operation: &'static str,
+    error: coco_app_server::RegistryError,
+) -> JsonRpcDispatchError {
+    use coco_app_server::RegistryError;
+
+    let (code, data) = match &error {
+        RegistryError::NotFound { session_id, .. } => (
+            coco_types::error_codes::INVALID_PARAMS,
+            serde_json::json!({ "kind": "session_not_found", "session_id": session_id }),
+        ),
+        RegistryError::ResourceExhausted { .. } => (
+            coco_types::error_codes::INVALID_REQUEST,
+            serde_json::json!({ "kind": "session_capacity_exhausted" }),
+        ),
+        RegistryError::OldNotReady { session_id, .. } => (
+            coco_types::error_codes::INVALID_REQUEST,
+            serde_json::json!({ "kind": "source_session_not_live", "session_id": session_id }),
+        ),
+        RegistryError::NewSlotOccupied { session_id, .. } => (
+            coco_types::error_codes::INVALID_REQUEST,
+            serde_json::json!({ "kind": "destination_session_occupied", "session_id": session_id }),
+        ),
+        RegistryError::SlotConflict {
+            session_id,
+            expected,
+            ..
+        } => (
+            coco_types::error_codes::INVALID_REQUEST,
+            serde_json::json!({ "kind": "session_slot_conflict", "session_id": session_id, "expected": expected }),
+        ),
+        RegistryError::LoadFailed { .. } | RegistryError::SignalDropped { .. } => (
+            coco_types::error_codes::INTERNAL_ERROR,
+            serde_json::json!({ "kind": "session_lifecycle_internal" }),
+        ),
+    };
+    JsonRpcDispatchError {
+        code,
+        message: format!("local AppServer {operation} failed: {error}"),
+        data: Some(data),
     }
 }
