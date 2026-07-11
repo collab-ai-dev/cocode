@@ -222,7 +222,6 @@ impl SessionRuntime {
         (applied, cleared)
     }
 
-    #[cfg(test)]
     pub fn session_env_snapshot(&self) -> Option<std::collections::HashMap<String, String>> {
         self.engine_state_resources
             .session_env_vars()

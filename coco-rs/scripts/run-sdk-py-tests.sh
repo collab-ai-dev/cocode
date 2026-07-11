@@ -58,7 +58,7 @@ fi
 
 # When no full binary is available, prefer the `sdk_server_stdio` test
 # target via `coco-sdk-via-cargo.sh` over a one-off `coco` build. Same
-# functional surface (real SdkServer + QueryEngineRunner against live
+# functional surface (real SdkServer + SessionTurnExecutor against live
 # DeepSeek), an order of magnitude less compile time. See the script's
 # header for the CLI translation it performs.
 CARGO_WRAPPER="${SCRIPT_DIR}/coco-sdk-via-cargo.sh"

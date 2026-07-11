@@ -143,24 +143,15 @@ the production routing/facade/adapter files below the workspace line limit.
   pending ownership is open, so late attach/replay can reconstruct actionable
   requests. Completing or cancelling a pending request removes the retained
   payload.
-- `AppServer::resolve_server_request` validates reply `(session_id, request_id)`
-  against pending ownership and clears the pending indexes before returning the
-  reply payload to the future runtime/adapter bridge.
+- `AppServer::resolve_server_request` validates reply `(connection, surface,
+  session, request_id)` against pending ownership and clears the pending
+  indexes before returning the reply payload to the runtime/adapter bridge.
 - `AppServer::route_server_request` and
   `pending_server_request_replays_for_surface` are the adapter-facing request
-  bridge: adapters should not split request delivery/replay ownership outside
-  the AppServer layer. **Status:** this bridge is built and unit-tested but is
-  not yet the v1 production path. v1 SDK server-initiated requests (approval /
-  user-input / elicitation / MCP-route / hook-callback) still flow through the
-  legacy `SdkServerState` pending-waiter map, which is ordered through the same
-  single-writer serializer as notifications, so single-interactive-surface
-  ordering is already correct. Routing production requests through this bridge
-  (with per-surface capability declaration and a typed reply-delivery seam back
-  to the awaiting caller) lands with Phase C multi-surface, where routing to a
-  *specific* surface actually matters. `cancel_turn_server_requests` is the
-  turn-scoped cancellation hook for that cut-over; it is exercised by tests and
-  wired into the precise-cancellation set, but cancels nothing until requests
-  are routed with a `turn_id`.
+  bridge: adapters must not split request delivery/replay ownership outside the
+  AppServer layer. This is the production path for approval, user-input,
+  elicitation, MCP-route, and hook callbacks. `cancel_turn_server_requests` is
+  the turn-scoped cancellation hook.
 - `LocalClientAdapter` is typed and in-process only. It registers a real
   `ConnectionKey`, event sender, request sender, and lifecycle sender through
   AppServer and then attaches/subscribes surfaces through the same routing
@@ -253,45 +244,11 @@ the production routing/facade/adapter files below the workspace line limit.
 - Outbound queues are bounded by their transport owner. `RoutingState` uses
   `try_send`; full or closed queues disconnect the whole `ConnectionKey`.
 
-## Pending
+## Deliberate Scope Boundary
 
-Concrete runtime factory implementation behind every `AppServer::spawn_load`
-caller, concrete close cascade implementation behind `spawn_close` /
-`spawn_shutdown`, concrete replace runtime factory and old-session close cascade
-behind `spawn_replace`, interactive takeover, production listener lifecycle
-wiring beyond the SDK sidecars, and broader persisted transcript/session-store
-integration are not implemented here yet. The CLI bridge now constructs the
-initial TUI/headless/SDK runtime through `AppServer::spawn_load`, registers
-remaining `LocalAppSessionHandle` snapshots through `spawn_load`, exposes
-runtime-backed replace helpers that construct replacement handles inside
-`spawn_replace` / `spawn_replace_detached` and return those handles to callers,
-uses the runtime replacement context for production SDK `session/start` so the
-client-started runtime is built through AppServer load/replace before the
-startup placeholder slot closes, uses runtime-backed
-`AppServer::spawn_replace` / `spawn_replace_detached` for TUI `/resume` and
-`/branch` runtime construction, uses the same runtime-backed replacement
-ordering for production SDK `session/resume`, archives through `spawn_close`,
-and installs the runtime
-`SessionManager` so local
-`session/list` / `session/read` can read persisted transcripts. The local
-handle snapshots can carry the fused app/cli `SessionHandle`, but their close
-cascade remains retarget-safe and does not tear down the fused runtime until
-Phase B removes in-place runtime retargeting. Runtime-backed handles are now
-also the preferred live data source for unpersisted local
-`session/list` / `session/read` / `session/turns/list` fallback results; SDK
-snapshot and SDK-only handles read keyed SDK state instead of singleton
-identity state.
-Re-installing a runtime-backed handle for an already-live local session
-refreshes the registry handle without changing surface routing; this is
-lifecycle and local-handler wiring, not the final broad server-client
-pagination bridge. The SDK production resume bridge now swaps SDK-visible
-runtime/session state only after AppServer construction and replacement commit,
-and rebuilds the SDK handoff from the resumed transcript plus runtime app
-state. Persisted/live session-data composition is
-centralized in the CLI bridge's local session-data view for now; this crate
-still does not depend on `coco-session`, but it now owns the pure cursor,
-pagination, and turn-span projection helpers shared by the local bridge and
-legacy SDK session-data handlers. That bridge view reads the installed
-`SessionManager` directly for local AppServer `session/list`, `session/read`,
-and `session/turns/list` instead of bouncing those read-only methods through
-the legacy SDK session-data handlers.
+This crate owns generic registry, routing, lifecycle coordination, callback
+correlation, replay, and pure session-data projection. It deliberately does not
+depend on `coco-session` or construct/close application runtimes. Host adapters
+supply runtime factories and close cascades to `spawn_load`, `spawn_replace`,
+`spawn_close`, and `spawn_shutdown`; interactive takeover and product-specific
+listener policy also stay above this crate.

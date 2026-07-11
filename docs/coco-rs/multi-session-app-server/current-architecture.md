@@ -139,15 +139,17 @@ There is no useful process-global `AppState`.
 | transcript and engine resources | `SessionRuntime` | one root session |
 | live slot lifecycle | `LiveSessionRegistry` | process registry, keyed by `SessionId` |
 | connection/surface/replay routing | `RoutingState` | AppServer process |
-| SDK handoff/accounting/active-turn maps | `SdkServerState` | keyed by `SessionId` |
+| turn ids, aggregate accounting, active-turn tasks/cancellation | `SessionTurnCoordinator` inside `SessionRuntime` | one root session |
+| SDK bootstrap, factory, activity and durable-sequence projections | `SdkServerState` | process services, keyed projections only |
 | immutable initialize inputs | per-connection `ConnectionProfile` | one accepted connection |
 | transport writer and outbound queues | connection runner / adapter | one accepted connection |
-| pending callback correlation | AppServer + connection adapter, keyed by request/session/connection | one originating request |
+| pending callback correlation | AppServer + connection adapter, keyed by request/session/surface/connection | one originating request |
 | MCP manager and registration reports | `SessionRuntime` integration resources | one root session |
 
-`SdkServerState` retains keyed wire projections and process services, but it no
-longer owns a selectable runtime, MCP manager, file history, reload slot,
-connection writer, or pending callback singleton.
+`SdkServerState` retains process services and cheap activity/durable-sequence
+projections, but it owns no selectable runtime, history, turn counter,
+accounting, active turn, MCP manager, file history, reload slot, connection
+writer, or pending callback map.
 
 ## AppServer registry and lifecycle
 
@@ -170,8 +172,11 @@ slots plus surface routing. This is an appropriate use of synchronous locks:
 critical sections are short and contain no asynchronous work.
 
 When resume observes `Closing`, the host waits for its completion with a
-bounded timeout and retries the load. Orphan close checks routing and moves the
-registry slot to `Closing` under the canonical registry-then-routing lock order.
+bounded timeout and retries the load. Orphan archive proves that no interactive
+owner exists while resolving the request runtime, before the archive handler
+can cancel a turn or mutate activity. The subsequent orphan close revalidates
+routing and moves the registry slot to `Closing` under the canonical
+registry-then-routing lock order.
 
 ## Connections and surfaces
 
@@ -233,7 +238,7 @@ replay.
 
 Event production takes identity from the selected handle and active turn.
 Server-initiated requests carry the originating session id; typed replies are
-accepted only from their owning connection and session.
+accepted only from their owning connection, surface, session, and request id.
 
 ## Test coverage today
 
@@ -244,17 +249,27 @@ capabilities, and multi-session shutdown. The release-blocking host integration
 suite uses public clients and production handlers for multi-session authority,
 cross-connection rejection, orphan lifecycle, and event/replay identity.
 
-The integration suite contains six production-handler scenarios. Local TUI
-coverage also verifies that command-queue turns, fast-mode and thinking-level
-controls, and file rewind attach an interactive surface before constructing a
-typed target.
+The integration suite contains sixteen production-handler scenarios using real
+`SessionRuntime`s. It covers concurrent A/B turns and targeted interruption,
+cwd plus project/local config isolation, independent initialized profiles,
+per-session tool catalogs and real SDK-hosted MCP handshakes, independent
+history/read/turn-list/rewind/control state, connection/surface/session/request
+callback correlation, compatible and incompatible orphan resume, orphan
+fail-closed behavior, close/replacement reload-supervisor lifetime, replay
+session/turn identity, slow-consumer recovery, orphan archive, and concurrent
+multi-runtime shutdown. Each package-H scenario has an explicit deadline;
+focused AppServer tests additionally cover lifecycle races and surface rebind.
 
-The final 2026-07-11 release-validation snapshot is:
+The final 2026-07-11 release-validation snapshot was:
 
 - all seam checks and workspace clippy passed with every feature and test
   target enabled;
-- all 13,606 executed workspace tests passed under nextest, with four tests
+- all 13,611 executed workspace tests passed under nextest, with four tests
   skipped by existing configuration;
 - all 88 TUI runner tests passed;
 - focused totals were 309 agent-host, 89 app-server, 34 app-server-client, and
-  300 types tests, all passing.
+  300 types tests, all passing;
+- all schema and Python protocol generation checks passed, and the Python SDK
+  suite passed 107 tests with ten environment-gated skips;
+- the sixteen production-handler integration tests passed after every
+  concurrent and lifecycle scenario received an overall bounded timeout.

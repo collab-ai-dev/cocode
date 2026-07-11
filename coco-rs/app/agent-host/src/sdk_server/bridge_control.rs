@@ -77,10 +77,6 @@ impl SdkBridgeControlHandler {
             .clone()
     }
 
-    async fn current_session_id(&self) -> Option<coco_types::SessionId> {
-        self.selected_session().map(|(target, _)| target.session_id)
-    }
-
     async fn set_permission_mode(
         &self,
         mode: coco_types::PermissionMode,
@@ -99,19 +95,13 @@ impl SdkBridgeControlHandler {
             ));
         }
 
-        let Some(session_id) = self.current_session_id().await else {
+        let Some((_target, runtime)) = self.selected_session() else {
             return Err(ControlError::new(
                 coco_types::error_codes::INVALID_REQUEST,
                 "no active session",
             ));
         };
-        let Some(handoff) = self.state.session_handoff_snapshot(&session_id) else {
-            return Err(ControlError::new(
-                coco_types::error_codes::INTERNAL_ERROR,
-                "session handoff state is missing",
-            ));
-        };
-        let app_state = handoff.app_state;
+        let app_state = Arc::clone(runtime.app_state());
         // Strip provenance from THIS session's live base — the same base
         // `apply_to_app_state` writes, so strip/restore stay coherent.
         let (previous_mode, live_allow_rules) = {

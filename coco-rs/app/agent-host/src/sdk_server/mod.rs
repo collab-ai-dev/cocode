@@ -39,7 +39,6 @@ pub mod dispatcher;
 pub mod handlers;
 mod idle_session_supervisor;
 pub mod outbound;
-pub mod pending_map;
 pub mod sandbox_approval_bridge;
 pub mod sdk_hooks;
 pub mod sdk_mcp;
@@ -49,6 +48,7 @@ mod session_lifecycle;
 mod session_store;
 pub mod transport;
 
+pub use crate::session_runtime::SessionStats;
 pub use app_server_bridge::{
     AppServerLocalBridge, AppServerSdkHandler, LocalAppSessionHandle, SdkAppServerBridgeError,
     install_session_seq_durability, spawn_app_server_local_outbound_forwarder,
@@ -59,11 +59,11 @@ pub use cli_bootstrap::CliInitializeBootstrap;
 pub use dispatcher::{SdkServer, server_notification_to_jsonrpc};
 pub use handlers::{
     HandlerContext, HandlerResult, InitializeBootstrap, RuntimeReplacementContext, SdkServerState,
-    SessionStats, TurnRunner, dispatch_client_request,
+    TurnRunner, dispatch_client_request,
 };
 pub use idle_session_supervisor::spawn_idle_session_sweep;
 pub use sandbox_approval_bridge::SdkSandboxApprovalBridge;
-pub use sdk_runner::{QueryEngineRunner, SessionTurnExecutor};
+pub use sdk_runner::SessionTurnExecutor;
 pub use session_lifecycle::{
     install_sdk_session_runtime_state, load_local_app_server_session_runtime,
     shutdown_local_app_server_sessions,

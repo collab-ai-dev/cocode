@@ -60,11 +60,6 @@ impl HandlerContext {
         if let Some(session) = &self.session {
             return Ok(session.runtime.original_cwd().clone());
         }
-        if let Some(session_id) = &self.target_session_id
-            && let Some(metadata) = self.state.session_metadata_snapshot(session_id)
-        {
-            return Ok(PathBuf::from(metadata.cwd));
-        }
         Err(HandlerResult::Err {
             code: coco_types::error_codes::INVALID_REQUEST,
             message: "request requires an explicitly targeted session workspace".to_string(),

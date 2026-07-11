@@ -570,7 +570,13 @@ fn completed_routed_server_request_removes_replay_payload() {
         .expect("route request");
 
     routing
-        .complete_server_request(&outcome.pending.request_id, &session_id)
+        .complete_server_request(
+            &outcome.pending.request_id,
+            &coco_types::InteractiveTarget {
+                session_id,
+                surface_id: outcome.pending.surface_id.clone(),
+            },
+        )
         .expect("complete request");
 
     assert!(
@@ -679,7 +685,13 @@ fn route_server_request_disconnects_full_request_channel_and_cancels_pending() {
             .is_empty()
     );
     assert!(matches!(
-        routing.complete_server_request(&first.pending.request_id, &session_id),
+        routing.complete_server_request(
+            &first.pending.request_id,
+            &coco_types::InteractiveTarget {
+                session_id,
+                surface_id: first.pending.surface_id.clone(),
+            },
+        ),
         Err(CompleteServerRequestError::NotFound { .. })
     ));
     let queued = request_rx.try_recv().expect("first request remains queued");
@@ -757,7 +769,13 @@ fn completing_server_request_validates_session_and_clears_indexes() {
         .expect("open request");
 
     let err = routing
-        .complete_server_request(&pending.request_id, &wrong_session_id)
+        .complete_server_request(
+            &pending.request_id,
+            &coco_types::InteractiveTarget {
+                session_id: wrong_session_id.clone(),
+                surface_id: pending.surface_id.clone(),
+            },
+        )
         .expect_err("wrong session should be rejected");
     assert_eq!(
         err,
@@ -768,8 +786,33 @@ fn completing_server_request_validates_session_and_clears_indexes() {
         }
     );
 
+    let wrong_surface_id = SurfaceId::from("surface-rebound");
+    let err = routing
+        .complete_server_request(
+            &pending.request_id,
+            &coco_types::InteractiveTarget {
+                session_id: session_id.clone(),
+                surface_id: wrong_surface_id.clone(),
+            },
+        )
+        .expect_err("wrong surface should be rejected");
+    assert_eq!(
+        err,
+        CompleteServerRequestError::WrongSurface {
+            request_id: pending.request_id.clone(),
+            expected_surface_id: surface_id.clone(),
+            actual_surface_id: wrong_surface_id,
+        }
+    );
+
     let completed = routing
-        .complete_server_request(&pending.request_id, &session_id)
+        .complete_server_request(
+            &pending.request_id,
+            &coco_types::InteractiveTarget {
+                session_id: session_id.clone(),
+                surface_id: pending.surface_id.clone(),
+            },
+        )
         .expect("complete request");
     assert_eq!(completed, pending);
     assert!(
@@ -778,7 +821,13 @@ fn completing_server_request_validates_session_and_clears_indexes() {
             .is_empty()
     );
     assert!(matches!(
-        routing.complete_server_request(&completed.request_id, &session_id),
+        routing.complete_server_request(
+            &completed.request_id,
+            &coco_types::InteractiveTarget {
+                session_id,
+                surface_id: completed.surface_id.clone(),
+            },
+        ),
         Err(CompleteServerRequestError::NotFound { .. })
     ));
 }
@@ -827,7 +876,13 @@ fn disconnect_cancels_pending_requests_for_connection_surfaces() {
             .is_empty()
     );
     assert!(matches!(
-        routing.complete_server_request(&keychain.request_id, &session_id),
+        routing.complete_server_request(
+            &keychain.request_id,
+            &coco_types::InteractiveTarget {
+                session_id,
+                surface_id: keychain.surface_id.clone(),
+            },
+        ),
         Err(CompleteServerRequestError::NotFound { .. })
     ));
 }
@@ -880,12 +935,24 @@ fn turn_transition_cancels_only_that_turns_pending_requests() {
         vec![second.clone()]
     );
     assert!(matches!(
-        routing.complete_server_request(&first.request_id, &session_id),
+        routing.complete_server_request(
+            &first.request_id,
+            &coco_types::InteractiveTarget {
+                session_id: session_id.clone(),
+                surface_id: first.surface_id.clone(),
+            },
+        ),
         Err(CompleteServerRequestError::NotFound { .. })
     ));
     assert_eq!(
         routing
-            .complete_server_request(&second.request_id, &session_id)
+            .complete_server_request(
+                &second.request_id,
+                &coco_types::InteractiveTarget {
+                    session_id,
+                    surface_id: second.surface_id.clone(),
+                },
+            )
             .expect("second still pending"),
         second
     );
@@ -991,7 +1058,13 @@ fn replace_cancels_old_session_pending_requests() {
             .is_empty()
     );
     assert!(matches!(
-        routing.complete_server_request(&pending.request_id, &old_session_id),
+        routing.complete_server_request(
+            &pending.request_id,
+            &coco_types::InteractiveTarget {
+                session_id: old_session_id,
+                surface_id: pending.surface_id.clone(),
+            },
+        ),
         Err(CompleteServerRequestError::NotFound { .. })
     ));
 }
@@ -1079,7 +1152,13 @@ fn archive_session_cancels_pending_requests() {
             .is_empty()
     );
     assert!(matches!(
-        routing.complete_server_request(&pending.request_id, &session_id),
+        routing.complete_server_request(
+            &pending.request_id,
+            &coco_types::InteractiveTarget {
+                session_id: session_id.clone(),
+                surface_id: pending.surface_id.clone(),
+            },
+        ),
         Err(CompleteServerRequestError::NotFound { .. })
     ));
 }

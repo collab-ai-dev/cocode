@@ -7,8 +7,8 @@
 //!
 //! Scope:
 //! - One QueryEngine per turn (fresh config). Multi-turn context is
-//!   threaded forward via `TurnHandoff.history`: the runner locks
-//!   the shared history, builds
+//!   read from the selected `SessionHandle`: the runner locks the
+//!   session history, builds
 //!   `prior_history + [create_user_message(prompt)]`, calls
 //!   `run_with_messages`, and replaces the history with
 //!   `result.final_messages` on completion.
@@ -28,45 +28,13 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use crate::sdk_server::handlers::{TurnHandoff, TurnRunner};
-
-/// `TurnRunner` implementation that spawns a fresh `QueryEngine` per
-/// turn.
-///
-/// Holds a `SessionHandle` for the same per-session state container
-/// the TUI runner uses. Per-turn engine assembly routes through
-/// `session.build_engine_from_config(...)` so SDK and TUI share the
-/// `with_*` install list.
-pub struct QueryEngineRunner {
-    /// Max internal agent turns (tool-use iterations) per SDK turn.
-    /// `None` = unbounded unless `max_turns` is supplied in the request
-    /// or `loop.max_turns` in settings.
-    max_turns: Option<i32>,
-    /// Optional system prompt. When None, the engine uses its default.
-    system_prompt: Option<String>,
-}
+use crate::sdk_server::handlers::TurnRunner;
 
 /// Process-stateless executor. Every call receives the AppServer-selected
 /// session capability explicitly.
 pub struct SessionTurnExecutor {
     max_turns: Option<i32>,
     system_prompt: Option<String>,
-}
-
-impl QueryEngineRunner {
-    /// Build a runner from a pre-constructed [`SessionHandle`] (which
-    /// already owns the client / tools / fallbacks / hook registry / all
-    /// session subsystems).
-    pub fn new(
-        _session: crate::session_runtime::SessionHandle,
-        max_turns: Option<i32>,
-        system_prompt: Option<String>,
-    ) -> Self {
-        Self {
-            max_turns,
-            system_prompt,
-        }
-    }
 }
 
 impl SessionTurnExecutor {
@@ -119,31 +87,6 @@ fn create_slash_metadata_message(metadata: &str) -> coco_messages::Message {
     coco_messages::Message::Attachment(attachment)
 }
 
-impl TurnRunner for QueryEngineRunner {
-    fn run_turn<'a>(
-        &'a self,
-        session: crate::session_runtime::SessionHandle,
-        app_server: Arc<coco_app_server::AppServer<crate::sdk_server::LocalAppSessionHandle>>,
-        params: TurnStartParams,
-        turn_id: coco_types::TurnId,
-        handoff: TurnHandoff,
-        event_tx: mpsc::Sender<CoreEvent>,
-        cancel: CancellationToken,
-    ) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
-        run_turn_with_session(
-            session,
-            app_server,
-            self.max_turns,
-            self.system_prompt.clone(),
-            params,
-            turn_id,
-            handoff,
-            event_tx,
-            cancel,
-        )
-    }
-}
-
 impl TurnRunner for SessionTurnExecutor {
     fn run_turn<'a>(
         &'a self,
@@ -151,7 +94,6 @@ impl TurnRunner for SessionTurnExecutor {
         app_server: Arc<coco_app_server::AppServer<crate::sdk_server::LocalAppSessionHandle>>,
         params: TurnStartParams,
         turn_id: coco_types::TurnId,
-        handoff: TurnHandoff,
         event_tx: mpsc::Sender<CoreEvent>,
         cancel: CancellationToken,
     ) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
@@ -165,7 +107,6 @@ impl TurnRunner for SessionTurnExecutor {
                 system_prompt,
                 params,
                 turn_id,
-                handoff,
                 event_tx,
                 cancel,
             )
@@ -182,7 +123,6 @@ fn run_turn_with_session(
     system_prompt: Option<String>,
     params: TurnStartParams,
     turn_id: coco_types::TurnId,
-    handoff: TurnHandoff,
     event_tx: mpsc::Sender<CoreEvent>,
     cancel: CancellationToken,
 ) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>> {
@@ -239,12 +179,9 @@ fn run_turn_with_session(
             session_id = %session_id,
             model = %model_id,
             cwd = %turn_cwd.display(),
-            "QueryEngineRunner: run_turn"
+            "SessionTurnExecutor: run_turn"
         );
-        let mut plan_mode_settings = runtime_config.settings.merged.plan_mode.clone();
-        if let Some(instructions) = handoff.plan_mode_instructions.clone() {
-            plan_mode_settings.custom_instructions = Some(instructions);
-        }
+        let plan_mode_settings = current_engine_config.plan_mode_settings.clone();
         let config = QueryEngineConfig {
             model_id,
             permission_mode,
@@ -301,13 +238,9 @@ fn run_turn_with_session(
         // SDK pre-builds an engine_config with request/session overrides.
         // `build_engine_from_config` installs every
         // per-session subsystem via `wire_engine`, and the
-        // `app_state_override` argument keeps the compaction
-        // observers' app_state pointer aligned with the engine's —
-        // critical so post-compact resets reach the actual flags
-        // the engine reads, not a sibling runtime copy.
-        // Seed the live permission base on the SDK session's app_state
-        // (the engine below uses it via app_state_override) from this
-        // turn's loaded rule maps, so the factory reads live rules + mode.
+        // Seed the live permission base on the selected runtime's app_state
+        // from this turn's loaded rule maps, so the factory reads live rules
+        // and mode.
         // The rules + dirs live ONLY on the live base now. Preserve the
         // session working-dir allowlist already on the live base (seeded at
         // build from --add-dir + settings additionalDirectories, plus any
@@ -334,7 +267,7 @@ fn run_turn_with_session(
         }
 
         let engine = session
-            .build_engine_from_config(config, cancel, Some(app_state.clone()))
+            .build_engine_from_config(config, cancel, None)
             .await
             .with_permission_bridge(Arc::new(crate::sdk_server::SdkPermissionBridge::new(
                 Arc::clone(&app_server),
@@ -568,7 +501,7 @@ fn run_turn_with_session(
                     input_tokens = result.total_usage.input_tokens.total,
                     output_tokens = result.total_usage.output_tokens.total,
                     history_len = result.final_messages.len(),
-                    "QueryEngineRunner: turn complete"
+                    "SessionTurnExecutor: turn complete"
                 );
                 // Overwrite with the engine's final history — this
                 // includes tool calls, tool results, and the
@@ -621,7 +554,7 @@ fn run_turn_with_session(
             Err(e) => {
                 warn!(
                     error = %e,
-                    "QueryEngineRunner: engine returned error; \
+                    "SessionTurnExecutor: engine returned error; \
                      user message already persisted to session history"
                 );
                 // Engine-bail path: when cancel was the cause the

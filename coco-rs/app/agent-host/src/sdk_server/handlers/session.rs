@@ -6,13 +6,12 @@ use std::sync::Arc;
 use coco_types::{
     CoreEvent, InitializeResult, SdkAccountInfo, SdkAgentInfo, SdkModelInfo, SdkSlashCommand,
 };
-use tokio::sync::{RwLock, mpsc};
-use tracing::{debug, info, warn};
+use tokio::sync::mpsc;
+use tracing::{info, warn};
 
 use super::{
     DEFAULT_SDK_FAST_MODEL, DEFAULT_SDK_MODEL, HandlerContext, HandlerResult, PROTOCOL_VERSION,
-    PriorSessionCleanup, ReplacementSessionState, SdkServerState, SessionAccounting,
-    SessionHandoffState, SessionMetadata,
+    SdkServerState,
 };
 use crate::{
     headless::build_output_style_manager,
@@ -37,7 +36,6 @@ pub(crate) struct PreparedStartSession {
     pub cwd: String,
     pub model: String,
     pub permission_mode: Option<coco_types::PermissionMode>,
-    pub plan_mode_instructions: Option<String>,
     pub agent_progress_summaries_enabled: bool,
 }
 
@@ -271,7 +269,6 @@ pub(crate) async fn prepare_session_start(
         cwd,
         model,
         permission_mode: params.permission_mode,
-        plan_mode_instructions: initialize.plan_mode_instructions.clone(),
         agent_progress_summaries_enabled: initialize.agent_progress_summaries.unwrap_or(false),
     })
 }
@@ -279,38 +276,34 @@ pub(crate) async fn prepare_session_start(
 pub(crate) async fn install_scoped_started_session_state(
     state: &SdkServerState,
     prepared: &PreparedStartSession,
-    runtime_app_state: Option<Arc<RwLock<coco_types::ToolAppState>>>,
+    runtime: &crate::session_runtime::SessionHandle,
 ) {
-    let handoff = build_started_session_handoff(prepared, runtime_app_state).await;
-    state.set_session_metadata(
-        prepared.session_id.clone(),
-        SessionMetadata {
-            cwd: prepared.cwd.clone(),
-            model: prepared.model.clone(),
-        },
-    );
-    state.set_session_plan_mode_instructions(
-        prepared.session_id.clone(),
-        prepared.plan_mode_instructions.clone(),
-    );
-    state.set_session_handoff(prepared.session_id.clone(), handoff);
-    state.reset_session_accounting(prepared.session_id.clone());
+    configure_started_session_runtime(prepared, runtime).await;
+    runtime.reset_session_accounting();
+    state.touch_session_activity(prepared.session_id.clone());
 }
 
-async fn build_started_session_handoff(
+async fn configure_started_session_runtime(
     prepared: &PreparedStartSession,
-    runtime_app_state: Option<Arc<RwLock<coco_types::ToolAppState>>>,
-) -> SessionHandoffState {
-    let mut handoff = SessionHandoffState::new();
-    if let Some(app_state) = runtime_app_state {
-        handoff.app_state = app_state;
-    }
+    runtime: &crate::session_runtime::SessionHandle,
+) {
+    let model_id = prepared.model.clone();
+    let permission_mode = prepared.permission_mode;
+    runtime
+        .update_engine_config(move |config| {
+            config.model_id = model_id;
+            if let Some(permission_mode) = permission_mode {
+                config.permission_mode = permission_mode;
+            }
+        })
+        .await;
+    let app_state = runtime.app_state();
     if let Some(mode) = prepared.permission_mode {
         // Brand-new session: the engine config / rules aren't wired yet, so the
         // Auto-entry stash starts empty. The evaluator-facing strip in
         // ToolContextFactory::build (keyed on live mode==Auto) is the real guard.
         crate::live_permission_mode::apply_to_app_state(
-            &handoff.app_state,
+            app_state,
             coco_types::PermissionMode::Default,
             mode,
             &coco_types::PermissionRulesBySource::new(),
@@ -323,13 +316,8 @@ async fn build_started_session_handoff(
     // periodic-summary timers without reaching into SdkServerState.
     // Coordinator mode auto-enables independently.
     if prepared.agent_progress_summaries_enabled {
-        handoff
-            .app_state
-            .write()
-            .await
-            .agent_progress_summaries_enabled = true;
+        app_state.write().await.agent_progress_summaries_enabled = true;
     }
-    handoff
 }
 
 /// Drain per-turn CoreEvents and forward to the outbound notification
@@ -337,8 +325,8 @@ async fn build_started_session_handoff(
 ///
 /// Specifically:
 /// - `SessionResult` events are **not** forwarded. Instead, their stats
-///   are folded into `SdkServerState` accounting while the owner session still
-///   has live scoped state. The aggregated `SessionResult` is emitted once
+///   are folded into the selected runtime's accounting. The aggregated
+///   `SessionResult` is emitted once
 ///   when `session/archive` runs.
 /// - `SessionStarted` events are also swallowed (defensive — the current
 ///   runner doesn't emit them, but if a future runner enables the
@@ -346,14 +334,11 @@ async fn build_started_session_handoff(
 ///   server side, not one per turn).
 /// - All other events pass through unchanged.
 ///
-/// `owner_session_id` is the session this forwarder was created for.
-/// If `session/archive`, close, or a legacy `session/start` replacement has
-/// removed this session's scoped state while the forwarder is still draining,
-/// we refuse to fold stats into a dead session.
+/// `owner_session_id` is the session this forwarder was created for and is
+/// used to stamp every outbound envelope.
 pub(super) async fn forward_turn_events(
     mut rx: mpsc::Receiver<CoreEvent>,
     tx: mpsc::Sender<OutboundMessage>,
-    state: Arc<SdkServerState>,
     session: crate::session_runtime::SessionHandle,
     owner_session_id: coco_types::SessionId,
 ) {
@@ -364,7 +349,7 @@ pub(super) async fn forward_turn_events(
     while let Some(event) = rx.recv().await {
         match event {
             CoreEvent::Protocol(ServerNotification::SessionResult(params)) => {
-                accumulate_session_result(&state, &owner_session_id, &params).await;
+                session.accumulate_session_result(&params);
                 // Swallow — aggregated result is emitted by session/archive.
             }
             CoreEvent::Protocol(ServerNotification::SessionStarted(_)) => {
@@ -400,23 +385,6 @@ pub(super) async fn forward_turn_events(
         // completion signal. A custom runner that omits TurnEnded must not
         // permanently occupy the session's active-turn slot.
         session.clear_active_turn();
-    }
-}
-
-/// Fold a per-turn `SessionResult` into the owner session's aggregated stats
-/// while its keyed SDK state is still live.
-async fn accumulate_session_result(
-    state: &SdkServerState,
-    owner_session_id: &coco_types::SessionId,
-    params: &coco_types::SessionResultParams,
-) {
-    if state.session_handoff_snapshot(owner_session_id).is_some() {
-        state.accumulate_session_result(owner_session_id, params);
-    } else {
-        debug!(
-            owner = %owner_session_id,
-            "accumulate_session_result: session state missing, dropping stats"
-        );
     }
 }
 
@@ -477,15 +445,17 @@ pub(super) async fn handle_session_archive(
             data: None,
         };
     }
-    let archived = ctx
-        .state
-        .archive_scoped_session(&session_id, |session_id, state| {
-            build_aggregated_session_result(session_id, state, "archived")
-        })
-        .await;
+    let Some(runtime) = ctx.resolve_runtime().await else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: format!("session {session_id} has no live runtime"),
+            data: Some(serde_json::json!({ "kind": "session_runtime_not_found" })),
+        };
+    };
+    let result_params = build_aggregated_session_result(&runtime, "archived");
+    let active_turn = runtime.take_active_turn();
+    ctx.state.forget_session_activity(&session_id);
     info!(session_id = %session_id, "SdkServer: session/archive");
-    let result_params = archived.result;
-    let active_turn = archived.active_turn;
 
     // Cancel any running turn. Outside the lock because:
     //  (a) `CancellationToken::cancel` is cheap and non-blocking
@@ -661,13 +631,13 @@ pub(super) async fn handle_session_toggle_tag(
 /// Used by `session/archive` to synthesize the once-per-session aggregate
 /// the SDK client expects.
 pub(crate) fn build_aggregated_session_result(
-    session_id: &coco_types::SessionId,
-    state: &SdkServerState,
+    session: &crate::session_runtime::SessionHandle,
     default_stop_reason: &str,
 ) -> coco_types::SessionResultParams {
-    let SessionAccounting { started_at, stats } = state.session_accounting_snapshot(session_id);
+    let crate::session_runtime::SessionAccounting { started_at, stats } =
+        session.session_accounting_snapshot();
     coco_types::SessionResultParams {
-        session_id: session_id.clone(),
+        session_id: session.session_id().clone(),
         total_turns: stats.total_turns,
         duration_ms: started_at.elapsed().as_millis() as i64,
         duration_api_ms: stats.total_duration_api_ms,
@@ -784,8 +754,8 @@ fn persisted_session_data_error(error: PersistedSessionDataError) -> HandlerResu
 /// the next turn the SDK client drives sees the prior chain.
 ///
 /// Replaces the current active session id (if any) and installs the
-/// state-owned SDK handoff/metadata maps for the resumed id. Any in-flight
-/// turn on the previous session is cancelled first to prevent orphaned state.
+/// a fresh runtime for the resumed id. Any in-flight turn on the previous
+/// session is cancelled first to prevent orphaned state.
 /// When a `SessionRuntime` is already on the requested id, `runtime.history()`
 /// is seeded with the loaded messages; mismatched runtime-backed resume must
 /// use the AppServer runtime-replacement path.
@@ -905,47 +875,6 @@ pub(crate) async fn load_resume_session(
         session_id,
         conversation,
     })
-}
-
-pub(crate) async fn install_scoped_resumed_session_state(
-    state: &SdkServerState,
-    session: &coco_session::Session,
-    session_id: coco_types::SessionId,
-    prior_messages: &[coco_messages::Message],
-    connection_profile: &coco_types::ConnectionProfile,
-) {
-    let plan_mode_instructions = connection_profile
-        .initialize()
-        .plan_mode_instructions
-        .clone();
-
-    state.install_scoped_replacement_session_state(ReplacementSessionState {
-        session_id,
-        metadata: SessionMetadata {
-            cwd: session.working_dir.to_string_lossy().into_owned(),
-            model: session.model.clone(),
-        },
-        handoff: resumed_session_handoff(prior_messages, None),
-        plan_mode_instructions,
-        prior_cleanup: PriorSessionCleanup::Full,
-        reset_accounting: true,
-    });
-}
-
-fn resumed_session_handoff(
-    prior_messages: &[coco_messages::Message],
-    app_state: Option<Arc<RwLock<coco_types::ToolAppState>>>,
-) -> SessionHandoffState {
-    let history = prior_messages
-        .iter()
-        .cloned()
-        .map(Arc::new)
-        .collect::<Vec<_>>();
-    SessionHandoffState {
-        history: Arc::new(tokio::sync::Mutex::new(history)),
-        app_state: app_state
-            .unwrap_or_else(|| Arc::new(RwLock::new(coco_types::ToolAppState::default()))),
-    }
 }
 
 pub(crate) async fn hydrate_runtime_for_resume_messages(

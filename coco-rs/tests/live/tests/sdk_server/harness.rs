@@ -1,7 +1,7 @@
 //! In-memory SDK server harness for live tests.
 //!
 //! Builds a real `SdkServer` with a real `SessionRuntime` driven by a
-//! real `QueryEngineRunner` against the live DeepSeek API, but talks
+//! real `SessionTurnExecutor` against the live DeepSeek API, but talks
 //! to it over an `InMemoryTransport::pair()` instead of stdio. Tests
 //! drive the client end directly.
 //!
@@ -21,9 +21,9 @@ use coco_agent_host::headless;
 use coco_agent_host::sdk_server::CliInitializeBootstrap;
 use coco_agent_host::sdk_server::InMemoryTransport;
 use coco_agent_host::sdk_server::LocalAppSessionHandle;
-use coco_agent_host::sdk_server::QueryEngineRunner;
 use coco_agent_host::sdk_server::SdkServer;
 use coco_agent_host::sdk_server::SdkTransport;
+use coco_agent_host::sdk_server::SessionTurnExecutor;
 use coco_agent_host::session_runtime::SessionHandle;
 use coco_agent_host::session_runtime::SessionRuntimeBuildOpts;
 use coco_cli::Cli;
@@ -77,7 +77,7 @@ pub struct LiveSdkServer {
 
 impl LiveSdkServer {
     /// Snapshot the **active session's** history — that's the
-    /// `SessionHandle.history` mutex `QueryEngineRunner` writes to per
+    /// `SessionHandle.history` mutex `SessionTurnExecutor` writes to per
     /// turn. `runtime.history` is a parallel mutex on `SessionRuntime`
     /// that the SDK runner doesn't update; reading it would always
     /// return empty.
@@ -140,7 +140,7 @@ pub fn cli_for(provider: &str, model: &str, extra: &[&str]) -> AgentHostOptions 
     Cli::parse_from(&argv).agent_host_options()
 }
 
-/// Spin up an `SdkServer` driven by a real `QueryEngineRunner` against
+/// Spin up an `SdkServer` driven by a real `SessionTurnExecutor` against
 /// `(provider, model)`. The runner uses DeepSeek live; `DEEPSEEK_API_KEY`
 /// must be set or the harness errors before reaching the server.
 pub async fn build_live_server(provider: &str, model: &str) -> Result<LiveSdkServer> {
@@ -309,8 +309,7 @@ pub async fn build_live_server_with_options(
         .with_startup_cwd(cwd.clone());
 
     let session_runtime = session_handle.clone();
-    let runner = Arc::new(QueryEngineRunner::new(
-        session_handle,
+    let runner = Arc::new(SessionTurnExecutor::new(
         cli.max_turns.or(Some(8)),
         Some(system_prompt),
     ));

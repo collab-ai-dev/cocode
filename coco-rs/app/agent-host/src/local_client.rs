@@ -223,7 +223,7 @@ impl<H: Clone> LocalServerClient<H> {
             .await
     }
 
-    async fn session_replace<Handler>(
+    pub async fn session_replace<Handler>(
         &self,
         handler: &Handler,
         params: coco_types::SessionReplaceParams,
@@ -907,6 +907,10 @@ impl<H: Clone> LocalServerClient<H> {
         &mut self,
     ) -> &mut tokio::sync::mpsc::Receiver<ServerRequestDelivery> {
         self.connection.server_requests_mut()
+    }
+
+    pub fn take_server_requests(&mut self) -> tokio::sync::mpsc::Receiver<ServerRequestDelivery> {
+        self.connection.take_server_requests()
     }
 
     pub fn try_next_session_request(

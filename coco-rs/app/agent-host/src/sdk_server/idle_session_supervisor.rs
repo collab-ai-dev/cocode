@@ -42,7 +42,7 @@ pub fn spawn_idle_session_sweep(
                 let runtime = app_server
                     .registry()
                     .get(session_id)
-                    .and_then(|handle| handle.runtime().cloned());
+                    .map(|handle| handle.runtime().clone());
                 let command_queue = runtime
                     .as_ref()
                     .map(|runtime| runtime.command_queue().clone());
@@ -135,7 +135,7 @@ async fn idle_session_is_due(
     let runtime = app_server
         .registry()
         .get(session_id)
-        .and_then(|handle| handle.runtime().cloned());
+        .map(|handle| handle.runtime().clone());
     if summary.surface_counts.attached != 0
         || runtime
             .as_ref()

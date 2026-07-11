@@ -979,11 +979,7 @@ async fn btw_uses_local_app_server_turn_shortcut() {
         .expect("/btw turn should finish")
         .expect("turn_done channel should stay open");
     assert!(drain_completed_turn(&active_turn, completed_turn).await);
-    let session_id = runtime.current_typed_session_id().await;
-    let handoff = state
-        .session_handoff_snapshot(&session_id)
-        .expect("active AppServer handoff");
-    let history = handoff.history.lock().await;
+    let history = runtime.history().lock().await;
     assert_eq!(history.len(), 2);
     let messages = history.as_slice();
     let echo = coco_messages::wrapping::extract_text_from_message(&messages[0]);

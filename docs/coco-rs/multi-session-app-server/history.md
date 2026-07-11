@@ -110,3 +110,52 @@ After that correction, all seam checks and workspace clippy passed, all 88 TUI
 runner tests passed, and nextest passed all 13,606 executed workspace tests
 (four tests remained skipped by their existing configuration). The focused
 agent-host, app-server, app-server-client, and types suites also passed in full.
+
+## Ownership hardening follow-up (2026-07-11)
+
+A final production-path audit removed the remaining duplicate SDK session
+owners. `LocalAppSessionHandle` now always contains a live `SessionHandle`;
+start/resume without a runtime factory fail closed. `SessionTurnExecutor` is
+the only turn executor across SDK, TUI, headless, and live harnesses. Turn ids,
+active tasks, cancellation, and aggregate accounting moved from process-keyed
+SDK maps into each runtime's `SessionTurnCoordinator`.
+
+The audit also made callback reply correlation include the originating surface,
+applied `session/start` model and permission inputs to the constructed runtime,
+and expanded the release-blocking host suite from six shallow handle scenarios
+to sixteen production-handler scenarios backed by real runtimes.
+
+The follow-up validation passed affected all-features clippy, all 13,611
+workspace tests (four existing skips), schema/Python generation checks, and
+107 Python SDK tests (ten environment-gated skips).
+
+The release suite was then tightened against every package-H sentence rather
+than its test count: the same A/B flows now cover controls, live reads,
+turn-list projection, file rewind, initialized-connection config/history,
+real SDK-hosted MCP handshakes with isolated tool catalogs, the complete
+callback authority matrix, replacement cleanup, turn identity, and explicit
+per-scenario deadlines.
+
+## Delivery-blocker closure (2026-07-11)
+
+The last audit found that `ArchiveTarget::Orphaned` selected a registry runtime
+before proving the session was actually orphaned. Because the handler cancelled
+and drained the active turn before the lifecycle close performed its own
+authorization, an owned session could suffer destructive side effects and only
+then return `InteractiveOwnerConflict`. Authorization now occurs in request
+resolution before handler dispatch, and a real-runtime barrier test proves a
+rejected orphan archive leaves the active turn and registry entry intact.
+
+The audit also rejected test-count equivalence as completion evidence. The
+host suite now maps all eleven package-H requirements to concrete assertions,
+including both project and local config writes, real SDK-hosted MCP isolation,
+the full callback authority tuple, compatible/incompatible orphan resume,
+targeted reload close/replacement, orphan turn continuation, lossless
+slow-consumer recovery, and non-serial shutdown. All concurrent and lifecycle
+tests have overall deadlines.
+
+Finally, the obsolete SDK `pending_map` module and its self-only tests were
+deleted after confirming that production callback ownership had moved to
+AppServer. The final post-fix gate passed all 13,611 workspace Rust tests,
+affected all-features clippy, schema/Python code-generation checks, and 107
+Python SDK tests.

@@ -468,7 +468,7 @@ impl<H: Clone> AppServer<H> {
 
     pub fn resolve_server_request(
         &self,
-        session_id: &SessionId,
+        target: &InteractiveTarget,
         reply: ServerRequestReply,
     ) -> Result<ResolvedServerRequest, AppServerError> {
         let request_id = RequestId::String(reply.request_id().to_string());
@@ -477,7 +477,7 @@ impl<H: Clone> AppServer<H> {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let pending = routing
-            .complete_server_request(&request_id, session_id)
+            .complete_server_request(&request_id, target)
             .map_err(AppServerError::from)?;
         drop(routing);
         if let Some(waiter) = self
@@ -1315,6 +1315,15 @@ impl ServerRequestReply {
             | Self::Error(ServerRequestErrorReply { request_id, .. }) => request_id,
         }
     }
+
+    pub fn interactive_target(&self) -> Option<&InteractiveTarget> {
+        match self {
+            Self::Approval(params) => Some(&params.target),
+            Self::UserInput(params) => Some(&params.target),
+            Self::Elicitation(params) => Some(&params.target),
+            Self::McpRouteMessage { .. } | Self::HookCallback { .. } | Self::Error(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1392,6 +1401,16 @@ pub enum AppServerError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display(
+        "server request {request_id:?} belongs to surface {expected_surface_id}, got {actual_surface_id}"
+    ))]
+    ServerRequestWrongSurface {
+        request_id: RequestId,
+        expected_surface_id: SurfaceId,
+        actual_surface_id: SurfaceId,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("server request belongs to another connection: {request_id:?}"))]
     ServerRequestWrongConnection {
         request_id: RequestId,
@@ -1411,9 +1430,9 @@ impl ErrorExt for AppServerError {
             | Self::InteractiveOwnerConflict { .. } => StatusCode::InvalidArguments,
             Self::TargetSessionNotLive { .. } => StatusCode::Cancelled,
             Self::ServerRequestNotFound { .. } => StatusCode::FileNotFound,
-            Self::ServerRequestWrongSession { .. } | Self::ServerRequestWrongConnection { .. } => {
-                StatusCode::InvalidArguments
-            }
+            Self::ServerRequestWrongSession { .. }
+            | Self::ServerRequestWrongSurface { .. }
+            | Self::ServerRequestWrongConnection { .. } => StatusCode::InvalidArguments,
         }
     }
 
@@ -1436,6 +1455,16 @@ impl From<CompleteServerRequestError> for AppServerError {
                 request_id,
                 expected_session_id,
                 actual_session_id,
+            }
+            .build(),
+            CompleteServerRequestError::WrongSurface {
+                request_id,
+                expected_surface_id,
+                actual_surface_id,
+            } => ServerRequestWrongSurfaceSnafu {
+                request_id,
+                expected_surface_id,
+                actual_surface_id,
             }
             .build(),
             CompleteServerRequestError::WrongConnection { request_id } => {
