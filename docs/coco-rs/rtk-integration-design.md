@@ -1,7 +1,10 @@
 # RTK Integration — Bash Output Compression via Rust Token Killer
 
-Status: **phase 1 implemented** (subprocess tier — Appendix B checklist landed;
-phase 2 embedded core still pending) · Branch: `feat/rtk` · 2026-07-07
+Status: **phase 1 + phase 2 (v0) implemented** — subprocess tier (Appendix B) and
+the embedded post-exec filter core (Appendix C) both landed; phase-2 v0 ships the
+declarative TOML long-tail + never-worse guard, with the git/cargo/pytest family
+formatters deferred until the fork's `cmds` module decouples from the binary
+`Commands` enum. · Branch: `feat/rtk` · 2026-07-11
 
 Upstream: [rtk-ai/rtk](https://github.com/rtk-ai/rtk) v0.42.4 (analyzed from a
 local checkout). rtk ("Rust Token Killer") is a CLI proxy that executes a
@@ -390,12 +393,13 @@ spawn ORIGINAL command (no rewrite, no rtk process, no permission nuance)
 | Command executed | `rtk git status` | `git status`, unmodified |
 | Rewrite trust model (§4.6) | applies | **moot** — command untouched |
 | rr-rtk name fixup (§4.5) | needed | moot |
-| Background tasks | skipped (buffering) | **works** — filter on completion |
+| Background tasks | skipped (buffering) | v0: **not filtered** — only completed foreground / TaskRuntime-`Terminal` output is (the `run_in_background` stream is captured raw); incremental stream filtering is future work |
 | Sandbox | skipped (rtk's SQLite write) | **works** — no rtk process, no DB |
-| Specialized text parsers (git, cargo/pytest failure-focus) | full | **full** — pure text→text formatters |
+| Specialized text parsers (git, cargo/pytest failure-focus) | full | v0: **deferred** — `cmds` formatters not yet lib-exposed (§10-Q6); TOML long tail only |
 | TOML long tail (63 tools) | full | **full** — engine is text→text by design |
+| Compound / piped commands | per-segment rewrite | **not filtered** — a first-word filter can't safely apply to combined multi-segment output; passes through raw |
 | JSON-mode filters (rubocop, golangci-lint, rspec…) | full (rtk injects `--format json`) | degraded to text parsing, until a small per-family argv flag-injection table is added pre-spawn (visible, auditable input tweak — far narrower than a rewrite) |
-| Raw-output recovery | rtk tee files | coco's Level-1 `<persisted-output>` persistence — already better |
+| Raw-output recovery | rtk tee files | v0: the filtered text **replaces** raw in both the inline view and the Level-1 `<persisted-output>` artifact (coco persists the model-facing stdout, not the pre-filter capture). Recover the raw output by re-running with the `RTK_DISABLED=1` prefix. Persisting the pre-filter capture for recovery is future work. |
 | Rules freshness | `brew upgrade` | pinned rev, bumped on coco's cadence |
 
 The dominant wins — the git family, cargo/pytest failure-focus, the TOML
@@ -601,6 +605,16 @@ metrics become the source of truth.
 Phase note: the knob ships with phase 2. During phase 1 only the external
 tier exists — the setting is accepted but everything effectively runs
 `ExternalOnly`.
+
+**v0 collapse (honest caveat).** With `cmds` family formatters not yet exposed
+(§10-Q6), the embedded tier has no *degraded-family* case, so `BuiltinFirst`
+never falls back to a pre-spawn rewrite — it is byte-for-byte identical to
+`BuiltinOnly` today. The two config values only diverge once family formatters
+land (then `BuiltinFirst` must arbitrate *per command*, which the current static
+per-session capability booleans cannot express — that step is a deliberate
+signature change on `BashOutputRewriter`, not a fill-in-the-TODO). `ExternalFirst`
+and `ExternalOnly` are already distinct (the post-exec fallback only fires under
+`ExternalFirst`).
 
 ---
 
@@ -823,8 +837,11 @@ default-on defensible is that the downside is bounded to zero — the never-wors
 guard (§3.3) and the `catch_unwind` around every filter make a bad filter
 degrade to raw output, never worse than today. The §7.3 metrics become
 **post-hoc validation and a rollback signal**, not a promotion gate. Opt out any
-time via `settings.json features.rtk = false`, `COCO_FEATURE_RTK=0`, or
-`RuntimeOverrides`; per-command via the `RTK_DISABLED=1` prefix (§6). As
+time via `settings.json features.output_rewrite = false`, `COCO_FEATURE_OUTPUT_REWRITE=0`,
+or `RuntimeOverrides` (the capability was renamed `Feature::Rtk` → `Feature::OutputRewrite`
+during genericization; unknown feature keys are silently ignored, so the old
+`features.rtk` / `COCO_FEATURE_RTK` names are inert no-ops); per-command via the
+`RTK_DISABLED=1` prefix (§6). As
 `Stable` (not `Experimental`) it has no `/experimental` menu entry and no
 announcement — the model-facing note lives on the Bash tool description instead.
 
@@ -883,8 +900,9 @@ itself needs to make the spawn/skip decision.
 
 One new variant: `CocoRtkPath => "COCO_RTK_PATH"` (binary override, ranked
 below the settings value inside `RtkConfig::resolve`). The feature toggle
-needs no new key — `COCO_FEATURE_RTK` rides the generic `COCO_FEATURE_*`
-layer. `rtk.engine` is deliberately settings-only (no env key): flipping
+needs no new key — `COCO_FEATURE_OUTPUT_REWRITE` rides the generic
+`COCO_FEATURE_*` layer. `output_rewrite.rtk.mode` is deliberately settings-only
+(no env key): flipping
 execution tiers per-process via env invites unreproducible sessions. No
 legacy aliases; backward compatibility is a non-goal.
 
@@ -1034,11 +1052,13 @@ Companion-file layout per repo convention; no inline `mod tests`.
 5. File upstream (rr-rtk and/or rtk-ai/rtk): binary-name-aware rewrite
    prefixes (§4.5), a `--no-permission-check` flag for `rtk rewrite` (Q2),
    and the `[lib]` + `core`/`cli` feature-split PR (§3.2 vehicle 2).
-6. Phase-2 spike must verify per family which formatters are actually pure
-   text→text and `pub`-reachable from a lib target (git and the
-   runner/pytest state machines look right from the architecture docs;
-   streaming-coupled modules like docker logs may need small upstream
-   refactors). Budget: audit the top-6 families before committing the fork.
+6. **RESOLVED** (phase-2 v0). The fork's `src/lib.rs` exposes `core`
+   (TOML filter registry + never-worse guard + ANSI/truncate/code-strip),
+   `discover` (classify/rewrite), `hooks` (trust store) and `parser` — but
+   **not `cmds`**: the family formatters stay coupled to `main.rs`'s binary-only
+   `Commands` enum (`cmds::js::vitest_cmd::run_test`). So the git/cargo/pytest
+   formatters are not `pub`-reachable yet; phase-2 v0 ships the TOML long-tail +
+   guard, and the `cmds` decouple remains the trigger for the family formatters.
 7. Where does the fork live — a `coco`-org repo, or contributed directly to
    rr-rtk's existing fork to avoid a third identity?
 
@@ -1090,5 +1110,32 @@ Every file phase 1 touches, in dependency order. Each row is independently
 | 9 | `coco.rtk.*` metrics + tracing fields (§7.3) | `exec/shell/src/rtk/` emission, names per `common/otel` conventions |
 | 10 | Register this doc in `docs/coco-rs/CLAUDE.md` Document Map + File Index | docs |
 
-Phase 2's checklist is deferred until the §10-Q6 formatter-purity audit
-lands (it decides the fork's exact export surface).
+## Appendix C — phase-2 (v0) implementation checklist
+
+The embedded post-exec filter tier, as landed. Each row is independently
+`just quick-check`-able.
+
+| # | Change | Where |
+|---|--------|-------|
+| 1 | Coco-owned fork adds additive `src/lib.rs` (`pub mod core/discover/hooks/parser`); no upstream file touched | `collab-ai-dev/rtk` @ `8f2bc3d` |
+| 2 | Fork delta: drop `serde_json` `preserve_order` so the lib does not force IndexMap key-ordering onto embedders (cargo unifies the feature graph-wide; coco relies on BTreeMap-sorted JSON) | `collab-ai-dev/rtk` @ `c788ea7` |
+| 3 | Pin the fork as a git dep by `rev` (vehicle 1); bumped via `/rtk-sync` | workspace `Cargo.toml`, `exec/shell/Cargo.toml` |
+| 4 | Post-exec stage: `apply_rtk_filter(command, exit_code, stdout) -> Option<String>`. Cheap command-string gate first (RTK_DISABLED strip → **skip compound/piped** commands → env-stripped `find_matching_filter` → **skip `filter_stderr` filters**), so the ~2 MB stdout is cloned only on a match; then `apply_filter` → self-contained byte-length never-worse guard (no coupling to rtk's return identity) → defensive `strip_ansi`, panic-isolated via the `spawn_blocking` join boundary; one decision metric | `exec/shell/src/rtk/filter.rs` + test |
+| 5 | Extend `BashOutputRewriter` with backend-agnostic capability predicates (`does_pre_spawn_rewrite` / `does_post_exec_filter`) + `filter_output`; `RtkRewriter` projects `RtkMode` onto them | `exec/shell/src/rtk/mod.rs` + test |
+| 6 | `RtkMode` becomes load-bearing (was inert): default `BuiltinFirst` now spawns unmodified + filters post-exec | `common/config/src/sections.rs` |
+| 7 | Gate the pre-spawn rewrite on `does_pre_spawn_rewrite`; add `apply_post_exec_filter` (gated on capability + `!was_rewritten`, the no-double-filter rule) + `annotate_builtin_tier`; wire into BOTH exec paths before `decode_capped`, image-detection skipped when the filter fired | `core/tools/src/tools/bash_rtk.rs`, `bash.rs` + tests |
+| 8 | `coco.output_rewrite.decision_total{engine=rtk,tier=builtin,reason}` for filtered / miss / never_worse / panic | `exec/shell/src/rtk/filter.rs` |
+
+**Deferred (prerequisites not yet met), with the safe fallback each has today:**
+
+- **`families.rs` (git/cargo/pytest formatters)** — blocked on the fork's `cmds`
+  decouple (§10-Q6). Until then those commands post-exec-Miss and fall through to
+  raw + head-truncation (today's behavior). No placeholder module is created
+  (dead code); it lands with real content at the decoupling rev.
+- **`trust.rs` (coco-native consent write flow)** — the registry loader already
+  trust-gates project `.rtk/filters.toml` internally (silently skips untrusted =
+  rtk's headless posture), so the read path is safe without it. The write flow is
+  only meaningful once per-cwd project loading exists (the singleton reads the
+  project file from process CWD once); deferred with the CWD-singleton skew.
+- **JSON-mode arg(§2.x flag-injection), native `Read` `FilterLevel::Aggressive`,
+  output-side secret redaction** — unchanged from §9.

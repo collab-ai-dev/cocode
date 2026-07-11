@@ -818,25 +818,31 @@ pub enum OutputRewriteEngine {
 /// rtk tier-selection policy (design §3.5) — which rtk lifecycle point acts:
 /// external is a **pre-spawn rewrite**, builtin is a **post-exec filter**. This
 /// is an rtk-engine-internal knob (`output_rewrite.rtk.mode`), distinct from
-/// [`OutputRewriteEngine`] which selects the backend.
+/// [`OutputRewriteEngine`] which selects the backend. `BashOutputRewriter`
+/// projects this to two capability predicates (`does_pre_spawn_rewrite` /
+/// `does_post_exec_filter`) so `BashTool` arbitrates without seeing `RtkMode`.
 ///
-/// **Phase 1 note:** the embedded tier does not exist yet, so this is *accepted
-/// but not yet read* — every value currently behaves as [`RtkMode::ExternalOnly`].
-/// The per-variant descriptions are the phase-2 target semantics (e.g.
-/// `BuiltinOnly`'s "never spawn the binary" only takes effect once the embedded
-/// core lands).
+/// **v0 scope:** the embedded core exposes only the declarative TOML long-tail;
+/// the git / cargo / pytest family formatters are still upstream-coupled, so
+/// under `BuiltinFirst` those commands fall through to raw output until either
+/// the caller selects an `External*` mode (with a binary on PATH) or the
+/// upstream `cmds` decouple lands. There is no degraded-family fallback to
+/// arbitrate yet, so `BuiltinFirst` never spawns the binary.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RtkMode {
-    /// Default. Embedded core filters post-exec; the external binary is
-    /// consulted only for commands the core cannot handle at full fidelity.
+    /// Default. Embedded core filters post-exec; no pre-spawn rewrite. Zero
+    /// install, works in sandboxes and background tasks.
     #[default]
     BuiltinFirst,
-    /// Binary rewrite when available; embedded core as the fallback.
+    /// Binary rewrite when available; embedded post-exec filter as the fallback
+    /// when the rewrite does not fire.
     ExternalFirst,
-    /// Never spawn the binary (deterministic CI / air-gapped).
+    /// Only the embedded post-exec filter; never spawn the binary
+    /// (deterministic CI / air-gapped).
     BuiltinOnly,
-    /// Never use the embedded core (parity debugging; `rtk gain` ledger).
+    /// Only the external binary rewrite; never run the embedded filter (parity
+    /// debugging; keeps the `rtk gain` ledger fed).
     ExternalOnly,
 }
 

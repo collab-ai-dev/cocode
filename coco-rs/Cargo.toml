@@ -475,6 +475,17 @@ tree-sitter-typescript = "0.23"
 # 0.32 only once rtk drops rusqlite from its lib target.
 rusqlite = { version = "0.31", features = ["bundled"] }
 sqlite-vec = "0.1"
+
+# External - embedded rtk filter core (phase-2 post-exec Bash output compression)
+# Coco-owned fork of rtk-ai/rtk that adds a `src/lib.rs` target (additive; the
+# upstream binary is untouched so `git merge upstream/develop` stays
+# conflict-free). Pinned by rev for a reproducible build; bumped via the
+# `/rtk-sync` skill on coco's cadence, never `branch`. The lib exposes the pure
+# text→text engine (`core` TOML filters + never-worse guard, `discover`
+# classify, `hooks::trust`); `cmds` family formatters stay omitted until upstream
+# decouples them from the binary `Commands` enum. Drags rusqlite 0.31 (see the
+# lockstep note above) — tracking/telemetry live in CLI paths a lib caller never runs.
+rtk = { git = "https://github.com/collab-ai-dev/rtk", rev = "c788ea7d4c4795a483df9efdaed9682cc942847e" }
 zerocopy = { version = "0.7", features = ["derive"] }
 
 # External - proc macros

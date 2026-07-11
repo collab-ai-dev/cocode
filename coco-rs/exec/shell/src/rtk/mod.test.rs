@@ -15,6 +15,52 @@ fn tier_as_str() {
     assert_eq!(RtkTier::External.as_str(), "external");
 }
 
+#[test]
+fn mode_projects_to_tier_capabilities() {
+    // (mode, does_pre_spawn_rewrite, does_post_exec_filter) — the §3.5 policy
+    // that `BashTool` consumes without ever seeing `RtkMode`.
+    let cases = [
+        (RtkMode::BuiltinFirst, false, true),
+        (RtkMode::BuiltinOnly, false, true),
+        (RtkMode::ExternalFirst, true, true),
+        (RtkMode::ExternalOnly, true, false),
+    ];
+    for (mode, pre, post) in cases {
+        let rewriter = rewriter_with(RtkConfig {
+            mode,
+            ..Default::default()
+        });
+        assert_eq!(
+            rewriter.does_pre_spawn_rewrite(),
+            pre,
+            "pre_spawn for {mode:?}"
+        );
+        assert_eq!(
+            rewriter.does_post_exec_filter(),
+            post,
+            "post_exec for {mode:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn filter_output_delegates_to_embedded_core() {
+    // The `BashOutputRewriter::filter_output` impl routes through the post-exec
+    // filter core: a single covered command compresses, a compound one stays raw.
+    let rewriter = rewriter_with(RtkConfig::default());
+    let mut input = String::from("Filesystem     1K-blocks   Used Available Use% Mounted on\n");
+    for i in 0..40 {
+        input.push_str(&format!(
+            "/dev/sda{i}        4096000 123456   3972544   4% /mnt/{i}\n"
+        ));
+    }
+    assert!(rewriter.filter_output("df -h", 0, &input).await.is_some());
+    assert_eq!(
+        rewriter.filter_output("df -h && echo x", 0, &input).await,
+        None
+    );
+}
+
 #[tokio::test]
 async fn background_skips_before_probe() {
     // A bogus binary_path would fail if probed — proving background short-
