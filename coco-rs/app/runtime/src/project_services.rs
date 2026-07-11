@@ -118,9 +118,9 @@ impl ProjectRegistryKey {
 
 /// Cache of project-scoped service snapshots.
 ///
-/// Loading is intentionally synchronous today, so holding the write lock during
-/// a miss gives a simple single-flight guarantee: concurrent callers for the
-/// same key share the first loaded `Arc<ProjectServices>`.
+/// Loading is synchronous but runs outside the global map lock. Concurrent
+/// same-key misses may duplicate the disk scan; publication deduplication makes
+/// every caller return the one winning `Arc<ProjectServices>`.
 #[derive(Debug)]
 pub struct ProjectRegistry {
     projects: RwLock<HashMap<ProjectRegistryKey, ProjectRegistryEntry>>,

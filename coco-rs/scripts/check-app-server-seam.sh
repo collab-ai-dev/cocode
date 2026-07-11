@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Enforce the AppServer layering seam (multi-session plan §5.3, D-11).
+# Enforce the AppServer layering seam (multi-session target architecture).
 #
 # Rule: engine and core crates MUST NOT depend on the server layer. Shared
 # view types (envelopes, notification payloads, ids) live in `coco-types`,
@@ -63,7 +63,7 @@ done
 
 if [ "$violations" -ne 0 ]; then
     echo
-    echo "Engine/core crates must not depend on the server layer (plan §5.3)."
+    echo "Engine/core crates must not depend on the server layer."
     echo "Move shared view types down to coco-types instead."
     exit 1
 fi

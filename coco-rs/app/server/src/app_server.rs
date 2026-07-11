@@ -57,9 +57,9 @@ use crate::registry::SessionSlot;
 
 /// App-server state holder for registry + routing lock ordering.
 ///
-/// Runtime factory, transport adapters, and owner task spawning are still
-/// pending; this skeleton owns the no-await commit sections that touch both
-/// lifecycle slots and surface routing.
+/// It owns lifecycle owner tasks and the no-await commit sections that touch
+/// both lifecycle slots and surface routing. Runtime construction and close
+/// behavior remain opaque futures supplied by the application host.
 pub struct AppServer<H> {
     registry: LiveSessionRegistry<H>,
     routing: RwLock<RoutingState>,

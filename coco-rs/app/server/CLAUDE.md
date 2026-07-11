@@ -12,7 +12,7 @@ the production routing/facade/adapter files below the workspace line limit.
 | Type | Purpose |
 |------|---------|
 | `AppServer` | Owns registry + routing locks and combined no-await commit sections. |
-| `SessionSeqAllocator` | Process-shared durable `session_seq` allocator: strictly monotonic per session across every forwarder path, with a watermark persist hook + `initialize_after_watermark` skip-ahead for cross-restart continuity (D-47). |
+| `SessionSeqAllocator` | Process-shared durable `session_seq` allocator: strictly monotonic per session across every forwarder path, with a watermark persist hook + `initialize_after_watermark` skip-ahead for cross-restart continuity. |
 | `AppLoadStart` | Result of starting/observing a load owner task. |
 | `AppCloseStart` | Result of starting/observing a close owner task. |
 | `AppReplaceStart` | Result of starting a replace owner task. |
@@ -36,7 +36,7 @@ the production routing/facade/adapter files below the workspace line limit.
 | `ConnectionKey` | Private in-process transport key. Never serialize or persist it. |
 | `RoutingState` | Single-lock state for connection/surface indexes and per-session durable rings. |
 | `SurfaceAttachment` | Server-owned attachment metadata: role, capabilities, notification prefs, delivery cursor, state. |
-| `SurfaceRole` | `Interactive` or `Passive`; exactly one interactive owner per session. |
+| `SurfaceRole` | `Interactive` or `Passive`; at most one interactive owner per session. |
 | `AttachError` | Snafu-backed attach failure (`InteractiveOwnerConflict`, `SurfaceLimit`, `SessionClosing`). |
 | `SurfaceDelivery` | `coco-types` envelope delivery targeted to one `SurfaceId`. |
 | `ServerRequestDelivery` | `coco-types` actionable server request targeted to one `SurfaceId`. |

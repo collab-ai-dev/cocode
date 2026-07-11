@@ -141,6 +141,14 @@ server implementation. In-process client composition lives in
 
 ## Pending
 
+Interactive handles do not yet inject their stored `session_id` / `surface_id`
+into turn and runtime-control requests because the canonical request DTOs lack
+an explicit target. Consequently one connection cannot safely control multiple
+interactive sessions even though event demux supports multiple surfaces. The
+breaking remediation is specified in
+`docs/coco-rs/multi-session-app-server/protocol-scope.md` and
+`docs/coco-rs/multi-session-app-server/remediation-plan.md`.
+
 Direct AppServer-owned persisted session-store listing/read semantics and
 broader TUI/Hub cut-over remain pending follow-up work.
 The client crate already exposes typed `session_list` / `session_read` request

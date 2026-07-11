@@ -1,8 +1,9 @@
-//! App-server session routing foundations.
+//! App-server lifecycle, routing, and protocol adapters.
 //!
-//! This crate is the first Phase A slice of `coco-app-server`: the internal
-//! connection key, surface routing indexes, and per-session durable replay ring.
-//! Runtime ownership, transports, and client adapters are wired in later slices.
+//! The crate owns opaque live-session slots, connection/surface indexes,
+//! durable replay, local/JSON-RPC adapters, and listener supervision. Concrete
+//! session-runtime construction and close behavior are supplied by the
+//! application host.
 
 mod activity;
 mod app_server;
