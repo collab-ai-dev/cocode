@@ -968,6 +968,35 @@ impl Tool for BashTool {
 
 use super::bash_rtk::ResolvedCommand;
 
+/// Phase-2 builtin-tier post-exec compression + byte cap for one exec path
+/// (design §3.3), shared by the foreground and TaskRuntime paths so the
+/// "filter-before-cap" and "never filter an image" invariants live in one place.
+///
+/// `is_image` is decided by the caller on the *raw* output bytes (which differ
+/// per path) and passed in: image output is never run through the text filter (a
+/// TOML filter would mangle raster bytes), it is only byte-capped. Otherwise the
+/// builtin filter runs on the full stdout before the cap. Returns the capped,
+/// model-facing stdout and whether the filter fired (for the envelope stamp).
+async fn compress_and_cap_stdout(
+    ctx: &ToolUseContext,
+    cmd: &ResolvedCommand,
+    exit_code: i32,
+    raw_stdout: &str,
+    is_image: bool,
+    max_bytes: usize,
+) -> (String, bool) {
+    if is_image {
+        return (decode_capped(raw_stdout.as_bytes(), max_bytes), false);
+    }
+    let filtered = super::bash_rtk::apply_post_exec_filter(ctx, cmd, exit_code, raw_stdout).await;
+    let builtin_fired = filtered.is_some();
+    let effective = filtered.as_deref().unwrap_or(raw_stdout);
+    (
+        decode_capped(effective.as_bytes(), max_bytes),
+        builtin_fired,
+    )
+}
+
 /// W3: unified fg/bg execution path via TaskRuntime.
 /// Always spawns through `spawn_shell_task` (the same primitive bg
 /// used). The fg/bg distinction is purely about which `tool.execute`
@@ -1157,7 +1186,19 @@ async fn execute_via_task_runtime(
                     source: None,
                 })?;
             let max_bytes = max_output_bytes(&ctx.tool_config);
-            let stdout = decode_capped(outputs.stdout.as_bytes(), max_bytes);
+            // Image detection runs on the raw disk bytes (UTF-8-lossy `String`;
+            // raster magic bytes survive lossy conversion) BEFORE compression, so
+            // the text filter never touches an image.
+            let is_image = is_likely_image_bytes(outputs.stdout.as_bytes());
+            let (stdout, builtin_fired) = compress_and_cap_stdout(
+                ctx,
+                cmd,
+                outputs.exit_code.unwrap_or(0),
+                &outputs.stdout,
+                is_image,
+                max_bytes,
+            )
+            .await;
             let stderr = decode_capped(outputs.stderr.as_bytes(), max_bytes);
             // Strip + record Claude Code hints so the model never sees the tag.
             let stdout = maybe_strip_and_record_hints(stdout, cmd.original());
@@ -1175,17 +1216,12 @@ async fn execute_via_task_runtime(
                 "command": cmd.original(),
             });
             cmd.annotate_envelope(&mut result_obj);
-            // Image detection on bytes from disk. The unified path
-            // reads the file via `read_terminal_outputs` which returns
-            // a `String` (UTF-8 lossy) — magic-byte detection still
-            // works since the leading bytes survive lossy conversion
-            // for raster formats.
-            let raw_bytes = stdout.as_bytes();
-            if is_likely_image_bytes(raw_bytes) {
+            if builtin_fired {
+                super::bash_rtk::annotate_builtin_tier(&mut result_obj);
+            }
+            if is_image {
                 result_obj["isImage"] = serde_json::Value::Bool(true);
-                if let Some(content) = Some(build_image_block(raw_bytes)) {
-                    result_obj["structuredContent"] = content;
-                }
+                result_obj["structuredContent"] = build_image_block(outputs.stdout.as_bytes());
             }
             Ok(ToolResult {
                 data: result_obj,
@@ -1372,31 +1408,41 @@ async fn execute_foreground(
     }
 
     let max_bytes = max_output_bytes(&ctx.tool_config);
-    // The `stdout` String field comes from `cmd_result.stdout`, which
-    // the executor has already cleaned up (CWD-marker stripped via
-    // `extract_cwd_from_output`). Truncate that for the inline view.
-    let stdout = decode_capped(cmd_result.stdout.as_bytes(), max_bytes);
-
-    // Hints protocol: CLIs/SDKs emit a `<coco-hint />`
-    // tag to stderr (merged into stdout here). Scan, record for the TUI's
-    // pending-hint dialog to surface, then strip so the model never sees
-    // the tag — a zero-token side channel. Stripping runs unconditionally
-    // (subagent output must stay clean too); recording is best-effort and
-    // never affects the tool result.
-    let stdout = maybe_strip_and_record_hints(stdout, cmd.original());
-    let stderr = decode_capped(cmd_result.stderr.as_bytes(), max_bytes);
-    let exit_code = cmd_result.exit_code;
     // R7-T18: image detection inspects the executor's raw stdout bytes
-    // (pre-UTF-8-lossy) when available so the magic-byte signature
-    // isn't mangled by replacement characters. Note this DOES include
-    // the CWD marker for shells that emit one — the detector is
-    // resilient to trailing bytes (PNG / JPEG / GIF / WebP all match
-    // on the leading bytes only). The fallback to `cmd_result.stdout`
-    // covers test stubs that don't populate `stdout_bytes`.
+    // (pre-UTF-8-lossy) when available so the magic-byte signature isn't mangled
+    // by replacement characters. Note this DOES include the CWD marker for shells
+    // that emit one — the detector is resilient to trailing bytes (PNG / JPEG /
+    // GIF / WebP all match on the leading bytes only). The fallback to
+    // `cmd_result.stdout` covers test stubs that don't populate `stdout_bytes`.
+    // Detection runs BEFORE compression so the text filter never touches an image.
     let raw_stdout_bytes_for_detection: &[u8] = cmd_result
         .stdout_bytes
         .as_deref()
         .unwrap_or(cmd_result.stdout.as_bytes());
+    let is_image = is_likely_image_bytes(raw_stdout_bytes_for_detection);
+
+    // Phase-2 builtin-tier post-exec compression (skipped for images), on the
+    // full `cmd_result.stdout` — already CWD-marker-stripped by the executor —
+    // before the byte cap, so the smaller, higher-signal filtered text rides the
+    // existing truncation.
+    let (stdout, builtin_fired) = compress_and_cap_stdout(
+        ctx,
+        cmd,
+        cmd_result.exit_code,
+        &cmd_result.stdout,
+        is_image,
+        max_bytes,
+    )
+    .await;
+
+    // Hints protocol: CLIs/SDKs emit a `<coco-hint />` tag to stderr (merged into
+    // stdout here). Scan, record for the TUI's pending-hint dialog to surface,
+    // then strip so the model never sees the tag — a zero-token side channel.
+    // Stripping runs unconditionally (subagent output must stay clean too);
+    // recording is best-effort and never affects the tool result.
+    let stdout = maybe_strip_and_record_hints(stdout, cmd.original());
+    let stderr = decode_capped(cmd_result.stderr.as_bytes(), max_bytes);
+    let exit_code = cmd_result.exit_code;
 
     // R5-T14 + R6-T17 + R7-T12: structured output envelope:
     // { stdout, stderr, exitCode, interrupted, isImage?,
@@ -1412,18 +1458,10 @@ async fn execute_foreground(
         return Err(ToolError::Cancelled);
     }
 
-    // R7-T12 fields:
-    // 1. `isImage`: detect from stdout magic bytes when e.g. `cat image.png`
-    // returns binary image data, so the UI can render it inline.
-    // 2. `structuredContent`: when stdout IS an image, attach a base64
-    // multimodal block so the model receives the actual pixels.
-    // For text output, structuredContent is omitted (the plain
-    // `stdout` field is enough).
-    // 3. Oversized text output is handled by the generic query-level
-    // Tool Result Budget pipeline. Bash keeps the structured
-    // envelope focused on stdout/stderr/exit status and does not
-    // write model-visible temp files.
-    let is_image = is_likely_image_bytes(raw_stdout_bytes_for_detection);
+    // `isImage` + `structuredContent`: when stdout IS an image, attach a base64
+    // multimodal block so the model receives the actual pixels; text output omits
+    // it (the plain `stdout` field is enough). Oversized text rides the generic
+    // query-level Tool Result Budget pipeline.
     let structured_content = if is_image {
         Some(build_image_block(raw_stdout_bytes_for_detection))
     } else {
@@ -1440,6 +1478,9 @@ async fn execute_foreground(
         "command": cmd.original(),
     });
     cmd.annotate_envelope(&mut result_obj);
+    if builtin_fired {
+        super::bash_rtk::annotate_builtin_tier(&mut result_obj);
+    }
     if is_image {
         result_obj["isImage"] = serde_json::Value::Bool(true);
     }

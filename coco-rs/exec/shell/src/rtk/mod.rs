@@ -14,6 +14,7 @@
 //! Design: `docs/coco-rs/rtk-integration-design.md`.
 
 mod detect;
+mod filter;
 mod rewrite;
 
 #[cfg(test)]
@@ -23,6 +24,7 @@ mod tests;
 use std::time::Instant;
 
 use coco_config::RtkConfig;
+use coco_config::RtkMode;
 use tokio::sync::OnceCell;
 
 pub use detect::RtkBinary;
@@ -119,17 +121,47 @@ pub struct RewriteSite {
     pub sandboxed: bool,
 }
 
-/// The Bash output-rewriter seam. A pre-spawn rewriter inspects the model's
-/// command and returns either a replacement command (whose tool output the
-/// engine then sees compressed) or a passthrough decision. [`RtkRewriter`] is
-/// the only implementation today; the trait exists so `BashTool` depends on the
-/// seam rather than a concrete backend — a second backend (e.g. the phase-2
-/// embedded core) implements this without touching the tool. The public API is
-/// **infallible**: every failure maps to a [`RewriteOutcome::Passthrough`].
+/// The Bash output-compression seam. A backend acts at one or both of two
+/// lifecycle points (design §3.5): a **pre-spawn rewrite** (external tier —
+/// `git status` → `rtk git status`, whose tool output the engine then sees
+/// compressed) and a **post-exec filter** (builtin tier — compress the captured
+/// stdout of the unmodified command in-process). [`RtkRewriter`] is the only
+/// implementation today and does both, arbitrated by [`RtkMode`]; the trait
+/// exists so `BashTool` depends on the seam and its two capability predicates
+/// rather than on a concrete backend or on `RtkMode`. The whole API is
+/// **infallible**: a rewrite maps to [`RewriteOutcome::Passthrough`] and a
+/// filter to `None`, so a broken backend only declines to compress.
 #[async_trait::async_trait]
 pub trait BashOutputRewriter: std::fmt::Debug + Send + Sync {
     /// Rewrite `command` for output compression, or decide to pass it through.
     async fn rewrite(&self, command: &str, site: RewriteSite) -> RewriteOutcome;
+
+    /// Whether this backend performs a pre-spawn rewrite. When `false`,
+    /// `BashTool` skips [`rewrite`](BashOutputRewriter::rewrite) and spawns the
+    /// original command. **Required, no default:** a silent `true` would opt a
+    /// post-exec-only backend into modifying the spawned command it never meant
+    /// to touch — each backend must declare its tiers explicitly.
+    fn does_pre_spawn_rewrite(&self) -> bool;
+
+    /// Whether this backend performs post-exec filtering. When `true`,
+    /// `BashTool` calls [`filter_output`](BashOutputRewriter::filter_output) on
+    /// the captured stdout — but never when a pre-spawn rewrite already fired
+    /// for the same call (no double filtering, §3.5). Required, no default.
+    fn does_post_exec_filter(&self) -> bool;
+
+    /// Post-exec output compression. Given the original command, its exit code,
+    /// and captured stdout, return compressed text or `None` to keep the raw
+    /// output. Infallible — a filter panic degrades to `None`. Defaults to `None`
+    /// for pre-spawn-only backends; it is only ever called when
+    /// [`does_post_exec_filter`](BashOutputRewriter::does_post_exec_filter) is `true`.
+    async fn filter_output(
+        &self,
+        _command: &str,
+        _exit_code: i32,
+        _stdout: &str,
+    ) -> Option<String> {
+        None
+    }
 }
 
 /// Session-wide RTK rewriter, shared via `Arc<dyn BashOutputRewriter>` on
@@ -202,6 +234,28 @@ impl BashOutputRewriter for RtkRewriter {
         let latency_ms = start.elapsed().as_millis() as i64;
         emit_decision(command, &outcome, latency_ms);
         outcome
+    }
+
+    /// External tiers only ([`RtkMode::ExternalFirst`] / [`RtkMode::ExternalOnly`]).
+    /// Under the default `BuiltinFirst` the command is spawned unmodified and
+    /// compressed post-exec instead.
+    fn does_pre_spawn_rewrite(&self) -> bool {
+        matches!(
+            self.config.mode,
+            RtkMode::ExternalFirst | RtkMode::ExternalOnly
+        )
+    }
+
+    /// Every tier except [`RtkMode::ExternalOnly`]. Combined with `BashTool`'s
+    /// no-double-filtering guard, this yields the §3.5 arbitration: `BuiltinFirst`
+    /// / `BuiltinOnly` always post-filter; `ExternalFirst` post-filters only when
+    /// the pre-spawn rewrite did not fire.
+    fn does_post_exec_filter(&self) -> bool {
+        !matches!(self.config.mode, RtkMode::ExternalOnly)
+    }
+
+    async fn filter_output(&self, command: &str, exit_code: i32, stdout: &str) -> Option<String> {
+        filter::apply_rtk_filter(command, exit_code, stdout).await
     }
 }
 
