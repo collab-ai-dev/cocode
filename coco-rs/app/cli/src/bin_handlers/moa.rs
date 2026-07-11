@@ -144,7 +144,7 @@ fn delete_preset(name: &str) -> Result<()> {
 }
 
 fn list_presets(cwd: &Path) -> Result<()> {
-    let roots = coco_cli::paths::settings_roots_for_cwd(cwd);
+    let roots = coco_agent_host::paths::settings_roots_for_cwd(cwd);
     let settings = coco_config::settings::load_settings_for_roots(&roots, None)?;
     let moa = &settings.merged.moa;
     if moa.presets.is_empty() {

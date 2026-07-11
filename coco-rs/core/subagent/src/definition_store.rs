@@ -4,7 +4,7 @@
 //! Active agent definition store.
 //!
 //! Sync-only: `load()` and `reload()` walk the filesystem with `std::fs`.
-//! No tokio, no watcher — `app/state` owns the watcher and calls
+//! No tokio, no watcher — the agent host owns reload orchestration and calls
 //! `reload()` on file changes.
 
 use std::collections::{BTreeMap, HashSet};
@@ -340,7 +340,7 @@ impl AgentDefinitionStore {
         &self.last_report
     }
 
-    /// Manual refresh from disk. The watcher in `app/state` invokes this
+    /// Manual refresh from disk. Agent-host reload orchestration invokes this
     /// when an agent file changes.
     pub fn reload(&mut self) -> &AgentLoadReport {
         self.load()

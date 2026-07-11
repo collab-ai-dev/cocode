@@ -257,7 +257,7 @@ async fn handle_hub_frame(
                 }
             }
             match state.store.ingest_batch(instance_id, batch).await {
-                Ok(_) => {
+                Ok(stats) => {
                     for (session_id, session_seq) in publish_keys {
                         match state
                             .store
@@ -269,7 +269,13 @@ async fn handle_hub_frame(
                             Err(err) => return store_error(err),
                         }
                     }
-                    HubFrame::BatchAck(BatchAckFrame { up_to_seq })
+                    // The cursor advances past every seq in the batch (including
+                    // rejected regressions — retrying them can't help), but the
+                    // rejected map lets the connector observe the loss.
+                    HubFrame::BatchAck(BatchAckFrame {
+                        up_to_seq,
+                        rejected: stats.rejected_by_session,
+                    })
                 }
                 Err(err) => store_error(err),
             }

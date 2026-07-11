@@ -2,7 +2,7 @@
 //!
 //! **Split design** (same pattern as SideQuery):
 //! - Async trait (`AgentHandle`) -> here in `coco-tool`
-//! - Implementations -> app/state or executor layer
+//! - Implementations -> `coco-coordinator` or another executor layer
 //! - Tools access via `ToolUseContext.agent`
 //!
 //! **Dependency flow**:
@@ -13,9 +13,9 @@
 //! |
 //! coco-tools (AgentTool/SendMessageTool call handle methods)
 //! |
-//! coco-state (implements AgentHandle using swarm infrastructure)
+//! coco-coordinator (implements AgentHandle using swarm infrastructure)
 //! |
-//! coco-executor (wires implementation into ToolUseContext)
+//! coco-agent-host (wires implementation into each SessionRuntime)
 //! ```
 
 use std::path::PathBuf;
@@ -441,7 +441,7 @@ pub enum AgentSpawnStatus {
 }
 
 /// Trait for agent operations from tools.
-/// Implementations live in the app/state or executor layer. Tools access
+/// Implementations live in the coordinator or another executor layer. Tools access
 /// this via `ToolUseContext.agent`.
 #[async_trait::async_trait]
 pub trait AgentHandle: Send + Sync {

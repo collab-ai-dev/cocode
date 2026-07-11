@@ -3,7 +3,7 @@
 //! **Split design** (same pattern as SideQuery, AgentHandle):
 //! - Trait definition → here in `coco-tool`
 //! - Implementation → `coco-query` (QueryEngine-based adapter)
-//! - Consumer → `coco-state` (swarm_runner_loop uses it to drive teammate loops)
+//! - Consumer → `coco-coordinator` (runner loop drives teammate loops)
 //!
 //! **Dependency flow**:
 //! ```text
@@ -11,7 +11,7 @@
 //!     ↓
 //! coco-query   (QueryEngine implements trait via adapter)
 //!     ↓
-//! coco-state   (InProcessTeammateRunner uses Arc<dyn AgentQueryEngine>)
+//! coco-coordinator (InProcessTeammateRunner uses Arc<dyn AgentQueryEngine>)
 //! ```
 
 use std::sync::Arc;

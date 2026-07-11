@@ -13,12 +13,14 @@ decisions. Emits `coco_types::CoreEvent` directly (no intermediate event enum).
 | `QueryResult`, `ContinueReason` | Loop control: `NextTurn`, `ReactiveCompactRetry`, `MaxOutputTokensEscalate`, `MaxOutputTokensRecovery`, `StopHookBlocking`, `TokenBudgetContinuation`, `CollapseDrainRetry` |
 | `SessionBootstrap` | Initial system prompt, messages, cost tracker |
 | `BudgetTracker`, `BudgetDecision` | Token budget; 3-continuation cap, 90% threshold, diminishing-returns stop |
-| `CommandQueue`, `QueuedCommand`, `QueuePriority`, `QueueOrigin` | `Now`/`Next`/`Later`; FIFO within priority; per-item `Uuid` for id-based removal; `Human`/`Coordinator`/`TaskNotification`/`Channel` origin drives framing prose |
+| `CommandQueue`, `QueuedCommand`, `QueuePriority`, `QueueOrigin` | `Now`/`Next`/`Later`; FIFO within priority; per-item `Uuid` for id-based removal; `Human`/`Coordinator`/`TaskNotification`/`Channel` origin drives framing prose. Every mutation advances a watch revision and monotonic activity timestamp for event-driven host supervision. |
 | `StreamAccumulator` | `AgentStreamEvent` → `ServerNotification::ItemStarted/Updated/Completed` with `ThreadItem` tool mapping |
 | `agent_adapter::*` | Bridges `QueryEngine` to tool invocations and subagent spawn callbacks |
 | `plan_mode_reminder::*` | Plan-mode steady-state reminder cadence (Full/Sparse/Reentry) |
 | `single_turn::*` | One-shot turn execution (no loop) |
 | `emit::*` | `CoreEvent` emission helpers |
+| `engine_finalize_turn` / `engine_finalize_tail` | Turn-finalization orchestration and its continuation, memory-reminder, suggestion, and rate-limit helpers |
+| `engine_compaction` / `engine_compaction_full` | Manual/session-memory entry paths and full-compaction execution/helpers |
 
 ## Turn Lifecycle
 

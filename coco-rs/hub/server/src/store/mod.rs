@@ -246,9 +246,12 @@ pub struct IngestStats {
     pub parse_failures: usize,
     /// A different event arriving under an already-stored
     /// `(instance, session, seq)` — a per-session seq regression. Rejected as
-    /// corruption rather than overwriting (multi-session plan D-47). Non-zero
-    /// here means a producer re-issued a seq without skip-ahead.
+    /// corruption rather than overwriting. Non-zero here means a producer
+    /// re-issued a seq without skip-ahead.
     pub rejected_conflicts: usize,
+    /// The same regressions as `rejected_conflicts`, keyed by session so the
+    /// batch ack can report which sessions lost events.
+    pub rejected_by_session: std::collections::HashMap<coco_types::SessionId, i64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

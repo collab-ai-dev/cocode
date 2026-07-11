@@ -44,6 +44,7 @@ mod sdk_hook_output;
 mod server_request;
 pub mod side_query;
 mod stream;
+mod surface;
 mod task;
 mod task_list;
 mod thinking;
@@ -232,6 +233,12 @@ pub use event::WorkflowDialogEntry;
 pub use event::WorkflowDialogPayload;
 pub use event::WorktreeEnteredParams;
 pub use event::WorktreeExitedParams;
+
+// Surface delivery DTOs shared by server routing and client adapters.
+pub use surface::ServerRequestDelivery;
+pub use surface::SurfaceDelivery;
+pub use surface::SurfaceLifecycleEffect;
+pub use surface::SurfaceLifecycleEffectKind;
 
 // Client request types (Phase 2 — SDK control protocol, SDK → agent)
 pub use client_request::AgentInterruptCurrentWorkParams;

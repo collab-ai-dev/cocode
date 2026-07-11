@@ -12,7 +12,7 @@
 //!   ThinkingDelta* → TextDelta* → ToolUseQueued → ToolUseStarted → ToolUseCompleted
 //!        ↓               ↓              ↓                ↓                ↓
 //!   ItemStarted     ItemStarted    ItemStarted     ItemUpdated      ItemCompleted
-//!   (Reasoning)     (AgentMsg)     (tool-specific)
+//!  (Reasoning)    (AgentMsg)    (tool-specific)
 //!   ReasoningDelta  AgentMsgDelta
 //! ```
 //!
@@ -397,7 +397,7 @@ fn build_tool_details(
             status,
         },
         Some(ToolName::Agent) => ThreadItemDetails::Subagent {
-            agent_id: String::new(),
+            agent_id: None,
             agent_type: input
                 .get("subagent_type")
                 .and_then(serde_json::Value::as_str)

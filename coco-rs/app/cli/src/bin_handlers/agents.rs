@@ -7,7 +7,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use coco_cli::paths::standard_agent_search_paths;
+use coco_agent_host::paths::standard_agent_search_paths;
 use coco_config::global_config;
 
 pub async fn run_agents_subcommand(cwd: &Path) -> Result<()> {

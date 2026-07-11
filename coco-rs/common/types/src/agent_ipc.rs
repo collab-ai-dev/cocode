@@ -1,9 +1,9 @@
 //! Inter-agent IPC message types: mailbox protocol used by leader and
 //! teammates, plus per-subagent execution snapshots stored in `AppState`.
 //!
-//! Lives in `coco-types` (not `app/state`) so the future `coco-coordinator`
-//! crate can read and write these without depending on `coco-state`. The
-//! types are pure data with serde — no tokio, no app/state, no LLM.
+//! Lives in `coco-types` so `coco-coordinator`, host, and surfaces share these
+//! values without depending on one another. The types are pure data with
+//! serde and contain no orchestration or LLM behavior.
 
 use serde::Deserialize;
 use serde::Serialize;

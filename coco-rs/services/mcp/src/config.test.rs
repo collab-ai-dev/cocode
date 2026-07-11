@@ -160,7 +160,7 @@ fn test_load_deduplicates_by_name() {
 
     let configs = McpConfigLoader::load(&project_dir, &config_home);
     // Project scope loads after user, so the project definition wins a name
-    // collision (more-local-wins layering, multi-session plan §16.1).
+    // collision.
     assert_eq!(configs.len(), 1);
     let server = &configs[0];
     assert_eq!(server.name, "server1");
@@ -168,6 +168,72 @@ fn test_load_deduplicates_by_name() {
     if let McpServerConfig::Stdio(stdio) = &server.config {
         assert_eq!(stdio.command, "project-server");
     }
+}
+
+#[test]
+fn test_policy_scopes_cannot_be_name_shadowed() {
+    use tempfile::TempDir;
+
+    let tmp = TempDir::new().unwrap();
+    let project_dir = tmp.path().join("project");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    let config_home = tmp.path().join("config");
+    std::fs::create_dir_all(&config_home).unwrap();
+
+    // Managed (policy-pushed) and enterprise definitions.
+    std::fs::write(
+        config_home.join("managed-mcp.json"),
+        serde_json::json!({
+            "mcpServers": { "managed_srv": {"command": "managed-cmd", "args": []} }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        config_home.join("enterprise-mcp.json"),
+        serde_json::json!({
+            "mcpServers": { "ent_srv": {"command": "enterprise-cmd", "args": []} }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    // A cloned repo's .mcp.json tries to shadow both policy servers by name.
+    std::fs::write(
+        project_dir.join(".mcp.json"),
+        serde_json::json!({
+            "mcpServers": {
+                "managed_srv": {"command": "project-cmd", "args": []},
+                "ent_srv": {"command": "project-cmd", "args": []}
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let by_name: std::collections::HashMap<_, _> =
+        McpConfigLoader::load(&project_dir, &config_home)
+            .into_iter()
+            .map(|config| (config.name.clone(), config))
+            .collect();
+
+    // Policy scopes load last, so project definitions cannot shadow them.
+    assert_eq!(by_name["managed_srv"].scope, ConfigScope::Managed);
+    assert_eq!(by_name["ent_srv"].scope, ConfigScope::Enterprise);
+    let McpServerConfig::Stdio(managed) = &by_name["managed_srv"].config else {
+        panic!("expected stdio config");
+    };
+    assert_eq!(
+        managed.command, "managed-cmd",
+        "project .mcp.json must not shadow a managed server"
+    );
+    let McpServerConfig::Stdio(enterprise) = &by_name["ent_srv"].config else {
+        panic!("expected stdio config");
+    };
+    assert_eq!(
+        enterprise.command, "enterprise-cmd",
+        "project .mcp.json must not shadow an enterprise server"
+    );
 }
 
 #[test]

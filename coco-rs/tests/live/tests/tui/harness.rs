@@ -248,7 +248,7 @@ pub struct TuiHarness {
     /// Same shape production uses for the TUI ↔ engine approval
     /// round-trip. Tests resolve via [`Self::approve`] / [`Self::reject`]
     /// once they observe an `ApprovalRequired` event.
-    pending_approvals: coco_cli::tui_permission_bridge::PendingApprovals,
+    pending_approvals: coco_agent_host::tui_permission_bridge::PendingApprovals,
     /// Engine handle exposed for tests that drive engine methods directly
     /// (e.g. `/compact` calls `run_manual_compact`). The driver task holds
     /// its own clone — both refer to the same engine instance.
@@ -358,12 +358,13 @@ impl TuiHarness {
         // resolves via `approve()` / `reject()`. Wiring this even when
         // the test runs in BypassPermissions is harmless — the engine
         // only consults the bridge on `PermissionDecision::Ask`.
-        let pending_approvals = coco_cli::tui_permission_bridge::new_pending_map();
-        let bridge: Arc<dyn coco_tool_runtime::ToolPermissionBridge> =
-            Arc::new(coco_cli::tui_permission_bridge::TuiPermissionBridge::new(
+        let pending_approvals = coco_agent_host::tui_permission_bridge::new_pending_map();
+        let bridge: Arc<dyn coco_tool_runtime::ToolPermissionBridge> = Arc::new(
+            coco_agent_host::tui_permission_bridge::TuiPermissionBridge::new(
                 event_tx.clone(),
                 pending_approvals.clone(),
-            ));
+            ),
+        );
         let mut engine = QueryEngine::new(engine_cfg, model_runtimes, tools, cancel.clone(), hooks)
             .with_permission_bridge(bridge);
         if let Some(handle) = task_handle {
@@ -755,7 +756,7 @@ impl TuiHarness {
     /// production via `tui_permission_bridge::resolve_pending`.
     /// Returns `true` if the request_id matched a pending oneshot.
     pub async fn approve(&self, request_id: &str) -> bool {
-        coco_cli::tui_permission_bridge::resolve_pending(
+        coco_agent_host::tui_permission_bridge::resolve_pending(
             &self.pending_approvals,
             request_id,
             true,
@@ -770,7 +771,7 @@ impl TuiHarness {
 
     /// Resolve a pending approval as **rejected**.
     pub async fn reject(&self, request_id: &str, feedback: Option<String>) -> bool {
-        coco_cli::tui_permission_bridge::resolve_pending(
+        coco_agent_host::tui_permission_bridge::resolve_pending(
             &self.pending_approvals,
             request_id,
             false,

@@ -29,7 +29,7 @@ use coco_types::ModelRole;
 use coco_types::SessionId;
 use coco_types::ToolOverrides;
 
-use coco_background_review::LockOutcome;
+use coco_maintenance::MaintenanceLockOutcome;
 
 use crate::config::MemoryConfig;
 use crate::lock::consolidate_lock;
@@ -416,10 +416,10 @@ impl DreamService {
         };
 
         // Time gate first — `lastConsolidatedAt` stat happens before any
-        // session scan. Eager `last_consolidated_at` is one stat;
+        // session scan. Eager `last_run_at` is one stat;
         // cheap regardless of the scan throttle.
         let dream_lock = consolidate_lock(&self.memory_dir);
-        let prior_last_ms = dream_lock.last_consolidated_at();
+        let prior_last_ms = dream_lock.last_run_at();
         let hours_since_initial = prior_last_ms
             .map(|m| (now_ms.saturating_sub(m)) / (60 * 60 * 1000))
             .unwrap_or(i64::MAX);
@@ -464,12 +464,12 @@ impl DreamService {
         }
 
         // Lock — kept under both paths so manual /dream and auto-dream
-        // never race over MEMORY.md edits. The `LockGuard` RAII type
+        // never race over MEMORY.md edits. The `MaintenanceGuard` RAII type
         // ensures the lock file's mtime is rolled back on cancellation
         // for async-runtime cancellation.
         let lock_guard = match dream_lock.try_acquire() {
-            LockOutcome::Acquired(g) => g,
-            LockOutcome::Held => {
+            MaintenanceLockOutcome::Acquired(g) => g,
+            MaintenanceLockOutcome::Held => {
                 self.telemetry.emit(MemoryEvent::AutoDreamSkipped {
                     reason: AutoDreamSkipReason::Lock,
                     session_count: None,
@@ -477,7 +477,7 @@ impl DreamService {
                 });
                 return DreamOutcome::Skipped(SkipReason::LockHeld);
             }
-            LockOutcome::Error(e) => {
+            MaintenanceLockOutcome::Error(e) => {
                 return DreamOutcome::Failed { reason: e };
             }
         };

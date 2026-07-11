@@ -25,8 +25,10 @@ coco-paths.workspace = true
 coco-plugins.workspace = true
 coco-skills.workspace = true
 coco-subagent.workspace = true
+coco-tool-runtime.workspace = true
 coco-types.workspace = true
 coco-utils-common.workspace = true
+snafu.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 tracing.workspace = true

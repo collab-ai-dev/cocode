@@ -1,8 +1,9 @@
 # coco-app-runtime
 
-Owns process-, project-, and session-lifetime runtime resources without UI or
-transport policy. Process and project ownership have moved here; session
-runtime construction is the remaining extraction from `coco-cli`.
+Owns transport-independent process/project resources, workspace paths, and
+session bootstrap contracts. Application-session composition stays in
+`coco-agent-host` because it integrates QueryEngine, tasks, MCP, hooks, and
+persistence rather than defining a lower-level resource primitive.
 
 ## Key Types
 
@@ -13,9 +14,9 @@ runtime construction is the remaining extraction from `coco-cli`.
 | `ProjectServices` | Shared project-rooted config snapshot and plugin catalog. |
 | `ProjectConfigSnapshot` | Fingerprint-tracked project settings inputs. |
 | `SessionWorkspace` (`workspace`) | Per-session path anchors: cwd, resolved `project_root` (the `ProjectServices` cache key), and `ProjectPaths` storage. |
-| `resolve_project_root` / `git_root_for` / `project_paths` / `runtime_paths` / `settings_roots_for_cwd` | Path/project-root resolution shared by session bootstrap and the project registry (single source of the worktree-root derivation). `app/cli::paths` re-exports these. |
+| `resolve_project_root` / `git_root_for` / `project_paths` / `runtime_paths` / `settings_roots_for_cwd` | Path/project-root resolution shared by session bootstrap and the project registry (single source of the worktree-root derivation). `coco-agent-host::paths` exposes the application-facing helpers. |
 | `SessionRuntimeBootstrap` (`bootstrap`) | The fully-resolved, config-derived inputs for constructing one session runtime (output of the per-session fold). |
-| `BootstrapSource` / `SessionRuntimeBootstrapBuild` / `BootstrapError` / `StartupSnapshotSource` | The fold seam: a trait producing the bundle + reloader, its result, a Tier-3 error, and the pre-built-bundle impl. The Cli-coupled production fold (`PerSessionFoldSource`) lives in `coco-cli` and implements this trait. |
+| `BootstrapSource` / `SessionRuntimeBootstrapBuild` / `BootstrapError` / `StartupSnapshotSource` | The fold seam: a trait producing the bundle + reloader, its result, a Tier-3 error, and the pre-built-bundle impl. The `AgentHostOptions`-backed production fold lives in `coco-agent-host`. |
 
 ## Invariants
 

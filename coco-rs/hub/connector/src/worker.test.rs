@@ -257,7 +257,10 @@ fn ack_for_batch(batch: &BatchFrame) -> BatchAckFrame {
             .and_modify(|seq| *seq = (*seq).max(event.session_seq))
             .or_insert(event.session_seq);
     }
-    BatchAckFrame { up_to_seq }
+    BatchAckFrame {
+        up_to_seq,
+        ..Default::default()
+    }
 }
 
 #[tokio::test]

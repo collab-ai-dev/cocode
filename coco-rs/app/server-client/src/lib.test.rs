@@ -1,35 +1,15 @@
-use std::sync::Arc;
-use std::sync::Mutex;
-
-use coco_app_server::AppServer;
-use coco_app_server::ConnectionKey;
-use coco_app_server::JsonRpcAdapter;
-use coco_app_server::JsonRpcRequestContext;
-use coco_app_server::JsonRpcRequestFuture;
-use coco_app_server::JsonRpcRequestHandler;
-use coco_app_server::LocalClientAdapter;
-use coco_app_server::LocalClientDispatchError;
-use coco_app_server::LocalClientRequestContext;
-use coco_app_server::LocalClientRequestFuture;
-use coco_app_server::LocalClientRequestHandler;
-use coco_app_server::SurfaceCapabilities;
-use coco_app_server::SurfaceCapability;
-use coco_app_server::SurfaceLifecycleEffect;
-use coco_app_server::SurfaceLifecycleEffectKind;
+use coco_app_server_transport::JsonRpcNotification;
 use coco_types::CoreEvent;
 use coco_types::ServerNotification;
-use coco_types::ServerRequest;
-use coco_types::ServerRequestUserInputParams;
 use coco_types::SessionEnvelope;
 use coco_types::SessionState;
+use coco_types::SurfaceDelivery;
+use coco_types::SurfaceLifecycleEffectKind;
 use coco_types::TurnId;
 use tokio::io::BufReader;
 use tokio::io::split;
 
 use super::*;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TestHandle(&'static str);
 
 fn test_session_id(value: &str) -> SessionId {
     SessionId::try_new(value).expect("valid test session id")
@@ -45,490 +25,6 @@ fn durable_envelope(session_id: SessionId, seq: i64) -> SessionEnvelope {
             state: SessionState::Running,
         }),
     )
-}
-
-fn test_server_request(label: &str) -> ServerRequest {
-    ServerRequest::RequestUserInput(ServerRequestUserInputParams {
-        request_id: format!("payload-request-{label}"),
-        prompt: "continue?".to_string(),
-        description: None,
-        choices: Vec::new(),
-        default: None,
-    })
-}
-
-struct RecordingLocalRequestHandler {
-    calls: Arc<Mutex<Vec<(ConnectionKey, String)>>>,
-    result: serde_json::Value,
-    error: Option<LocalClientDispatchError>,
-}
-
-impl Default for RecordingLocalRequestHandler {
-    fn default() -> Self {
-        Self {
-            calls: Arc::new(Mutex::new(Vec::new())),
-            result: serde_json::Value::Null,
-            error: None,
-        }
-    }
-}
-
-impl LocalClientRequestHandler for RecordingLocalRequestHandler {
-    fn handle_local_client_request(
-        &self,
-        context: LocalClientRequestContext,
-        request: ClientRequest,
-    ) -> LocalClientRequestFuture {
-        let calls = Arc::clone(&self.calls);
-        let result = self.result.clone();
-        let error = self.error.clone();
-        Box::pin(async move {
-            calls.lock().expect("calls lock").push((
-                context.connection_key(),
-                request.method().as_str().to_string(),
-            ));
-            match error {
-                Some(error) => Err(error),
-                None => Ok(result),
-            }
-        })
-    }
-}
-
-struct RecordingClientRequestHandler {
-    calls: Arc<Mutex<Vec<ClientRequest>>>,
-    result: serde_json::Value,
-    error: Option<LocalClientDispatchError>,
-}
-
-impl RecordingClientRequestHandler {
-    fn ok(result: serde_json::Value) -> Self {
-        Self {
-            calls: Arc::new(Mutex::new(Vec::new())),
-            result,
-            error: None,
-        }
-    }
-
-    fn error(error: LocalClientDispatchError) -> Self {
-        Self {
-            calls: Arc::new(Mutex::new(Vec::new())),
-            result: serde_json::Value::Null,
-            error: Some(error),
-        }
-    }
-}
-
-impl LocalClientRequestHandler for RecordingClientRequestHandler {
-    fn handle_local_client_request(
-        &self,
-        _context: LocalClientRequestContext,
-        request: ClientRequest,
-    ) -> LocalClientRequestFuture {
-        let calls = Arc::clone(&self.calls);
-        let result = self.result.clone();
-        let error = self.error.clone();
-        Box::pin(async move {
-            calls.lock().expect("calls lock").push(request);
-            match error {
-                Some(error) => Err(error),
-                None => Ok(result),
-            }
-        })
-    }
-}
-
-struct RecordingJsonRpcRequestHandler {
-    calls: Arc<Mutex<Vec<String>>>,
-}
-
-impl RecordingJsonRpcRequestHandler {
-    fn new(calls: Arc<Mutex<Vec<String>>>) -> Self {
-        Self { calls }
-    }
-}
-
-impl JsonRpcRequestHandler for RecordingJsonRpcRequestHandler {
-    fn handle_json_rpc_request(
-        &self,
-        _context: JsonRpcRequestContext,
-        request: ClientRequest,
-    ) -> JsonRpcRequestFuture {
-        let calls = Arc::clone(&self.calls);
-        Box::pin(async move {
-            calls
-                .lock()
-                .expect("json rpc calls lock")
-                .push(request.method().as_str().to_string());
-            Ok(serde_json::json!({ "ok": true }))
-        })
-    }
-}
-
-fn minimal_turn_params(prompt: &str) -> TurnStartParams {
-    TurnStartParams {
-        prompt: prompt.to_string(),
-        history_override: Vec::new(),
-        images: Vec::new(),
-        slash_metadata: None,
-        model_selection: None,
-        permission_mode: None,
-        thinking_level: None,
-    }
-}
-
-#[tokio::test]
-async fn local_server_client_typed_methods_dispatch_and_decode_results() {
-    let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
-    let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 8);
-    let client = ServerClient::connect_local(&adapter);
-    let session_id = test_session_id("sess-local-typed-client");
-    let handler = RecordingLocalRequestHandler {
-        result: serde_json::json!({ "session_id": session_id }),
-        ..RecordingLocalRequestHandler::default()
-    };
-
-    let result = client
-        .session_start(&handler, SessionStartParams::default())
-        .await
-        .expect("session start succeeds");
-
-    assert_eq!(
-        result.session_id,
-        test_session_id("sess-local-typed-client")
-    );
-    {
-        let calls = handler.calls.lock().expect("calls lock");
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].1, "session/start");
-    }
-
-    let unit_handler = RecordingLocalRequestHandler::default();
-    client
-        .user_input_resolve(
-            &unit_handler,
-            UserInputResolveParams {
-                request_id: "input-1".to_string(),
-                answer: "yes".to_string(),
-            },
-        )
-        .await
-        .expect("user input resolve succeeds");
-    {
-        let calls = unit_handler.calls.lock().expect("calls lock");
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].1, "input/resolveUserInput");
-    }
-
-    let usage = coco_types::SessionUsageSnapshot::empty(test_session_id("sess-local-typed-client"));
-    let cost_handler = RecordingLocalRequestHandler {
-        result: serde_json::to_value(SessionCostResult {
-            text: "No usage yet.".to_string(),
-            usage,
-        })
-        .expect("cost result serializes"),
-        ..RecordingLocalRequestHandler::default()
-    };
-    let cost = client
-        .session_cost(&cost_handler)
-        .await
-        .expect("session cost succeeds");
-    assert_eq!(cost.text, "No usage yet.");
-    {
-        let calls = cost_handler.calls.lock().expect("calls lock");
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].1, "session/cost");
-    }
-
-    let task_list_handler = RecordingLocalRequestHandler {
-        result: serde_json::to_value(TaskListResult { tasks: Vec::new() })
-            .expect("task list result serializes"),
-        ..RecordingLocalRequestHandler::default()
-    };
-    let task_list = client
-        .task_list(&task_list_handler)
-        .await
-        .expect("task list succeeds");
-    assert!(task_list.tasks.is_empty());
-    {
-        let calls = task_list_handler.calls.lock().expect("calls lock");
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].1, "task/list");
-    }
-
-    let background_handler = RecordingLocalRequestHandler {
-        result: serde_json::to_value(BackgroundAllTasksResult {
-            task_ids: vec!["task-1".to_string()],
-        })
-        .expect("background-all result serializes"),
-        ..RecordingLocalRequestHandler::default()
-    };
-    let backgrounded = client
-        .background_all_tasks(&background_handler)
-        .await
-        .expect("background-all succeeds");
-    assert_eq!(backgrounded.task_ids, vec!["task-1".to_string()]);
-    let calls = background_handler.calls.lock().expect("calls lock");
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].1, "control/backgroundAllTasks");
-}
-
-#[tokio::test]
-async fn local_session_handle_helpers_dispatch_session_requests() {
-    let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
-    let session_id = test_session_id("sess-local-handle");
-    server
-        .registry()
-        .begin_load(session_id.clone())
-        .expect("reserve session");
-    server
-        .registry()
-        .complete_load_success(&session_id, TestHandle("handle"))
-        .expect("session live");
-    let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 8);
-    let client = ServerClient::connect_local(&adapter);
-    let interactive = client
-        .attach_interactive_session(session_id.clone(), AttachSurfaceOptions::default())
-        .expect("attach interactive");
-    let passive = client
-        .subscribe_session(session_id.clone(), Some(0), AttachSurfaceOptions::default())
-        .expect("subscribe passive");
-
-    let query_handler = RecordingClientRequestHandler::ok(serde_json::json!({
-        "turn_id": "turn-local-handle"
-    }));
-    let query = client
-        .query_session(&query_handler, &interactive, minimal_turn_params("hello"))
-        .await
-        .expect("query succeeds");
-    assert_eq!(query.turn_id, TurnId::from("turn-local-handle"));
-    {
-        let calls = query_handler.calls.lock().expect("calls lock");
-        let ClientRequest::TurnStart(params) = &calls[0] else {
-            panic!("expected turn/start request");
-        };
-        assert_eq!(params.prompt, "hello");
-    }
-
-    let interrupt_handler = RecordingClientRequestHandler::ok(serde_json::Value::Null);
-    client
-        .interrupt_session(&interrupt_handler, &interactive)
-        .await
-        .expect("interrupt succeeds");
-    assert!(matches!(
-        &interrupt_handler.calls.lock().expect("calls lock")[0],
-        ClientRequest::TurnInterrupt
-    ));
-
-    let read_handler = RecordingClientRequestHandler::ok(serde_json::json!({
-        "session": {
-            "session_id": session_id,
-            "model": "gpt-test",
-            "cwd": "/tmp",
-            "created_at": "2026-07-08T00:00:00Z",
-            "message_count": 0,
-            "total_tokens": 0
-        },
-        "messages": [],
-        "has_more": false
-    }));
-    let read = client
-        .read_passive_session(&read_handler, &passive, Some("4".to_string()), Some(2))
-        .await
-        .expect("read succeeds");
-    assert_eq!(
-        read.session.session_id,
-        test_session_id("sess-local-handle")
-    );
-    {
-        let calls = read_handler.calls.lock().expect("calls lock");
-        let ClientRequest::SessionRead(params) = &calls[0] else {
-            panic!("expected session/read request");
-        };
-        assert_eq!(params.session_id, test_session_id("sess-local-handle"));
-        assert_eq!(params.cursor.as_deref(), Some("4"));
-        assert_eq!(params.limit, Some(2));
-    }
-
-    let turns_handler = RecordingClientRequestHandler::ok(serde_json::json!({
-        "session": {
-            "session_id": session_id,
-            "model": "gpt-test",
-            "cwd": "/tmp",
-            "created_at": "2026-07-08T00:00:00Z",
-            "message_count": 2,
-            "total_tokens": 0
-        },
-        "turns": [{
-            "index": 1,
-            "start_cursor": "2",
-            "message_count": 2
-        }],
-        "has_more": false
-    }));
-    let turns = client
-        .list_passive_session_turns(&turns_handler, &passive, Some("1".to_string()), Some(1))
-        .await
-        .expect("turn list succeeds");
-    assert_eq!(turns.turns[0].start_cursor, "2");
-    {
-        let calls = turns_handler.calls.lock().expect("calls lock");
-        let ClientRequest::SessionTurnsList(params) = &calls[0] else {
-            panic!("expected session/turns/list request");
-        };
-        assert_eq!(params.session_id, test_session_id("sess-local-handle"));
-        assert_eq!(params.cursor.as_deref(), Some("1"));
-        assert_eq!(params.limit, Some(1));
-    }
-}
-
-#[tokio::test]
-async fn local_close_session_returns_handle_on_failure() {
-    let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
-    let session_id = test_session_id("sess-close-failure");
-    server
-        .registry()
-        .begin_load(session_id.clone())
-        .expect("reserve session");
-    server
-        .registry()
-        .complete_load_success(&session_id, TestHandle("handle"))
-        .expect("session live");
-    let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 8);
-    let client = ServerClient::connect_local(&adapter);
-    let interactive = client
-        .attach_interactive_session(session_id.clone(), AttachSurfaceOptions::default())
-        .expect("attach interactive");
-    let handler = RecordingClientRequestHandler::error(LocalClientDispatchError::invalid_params(
-        "archive failed",
-    ));
-
-    let Err((returned, ClientError::Server { message, .. })) =
-        client.close_session(&handler, interactive).await
-    else {
-        panic!("expected close failure");
-    };
-
-    assert_eq!(returned.session_id(), &session_id);
-    assert_eq!(message, "archive failed");
-    let calls = handler.calls.lock().expect("calls lock");
-    let ClientRequest::SessionArchive(params) = &calls[0] else {
-        panic!("expected session/archive request");
-    };
-    assert_eq!(params.session_id, session_id);
-}
-
-#[tokio::test]
-async fn local_replace_session_helpers_return_new_handle_or_original_on_failure() {
-    let server = Arc::new(AppServer::<TestHandle>::new(2, 8));
-    let old_session_id = test_session_id("sess-replace-old");
-    server
-        .registry()
-        .begin_load(old_session_id.clone())
-        .expect("reserve old session");
-    server
-        .registry()
-        .complete_load_success(&old_session_id, TestHandle("handle"))
-        .expect("old session live");
-    let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 8);
-    let client = ServerClient::connect_local(&adapter);
-    let interactive = client
-        .attach_interactive_session(old_session_id.clone(), AttachSurfaceOptions::default())
-        .expect("attach interactive");
-
-    let start_handler = RecordingClientRequestHandler::ok(serde_json::json!({
-        "session_id": "sess-replace-started",
-        "surface_id": "surface-replace-started"
-    }));
-    let started = client
-        .replace_session_with_start(&start_handler, interactive, SessionStartParams::default())
-        .await
-        .expect("replace with start succeeds");
-    assert_eq!(
-        started.session_id(),
-        &test_session_id("sess-replace-started")
-    );
-    assert_eq!(
-        started.surface_id(),
-        &SurfaceId::from("surface-replace-started")
-    );
-    {
-        let calls = start_handler.calls.lock().expect("calls lock");
-        assert!(matches!(&calls[0], ClientRequest::SessionStart(_)));
-    }
-
-    let resume_handler = RecordingClientRequestHandler::ok(serde_json::json!({
-        "session": {
-            "session_id": "sess-replace-resumed",
-            "model": "gpt-test",
-            "cwd": "/tmp",
-            "created_at": "2026-07-08T00:00:00Z",
-            "message_count": 0,
-            "total_tokens": 0
-        }
-    }));
-    let resumed = client
-        .replace_session_with_resume(
-            &resume_handler,
-            started,
-            SessionResumeParams {
-                session_id: test_session_id("sess-replace-resumed"),
-            },
-        )
-        .await
-        .expect("replace with resume succeeds");
-    assert_eq!(
-        resumed.session_id(),
-        &test_session_id("sess-replace-resumed")
-    );
-    assert_eq!(
-        resumed.surface_id(),
-        &SurfaceId::from("surface-replace-started")
-    );
-
-    let failing_handler = RecordingClientRequestHandler::error(
-        LocalClientDispatchError::invalid_params("resume failed"),
-    );
-    let Err((returned, ClientError::Server { message, .. })) = client
-        .replace_session_with_resume(
-            &failing_handler,
-            resumed,
-            SessionResumeParams {
-                session_id: test_session_id("sess-replace-fail"),
-            },
-        )
-        .await
-    else {
-        panic!("expected replace failure");
-    };
-    assert_eq!(
-        returned.session_id(),
-        &test_session_id("sess-replace-resumed")
-    );
-    assert_eq!(
-        returned.surface_id(),
-        &SurfaceId::from("surface-replace-started")
-    );
-    assert_eq!(message, "resume failed");
-}
-
-#[tokio::test]
-async fn local_server_client_maps_dispatch_errors_to_server_errors() {
-    let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
-    let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 8);
-    let client = ServerClient::connect_local(&adapter);
-    let handler = RecordingLocalRequestHandler {
-        error: Some(LocalClientDispatchError::invalid_params(
-            "bad local request",
-        )),
-        ..RecordingLocalRequestHandler::default()
-    };
-
-    let Err(ClientError::Server { message, .. }) = client.keep_alive(&handler).await else {
-        panic!("expected server error");
-    };
-
-    assert_eq!(message, "bad local request");
 }
 
 #[tokio::test]
@@ -1099,7 +595,7 @@ async fn remote_json_rpc_client_decodes_lifecycle_notifications() {
     };
     assert_eq!(delivery.surface_id, SurfaceId::from("surface-remote"));
     assert_eq!(
-        delivery.effect.kind,
+        delivery.kind,
         SurfaceLifecycleEffectKind::SessionEnded {
             session_id: test_session_id("sess-ended")
         }
@@ -1183,6 +679,189 @@ async fn remote_json_rpc_disconnect_resolves_pending_and_invalidates_client() {
 }
 
 #[tokio::test]
+async fn remote_incoming_tolerates_unknown_response_id() {
+    let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+    let (client, incoming, _events) = RemoteJsonRpcClient::new(outbound_tx);
+
+    // A success/error for an id that was never pending (a late reply after a
+    // per-request timeout, or a duplicate) is tolerate-with-warn: handle_frame
+    // returns Ok and the client stays valid.
+    incoming
+        .handle_frame(JsonRpcFrame::Success(JsonRpcSuccess::new(
+            JsonRpcId::Number(999),
+            serde_json::json!({ "late": true }),
+        )))
+        .await
+        .expect("unknown success tolerated");
+    incoming
+        .handle_frame(JsonRpcFrame::Error(JsonRpcErrorResponse::new(
+            JsonRpcId::Number(1000),
+            JsonRpcErrorObject::new(-32000, "late", None),
+        )))
+        .await
+        .expect("unknown error tolerated");
+
+    // A real request over the still-valid client still correlates.
+    let request_client = client.clone();
+    let request_task =
+        tokio::spawn(async move { request_client.request("keep/alive", None).await });
+    let JsonRpcFrame::Request(request) = outbound_rx.recv().await.expect("request") else {
+        panic!("expected request frame");
+    };
+    incoming
+        .handle_frame(JsonRpcFrame::Success(JsonRpcSuccess::new(
+            request.id,
+            serde_json::json!({ "ok": true }),
+        )))
+        .await
+        .expect("handle response");
+    assert_eq!(
+        request_task.await.expect("request task").expect("ok"),
+        serde_json::json!({ "ok": true })
+    );
+}
+
+#[tokio::test]
+async fn remote_incoming_drop_resolves_pending_and_invalidates() {
+    let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+    let (client, incoming, mut events) = RemoteJsonRpcClient::new(outbound_tx);
+    let request_client = client.clone();
+    let request_task = tokio::spawn(async move { request_client.request("slow", None).await });
+    let JsonRpcFrame::Request(_request) = outbound_rx.recv().await.expect("request") else {
+        panic!("expected request frame");
+    };
+
+    // Dropping the incoming half WITHOUT a graceful disconnect() (the standard
+    // aborted-owner-task shutdown move) must still resolve the in-flight RPC with
+    // Disconnected, emit the terminal event, and invalidate the client.
+    drop(incoming);
+
+    assert!(matches!(
+        request_task.await.expect("request task"),
+        Err(ClientError::Disconnected)
+    ));
+    assert!(matches!(
+        events.recv().await.expect("disconnect event"),
+        RemoteJsonRpcEvent::Disconnected
+    ));
+    assert!(matches!(
+        client.request("after/drop", None).await,
+        Err(ClientError::ClientInvalid)
+    ));
+}
+
+#[tokio::test]
+async fn remote_incoming_tolerates_undecodable_lifecycle_notification() {
+    let (outbound_tx, _outbound_rx) = mpsc::channel(8);
+    let (_client, incoming, mut events) = RemoteJsonRpcClient::new(outbound_tx);
+
+    // An unknown lifecycle effect kind (a newer server) is dropped with a
+    // warning, not fatal: handle_frame returns Ok and emits no event.
+    incoming
+        .handle_frame(JsonRpcFrame::Notification(JsonRpcNotification::new(
+            "session/lifecycle",
+            Some(serde_json::json!({
+                "surface_id": "surface-x",
+                "effect": { "type": "session_teleported", "session_id": "sess-x" }
+            })),
+        )))
+        .await
+        .expect("undecodable lifecycle tolerated");
+
+    // A subsequent well-formed notification is still delivered on the same
+    // still-live connection.
+    incoming
+        .handle_frame(JsonRpcFrame::Notification(JsonRpcNotification::new(
+            "custom/notice",
+            Some(serde_json::json!({ "ok": true })),
+        )))
+        .await
+        .expect("custom notification delivered");
+    assert!(matches!(
+        events.recv().await.expect("event"),
+        RemoteJsonRpcEvent::Notification(_)
+    ));
+}
+#[test]
+fn remote_demux_purge_surface_drops_buffered_events_and_lifecycle() {
+    let (events_tx, events_rx) = mpsc::channel(8);
+    let mut demux = RemoteEventDemux::new(events_rx);
+    let target = SurfaceId::from("surface-target");
+    let other = SurfaceId::from("surface-other");
+    let target_session = test_session_id("sess-target");
+    let other_session = test_session_id("sess-other");
+
+    // Buffer a delivery + lifecycle for `target` while reading `other`.
+    events_tx
+        .try_send(RemoteJsonRpcEvent::SurfaceDelivery(Box::new(
+            SurfaceDelivery {
+                surface_id: target.clone(),
+                envelope: durable_envelope(target_session.clone(), 1),
+            },
+        )))
+        .expect("send target event");
+    events_tx
+        .try_send(RemoteJsonRpcEvent::SurfaceLifecycle(
+            SurfaceLifecycleEffect {
+                surface_id: target.clone(),
+                kind: SurfaceLifecycleEffectKind::SessionStarted {
+                    session_id: target_session,
+                },
+            },
+        ))
+        .expect("send target lifecycle");
+    events_tx
+        .try_send(RemoteJsonRpcEvent::SurfaceDelivery(Box::new(
+            SurfaceDelivery {
+                surface_id: other.clone(),
+                envelope: durable_envelope(other_session.clone(), 1),
+            },
+        )))
+        .expect("send other event");
+
+    // Reading `other` buffers the two `target` deliveries.
+    let other_event = demux.try_next_surface_event(&other).expect("other event");
+    assert_eq!(other_event.session_id, other_session);
+
+    // Purge drops the buffered target queues; nothing is left to read.
+    demux.purge_surface(&target);
+    assert!(demux.try_next_surface_event(&target).is_none());
+    assert!(demux.try_next_lifecycle(&target).is_none());
+}
+
+#[tokio::test]
+async fn remote_ndjson_write_timeout_triggers_slow_consumer_disconnect() {
+    // A 16-byte pipe whose server end stays open but never reads: the first frame
+    // write stalls past `write_timeout`, so the owner fails with `SlowConsumer`
+    // and the guaranteed disconnect resolves the in-flight request.
+    let (client_stream, _server_stream) = tokio::io::duplex(16);
+    let (client_read, client_write) = split(client_stream);
+    let client_transport = NdjsonDuplexConnection::new(BufReader::new(client_read), client_write);
+    let (client, connection, _events) = RemoteJsonRpcClient::connect_ndjson_with_options(
+        client_transport,
+        RemoteConnectOptions {
+            outbound_channel_capacity: 8,
+            event_channel_capacity: 8,
+            request_timeout: None,
+            write_timeout: Some(Duration::from_millis(50)),
+        },
+    );
+    let connection_task = tokio::spawn(connection.run());
+    let request_client = client.clone();
+    let request_task =
+        tokio::spawn(async move { request_client.request("control/keepAlive", None).await });
+
+    assert!(matches!(
+        connection_task.await.expect("connection task"),
+        Err(RemoteTransportError::SlowConsumer)
+    ));
+    assert!(matches!(
+        request_task.await.expect("request task"),
+        Err(ClientError::Disconnected)
+    ));
+}
+
+#[tokio::test]
 async fn remote_ndjson_connection_drives_request_response_and_disconnect() {
     let (client_stream, server_stream) = tokio::io::duplex(1024);
     let (client_read, client_write) = split(client_stream);
@@ -1234,68 +913,6 @@ async fn remote_ndjson_connection_drives_request_response_and_disconnect() {
     ));
 }
 
-#[tokio::test]
-async fn remote_json_rpc_client_connects_over_websocket() {
-    let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
-    let adapter = JsonRpcAdapter::with_channel_capacity(Arc::clone(&server), 8);
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-        .await
-        .expect("bind websocket listener");
-    let addr = listener.local_addr().expect("listener addr");
-    let calls = Arc::new(Mutex::new(Vec::new()));
-    let handler = Arc::new(RecordingJsonRpcRequestHandler::new(Arc::clone(&calls)));
-    let server_task = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.expect("accept websocket tcp");
-        let websocket = tokio_tungstenite::accept_async(stream)
-            .await
-            .expect("accept websocket");
-        adapter
-            .connect()
-            .run_websocket_transport(websocket, handler)
-            .await
-            .expect("websocket owner exits")
-    });
-
-    let (client, connection, mut events) = RemoteJsonRpcClient::connect_websocket_with_options(
-        &format!("ws://{addr}"),
-        RemoteConnectOptions {
-            outbound_channel_capacity: 8,
-            event_channel_capacity: 8,
-            request_timeout: None,
-        },
-    )
-    .await
-    .expect("connect websocket");
-    let connection_task = tokio::spawn(connection.run());
-    let request_client = client.clone();
-    let request_task =
-        tokio::spawn(async move { request_client.request("control/keepAlive", None).await });
-
-    assert_eq!(
-        request_task
-            .await
-            .expect("request task")
-            .expect("request success"),
-        serde_json::json!({ "ok": true })
-    );
-    assert_eq!(
-        calls.lock().expect("json rpc calls lock").as_slice(),
-        ["control/keepAlive"]
-    );
-
-    drop(client);
-    connection_task
-        .await
-        .expect("connection task")
-        .expect("connection exits cleanly");
-    let outcome = server_task.await.expect("server task");
-    assert!(outcome.detached_surfaces.is_empty());
-    assert!(matches!(
-        events.recv().await.expect("disconnect event"),
-        RemoteJsonRpcEvent::Disconnected
-    ));
-}
-
 #[cfg(unix)]
 #[tokio::test]
 async fn remote_json_rpc_client_connects_over_unix_socket() {
@@ -1312,6 +929,7 @@ async fn remote_json_rpc_client_connects_over_unix_socket() {
             outbound_channel_capacity: 8,
             event_channel_capacity: 8,
             request_timeout: None,
+            write_timeout: None,
         },
     )
     .await
@@ -1392,6 +1010,7 @@ async fn remote_request_timeout_returns_timeout_and_clears_pending() {
             outbound_channel_capacity: 8,
             event_channel_capacity: 8,
             request_timeout: Some(Duration::from_millis(25)),
+            write_timeout: None,
         },
     );
     let connection_task = tokio::spawn(connection.run());
@@ -1406,6 +1025,7 @@ async fn remote_request_timeout_returns_timeout_and_clears_pending() {
     else {
         panic!("expected request frame");
     };
+    let late_id = request.id.clone();
 
     // The server never responds: the request must resolve with Timeout.
     assert!(matches!(
@@ -1413,23 +1033,47 @@ async fn remote_request_timeout_returns_timeout_and_clears_pending() {
         Err(ClientError::Timeout)
     ));
     // The timed-out id must be removed from the correlation map.
-    assert!(client.pending.lock().await.is_empty());
+    assert!(lock_pending(&client.pending).is_empty());
 
-    // A late response for the timed-out id must not panic or resolve any other
-    // request; per the unknown-response-id contract it invalidates the
-    // connection instead of being delivered.
+    // A late response for the timed-out id is tolerate-with-warn: it hits
+    // the unknown-response-id contract and is dropped, NOT fatal. The connection
+    // keeps running and a subsequent live request still correlates.
     server_transport
         .send_frame(&JsonRpcFrame::Success(JsonRpcSuccess::new(
-            request.id,
+            late_id,
             serde_json::json!({ "late": true }),
         )))
         .await
         .expect("server writes late response");
+
+    // A fresh request over the still-live connection correlates normally.
+    let next_client = client.clone();
+    let next_task =
+        tokio::spawn(async move { next_client.request("control/keepAlive", None).await });
+    let Some(JsonRpcFrame::Request(next_request)) = server_transport
+        .recv_frame()
+        .await
+        .expect("server reads next request")
+    else {
+        panic!("expected second request frame");
+    };
+    server_transport
+        .send_frame(&JsonRpcFrame::Success(JsonRpcSuccess::new(
+            next_request.id,
+            serde_json::json!({ "ok": true }),
+        )))
+        .await
+        .expect("server writes response");
+    assert_eq!(
+        next_task.await.expect("next request task").expect("ok"),
+        serde_json::json!({ "ok": true })
+    );
+
+    // Dropping the client closes the outbound channel; the owner exits cleanly.
+    drop(client);
     assert!(matches!(
         connection_task.await.expect("connection task"),
-        Err(RemoteTransportError::Client {
-            source: ClientError::InvalidArgument(_),
-        })
+        Ok(())
     ));
 }
 
@@ -1465,13 +1109,10 @@ fn remote_event_demux_buffers_mixed_events_by_surface() {
         .expect("send notification");
     events_tx
         .try_send(RemoteJsonRpcEvent::SurfaceLifecycle(
-            SurfaceLifecycleDelivery {
+            SurfaceLifecycleEffect {
                 surface_id: second.clone(),
-                effect: SurfaceLifecycleEffect {
-                    surface_id: second.clone(),
-                    kind: SurfaceLifecycleEffectKind::SessionEnded {
-                        session_id: second_session.clone(),
-                    },
+                kind: SurfaceLifecycleEffectKind::SessionEnded {
+                    session_id: second_session.clone(),
                 },
             },
         ))
@@ -1512,7 +1153,7 @@ fn remote_event_demux_buffers_mixed_events_by_surface() {
         .try_next_lifecycle(&second)
         .expect("lifecycle was buffered");
     assert_eq!(
-        lifecycle.effect.kind,
+        lifecycle.kind,
         SurfaceLifecycleEffectKind::SessionEnded {
             session_id: second_session
         }
@@ -1539,13 +1180,10 @@ fn remote_surface_stream_reads_events_and_lifecycle_for_one_surface() {
         .expect("send surface event");
     events_tx
         .try_send(RemoteJsonRpcEvent::SurfaceLifecycle(
-            SurfaceLifecycleDelivery {
+            SurfaceLifecycleEffect {
                 surface_id: surface.clone(),
-                effect: SurfaceLifecycleEffect {
-                    surface_id: surface.clone(),
-                    kind: SurfaceLifecycleEffectKind::SessionEnded {
-                        session_id: session.clone(),
-                    },
+                kind: SurfaceLifecycleEffectKind::SessionEnded {
+                    session_id: session.clone(),
                 },
             },
         ))
@@ -1558,7 +1196,7 @@ fn remote_surface_stream_reads_events_and_lifecycle_for_one_surface() {
         session
     );
     assert_eq!(
-        stream.try_next_lifecycle().expect("lifecycle").effect.kind,
+        stream.try_next_lifecycle().expect("lifecycle").kind,
         SurfaceLifecycleEffectKind::SessionEnded {
             session_id: test_session_id("sess-stream")
         }
@@ -1806,10 +1444,12 @@ async fn remote_session_handle_forwards_query_interrupt_and_close() {
     let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
     let (client, incoming, _events) = RemoteJsonRpcClient::new(outbound_tx);
     let session_id = test_session_id("sess-remote-query");
-    let remote_session =
-        client.session_handle(session_id.clone(), SurfaceId::from("surface-remote-query"));
+    let surface_id = SurfaceId::from("surface-remote-query");
+    let remote_session = client.session_handle(session_id.clone(), surface_id.clone());
 
-    let query_session = remote_session.clone();
+    // The remote handles are not `Clone`; mint fresh handles from the
+    // still-cloneable client for the concurrent query/interrupt tasks.
+    let query_session = client.session_handle(session_id.clone(), surface_id.clone());
     let query_task = tokio::spawn(async move {
         query_session
             .query(TurnStartParams {
@@ -1844,7 +1484,7 @@ async fn remote_session_handle_forwards_query_interrupt_and_close() {
         TurnId::from("turn-remote")
     );
 
-    let interrupt_session = remote_session.clone();
+    let interrupt_session = client.session_handle(session_id.clone(), surface_id.clone());
     let interrupt_task = tokio::spawn(async move { interrupt_session.interrupt().await });
     let JsonRpcFrame::Request(interrupt_request) =
         outbound_rx.recv().await.expect("interrupt request")
@@ -2164,330 +1804,4 @@ async fn remote_owned_surface_stream_reads_surface_and_retains_demux() {
         .try_next_surface_event(&second)
         .expect("second event remains buffered");
     assert_eq!(second_event.session_id, second_session);
-}
-
-#[test]
-fn local_server_client_attaches_interactive_and_passive_surfaces() {
-    let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
-    let session_id = test_session_id("sess-1");
-    server
-        .registry()
-        .begin_load(session_id.clone())
-        .expect("reserve session");
-    server
-        .registry()
-        .complete_load_success(&session_id, TestHandle("handle"))
-        .expect("session live");
-    server.route_envelope(durable_envelope(session_id.clone(), 1));
-    let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 8);
-    let mut client = ServerClient::connect_local(&adapter);
-
-    let interactive = client
-        .attach_interactive_session(session_id.clone(), AttachSurfaceOptions::default())
-        .expect("attach interactive");
-    let passive = client
-        .subscribe_session(session_id.clone(), Some(0), AttachSurfaceOptions::default())
-        .expect("subscribe passive");
-
-    assert_eq!(interactive.session_id(), &session_id);
-    assert_eq!(passive.session_id(), &session_id);
-    assert_eq!(passive.replayed().len(), 1);
-    assert_eq!(
-        server.list_live_sessions()[0].surface_counts,
-        SessionSurfaceCounts {
-            attached: 2,
-            closed: 0,
-        }
-    );
-    let outcome = server.route_envelope(durable_envelope(session_id, 2));
-    assert_eq!(outcome.delivered, 2);
-    assert_eq!(
-        client
-            .events_mut()
-            .try_recv()
-            .expect("first surface event")
-            .envelope
-            .session_seq,
-        Some(2)
-    );
-    assert_eq!(
-        client
-            .events_mut()
-            .try_recv()
-            .expect("second surface event")
-            .envelope
-            .session_seq,
-        Some(2)
-    );
-}
-
-#[tokio::test]
-async fn local_server_client_next_event_buffers_other_surfaces() {
-    let server = Arc::new(AppServer::<TestHandle>::new(2, 8));
-    let first_session = test_session_id("sess-1");
-    let second_session = test_session_id("sess-2");
-    for session_id in [&first_session, &second_session] {
-        server
-            .registry()
-            .begin_load(session_id.clone())
-            .expect("reserve session");
-        server
-            .registry()
-            .complete_load_success(session_id, TestHandle("handle"))
-            .expect("session live");
-    }
-    let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 8);
-    let mut client = ServerClient::connect_local(&adapter);
-    let first = client
-        .subscribe_session(
-            first_session.clone(),
-            Some(0),
-            AttachSurfaceOptions::default(),
-        )
-        .expect("subscribe first");
-    let second = client
-        .subscribe_session(
-            second_session.clone(),
-            Some(0),
-            AttachSurfaceOptions::default(),
-        )
-        .expect("subscribe second");
-
-    server.route_envelope(durable_envelope(second_session.clone(), 1));
-    server.route_envelope(durable_envelope(first_session.clone(), 1));
-
-    let first_event = client
-        .next_passive_event(&first)
-        .await
-        .expect("first event");
-    assert_eq!(first_event.session_id, first_session);
-    let buffered_second = client
-        .try_next_passive_event(&second)
-        .expect("buffered second event");
-    assert_eq!(buffered_second.session_id, second_session);
-}
-
-#[test]
-fn detach_passive_consumes_only_that_surface() {
-    let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
-    let session_id = test_session_id("sess-1");
-    server
-        .registry()
-        .begin_load(session_id.clone())
-        .expect("reserve session");
-    server
-        .registry()
-        .complete_load_success(&session_id, TestHandle("handle"))
-        .expect("session live");
-    let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 8);
-    let client = ServerClient::connect_local(&adapter);
-    let _interactive = client
-        .attach_interactive_session(session_id.clone(), AttachSurfaceOptions::default())
-        .expect("attach interactive");
-    let passive = client
-        .subscribe_session(session_id, Some(0), AttachSurfaceOptions::default())
-        .expect("subscribe passive");
-
-    let detached = client.detach_passive(passive).expect("detach passive");
-
-    assert!(detached.detached_surface.is_some());
-    assert_eq!(server.list_live_sessions()[0].surface_counts.attached, 1);
-}
-
-#[test]
-fn client_lists_live_sessions_with_surface_counts() {
-    let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
-    let session_id = test_session_id("sess-1");
-    server
-        .registry()
-        .begin_load(session_id.clone())
-        .expect("reserve session");
-    server
-        .registry()
-        .complete_load_success(&session_id, TestHandle("handle"))
-        .expect("session live");
-    let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 8);
-    let client = ServerClient::connect_local(&adapter);
-    let _interactive = client
-        .attach_interactive_session(session_id.clone(), AttachSurfaceOptions::default())
-        .expect("attach interactive");
-    let passive = client
-        .subscribe_session(session_id.clone(), Some(0), AttachSurfaceOptions::default())
-        .expect("subscribe passive");
-
-    assert_eq!(
-        client.list_live_sessions(),
-        vec![LiveSessionSummary {
-            session_id: session_id.clone(),
-            surface_counts: SessionSurfaceCounts {
-                attached: 2,
-                closed: 0,
-            },
-        }]
-    );
-
-    client.detach_passive(passive).expect("detach passive");
-
-    assert_eq!(
-        client.list_live_sessions(),
-        vec![LiveSessionSummary {
-            session_id,
-            surface_counts: SessionSurfaceCounts {
-                attached: 1,
-                closed: 0,
-            },
-        }]
-    );
-}
-
-#[test]
-fn session_event_demux_buffers_other_surfaces_on_same_connection() {
-    let server = Arc::new(AppServer::<TestHandle>::new(2, 8));
-    let interactive_session_id = test_session_id("sess-interactive");
-    let passive_session_id = test_session_id("sess-passive");
-    let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 8);
-    let mut client = ServerClient::connect_local(&adapter);
-    let interactive = client
-        .attach_interactive_session(
-            interactive_session_id.clone(),
-            AttachSurfaceOptions::default(),
-        )
-        .expect("attach interactive");
-    let passive = client
-        .subscribe_session(
-            passive_session_id.clone(),
-            Some(0),
-            AttachSurfaceOptions::default(),
-        )
-        .expect("subscribe passive");
-
-    server.route_envelope(durable_envelope(passive_session_id.clone(), 1));
-    server.route_envelope(durable_envelope(interactive_session_id.clone(), 1));
-
-    let interactive_event = client
-        .try_next_session_event(&interactive)
-        .expect("interactive event");
-    let passive_event = client
-        .try_next_passive_event(&passive)
-        .expect("passive event");
-
-    assert_eq!(interactive_event.session_id, interactive_session_id);
-    assert_eq!(passive_event.session_id, passive_session_id);
-    assert!(client.try_next_session_event(&interactive).is_none());
-    assert!(client.try_next_passive_event(&passive).is_none());
-}
-
-#[test]
-fn session_request_demux_buffers_other_interactive_surfaces() {
-    let server = Arc::new(AppServer::<TestHandle>::new(2, 8));
-    let first_session_id = test_session_id("sess-first");
-    let second_session_id = test_session_id("sess-second");
-    let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 8);
-    let mut client = ServerClient::connect_local(&adapter);
-    let first = client
-        .attach_interactive_session(
-            first_session_id.clone(),
-            AttachSurfaceOptions {
-                capabilities: SurfaceCapabilities {
-                    notifications: true,
-                    ..SurfaceCapabilities::default()
-                },
-                ..AttachSurfaceOptions::default()
-            },
-        )
-        .expect("attach first interactive");
-    let second = client
-        .attach_interactive_session(
-            second_session_id.clone(),
-            AttachSurfaceOptions {
-                capabilities: SurfaceCapabilities {
-                    notifications: true,
-                    ..SurfaceCapabilities::default()
-                },
-                ..AttachSurfaceOptions::default()
-            },
-        )
-        .expect("attach second interactive");
-
-    let first_route = server
-        .route_server_request(
-            first_session_id,
-            SurfaceCapability::Notifications,
-            Some(TurnId::from("turn-first")),
-            test_server_request("first"),
-        )
-        .expect("route first request");
-    let second_route = server
-        .route_server_request(
-            second_session_id,
-            SurfaceCapability::Notifications,
-            Some(TurnId::from("turn-second")),
-            test_server_request("second"),
-        )
-        .expect("route second request");
-
-    let second_delivery = client
-        .try_next_session_request(&second)
-        .expect("second request");
-    let first_delivery = client
-        .try_next_session_request(&first)
-        .expect("first request");
-
-    assert_eq!(second_delivery.request_id, second_route.pending.request_id);
-    assert_eq!(first_delivery.request_id, first_route.pending.request_id);
-    assert!(client.try_next_session_request(&first).is_none());
-    assert!(client.try_next_session_request(&second).is_none());
-}
-
-#[test]
-fn lifecycle_demux_buffers_other_surfaces_on_same_connection() {
-    let server = Arc::new(AppServer::<TestHandle>::new(2, 8));
-    let interactive_session_id = test_session_id("sess-interactive");
-    let passive_session_id = test_session_id("sess-passive");
-    let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 8);
-    let mut client = ServerClient::connect_local(&adapter);
-    let interactive = client
-        .attach_interactive_session(
-            interactive_session_id.clone(),
-            AttachSurfaceOptions::default(),
-        )
-        .expect("attach interactive");
-    let passive = client
-        .subscribe_session(
-            passive_session_id.clone(),
-            Some(0),
-            AttachSurfaceOptions::default(),
-        )
-        .expect("subscribe passive");
-
-    let outcome = server.route_lifecycle_effects(vec![
-        SurfaceLifecycleEffect {
-            surface_id: passive.surface_id().clone(),
-            kind: SurfaceLifecycleEffectKind::SessionStarted {
-                session_id: passive_session_id,
-            },
-        },
-        SurfaceLifecycleEffect {
-            surface_id: interactive.surface_id().clone(),
-            kind: SurfaceLifecycleEffectKind::SessionStarted {
-                session_id: interactive_session_id,
-            },
-        },
-    ]);
-    assert_eq!(outcome.delivered, 2);
-
-    let interactive_delivery = client
-        .try_next_session_lifecycle(&interactive)
-        .expect("interactive lifecycle");
-    let passive_delivery = client
-        .try_next_passive_lifecycle(&passive)
-        .expect("passive lifecycle");
-
-    assert_eq!(
-        interactive_delivery.surface_id,
-        interactive.surface_id().clone()
-    );
-    assert_eq!(passive_delivery.surface_id, passive.surface_id().clone());
-    assert!(client.try_next_session_lifecycle(&interactive).is_none());
-    assert!(client.try_next_passive_lifecycle(&passive).is_none());
 }

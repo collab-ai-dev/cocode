@@ -1,7 +1,8 @@
-//! Process-, project-, and session-scoped runtime ownership.
+//! Transport- and surface-independent process/project runtime primitives.
 //!
-//! Process and project ownership live here today. Session construction is
-//! being extracted from `coco-cli` behind the same crate boundary.
+//! Session application composition belongs to `coco-agent-host`; this crate owns
+//! the lower-level resource scopes, workspace paths, and bootstrap contracts
+//! that do not depend on QueryEngine, SDK handlers, or presentation policy.
 
 mod bootstrap;
 mod process_runtime;

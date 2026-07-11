@@ -244,7 +244,7 @@ pub enum EnvKey {
     CocoLoopPersistent,
     CocoSimple,
     /// Truthy ⇒ emit startup phase timings (one `debug!` per phase with a
-    /// `duration_ms` field). Read by `coco_cli::startup_profile`.
+    /// `duration_ms` field). Read by `coco_agent_host::startup_profile`.
     CocoStartupProfile,
     CocoTaskListId,
     CocoTeamName,

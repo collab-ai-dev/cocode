@@ -228,8 +228,8 @@ impl IdeBridgeSource for IdeBridgeAdapter {
 // ────────────────────────────────────────────────────────────────
 // Swarm adapter — wires the in-memory `PendingMessageStore` to the
 // `agent_pending_messages` system-reminder. `teammate_mailbox` and
-// `team_context` remain stubs (app/state swarm surface is per-session
-// spread across swarm_{runner_loop, mailbox, teammate, agent_handle}
+// `team_context` remain stubs (the coordinator surface is per-session
+// and spread across runner-loop, mailbox, teammate, and agent-handle modules
 // and not yet bridged into this adapter).
 // ────────────────────────────────────────────────────────────────
 

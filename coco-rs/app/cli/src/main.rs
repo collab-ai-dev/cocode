@@ -24,20 +24,20 @@ use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
 
+use coco_agent_host::headless::build_runtime_config_for_cli;
+use coco_agent_host::headless::resolve_main_model;
+use coco_agent_host::resume_resolver;
+use coco_agent_host::resume_resolver::ResumePlan;
+use coco_agent_host::sdk_server::SdkServer;
+use coco_agent_host::sdk_server::StateQueryEngineRunner;
+use coco_agent_host::sdk_server::StdioTransport;
+use coco_agent_host::sdk_server::cli_bootstrap::CliInitializeBootstrap;
+use coco_agent_host::sdk_server::spawn_app_server_local_outbound_forwarder;
+use coco_agent_host::session_bootstrap::build_engine_resources;
+use coco_agent_host::session_bootstrap::install_session_late_binds;
 use coco_cli::Cli;
 use coco_cli::Commands;
 use coco_cli::McpAction;
-use coco_cli::headless::build_runtime_config_for_cli;
-use coco_cli::headless::resolve_main_model;
-use coco_cli::resume_resolver;
-use coco_cli::resume_resolver::ResumePlan;
-use coco_cli::sdk_server::SdkServer;
-use coco_cli::sdk_server::StateQueryEngineRunner;
-use coco_cli::sdk_server::StdioTransport;
-use coco_cli::sdk_server::cli_bootstrap::CliInitializeBootstrap;
-use coco_cli::sdk_server::spawn_app_server_local_outbound_forwarder;
-use coco_cli::session_bootstrap::build_engine_resources;
-use coco_cli::session_bootstrap::install_session_late_binds;
 use coco_cli::tracing_init;
 use coco_config::global_config;
 use coco_hub_connector::HubConnectorSender;
@@ -46,8 +46,8 @@ use tokio::task::JoinHandle;
 
 mod bin_handlers;
 mod tui_runner;
-use coco_cli::conversation_export;
-use coco_cli::session_runtime;
+use coco_agent_host::conversation_export;
+use coco_agent_host::session_runtime;
 
 /// Stack size for tokio worker + blocking threads (default: 2 MiB).
 ///
@@ -80,7 +80,7 @@ fn server_config_duration_secs(value: i64, fallback: Duration) -> Duration {
 
 fn shutdown_drain_result(
     component: &str,
-    outcome: &coco_cli::shutdown::ShutdownDrainOutcome,
+    outcome: &coco_agent_host::shutdown::ShutdownDrainOutcome,
 ) -> Result<()> {
     if outcome.is_clean() {
         return Ok(());
@@ -161,9 +161,9 @@ fn sdk_named_pipe_name(runtime_config: &coco_config::RuntimeConfig) -> Option<St
 #[cfg(unix)]
 fn start_sdk_unix_listener(
     socket_path: Option<PathBuf>,
-    adapter: coco_app_server::JsonRpcAdapter<coco_cli::sdk_server::LocalAppSessionHandle>,
-    app_server: Arc<coco_app_server::AppServer<coco_cli::sdk_server::LocalAppSessionHandle>>,
-    state: Arc<coco_cli::sdk_server::SdkServerState>,
+    adapter: coco_app_server::JsonRpcAdapter<coco_agent_host::sdk_server::LocalAppSessionHandle>,
+    app_server: Arc<coco_app_server::AppServer<coco_agent_host::sdk_server::LocalAppSessionHandle>>,
+    state: Arc<coco_agent_host::sdk_server::SdkServerState>,
     hub_connector: Option<HubConnectorSender>,
     turn_drain_timeout: Duration,
 ) -> Result<Option<SdkUnixListenerTask>> {
@@ -180,7 +180,7 @@ fn start_sdk_unix_listener(
         })?;
     let (outbound_tx, outbound_rx) = tokio::sync::mpsc::channel(SDK_UNIX_LISTENER_CHANNEL_CAPACITY);
     let handler = Arc::new(
-        coco_cli::sdk_server::AppServerSdkHandler::with_local_app_server_and_turn_drain_timeout(
+        coco_agent_host::sdk_server::AppServerSdkHandler::with_local_app_server_and_turn_drain_timeout(
             Arc::clone(&state),
             outbound_tx,
             Arc::clone(&app_server),
@@ -201,7 +201,7 @@ fn start_sdk_unix_listener(
             .await;
         if let Err(error) = &result {
             tracing::warn!(
-                target: "coco_cli::sdk",
+                target: "coco_agent_host::sdk",
                 socket_path = %task_socket_path.display(),
                 error = %error,
                 "SDK AppServer Unix listener exited with error"
@@ -211,7 +211,7 @@ fn start_sdk_unix_listener(
     });
 
     tracing::info!(
-        target: "coco_cli::sdk",
+        target: "coco_agent_host::sdk",
         socket_path = %socket_path.display(),
         "SDK AppServer Unix listener started"
     );
@@ -225,9 +225,9 @@ fn start_sdk_unix_listener(
 
 async fn start_sdk_websocket_listener(
     bind_addr: Option<String>,
-    adapter: coco_app_server::JsonRpcAdapter<coco_cli::sdk_server::LocalAppSessionHandle>,
-    app_server: Arc<coco_app_server::AppServer<coco_cli::sdk_server::LocalAppSessionHandle>>,
-    state: Arc<coco_cli::sdk_server::SdkServerState>,
+    adapter: coco_app_server::JsonRpcAdapter<coco_agent_host::sdk_server::LocalAppSessionHandle>,
+    app_server: Arc<coco_app_server::AppServer<coco_agent_host::sdk_server::LocalAppSessionHandle>>,
+    state: Arc<coco_agent_host::sdk_server::SdkServerState>,
     hub_connector: Option<HubConnectorSender>,
     turn_drain_timeout: Duration,
 ) -> Result<Option<SdkWebSocketListenerTask>> {
@@ -247,7 +247,7 @@ async fn start_sdk_websocket_listener(
     let (outbound_tx, outbound_rx) =
         tokio::sync::mpsc::channel(SDK_WEBSOCKET_LISTENER_CHANNEL_CAPACITY);
     let handler = Arc::new(
-        coco_cli::sdk_server::AppServerSdkHandler::with_local_app_server_and_turn_drain_timeout(
+        coco_agent_host::sdk_server::AppServerSdkHandler::with_local_app_server_and_turn_drain_timeout(
             Arc::clone(&state),
             outbound_tx,
             Arc::clone(&app_server),
@@ -269,7 +269,7 @@ async fn start_sdk_websocket_listener(
             .await;
         if let Err(error) = &result {
             tracing::warn!(
-                target: "coco_cli::sdk",
+                target: "coco_agent_host::sdk",
                 bind_addr = %task_bind_addr,
                 error = %error,
                 "SDK AppServer WebSocket listener exited with error"
@@ -279,7 +279,7 @@ async fn start_sdk_websocket_listener(
     });
 
     tracing::info!(
-        target: "coco_cli::sdk",
+        target: "coco_agent_host::sdk",
         bind_addr = %local_addr,
         "SDK AppServer WebSocket listener started"
     );
@@ -294,9 +294,9 @@ async fn start_sdk_websocket_listener(
 #[cfg(windows)]
 fn start_sdk_named_pipe_listener(
     pipe_name: Option<String>,
-    adapter: coco_app_server::JsonRpcAdapter<coco_cli::sdk_server::LocalAppSessionHandle>,
-    app_server: Arc<coco_app_server::AppServer<coco_cli::sdk_server::LocalAppSessionHandle>>,
-    state: Arc<coco_cli::sdk_server::SdkServerState>,
+    adapter: coco_app_server::JsonRpcAdapter<coco_agent_host::sdk_server::LocalAppSessionHandle>,
+    app_server: Arc<coco_app_server::AppServer<coco_agent_host::sdk_server::LocalAppSessionHandle>>,
+    state: Arc<coco_agent_host::sdk_server::SdkServerState>,
     hub_connector: Option<HubConnectorSender>,
     turn_drain_timeout: Duration,
 ) -> Result<Option<SdkNamedPipeListenerTask>> {
@@ -311,7 +311,7 @@ fn start_sdk_named_pipe_listener(
     let (outbound_tx, outbound_rx) =
         tokio::sync::mpsc::channel(SDK_NAMED_PIPE_LISTENER_CHANNEL_CAPACITY);
     let handler = Arc::new(
-        coco_cli::sdk_server::AppServerSdkHandler::with_local_app_server_and_turn_drain_timeout(
+        coco_agent_host::sdk_server::AppServerSdkHandler::with_local_app_server_and_turn_drain_timeout(
             Arc::clone(&state),
             outbound_tx,
             Arc::clone(&app_server),
@@ -333,7 +333,7 @@ fn start_sdk_named_pipe_listener(
             .await;
         if let Err(error) = &result {
             tracing::warn!(
-                target: "coco_cli::sdk",
+                target: "coco_agent_host::sdk",
                 pipe_name = %task_pipe_name,
                 error = %error,
                 "SDK AppServer named-pipe listener exited with error"
@@ -343,7 +343,7 @@ fn start_sdk_named_pipe_listener(
     });
 
     tracing::info!(
-        target: "coco_cli::sdk",
+        target: "coco_agent_host::sdk",
         pipe_name = %pipe_name,
         "SDK AppServer named-pipe listener started"
     );
@@ -369,7 +369,7 @@ async fn shutdown_sdk_unix_listener(
         Ok(Ok(Ok(()))) => {}
         Ok(Ok(Err(error))) => {
             tracing::warn!(
-                target: "coco_cli::sdk",
+                target: "coco_agent_host::sdk",
                 socket_path = %listener.socket_path.display(),
                 error = %error,
                 "SDK AppServer Unix listener stopped with error"
@@ -377,7 +377,7 @@ async fn shutdown_sdk_unix_listener(
         }
         Ok(Err(error)) => {
             tracing::warn!(
-                target: "coco_cli::sdk",
+                target: "coco_agent_host::sdk",
                 socket_path = %listener.socket_path.display(),
                 error = %error,
                 "SDK AppServer Unix listener task failed"
@@ -385,7 +385,7 @@ async fn shutdown_sdk_unix_listener(
         }
         Err(_) => {
             tracing::warn!(
-                target: "coco_cli::sdk",
+                target: "coco_agent_host::sdk",
                 socket_path = %listener.socket_path.display(),
                 timeout_secs = shutdown_timeout.as_secs(),
                 "aborting SDK AppServer Unix listener after shutdown timeout"
@@ -412,7 +412,7 @@ async fn shutdown_sdk_websocket_listener(
         Ok(Ok(Ok(()))) => {}
         Ok(Ok(Err(error))) => {
             tracing::warn!(
-                target: "coco_cli::sdk",
+                target: "coco_agent_host::sdk",
                 bind_addr = %listener.bind_addr,
                 error = %error,
                 "SDK AppServer WebSocket listener stopped with error"
@@ -420,7 +420,7 @@ async fn shutdown_sdk_websocket_listener(
         }
         Ok(Err(error)) => {
             tracing::warn!(
-                target: "coco_cli::sdk",
+                target: "coco_agent_host::sdk",
                 bind_addr = %listener.bind_addr,
                 error = %error,
                 "SDK AppServer WebSocket listener task failed"
@@ -428,7 +428,7 @@ async fn shutdown_sdk_websocket_listener(
         }
         Err(_) => {
             tracing::warn!(
-                target: "coco_cli::sdk",
+                target: "coco_agent_host::sdk",
                 bind_addr = %listener.bind_addr,
                 timeout_secs = shutdown_timeout.as_secs(),
                 "aborting SDK AppServer WebSocket listener after shutdown timeout"
@@ -456,7 +456,7 @@ async fn shutdown_sdk_named_pipe_listener(
         Ok(Ok(Ok(()))) => {}
         Ok(Ok(Err(error))) => {
             tracing::warn!(
-                target: "coco_cli::sdk",
+                target: "coco_agent_host::sdk",
                 pipe_name = %listener.pipe_name,
                 error = %error,
                 "SDK AppServer named-pipe listener stopped with error"
@@ -464,7 +464,7 @@ async fn shutdown_sdk_named_pipe_listener(
         }
         Ok(Err(error)) => {
             tracing::warn!(
-                target: "coco_cli::sdk",
+                target: "coco_agent_host::sdk",
                 pipe_name = %listener.pipe_name,
                 error = %error,
                 "SDK AppServer named-pipe listener task failed"
@@ -472,7 +472,7 @@ async fn shutdown_sdk_named_pipe_listener(
         }
         Err(_) => {
             tracing::warn!(
-                target: "coco_cli::sdk",
+                target: "coco_agent_host::sdk",
                 pipe_name = %listener.pipe_name,
                 timeout_secs = shutdown_timeout.as_secs(),
                 "aborting SDK AppServer named-pipe listener after shutdown timeout"
@@ -506,7 +506,7 @@ async fn async_main() -> Result<()> {
 
     let mut cli = Cli::parse();
     // `--bare` is the flag form of bare mode; export the env so every
-    // downstream `is_env_truthy(CocoBareMode)` read — session bootstrap
+    // downstream `is_env_truthy (CocoBareMode)` read — session bootstrap
     // and the per-turn finalize — observes it.
     if cli.bare {
         // SAFETY: set once at startup, single-threaded, before any task spawn.
@@ -516,7 +516,7 @@ async fn async_main() -> Result<()> {
     }
     coco_cli::startup_profile::init();
 
-    // CLI startup boundary: capture the initial process cwd once (§6.5/D-37);
+    // CLI startup boundary: capture the initial process cwd once;
     // every session threads its own cwd thereafter.
     #[allow(clippy::disallowed_methods)]
     let startup_cwd = std::env::current_dir()?;
@@ -529,7 +529,7 @@ async fn async_main() -> Result<()> {
     let process_runtime = coco_app_runtime::ProcessRuntime::global();
 
     tracing::info!(
-        target: "coco_cli::startup",
+        target: "coco_agent_host::startup",
         version = env!("CARGO_PKG_VERSION"),
         subcommand = ?cli.command.as_ref().map(std::mem::discriminant),
         has_prompt = cli.prompt.is_some(),
@@ -565,14 +565,14 @@ async fn async_main() -> Result<()> {
         match cmd {
             Commands::Status => {
                 let cwd = startup_cwd.clone();
-                let runtime_config = build_runtime_config_for_cli(&cli, &cwd)?;
-                coco_cli::model_card_refresh::spawn_if_enabled(&runtime_config);
+                let runtime_config = build_runtime_config_for_cli(&cli.agent_host_options(), &cwd)?;
+                coco_agent_host::model_card_refresh::spawn_if_enabled(&runtime_config);
                 let main_model = resolve_main_model(&runtime_config);
                 let mode = main_model.provider_api.map_or("mock", |api| api.as_str());
                 println!("coco-rs v0.0.0 ({mode} mode)");
                 println!("model: {}", main_model.model_id);
                 println!("provider: {}", main_model.provider);
-                coco_cli::provider_login::print_auth_status(&runtime_config);
+                coco_agent_host::provider_login::print_auth_status(&runtime_config);
                 return Ok(());
             }
             Commands::Sessions => {
@@ -590,15 +590,23 @@ async fn async_main() -> Result<()> {
                     None => cli_for_resume.continue_session = true,
                 }
                 let cwd = startup_cwd.clone();
-                let runtime_paths = coco_cli::paths::runtime_paths();
-                let plan =
-                    resume_resolver::resolve(&cli_for_resume, runtime_paths.memory_base(), &cwd)?;
+                let runtime_paths = coco_agent_host::paths::runtime_paths();
+                let plan = resume_resolver::resolve(
+                    &cli_for_resume.agent_host_options(),
+                    runtime_paths.memory_base(),
+                    &cwd,
+                )?;
                 if plan.is_none() {
                     println!("No sessions to resume.");
                     return Ok(());
                 }
-                return tui_runner::run_tui(&cli_for_resume, plan, cwd, process_runtime.clone())
-                    .await;
+                return tui_runner::run_tui(
+                    cli_for_resume.agent_host_options(),
+                    plan,
+                    cwd,
+                    process_runtime.clone(),
+                )
+                .await;
             }
             Commands::Config { action } => {
                 let cwd = startup_cwd.clone();
@@ -619,12 +627,12 @@ async fn async_main() -> Result<()> {
                 println!("[ok] Shell: available");
                 println!("[ok] Config: loaded");
                 let cwd = startup_cwd.clone();
-                let runtime_config = build_runtime_config_for_cli(&cli, &cwd)?;
-                coco_cli::model_card_refresh::spawn_if_enabled(&runtime_config);
+                let runtime_config = build_runtime_config_for_cli(&cli.agent_host_options(), &cwd)?;
+                coco_agent_host::model_card_refresh::spawn_if_enabled(&runtime_config);
                 let main_model = resolve_main_model(&runtime_config);
                 let mode = main_model.provider_api.map_or("mock", |api| api.as_str());
                 println!("[ok] Model: {} ({mode})", main_model.model_id);
-                coco_cli::provider_login::print_auth_status(&runtime_config);
+                coco_agent_host::provider_login::print_auth_status(&runtime_config);
                 return Ok(());
             }
             Commands::Login {
@@ -633,7 +641,7 @@ async fn async_main() -> Result<()> {
                 import,
             } => {
                 let cwd = startup_cwd.clone();
-                return coco_cli::provider_login::run_login(
+                return coco_agent_host::provider_login::run_login(
                     provider.clone(),
                     *no_browser,
                     import.clone(),
@@ -642,7 +650,7 @@ async fn async_main() -> Result<()> {
                 .await;
             }
             Commands::Logout { provider } => {
-                return coco_cli::provider_login::run_logout(provider.clone()).await;
+                return coco_agent_host::provider_login::run_logout(provider.clone()).await;
             }
             Commands::Init => {
                 let cwd = startup_cwd.clone();
@@ -682,11 +690,11 @@ async fn async_main() -> Result<()> {
                     McpAction::Remove { name } => println!("Removing MCP server: {name}"),
                     McpAction::Login { name, no_browser } => {
                         let cwd = startup_cwd.clone();
-                        return coco_cli::mcp_cli::run_login(name, *no_browser, &cwd).await;
+                        return coco_agent_host::mcp_cli::run_login(name, *no_browser, &cwd).await;
                     }
                     McpAction::Logout { name } => {
                         let cwd = startup_cwd.clone();
-                        return coco_cli::mcp_cli::run_logout(name, &cwd).await;
+                        return coco_agent_host::mcp_cli::run_logout(name, &cwd).await;
                     }
                 }
                 return Ok(());
@@ -814,7 +822,7 @@ async fn async_main() -> Result<()> {
     if cli.prompt.is_some() || is_piped {
         let prompt = cli.prompt.as_deref().unwrap_or("Hello!");
         tracing::info!(
-            target: "coco_cli::startup",
+            target: "coco_agent_host::startup",
             mode = "headless",
             piped = is_piped,
             prompt_len = prompt.len(),
@@ -832,17 +840,17 @@ async fn async_main() -> Result<()> {
         // and hand off to the TUI runner. `None` keeps the default
         // fresh-session bootstrap.
         let cwd = startup_cwd.clone();
-        let runtime_paths = coco_cli::paths::runtime_paths();
+        let runtime_paths = coco_agent_host::paths::runtime_paths();
         let plan: Option<ResumePlan> =
-            resume_resolver::resolve(&cli, runtime_paths.memory_base(), &cwd)?;
+            resume_resolver::resolve(&cli.agent_host_options(), runtime_paths.memory_base(), &cwd)?;
         coco_cli::startup_profile::mark("resume_resolved");
         tracing::info!(
-            target: "coco_cli::startup",
+            target: "coco_agent_host::startup",
             mode = "tui",
             resuming = plan.is_some(),
             "launching interactive TUI"
         );
-        tui_runner::run_tui(&cli, plan, cwd, process_runtime.clone()).await
+        tui_runner::run_tui(cli.agent_host_options(), plan, cwd, process_runtime.clone()).await
     }
 }
 
@@ -853,12 +861,13 @@ async fn run_chat(
     cwd: PathBuf,
     process_runtime: Arc<coco_app_runtime::ProcessRuntime>,
 ) -> Result<()> {
+    let agent_host_options = cli.agent_host_options();
     // Resolve `--resume` / `--continue` / `--fork-session` once at
     // the boot edge so headless and TUI share identical semantics.
     // `None` means no resume flag was set; fall through to a fresh
     // session.
-    let runtime_paths = coco_cli::paths::runtime_paths();
-    let plan = resume_resolver::resolve(cli, runtime_paths.memory_base(), &cwd)?;
+    let runtime_paths = coco_agent_host::paths::runtime_paths();
+    let plan = resume_resolver::resolve(&agent_host_options, runtime_paths.memory_base(), &cwd)?;
     if let Some(p) = &plan {
         eprintln!(
             "{} session {} ({} prior message(s))",
@@ -868,7 +877,7 @@ async fn run_chat(
         );
     }
     let opts = match plan {
-        Some(p) => coco_cli::headless::RunChatOptions {
+        Some(p) => coco_agent_host::headless::RunChatOptions {
             cwd: Some(cwd.clone()),
             prior_messages: p
                 .prior_messages
@@ -880,22 +889,23 @@ async fn run_chat(
             process_runtime: Some(process_runtime.clone()),
             ..Default::default()
         },
-        None => coco_cli::headless::RunChatOptions {
+        None => coco_agent_host::headless::RunChatOptions {
             cwd: Some(cwd.clone()),
             process_runtime: Some(process_runtime.clone()),
             ..Default::default()
         },
     };
-    let outcome = coco_cli::headless::run_chat_with_options(cli, prompt, opts).await?;
+    let outcome =
+        coco_agent_host::headless::run_chat_with_options(&agent_host_options, prompt, opts).await?;
     if let Some(msg) = &outcome.permission_notification {
-        tracing::warn!(target: "coco_cli::headless", notice = %msg, "headless permission notice");
+        tracing::warn!(target: "coco_agent_host::headless", notice = %msg, "headless permission notice");
         eprintln!("warning: {msg}");
     }
     let mode = outcome
         .provider_api
         .map_or("mock", coco_types::ProviderApi::as_str);
     tracing::info!(
-        target: "coco_cli::headless",
+        target: "coco_agent_host::headless",
         provider_mode = mode,
         model_id = %outcome.model_id,
         turns = outcome.turns,
@@ -921,15 +931,18 @@ async fn run_sdk_mode(
     cwd: PathBuf,
     process_runtime: Arc<coco_app_runtime::ProcessRuntime>,
 ) -> Result<()> {
+    let agent_host_options = Arc::new(cli.agent_host_options());
     tracing::info!(
-        target: "coco_cli::sdk",
+        target: "coco_agent_host::sdk",
         cwd = %cwd.display(),
         "sdk mode starting"
     );
-    let runtime_config = coco_cli::headless::build_runtime_config_for_cli(cli, &cwd)?;
-    coco_cli::model_card_refresh::spawn_if_enabled(&runtime_config);
+    let runtime_config =
+        coco_agent_host::headless::build_runtime_config_for_cli(&agent_host_options, &cwd)?;
+    coco_agent_host::model_card_refresh::spawn_if_enabled(&runtime_config);
 
-    let resources = build_engine_resources(&process_runtime, cli, &runtime_config, &cwd)?;
+    let resources =
+        build_engine_resources(&process_runtime, &agent_host_options, &runtime_config, &cwd)?;
     let is_real_anthropic = resources.provider_api == Some(coco_types::ProviderApi::Anthropic);
     let system_prompt = Some(resources.system_prompt.clone());
 
@@ -994,7 +1007,8 @@ async fn run_sdk_mode(
     if let Some(auth) = auth_method {
         bootstrap_builder = bootstrap_builder.with_auth_method(auth);
     }
-    let bootstrap: Arc<dyn coco_cli::sdk_server::InitializeBootstrap> = Arc::new(bootstrap_builder);
+    let bootstrap: Arc<dyn coco_agent_host::sdk_server::InitializeBootstrap> =
+        Arc::new(bootstrap_builder);
 
     if let Some(msg) = &resources.startup.notification {
         eprintln!("warning: {msg}");
@@ -1011,11 +1025,11 @@ async fn run_sdk_mode(
     // receive `plugins/changed` notifications.
     let (plugin_notif_tx, plugin_notif_rx) = tokio::sync::mpsc::channel(16);
     let _plugin_watcher_guard =
-        coco_cli::plugin_watch::spawn(plugin_notif_tx, &cwd, &global_config::config_home());
+        coco_agent_host::plugin_watch::spawn(plugin_notif_tx, &cwd, &global_config::config_home());
     // Startup marketplace maintenance (seed/reconcile/delist) on the SDK
     // surface too — mirrors the TUI/headless so delisted-plugin enforcement
     // runs for SDK NDJSON sessions. Background + non-fatal.
-    coco_cli::session_bootstrap::spawn_marketplace_startup(global_config::config_home());
+    coco_agent_host::session_bootstrap::spawn_marketplace_startup(global_config::config_home());
     let server = SdkServer::new(transport)
         .with_startup_cwd(cwd.clone())
         .with_session_manager(session_manager)
@@ -1025,15 +1039,15 @@ async fn run_sdk_mode(
     let state = server.state();
     state.set_bypass_permissions_available(bypass_permissions_available);
     // Durable session_seq: bind skip-ahead to the retention ring and install
-    // the transcript watermark persist hook (plan D-47). SDK stdio shares the
+    // the transcript watermark persist hook. SDK stdio shares the
     // same allocator across its stdio and sidecar forwarders.
-    coco_cli::sdk_server::install_session_seq_durability(
+    coco_agent_host::sdk_server::install_session_seq_durability(
         &state,
         server_config_usize(runtime_config.server.event_retention_per_session, 1024) as i64,
     );
 
     let bridge: Arc<dyn coco_tool_runtime::ToolPermissionBridge> = Arc::new(
-        coco_cli::sdk_server::SdkPermissionBridge::new(state.clone()),
+        coco_agent_host::sdk_server::SdkPermissionBridge::new(state.clone()),
     );
 
     #[cfg(unix)]
@@ -1042,7 +1056,7 @@ async fn run_sdk_mode(
     #[cfg(windows)]
     let sdk_named_pipe_name = sdk_named_pipe_name(&runtime_config);
     let app_server = Arc::new(coco_app_server::AppServer::<
-        coco_cli::sdk_server::LocalAppSessionHandle,
+        coco_agent_host::sdk_server::LocalAppSessionHandle,
     >::new_with_surface_limits(
         server_config_usize(runtime_config.server.max_sessions, 32),
         server_config_usize(runtime_config.server.event_retention_per_session, 1024),
@@ -1053,7 +1067,7 @@ async fn run_sdk_mode(
         server_config_usize(runtime_config.server.outbound_queue_frames, 256),
     );
 
-    // Optional idle-session auto-archive (plan §7.6), off unless
+    // Optional idle-session auto-archive, off unless
     // `server.idle_session_timeout_secs` is set. SDK multi-session mode is the
     // only place surfaceless sessions accumulate.
     let _idle_session_sweep = runtime_config
@@ -1061,7 +1075,7 @@ async fn run_sdk_mode(
         .idle_session_timeout_secs
         .filter(|secs| *secs > 0)
         .map(|secs| {
-            coco_cli::sdk_server::spawn_idle_session_sweep(
+            coco_agent_host::sdk_server::spawn_idle_session_sweep(
                 Arc::clone(&app_server),
                 Arc::clone(&state),
                 Duration::from_secs(secs as u64),
@@ -1069,7 +1083,7 @@ async fn run_sdk_mode(
             )
         });
 
-    let runtime_factory_cli = Arc::new(cli.clone());
+    let runtime_factory_cli = Arc::clone(&agent_host_options);
     let runtime_factory = crate::session_runtime::SessionRuntimeFactory::new(
         crate::session_runtime::SessionRuntimeFactoryOpts {
             cli: Arc::clone(&runtime_factory_cli),
@@ -1080,7 +1094,6 @@ async fn run_sdk_mode(
                 ),
             cwd: cwd.clone(),
             model_runtimes: None,
-            tools: resources.tools,
             session_manager: session_manager_for_runtime,
             fast_model_spec: None,
             permission_bridge: Some(bridge),
@@ -1094,7 +1107,7 @@ async fn run_sdk_mode(
     );
     let startup_session_id = coco_types::SessionId::generate();
     let runtime_replacement_factory = runtime_factory.clone();
-    let loaded_handle = coco_cli::sdk_server::load_local_app_server_session_runtime(
+    let loaded_handle = coco_agent_host::sdk_server::load_local_app_server_session_runtime(
         &app_server,
         startup_session_id.clone(),
         runtime_factory,
@@ -1111,7 +1124,7 @@ async fn run_sdk_mode(
     state.install_mcp_manager(mcp_manager.clone()).await;
     let sdk_event_hub_connector = {
         let session_id = session_handle.current_typed_session_id().await;
-        coco_cli::event_hub::RuntimeEventHubConnector::spawn_for_session(
+        coco_agent_host::event_hub::RuntimeEventHubConnector::spawn_for_session(
             session_handle.runtime_config(),
             session_id,
             &cwd,
@@ -1122,8 +1135,8 @@ async fn run_sdk_mode(
     // tool and enable the inline enforcement nudge when `--json-schema` is set.
     // TUI never reaches this branch (different code path in `tui_runner`).
     let requires_structured_output =
-        coco_cli::headless::inject_structured_output_tool_if_requested(
-            cli,
+        coco_agent_host::headless::inject_structured_output_tool_if_requested(
+            &agent_host_options,
             session_handle.tools(),
         )?;
     if requires_structured_output {
@@ -1134,7 +1147,7 @@ async fn run_sdk_mode(
 
     // Late-binds shared with TUI/headless: task runtime, agent transcript
     // persistence, agent-team wiring, fork dispatcher.
-    let lsp_handle = coco_cli::session_bootstrap::build_lsp_handle_if_enabled(
+    let lsp_handle = coco_agent_host::session_bootstrap::build_lsp_handle_if_enabled(
         process_runtime.clone(),
         session_handle.runtime_config(),
         &global_config::config_home(),
@@ -1147,7 +1160,7 @@ async fn run_sdk_mode(
     // connects + registers tools in the background. Reuses the manager already
     // handed to `SdkServer` (for `mcp/setServers`) so all surfaces share one
     // source of truth.
-    coco_cli::session_bootstrap::bootstrap_session_mcp(
+    coco_agent_host::session_bootstrap::bootstrap_session_mcp(
         &session_handle,
         &cwd,
         Some(mcp_manager),
@@ -1161,7 +1174,7 @@ async fn run_sdk_mode(
     // here, so no permission bridge is registered (worker deny-path prompts
     // fail closed); teardown / idle / coordinator re-injection still flow.
     // No-op when AgentTeams is off or this session is itself a teammate.
-    coco_cli::leader_inbox_poller::install_leader(session_handle.clone(), None).await;
+    coco_agent_host::leader_inbox_poller::install_leader(session_handle.clone(), None).await;
 
     // SessionStart hooks fire once at session bootstrap; output queues
     // onto the shared sync-hook buffer and surfaces as `hook_*` reminders
@@ -1176,8 +1189,11 @@ async fn run_sdk_mode(
         .fire_setup_hooks(coco_hooks::orchestration::SetupTrigger::Maintenance)
         .await;
 
-    coco_cli::sdk_server::install_sdk_session_runtime_state(state.clone(), session_handle.clone())
-        .await;
+    coco_agent_host::sdk_server::install_sdk_session_runtime_state(
+        state.clone(),
+        session_handle.clone(),
+    )
+    .await;
 
     let file_history_for_server = session_handle.file_history().cloned().unwrap_or_else(|| {
         Arc::new(tokio::sync::RwLock::new(
@@ -1185,7 +1201,8 @@ async fn run_sdk_mode(
         ))
     });
     state
-        .install_runtime_replacement(coco_cli::sdk_server::RuntimeReplacementContext {
+        .install_runtime_replacement(coco_agent_host::sdk_server::RuntimeReplacementContext {
+            startup_session_id: startup_session_id.clone(),
             runtime_factory: runtime_replacement_factory,
             process_runtime: process_runtime.clone(),
             cwd: cwd.clone(),
@@ -1207,7 +1224,7 @@ async fn run_sdk_mode(
     server.set_turn_runner(runner).await;
 
     tracing::info!(
-        target: "coco_cli::sdk",
+        target: "coco_agent_host::sdk",
         permission_mode = ?permission_mode,
         bypass_available = bypass_permissions_available,
         "sdk server entering AppServer bridge dispatch loop"
@@ -1220,7 +1237,7 @@ async fn run_sdk_mode(
         state.clone(),
         sdk_event_hub_connector
             .as_ref()
-            .map(coco_cli::event_hub::RuntimeEventHubConnector::sender),
+            .map(coco_agent_host::event_hub::RuntimeEventHubConnector::sender),
         app_server_turn_drain_timeout,
     )?;
     let sdk_websocket_listener = start_sdk_websocket_listener(
@@ -1230,7 +1247,7 @@ async fn run_sdk_mode(
         state.clone(),
         sdk_event_hub_connector
             .as_ref()
-            .map(coco_cli::event_hub::RuntimeEventHubConnector::sender),
+            .map(coco_agent_host::event_hub::RuntimeEventHubConnector::sender),
         app_server_turn_drain_timeout,
     )
     .await?;
@@ -1242,20 +1259,20 @@ async fn run_sdk_mode(
         state.clone(),
         sdk_event_hub_connector
             .as_ref()
-            .map(coco_cli::event_hub::RuntimeEventHubConnector::sender),
+            .map(coco_agent_host::event_hub::RuntimeEventHubConnector::sender),
         app_server_turn_drain_timeout,
     )?;
     let connection = adapter.connect();
-    // §7.7: an OS signal initiates the drain rather than aborting the process.
+    // an OS signal initiates the drain rather than aborting the process.
     // Racing the dispatch loop against the signal also installs the SIGINT/
     // SIGTERM handler for the whole loop duration, so a `kill <pid>` during an
     // active turn drains cleanly instead of taking the default terminate
-    // action. A second signal is caught by the bounded drain below (§7.7).
+    // action. A second signal is caught by the bounded drain below.
     let dispatch_result = tokio::select! {
         result = server.run_app_server_connection(connection) => result.map(|_| ()),
-        () = coco_cli::shutdown::os_interrupt_signal() => {
+        () = coco_agent_host::shutdown::os_interrupt_signal() => {
             tracing::info!(
-                target: "coco_cli::sdk",
+                target: "coco_agent_host::sdk",
                 "received OS shutdown signal; draining SDK AppServer sessions"
             );
             Ok(())
@@ -1271,10 +1288,10 @@ async fn run_sdk_mode(
     shutdown_sdk_named_pipe_listener(sdk_named_pipe_listener, app_server_shutdown_timeout).await;
     let app_server_for_shutdown = Arc::clone(&app_server);
     let state_for_shutdown = state.clone();
-    let app_server_shutdown = coco_cli::shutdown::drain_with_timeout_or_signal(
+    let app_server_shutdown = coco_agent_host::shutdown::drain_with_timeout_or_signal(
         app_server_shutdown_timeout,
         async move {
-            coco_cli::sdk_server::shutdown_local_app_server_sessions(
+            coco_agent_host::sdk_server::shutdown_local_app_server_sessions(
                 app_server_for_shutdown,
                 state_for_shutdown,
                 app_server_turn_drain_timeout,
@@ -1282,23 +1299,25 @@ async fn run_sdk_mode(
             .await
             .map_err(|error| format!("{}: {}", error.code, error.message))
         },
-        coco_cli::shutdown::os_interrupt_signal(),
+        coco_agent_host::shutdown::os_interrupt_signal(),
     )
     .await;
     match &app_server_shutdown {
-        coco_cli::shutdown::ShutdownDrainOutcome::Clean => {}
-        coco_cli::shutdown::ShutdownDrainOutcome::Failed { message } => tracing::warn!(
-            target: "coco_cli::sdk",
+        coco_agent_host::shutdown::ShutdownDrainOutcome::Clean => {}
+        coco_agent_host::shutdown::ShutdownDrainOutcome::Failed { message } => tracing::warn!(
+            target: "coco_agent_host::sdk",
             message = %message,
             "SDK AppServer shutdown drain failed"
         ),
-        coco_cli::shutdown::ShutdownDrainOutcome::TimedOut { timeout_secs } => tracing::warn!(
-            target: "coco_cli::sdk",
-            timeout_secs,
-            "SDK AppServer shutdown drain timed out"
-        ),
-        coco_cli::shutdown::ShutdownDrainOutcome::Interrupted => tracing::warn!(
-            target: "coco_cli::sdk",
+        coco_agent_host::shutdown::ShutdownDrainOutcome::TimedOut { timeout_secs } => {
+            tracing::warn!(
+                target: "coco_agent_host::sdk",
+                timeout_secs,
+                "SDK AppServer shutdown drain timed out"
+            )
+        }
+        coco_agent_host::shutdown::ShutdownDrainOutcome::Interrupted => tracing::warn!(
+            target: "coco_agent_host::sdk",
             "SDK AppServer shutdown drain interrupted by signal"
         ),
     }
@@ -1313,7 +1332,7 @@ async fn run_sdk_mode(
         // role (R2). The SDK leader path previously never wrote it, silently
         // dropping the coordinator role on resume.
         let session_id = session_runtime.current_typed_session_id().await;
-        coco_cli::coordinator_mode_resume::persist_session_mode(
+        coco_agent_host::coordinator_mode_resume::persist_session_mode(
             session_runtime.session_manager(),
             &session_id,
             &session_runtime.runtime_config().features,
@@ -1332,12 +1351,12 @@ async fn run_sdk_mode(
             .shutdown_and_flush_with_timeout(app_server_shutdown_timeout)
             .await
     } else {
-        coco_cli::shutdown::ShutdownDrainOutcome::Clean
+        coco_agent_host::shutdown::ShutdownDrainOutcome::Clean
     };
 
     if let Err(e) = dispatch_result {
         tracing::error!(
-            target: "coco_cli::sdk",
+            target: "coco_agent_host::sdk",
             error = %e,
             "sdk dispatch loop exited with error"
         );

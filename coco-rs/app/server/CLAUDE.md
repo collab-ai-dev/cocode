@@ -1,9 +1,11 @@
 # coco-app-server
 
-App-server ownership and routing layer. This crate is currently a Phase A
-foundation slice: it owns connection/surface routing metadata, replay-ring
-behavior, and the registry slot-state skeleton, but does not yet own runtime
-construction or transports.
+App-server ownership and routing layer. It owns connection/surface routing,
+replay rings, lifecycle slots, protocol adapters, and listener supervision.
+Runtime construction remains behind higher-layer handler/factory traits.
+Large test suites live beside their production modules as
+`routing.test.rs`, `app_server.test.rs`, and `json_rpc_adapter.test.rs`; keep
+the production routing/facade/adapter files below the workspace line limit.
 
 ## Key Types
 
@@ -17,8 +19,7 @@ construction or transports.
 | `AppShutdownStart` / `AppShutdownSession` | Process-shutdown close orchestration result plus per-session close completion. |
 | `AppArchiveCommit` | Result of completing close and archiving surfaces in one commit section. |
 | `AppLiveSessionSummary` | Live registry session id plus current routing surface counts. |
-| `SurfaceLifecycleEffect` | Internal lifecycle effect targeted to a surface after commit. |
-| `SurfaceLifecycleDelivery` | Lifecycle effect delivery queued to one target surface. |
+| `SurfaceLifecycleEffect` | `coco-types` lifecycle delivery targeted to a surface after commit; the lifecycle channel carries it directly. |
 | `ServerRequestRouteOutcome` | Result of routing one server-initiated request through the AppServer request bridge. |
 | `LocalClientAdapter` | Typed in-process adapter that registers real AppServer connections and channels. |
 | `LocalClientConnection` | One local connection with event, request, and lifecycle receivers. |
@@ -37,8 +38,8 @@ construction or transports.
 | `SurfaceAttachment` | Server-owned attachment metadata: role, capabilities, notification prefs, delivery cursor, state. |
 | `SurfaceRole` | `Interactive` or `Passive`; exactly one interactive owner per session. |
 | `AttachError` | Snafu-backed attach failure (`InteractiveOwnerConflict`, `SurfaceLimit`, `SessionClosing`). |
-| `SurfaceDelivery` | One envelope delivery targeted to one `SurfaceId`. |
-| `ServerRequestDelivery` | Actionable server->client request targeted to one `SurfaceId`. |
+| `SurfaceDelivery` | `coco-types` envelope delivery targeted to one `SurfaceId`. |
+| `ServerRequestDelivery` | `coco-types` actionable server request targeted to one `SurfaceId`. |
 | `ServerRequestReply` / `ResolvedServerRequest` | Client reply payload plus resolved pending-request ownership metadata. |
 | `SubscribeReplay` | Result of `after_seq` replay lookup: replay events or require a snapshot. |
 | `RouteOutcome` | Delivery count plus connections disconnected for full/closed outbound queues. |
@@ -84,6 +85,11 @@ construction or transports.
 - Owner tasks route lifecycle effects through `route_lifecycle_effects` after
   commit locks are released: replace emits started/replaced before the old close
   cascade, and close/archive emits ended after archive commit.
+- `SessionActivityTracker` is the lost-wakeup-safe activity clock used by
+  lifecycle supervisors. Successful load/replace, surface attach/detach or
+  disconnect, and routed session events update it; close completion forgets
+  the session. Consumers subscribe through `AppServer` rather than polling
+  routing state.
 - On Unix, `JsonRpcAdapter::bind_and_run_unix_listener_until_shutdown` binds
   an NDJSON Unix socket listener, runs the supervised accept loop, and relies on
   the transport listener wrapper to remove the socket path when shutdown drops
@@ -210,7 +216,10 @@ construction or transports.
 - `JsonRpcAdapterConnection::run_frame_channels` is the same remote connection
   owner loop over caller-supplied JSON-RPC frame channels. Higher layers use it
   to bridge existing transports into AppServer without moving concrete I/O into
-  this crate.
+  this crate. Request/notification handlers run in an owned task set so a slow
+  lifecycle request cannot block inbound interrupt/response processing. Event
+  deliveries are emitted before a completed request response when both are
+  ready; shutdown aborts and joins outstanding dispatch tasks.
 - JSON-RPC remote owner loops apply a bounded outbound write/send timeout.
   NDJSON and WebSocket transports fail the owner with
   `JsonRpcConnectionOwnerError::TransportSlowConsumer`; frame-channel bridges

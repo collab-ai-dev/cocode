@@ -61,7 +61,7 @@ Dispatch flow:
 3. `build_params(action, uri, line, character)` produces 0-based LSP
    `Position` from 1-based input.
 4. `ctx.lsp.send_request(path, method, params)` → adapter
-   (`coco_cli::lsp_handle_adapter::LspManagerAdapter`) routes via
+   (`coco_agent_host::lsp_handle_adapter::LspManagerAdapter`) routes via
    `LspServerManager::get_client(path)` which walks up to find
    `.git` / `Cargo.toml` — auto-routing per worktree.
 5. For `incomingCalls` / `outgoingCalls`, dispatch runs the

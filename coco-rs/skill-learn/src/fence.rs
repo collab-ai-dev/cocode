@@ -148,7 +148,7 @@ fn bash_is_read_only(input: &Value) -> bool {
 }
 
 fn input_path_under_root(input: &Value, root: &Path, cwd: &Path) -> bool {
-    coco_background_review::input_write_target(input, cwd)
+    coco_maintenance::write_fence::input_write_target(input, cwd)
         .is_some_and(|absolute| write_target_allowed(root, &absolute))
 }
 
@@ -183,7 +183,7 @@ fn write_target_allowed(root: &Path, absolute: &Path) -> bool {
 }
 
 fn apply_patch_paths_under_root(input: &Value, root: &Path, cwd: &Path) -> bool {
-    coco_background_review::apply_patch_write_targets(input, cwd)
+    coco_maintenance::write_fence::apply_patch_write_targets(input, cwd)
         .is_some_and(|paths| paths.iter().all(|path| write_target_allowed(root, path)))
 }
 

@@ -125,7 +125,10 @@ async fn spawn_hub_test_server() -> String {
                             .and_modify(|seq| *seq = (*seq).max(event.session_seq))
                             .or_insert(event.session_seq);
                     }
-                    HubFrame::BatchAck(BatchAckFrame { up_to_seq })
+                    HubFrame::BatchAck(BatchAckFrame {
+                        up_to_seq,
+                        ..Default::default()
+                    })
                 }
                 _ => panic!("unexpected client frame"),
             };

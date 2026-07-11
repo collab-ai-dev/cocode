@@ -642,7 +642,7 @@
           "type": "string"
         },
         "updated_input": {
-          "description": "Optional rewritten tool input the SDK client supplies at\napproval time. When `Some`, the engine substitutes this for the\nmodel-emitted input before invoking the tool. Used by\n`AskUserQuestion` to ship user-selected `answers` (and optional\n`annotations`) back into the tool's data envelope.\n\nIn-process equivalent is `coco_tool_runtime::ToolPermissionResolution.updated_input`\n(TUI mode). Consumed by `app/cli/src/sdk_server/approval_bridge.rs`."
+          "description": "Optional rewritten tool input the SDK client supplies at\napproval time. When `Some`, the engine substitutes this for the\nmodel-emitted input before invoking the tool. Used by\n`AskUserQuestion` to ship user-selected `answers` (and optional\n`annotations`) back into the tool's data envelope.\n\nIn-process equivalent is `coco_tool_runtime::ToolPermissionResolution.updated_input`\n(TUI mode). Consumed by `app/agent-host/src/sdk_server/approval_bridge.rs`."
         }
       },
       "required": [
@@ -7757,7 +7757,7 @@
           "type": "object"
         },
         {
-          "description": "One Message appended to engine MessageHistory.\n\n`session_id` + `agent_id` envelope (plan \u00a711 F9): merged-timeline\nconsumers (AgentTeams) demux per session/agent off the same event\nstream. `agent_id` is `None` for the main agent; `Some` for\nteammates / subagents. Single-session SDK consumers may ignore\nboth fields (`#[serde(default)]` keeps the wire forward-compat).",
+          "description": "One Message appended to engine MessageHistory.\n\n`session_id` + `agent_id` envelope: merged-timeline\nconsumers (AgentTeams) demux per session/agent off the same event\nstream. `agent_id` is `None` for the main agent; `Some` for\nteammates / subagents. Single-session SDK consumers may ignore\nboth fields (`#[serde(default)]` keeps the wire forward-compat).",
           "properties": {
             "method": {
               "const": "history/messageAppended",
@@ -12336,7 +12336,11 @@
           "description": "Agent/Task tool \u2192 subagent lifecycle.",
           "properties": {
             "agent_id": {
-              "type": "string"
+              "description": "The spawned subagent's id. `None` until the id is known \u2014\nthe accumulator sees only the tool call, not the spawned\n`AgentId`, so it is absent rather than an empty-string lie.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "agent_type": {
               "type": "string"
@@ -12364,7 +12368,6 @@
           },
           "required": [
             "type",
-            "agent_id",
             "agent_type",
             "description",
             "status"

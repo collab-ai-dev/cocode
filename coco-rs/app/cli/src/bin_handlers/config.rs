@@ -7,7 +7,7 @@ use coco_cli::ConfigAction;
 use coco_config::global_config;
 
 pub fn handle_config(action: &ConfigAction, cwd: &Path) -> Result<()> {
-    let roots = coco_cli::paths::settings_roots_for_cwd(cwd);
+    let roots = coco_agent_host::paths::settings_roots_for_cwd(cwd);
     let settings = coco_config::settings::load_settings_for_roots(&roots, None)?;
     let json = serde_json::to_value(&settings.merged)?;
 

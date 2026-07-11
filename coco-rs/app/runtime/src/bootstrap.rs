@@ -13,12 +13,14 @@ use std::sync::Arc;
 use coco_commands::CommandRegistry;
 use coco_config::RuntimeConfig;
 use coco_error::ErrorExt;
-use coco_error::StackError;
+use coco_error::Location;
 use coco_error::StatusCode;
+use coco_error::stack_trace_debug;
+use coco_tool_runtime::ToolRegistry;
 use coco_types::PermissionMode;
 use coco_types::PermissionModeAvailability;
 use coco_types::SessionId;
-use thiserror::Error;
+use snafu::Snafu;
 use tokio::sync::RwLock;
 
 use crate::ProjectServices;
@@ -30,6 +32,10 @@ use crate::ProjectServices;
 /// (and per resume) by the config fold.
 pub struct SessionRuntimeBootstrap {
     pub runtime_config: Arc<RuntimeConfig>,
+    /// The session's own tool registry, built by the per-session fold. Each
+    /// session gets a fresh registry so one session's MCP/plugin reload cannot
+    /// mutate another session's tool set mid-turn.
+    pub tools: Arc<ToolRegistry>,
     pub model_id: String,
     pub system_prompt: String,
     pub permission_mode_availability: PermissionModeAvailability,
@@ -51,27 +57,24 @@ pub struct SessionRuntimeBootstrapBuild {
 ///
 /// Cli-coupled folds in `coco-cli` convert their `anyhow` failures into this
 /// Tier-3 error at the crate boundary via [`BootstrapError::fold`].
-#[derive(Debug, Error)]
+#[stack_trace_debug]
+#[derive(Snafu)]
+#[snafu(visibility(pub(crate)))]
 pub enum BootstrapError {
-    #[error("{message}")]
-    Fold { message: String },
+    #[snafu(display("{message}"))]
+    Fold {
+        message: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 impl BootstrapError {
     pub fn fold(message: impl Into<String>) -> Self {
-        Self::Fold {
+        FoldSnafu {
             message: message.into(),
         }
-    }
-}
-
-impl StackError for BootstrapError {
-    fn debug_fmt(&self, layer: usize, buf: &mut Vec<String>) {
-        buf.push(format!("{layer}: {self}"));
-    }
-
-    fn next(&self) -> Option<&dyn StackError> {
-        None
+        .build()
     }
 }
 

@@ -7,7 +7,7 @@
 //! [`TaskHandle`] is a single trait spanning read / control / spawn /
 //! teammate-registry methods. Test mocks override only what they
 //! exercise (every method has a default no-op / error implementation);
-//! the production impl (`coco_cli::task_runtime::TaskRuntime`)
+//! the production impl (`coco_agent_host::task_runtime::TaskRuntime`)
 //! overrides everything.
 //!
 //! Phase-3a follow-up: split into `TaskReader` / `TaskLifecycle` /
@@ -20,7 +20,7 @@
 //! - Status + per-task state — [`coco_types::TaskStateBase`] (the
 //!   canonical wire shape). [`TaskHandle::get_task_status`] returns it
 //!   directly.
-//! - On-disk output — `coco_cli::disk_task_output::DiskTaskOutput`.
+//! - On-disk output — `coco_agent_host::disk_task_output::DiskTaskOutput`.
 //! - Notifications — `coco_tasks::notification::NotificationSink`.
 
 use coco_messages::Message;

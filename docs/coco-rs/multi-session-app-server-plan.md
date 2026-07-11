@@ -1,6 +1,6 @@
 # Multi-Session AppServer Refactor Design
 
-Status: v6.3. v6.1 added the Process/Project/Session three-scope split
+Status: v6.7. v6.1 added the Process/Project/Session three-scope split
 (§6.2 + §6.5) after a five-product survey of cwd/config scoping; v6.2
 folded in the first adversarial-review fixes (event durability taxonomy
 + seq restart continuity, driver turn-spawn rule, Closing-reopen
@@ -13,6 +13,36 @@ cancellation), seq crash-recovery skip-ahead, project-only
 registry-initiated/driver-executed close contract, std-lock + snafu
 convention alignment, subscribe replay atomicity, and the process
 shutdown sequence — D-46..D-54.
+v6.4 (2026-07-10) folds in a two-round adversarial *implementation*
+review of the shipped code (independent find pass, then an independent
+refute pass per finding with all code paths re-derived): a verified
+findings + remediation register and the explicit multi-session gate
+list (§18 "Adversarial review pass (v6.4)"), the D-38 durable-taxonomy
+redefinition by content class, stamping-trust and hub-ack contract
+corrections, and in-place fixes where this doc mis-stated shipped code —
+D-55..D-60.
+v6.5 (2026-07-11) completes the SDK multi-session egress/dispatch wave
+(R-10, G-5, G-6), moves surface delivery DTO ownership to `coco-types`
+(H-8), and records the crate/runner/module-size architecture audit below.
+It also corrects the earlier implication that runner unification means one
+surface-agnostic runner: execution use cases are shared, while TUI, headless,
+and SDK remain thin policy/projection adapters.
+v6.6 (2026-07-11) lands the crate and module audit: reusable host/session/SDK/
+headless code moves from `coco-cli` into `coco-agent-host`; CLI arguments map
+once into clap-independent `AgentHostOptions`; TUI orchestration is split into
+focused modules; and every production Rust file under `app/` is below the
+1600-line hard limit. It also corrects the earlier A3 placement: the fused
+application `SessionRuntime` belongs to the host because it composes query,
+tasks, MCP, hooks, and persistence. `coco-app-runtime` remains the lower-level
+process/project/workspace and bootstrap-contract crate.
+v6.7 (2026-07-11) tightens the dependency graph: `coco-agent-host` replaces
+the generic app-host name and owns the in-process `LocalServerClient` facade;
+`coco-app-server-client` is now remote-only and has no dependency on
+`coco-app-server`; cross-crate transport tests live in agent-host. The unused
+`coco-state` parity tree is removed; live state
+remains split between `SessionRuntime`, `ToolAppState`, persistence owners, and
+the TUI read model. The shared memory/skill safety substrate is renamed from
+background-review to the direct `coco-maintenance` name.
 Supersedes the v5 revision (see git history of this file); v5's locked
 decisions are carried forward in §22 unless explicitly reversed there.
 This doc owns the cross-cutting AppServer architecture and migration plan.
@@ -60,7 +90,7 @@ across resume, archive, reconnect, and client changes.
 The current runtime is architecturally single-root-session-per-process, and
 the seams this design must cut are concrete:
 
-- `SessionRuntime` (`app/cli/src/session_runtime.rs`, ~4300 LoC) fuses
+- `SessionRuntime` (now split under `app/agent-host/src/session_runtime/`) fuses
   process-lifetime resources (model runtimes, tool registry, hook registry,
   `Arc<RuntimeConfig>`, session manager) with per-session mutable state in
   one struct. The split exists only as a comment
@@ -132,10 +162,10 @@ the seams this design must cut are concrete:
   global `seq` and a single per-connection resume cursor
   (`hub/protocol/src/lib.rs:39,51,63`), and `event-hub/spec.md` §4 assumes
   one live session per process with id rotation. §13 reconciles this.
-- `coco-state::AppState` is declared but not wired (`app/state/src/lib.rs:130`).
-  The live per-session state container is `ToolAppState`
-  (`session_runtime.rs:580`). This design uses `ToolAppState`; it does not
-  route through `coco-state::AppState`.
+- The legacy global `coco-state::AppState` parity tree was never wired and is
+  removed. Live backend ownership is `SessionRuntime`, with cross-turn
+  tool/permission/reminder state in `ToolAppState`; TUI owns a separate event-
+  projected `coco_tui::state::AppState` read model.
 - `coco-coordinator` is a multi-*agent* registry under one root session
   (teams/swarm, keyed by `AgentId`). The `LiveSessionRegistry` sits one
   level above it; the two registries layer and never merge (§6.6).
@@ -265,10 +295,11 @@ and never widen features.
 
 | Crate | Error tier | Contents |
 |---|---|---|
-| `app/runtime` → `coco-app-runtime` | Tier 3 (snafu + `coco-error`) | `ProcessRuntime`, `SessionRuntime` (driver task), `SessionHandle`, `SessionRuntimeFactory`; per-turn `QueryEngine` construction; transcript/history/command-queue/turn wiring extracted from `app/cli/src/session_runtime.rs` |
+| `app/runtime` → `coco-app-runtime` | Tier 3 (snafu + `coco-error`) | Transport-independent `ProcessRuntime`, project/workspace ownership, and session bootstrap contracts; no query/task/MCP application composition |
+| `app/agent-host` → `coco-agent-host` | Tier 1 (`anyhow` permitted for application assembly) | `SessionRuntime`, `SessionHandle`, `SessionRuntimeFactory`, per-turn `QueryEngine` construction, SDK/local AppServer handlers, headless use cases, and application integrations |
 | `app/server` → `coco-app-server` | Tier 3 | `AppServer`, `LiveSessionRegistry`, connection + surface registries, subscriptions, pending server requests, envelope stamping + fan-out + retention ring (§10), serialization model (§9), `LocalClientAdapter` + `JsonRpcAdapter` (§12), lifecycle + graceful drain |
 | `app/server-transport` → `coco-app-server-transport` | Tier 2 (thiserror) | stdio NDJSON, UDS, WebSocket framing + the JSON-RPC frame types (§5.2); connection acceptance, backpressure, close detection. Pure I/O — no coco domain state; yields accepted connections to `coco-app-server`, which assigns `ConnectionKey` |
-| `app/server-client` → `coco-app-server-client` | Tier 2 (thiserror; no `coco-error` in public API) | in-process `LocalTransport` (typed, no serde) for TUI; UDS/WS `RemoteTransport` (JSON-RPC) for SDK; `ServerClient` / `SessionClient` (§14) |
+| `app/server-client` → `coco-app-server-client` | Tier 2 (thiserror; no `coco-error` in public API) | Remote JSON-RPC client/session handles, demux, and UDS/WS/NDJSON transport owners; in-process typed handles live in `coco-agent-host::local_client` |
 
 Phase-5 adapters (`WebAdapter`, `DesktopAdapter`, `ImGatewayAdapter`) land
 as separate crates (`coco-app-web`, `coco-app-desktop`,
@@ -293,7 +324,9 @@ depend on `coco-app-server*`. Shared view types (envelopes, notification
 payloads, ids) live in `coco-types`, below both. This is the codex
 counter-lesson (§3): their `core` → `app-server-protocol` dependency lets
 the wire view leak into the engine. `scripts/` gains a seam-guard check
-mirroring `check-tui-ui-seam.sh`.
+mirroring `check-tui-ui-seam.sh` — **still not in place as of v6.4**:
+the dependency graph is verified clean today, but nothing enforces it
+(H-14 in §18 adds `check-app-server-seam.sh` to `just check-seam`).
 
 ## 6. Runtime Split
 
@@ -384,8 +417,13 @@ struct ProjectRegistry {
 ```
 
 - `project_root = resolve_project_root(cwd)`: git worktree root, else
-  the cwd itself. This is the same derivation session storage already
-  uses for its `projects/<slug>/` layout — the two must not diverge.
+  the cwd itself. Session *storage* (`projects/<slug>/`) deliberately
+  keys on the raw session cwd instead (`SessionWorkspace::resolve`
+  separates the two on purpose): sessions at `repo/` and `repo/sub/`
+  share one `ProjectServices` entry but write under two storage slugs.
+  Consumers must never assume the cache key and the storage anchor
+  coincide. (v6.4 correction — an earlier revision wrongly required
+  them to be identical.)
 - Lifecycle: `get_or_load(project_root)` at session start, single-flight
   like the session registry (§7.2). Entries are ref-counted by attached
   sessions and evicted after `server.project_services_idle_ttl_secs`
@@ -406,6 +444,15 @@ struct ProjectRegistry {
   deliberately NOT recycled by a config re-read — they live until the
   entry evicts (§17). Sessions already running keep their own fold
   snapshot; re-reads affect only subsequent session starts.
+  **v6.4 status:** the shipped fingerprint covers only
+  `<project_root>/.coco/settings.json`, but the cached plugin catalog's
+  true inputs are user-level `settings.json` (`enabled_plugins`) plus
+  user/project plugin and marketplace dirs — a `/plugin disable` is
+  invisible to the cache until an explicit `/reload-plugins` (R-13
+  extends the fingerprint to the full input set). `ProjectHeavyServices`
+  itself is unbuilt: LSP/retrieval/ignore/context-discovery are still
+  constructed per session (a project-service optimization, independent of
+  the completed crate-ownership split).
 
 ### 6.3 SessionRuntime — the actor that owns one session
 
@@ -778,6 +825,16 @@ Stage 3 — background close:
      and emit session/ended(old_id).
 ```
 
+**Close-after-load interaction (v6.4).** A replace reservation is a
+`Loading` slot, and §7.7 shutdown (or any future close caller) may
+record a close-after-load on it. Both commit paths must honor that flag:
+the commit promotes the reservation with the same logic as a load
+completion — `Loading → Closing` when close-after-load is set, else
+`→ Live` — never by blind-inserting `Live`. (R-3: the shipped commits
+drop the flag; a shutdown racing a replace tears down the freshly
+committed runtime while its slot says `Live`, and close waiters get a
+dropped-signal error.)
+
 Rollback matrix:
 
 | Failure point | New | Old |
@@ -977,6 +1034,20 @@ cannot forget or lie), copies `agent_id`/`turn_id` from the payload where
 present, and assigns `session_seq` to durable events. One write site,
 mirroring the "single `ProviderOptions` write site" convention.
 
+**v6.4 caveat:** until the §6.3 actor gives each session its own sink,
+the production "router" is two seams — per-turn forwarders that carry
+the owning session id (correct), and a process-global installed-runtime
+fallback used by a handful of untagged control/goal/plugin emitters,
+which can stamp the wrong session during replacement windows and in SDK
+multi-session mode (the consequence is cross-session attribution bleed
+to the wrong surfaces/timelines — NOT hub seq corruption; the shared
+allocator keeps per-session monotonicity). `agent_id` is currently not
+stamped at all. R-10/D-56 close this: the outbound event message carries
+a **mandatory** `SessionId` (the untagged variant and the fallback are
+deleted), process-scoped notifications (plugin changes) get a dedicated
+non-stamped channel, `agent_id` is stamped from the payload accessor,
+and `stamp()` debug-asserts payload-vs-envelope identity.
+
 The per-variant `session_id`/`agent_id` fields on history notifications
 are consolidated into one shared flattened `ServerNotificationIdentity`
 (the per-variant Rust field duplication is gone), but the *wire* fields are
@@ -1003,16 +1074,31 @@ dropping it.
 on a non-replayable event is a hole a reconnecting client stalls on. Two
 classes, decided at the stamping seam:
 
-- **Durable** — `Protocol`-layer notifications and boundary events
-  (turn started/completed, item completed, history mutations, permission
-  prompts, queue state, MCP state). Durable events get the next
-  `session_seq`, enter the retention ring (§10.3), and are what the Hub
-  stores (§13).
-- **Ephemeral** — `Stream`-layer deltas (`TextDelta`, `ThinkingDelta`,
-  tool progress) and the `Tui` layer. Delivered live to subscribed
+- **Durable** — boundary events by *content class*: turn lifecycle
+  (started/completed), item started/completed, history mutations,
+  permission prompts, queue state, MCP state. Durable events get the
+  next `session_seq`, enter the retention ring (§10.3), and are what
+  the Hub stores (§13).
+- **Ephemeral** — per-delta events, regardless of layer: the
+  `Stream`-layer deltas (`TextDelta`, `ThinkingDelta`, tool progress),
+  the `Tui` layer, AND the Protocol-layer per-delta wire notifications
+  the SDK writer mints per token chunk (`AgentMessageDelta`,
+  `ReasoningDelta`, `ItemUpdated`). Delivered live to subscribed
   surfaces with `session_seq: None`, never retained, never replayed. A
   reconnecting surface reconstructs in-flight output from the snapshot
   plus the next boundary event, then follows new deltas live.
+
+**v6.4 (D-55, amends D-38):** durability is decided per
+`ServerNotification` variant by an exhaustive `replay_class()` at the
+stamping seam — NOT by the `CoreEvent` transport layer. The original
+layer test ("Protocol ⇒ durable") was falsified by the SDK writer's
+legitimate Protocol lift of per-delta notifications: as shipped, every
+token chunk on the SDK path burns a durable seq and ships to the Hub,
+and delta floods compete with real boundary events for the bounded
+connector queue (R-7). A second asymmetry to close: item lifecycle
+events are minted only by the SDK writer's accumulator, so local and
+SDK sessions currently expose *different durable vocabularies* for the
+same concepts — G-5 unifies egress.
 
 This mirrors opencode (durable events in SQLite with per-aggregate seq;
 the live pubsub unsequenced) and keeps the Hub honest: everything
@@ -1089,9 +1175,24 @@ snapshot (codex, jcode). Adopted design:
     `snapshot_required`; the client re-baselines via `session/read`
     (which returns the current `session_seq` high-water mark) and
     re-subscribes from there.
+- Live-only consumers (e.g. the TUI turn-completion monitor) attach
+  **without replay** (`attach_surface`); they must never subscribe with
+  a fabricated low cursor such as `after_seq: Some(0)` — on any
+  long-lived or resumed session that cursor falls out of the ring and
+  degrades to `snapshot_required` (R-1: the shipped TUI monitors do
+  exactly this and silently drop the user's turn on failure). The
+  empty-ring case must be strict: the ring is seeded with the resume
+  watermark so a stale cursor is `TooOld`, not silently accepted as
+  `Available([])` (R-4; implementation note: the shipped skip-ahead
+  margin is `watermark + max(retention, 32) + 32 + 1`, not bare
+  retention).
 - The same `session_seq` domain is what the Hub speaks (§13), so live
   resume (ring) and durable replay (hub `EventStore` over JSONL) compose
   without a second cursor scheme.
+- **v6.4 gap:** on the SDK stdio path nothing feeds the retention ring
+  today — the writer sends NDJSON directly and never routes envelopes —
+  so JSON-RPC `session/subscribe` against an SDK-hosted session replays
+  nothing and receives no live routed deliveries (G-5).
 
 ### 10.4 Observability
 
@@ -1162,7 +1263,8 @@ enum AttachError {
 Passive surfaces attach freely up to the per-session limit (§17) and never
 gain input control. Interactive **takeover** (evict the current owner,
 transfer in-flight approval routing) is v2; the v1 error carries the
-fields takeover will need.
+fields takeover will need. v1 note: `owner_idle` is reported as `false`
+unconditionally — per-surface activity tracking lands with takeover.
 
 ### 11.4 Capabilities are per surface
 
@@ -1184,10 +1286,21 @@ When `session/replace(old→new)` commits (§7.5 Stage 2):
   a dashboard tracking many sessions may not want to follow. Following is
   an explicit re-attach to `new`.
 
+The **detached** variant (`spawn_replace_detached` — used when no
+calling surface exists, e.g. local resume without an attached
+interactive surface) has no re-pointed caller, so *every* surface on old
+is an "other surface" and must receive `session/replaced { old, new }`
+at commit. (R-3: the shipped detached commit is registry-only; old
+surfaces currently learn only via `session/ended` at cascade completion
+and cannot follow.)
+
 `session/archive(X)` is analogous: surfaces receive `session/ended(X)`,
 their attachments move to `SurfaceState::SessionClosed`, and the client
 dismisses or re-attaches elsewhere. Pending server requests for those
-surfaces are cancelled (§8.3).
+surfaces are cancelled (§8.3). Once a `SessionClosed` surface's terminal
+lifecycle effect has been queued, its remaining routing metadata is
+purged (H-9) — a long-lived connection must not accumulate closed
+attachments without bound.
 
 ## 12. Protocol Adapters and Transports
 
@@ -1284,6 +1397,33 @@ pub struct BatchAckFrameV2 {
 - Hub `EventStore` indexes `(session_id, session_seq)`; replay is
   `events_for_session(x, seq > resume_from[x])`, O(per-session) via the
   composite index. Cross-session ordering is intentionally undefined.
+- **Ack contract (v6.4, D-58):** `up_to_seq` reports **stored reality
+  after commit** — never a pre-ingest computation from batch contents.
+  A rejected per-session seq regression still advances the cursor past
+  the permanently-unstorable seq (retrying it can never succeed), but
+  the rejection is surfaced explicitly (per-session rejected counts on
+  the ack) and recorded hub-side. `instance_mismatch` and malformed
+  frames are **non-retriable**: the connector drops the batch with an
+  `events_dropped` marker instead of retrying forever, and the wire
+  payload is an opaque `serde_json::Value` so an unknown event kind can
+  never poison a whole frame. Events larger than the server frame limit
+  are truncated at the connector conversion seam. The connector redacts
+  payloads (`coco-secret-redact`) at the same seam — the hub stores and
+  renders exactly what it receives. (R-9: the shipped ack is pre-ingest
+  and silently acks rejected/skipped events as stored; poison batches
+  and oversize events loop forever; the ingest path is unredacted.)
+- **`instance_id` is persisted** (load-or-create, e.g.
+  `<config_home>/instance-id`). Hub cursors are
+  `(instance_id, session_id)`-scoped, so a per-start random instance id
+  fragments one session's history across phantom instances and silently
+  voids the cross-restart cursor guarantee above (R-8: the shipped code
+  calls `Uuid::new_v4()` per process start; the requirement previously
+  lived only in `event-hub/spec.md` §4 — this section owns it now).
+- **Size-cap retention must not evict live sessions**: the sweep
+  excludes sessions whose instance was seen within a grace window
+  before falling back to age-based eviction (R-9; the shipped
+  oldest-by-`last_event_ts` scan can repeatedly delete the busiest live
+  session's entire event set).
 - No `thread_id` anywhere in Hub protocol, storage, routes, or rows.
 - **`event-hub/spec.md` §4 must be revised in the same change**: its
   "one live session per process, id rotates on `/clear`" identity section
@@ -1340,6 +1480,20 @@ impl PassiveSessionClient {
   timed-out close leaves the session alive server-side, and swallowing
   the handle would orphan it (§7.6). Retry or recover with the same
   handle.
+- After a server-committed replace re-points a surface (§7.5 Stage 2f /
+  §11.5), the client mints the successor handle by **consuming** the old
+  one — `into_replaced(self, new_session_id)` on the same surface. No
+  API re-points a live handle in place (v6.4/H-4: replaces the shipped
+  `with_session_id(&self)` escape hatch, and the remote handles drop
+  `Clone` so consume-self is type-enforced). The local v1
+  `SessionClient` is a plain `(SessionId, SurfaceId)` value handle, so
+  its identity rule is enforced by API shape rather than linearity. The
+  CLI bridge's `ensure_interactive_surface` performs exactly this
+  post-replace-swap transition: when the current interactive surface is
+  already routed to the target session it `take()`s the old handle and
+  rebinds it with `into_replaced(session_id)` on the same surface rather
+  than re-pointing in place — a sanctioned same-surface identity swap, not
+  a fresh attach.
 - `start_session` / `resume_session` attach an `Interactive` surface and
   return `SessionClient`. Passive observation is a different type:
   `subscribe_session(id) -> PassiveSessionClient` has no
@@ -1390,9 +1544,16 @@ let session = server.resume_session(saved, params).await?;
 - Startup → `ServerClient::connect` (LocalTransport) →
   `start_session(cwd, …)`; TUI holds exactly one `SessionClient`.
 - `/clear` → `session.replace()` (atomic §7.5; the TUI swaps its handle).
-- `/resume <id>` → `session.close().await` (archive current — without it,
-  repeated `/resume` accumulates live sessions until `max_sessions`) →
-  `resume_session(id)`.
+- `/resume <id>` → replacement commit through the AppServer owner task
+  (`spawn_replace` when the caller holds an interactive surface, else
+  `spawn_replace_detached` + fresh attach); archiving the previous
+  session is Stage 3 of that replace, not a separate close-then-resume
+  (v6.4 correction — this section previously described a
+  close-then-resume flow the code never shipped). **Known Phase-B gap
+  (R-2):** the TUI resume paths bypass the `session/resume` handler and
+  never apply the D-47 seq skip-ahead — a TUI-resumed session re-issues
+  durable seqs from 1 in the new process epoch, which regresses Hub
+  cursors when a connector is configured.
 - `/quit` → `session.close()` → exit.
 - Multi-window / multi-session TUI is out of scope; evolving to
   `HashMap<SessionId, SessionClient>` requires zero protocol change.
@@ -1414,6 +1575,14 @@ MCP server definitions follow the same three scopes as configuration
   effective server set — user catalog ∪ project catalog, the project
   definition winning on a name collision (standard more-local-wins
   layering).
+
+Policy scopes sit above all of these: managed (`managed-mcp.json`) and
+enterprise definitions load **last** and cannot be name-shadowed by
+user, project, or local files — mirroring permission-settings
+precedence (policy wins; D-59). v6.4: the shipped loader inserts them
+*first*, so a cloned repo's `.mcp.json` can silently replace a managed
+definition with an arbitrary command (R-12); the per-project approval
+gate required above is also still unimplemented.
 
 ### 16.2 Instance scope
 
@@ -1471,9 +1640,16 @@ take precedence per the standard resolution order.
 | `server.max_surfaces_per_connection` | 8 | typed `SurfaceLimit` error |
 | `server.max_passive_surfaces_per_session` | 16 | resource guard for fan-out |
 | `server.project_services_idle_ttl_secs` | 3600 | evict `ProjectServices` entries with zero attached sessions (§6.2) |
-| `server.idle_session_timeout_secs` | off | optional auto-archive of sessions with zero surfaces and no active/queued turn (§7.6) |
+| `server.idle_session_timeout_secs` | off | optional auto-archive: zero surfaces, no active turn, empty cross-turn command queue, judged on an event-driven last-activity timestamp (turn start/end, surface attach/detach, queue enqueue) — not tick sampling (§7.6; H-17: the shipped sweep tick-samples and ignores the command queue; there is no separate queued-turn state — the command queue IS the queued work) |
 | `server.turn_drain_timeout_secs` | 10 | close cascade step 3 bound; on timeout the cascade proceeds to the abort backstop (§7.4) |
 | `server.shutdown_timeout_secs` | 30 | process-shutdown drain bound (§7.7) |
+
+`server.*` keys resolve from **process settings layers only** (policy,
+user, flag, env) — never from a per-session/project fold. A project
+settings file must not set process-wide policy (D-60; the shipped code
+applies each session fold's `project_services_idle_ttl_secs` to the
+process registry last-writer-wins, and startup reads take the startup
+project's values for process caps — R-14).
 
 Ownership recap (three scopes, §6):
 
@@ -1698,7 +1874,7 @@ Implementation progress as of 2026-07-07:
   surfaces can receive runtime events without SDK JSON-RPC serialization.
   `AppServerLocalBridge` now packages that local wiring as the concrete
   TUI/headless entrypoint foundation: it owns the local `AppServer`,
-  `LocalClientAdapter`/`ServerClient`, shared runtime-backed handler, and event
+  `LocalClientAdapter`/`LocalServerClient`, shared runtime-backed handler, and event
   forwarder. It can also install an already-built `SessionRuntime` snapshot
   into the shared handler state, so TUI/headless cut-over code can adopt the
   local AppServer client path without minting a second session id. Installing a
@@ -1744,7 +1920,7 @@ Implementation progress as of 2026-07-07:
   matching turn completion. The TUI and headless
   bootstraps now instantiate
   this bridge, install their already-built `SessionRuntime`, and issue a local
-  `keep_alive` through `ServerClient`. TUI normal submits and slash/palette
+  `keep_alive` through `LocalLocalServerClient`. TUI normal submits and slash/palette
   prompt turns now start through local AppServer `turn/start`; the TUI keeps a
   passive completion monitor to release `active_turn`, while `Interrupt` and
   preemptive drains call local AppServer `turn/interrupt` for server-owned
@@ -1765,11 +1941,11 @@ Implementation progress as of 2026-07-07:
   `turn/start`, so side-question forks and no-dispatcher degraded responses use
   the handler shortcut instead of a direct TUI runtime helper. TUI
   `/reload-plugins` now routes through this local AppServer client via
-  `ServerClient::plugin_reload`, preserving the TUI toast and command-palette
+  `LocalServerClient::plugin_reload`, preserving the TUI toast and command-palette
   refresh. TUI `/hooks reload` now routes through
-  `ServerClient::hook_reload`, so hook registry reloads also use the local
+  `LocalServerClient::hook_reload`, so hook registry reloads also use the local
   AppServer handler path instead of direct TUI runtime mutation. TUI `/context`
-  now routes through `ServerClient::context_usage`
+  now routes through `LocalServerClient::context_usage`
   as well; the bridge refreshes its installed runtime snapshot before dispatch
   so the handler sees current transcript history and app state. TUI `/cost`
   and `/status` now route through local AppServer `session/cost` and
@@ -1788,43 +1964,43 @@ Implementation progress as of 2026-07-07:
   hook there before falling through to the normal runner with the kickoff
   prompt. TUI
   permission-mode changes now route through
-  `ServerClient::set_permission_mode`; the bridge attaches a local interactive
+  `LocalServerClient::set_permission_mode`; the bridge attaches a local interactive
   surface and drains forwarded `PermissionModeChanged` events back into the TUI
   event channel after dispatch. TUI fast-mode toggles now route through
-  `ServerClient::config_apply_flags` with `fast_mode`; the SDK handler mutates
+  `LocalServerClient::config_apply_flags` with `fast_mode`; the SDK handler mutates
   the installed runtime engine config and emits `FastModeChanged` from the
   AppServer path. TUI Ctrl+T thinking-level changes now route through
-  `ServerClient::set_thinking`; the SDK handler updates the installed runtime
+  `LocalServerClient::set_thinking`; the SDK handler updates the installed runtime
   engine config and emits `ModelRoleChanged` from the AppServer path. TUI
   `/model` picker role/provider/model overrides now route through
-  `ServerClient::set_model_role`; the SDK handler applies the live
+  `LocalServerClient::set_model_role`; the SDK handler applies the live
   `SessionRuntime` role override and emits `ModelRoleChanged`, while the TUI
   keeps only the picker confirmation/history message. TUI `/permissions`
   editor, `/permissions allow|deny`, approval always-allow, and `/add-dir`
-  updates now route through `ServerClient::apply_permission_update`; the SDK
+  updates now route through `LocalServerClient::apply_permission_update`; the SDK
   handler applies the live permission base and persists writable destinations,
   while the TUI refreshes the editor overlay from disk afterward for editor
   edits. `/permissions reset` now routes through
-  `ServerClient::reset_session_permission_rules`, clearing only
+  `LocalServerClient::reset_session_permission_rules`, clearing only
   session-scoped live allow/deny rules. TUI `/color` changes now route
-  through `ServerClient::set_agent_color`; the SDK handler updates the
+  through `LocalServerClient::set_agent_color`; the SDK handler updates the
   installed runtime's live app-state color.
   TUI teammate
   current-work interrupt now routes through
-  `ServerClient::agent_interrupt_current_work`, keeping that runtime-control
+  `LocalServerClient::agent_interrupt_current_work`, keeping that runtime-control
   request on the same local AppServer handler path as the SDK.
   TUI teammate/subagent cancellation now routes through local AppServer
   `control/stopTask`; the SDK handler prefers the installed `TaskRuntime`
   cancel token path and retains the active-turn fallback only for legacy
   SDK-only sessions without an installed `SessionRuntime`. TUI Ctrl+B
   background-all foreground tasks now routes through local AppServer
-  `control/backgroundAllTasks` via `ServerClient::background_all_tasks`. The
+  `control/backgroundAllTasks` via `LocalServerClient::background_all_tasks`. The
   `/tasks cancel <id>` slash command now uses the same local
-  `ServerClient::stop_task` path, while `/tasks list` and `/tasks detail <id>`
+  `LocalServerClient::stop_task` path, while `/tasks list` and `/tasks detail <id>`
   now use local AppServer `task/list` and `task/detail` through
-  `ServerClient::task_list` and `ServerClient::task_detail`.
+  `LocalServerClient::task_list` and `LocalServerClient::task_detail`.
   TUI explicit `/rewind` now routes its file-restore half through
-  `ServerClient::rewind_files` on the local AppServer handler path while
+  `LocalServerClient::rewind_files` on the local AppServer handler path while
   keeping conversation-history truncation local to preserve TUI event ordering.
   Startup resume, in-session TUI `/resume <id>`, and `/branch` now dispatch
   local AppServer `session/resume`, then reattach the bridge's
@@ -1936,7 +2112,7 @@ Implementation progress as of 2026-07-07:
   runtime/session-store bridge. The
   `coco-app-server-client` crate now exists as the first client-side
   foundation slice: it depends on `coco-app-server`, exposes a local
-  in-process `ServerClient` over `LocalClientAdapter`, returns distinct
+  in-process `LocalServerClient` over `LocalClientAdapter`, returns distinct
   `SessionClient` and `PassiveSessionClient` handles with typed
   `SessionId`/`SurfaceId` accessors, and consumes passive handles when
   detaching one surface from a connection. Snapshot-required subscribes do not
@@ -2125,7 +2301,7 @@ Implementation progress as of 2026-07-07:
   `session/list`, `session/read`, and `session/turns/list` fallbacks now prefer
   the registry handle's runtime-backed history/metadata before falling back to
   the SDK singleton slot, reducing the remaining fused-runtime data seam.
-  `SessionRuntimeFactory` now exists in `app/cli` as an owned construction
+  `SessionRuntimeFactory` now exists in `app/agent-host` as an owned construction
   boundary over cloneable startup inputs plus a target session id, and TUI,
   headless, and SDK bootstraps use it for their initial `SessionHandle`
   construction. `SessionRuntimeFactory` now receives a coherent
@@ -2238,11 +2414,10 @@ Implementation progress as of 2026-07-07:
   Process signal orchestration around shutdown now covers SIGINT/SIGTERM:
   `shutdown::os_interrupt_signal` observes both on Unix and SDK server mode
   races the dispatch loop against it so a signal initiates the §7.7 drain.
-  Remaining after this: full immutable-runtime shutdown beyond the
-  bridge-owned close cascade, broader concrete persisted session-store I/O,
-  signal-initiated interruption of interactive TUI / print-mode turns, and
-  deleting the fused `SessionRuntime` container once its remaining shared
-  process resources have owners (the A3 extraction into `coco-app-runtime`).
+  Remaining after this: broader concrete persisted session-store I/O and
+  further actor-style state isolation. v6.6 keeps the fused application
+  `SessionRuntime` in `coco-agent-host`; moving it into `coco-app-runtime` is no
+  longer a target because that would invert the intended dependency boundary.
   Transport
   owner loops now apply bounded
   outbound write/send timeouts and disconnect slow consumers before returning
@@ -2401,29 +2576,24 @@ Implementation progress as of 2026-07-07:
   (`workspace` module) — their derived project root is the `ProjectServices`
   cache key, so they belong beside the registry that keys on it; this also
   removes the byte-identical `git_root_for` that was duplicated in
-  `project_services.rs`. `app/cli::paths` re-exports them so existing callers
-  are unchanged, and `SessionRuntime` construction (`factory.rs` / `build.rs`)
+  `project_services.rs`. `coco-agent-host::paths` exposes the application-facing
+  helpers, and `SessionRuntime` construction (`factory.rs` / `build.rs`)
   now depends on `coco_app_runtime::SessionWorkspace` directly rather than
-  `crate::paths`. This is the first landed slice of the §5.1 A3 extraction (the
-  cleanly-separable, cross-cutting path helpers); the remaining A3 work — moving
-  `SessionRuntime`/`SessionHandle`/`SessionRuntimeFactory` themselves — is
-  advanced by moving the whole session-construction *bootstrap* machinery into
+  `crate::paths`. This is the reusable lower-layer slice of the §5.1 scope.
+  Session-construction *bootstrap contracts* live in
   `coco-app-runtime`'s `bootstrap` module: the `SessionRuntimeBootstrap` bundle,
   `SessionRuntimeBootstrapBuild`, the `BootstrapSource` trait,
   `StartupSnapshotSource`, and a Tier-3 `BootstrapError` (thiserror +
   `StackError`/`ErrorExt`). `SessionRuntimeBootstrapSource` is now a cloneable
-  facade over `Arc<dyn coco_app_runtime::BootstrapSource>`; only the Cli-coupled
-  `PerSessionFoldSource` (`crate::Cli` +
+  facade over `Arc<dyn coco_app_runtime::BootstrapSource>`; the
+  `AgentHostOptions`-backed `PerSessionFoldSource` (`AgentHostOptions` +
   `headless::build_runtime_config_with_reloader_roots` +
-  `session_bootstrap::build_engine_resources`) stays in `coco-cli`, implementing
-  the trait and converting its `anyhow` failures to `BootstrapError` at the
-  crate boundary. What still remains: moving the factory + `SessionHandle::build`
-  off `anyhow` to a Tier-3 error, and trait-inverting the three held
-  late-bound app/cli handles (`task_runtime::TaskRuntime` — shared with SDK
-  handlers calling concrete `kill_task`/`list_tasks`/`manager`/
-  `read_terminal_outputs`, a connected-component move;
-  `file_changed_watcher::FileChangedHookWatcher` and
-  `command_queue_sink::CommandQueueNotificationSink` — session-runtime-only).
+  `session_bootstrap::build_engine_resources`) stays in `coco-agent-host`,
+  implementing the trait and converting fold failures to `BootstrapError` at
+  the lower-crate boundary. `SessionRuntimeFactory`, `SessionHandle`,
+  `task_runtime::TaskRuntime`, `FileChangedHookWatcher`, and the command-queue
+  sink are intentionally one host-level connected component; trait-inverting
+  them merely to move files into `coco-app-runtime` would weaken the boundary.
   Session-runtime-only helpers (e.g. `side_query_impl`) move with
   `SessionRuntime`, not separately.
   `app/cli` resolves a `SessionWorkspace` snapshot at runtime build time,
@@ -3001,12 +3171,404 @@ Parity-fix pass (2026-07-10, after a full 12-area code verification):
 - **Lint gap closed**: the `hooks/` codegen example's `env::current_dir` now
   carries `#[allow(clippy::disallowed_methods)]`.
 
-Not changed this pass (accurately deferred, not regressions): the §8.3 AppServer
+Not changed in the historical v6.4 pass (accurately deferred there): the §8.3 AppServer
 server-request bridge stays reserved for Phase C multi-surface — v1 approvals
 flow through the legacy single-writer pending map (correct for one interactive
-surface); the A3 `SessionRuntime`/`SessionHandle` core extraction and the §6.3
-actor mailbox remain the cohesive move tracked in §5.1; §16.2/§16.3 `McpScope`
+surface); the §6.3 actor mailbox and §16.2/§16.3 `McpScope`
 Shared/PerSession instance model + PID-file reaping are unbuilt.
+
+### Adversarial review pass (2026-07-10, v6.4) — verified findings, gate list, remediation
+
+Method: seven independent area reviews over the shipped code, then an
+independent refute pass per finding with every code path re-derived.
+The ledger above held up well — each mechanism it claims exists where
+claimed, and its deferred list is accurate for what it names. Below is
+what survived the refute pass, ordered by remediation batch; refuted
+claims are recorded at the end so they are not re-reported. Module-size
+observations are excluded by request.
+
+**v1 cut-over ships single-live-session semantics (gate statement).**
+The shipped code enforces one live root session per process: SDK
+`session/start` / `session/resume` replace the first live session and
+close every other one — process-wide, regardless of requesting
+connection (`start_sdk_session_with_runtime_replacement` and siblings)
+— and the TUI/headless local bridge pins `max_sessions = 1`. This is
+deliberate for the TUI bridge and an accident of code reuse for SDK
+stdio, whose AppServer is built with `max_sessions = 32` it can never
+reach. §1's concurrent-hosting requirement is therefore **not yet
+met**: what shipped is the single-session product re-plumbed through
+multi-session-shaped infrastructure. The genuinely multi-session-ready
+parts — registry/slot machine, routing/surfaces, per-session seq
+domains, session-keyed SDK state maps, fail-closed sole-session
+resolution — are real and reusable; Batch G below is what stands
+between them and honoring `max_sessions > 1` (D-57).
+
+**A3 true scope (v6.6 correction).** The crate move and the actor conversion
+are separate decisions. `SessionRuntimeBuildOpts.cli: &Cli` has been replaced
+by clap-independent `AgentHostOptions`, and the session/SDK/headless implementation
+lives in the physical `coco-agent-host` package. `SessionHandle` still exposes
+the fused runtime and the optional §6.3 actor conversion would invert direct
+lock access into `SessionCommand`/watch reads, but that is a concurrency-model
+evolution rather than justification for putting host-level query/task/MCP
+composition in `coco-app-runtime`. `ProcessRuntime`, `ProjectServices`,
+workspace paths, and bootstrap contracts remain in the lower runtime crate.
+
+#### Batch 1 — live single-session correctness (fix first)
+
+| ID | Confirmed finding | Remediation |
+|---|---|---|
+| R-1 | All four TUI turn monitors subscribe with `after_seq: Some(0)`; once the ring evicts seq 1 (> `event_retention_per_session` durable events — a long session) the subscribe returns `snapshot_required` and the TUI warns and silently drops the user's submit / slash / shortcut turn | Live-only tail attach: add `LocalServerClient::attach_passive_session` (no replay) and use it at the four monitor sites; §10.3 states the contract |
+| R-2 | TUI `/resume`, `/branch`, and startup resume bypass the `session/resume` handler and never run the D-47 skip-ahead: a TUI-resumed session re-issues durable seqs from 1 in the new epoch — Hub cursor regression when a connector is configured | Apply `initialize_after_watermark` (and seed the ring watermark, R-4) on every resume path, or route TUI resume through the handler |
+| R-3 | Replace commit paths (`commit_replace_for_surface`, `complete_replace_success`) blind-insert `Live` and drop a `close_after_load` recorded on the reservation — §7.7 shutdown racing a replace tears down the fresh runtime while the slot says `Live`, and close waiters get `SignalDropped`. Also: `spawn_replace_detached` commits registry-only — old surfaces never receive `session/replaced` | Extract `LoadState::promote(handle) -> Live \| Closing` and use it from load AND both replace commits; add `commit_replace_detached` emitting `session/replaced` to all old surfaces (§7.5/§11.5 updated) |
+| R-4 | Empty-ring subscribe returns `Available([])` for ANY stale cursor (missing ring likewise), contradicting §10.3 — silent replay gap in the resume-to-first-event window | Ring keeps a `last_seq` watermark seeded from the resume skip-ahead; empty-ring replay is strict (`after_seq >= watermark` else `TooOld`). Land with R-1/R-2 |
+| R-5 | An owner-task panic (load/close/replace) leaves the completion sender alive inside the slot: waiters hang forever and the slot permanently leaks a `max_sessions` unit — fatal at the TUI bridge's `max_sessions = 1` | Disarming drop guard inside each owner task completing failure (load/replace) or archive (close) on unwind/abort; extends D-46 |
+| R-6 | Two more silent-failure paths: (a) a reply to an already-cancelled server request (reachable via the stdio fallback chain) is fatal to all adapter owner loops → whole-connection disconnect; (b) the per-session turn slot is cleared *after* `TurnEnded` is forwarded, so a fast next submit hits `TurnAlreadyRunning`, which the TUI also swallows | (a) tolerate unknown-id / not-found replies with a warn; (b) clear the turn record atomically with forwarding the terminal event, and the TUI treats `TurnAlreadyRunning` as retryable (re-enqueue), never a drop |
+
+#### Batch 2 — durable-stream integrity (before trusting Hub data)
+
+| ID | Confirmed finding | Remediation |
+|---|---|---|
+| R-7 | Every SDK token chunk becomes a durable, seq-consuming, hub-shipped event (per-delta notifications are Protocol-layer; `replay_policy` keys on layer); delta floods also crowd real boundary events out of the bounded connector queue. The ring is NOT flooded (deltas never reach it) — but on the SDK stdio path nothing feeds the ring at all (G-5) | `ServerNotification::replay_class()` — exhaustive per-variant classification consulted by `replay_policy` (D-55); §10.1 text updated |
+| R-8 | `instance_id` regenerated per process start; hub cursors are `(instance, session)`-scoped → phantom-instance fragmentation, empty `resume_from` after every restart | Persist load-or-create; §13 owns the requirement now |
+| R-9 | Hub contract triple: pre-ingest `batch_ack` silently acks rejected/skipped events as stored (durable loss with no marker); poison batches (unknown payload kind fails the whole closed-enum frame) and single oversize events retry forever; ingest path stores/renders unredacted payloads; size-cap retention can repeatedly delete the busiest live session | Per D-58: post-commit acks + explicit rejection surfacing; opaque `Value` payload passthrough; non-retriable error classes (drop + `events_dropped` marker); per-event size cap and `coco-secret-redact` at the connector conversion seam; retention excludes recently-seen instances. Revise `event-hub/spec.md` §5.8's stale marker/drop-end wording in the same change (code drops the *newest* envelope at the producer edge and ships markers — both contrary to the spec text) |
+| R-10 | Envelope-stamping fallback: 7 untagged emitter sites (control/goal/plugin notifications) resolve identity from the process-global installed runtime — wrong-session stamping reachable in replacement windows and SDK multi-session; consequence is cross-session attribution bleed (hub seq corruption REFUTED — the shared allocator keeps monotonicity). `agent_id` stamped `None` everywhere | Per D-56: session id becomes mandatory on outbound event messages (6 of 7 sites have it in scope), the plugin-change notification gets a dedicated non-stamped process-event channel, `agent_id` stamps from the payload accessor, `stamp()` debug-asserts payload-vs-envelope identity |
+
+#### Batch 3 — security / policy / config scoping
+
+| ID | Confirmed finding | Remediation |
+|---|---|---|
+| R-12 | Project `.mcp.json` / local files silently override managed and enterprise MCP definitions by name (policy scopes load FIRST; later scopes overwrite by name); the §16.1 per-project approval store is unimplemented; the loader's module doc describes an order the code never had | Load managed/enterprise LAST (policy wins — permission-settings precedent, D-59); fix the module doc; approval store stays on the §16 backlog |
+| R-13 | `ProjectServices` fingerprint watches only project `settings.json`, but the cached plugin catalog reads user-level `settings.json` (`enabled_plugins`) + plugin/marketplace dirs: `/plugin disable` keeps loading the disabled plugin's hooks/commands/MCP into every new session until an explicit `/reload-plugins`; the in-code "enable/disable is a project-settings concern" comment is factually wrong; `migrate_renamed_plugins_in_settings` writes to files the loader never reads | Fingerprint the catalog's true input set (user settings `enabled_plugins` subtree, user+project plugin dirs, marketplace cache); fix the comment and the migration writer (§6.2 updated) |
+| R-14 | `server.*` resolves from the fully merged per-session fold: each session start writes its project's idle TTL onto the process registry (last-writer-wins), and startup reads take the startup project's values for process caps | Resolve `server.*` once at startup from process layers only; store on `ProcessRuntime` (D-60; §17 updated) |
+
+#### Batch G — the multi-session gate (D-57; all green before `max_sessions > 1` is honored)
+
+| ID | Gap | Remediation |
+|---|---|---|
+| G-1 | `session/start`/`resume` close every other live session process-wide from any connection (a sidecar `session/start` destroys the stdio client's session; a second start on one connection destroys the first) | `start` creates a new slot and enforces `max_sessions` (`ResourceExhausted`); `resume` replaces only the requesting connection's own current session, else plain load; close-others survives only in the `max_sessions = 1` TUI bridge and explicit `/clear`. Lands together with G-2/G-3. Note: the wire has no `session/replace` request — replace intent is currently implicit in start/resume |
+| G-2 | Runtime-control handlers (`set_model`, `set_permission_mode`, `set_model_role`, cost/status/context-usage, plugin/hook reload) and `turn/start`'s runner resolve the process-singleton installed runtime, ignoring routed scope; `set_model` split-writes engine config (installed) vs metadata (scoped) — two different sessions during replacement windows; `set_model_role` never updates `metadata.model` | Resolve the runtime by routed session id via the registry handle (`LocalAppSessionHandle::require_runtime`); installed-slot fallback only for legacy no-registry sessions |
+| G-3 | The close cascade clears session-keyed maps but not the `session_runtime`/`turn_runner`/`mcp_manager`/`file_history` singletons: after archive or idle-sweep (reachable today in SDK mode), a zombie session id keeps receiving stamps, hub egress, and "successful" control mutations against a shut-down runtime | Clear the singletons when the closing id matches the installed runtime; the slots disappear entirely with G-2 |
+| G-4 | `start_active_turn_for_session` takes four separate locks (check → mint → snapshot → blind insert): two connections can both pass; the second insert leaks the first turn's cancel token — two uninterruptible concurrent turns on one engine | One critical section over the per-session turn record (`entry` + occupied → `TurnAlreadyRunning`), per §9's per-session serialization |
+| G-5 | SDK stdio egress bifurcation: the writer sends NDJSON directly and never calls `route_envelope` — sidecar subscribers see zero events for stdio turns, the ring is unfed, stdio notifications carry no session id; sidecar-started turns reach the stdio client in a different wire shape | Single egress: stdio turn events route through `route_envelope`; the SDK writer becomes a consumer of its connection's routed envelopes rendering the NDJSON view. A prerequisite for any sidecar-visible parity, not a Phase-C nicety |
+| G-6 | Adapter connection loops dispatch requests inline: a slow `session/resume` (runtime build + bounded old-turn drain) starves `turn/interrupt` and the events arm; the requester's own outbound queue can overflow → the client is disconnected by its own request | Spawn lifecycle-heavy request dispatch off the loop (lifecycle mutual exclusion already lives in the slot machine); the full answer is the §6.3 actor's fast-mailbox rule |
+| G-7 | One mutable `ToolRegistry` is shared by every runtime (session A's MCP/plugin reload mutates session B's tool set mid-turn) while the per-session fold builds a fresh registry the factory then discards | Thread the fold's registry through `SessionRuntimeBootstrap.tools` into the runtime; SDK MCP handlers already resolve via the installed runtime, so registrations land per-session naturally |
+
+#### Batch H — hardening & hygiene (latent or low; schedule opportunistically)
+
+- H-1 Remote client (`RemoteJsonRpcClient`; no production callers yet):
+  unknown/late/duplicate response ids must be tolerate-with-warn — today
+  one late response after a per-request timeout kills every in-flight
+  RPC AND skips `disconnect()`, hanging them forever with
+  `request_timeout: None`, and the pinned test encodes the broken
+  behavior. Restructure both owner `run()` loops so disconnect runs on
+  every exit path; Drop-based pending resolution (std `Mutex` for the
+  pending map — every critical section is non-await); update the crate
+  CLAUDE.md invariant. Tolerate unknown notification payload kinds too
+  (forward compat); keep transport-level IO/oversize/decode fatal.
+- H-2 Activation waiters (`next_session_activation`) must scan
+  `lifecycle_buffers` before `recv` — a concurrently-polled surface
+  accessor buffers the activation where the waiter never looks
+  (permanent hang; latent — local `session_start_handle` never awaits
+  activation today).
+- H-3 Demux hygiene: `purge_surface` on close/detach/`SessionEnded`;
+  cap the unbounded `notifications`/`server_requests` queues
+  (drop-oldest + warn). (v1-local OOM claim was refuted — the bridge
+  drains its single surface — this is remote-path hardening.)
+- H-4 Delete `SessionClient::with_session_id(&self)` → consuming
+  `into_replaced(self, new_session_id)` (§14 updated); drop `Clone`
+  from the remote handles.
+- H-5 Unix-socket lifecycle: bind recovers from a stale socket
+  (probe-connect; dead → unlink + rebind once; alive → AddrInUse), and
+  listener `Drop` unlinks only its own socket (compare `(dev, ino)`
+  recorded at bind). Today a crashed process bricks every subsequent
+  startup that configures a socket path.
+- H-6 Client-side outbound write timeout mirroring the server's
+  slow-consumer bound (a stalled write currently freezes inbound
+  processing on that connection).
+- H-7 Remote passive detach: add `session/unsubscribe` end-to-end
+  (request variant + handler arm; the routing detach already exists);
+  delete the dead `query_session`/`interrupt_session` facades — they
+  ignore their session argument because `TurnStartParams` has no
+  session id (adding one is the eventual multi-interactive item).
+- H-8 Move the surface-delivery view types (`SurfaceDelivery`,
+  `SurfaceLifecycleDelivery`/`Effect`/`Kind`, `ServerRequestDelivery`)
+  from `coco-app-server` to `coco-types` — pure id+envelope composites
+  consumed on both sides of the wire (§5.3's hard rule was never
+  violated; this is the §5.2 hygiene follow-through). Collapse the
+  duplicated `surface_id` while moving.
+- H-9 Routing-state hygiene: remove the session's retention ring at
+  archive commit (rings currently live for the process lifetime); purge
+  `SessionClosed` attachments once their terminal effect is queued
+  (§11.5); actually update `SurfaceAttachment.last_delivered_seq` on
+  delivery (write-only today); sort pending-request replay by mint
+  counter, not id string ("server-request-10" sorts before "-2").
+- H-10 `SessionSeqAllocator::high_water` reports the last *issued* seq
+  — idle resume→close cycles currently inflate the persisted watermark
+  by ~1056 each. (The suspected out-of-order persist hazard was
+  REFUTED: the store appends and the read fold takes max; keep a
+  comment saying so.)
+- H-11 Identity hygiene: make `ServerNotification::session_id()` /
+  `agent_id()` exhaustive (wildcard arms hide future identity-bearing
+  variants from the envelope seam); `ThreadItemDetails::Subagent.agent_id`
+  becomes `Option` + skip-if-none (today serialized as `""`; the id is
+  genuinely unknown at the accumulator); add the empty-string-lenient
+  deserializer to `HistoryLogEntry.session_id` and upgrade silent
+  line-skips to visible logs. (The claimed transcript data-loss path
+  was REFUTED — the actual load path is already lenient and no
+  same-lineage writer ever emitted `""` on the strict surfaces.)
+- H-12 Freeze session identity out of the mutable engine-config
+  surface: `update_engine_config` hands closures
+  `&mut QueryEngineConfig` including `session_id`, and that field feeds
+  fallback stamping (R-10) — split identity out type-level; interim: a
+  hard assert that the id is unchanged across the closure.
+- H-13 `SessionRuntime::shutdown_signal()` → `pub(crate)`; the
+  bootstrap reaper observes a `child_token()`. The root token must not
+  be cancellable from any handle clone (§6.4; both external callers are
+  in-crate, so `pub(crate)` suffices today).
+- H-14 Add `scripts/check-app-server-seam.sh` (`app/query`, `core/*`,
+  `services/*` must not depend on `coco-app-server*`/`coco-app-runtime`)
+  and wire into `just check-seam` — fulfils the §5.3 promise.
+- H-15 `coco-app-runtime` error tier: migrate `BootstrapError` from
+  thiserror to snafu with structured variants — the current single
+  `Fold { message: String }` flattens the fold's anyhow chain and
+  hardwires `StatusCode::Internal`, defeating Tier-3 classification.
+  §5.1's snafu mandate is normative.
+- H-16 Fold execution: `spawn_blocking` around `bootstrap_for_session`
+  in `build_for_cwd` (the sync disk-heavy fold currently runs on async
+  workers; the trait objects are Send — drop-in), and convert
+  `ProjectRegistry::get_or_load` to the §7.2 placeholder single-flight
+  (it currently holds the map write lock across the plugin-catalog disk
+  scan, stalling every project's lookups process-wide).
+- H-17 Idle sweep: event-driven last-activity (turn start/end,
+  attach/detach, command-queue enqueue) + empty-queue condition,
+  replacing tick sampling (§17 updated).
+
+#### Refuted or downgraded in the refute pass (recorded so they are not re-reported)
+
+- Hub shutdown-path drop-marker misordering — REFUTED: the
+  range-dominance guard keeps per-session marker order; back-append is
+  safe.
+- Seq-watermark out-of-order persistence — REFUTED: append-only store +
+  max-fold on read; regression impossible.
+- Empty-string session-id transcript data loss — LARGELY REFUTED (see
+  H-11).
+- Envelope mis-stamp ⇒ hub rejects real events as corruption — the
+  consequence was REFUTED (shared allocator keeps monotonicity); the
+  real consequence is attribution bleed (R-10).
+- Ring flood from durable deltas — REFUTED (deltas never enter the
+  ring); the flood is hub-side (R-7); the SDK ring is unfed for a
+  different reason (G-5).
+- Stale-snapshot close guard killing a replacement runtime instance —
+  MOSTLY REFUTED: the refresh path re-wraps the *same*
+  `Arc<SessionRuntime>` and the registry rejects refresh on non-`Live`
+  slots; the id-based guard is dead code (harden with `Arc::ptr_eq`
+  opportunistically).
+- Client demux OOM in v1 local — REFUTED (single drained surface); the
+  remote path is unused (H-3).
+- "Every resumed TUI session drops its second submit" — corrected: TUI
+  resume never skip-aheads (that is R-2's separate bug); R-1's live
+  trigger is ring eviction on long sessions.
+
+#### Fix landing status (2026-07-10)
+
+First implementation pass. Landed + workspace-green (full `cargo clippy
+--workspace --all-features --tests` clean; changed-crate unit tests pass;
+`coco-app-server` 89 tests green):
+
+- **R-7 / D-55** — `ServerNotification::replay_class()` + layer-agnostic
+  `CoreEvent::replay_policy`; per-delta notifications are ephemeral.
+- **H-11** — exhaustive `session_id()`/`agent_id()`;
+  `ThreadItemDetails::Subagent.agent_id` → `Option`.
+- **R-10 (seam only)** — `SessionEnvelope::stamp` debug-asserts
+  payload-vs-envelope session id. The mandatory-`SessionId` outbound
+  reshape and untagged-fallback deletion remain (needs the SDK-bridge
+  wave).
+- **R-3** — `LoadState::promote` honors close-after-load from
+  `complete_load_success`, `complete_replace_success`, and
+  `commit_replace_for_surface`; new `commit_replace_detached` emits
+  `session/replaced` to all old surfaces.
+- **R-4** — `RetentionRing.high_seq` watermark +
+  `initialize_session_ring_watermark`; empty-ring replay is strict.
+  (CLI wiring to call it on resume alongside `initialize_after_watermark`
+  is the remaining R-2/R-4 bridge half.)
+- **R-5** — `OwnerGuard` drop-guard in load/close/replace owner tasks.
+- **H-9** — ring removed at archive; `SessionClosed` attachments purged
+  after their terminal effect; `last_delivered_seq` updated on delivery.
+  (Pending-request replay sort by mint counter still open.)
+- **H-10** — `SessionSeqAllocator` tracks `issued`; `high_water` reports
+  last issued, not `base + window`.
+- **R-12 / D-59** — MCP managed/enterprise scopes load last (policy
+  wins); precedence test added.
+- **H-5** — Unix listener stale-socket recovery (probe-connect) + Drop
+  compares `(dev, ino)`.
+- **H-14** — `scripts/check-app-server-seam.sh` wired into
+  `just check-seam` (passes; engine/core→server graph is clean).
+- **G-7** — per-session `ToolRegistry` threaded through
+  `SessionRuntimeBootstrap`; discarded startup registries removed from
+  `main`/`tui_runner`/`headless`; StructuredOutput injection retargeted
+  to `session.tools()`.
+
+#### Fix landing status (2026-07-11) — second pass
+
+The large/coupled items deferred from the first pass were implemented
+directly (single-agent, no fan-out). Landed and committed:
+
+- **Hub R-8** — `persisted_instance_id()` loads-or-creates
+  `<config_home>/instance-id`, so the cross-restart cursor guarantee
+  holds instead of minting a fresh UUID per process start.
+- **Hub R-9 / D-58** — post-commit `batch_ack` with a per-session
+  `rejected` map (a rejected seq-regression advances the cursor but is
+  surfaced, never silently dropped); non-retriable frame classification
+  (`invalid_json` / `instance_mismatch` / `unsupported_frame` /
+  serialize) drops the batch with a warn + `events_dropped` marker
+  instead of retrying forever; `coco-secret-redact` + a per-event size
+  cap at the connector conversion seam; size-cap retention prefers
+  dormant instances (two-tier: dormant-first, oldest-regardless
+  fallback so the hard cap still bounds disk).
+- **H-9 tail (D-H9t)** — `PendingServerRequest.minted` monotonic counter;
+  pending-request replay sorts by it, not the id string.
+- **SDK gates G-1 / G-2 / G-3 / G-4 (+ G-2-tail) + R-6h** — `session/start`
+  and `resume` no longer close other sessions process-wide;
+  `max_sessions` enforced via `ResourceExhausted`; the close cascade
+  clears the runtime singletons; all runtime-control handlers resolve
+  the runtime by routed session via `ctx.resolve_runtime()`
+  (registry-first, installed-slot fallback only for legacy no-registry
+  sessions).
+- **Client contract H-1..H-6 + R-1 attach** — `coco-app-server-client`.
+- **TUI R-1 / R-2 / R-6** — `tui_runner` monitor passive attach + resume
+  skip-ahead + `TurnAlreadyRunning` retry.
+- **Project/config R-13 / R-14 / H-15 / H-16** — project-config
+  fingerprint, set-once idle TTL, `BootstrapError` snafu conversion,
+  out-of-lock load.
+
+R-9 caveat: the wire `EventPayload` keeps its typed-variant-plus-`Unknown`
+shape rather than switching to a single opaque `Value`. The poison-frame
+concern D-58 raised is met by non-retriable `unsupported_frame`
+classification (an unknown kind drops that one batch, never wedges the
+stream) — the full opaque-payload rewrite buys nothing beyond that and
+was intentionally skipped.
+
+#### Fix landing status (2026-07-11) — third pass
+
+- **R-10 (outbound reshape)** — `OutboundMessage` has no unscoped
+  `CoreEvent` variant. Every session event carries a mandatory `SessionId`;
+  `plugins/changed` is the sole typed process event and is never stamped.
+  Both stamping seams derive `agent_id` from the payload identity accessor.
+- **G-5 (egress unification)** — SDK stdio events are stamped and routed
+  through the shared `AppServer` before the writer renders the SDK NDJSON
+  view. Sidecars and the retention ring consume the same envelope; rendered
+  stdio notification params include session/surface/turn/agent/seq identity.
+  Stream accumulation is keyed per session rather than stored in one global
+  accumulator.
+- **G-6 (non-inline dispatch)** — frame-channel requests/notifications run in
+  a connection-owned `JoinSet`; the owner loop continues servicing inbound
+  interrupt/response frames and outbound surface queues. Session event routing
+  can be acknowledged before an ordering-sensitive reply (notably archive),
+  and disconnect aborts/joins unfinished dispatch tasks.
+- **H-8 (view-type ownership)** — `SurfaceDelivery`,
+  `ServerRequestDelivery`, `SurfaceLifecycleEffect`, and its kind live in
+  `coco-types`. The duplicate `SurfaceLifecycleDelivery.surface_id` wrapper
+  is deleted; lifecycle channels carry `SurfaceLifecycleEffect` directly.
+- **G-1 bootstrap-slot correction** — production SDK start/resume may replace
+  only the registered `startup_session_id` when that slot has no interactive
+  owner; it never guesses another detached user session. The `max_sessions=1`
+  local bridge similarly reuses only its sole non-interactive slot. Passive
+  observers do not turn a detached slot into an interactive owner and receive
+  the normal lifecycle effect when it is replaced.
+- **G-1 start failure atomicity** — session preparation is side-effect free;
+  the SDK installs keyed state only after the AppServer slot/attach commit
+  succeeds. A capacity rejection therefore leaves the previous live state
+  unchanged; JSONL remains lazily created by the first transcript append.
+
+#### Crate, runner, and module-size audit (v6.6)
+
+**Crate naming/boundaries.** Keep the `coco-cli` name: it is the `coco`
+binary's clap/composition root, not a reusable "app" library. The problem is
+its contents, not its name. The implemented split is:
+
+- `coco-app-runtime`: transport-independent process/project ownership,
+  workspace paths, and session bootstrap contracts. It deliberately does not
+  absorb the fused application session container.
+- `coco-agent-host`: application use-case orchestration that combines
+  AppServer lifecycle, session runtime, turn execution, session data, and
+  runtime control handlers. It accepts clap-independent `AgentHostOptions` and owns
+  the SDK/local handler, bridge, headless use cases, and `SessionRuntimeFactory`.
+- `coco-cli`: arguments, subcommand selection, process signal/shutdown policy,
+  listener startup, TUI command-loop policy, and construction of a host plus
+  one surface adapter. Its library target contains the clap schema only.
+- `coco-tui`: presentation/input state only; no runtime construction or direct
+  engine calls.
+
+`coco-app-server`, `coco-app-server-client`, and
+`coco-app-server-transport` are correctly named and layered. The server owns
+lifecycle/routing/protocol adapters, the remote client owns JSON-RPC handles,
+demux, and connection tasks without depending on the server implementation,
+and transport owns framing/I/O primitives. `coco-app-runtime` is the correct name
+for reusable runtime scopes; moving `SessionRuntime` there would force the
+lower crate to depend on host-level query/task/MCP integrations and is rejected.
+
+**Runner direction.** A unified execution layer is correct, but a single
+`Runner` abstraction for SDK/TUI/headless is not. The shared unit is the
+application use case (`turn/start`, interrupt, replace, archive, runtime
+controls) over an immutable `SessionHandle`. `QueryEngineRunner`/the host turn
+executor implements that once. SDK stdio, TUI, and headless then differ only
+in transport, input policy, and output projection. TUI's command loop, modal
+state, terminal lifecycle, and slash-command presentation are not execution
+runner responsibilities and must not be pushed into a generic runner trait.
+
+**Hard module-size remediation.** Physical files over the project's 1600-line
+limit remain an architecture task, not formatting debt. Split by ownership,
+with no compatibility re-exports:
+
+- `server-client/lib.rs`: remote RPC client, remote demux, transport owners,
+  and wire codec modules. In-process handles belong to agent-host composition.
+- `sdk_server/app_server_bridge.rs`: lifecycle interception, local host bridge,
+  SDK transport owner, and shutdown/idle supervision.
+- `server/lib.rs`: routing model/state plus a separate routing test module;
+  `server/app_server.rs`: registry facade, owner tasks, and shutdown.
+- `server/json_rpc_adapter.rs`: codec, connection owner, and listener
+  supervision modules.
+- `tui_runner.rs`: TUI driver, session switching, slash use cases,
+  editor/process helpers, and model/permission projections. Do not move these
+  into the shared turn executor merely to reduce line count.
+
+#### Fix landing status (2026-07-11) — fifth pass
+
+- **H-17 (event-driven idle supervision)** — `spawn_idle_session_sweep` now waits on
+  lost-wakeup-safe AppServer activity, SDK turn activity, command-queue
+  revisions, or the earliest exact deadline. Successful load/replace,
+  surface attach/detach/disconnect, routed events, turn start/end, and queue
+  mutations advance activity. Attached, running, or queued sessions are not
+  eligible, and the candidate is revalidated immediately before close.
+- **Module-size wave 1** — SDK idle supervision and session lifecycle/runtime
+  replacement moved out of `app_server_bridge.rs`, reducing that production
+  module from roughly 2800 to roughly 1500 lines. AppServer routing, facade,
+  and JSON-RPC adapter tests moved to dedicated sibling test modules; all three
+  production files are now below the 1600-line workspace limit.
+- **Module-size wave 2** — `coco-app-server-client` is split into remote
+  demux/codec, remote transport owners, and remote RPC core; local typed
+  handles subsequently moved to `coco-agent-host::local_client`, removing the
+  client-to-server implementation dependency. Every production module is
+  below 1600 lines. TUI model controls, editor
+  workflows, plugin dialog projection, and session switching moved to focused
+  child modules without introducing a generic UI runner abstraction.
+- **Module-size wave 3** — `tui_runner.rs` is now an 84-line module root.
+  Bootstrap, driver, slash resolution/execution, active-turn operations,
+  rewind/title post-processing, session switching, editor workflows, model
+  controls, provider/goal/observability commands, and plugin projection each
+  have a focused child module; every production file is below 1600 lines.
+- **Module-size wave 4** — a complete `app/**/src/*.rs` production sweep split
+  transcript chain selection/metadata scanning, finalize-turn tail work, full
+  compaction helpers, TUI event-loop helpers, and headless support into focused
+  child modules. This closes the hard limit across the whole application tree,
+  rather than only the files named by the original audit.
+- **A3 ownership completion (revised)** — `coco-agent-host` is a physical Cargo
+  package, not a compatibility facade. Session runtime/factory, SDK/AppServer
+  host, headless use cases, and application integrations moved there.
+  `coco-cli` retains clap/process/TUI surface policy and maps arguments once to
+  `AgentHostOptions`; host source has no clap dependency. The actor-mailbox proposal
+  in §6.3 remains an independent concurrency-model evolution, not a prerequisite
+  for correct crate ownership.
 
 **Phase B — atomic cut-over (single PR):**
 
@@ -3091,9 +3653,11 @@ surface routing (§11.5).
 `ImGatewayAdapter` as separate crates (§12.3–12.5), each keeping platform
 credentials and capability state outside AppServer core.
 
-Phase A/B ordering note: the runtime split (A3) lands *before* the
-cut-over so AppServer never wraps the fused `SessionRuntime` — routing
-ownership and state ownership move together.
+Phase A/B ownership note (v6.6): AppServer stores an opaque
+`LocalAppSessionHandle`; the concrete fused runtime and close choreography are
+owned by `coco-agent-host`, not by the routing crate. A future actor conversion
+can change that host-private handle without moving application composition
+into `coco-app-runtime` or changing the AppServer protocol boundary.
 
 ## 19. Testing Plan
 
@@ -3311,3 +3875,9 @@ Carried forward from v5 unless marked; new and reversed entries noted.
 | D-52 | JSON-RPC frame types live in `coco-app-server-transport` (wire format, not domain); `coco-types` keeps only canonical requests/notifications/envelope (refines D-12) |
 | D-53 | Fixed process-shutdown sequence (§7.7): stop transports → concurrent close cascades under `server.shutdown_timeout_secs` → hub egress flush → exit code reflects drain vs forced abort; second signal aborts immediately |
 | D-54 | Wire counters (`session_seq`, `after_seq`, hub cursors) are `i64` per the workspace integer convention; the hub announce carries the instance's live-session set and ack cursor maps are scoped to it; `ModelRuntimeRegistry` keys cached provider clients by `ProviderClientFingerprint` (per-session folds may diverge per project) |
+| D-55 | Durable/ephemeral is a *content-class* decision per `ServerNotification` variant — an exhaustive `replay_class()` consulted by `replay_policy` — not a transport-layer test. Per-delta notifications (`AgentMessageDelta`, `ReasoningDelta`, `ItemUpdated`) are ephemeral even on the Protocol layer; `ItemStarted`/`ItemCompleted` and all other Protocol notifications stay durable (amends D-38, whose layer test was falsified by the SDK writer's legitimate Protocol lift of deltas) |
+| D-56 | Envelope identity is never inferred from process-global state: outbound event messages carry a mandatory `SessionId` (the untagged variant and the installed-runtime fallback are deleted); process-scoped notifications (plugin changes) use a dedicated non-stamped process-event channel; `agent_id` is stamped from the payload accessor; `stamp()` debug-asserts payload-vs-envelope identity (hardens D-14 until the §6.3 actor makes identity structural) |
+| D-57 | Multi-session gate: `session/start` creates a new slot and enforces `max_sessions` — it never closes other sessions; `session/resume` replaces only the requesting connection's own current session; close-others survives only inside the `max_sessions = 1` TUI bridge and explicit `/clear`. The Batch-G list (§18 v6.4) must be green before `max_sessions > 1` is honored; until then the SDK cut-over is explicitly single-live-session |
+| D-58 | Hub acks report stored reality: `up_to_seq` computed post-commit; rejections surfaced explicitly on the ack and recorded hub-side; a rejected seq-regression still advances the cursor (retrying it can never succeed — never lower an ack for it); `instance_mismatch`/malformed frames are non-retriable (connector drops + `events_dropped` marker); wire payload is opaque `serde_json::Value` (unknown kinds cannot poison a frame); per-event size cap and `coco-secret-redact` applied at the connector conversion seam; `instance_id` persisted load-or-create; size-cap retention never evicts recently-seen instances' sessions (amends D-16/§13) |
+| D-59 | Policy MCP scopes (managed, enterprise) load last and cannot be name-shadowed by user/project/local definitions — mirrors permission-settings precedence (refines D-45) |
+| D-60 | `server.*` configuration resolves from process settings layers only (policy/user/flag/env), never from a per-session/project fold (sharpens the D-36 boundary: the fold governs session behavior, not process policy) |

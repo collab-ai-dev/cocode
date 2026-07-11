@@ -3,12 +3,12 @@
 //! Low-cost regression insurance for boot latency (modeled on jcode's
 //! `startup_profile`). When enabled, [`init`] records `process_start`, [`mark`]
 //! stamps named milestones, and [`report`] emits one `tracing::debug!` per phase
-//! (delta + cumulative `duration_ms`) under the `coco_cli::startup` target, plus
+//! (delta + cumulative `duration_ms`) under the `coco_agent_host::startup` target, plus
 //! a `total_ms` summary. Disabled by default: `init` leaves the profile unset,
 //! so `mark`/`report` are no-ops.
 //!
 //! Surface it with `COCO_STARTUP_PROFILE=1 coco --log-level=debug` (or any sink
-//! that captures the `coco_cli::startup` target at debug).
+//! that captures the `coco_agent_host::startup` target at debug).
 
 use std::sync::Mutex;
 use std::sync::MutexGuard;
@@ -73,7 +73,7 @@ pub fn report() {
         let (_, prev) = window[0];
         let (name, at) = window[1];
         tracing::debug!(
-            target: "coco_cli::startup",
+            target: "coco_agent_host::startup",
             phase = name,
             duration_ms = ms(at.duration_since(prev)),
             from_start_ms = ms(at.duration_since(profile.start)),
@@ -82,7 +82,7 @@ pub fn report() {
     }
     if let Some((_, last)) = profile.marks.last() {
         tracing::debug!(
-            target: "coco_cli::startup",
+            target: "coco_agent_host::startup",
             total_ms = ms(last.duration_since(profile.start)),
             phases = profile.marks.len().saturating_sub(1),
             "startup profile complete"

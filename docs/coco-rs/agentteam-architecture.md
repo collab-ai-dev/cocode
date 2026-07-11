@@ -164,22 +164,22 @@ coordinator/src/
     └── it2_setup.rs          ← was app/state/swarm_it2_setup.rs
 ```
 
-**Layering invariant**: `coco-coordinator` does NOT depend on `coco-state`
-(would create a cycle). The shared data shapes that both layers read or
-write — `TeamContext`, `TeammateEntry`, `StandaloneAgentContext`,
+**Layering invariant**: `coco-coordinator` depends only on lower contracts and
+shared data. Shapes read by coordinator, host, and surfaces — `TeamContext`,
+`TeammateEntry`, `StandaloneAgentContext`,
 `SubAgentState`, `SubAgentStatus`, `IdleReason`, `TaskEntry`, the mailbox
 protocol enums (`TeammateProtocolMessage`, `TeammateProtocolContent`) —
-were lifted to `coco_types::agent_ipc` so neither side needs the other
-just for the types.
+live in `coco_types::agent_ipc` so those layers do not import one another just
+for data.
 
-**`app/state` after extraction**: down from 21 swarm modules to zero.
-Just `lib.rs` (471 LoC of `AppState` field tree) and `lib.test.rs`.
+**Legacy state cleanup**: after all swarm modules moved to coordinator, the
+remaining unwired global `AppState` parity tree was deleted. Live session state
+is owned by agent-host `SessionRuntime`/`ToolAppState`; TUI has its own read
+model.
 
-**Migrated consumers**: `app/cli/src/{session_runtime,tui_runner}.rs`
-import `coco_coordinator::mailbox::SwarmMailboxHandle` directly. The
-historical `coco_state::swarm_*` re-exports were dropped in step 10 (no
-remaining external consumers). `app/state/Cargo.toml` no longer has the
-`coco-coordinator` dep.
+**Migrated consumers**: agent-host session assembly imports coordinator
+handles directly. Historical state-crate re-exports were dropped; there is no
+intermediate global-state dependency.
 
 ### PR #3 step 7 — `SpawnMode::Fork` dispatch end-to-end (merged)
 

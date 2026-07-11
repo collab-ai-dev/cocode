@@ -116,7 +116,7 @@ Hermes 的一个显著特征是**超大单文件**——这既是它的能力密
 ### 定义 Hermes 身份的几个子系统
 
 - **MoA(Mixture-of-Agents,`agent/moa_loop.py`)**:`/moa` 把某回合标为 MoA(不是工具)。`aggregate_moa_context` 用线程池(上限 8)把多个参考模型并行扇出到一个"顾问视图"(丢掉 8K 系统提示、把 tool_calls 渲染成文本、为 Anthropic 强制末尾 user 回合),聚合器综合后把结论追加到最后一条 user 消息作私有指导。它与主循环组合而非替换。
-- **自进化闭环(核心差异化)**:四个协作机制 + 一个 provenance 开关。`agent/background_review.py` 在每 ~10 回合后 fork 一个子代理,把刚结束的会话蒸馏成 skill 补丁/新建与 memory 写入;`agent/curator.py` 以 7 天节律管理 agent 自建 skill 的 active→stale→archived 生命周期(可选 LLM "umbrella" 合并);枢纽是 `tools/skill_provenance.py` 的 ContextVar——只有在 background-review fork 内创建的 skill 才被标 `created_by:"agent"` 并纳入 Curator 管理,前台/`/learn` 创建的归用户所有、Curator 永不触碰。
+- **自进化闭环(核心差异化)**:四个协作机制 + 一个 provenance 开关。`agent/background_review.py` 在每 ~10 回合后 fork 一个子代理,把刚结束的会话蒸馏成 skill 补丁/新建与 memory 写入;`agent/curator.py` 以 7 天节律管理 agent 自建 skill 的 active→stale→archived 生命周期(可选 LLM "umbrella" 合并);枢纽是 `tools/skill_provenance.py` 的 ContextVar——只有在 maintenance fork 内创建的 skill 才被标 `created_by:"agent"` 并纳入 Curator 管理,前台/`/learn` 创建的归用户所有、Curator 永不触碰。
 - **Skills 程序性记忆(`tools/skills_*`)**:agentskills.io 兼容的 `SKILL.md`,渐进式披露(仅 name+description 进系统提示),`skill_manage` 是 agent 的写入器,四类 skill(bundled/optional/user/plugin)共存于 `~/.hermes/skills/`,Hub 有 ~10 个注册源 + quarantine→扫描→信任矩阵→安装的安全管线。
 - **Memory(`tools/memory_tool.py` + `agent/memory_manager.py`)**:`MEMORY.md`(~2200 字符)/`USER.md`(~1375 字符),§ 分段、原子写、注入扫描,可插外部 provider(`MemoryProvider` ABC,如 Honcho 多轮辩证式用户建模)。
 - **6 种终端后端(`tools/environments/`)**:统一 `BaseEnvironment` ABC 下的 `local/docker/ssh/singularity/modal(直连 + Nous 托管)/daytona`,由 `TERMINAL_ENV` 选择;Modal/Daytona 提供无服务器文件系统持久化,SSH/Modal/Daytona 用 `FileSyncManager`(mtime+SHA-256)同步。

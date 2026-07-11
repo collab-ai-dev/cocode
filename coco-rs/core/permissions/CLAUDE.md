@@ -90,7 +90,7 @@ rule pipeline in front of every tool call.
 Settings rules reach the evaluator via three layers:
 1. `coco_config::SettingsWithSource::sourced_permission_rules()` →
    `(allow, deny, ask)` per-source raw lists.
-2. `coco_cli::permission_rule_loader::typed_permission_rules` →
+2. `coco_agent_host::permission_rule_loader::typed_permission_rules` →
    `PermissionRulesBySource` keyed by `PermissionRuleSource`.
 3. `QueryEngineConfig.{allow,deny,ask}_rules` →
    `ToolUseContext.permission_context` per turn (built in

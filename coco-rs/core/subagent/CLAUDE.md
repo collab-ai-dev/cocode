@@ -12,7 +12,7 @@ prompt rendering, tool filter planning, validation diagnostics.
 | `AgentLoadReport` | Diagnostics from the most recent load |
 | `BuiltinAgentCatalog` | Toggle set for optional built-ins (Explore/Plan, verification, coco-guide, SDK disable) |
 | `AgentToolPromptRenderer` | AgentTool prompt string builder |
-| `AgentToolFilter` + `ToolFilterPlan` | Pure tool filter computation; `app/state` applies the plan to the child `ToolRegistry` |
+| `AgentToolFilter` + `ToolFilterPlan` | Pure tool filter computation; host/coordinator assembly applies the plan to the child `ToolRegistry` |
 | `AllowedAgentTypes` + `parse_allowed_agent_types` | Parse `Agent(...)` / `Task(...)` permission entries |
 | `AgentDefinitionValidator` | Structural validation (required `name` / `description`) |
 | `parse_agent_markdown` | Frontmatter → `AgentDefinition` (camelCase + snake_case keys) |
@@ -42,11 +42,11 @@ This crate is **pure logic**. Its own `Cargo.toml` must NOT add:
 
 - `tokio`, `tokio-util`, `mpsc`, watcher infrastructure
 - `coco-tool`, `coco-tools` — would invert the thin AgentTool boundary
-- `coco-query`, `coco-state`, `coco-commands` — those consume the catalog,
+- `coco-query`, `coco-agent-host`, `coco-commands` — those consume the catalog,
   not the other way round
 
 Filesystem access is sync `std::fs` triggered by `AgentDefinitionStore::load()`
-/ `reload()`. The watcher that calls `reload()` lives in `app/state`.
+/ `reload()`. Reload orchestration lives in `coco-agent-host`.
 
 **Caveat — transitive tokio:** `cargo tree -p coco-subagent` shows tokio in
 the graph because `coco-types` (a required dep) depends on tokio for
@@ -76,9 +76,9 @@ removing tokio from the graph requires splitting `AppStateReadHandle` out of
 The following entries appeared in earlier audits but verification confirmed
 they are NOT gaps in the current code:
 
-- ~~No consumer wiring~~ — `AgentTool`, `app/state`, `commands` all consume
+- ~~No consumer wiring~~ — `AgentTool`, agent host, and commands all consume
   the catalog. Legacy `agent_spawn.rs`/`agent_advanced.rs` are gone (one
-  comment reference in `app/cli/src/paths.rs`, no active code).
+  comment reference in the host path helpers, no active code).
 - ~~No nested-directory walking~~ — `collect_md_paths` walks 2 levels
   (root + 1 nested, depth=2). 1 MiB size cap is enforced via the existing
   metadata check.

@@ -1424,7 +1424,7 @@ async fn test_spawn_subagent_worktree_without_manager_fails_cleanly() {
 /// used to terminate the engine on detach).
 ///
 /// Uses an inline mock `AgentTaskRegistry` instead of the real
-/// `coco_cli::TaskRuntime` because coordinator can't depend on
+/// `coco_agent_host::TaskRuntime` because coordinator can't depend on
 /// `coco-cli` (one-way layer rule).
 #[cfg(not(windows))]
 #[tokio::test]

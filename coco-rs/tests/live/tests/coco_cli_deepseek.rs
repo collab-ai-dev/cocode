@@ -4,7 +4,7 @@
 
 //! Live tests for the **`coco -p`** headless entry point.
 //!
-//! Drives `coco_cli::headless::run_chat_with_options` in-process — the
+//! Drives `coco_agent_host::headless::run_chat_with_options` in-process — the
 //! **same** function `main.rs` calls when the user runs `coco -p "<prompt>"`.
 //! Goes through:
 //!
@@ -28,10 +28,11 @@
 mod common;
 
 use anyhow::Result;
+use coco_agent_host::AgentHostOptions;
+use coco_agent_host::headless::RunChatOptions;
+use coco_agent_host::headless::RunChatOutcome;
+use coco_agent_host::headless::run_chat_with_options as run_chat_with_options_raw;
 use coco_cli::Cli;
-use coco_cli::headless::RunChatOptions;
-use coco_cli::headless::RunChatOutcome;
-use coco_cli::headless::run_chat_with_options as run_chat_with_options_raw;
 use coco_types::ProviderApi;
 use tokio_util::sync::CancellationToken;
 
@@ -54,7 +55,7 @@ fn model_id() -> &'static str {
     })
 }
 
-fn parse_cli(argv: &[&str]) -> Cli {
+fn parse_cli(argv: &[&str]) -> AgentHostOptions {
     use clap::Parser;
     let mut hermetic = argv.to_vec();
     if !argv
@@ -64,15 +65,15 @@ fn parse_cli(argv: &[&str]) -> Cli {
         hermetic.push("--setting-sources");
         hermetic.push("project,local,flag");
     }
-    Cli::parse_from(hermetic)
+    Cli::parse_from(hermetic).agent_host_options()
 }
 
-async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<RunChatOutcome> {
+async fn run_chat(cli: &AgentHostOptions, prompt: Option<&str>) -> Result<RunChatOutcome> {
     run_chat_with_options(cli, prompt, RunChatOptions::default()).await
 }
 
 async fn run_chat_with_options(
-    cli: &Cli,
+    cli: &AgentHostOptions,
     prompt: Option<&str>,
     mut opts: RunChatOptions,
 ) -> Result<RunChatOutcome> {
@@ -91,7 +92,7 @@ fn cli_for(
     prompt: &str,
     settings_path: Option<&str>,
     extra: &[&str],
-) -> Cli {
+) -> AgentHostOptions {
     let model_arg = format!("{provider}/{model}");
     let mut argv: Vec<&str> = vec!["coco", "-p", prompt, "--models.main", &model_arg];
     if let Some(s) = settings_path {

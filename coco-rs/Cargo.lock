@@ -1121,6 +1121,89 @@ dependencies = [
 ]
 
 [[package]]
+name = "coco-agent-host"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "coco-app-runtime",
+ "coco-app-server",
+ "coco-app-server-client",
+ "coco-app-server-transport",
+ "coco-bridge",
+ "coco-commands",
+ "coco-compact",
+ "coco-config",
+ "coco-config-reload",
+ "coco-context",
+ "coco-coordinator",
+ "coco-cron",
+ "coco-error",
+ "coco-exec-server",
+ "coco-file-watch",
+ "coco-frontmatter",
+ "coco-git",
+ "coco-hooks",
+ "coco-hub-connector",
+ "coco-inference",
+ "coco-keybindings",
+ "coco-llm-types",
+ "coco-lsp",
+ "coco-mcp",
+ "coco-mcp-skills",
+ "coco-memory",
+ "coco-messages",
+ "coco-model-card",
+ "coco-otel",
+ "coco-output-styles",
+ "coco-paths",
+ "coco-permissions",
+ "coco-plugins",
+ "coco-provider-auth",
+ "coco-query",
+ "coco-rmcp-client",
+ "coco-sandbox",
+ "coco-session",
+ "coco-shell",
+ "coco-skill-learn",
+ "coco-skills",
+ "coco-subagent",
+ "coco-system-reminder",
+ "coco-tasks",
+ "coco-tool-runtime",
+ "coco-tools",
+ "coco-tui",
+ "coco-types",
+ "coco-utils-audio",
+ "coco-utils-cargo-bin",
+ "coco-utils-common",
+ "coco-utils-pty",
+ "coco-utils-string",
+ "coco-voice",
+ "coco-workflow",
+ "dirs 6.0.0",
+ "futures",
+ "http",
+ "jsonc-parser",
+ "libc",
+ "pretty_assertions",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "shlex",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
 name = "coco-app-runtime"
 version = "0.1.1"
 dependencies = [
@@ -1137,9 +1220,11 @@ dependencies = [
  "coco-plugins",
  "coco-skills",
  "coco-subagent",
+ "coco-tool-runtime",
  "coco-types",
  "coco-utils-common",
  "serde_json",
+ "snafu",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -1168,7 +1253,6 @@ dependencies = [
 name = "coco-app-server-client"
 version = "0.1.1"
 dependencies = [
- "coco-app-server",
  "coco-app-server-transport",
  "coco-types",
  "futures",
@@ -1178,6 +1262,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
+ "tracing",
 ]
 
 [[package]]
@@ -1222,19 +1307,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "coco-background-review"
-version = "0.1.1"
-dependencies = [
- "coco-apply-patch",
- "coco-utils-absolute-path",
- "filetime",
- "libc",
- "pretty_assertions",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "coco-bridge"
 version = "0.1.1"
 dependencies = [
@@ -1274,21 +1346,18 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
+ "coco-agent-host",
  "coco-app-runtime",
  "coco-app-server",
  "coco-app-server-client",
  "coco-app-server-transport",
- "coco-bridge",
  "coco-commands",
  "coco-compact",
  "coco-config",
  "coco-config-reload",
  "coco-context",
  "coco-coordinator",
- "coco-cron",
- "coco-error",
  "coco-exec-server",
- "coco-file-watch",
  "coco-frontmatter",
  "coco-git",
  "coco-hooks",
@@ -1297,9 +1366,7 @@ dependencies = [
  "coco-inference",
  "coco-keybindings",
  "coco-llm-types",
- "coco-lsp",
  "coco-mcp",
- "coco-mcp-skills",
  "coco-memory",
  "coco-messages",
  "coco-model-card",
@@ -1308,41 +1375,30 @@ dependencies = [
  "coco-paths",
  "coco-permissions",
  "coco-plugins",
- "coco-provider-auth",
  "coco-query",
- "coco-rmcp-client",
  "coco-sandbox",
  "coco-session",
  "coco-shell",
- "coco-skill-learn",
  "coco-skills",
- "coco-state",
  "coco-subagent",
  "coco-system-reminder",
  "coco-tasks",
  "coco-tool-runtime",
- "coco-tools",
  "coco-tui",
  "coco-types",
- "coco-utils-audio",
  "coco-utils-cargo-bin",
  "coco-utils-common",
  "coco-utils-pty",
  "coco-utils-string",
- "coco-voice",
  "coco-workflow",
  "dirs 6.0.0",
- "futures",
  "http",
  "jsonc-parser",
- "libc",
  "pretty_assertions",
- "reqwest 0.12.28",
  "serde",
  "serde_json",
  "shlex",
  "tempfile",
- "thiserror 2.0.18",
  "tikv-jemallocator",
  "tokio",
  "tokio-tungstenite",
@@ -1671,6 +1727,7 @@ dependencies = [
  "chrono",
  "coco-error",
  "coco-hub-protocol",
+ "coco-secret-redact",
  "coco-types",
  "coco-utils-rustls-provider",
  "futures",
@@ -1680,6 +1737,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
+ "tracing",
  "uuid",
 ]
 
@@ -1821,6 +1879,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "coco-maintenance"
+version = "0.1.1"
+dependencies = [
+ "coco-apply-patch",
+ "coco-utils-absolute-path",
+ "filetime",
+ "libc",
+ "pretty_assertions",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "coco-mcp"
 version = "0.1.1"
 dependencies = [
@@ -1878,13 +1949,13 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "chrono",
- "coco-background-review",
  "coco-config",
  "coco-error",
  "coco-file-watch",
  "coco-frontmatter",
  "coco-git",
  "coco-llm-types",
+ "coco-maintenance",
  "coco-otel",
  "coco-paths",
  "coco-secret-redact",
@@ -2370,8 +2441,8 @@ version = "0.1.1"
 dependencies = [
  "async-trait",
  "chrono",
- "coco-background-review",
  "coco-frontmatter",
+ "coco-maintenance",
  "coco-shell-parser",
  "coco-skills",
  "coco-tool-runtime",
@@ -2423,27 +2494,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "coco-state"
-version = "0.1.1"
-dependencies = [
- "async-trait",
- "chrono",
- "coco-config",
- "coco-git",
- "coco-hooks",
- "coco-tool-runtime",
- "coco-types",
- "dirs 6.0.0",
- "fs2",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "uuid",
 ]
 
 [[package]]
@@ -2573,6 +2623,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "clap",
+ "coco-agent-host",
  "coco-app-runtime",
  "coco-app-server",
  "coco-cli",

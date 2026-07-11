@@ -11,7 +11,7 @@
 //! - Read/Write/Edit pre-flight → [`PermissionChecker::check_path_async`]
 //! (`core/tools/src/tools/sandbox_preflight.rs`).
 //! - SDK control channel → `SdkSandboxApprovalBridge`
-//! (`app/cli/src/sdk_server`), installed onto the live `SandboxState`.
+//! (`app/agent-host/src/sdk_server`), installed onto the live `SandboxState`.
 //!
 //! Network approval is handled at the egress proxy itself (a `NetworkAskCallback`
 //! built from the installed bridge in `state.rs::build_network_ask_callback`),

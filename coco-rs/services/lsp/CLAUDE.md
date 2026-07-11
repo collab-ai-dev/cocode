@@ -54,7 +54,7 @@ Config files: `~/.coco/lsp_servers.json` (user) → `.coco/lsp_servers.json` (pr
 
 The agent-facing `LspTool` lives in `coco-tools` and dispatches via the
 `coco_tool_runtime::LspHandle` trait. The concrete adapter
-(`coco_cli::lsp_handle_adapter::LspManagerAdapter`) wraps an
+(`coco_agent_host::lsp_handle_adapter::LspManagerAdapter`) wraps an
 `Arc<LspServerManager>` + the manager's `DiagnosticsStore`. Integration seam:
 
 | Operation | Implementation |

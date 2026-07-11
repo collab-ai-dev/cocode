@@ -7,7 +7,7 @@
 //! - `session/resume` reads the persisted record back, cancels any
 //!   in-flight turn on the previously active slot, and installs a
 //!   fresh `SessionHandle` keyed on the same `session_id`. See
-//!   `app/cli/src/sdk_server/handlers/session.rs:678-755`.
+//!   `app/agent-host/src/sdk_server/handlers/session.rs:678-755`.
 //!
 //! This test asserts: resume returns metadata for the same session_id
 //! after a successful `session/start`, and a subsequent `turn/start`
@@ -21,7 +21,7 @@
 
 use anyhow::Result;
 use anyhow::anyhow;
-use coco_cli::sdk_server::SdkTransport;
+use coco_agent_host::sdk_server::SdkTransport;
 
 use crate::sdk_server::harness::build_live_server;
 use crate::sdk_server::harness::drive_until_response;

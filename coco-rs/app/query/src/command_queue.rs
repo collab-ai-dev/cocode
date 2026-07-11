@@ -17,8 +17,10 @@ use coco_types::TaskNotificationPayload;
 use serde::Deserialize;
 use serde::Serialize;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::time::Instant;
 use tokio::sync::Mutex;
-use tokio::sync::Notify;
+use tokio::sync::watch;
 use uuid::Uuid;
 
 /// Priority for queued commands.
@@ -152,7 +154,8 @@ impl QueuedCommand {
 #[derive(Debug, Clone)]
 pub struct CommandQueue {
     inner: Arc<Mutex<Vec<QueuedCommand>>>,
-    changed: Arc<Notify>,
+    last_changed: Arc<StdMutex<Instant>>,
+    revision: watch::Sender<u64>,
 }
 
 impl Default for CommandQueue {
@@ -163,10 +166,32 @@ impl Default for CommandQueue {
 
 impl CommandQueue {
     pub fn new() -> Self {
+        let (revision, _) = watch::channel(0);
         Self {
             inner: Arc::new(Mutex::new(Vec::new())),
-            changed: Arc::new(Notify::new()),
+            last_changed: Arc::new(StdMutex::new(Instant::now())),
+            revision,
         }
+    }
+
+    fn mark_changed(&self) {
+        *self
+            .last_changed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Instant::now();
+        self.revision
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
+    }
+
+    pub fn last_changed_at(&self) -> Instant {
+        *self
+            .last_changed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub fn subscribe_changes(&self) -> watch::Receiver<u64> {
+        self.revision.subscribe()
     }
 
     /// Enqueue a command, maintaining priority order with FIFO within same priority.
@@ -176,7 +201,8 @@ impl CommandQueue {
         let mut queue = self.inner.lock().await;
         let pos = queue.partition_point(|c| c.priority <= command.priority);
         queue.insert(pos, command);
-        self.changed.notify_waiters();
+        drop(queue);
+        self.mark_changed();
     }
 
     /// Dequeue highest-priority non-slash command matching the agent filter.
@@ -185,7 +211,10 @@ impl CommandQueue {
         let idx = queue
             .iter()
             .position(|c| !c.is_slash_command && c.agent_id.as_deref() == agent_id)?;
-        Some(queue.remove(idx))
+        let command = queue.remove(idx);
+        drop(queue);
+        self.mark_changed();
+        Some(command)
     }
 
     /// Get all commands at or above (lower numeric value) a max priority.
@@ -215,7 +244,13 @@ impl CommandQueue {
     /// [`Uuid`] minted at construction is the canonical identity.
     pub async fn remove_by_ids(&self, ids_to_remove: &[Uuid]) {
         let mut queue = self.inner.lock().await;
+        let original_len = queue.len();
         queue.retain(|c| !ids_to_remove.contains(&c.id));
+        let changed = queue.len() != original_len;
+        drop(queue);
+        if changed {
+            self.mark_changed();
+        }
     }
 
     /// Remove one queued command by id and return it to the caller.
@@ -223,7 +258,8 @@ impl CommandQueue {
         let mut queue = self.inner.lock().await;
         let idx = queue.iter().position(|c| c.id == id)?;
         let removed = queue.remove(idx);
-        self.changed.notify_waiters();
+        drop(queue);
+        self.mark_changed();
         Some(removed)
     }
 
@@ -250,7 +286,8 @@ impl CommandQueue {
 
     /// Wait for a change to the queue.
     pub async fn wait_for_change(&self) {
-        self.changed.notified().await;
+        let mut changes = self.subscribe_changes();
+        let _ = changes.changed().await;
     }
 
     /// Number of queued commands.
@@ -314,8 +351,9 @@ impl CommandQueue {
                 i += 1;
             }
         }
+        drop(queue);
         if !matched.is_empty() {
-            self.changed.notify_waiters();
+            self.mark_changed();
         }
         matched
     }
@@ -328,15 +366,20 @@ impl CommandQueue {
         let mut queue = self.inner.lock().await;
         let idx = queue.iter().position(predicate)?;
         let matched = queue.remove(idx);
-        self.changed.notify_waiters();
+        drop(queue);
+        self.mark_changed();
         Some(matched)
     }
 
     /// Clear the entire queue.
     pub async fn clear(&self) {
         let mut queue = self.inner.lock().await;
+        let changed = !queue.is_empty();
         queue.clear();
-        self.changed.notify_waiters();
+        drop(queue);
+        if changed {
+            self.mark_changed();
+        }
     }
 }
 

@@ -31,7 +31,7 @@ pub const AGENT_NOTES: &str = include_str!("agent_notes.md");
 /// Subagent-only fallback for spawns whose `AgentDefinition` has an
 /// empty `system_prompt` body (edge case: missing catalog entry,
 /// malformed `.md`). The main agent uses
-/// `DEFAULT_SYSTEM_PROMPT_IDENTITY` from `app/cli/src/headless.rs`,
+/// `DEFAULT_SYSTEM_PROMPT_IDENTITY` from `app/agent-host/src/headless.rs`,
 /// which is the full base instructions ("You are an interactive agent …").
 pub fn default_agent_identity() -> String {
     let product = coco_config::constants::PRODUCT_NAME;

@@ -12,4 +12,5 @@ Each has its own plan document:
 | `coco-plugins` | `plugins/`, `services/plugins/` | [`crate-coco-plugins.md`](crate-coco-plugins.md) |
 | `coco-keybindings` | `keybindings/` | [`crate-coco-keybindings.md`](crate-coco-keybindings.md) |
 
-None of these depend on: coco-tools, coco-query, coco-state, coco-session, coco-tui, coco-cli (app layer).
+None of these depend on: coco-tools, coco-query, coco-session, coco-tui,
+coco-agent-host, or coco-cli (app layer).

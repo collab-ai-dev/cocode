@@ -168,9 +168,14 @@ pub fn event_envelope_from_session_envelope(
     };
 
     let payload = match envelope.event {
-        CoreEvent::Protocol(notification) => EventPayload::Protocol {
-            value: serde_json::to_value(notification)?,
-        },
+        CoreEvent::Protocol(notification) => {
+            // Redact secrets before the payload leaves the process (the hub
+            // stores and renders exactly what it receives), and cap a single
+            // oversized event to a stub so it cannot exceed the hub frame
+            // limit and wedge delivery in a retry loop.
+            let value = cap_payload_size(redact_value(serde_json::to_value(notification)?));
+            EventPayload::Protocol { value }
+        }
         CoreEvent::Stream(_) | CoreEvent::Tui(_) => {
             return Err(EnvelopeEgressError::NonProtocolDurable);
         }
@@ -185,6 +190,39 @@ pub fn event_envelope_from_session_envelope(
         schema_version: SCHEMA_VERSION_V2,
         payload,
     }))
+}
+
+/// Ship at most this many bytes of a single event payload. Kept below the
+/// hub's WebSocket message limit so one large tool result cannot produce an
+/// envelope the server rejects (which the connector would retry forever).
+const MAX_EVENT_PAYLOAD_BYTES: usize = 9 * 1024 * 1024;
+
+fn cap_payload_size(value: serde_json::Value) -> serde_json::Value {
+    match serde_json::to_vec(&value) {
+        Ok(bytes) if bytes.len() > MAX_EVENT_PAYLOAD_BYTES => serde_json::json!({
+            "truncated": true,
+            "originalBytes": bytes.len(),
+            "reason": "event payload exceeded hub size cap",
+        }),
+        _ => value,
+    }
+}
+
+fn redact_value(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::String(text) => {
+            serde_json::Value::String(coco_secret_redact::redact_secrets(&text).into_owned())
+        }
+        serde_json::Value::Array(values) => {
+            serde_json::Value::Array(values.into_iter().map(redact_value).collect())
+        }
+        serde_json::Value::Object(map) => serde_json::Value::Object(
+            map.into_iter()
+                .map(|(key, value)| (key, redact_value(value)))
+                .collect(),
+        ),
+        other => other,
+    }
 }
 
 pub fn batch_frame_from_session_envelopes(
