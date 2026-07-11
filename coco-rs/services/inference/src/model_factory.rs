@@ -170,7 +170,18 @@ pub fn build_language_model_from_runtime(
         ),
         ProviderApi::Gemini => build_google(provider_cfg, &api_model_name, resolver, headers),
         ProviderApi::Volcengine | ProviderApi::Zai | ProviderApi::OpenaiCompat => {
-            build_openai_compat(provider_cfg, &api_model_name, timeout_secs, headers)
+            // A few OpenAI-wire providers ship dedicated crates for wire details
+            // the generic path can't express (xAI: Live-Search `citations`,
+            // `max_completion_tokens`, per-model reasoning-effort gating; Groq:
+            // `x_groq.usage` streaming + the `reasoning` field). Route those by
+            // canonical instance name; everything else uses the generic path.
+            if provider_cfg.name == coco_config::builtin::XAI_PROVIDER {
+                build_xai(provider_cfg, &api_model_name, timeout_secs, headers)
+            } else if provider_cfg.name == coco_config::builtin::GROQ_PROVIDER {
+                build_groq(provider_cfg, &api_model_name, timeout_secs, headers)
+            } else {
+                build_openai_compat(provider_cfg, &api_model_name, timeout_secs, headers)
+            }
         }
     }
 }
@@ -646,6 +657,63 @@ fn build_openai_compat(
     provider.language_model(api_model).map_err(|e| {
         crate::errors::ProviderBuildFailedSnafu {
             provider: "openai-compat",
+            provider_name: provider_cfg.name.clone(),
+            message: e.to_string(),
+        }
+        .build()
+    })
+}
+
+/// Build the dedicated xAI (Grok) chat model. Routed here (rather than through
+/// the generic OpenAI-compat path) for xai-specific behavior: Live-Search
+/// `citations` → source parts, `max_completion_tokens`, per-model
+/// `supports_reasoning_effort` gating, and unsupported-parameter warnings. The
+/// runtime instance name is `xai`, which also selects the `"xai"`
+/// `provider_options` namespace the crate reads.
+fn build_xai(
+    provider_cfg: &ProviderConfig,
+    api_model: &str,
+    timeout_secs: i64,
+    headers: Option<HashMap<String, String>>,
+) -> Result<Arc<dyn LanguageModel>, InferenceError> {
+    let settings = vercel_ai_xai::XaiProviderSettings {
+        base_url: Some(provider_cfg.base_url.clone()),
+        api_key: provider_cfg.resolve_api_key(),
+        headers,
+        client: build_http_client(timeout_secs),
+    };
+    let provider = vercel_ai_xai::create_xai(settings);
+    provider.language_model(api_model).map_err(|e| {
+        crate::errors::ProviderBuildFailedSnafu {
+            provider: "xai",
+            provider_name: provider_cfg.name.clone(),
+            message: e.to_string(),
+        }
+        .build()
+    })
+}
+
+/// Build the dedicated Groq chat model. Routed here (rather than through the
+/// generic OpenAI-compat path) because Groq streams token usage under
+/// `x_groq.usage` (not the top-level `usage`) and surfaces reasoning through the
+/// `reasoning` field. The runtime instance name is `groq`, which also selects
+/// the `"groq"` `provider_options` namespace the crate reads.
+fn build_groq(
+    provider_cfg: &ProviderConfig,
+    api_model: &str,
+    timeout_secs: i64,
+    headers: Option<HashMap<String, String>>,
+) -> Result<Arc<dyn LanguageModel>, InferenceError> {
+    let settings = vercel_ai_groq::GroqProviderSettings {
+        base_url: Some(provider_cfg.base_url.clone()),
+        api_key: provider_cfg.resolve_api_key(),
+        headers,
+        client: build_http_client(timeout_secs),
+    };
+    let provider = vercel_ai_groq::create_groq(settings);
+    provider.language_model(api_model).map_err(|e| {
+        crate::errors::ProviderBuildFailedSnafu {
+            provider: "groq",
             provider_name: provider_cfg.name.clone(),
             message: e.to_string(),
         }

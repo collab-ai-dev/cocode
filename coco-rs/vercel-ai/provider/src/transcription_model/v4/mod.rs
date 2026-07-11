@@ -12,6 +12,13 @@ use crate::shared::ProviderMetadata;
 use crate::shared::ProviderOptions;
 use crate::shared::Warning;
 
+mod stream;
+pub use stream::AudioChunkStream;
+pub use stream::TranscriptionInputAudioFormat;
+pub use stream::TranscriptionModelV4StreamOptions;
+pub use stream::TranscriptionModelV4StreamPart;
+pub use stream::TranscriptionModelV4StreamResult;
+
 /// The transcription model trait (V4).
 ///
 /// This trait defines the interface for speech-to-text models following the
@@ -34,6 +41,20 @@ pub trait TranscriptionModelV4: Send + Sync {
         &self,
         options: TranscriptionModelV4CallOptions,
     ) -> Result<TranscriptionModelV4Result, AISdkError>;
+
+    /// Stream a transcription of live audio (WebSocket-based real-time STT).
+    ///
+    /// Optional — the spec's `doStream?`. The default rejects with an
+    /// unsupported-functionality error; providers with a streaming endpoint
+    /// (e.g. xAI `/stt`) override it.
+    async fn do_stream(
+        &self,
+        _options: TranscriptionModelV4StreamOptions,
+    ) -> Result<TranscriptionModelV4StreamResult, AISdkError> {
+        Err(AISdkError::new(
+            "streaming transcription is not supported by this model",
+        ))
+    }
 }
 
 /// Options for a transcription model call.
@@ -160,7 +181,7 @@ impl TranscriptionModelV4Result {
 }
 
 /// A transcription segment with timing information (V4 spec).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct TranscriptionSegmentV4 {
     /// The segment text.
     pub text: String,

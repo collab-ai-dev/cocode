@@ -54,7 +54,9 @@ Groq is OpenAI-wire but diverges enough to warrant its own model impl:
   text passes through, non-text parts become a `[… omitted]` marker (matching
   openai / openai-compatible) rather than dumping raw base64 into the prompt.
 - Streaming uses the shared `vercel_ai_provider_utils::SseDecoder` for
-  UTF-8-safe byte→line framing; a malformed / error chunk finishes the stream
-  with `UnifiedFinishReason::Error`.
+  UTF-8-safe byte→line framing; a malformed / error chunk surfaces as an
+  `Error` stream part and sets the raw `finish_reason` to `"error"` (→ unified
+  `Other`), matching the coco provider majority — the `Error` part is the real
+  signal, not the finish reason.
 - Wire schemas in `chat/groq_api_types.rs` are intentionally a minimal subset —
   only fields the impl reads — so upstream API additions don't break parsing.

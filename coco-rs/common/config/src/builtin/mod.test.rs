@@ -10,7 +10,31 @@ use super::*;
 #[test]
 fn builtin_provider_count() {
     let providers = builtin_providers().expect("builtin partials must resolve");
-    assert_eq!(providers.len(), 9);
+    assert_eq!(providers.len(), 11);
+}
+
+#[test]
+fn builtin_xai_provider_resolves() {
+    let providers = builtin_providers().expect("builtin partials must resolve");
+    let xai = providers
+        .iter()
+        .find(|p| p.name == super::XAI_PROVIDER)
+        .expect("xai builtin");
+    assert_eq!(xai.api, ProviderApi::OpenaiCompat);
+    assert_eq!(xai.env_key, "XAI_API_KEY");
+    assert_eq!(xai.base_url, "https://api.x.ai/v1");
+}
+
+#[test]
+fn builtin_groq_provider_resolves() {
+    let providers = builtin_providers().expect("builtin partials must resolve");
+    let groq = providers
+        .iter()
+        .find(|p| p.name == super::GROQ_PROVIDER)
+        .expect("groq builtin");
+    assert_eq!(groq.api, ProviderApi::OpenaiCompat);
+    assert_eq!(groq.env_key, "GROQ_API_KEY");
+    assert_eq!(groq.base_url, "https://api.groq.com/openai/v1");
 }
 
 #[test]

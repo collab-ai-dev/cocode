@@ -1,0 +1,17 @@
+---
+source: vercel-ai/xai/tests/xai_responses_cassette_replay.rs
+assertion_line: 191
+expression: rle_shape(&parts)
+---
+streamStart
+response-metadata
+toolInputStart
+toolInputDelta
+toolInputEnd
+tool-call
+tool-result
+textStart
+textDelta x259
+source x10
+textEnd
+finish

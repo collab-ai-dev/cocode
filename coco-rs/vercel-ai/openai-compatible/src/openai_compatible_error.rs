@@ -3,6 +3,7 @@ use reqwest::Response;
 use serde::Deserialize;
 use serde_json::Value;
 use vercel_ai_provider::AISdkError;
+use vercel_ai_provider::APICallError;
 use vercel_ai_provider_utils::ResponseHandler;
 
 /// OpenAI-compatible error response shape.
@@ -42,7 +43,7 @@ impl ResponseHandler<AISdkError> for OpenAICompatibleFailedResponseHandler {
     async fn handle(
         &self,
         response: Response,
-        _url: &str,
+        url: &str,
         _request_body_values: &Value,
     ) -> Result<AISdkError, AISdkError> {
         let status = response.status();
@@ -61,10 +62,19 @@ impl ResponseHandler<AISdkError> for OpenAICompatibleFailedResponseHandler {
             }
         };
 
+        // Carry the HTTP status on an `APICallError` cause. The inference retry
+        // classifier downcasts `AISdkError.cause` to recover the status and
+        // decide retryability (429/503/529 → retry); without it a transient
+        // 5xx on the blocking `do_generate` path degrades to non-retryable.
+        let api_err = APICallError::new(message.clone(), url)
+            .with_status(status.as_u16())
+            .with_response_body(body);
+
         Ok(AISdkError::new(format!(
             "{} API error ({status}): {message}",
             self.provider_name
-        )))
+        ))
+        .with_cause(Box::new(api_err)))
     }
 }
 

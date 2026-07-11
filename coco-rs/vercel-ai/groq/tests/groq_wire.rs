@@ -214,3 +214,58 @@ async fn do_stream_assembles_tool_call_across_deltas() {
         UnifiedFinishReason::ToolUse
     );
 }
+
+#[tokio::test]
+async fn do_stream_malformed_chunk_emits_error_part_and_other_finish() {
+    // A malformed mid-stream chunk surfaces as an `Error` stream part; the
+    // finish reason stays `Other` (raw "error"), NOT the `Error` unified
+    // variant — matching the coco provider majority (openai /
+    // openai-compatible / google / anthropic / xai).
+    let server = MockServer::start().await;
+    let sse = concat!(
+        "data: {\"id\":\"c1\",\"created\":1700000000,\"model\":\"llama-3.3-70b\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"}}]}\n\n",
+        "data: {not valid json}\n\n",
+        "data: [DONE]\n\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = create_groq(GroqProviderSettings {
+        base_url: Some(server.uri()),
+        api_key: Some("test-key".into()),
+        ..Default::default()
+    });
+    let model = provider.chat("llama-3.3-70b");
+    let mut stream_result = model.do_stream(&options(), None).await.expect("do_stream");
+
+    let mut saw_error = false;
+    let mut finish_reason = None;
+    while let Some(part) = stream_result.stream.next().await {
+        match part.expect("stream part") {
+            LanguageModelV4StreamPart::Error { .. } => saw_error = true,
+            LanguageModelV4StreamPart::Finish {
+                finish_reason: fr, ..
+            } => finish_reason = Some(fr),
+            _ => {}
+        }
+    }
+
+    assert!(
+        saw_error,
+        "malformed chunk must surface an Error stream part"
+    );
+    let fr = finish_reason.expect("finish reason");
+    assert_eq!(
+        fr.unified,
+        UnifiedFinishReason::Other,
+        "unified finish stays Other, not Error"
+    );
+    assert_eq!(fr.raw.as_deref(), Some("error"), "raw marker preserved");
+}

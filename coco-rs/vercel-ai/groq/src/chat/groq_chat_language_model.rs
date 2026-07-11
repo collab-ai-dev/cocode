@@ -11,7 +11,6 @@ use serde_json::json;
 
 use vercel_ai_provider::AISdkError;
 use vercel_ai_provider::AssistantContentPart;
-use vercel_ai_provider::FinishReason;
 use vercel_ai_provider::LanguageModelV4;
 use vercel_ai_provider::LanguageModelV4CallOptions;
 use vercel_ai_provider::LanguageModelV4GenerateResult;
@@ -27,7 +26,6 @@ use vercel_ai_provider::ResponseMetadata;
 use vercel_ai_provider::StreamError;
 use vercel_ai_provider::TextPart;
 use vercel_ai_provider::ToolCallPart;
-use vercel_ai_provider::UnifiedFinishReason;
 use vercel_ai_provider::Warning;
 use vercel_ai_provider_utils::JsonResponseHandler;
 use vercel_ai_provider_utils::StreamingToolCallDelta;
@@ -385,17 +383,17 @@ fn create_groq_chat_stream(
                         state.drain_tool_call_parts();
                         if !state.finish_emitted {
                             state.finish_emitted = true;
-                            let finish_reason = if state.stream_errored {
-                                FinishReason {
-                                    unified: UnifiedFinishReason::Error,
-                                    raw: None,
-                                }
-                            } else {
-                                map_groq_finish_reason(state.finish_reason.as_deref())
-                            };
+                            // A malformed / error chunk sets the raw finish reason
+                            // to "error", which maps to `Other` — matching the TS
+                            // reference and the coco provider majority (openai /
+                            // openai-compatible / google / anthropic / xai). The
+                            // emitted `Error` stream part is the real error
+                            // signal, not the finish reason.
                             state.pending.push_back(LanguageModelV4StreamPart::Finish {
                                 usage: convert_groq_usage(state.usage.as_ref()),
-                                finish_reason,
+                                finish_reason: map_groq_finish_reason(
+                                    state.finish_reason.as_deref(),
+                                ),
                                 provider_metadata: None,
                             });
                         }
@@ -421,11 +419,9 @@ struct GroqStreamState {
     reasoning_started: bool,
     reasoning_id: String,
     usage: Option<GroqUsage>,
+    /// Raw `finish_reason`; a malformed / error chunk sets it to `"error"`
+    /// (maps to `Other`), mirroring openai-compatible and xai.
     finish_reason: Option<String>,
-    /// Set when a chunk fails to parse or the API sends an error chunk. Drives
-    /// a `UnifiedFinishReason::Error` finish instead of routing a fake wire
-    /// string through the finish-reason mapper.
-    stream_errored: bool,
     finish_emitted: bool,
     done: bool,
     metadata_emitted: bool,
@@ -451,7 +447,6 @@ impl GroqStreamState {
             reasoning_id: "reasoning-0".to_string(),
             usage: None,
             finish_reason: None,
-            stream_errored: false,
             finish_emitted: false,
             done: false,
             metadata_emitted: false,
@@ -525,7 +520,7 @@ impl GroqStreamState {
         let raw: Value = match serde_json::from_str(data) {
             Ok(v) => v,
             Err(e) => {
-                self.stream_errored = true;
+                self.finish_reason = Some("error".to_string());
                 self.pending.push_back(LanguageModelV4StreamPart::Error {
                     error: StreamError::new(format!("Failed to parse Groq chunk: {e}")),
                 });
@@ -554,7 +549,7 @@ impl GroqStreamState {
         let chunk: GroqChatChunk = match serde_json::from_value(raw) {
             Ok(c) => c,
             Err(e) => {
-                self.stream_errored = true;
+                self.finish_reason = Some("error".to_string());
                 self.pending.push_back(LanguageModelV4StreamPart::Error {
                     error: StreamError::new(format!("Invalid Groq chunk structure: {e}")),
                 });

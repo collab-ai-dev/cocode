@@ -1,0 +1,14 @@
+---
+source: vercel-ai/xai/tests/xai_cassette_replay.rs
+assertion_line: 134
+expression: rle_shape(&parts)
+---
+streamStart
+response-metadata
+reasoningStart
+reasoningDelta x5
+reasoningEnd
+textStart
+textDelta
+textEnd
+finish
