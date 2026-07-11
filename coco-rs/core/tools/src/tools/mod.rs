@@ -58,8 +58,7 @@ pub use workflow::WorkflowTool;
 
 // Agent & Team (3) — schema/validation/result-formatting wrappers only.
 // The catalog (definitions, prompt, filter, fork, transcript) lives in
-// `coco-subagent`; the spawn lifecycle lives in `app/state/swarm` (and
-// will move to the future `root/coordinator` crate in PR #3).
+// `coco-subagent`; the spawn lifecycle lives in `coco-coordinator`.
 pub use agent::AgentTool;
 pub use agent::SendMessageTool;
 pub use agent::SkillTool;

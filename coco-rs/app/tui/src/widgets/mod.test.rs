@@ -350,7 +350,7 @@ fn test_snapshot_tool_result_middle_truncation() {
          coco-rs/app/tui/CLAUDE.md\n\
          coco-rs/app/query/CLAUDE.md\n\
          coco-rs/app/cli/CLAUDE.md\n\
-         coco-rs/app/state/CLAUDE.md\n\
+         coco-rs/app/agent-host/CLAUDE.md\n\
          coco-rs/core/tools/CLAUDE.md\n\
          coco-rs/core/messages/CLAUDE.md\n\
          coco-rs/core/permissions/CLAUDE.md\n\

@@ -15,8 +15,10 @@ workspace = true
 chrono.workspace = true
 coco-error.workspace = true
 coco-hub-protocol.workspace = true
+coco-secret-redact.workspace = true
 coco-types.workspace = true
 coco-utils-rustls-provider.workspace = true
+tracing.workspace = true
 futures = { workspace = true, features = ["alloc"] }
 http.workspace = true
 serde_json.workspace = true

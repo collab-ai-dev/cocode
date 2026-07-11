@@ -50,10 +50,16 @@ pub struct BatchFrame {
     pub events: Vec<EventEnvelope>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchAckFrame {
     pub up_to_seq: HashMap<SessionId, i64>,
+    /// Per-session count of events the hub could not durably store (a seq
+    /// regression under an already-stored key). The cursor still advances past
+    /// them — retrying cannot succeed — but the connector observes the loss
+    /// rather than dropping it silently.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub rejected: HashMap<SessionId, i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -94,13 +94,13 @@ members = [
     "exec/exec-server",
     "exec/apply-patch",
 
-    # ─── root modules (9) ───
+    # ─── root modules (11) ───
     "commands",
     "skills",
     "hooks",
     "tasks",
     "memory",
-    "background-review",
+    "maintenance",
     "skill-learn",
     "plugins",
     "keybindings",
@@ -110,10 +110,10 @@ members = [
     # ─── app/ (9) ───
     "app/query",
     "app/runtime",
+    "app/agent-host",
     "app/server",
     "app/server-client",
     "app/server-transport",
-    "app/state",
     "app/session",
     "app/tui",
     "app/cli",
@@ -236,7 +236,7 @@ coco-skills = { path = "skills" }
 coco-hooks = { path = "hooks" }
 coco-tasks = { path = "tasks" }
 coco-memory = { path = "memory" }
-coco-background-review = { path = "background-review" }
+coco-maintenance = { path = "maintenance" }
 coco-skill-learn = { path = "skill-learn" }
 coco-plugins = { path = "plugins" }
 coco-keybindings = { path = "keybindings" }
@@ -246,10 +246,10 @@ coco-output-styles = { path = "output-styles" }
 # Internal - app
 coco-query = { path = "app/query" }
 coco-app-runtime = { path = "app/runtime" }
+coco-agent-host = { path = "app/agent-host" }
 coco-app-server = { path = "app/server" }
 coco-app-server-client = { path = "app/server-client" }
 coco-app-server-transport = { path = "app/server-transport" }
-coco-state = { path = "app/state" }
 coco-session = { path = "app/session" }
 coco-tui = { path = "app/tui" }
 coco-cli = { path = "app/cli" }

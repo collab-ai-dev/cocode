@@ -9,7 +9,7 @@
 //! ↓
 //! coco-query (this adapter implements it via QueryEngine)
 //! ↓
-//! coco-state (SwarmAgentHandle / InProcessTeammateRunner consumes it)
+//! coco-coordinator (SwarmAgentHandle / InProcessTeammateRunner consumes it)
 //! ```
 
 use std::sync::Arc;
@@ -35,7 +35,7 @@ use crate::engine::QueryEngineConfig;
 /// runtime source. `InheritMain` defaults to the parent session's model
 /// unless the agent definition specifies a model.
 /// The factory is async because production implementations (see
-/// `app/cli/src/agent_handle_factory.rs`) need to call into the
+/// `app/agent-host/src/agent_handle_factory.rs`) need to call into the
 /// session runtime's role-client resolver and engine builder, both
 /// of which are async. The adapter calls `(factory)(cfg, role).await`
 /// from inside `execute_query`, which itself runs in an async context
@@ -377,7 +377,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
         // when the spawn carries an output schema, the child must emit its
         // final answer via the synthetic `StructuredOutput` tool rather than
         // free-form text. Mirror the headless `--json-schema` path
-        // (`coco_cli::headless::inject_structured_output_tool_if_requested`):
+        // (`coco_agent_host::headless::inject_structured_output_tool_if_requested`):
         // register the compiled tool into a PER-SPAWN tool registry and enable
         // `requires_structured_output` on the child engine. Per-spawn
         // isolation is mandatory — registering on the shared session

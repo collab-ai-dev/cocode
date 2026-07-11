@@ -2,8 +2,8 @@ use std::collections::HashMap;
 #[cfg(unix)]
 use std::path::PathBuf;
 
-use coco_cli::headless::build_system_prompt_for_model;
-use coco_cli::shutdown::ShutdownDrainOutcome;
+use coco_agent_host::headless::build_system_prompt_for_model;
+use coco_agent_host::shutdown::ShutdownDrainOutcome;
 use coco_config::CatalogPaths;
 use coco_config::EnvSnapshot;
 use coco_config::RoleSlots;

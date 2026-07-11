@@ -3,9 +3,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use coco_types::ClientRequest;
+use coco_types::ServerRequestDelivery;
 use coco_types::SessionEnvelope;
 use coco_types::SessionId;
+use coco_types::SurfaceDelivery;
 use coco_types::SurfaceId;
+use coco_types::SurfaceLifecycleEffect;
 
 use crate::AppLiveSessionSummary;
 use crate::AppServer;
@@ -14,10 +17,7 @@ use crate::AttachSurfaceOptions;
 use crate::ConnectionKey;
 use crate::DetachSurfaceOutcome;
 use crate::DisconnectOutcome;
-use crate::ServerRequestDelivery;
 use crate::SubscribeReplay;
-use crate::SurfaceDelivery;
-use crate::SurfaceLifecycleDelivery;
 
 const DEFAULT_LOCAL_CHANNEL_CAPACITY: usize = 128;
 
@@ -109,7 +109,7 @@ pub struct LocalClientConnection<H> {
     connection: ConnectionKey,
     events: tokio::sync::mpsc::Receiver<SurfaceDelivery>,
     server_requests: tokio::sync::mpsc::Receiver<ServerRequestDelivery>,
-    lifecycle: tokio::sync::mpsc::Receiver<SurfaceLifecycleDelivery>,
+    lifecycle: tokio::sync::mpsc::Receiver<SurfaceLifecycleEffect>,
 }
 
 impl<H: Clone> LocalClientConnection<H> {
@@ -184,7 +184,7 @@ impl<H: Clone> LocalClientConnection<H> {
         &mut self.server_requests
     }
 
-    pub fn lifecycle_mut(&mut self) -> &mut tokio::sync::mpsc::Receiver<SurfaceLifecycleDelivery> {
+    pub fn lifecycle_mut(&mut self) -> &mut tokio::sync::mpsc::Receiver<SurfaceLifecycleEffect> {
         &mut self.lifecycle
     }
 

@@ -3394,11 +3394,11 @@ class WebSearchItem(BaseModel):
 
 
 class SubagentItem(BaseModel):
-    agent_id: str
     agent_type: str
     description: str
     status: ItemStatus
     type: Literal["subagent"]
+    agent_id: str | None = None
     is_background: bool = False
     result: str | None = None
 

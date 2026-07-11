@@ -367,6 +367,24 @@ fn push_dropped_marker(
     session_id: SessionId,
     range: DroppedEventRange,
 ) {
+    push_dropped_marker_with_reason(
+        config,
+        pending,
+        stats,
+        session_id,
+        range,
+        "hub_connector_backlog_full",
+    );
+}
+
+fn push_dropped_marker_with_reason(
+    config: &HubConnectorWorkerConfig,
+    pending: &mut VecDeque<EventEnvelope>,
+    stats: &mut HubConnectorWorkerStats,
+    session_id: SessionId,
+    range: DroppedEventRange,
+    reason: &str,
+) {
     stats.dropped_durable_events = stats.dropped_durable_events.saturating_add(range.count);
     pending.push_back(EventEnvelope {
         instance_id: config.announce.instance_id,
@@ -379,9 +397,62 @@ fn push_dropped_marker(
             count: range.count,
             since_seq: range.since_seq,
             until_seq: range.until_seq,
-            reason: "hub_connector_backlog_full".to_string(),
+            reason: reason.to_string(),
         },
     });
+}
+
+/// A hub error the connector must NOT retry: the same batch will fail again,
+/// so retrying it forever wedges all later events behind it. The offending
+/// batch is dropped with `events_dropped` markers so per-session cursors can
+/// still advance.
+fn is_non_retriable(error: &HubConnectorError) -> bool {
+    match error {
+        HubConnectorError::HubError { code, .. } => matches!(
+            code.as_str(),
+            "invalid_json" | "instance_mismatch" | "unsupported_frame"
+        ),
+        HubConnectorError::Serialize(_) => true,
+        _ => false,
+    }
+}
+
+/// Drop the front `batch_len` events (the batch a non-retriable error just
+/// rejected) and record them as `events_dropped` so cursors advance. Existing
+/// dropped-markers in that range are re-queued rather than re-dropped.
+fn drop_front_batch(
+    config: &HubConnectorWorkerConfig,
+    pending: &mut VecDeque<EventEnvelope>,
+    stats: &mut HubConnectorWorkerStats,
+    batch_len: usize,
+    reason: &str,
+) {
+    let mut ranges: std::collections::HashMap<SessionId, DroppedEventRange> =
+        std::collections::HashMap::new();
+    for _ in 0..batch_len {
+        let Some(event) = pending.pop_front() else {
+            break;
+        };
+        if matches!(event.payload, EventPayload::EventsDropped { .. }) {
+            pending.push_back(event);
+            continue;
+        }
+        ranges
+            .entry(event.session_id.clone())
+            .and_modify(|range| {
+                range.count = range.count.saturating_add(1);
+                range.since_seq = range.since_seq.min(event.session_seq);
+                range.until_seq = range.until_seq.max(event.session_seq);
+            })
+            .or_insert(DroppedEventRange {
+                count: 1,
+                since_seq: event.session_seq,
+                until_seq: event.session_seq,
+            });
+    }
+    for (session_id, range) in ranges {
+        push_dropped_marker_with_reason(config, pending, stats, session_id, range, reason);
+    }
 }
 
 async fn deliver_or_backoff(
@@ -432,12 +503,28 @@ async fn deliver_once(
             "connector client was not initialized".to_string(),
         ));
     };
-    let ack = active_client.send_batch(BatchFrame { events }).await?;
-    let shipped = pop_acked_front(pending, &ack);
-    stats.shipped_events += i64::try_from(shipped).map_err(|_| {
-        HubConnectorError::Protocol("shipped event count overflowed i64".to_string())
-    })?;
-    Ok(())
+    let batch_len = events.len();
+    match active_client.send_batch(BatchFrame { events }).await {
+        Ok(ack) => {
+            let shipped = pop_acked_front(pending, &ack);
+            stats.shipped_events += i64::try_from(shipped).map_err(|_| {
+                HubConnectorError::Protocol("shipped event count overflowed i64".to_string())
+            })?;
+            Ok(())
+        }
+        Err(error) if is_non_retriable(&error) => {
+            tracing::warn!(%error, batch_len, "dropping hub batch rejected as non-retriable");
+            drop_front_batch(
+                config,
+                pending,
+                stats,
+                batch_len,
+                "hub_rejected_non_retriable",
+            );
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn batch_events_within_limits(

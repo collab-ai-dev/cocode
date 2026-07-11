@@ -115,6 +115,42 @@ impl SqliteEventStore {
             .map_err(|err| EventStoreError::TaskJoin(err.to_string()))?
         }
     }
+
+    /// Test-only: force an instance's `last_seen_at` so retention can treat it
+    /// as dormant (or live) without waiting real wall-clock time.
+    #[cfg(test)]
+    async fn set_instance_last_seen_for_test(
+        &self,
+        instance_id: &str,
+        last_seen_at_ms: i64,
+    ) -> Result<(), EventStoreError> {
+        let instance_id = instance_id.to_string();
+        self.with_conn_mut(move |conn| {
+            conn.execute(
+                "UPDATE instances SET last_seen_at = ?1 WHERE instance_id = ?2",
+                params![last_seen_at_ms, instance_id],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Test-only: expose the two size-cap eviction candidate pickers so the
+    /// dormant-preference guarantee can be asserted directly, independent of
+    /// the byte-cap drain loop.
+    #[cfg(test)]
+    async fn eviction_candidates_for_test(
+        &self,
+        live_cutoff_ms: i64,
+    ) -> Result<(Option<(String, String)>, Option<(String, String)>), EventStoreError> {
+        self.with_conn(move |conn| {
+            Ok((
+                oldest_dormant_session_key(conn, live_cutoff_ms)?,
+                oldest_session_key(conn)?,
+            ))
+        })
+        .await
+    }
 }
 
 #[async_trait]
@@ -464,6 +500,10 @@ fn ingest_batch_sync(
             // reject it as corruption rather than overwriting (plan D-47).
             if stored_event_conflicts(&tx, &row)? {
                 stats.rejected_conflicts += 1;
+                *stats
+                    .rejected_by_session
+                    .entry(row.session_id.clone())
+                    .or_insert(0) += 1;
                 warn!(
                     instance_id = %row.instance_id,
                     session_id = %row.session_id.as_str(),
@@ -662,10 +702,25 @@ fn run_retention_sweep_sync(
     tx.commit()?;
 
     if policy.retention_max_bytes >= 0 {
+        // Instances seen within this window are treated as live. Size-cap
+        // eviction prefers sessions from dormant instances so a live UI's
+        // transcript is not wiped out from under it mid-session. Only when
+        // every remaining session belongs to a live instance does the sweep
+        // fall back to evicting the oldest regardless, so the hard cap still
+        // bounds disk use rather than growing without limit.
+        const SIZE_CAP_LIVE_GRACE_MS: i64 = 10 * 60 * 1000;
+        let live_cutoff_ms = Utc::now()
+            .timestamp_millis()
+            .saturating_sub(SIZE_CAP_LIVE_GRACE_MS);
         while database_bytes(conn)? > policy.retention_max_bytes {
-            let Some((instance_id, session_id)) = oldest_session_key(conn)? else {
-                break;
+            let victim = match oldest_dormant_session_key(conn, live_cutoff_ms)? {
+                Some(key) => key,
+                None => match oldest_session_key(conn)? {
+                    Some(key) => key,
+                    None => break,
+                },
             };
+            let (instance_id, session_id) = victim;
             let deleted_events = delete_session_events(conn, &instance_id, &session_id)?;
             let deleted_sessions = prune_empty_sessions(conn)?;
             stats.deleted_events += deleted_events;
@@ -758,10 +813,34 @@ fn session_event_rollup(
     .map_err(EventStoreError::from)
 }
 
+/// Oldest session whose instance has been dormant past the live grace window
+/// (or has no instance row at all — an orphan). Size-cap eviction prefers
+/// these so a currently-live session's whole event set is not deleted out from
+/// under an active UI.
+fn oldest_dormant_session_key(
+    conn: &Connection,
+    live_cutoff_ms: i64,
+) -> Result<Option<(String, String)>, EventStoreError> {
+    conn.query_row(
+        "SELECT s.instance_id, s.session_id FROM sessions s
+         LEFT JOIN instances i ON i.instance_id = s.instance_id
+         WHERE i.last_seen_at IS NULL OR i.last_seen_at < ?1
+         ORDER BY s.last_event_ts ASC, s.session_id ASC
+         LIMIT 1",
+        params![live_cutoff_ms],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )
+    .optional()
+    .map_err(EventStoreError::from)
+}
+
+/// Oldest session regardless of instance liveness — the fall-back victim when
+/// the database is over the size cap yet every remaining session belongs to a
+/// live instance, so the hard cap keeps bounding disk use.
 fn oldest_session_key(conn: &Connection) -> Result<Option<(String, String)>, EventStoreError> {
     conn.query_row(
-        "SELECT instance_id, session_id FROM sessions
-         ORDER BY last_event_ts ASC, session_id ASC
+        "SELECT s.instance_id, s.session_id FROM sessions s
+         ORDER BY s.last_event_ts ASC, s.session_id ASC
          LIMIT 1",
         [],
         |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),

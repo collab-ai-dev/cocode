@@ -59,7 +59,7 @@ impl ServerNotificationIdentity {
 /// Where ordering matters, all related events must be emitted from a
 /// single task. Current ownership (one sequence = one task):
 ///
-/// - **Turn lifecycle** (`TurnStarted → Stream* → TurnEnded`):
+/// - **Turn lifecycle**(`TurnStarted → Stream* → TurnEnded`):
 ///   `TurnStarted` is emitted **exactly once per logical user-prompt
 ///   cycle** by the runner layer (`tui_runner` / `sdk_runner` /
 ///   `TurnRunner` impls). The runner generates a fresh `TurnId`
@@ -77,17 +77,17 @@ impl ServerNotificationIdentity {
 ///   / `Failed { error }` / `Interrupted { abort_reason }` /
 ///   `MaxTurnsReached { max_turns }` / `BudgetExhausted { used_tokens,
 ///   budget_tokens }`).
-/// - **Session lifecycle** (`SessionStarted → (Running ↔ Idle ↔ RequiresAction)*
+/// - **Session lifecycle** (`SessionStarted →(Running ↔ Idle ↔ RequiresAction)*
 ///   → SessionResult → SessionEnded`): emitted by `run_internal_with_messages`
 ///   in `coco-query::engine`; `SessionStateChanged` transitions are deduped
 ///   via `SessionStateTracker` (see `coco-query::session_state`).
-/// - **Hook lifecycle** (`HookStarted → HookProgress* → HookResponse`):
+/// - **Hook lifecycle**(`HookStarted → HookProgress* → HookResponse`):
 ///   emitted by the `forward_hook_events` child task in `coco-query::engine`.
 ///   Cancellation + 5s drain-on-shutdown protect trailing events.
-/// - **Task lifecycle** (`TaskStarted → TaskProgress* → TaskCompleted`):
-///   emitted by `TaskManager` when built with `with_event_sink(tx)`.
+/// - **Task lifecycle**(`TaskStarted → TaskProgress* → TaskCompleted`):
+///   emitted by `TaskManager` when built with `with_event_sink (tx)`.
 ///   One task manager serializes emissions for all managed tasks.
-/// - **Item lifecycle** (`ItemStarted → ItemUpdated → ItemCompleted`) and
+/// - **Item lifecycle**(`ItemStarted → ItemUpdated → ItemCompleted`) and
 ///   content deltas (`AgentMessageDelta`, `ReasoningDelta`):
 ///   **SDK path only**. Produced by `StreamAccumulator` inside the SDK
 ///   dispatcher's writer task (single task, per-turn accumulator). The
@@ -100,7 +100,7 @@ impl ServerNotificationIdentity {
 /// ## Known cross-sender emission sites (tolerated)
 ///
 /// - `ContextCompacted` is emitted from two sites inside `run_session_loop`
-///   (reactive compaction and auto-compaction). Semantics are idempotent;
+///  (reactive compaction and auto-compaction). Semantics are idempotent;
 ///   consumers may see two notifications carrying the same summary.
 /// - `Error` may be emitted from budget-exhaustion and query-execution
 ///   paths. Consumers MUST treat Errors as independent signals; they are
@@ -108,7 +108,7 @@ impl ServerNotificationIdentity {
 ///
 /// See `event-system-design.md` §12 and plan WS-8.
 ///
-/// **`large_enum_variant` exemption.** `Protocol(ServerNotification)` is
+/// **`large_enum_variant` exemption.** `Protocol (ServerNotification)` is
 /// considerably larger than `Stream` / `Tui` because `ServerNotification`
 /// carries 59 wire-tagged variants. Boxing it would churn hundreds of
 /// pattern matches across `coco-query` / `coco-tui` / `coco-cli` for a
@@ -127,7 +127,7 @@ pub enum CoreEvent {
 
     /// Agent-loop stream events requiring accumulation before SDK consumption.
     /// TUI consumes directly for real-time display; SDK passes through
-    /// `StreamAccumulator` which converts to `Protocol(ItemStarted/Updated/Completed)`.
+    /// `StreamAccumulator` which converts to `Protocol (ItemStarted/Updated/Completed)`.
     Stream(AgentStreamEvent),
 
     /// TUI-exclusive events (overlays, toasts, streaming deltas for display).
@@ -145,9 +145,16 @@ pub enum EventReplayPolicy {
 }
 
 impl CoreEvent {
+    /// Durability is a *content-class* decision, not a transport-layer one
+    ///: `Protocol` notifications delegate to
+    /// [`ServerNotification::replay_class`], so per-delta notifications the
+    /// SDK writer mints on the Protocol layer (`AgentMessageDelta`,
+    /// `ReasoningDelta`, `ItemUpdated`) are ephemeral like the raw
+    /// `Stream`/`Tui` deltas. Stamping every token chunk durable would burn a
+    /// `session_seq` per chunk and flood the retention ring and Hub.
     pub fn replay_policy(&self) -> EventReplayPolicy {
         match self {
-            Self::Protocol(_) => EventReplayPolicy::Durable,
+            Self::Protocol(notification) => notification.replay_class(),
             Self::Stream(_) | Self::Tui(_) => EventReplayPolicy::Ephemeral,
         }
     }
@@ -189,6 +196,18 @@ impl SessionEnvelope {
         event: CoreEvent,
         next_session_seq: impl FnOnce() -> i64,
     ) -> Self {
+        // The envelope session id is authoritative. If a Protocol
+        // payload also carries identity, it must agree — a mismatch means an
+        // emitter stamped the wrong sink and is corrupting cross-session
+        // attribution.
+        if let CoreEvent::Protocol(notification) = &event
+            && let Some(payload_session) = notification.session_id()
+        {
+            debug_assert_eq!(
+                payload_session, &session_id,
+                "envelope/payload session id mismatch at stamping seam"
+            );
+        }
         let turn_id = event.turn_id();
         match event.replay_policy() {
             EventReplayPolicy::Durable => {
@@ -376,7 +395,11 @@ pub enum ThreadItemDetails {
     },
     /// Agent/Task tool → subagent lifecycle.
     Subagent {
-        agent_id: String,
+        /// The spawned subagent's id. `None` until the id is known —
+        /// the accumulator sees only the tool call, not the spawned
+        /// `AgentId`, so it is absent rather than an empty-string lie.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
         agent_type: String,
         description: String,
         #[serde(default)]
@@ -527,7 +550,7 @@ matching `NotificationMethod` discriminant.",
 
     /// One Message appended to engine MessageHistory.
     ///
-    /// `session_id` + `agent_id` envelope (plan §11 F9): merged-timeline
+    /// `session_id` + `agent_id` envelope: merged-timeline
     /// consumers (AgentTeams) demux per session/agent off the same event
     /// stream. `agent_id` is `None` for the main agent; `Some` for
     /// teammates / subagents. Single-session SDK consumers may ignore
@@ -818,6 +841,9 @@ matching `NotificationMethod` discriminant.",
 }
 
 impl ServerNotification {
+    // Exhaustive on purpose: this accessor is the `SessionEnvelope`
+    // migration seam, so a new identity-bearing variant must be classified
+    // here rather than silently returning `None` under a wildcard.
     pub fn session_id(&self) -> Option<&crate::SessionId> {
         match self {
             Self::MessageAppended { identity, .. }
@@ -827,17 +853,234 @@ impl ServerNotification {
             Self::SessionStarted(params) => Some(&params.session_id),
             Self::SessionResult(params) => Some(&params.session_id),
             Self::SessionUsageUpdated(snapshot) => Some(&snapshot.session_id),
-            _ => None,
+            // No payload-level session identity — the envelope is authoritative.
+            Self::TurnStarted(_)
+            | Self::TurnEnded(_)
+            | Self::ItemStarted { .. }
+            | Self::ItemUpdated { .. }
+            | Self::ItemCompleted { .. }
+            | Self::AgentMessageDelta(_)
+            | Self::ReasoningDelta(_)
+            | Self::MoaReferenceStarted(_)
+            | Self::MoaReferenceCompleted(_)
+            | Self::MoaAggregating(_)
+            | Self::StreamStallDetected { .. }
+            | Self::SessionEnded(_)
+            | Self::ReasoningMetadataAttached(_)
+            | Self::ActiveGoalChanged(_)
+            | Self::McpStartupStatus(_)
+            | Self::McpStartupComplete(_)
+            | Self::LspPrewarmComplete(_)
+            | Self::ContextCompacted(_)
+            | Self::ContextUsageWarning(_)
+            | Self::CompactionStarted
+            | Self::CompactionPhase(_)
+            | Self::CompactionFailed(_)
+            | Self::ContextCleared(_)
+            | Self::TaskStarted(_)
+            | Self::TaskCompleted(_)
+            | Self::TaskProgress(_)
+            | Self::TaskPanelChanged(_)
+            | Self::PlanApprovalRequested(_)
+            | Self::AgentsKilled(_)
+            | Self::ModelFallbackStarted(_)
+            | Self::ModelFallbackCompleted
+            | Self::FastModeChanged { .. }
+            | Self::ModelRoleChanged(_)
+            | Self::PermissionModeChanged(_)
+            | Self::PromptSuggestion { .. }
+            | Self::Error(_)
+            | Self::RateLimit(_)
+            | Self::KeepAlive { .. }
+            | Self::IdeSelectionChanged(_)
+            | Self::IdeDiagnosticsUpdated(_)
+            | Self::QueueStateChanged { .. }
+            | Self::CommandQueued { .. }
+            | Self::CommandDequeued { .. }
+            | Self::RewindCompleted(_)
+            | Self::RewindFailed { .. }
+            | Self::CostWarning(_)
+            | Self::SandboxStateChanged(_)
+            | Self::SandboxViolationsDetected { .. }
+            | Self::AgentsRegistered { .. }
+            | Self::HookStarted(_)
+            | Self::HookProgress(_)
+            | Self::HookResponse(_)
+            | Self::WorktreeEntered(_)
+            | Self::WorktreeExited(_)
+            | Self::SummarizeCompleted(_)
+            | Self::SummarizeFailed { .. }
+            | Self::StreamWatchdogWarning { .. }
+            | Self::StreamRequestEnd { .. }
+            | Self::SessionStateChanged { .. }
+            | Self::LocalCommandOutput(_)
+            | Self::FilesPersisted(_)
+            | Self::ElicitationComplete(_)
+            | Self::ToolUseSummary(_)
+            | Self::ToolProgress(_)
+            | Self::PluginsChanged { .. } => None,
         }
     }
 
+    // Exhaustive on purpose — see `session_id`.
     pub fn agent_id(&self) -> Option<&str> {
         match self {
             Self::MessageAppended { identity, .. }
             | Self::MessageTruncated { identity, .. }
             | Self::SessionResetForResume { identity }
             | Self::HistoryReplaced { identity, .. } => identity.agent_id.as_deref(),
-            _ => None,
+            Self::SessionStarted(_)
+            | Self::SessionResult(_)
+            | Self::SessionUsageUpdated(_)
+            | Self::TurnStarted(_)
+            | Self::TurnEnded(_)
+            | Self::ItemStarted { .. }
+            | Self::ItemUpdated { .. }
+            | Self::ItemCompleted { .. }
+            | Self::AgentMessageDelta(_)
+            | Self::ReasoningDelta(_)
+            | Self::MoaReferenceStarted(_)
+            | Self::MoaReferenceCompleted(_)
+            | Self::MoaAggregating(_)
+            | Self::StreamStallDetected { .. }
+            | Self::SessionEnded(_)
+            | Self::ReasoningMetadataAttached(_)
+            | Self::ActiveGoalChanged(_)
+            | Self::McpStartupStatus(_)
+            | Self::McpStartupComplete(_)
+            | Self::LspPrewarmComplete(_)
+            | Self::ContextCompacted(_)
+            | Self::ContextUsageWarning(_)
+            | Self::CompactionStarted
+            | Self::CompactionPhase(_)
+            | Self::CompactionFailed(_)
+            | Self::ContextCleared(_)
+            | Self::TaskStarted(_)
+            | Self::TaskCompleted(_)
+            | Self::TaskProgress(_)
+            | Self::TaskPanelChanged(_)
+            | Self::PlanApprovalRequested(_)
+            | Self::AgentsKilled(_)
+            | Self::ModelFallbackStarted(_)
+            | Self::ModelFallbackCompleted
+            | Self::FastModeChanged { .. }
+            | Self::ModelRoleChanged(_)
+            | Self::PermissionModeChanged(_)
+            | Self::PromptSuggestion { .. }
+            | Self::Error(_)
+            | Self::RateLimit(_)
+            | Self::KeepAlive { .. }
+            | Self::IdeSelectionChanged(_)
+            | Self::IdeDiagnosticsUpdated(_)
+            | Self::QueueStateChanged { .. }
+            | Self::CommandQueued { .. }
+            | Self::CommandDequeued { .. }
+            | Self::RewindCompleted(_)
+            | Self::RewindFailed { .. }
+            | Self::CostWarning(_)
+            | Self::SandboxStateChanged(_)
+            | Self::SandboxViolationsDetected { .. }
+            | Self::AgentsRegistered { .. }
+            | Self::HookStarted(_)
+            | Self::HookProgress(_)
+            | Self::HookResponse(_)
+            | Self::WorktreeEntered(_)
+            | Self::WorktreeExited(_)
+            | Self::SummarizeCompleted(_)
+            | Self::SummarizeFailed { .. }
+            | Self::StreamWatchdogWarning { .. }
+            | Self::StreamRequestEnd { .. }
+            | Self::SessionStateChanged { .. }
+            | Self::LocalCommandOutput(_)
+            | Self::FilesPersisted(_)
+            | Self::ElicitationComplete(_)
+            | Self::ToolUseSummary(_)
+            | Self::ToolProgress(_)
+            | Self::PluginsChanged { .. } => None,
+        }
+    }
+
+    /// Durable vs ephemeral by content class, consulted by
+    /// [`CoreEvent::replay_policy`]. Exhaustive: a new notification variant
+    /// must choose, so a future per-delta event can't accidentally inherit
+    /// durable retention (ring + Hub) and flood it.
+    pub fn replay_class(&self) -> EventReplayPolicy {
+        match self {
+            // Per-delta, progress, and liveness signals — live-only.
+            Self::AgentMessageDelta(_)
+            | Self::ReasoningDelta(_)
+            | Self::ItemUpdated { .. }
+            | Self::ToolProgress(_)
+            | Self::TaskProgress(_)
+            | Self::HookProgress(_)
+            | Self::KeepAlive { .. }
+            | Self::StreamStallDetected { .. }
+            | Self::StreamWatchdogWarning { .. }
+            | Self::StreamRequestEnd { .. } => EventReplayPolicy::Ephemeral,
+            // Boundary / state events — durable, sequenced, ring-retained,
+            // hub-shipped.
+            Self::TurnStarted(_)
+            | Self::TurnEnded(_)
+            | Self::ItemStarted { .. }
+            | Self::ItemCompleted { .. }
+            | Self::MoaReferenceStarted(_)
+            | Self::MoaReferenceCompleted(_)
+            | Self::MoaAggregating(_)
+            | Self::SessionStarted(_)
+            | Self::SessionResult(_)
+            | Self::SessionEnded(_)
+            | Self::SessionUsageUpdated(_)
+            | Self::MessageAppended { .. }
+            | Self::MessageTruncated { .. }
+            | Self::SessionResetForResume { .. }
+            | Self::HistoryReplaced { .. }
+            | Self::ReasoningMetadataAttached(_)
+            | Self::ActiveGoalChanged(_)
+            | Self::McpStartupStatus(_)
+            | Self::McpStartupComplete(_)
+            | Self::LspPrewarmComplete(_)
+            | Self::ContextCompacted(_)
+            | Self::ContextUsageWarning(_)
+            | Self::CompactionStarted
+            | Self::CompactionPhase(_)
+            | Self::CompactionFailed(_)
+            | Self::ContextCleared(_)
+            | Self::TaskStarted(_)
+            | Self::TaskCompleted(_)
+            | Self::TaskPanelChanged(_)
+            | Self::PlanApprovalRequested(_)
+            | Self::AgentsKilled(_)
+            | Self::ModelFallbackStarted(_)
+            | Self::ModelFallbackCompleted
+            | Self::FastModeChanged { .. }
+            | Self::ModelRoleChanged(_)
+            | Self::PermissionModeChanged(_)
+            | Self::PromptSuggestion { .. }
+            | Self::Error(_)
+            | Self::RateLimit(_)
+            | Self::IdeSelectionChanged(_)
+            | Self::IdeDiagnosticsUpdated(_)
+            | Self::QueueStateChanged { .. }
+            | Self::CommandQueued { .. }
+            | Self::CommandDequeued { .. }
+            | Self::RewindCompleted(_)
+            | Self::RewindFailed { .. }
+            | Self::CostWarning(_)
+            | Self::SandboxStateChanged(_)
+            | Self::SandboxViolationsDetected { .. }
+            | Self::AgentsRegistered { .. }
+            | Self::HookStarted(_)
+            | Self::HookResponse(_)
+            | Self::WorktreeEntered(_)
+            | Self::WorktreeExited(_)
+            | Self::SummarizeCompleted(_)
+            | Self::SummarizeFailed { .. }
+            | Self::SessionStateChanged { .. }
+            | Self::LocalCommandOutput(_)
+            | Self::FilesPersisted(_)
+            | Self::ElicitationComplete(_)
+            | Self::ToolUseSummary(_)
+            | Self::PluginsChanged { .. } => EventReplayPolicy::Durable,
         }
     }
 
@@ -925,7 +1168,7 @@ impl ServerNotification {
 // unbounded. The enum's size is the size of the largest variant; every
 // `CoreEvent` pays this cost (inlined in mpsc channel buffers). If a new
 // variant pushes this past the limit, either `Box<T>` the offending params
-// (like `SessionResult(Box<SessionResultParams>)`) or justify raising the
+// (like `SessionResult (Box<SessionResultParams>)`) or justify raising the
 // limit. Don't let it drift silently.
 const _: () = assert!(
     std::mem::size_of::<ServerNotification>() <= 400,

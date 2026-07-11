@@ -8,12 +8,10 @@ invokes.
 
 ## Layer
 
-L5 (root). Sits next to `commands`, `tasks`, `memory`. **Does NOT depend
-on `coco-state`** — would create a cycle (the cleanup at the end of
-PR #3 deliberately broke this). Shared data shapes (mailbox protocol,
+L5 (root). Sits next to `commands`, `tasks`, `memory`. Shared data shapes (mailbox protocol,
 sub-agent state snapshots, team / teammate / standalone-agent context,
-task entry) live in `coco_types::agent_ipc` so neither side has to
-import the other for the types alone.
+task entry) live in `coco_types::agent_ipc` so the coordinator, host, and
+surfaces share values without importing one another.
 
 ## Module map
 
@@ -40,10 +38,10 @@ import the other for the types alone.
 
 ## Key invariants
 
-- **One-way layering**: this crate does not depend on `coco-state`.
-  AppState integration goes the other way — `app/state` (and consumers
-  like `app/cli`, `app/query`, `app/tui`) imports `coco_coordinator::*`
-  directly.
+- **One-way layering**: coordinator behavior depends on core contracts and
+  shared `coco-types`; agent-host assembly installs its handles into each
+  session runtime. Query and TUI consume typed events/snapshots rather than a
+  global application-state crate.
 - **`AgentColorName` lives in `coco_types`** (canonical, also used by
   `core/subagent`). `crate::constants::AgentColorName` is a re-export
   alias kept for path stability inside the crate.

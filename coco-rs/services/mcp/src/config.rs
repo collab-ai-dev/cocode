@@ -1,7 +1,10 @@
 //! Multi-source MCP config loading and deduplication.
 //!
-//! Sources checked in order (later overrides earlier by server name):
-//! managed → enterprise → claudeai → project → user → local → dynamic
+//! Sources are loaded in precedence order, a later source overriding an
+//! earlier one by server name, so policy scopes (enterprise, managed) load
+//! last and cannot be name-shadowed by user/project/local definitions
+//!:
+//! claudeai → user → project → local → enterprise → managed
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -54,27 +57,22 @@ impl McpConfigLoader {
     ) -> Vec<ScopedMcpServerConfig> {
         let mut configs_by_name: HashMap<String, ScopedMcpServerConfig> = HashMap::new();
 
-        // 1. Managed scope: policy-pushed config
-        let managed_path = config_home.join("managed-mcp.json");
-        load_mcp_json(&managed_path, ConfigScope::Managed, &mut configs_by_name);
+        // Non-policy scopes load first (most-local last) so a later source
+        // overrides an earlier one by server name (more-local-wins layering).
+        // Policy scopes (enterprise, managed) load
+        // LAST below so they win outright and cannot be name-shadowed by
+        // user/project/local definitions.
 
-        // 2. Enterprise scope: enterprise-managed config
-        let enterprise_path = config_home.join("enterprise-mcp.json");
-        load_mcp_json(
-            &enterprise_path,
-            ConfigScope::Enterprise,
-            &mut configs_by_name,
-        );
+        // 1. Claude.ai scope: fetched at startup (not from file). Callers use
+        //    `register_claudeai_configs()` to add these dynamically; it sits
+        //    below user/project/local.
 
-        // 3. Claude.ai scope: fetched at startup (not from file, loaded via register)
-        //    Callers use `register_claudeai_configs()` to add these dynamically.
-
-        // 4. User scope — below project so a project definition wins a name
-        //    collision (more-local-wins layering, multi-session plan §16.1).
+        // 2. User scope — below project so a project definition wins a name
+        //    collision.
         let user_mcp = config_home.join("mcp.json");
         load_mcp_json(&user_mcp, ConfigScope::User, &mut configs_by_name);
 
-        // 5. Project scope: .mcp.json in project directory
+        // 3. Project scope: .mcp.json in project directory
         load_mcp_json(
             &roots.project_root.join(".mcp.json"),
             ConfigScope::Project,
@@ -87,10 +85,26 @@ impl McpConfigLoader {
             .join("mcp.json");
         load_mcp_json(&project_mcp, ConfigScope::Project, &mut configs_by_name);
 
-        // 6. Local scope
+        // 4. Local scope
         let local_dir = format!("{}.local", coco_utils_common::COCO_CONFIG_DIR_NAME);
         let local_mcp = roots.session_cwd.join(local_dir).join("mcp.json");
         load_mcp_json(&local_mcp, ConfigScope::Local, &mut configs_by_name);
+
+        // 5. Enterprise scope: enterprise-managed policy config. Loads after
+        //    user/project/local so it wins a name collision and cannot be
+        //    shadowed.
+        let enterprise_path = config_home.join("enterprise-mcp.json");
+        load_mcp_json(
+            &enterprise_path,
+            ConfigScope::Enterprise,
+            &mut configs_by_name,
+        );
+
+        // 6. Managed scope: policy-pushed config. Loads LAST so a managed
+        //    definition wins outright over every other scope, enterprise
+        //    included.
+        let managed_path = config_home.join("managed-mcp.json");
+        load_mcp_json(&managed_path, ConfigScope::Managed, &mut configs_by_name);
 
         configs_by_name.into_values().collect()
     }

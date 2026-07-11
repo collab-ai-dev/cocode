@@ -287,6 +287,9 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 | `hooks` | Pre/post event interception with scoped priority, async registry, SSRF guard |
 | `tasks` | Three kinds: `running` (bg tasks), `task_list` (durable plan items), `todos` (per-agent) |
 | `memory` | Persistent cross-session: CLAUDE.md mgmt, auto-extraction, session memory, KAIROS auto-dream, team sync |
+| `maintenance` | Shared cross-process maintenance lock and fail-closed write-fence path extraction for memory and skill upkeep |
+| `skill-learn` | Skill review and curator workflows |
+| `coordinator` | Multi-agent spawn, mailbox, teammate, worktree, and team lifecycle orchestration |
 | `plugins` | Plugin system via `PLUGIN.toml` (contributions, marketplace, hot-reload) |
 | `keybindings` | Shortcuts with context-based resolution and chord support |
 | `output-styles` | Built-in catalog (`Explanatory` / `Learning`) + project / user / managed dir loader + plugin loader (`force-for-plugin`) + system-prompt section + `OutputStyleManager` |
@@ -295,12 +298,16 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 
 | Crate | Purpose |
 |-------|---------|
-| `cli` | CLI entry (clap), transports (SSE / WS / NDJSON), server / daemon / SDK modes; binary `coco` |
+| `cli` | Thin `coco` entry: clap schema, subcommand/process policy, listener wiring, and TUI surface loop |
+| `agent-host` | Agent-session host: session composition, local AppServer client facade, SDK/headless handlers, and runtime integrations |
+| `runtime` | Transport-independent process/project resources, workspace paths, and session bootstrap contracts |
+| `server` | Multi-session lifecycle/routing registry plus local and JSON-RPC adapters |
+| `server-client` | Remote AppServer JSON-RPC client, per-surface demux, and transport owners; independent of the server implementation |
+| `server-transport` | JSON-RPC framing and concrete stream/listener transports |
 | `tui` | Terminal UI shell: Elm architecture (TEA) + rust-i18n; owns `AppState`, the AppState→Line projection, and the domain renderers. Drives `coco-tui-ui` for the actual painting |
 | `tui-ui` (top-level crate) | Pure, domain-free presentational layer: native-scrollback paint engine (`SurfaceTerminal`, BSU/ESU, cell-diff), generic widgets, theme/style/color, width-aware truncation. Depends only on ratatui/crossterm/unicode/tracing — no `AppState`, no i18n. Seam enforced by `scripts/check-tui-ui-seam.sh` |
 | `session` | Session persistence, title generation, transcript recovery |
 | `query` | Multi-turn agent loop driver (`QueryEngine`) + budget + command queue |
-| `state` | Central `AppState` tree + swarm orchestration modules |
 
 ### Hub
 
@@ -379,7 +386,7 @@ Three tiers, each with one allowed error library. Pick by layer, not taste.
 |------|-------|---------|-------|
 | **3 (main trunk)** | `common/`, `core/`, `services/`, root modules (`commands`, `skills`, `hooks`, `tasks`, `memory`, `plugins`, `keybindings`), `app/query` | **snafu + `coco-error`** | Required when the error crosses ≥2 layers, drives retry / classification, or surfaces to users. Implement `ErrorExt` and pick a `StatusCode`. |
 | **2 (boundary)** | `vercel-ai/*`, `utils/*` (libraries), `retrieval`, `bridge` | **thiserror** | Leaf libraries. No `coco-error` dep — main-trunk callers convert at the boundary via `boxed(err, StatusCode::X)`. |
-| **1 (terminal)** | `app/cli` `main`, `app/tui`, `exec/shell`, `exec/exec-server`, tests, `[dev-dependencies]` | **anyhow** | Entry points and tests where errors are printed and discarded. Never appears in a public lib API. |
+| **1 (application)** | `app/cli`, `app/agent-host`, `app/tui`, `exec/shell`, `exec/exec-server`, tests, `[dev-dependencies]` | **anyhow** | Process/surface composition where errors are printed or translated to protocol results. Domain crates below this boundary keep typed errors. |
 
 **Hard rules:**
 - **No `pub fn ... -> anyhow::Result<_>` in `utils/*` or `vercel-ai/*`** — these are libraries; their public API must be a typed `Result<T, CrateError>`. Enforced by `just check-error-policy`.

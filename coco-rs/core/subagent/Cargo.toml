@@ -10,9 +10,9 @@ workspace = true
 # Pure-logic crate: definition loading, source precedence, builtin catalog,
 # AgentTool prompt rendering, tool filter planning, validation diagnostics.
 #
-# DO NOT ADD tokio, mpsc, watcher, cancellation, or any app/state, app/query,
+# DO NOT ADD tokio, mpsc, watcher, cancellation, or any agent-host, app/query,
 # coco-tool, coco-tools deps. Background tasks, file watchers, and runtime
-# execution belong in app/state — see docs/coco-rs/subagent-refactor-plan.md
+# execution belong in app/agent-host or coordinator — see docs/coco-rs/subagent-refactor-plan.md
 # § "Avoid dependencies".
 
 [dependencies]

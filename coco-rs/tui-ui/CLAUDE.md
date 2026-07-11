@@ -10,7 +10,7 @@ no application dependencies. The `coco-tui` shell projects `AppState` into
 `ratatui`, `crossterm`, `unicode-width`, `unicode-segmentation`, `tracing`
 (logging facade), `base64`, and platform-gated `arboard` (clipboard) / `libc`
 (unix). **Must NOT depend on** `coco-config`, `coco-messages`, `coco-types`,
-`coco-state`, `coco-query`, `coco-context`, `coco-keybindings`, or `rust-i18n`.
+`coco-agent-host`, `coco-query`, `coco-context`, `coco-keybindings`, or `rust-i18n`.
 Enforced by `scripts/check-tui-ui-seam.sh` (wired into `just check-seam` →
 `quick-check` / `pre-commit`).
 

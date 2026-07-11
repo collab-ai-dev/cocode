@@ -7,6 +7,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::project_services::ProjectRegistry;
@@ -15,6 +17,7 @@ use crate::project_services::ProjectServices;
 
 pub struct ProcessRuntime {
     project_registry: ProjectRegistryManager,
+    idle_ttl_applied: AtomicBool,
 }
 
 impl ProcessRuntime {
@@ -28,15 +31,25 @@ impl ProcessRuntime {
     fn start_global() -> Self {
         Self {
             project_registry: ProjectRegistryManager::start_global(),
+            idle_ttl_applied: AtomicBool::new(false),
         }
     }
 
-    /// Apply the resolved `server.project_services_idle_ttl_secs` after config
-    /// resolution (which happens after `global()` is first taken). The idle
-    /// eviction loop reads the TTL live, so a post-startup update takes effect
-    /// on the next sweep. A non-positive value keeps the built-in default.
+    /// Apply the resolved `server.project_services_idle_ttl_secs` exactly once,
+    /// from the first (startup) config resolution. `server.*` is process-scoped
+    /// policy: a later session's fold — which may carry a
+    /// project-layer override — must NOT mutate this process-global knob, so
+    /// subsequent calls are ignored (this removes the previous cross-project
+    /// last-writer-wins bleed). Full process-layer-only resolution that ignores
+    /// even the startup project's override remains a refinement. A non-positive
+    /// value keeps the built-in default and does not consume the one-shot.
     pub fn set_project_services_idle_ttl(&self, idle_for: Duration) {
-        if idle_for.as_secs() > 0 {
+        if idle_for.as_secs() > 0
+            && self
+                .idle_ttl_applied
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        {
             self.project_registry.registry().set_idle_ttl(idle_for);
         }
     }
@@ -48,6 +61,7 @@ impl ProcessRuntime {
     ) -> Self {
         Self {
             project_registry: ProjectRegistryManager::start(registry, idle_for, sweep_interval),
+            idle_ttl_applied: AtomicBool::new(false),
         }
     }
 

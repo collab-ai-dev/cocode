@@ -596,7 +596,7 @@ pub struct AgentDefinition {
     /// variants. Used as the discriminator in
     /// `ModelInfo.supported_thinking_levels.find(|l| l.effort == effort)`
     /// at session-runtime resolution time
-    /// (`app/cli/src/session_runtime.rs::thinking_level_for_effort_from`).
+    /// (`app/agent-host/src/session_runtime.rs::thinking_level_for_effort_from`).
     /// The lookup is model-relative — the same `ReasoningEffort::High`
     /// resolves to a different `ThinkingLevel` (budget / options) on
     /// each model, but the key itself is enum-typed.

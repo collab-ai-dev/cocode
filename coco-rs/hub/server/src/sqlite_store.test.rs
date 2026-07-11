@@ -32,6 +32,24 @@ fn instance_id() -> Uuid {
     Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap()
 }
 
+fn instance_id_b() -> Uuid {
+    Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap()
+}
+
+fn announce_for(instance_id: Uuid, live_sessions: Vec<SessionId>) -> AnnounceFrame {
+    AnnounceFrame {
+        instance_id,
+        ..announce(live_sessions)
+    }
+}
+
+fn protocol_event_for(instance_id: Uuid, session_id: SessionId, session_seq: i64) -> EventEnvelope {
+    EventEnvelope {
+        instance_id,
+        ..protocol_event(session_id, session_seq)
+    }
+}
+
 fn fixed_ts(seconds: i64) -> chrono::DateTime<Utc> {
     Utc.timestamp_opt(seconds, 0).single().unwrap()
 }
@@ -395,5 +413,78 @@ async fn sqlite_store_retention_sweep_enforces_size_cap_by_dropping_oldest_sessi
             .unwrap()
             .items
             .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn sqlite_store_size_cap_prefers_dormant_instance_over_live_session() {
+    let store = SqliteEventStore::open_in_memory().unwrap();
+    let dormant_session = session_id("session-a");
+    let live_session = session_id("session-b");
+
+    // Dormant instance's session carries the *newer* event; the live instance's
+    // session is the older one. Pure oldest-by-timestamp would evict the live
+    // session first — the dormant preference must override that.
+    store
+        .upsert_instance(&announce_for(instance_id(), vec![dormant_session.clone()]))
+        .await
+        .unwrap();
+    store
+        .ingest_batch(
+            &instance_id().to_string(),
+            BatchFrame {
+                events: vec![protocol_event_for(
+                    instance_id(),
+                    dormant_session.clone(),
+                    5,
+                )],
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .upsert_instance(&announce_for(instance_id_b(), vec![live_session.clone()]))
+        .await
+        .unwrap();
+    store
+        .ingest_batch(
+            &instance_id_b().to_string(),
+            BatchFrame {
+                events: vec![protocol_event_for(instance_id_b(), live_session.clone(), 1)],
+            },
+        )
+        .await
+        .unwrap();
+
+    // Backdate instance A to the epoch so it reads as dormant; instance B keeps
+    // its just-announced (live) last_seen.
+    store
+        .set_instance_last_seen_for_test(&instance_id().to_string(), 1_000)
+        .await
+        .unwrap();
+
+    let live_cutoff_ms = Utc::now().timestamp_millis() - 600_000;
+    let (dormant_pick, fallback_pick) = store
+        .eviction_candidates_for_test(live_cutoff_ms)
+        .await
+        .unwrap();
+
+    // Primary picker chooses the dormant instance's session, never the live one,
+    // even though the live session is older.
+    assert_eq!(
+        dormant_pick,
+        Some((
+            instance_id().to_string(),
+            dormant_session.as_str().to_string()
+        ))
+    );
+    // Fallback picker (only used when no dormant session remains) is pure
+    // oldest-by-timestamp, which is the live session here.
+    assert_eq!(
+        fallback_pick,
+        Some((
+            instance_id_b().to_string(),
+            live_session.as_str().to_string()
+        ))
     );
 }

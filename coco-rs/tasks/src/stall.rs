@@ -2,7 +2,7 @@
 //!
 //! Constants and prompt-detection logic. The watchdog *loop* lives
 //! in the app-layer crate that drives the shell child process
-//! (`coco_cli::task_runtime::stall::watchdog`); this module owns
+//! (`coco_agent_host::task_runtime::stall::watchdog`); this module owns
 //! the pure-logic detection bits so the loop's two ingredients —
 //! "is output frozen?" and "does the tail look like a prompt?" —
 //! can be unit-tested without spinning a tokio runtime.

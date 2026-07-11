@@ -16,16 +16,17 @@ use std::sync::Arc;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use coco_agent_host::AgentHostOptions;
+use coco_agent_host::headless;
+use coco_agent_host::sdk_server::CliInitializeBootstrap;
+use coco_agent_host::sdk_server::InMemoryTransport;
+use coco_agent_host::sdk_server::LocalAppSessionHandle;
+use coco_agent_host::sdk_server::QueryEngineRunner;
+use coco_agent_host::sdk_server::SdkServer;
+use coco_agent_host::sdk_server::SdkTransport;
+use coco_agent_host::session_runtime::SessionHandle;
+use coco_agent_host::session_runtime::SessionRuntimeBuildOpts;
 use coco_cli::Cli;
-use coco_cli::headless;
-use coco_cli::sdk_server::CliInitializeBootstrap;
-use coco_cli::sdk_server::InMemoryTransport;
-use coco_cli::sdk_server::LocalAppSessionHandle;
-use coco_cli::sdk_server::QueryEngineRunner;
-use coco_cli::sdk_server::SdkServer;
-use coco_cli::sdk_server::SdkTransport;
-use coco_cli::session_runtime::SessionHandle;
-use coco_cli::session_runtime::SessionRuntimeBuildOpts;
 use coco_commands::CommandRegistry;
 use coco_commands::register_extended_builtins;
 use coco_session::SessionManager;
@@ -66,7 +67,7 @@ pub struct LiveSdkServer {
     /// reminder assertions go through the server-state path, not
     /// this field directly.
     #[allow(dead_code)]
-    pub session_runtime: Arc<coco_cli::session_runtime::SessionRuntime>,
+    pub session_runtime: Arc<coco_agent_host::session_runtime::SessionRuntime>,
     /// `Arc<SdkServer>` retained so the harness can peek at the active
     /// `SessionHandle.history` (which is what `QueryEngineRunner` writes
     /// per-turn — `runtime.history` is not the live SDK history).
@@ -136,7 +137,7 @@ impl LiveSdkServer {
 /// extra argv entries (e.g. `--max-turns 4`). Top-level flags must
 /// appear BEFORE the `sdk` subcommand because clap routes them on
 /// the parent parser.
-pub fn cli_for(provider: &str, model: &str, extra: &[&str]) -> Cli {
+pub fn cli_for(provider: &str, model: &str, extra: &[&str]) -> AgentHostOptions {
     use clap::Parser;
     let model_arg = format!("{provider}/{model}");
     let mut argv: Vec<&str> = vec!["coco", "--models.main", &model_arg];
@@ -144,7 +145,7 @@ pub fn cli_for(provider: &str, model: &str, extra: &[&str]) -> Cli {
         argv.push(e);
     }
     argv.push("sdk");
-    Cli::parse_from(&argv)
+    Cli::parse_from(&argv).agent_host_options()
 }
 
 /// Spin up an `SdkServer` driven by a real `QueryEngineRunner` against

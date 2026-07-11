@@ -1,74 +1,24 @@
 # coco-app-server-client
 
-Typed client-side handles for AppServer. This crate is currently a Phase A
-foundation slice: it exposes an in-process `ServerClient` over
-`coco_app_server::LocalClientAdapter` plus typed interactive/passive surface
-handles, a transport-agnostic `RemoteJsonRpcClient` core, an NDJSON remote
-connection loop over caller-owned streams, a WebSocket remote connection loop
-over accepted/dialed streams, `RemoteConnectOptions` for named
-remote channel capacities, typed remote interactive/passive surface handles
-over known `(session_id, surface_id)` pairs, a per-surface
-`RemoteSurfaceStream` facade over the remote event demux, typed local and
-remote request helpers, Unix-domain socket dialing, and Windows named-pipe dialing for future SDK
-transports.
+Remote typed client for AppServer. `lib.rs` owns the JSON-RPC/session core and
+public error mapping, `remote_demux.rs` owns surface/lifecycle demultiplexing,
+and `remote_transport.rs` owns NDJSON/WebSocket connection tasks and dialing.
+The crate depends only on canonical DTOs and wire transport, never on the
+server implementation. In-process client composition lives in
+`coco-agent-host::local_client`.
 
 ## Invariants
 
-- The client crate depends on `coco-app-server`; the server crate must not
-  depend on the client crate.
-- `ServerClient` owns one connection. Sequential and concurrent surfaces on
-  that connection are represented by `SessionClient` and `PassiveSessionClient`
-  handles.
-- `SessionClient` and `PassiveSessionClient` expose typed `SessionId` and
-  `SurfaceId` accessors; handles are not re-pointed to another session.
-- `PassiveSessionClient` has no turn-start, interrupt, or replace methods.
+- Surface event, lifecycle, and server-request delivery DTOs are owned by
+  `coco-types`. The client and server share those values without a
+  server-owned compatibility wrapper; lifecycle delivery is
+  `SurfaceLifecycleEffect` directly, with one `surface_id`.
+- Dependencies are limited to `coco-types`, `coco-app-server-transport`, and
+  general-purpose async/serde libraries. Cross-crate server/client integration
+  tests live in agent-host, which intentionally depends on both sides.
 - Snapshot-required subscribe results are returned as
   `ClientError::SnapshotRequired`; no passive handle is minted unless the
   AppServer actually attached the surface.
-- The in-process foundation keeps transport receivers on `ServerClient`.
-  `try_next_session_event` / `try_next_passive_event` and their async
-  `next_*` counterparts demux the shared event receiver by `SurfaceId` and
-  buffer other surfaces; the full owned stream API lands with the
-  transport/client work.
-- Server-request and lifecycle receivers follow the same `SurfaceId` demux
-  rule. Reading one handle's request/lifecycle queue must not consume another
-  surface's delivery on the same connection.
-- `ServerClient::list_live_sessions` is the client-side live projection for
-  future `list_sessions`: it returns `SessionId` plus current surface counts,
-  not persisted transcript metadata.
-- `ServerClient::detach_passive` consumes a passive handle and removes only
-  that surface. It does not close the connection or archive the session.
-- `ServerClient` typed helpers (`session_start`, `session_resume`,
-  `session_list`, `session_read`, `session_turns_list`, `session_archive`,
-  `session_cost`, `session_status`, `task_list`, `task_detail`,
-  `background_all_tasks`, `turn_start`, `turn_interrupt`,
-  approval/user-input/elicitation resolve, `initialize`,
-  config/runtime-control, MCP, plugin/hook reload, and context-usage helpers)
-  dispatch canonical `ClientRequest`s through a caller-supplied
-  `LocalClientRequestHandler`. This is the typed local TUI/headless seam; it
-  must stay in-process and avoid JSON-RPC framing.
-- `ServerClient::query_session`, `interrupt_session`, `close_session`,
-  `replace_session_with_start`, `replace_session_with_resume`,
-  `read_passive_session`, and `list_passive_session_turns` are the local
-  handle-oriented facade over those helpers while `ServerClient` still owns the
-  shared connection receivers. Replace and close consume the interactive handle
-  and return it on failure.
-- `ServerClient::stop_task` is the local runtime-control helper for
-  task/subagent cancellation. Handler implementations should target a real task
-  registry when one is installed instead of treating it only as a turn
-  interrupt.
-- `ServerClient::config_apply_flags` carries runtime flag updates; local
-  handlers currently apply `fast_mode` / `fastMode` to the installed session
-  runtime and may acknowledge unknown flags for SDK compatibility.
-- `ServerClient::set_thinking` carries the session thinking override; local
-  handlers apply it to the installed runtime and emit `ModelRoleChanged` for
-  TUI mirrors.
-- `ServerClient::set_model_role` carries in-memory model-role overrides used
-  by the TUI `/model` picker; local handlers apply the installed runtime
-  override and emit `ModelRoleChanged`.
-- `ServerClient::apply_permission_update` carries `/permissions` editor
-  updates; local handlers apply the installed runtime's live permission base
-  and persist destinations that map to settings files.
 - `RemoteJsonRpcClient` owns client-side JSON-RPC request id generation,
   pending-response correlation, and success/error replies to server-initiated
   JSON-RPC requests. Concrete transports own I/O and feed frames to
@@ -97,11 +47,15 @@ transports.
 - `RemoteSessionClient::replace_with_start`,
   `RemoteSessionClient::replace_with_resume`, and `RemoteSessionClient::close`
   consume the handle and return the original handle on failure so callers cannot
-  silently orphan a still-live session.
+  silently orphan a still-live session. Neither `RemoteSessionClient` nor
+  `RemotePassiveSessionClient` is `Clone`, so consume-self replace/close is
+  type-enforced (§14/H-4). The remote replace success paths call
+  `RemoteEventDemux::purge_surface` on the replaced surface.
 - `RemoteConnectOptions` names outbound and event channel capacities for
   remote NDJSON/Unix/WebSocket connections plus an optional `request_timeout`
-  applied to every remote JSON-RPC request. Defaults match the original fixed
-  capacities with no timeout.
+  applied to every remote JSON-RPC request and an optional `write_timeout`
+  applied to every outbound frame write. Defaults match the original fixed
+  capacities with no request timeout and a 30s write timeout.
 - Remote dialing failures are typed: `connect_unix`, `connect_named_pipe`,
   `connect_websocket`, and their `_with_options` / `_with_channel_capacity`
   variants return `ClientError::Connect` with the underlying transport error
@@ -110,18 +64,41 @@ transports.
   `RemoteJsonRpcClient::request` races the pending response against the
   timeout; on expiry it removes the pending correlation entry and returns
   `ClientError::Timeout`. A response arriving after the timeout hits the
-  unknown-response-id contract and invalidates the connection; it is never
-  delivered to another request.
+  unknown-response-id contract and is tolerated-with-warn: `resolve_success` /
+  `resolve_error` `tracing::warn!` and drop any unknown / late / duplicate /
+  null response id instead of invalidating the connection. A late/duplicate
+  reply is peer noise, not correlation corruption, and is never delivered to
+  another request. The pending map is a `std::sync::Mutex` (every critical
+  section — insert / remove / drain — is non-await) so `Drop` can resolve
+  pending futures without an async context.
+- `RemoteConnectOptions.write_timeout` bounds each outbound frame write in both
+  owner loops (default 30s, mirroring the server's slow-consumer guard). On
+  expiry the loop breaks with `RemoteTransportError::SlowConsumer`, which routes
+  through the guaranteed-disconnect path. `None` disables the bound.
 - `RemoteJsonRpcIncoming` decodes known `session/event` and
   `session/lifecycle` notifications into typed surface deliveries, preserves
   unknown notifications as raw JSON-RPC notifications, and surfaces inbound
   server-initiated JSON-RPC requests as `RemoteJsonRpcEvent::ServerRequest`.
   Server request frames must not invalidate the connection because
-  approval/user-input/MCP callbacks use this direction.
+  approval/user-input/MCP callbacks use this direction. Notification payload
+  decode failures (unknown lifecycle effect kinds / event layers on a newer
+  server) are tolerate-with-warn: the notification is dropped, not fatal —
+  a fire-and-forget delivery cannot corrupt correlation and this buys
+  forward-compat. Only transport Io / FrameTooLarge / frame-level Decode,
+  events-channel-closed, and write failures stay fatal.
 - Remote disconnect is dual-channel: `RemoteJsonRpcIncoming::disconnect`
   resolves every pending RPC with `ClientError::Disconnected`, emits a terminal
   `RemoteJsonRpcEvent::Disconnected`, and invalidates later client requests
-  with `ClientError::ClientInvalid`.
+  with `ClientError::ClientInvalid`. Both owner `run()` loops break to a single
+  post-loop `disconnect().await` on every exit path (no `?` short-circuits past
+  it), and a `Drop` impl on `RemoteJsonRpcIncoming` re-runs the pending
+  resolution + invalid flag if the owner task is aborted/dropped without a
+  graceful disconnect — so the standard shutdown move still satisfies the
+  dual-channel contract and no in-flight RPC hangs.
+- `RemoteEventDemux::purge_surface` drops a surface's buffered events/lifecycle
+  after it is closed/replaced or a `SessionEnded` for it is consumed; the
+  connection-scoped `server_requests` / `notifications` queues are not
+  surface-keyed and are bounded (drop-oldest + warn) instead.
 - Remote JSON-RPC standard error codes map to typed public `ClientError`
   variants: `INVALID_REQUEST` -> `InvalidRequest`, `INVALID_PARAMS` ->
   `InvalidParams`, `METHOD_NOT_FOUND` -> `MethodNotFound`, and

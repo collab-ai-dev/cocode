@@ -343,12 +343,12 @@ fn bash_is_rm_md_under_root(input: &Value, root: &Path) -> bool {
 }
 
 fn input_path_is_md_under_root(input: &Value, root: &Path, cwd: &Path) -> bool {
-    coco_background_review::input_write_target(input, cwd)
+    coco_maintenance::write_fence::input_write_target(input, cwd)
         .is_some_and(|absolute| path_is_md_under_root(&absolute, root))
 }
 
 fn apply_patch_paths_are_md_under_root(input: &Value, root: &Path, cwd: &Path) -> bool {
-    coco_background_review::apply_patch_write_targets(input, cwd)
+    coco_maintenance::write_fence::apply_patch_write_targets(input, cwd)
         .is_some_and(|paths| paths.iter().all(|path| path_is_md_under_root(path, root)))
 }
 

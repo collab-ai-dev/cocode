@@ -22,6 +22,21 @@ async fn test_enqueue_dequeue_priority_order() {
 }
 
 #[tokio::test]
+async fn change_receiver_observes_enqueue_and_dequeue_without_lost_wakeup() {
+    let queue = CommandQueue::new();
+    let mut changes = queue.subscribe_changes();
+
+    queue
+        .enqueue(QueuedCommand::new("queued".into(), QueuePriority::Next))
+        .await;
+    changes.changed().await.expect("enqueue change");
+
+    let mut changes = queue.subscribe_changes();
+    queue.dequeue(None).await.expect("queued command");
+    changes.changed().await.expect("dequeue change");
+}
+
+#[tokio::test]
 async fn test_slash_commands_excluded_from_dequeue() {
     let queue = CommandQueue::new();
     queue

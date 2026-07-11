@@ -45,6 +45,7 @@ coco-coordinator.workspace = true
 # coco-cli suite (coco_cli_deepseek): full `coco -p` headless path,
 # including system-prompt assembly, fallback chain, permission resolution,
 # CLAUDE.md discovery — the user's actual entry point.
+coco-agent-host.workspace = true
 coco-cli.workspace = true
 coco-app-runtime.workspace = true
 coco-app-server.workspace = true

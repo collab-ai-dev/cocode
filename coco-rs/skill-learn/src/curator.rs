@@ -24,7 +24,7 @@
 
 use std::path::{Path, PathBuf};
 
-use coco_background_review::{ConsolidateLock, LockOutcome};
+use coco_maintenance::{MaintenanceLock, MaintenanceLockOutcome};
 use coco_skills::agent_scope::agent_skills_dir;
 
 /// Lock file basename. Lives in `<config_home>/skills` — a **sibling** of the
@@ -71,7 +71,7 @@ pub enum CuratorOutcome {
 pub struct SkillCurator {
     config_home: PathBuf,
     agent_root: PathBuf,
-    lock: ConsolidateLock,
+    lock: MaintenanceLock,
     min_hours: i64,
 }
 
@@ -80,7 +80,7 @@ impl SkillCurator {
     pub fn new(config_home: &Path) -> Self {
         // The lock is a sibling of the fenced root — geometry owned by
         // `agent_scope` so it can never drift inside the fence.
-        let lock = ConsolidateLock::new(
+        let lock = MaintenanceLock::new(
             &coco_skills::agent_scope::skills_root(config_home),
             CURATOR_LOCK_FILENAME,
         );
@@ -105,15 +105,17 @@ impl SkillCurator {
         let now = coco_utils_common::now_epoch_ms().unwrap_or(0);
 
         // Time gate — cheap stat before acquiring the lock.
-        if let Some(last) = self.lock.last_consolidated_at()
+        if let Some(last) = self.lock.last_run_at()
             && now.saturating_sub(last) < self.min_hours.saturating_mul(3_600_000)
         {
             return CuratorOutcome::SkippedTimeGate;
         }
 
         let guard = match self.lock.try_acquire() {
-            LockOutcome::Acquired(g) => g,
-            LockOutcome::Held | LockOutcome::Error(_) => return CuratorOutcome::SkippedLockHeld,
+            MaintenanceLockOutcome::Acquired(g) => g,
+            MaintenanceLockOutcome::Held | MaintenanceLockOutcome::Error(_) => {
+                return CuratorOutcome::SkippedLockHeld;
+            }
         };
 
         let telemetry = coco_skills::telemetry::load_all(&self.config_home);

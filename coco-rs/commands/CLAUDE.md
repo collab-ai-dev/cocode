@@ -131,7 +131,7 @@ runner (`app/cli/tui_runner.rs` dispatch interceptors), not the registry sync
 handler. These are interactive-only (TUI) commands — they don't run meaningfully in headless `-p` mode. The registry
 handlers (`branch_handler`, `export_handler`) return honest usage guidance for
 the non-interactive surface; `/btw` additionally has an SDK `turn/start`
-handler fork path (shared `coco_cli::side_question`). Behavior notes:
+handler fork path (shared `coco_agent_host::side_question`). Behavior notes:
 
 - `/export <filename>` writes the conversation (incl. tool activity) under cwd;
   format inferred from extension (`.md`/`.json`/else text). No-arg opens the

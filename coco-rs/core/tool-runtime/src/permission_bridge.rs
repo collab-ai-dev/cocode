@@ -6,7 +6,7 @@
 //!
 //! **Split design** (same pattern as SideQuery):
 //! - Trait definition → here in `coco-tool`
-//! - Implementation → `coco-state` (PermissionBridge struct)
+//! - Implementations → `coco-coordinator` and surface adapters
 //! - Consumer → tool execution layer (checks before running unsafe tools)
 
 use std::sync::Arc;

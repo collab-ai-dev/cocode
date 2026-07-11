@@ -26,7 +26,7 @@
 //! TUI and SDK surfaces consume it through the AppServer `turn/start` handler
 //! shortcut. TUI submits it over the local bridge; SDK submits it over
 //! JSON-RPC. The shortcut delegates the fork + answer extraction to
-//! `coco_cli::side_question`. Headless `-p` mode does not expand registry slash
+//! `coco_agent_host::side_question`. Headless `-p` mode does not expand registry slash
 //! commands, so it never reaches this handler.
 
 /// Sentinel prefix runners recognise on the handler output. Text after

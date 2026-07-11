@@ -75,7 +75,7 @@ Every TS source directory and top-level file mapped to its Rust crate, version, 
 | `query.ts` | `coco-query` | `app/query/` | v1 | TS | Single-turn execution |
 | `QueryEngine.ts` | `coco-query` | `app/query/` | v1 | TS | Multi-turn agent loop |
 | `query/` | `coco-query` | `app/query/` | v1 | TS | Token budget, query config |
-| `state/` | `coco-state` | `app/state/` | v1 | TS | AppState tree |
+| `state/` | `coco-agent-host` + `coco-types::ToolAppState` + `coco-tui::state` | `app/agent-host/`, `common/types/`, `app/tui/` | v1 | Rust | State split by backend authority and surface projection; no global AppState crate |
 | `bootstrap/` | `coco-session` | `app/session/` | v1 | TS | Session init, persistence |
 | `components/` | `coco-tui` | `app/tui/` | v1 | TS | Terminal UI components |
 | `screens/` | `coco-tui` | `app/tui/` | v1 | TS | UI screens |
@@ -175,7 +175,7 @@ Every TS source directory and top-level file mapped to its Rust crate, version, 
 | `costHook.ts` | `coco-tui` | v1 | TS | Cost summary display hook |
 | `dialogLaunchers.tsx` | `coco-tui` | v1 | TS | Dialog rendering (React-specific → TUI overlays) |
 | `interactiveHelpers.tsx` | `coco-tui` | v1 | TS | renderAndRun, setup dialog |
-| `projectOnboardingState.ts` | `coco-state` | v1 | TS | Onboarding step tracking |
+| `projectOnboardingState.ts` | no global port | v1 | Rust | Add to the owning surface only when a live reader/writer exists |
 | `replLauncher.tsx` | `coco-tui` | v1 | TS | REPL launch wrapper |
 | `setup.ts` (477 LOC) | `coco-session` | v1 | TS | Setup flow orchestration (auth, settings init) |
 | `ink.ts` | `coco-tui` | v1 | TS | Terminal renderer (React/Ink → ratatui) |
@@ -200,7 +200,7 @@ Every TS source directory and top-level file mapped to its Rust crate, version, 
 | TS dir | What it is | Rust handling |
 |--------|-----------|---------------|
 | `hooks/` (80+ files) | React hooks (useCanUseTool, useMergedTools, etc.) | ~67 are pure UI wiring (no Rust port). **16 have core business logic** — see table below. |
-| `context/` (9 files) | React contexts (mailbox, notifications, voice, stats) | State managed via `coco-state` (`Arc<RwLock<AppState>>`) |
+| `context/` (9 files) | React contexts (mailbox, notifications, voice, stats) | Split across coordinator/agent-host runtime owners and TUI `AppState`; no global context bag |
 
 ### React Hooks with Business Logic (must port core logic)
 

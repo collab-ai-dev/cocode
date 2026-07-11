@@ -17,9 +17,9 @@ use crate::AttachSurfaceOptions;
 use crate::ServerRequestReply;
 use crate::SurfaceCapabilities;
 use crate::SurfaceCapability;
-use crate::SurfaceLifecycleEffect;
-use crate::SurfaceLifecycleEffectKind;
 use crate::SurfaceRole;
+use coco_types::SurfaceLifecycleEffect;
+use coco_types::SurfaceLifecycleEffectKind;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TestHandle(&'static str);
@@ -188,7 +188,7 @@ fn local_adapter_registers_request_and_lifecycle_channels() {
         .expect("lifecycle delivery");
     assert_eq!(lifecycle_delivery.surface_id, surface.surface_id);
     assert_eq!(
-        lifecycle_delivery.effect.kind,
+        lifecycle_delivery.kind,
         SurfaceLifecycleEffectKind::SessionStarted { session_id }
     );
 

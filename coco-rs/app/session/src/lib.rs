@@ -353,7 +353,7 @@ impl SessionManager {
     /// (`"coordinator"` / `"normal"`) so a later `--resume` can re-derive
     /// it. The reader keeps the last-wins `Mode` entry
     /// ([`storage::read_transcript_metadata`]), which drives
-    /// `coco_cli::coordinator_mode_resume::reconcile_on_resume`.
+    /// `coco_agent_host::coordinator_mode_resume::reconcile_on_resume`.
     ///
     /// Errors when no transcript exists for `id` (a zero-turn session has
     /// nothing to record); callers treat the write as best-effort.

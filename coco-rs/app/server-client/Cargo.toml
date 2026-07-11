@@ -12,7 +12,6 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-coco-app-server.workspace = true
 coco-app-server-transport.workspace = true
 coco-types.workspace = true
 serde.workspace = true
@@ -20,10 +19,10 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "net", "sync", "time"] }
 tokio-tungstenite.workspace = true
+tracing.workspace = true
 futures = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
-coco-app-server.workspace = true
 coco-types.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync"] }

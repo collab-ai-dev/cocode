@@ -8,7 +8,7 @@
 //! In-process subagents inherit the leader's
 //! [`coco_tool_runtime::ToolPermissionBridge`] via
 //! `SessionRuntime::wire_engine` — SDK leaders get
-//! [`coco_cli::sdk_server::SdkPermissionBridge`] (forwards over
+//! [`coco_agent_host::sdk_server::SdkPermissionBridge`] (forwards over
 //! `approval/askForApproval`); TUI leaders get the TUI bridge (P0
 //! work). Cross-process pane teammates use
 //! [`crate::runner_loop::MailboxPermissionBridge`] (mailbox file IPC).

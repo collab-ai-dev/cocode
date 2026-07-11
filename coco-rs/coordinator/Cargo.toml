@@ -15,15 +15,10 @@ workspace = true
 # Pure-logic rules and templates (definition catalog, prompt rendering,
 # tool-filter planning, fork pure logic, transcript filter,
 # coordinator_mode prompt) live in `core/subagent`. This crate is the
-# orchestration layer that consumes those rules and owns the tokio /
-# AppState / file-lock / process-spawn machinery.
+# orchestration layer that consumes those rules and owns the tokio,
+# file-lock, mailbox, and process-spawn machinery.
 
 [dependencies]
-# NOTE: `coco-state` is intentionally absent from this dep list — adding it
-# would create a cycle (`app/state` re-exports moved modules from this
-# crate). When the runner moves over in PR #3 step 6, coordinator will
-# define a trait abstraction (`CoordinatorAppState`) that `app/state`
-# implements, keeping the dep one-directional.
 coco-types.workspace = true
 coco-apply-patch.workspace = true
 coco-config.workspace = true

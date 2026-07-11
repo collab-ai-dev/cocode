@@ -20,6 +20,7 @@ Model (AppState) ← Update (handle_event) ← Events (TuiEvent) ← View (rende
 | Type | Purpose |
 |------|---------|
 | `App`, `create_channels` | Run loop + channel constructor |
+| `app_events::*` | Event-loop conversion, coalescing, deferred-event, completion, and theme/plugin helpers |
 | `AppState` | Model: `SessionState` + `UiState` + `RunningState` |
 | `state::SessionState` | Messages, tool executions, subagents, token usage, plan_mode, permission_mode, MCP servers, team |
 | `state::UiState` | Input, overlay stack, scroll, streaming, suggestions, theme |

@@ -1,8 +1,8 @@
 //! Per-category "source" traits for cross-crate reminder state.
 //!
 //! Each trait is implemented by the crate that owns the live state
-//! (hooks, services/lsp, tasks, skills, services/mcp, app/state
-//! swarm, bridge, memory). `coco-system-reminder` only defines the
+//! (hooks, services/lsp, tasks, skills, services/mcp, coordinator,
+//! bridge, memory). `coco-system-reminder` only defines the
 //! trait shape and returns shared snapshot types; the owning crate
 //! gains a dep on `coco-system-reminder` to `impl`, never the reverse.
 //!

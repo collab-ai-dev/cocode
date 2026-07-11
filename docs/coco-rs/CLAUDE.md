@@ -102,7 +102,7 @@ TextContent, FileContent, ToolCallContent, ToolResultContent, ReasoningContent
 ```
 All crates use `coco_types::LlmMessage` — never `vercel_ai_provider::LanguageModelV4Message` directly.
 
-Does NOT own: `ModelInfo` (coco-config), `ToolUseContext` (coco-tool), `HooksSettings` (coco-hooks), `QueryEngine` (coco-query), `AppState` (coco-state).
+Does NOT own: `ModelInfo` (coco-config), `ToolUseContext` (coco-tool), `HooksSettings` (coco-hooks), `QueryEngine` (coco-query), or session/TUI state owners.
 
 ### coco-config
 
@@ -227,9 +227,10 @@ L3  coco-mcp                               — coco-types, coco-config
 L3  coco-tools                             — coco-tool, coco-shell, coco-mcp, coco-lsp, coco-permissions
 L4  coco-commands, coco-skills, coco-hooks — coco-types, coco-tool (ToolRegistry)
 L4  coco-tasks, coco-memory, coco-plugins  — coco-types, coco-tool, coco-inference
-L5  coco-state                             — coco-types, coco-config, coco-tool
-L5  coco-query                             — coco-types, coco-config, coco-inference, coco-tool, coco-context, coco-messages, coco-compact, coco-permissions, coco-hooks, coco-state
-L5  coco-session, coco-tui, coco-cli       — everything
+L5  coco-query                             — coco-types, coco-config, coco-inference, coco-tool, coco-context, coco-messages, coco-compact, coco-permissions, coco-hooks, coco-session
+L5  coco-session, coco-tui                 — typed lower services only
+L5  coco-agent-host                        — app-runtime, query, session, AppServer, integrations
+L5  coco-cli                               — agent-host, TUI, process/surface policy
 --- v2/v3 (added on top of v1 layer rules) ---
 L3  coco-vim                               — (none — pure state machine)
 L5  coco-coordinator                       — coco-types, coco-config, coco-permissions, coco-tool, coco-error
@@ -564,7 +565,7 @@ Every TS source directory maps to a Rust crate, and every crate has a plan doc.
 | `commands/` (~56 dirs) | `coco-commands` | `crate-coco-commands.md` | v1 |
 | `query/`, `QueryEngine.ts`, `utils/processUserInput/` | `coco-query` | `crate-coco-query.md` | v1 |
 | `skills/`, `schemas/hooks.ts`, `utils/hooks/`, `tasks/`, `memdir/`, `services/extractMemories/`, `services/SessionMemory/`, `services/autoDream/`, `plugins/`, `services/plugins/`, `keybindings/` | `coco-skills`, `coco-hooks`, `coco-tasks`, `coco-memory`, `coco-plugins`, `coco-keybindings` | `crate-coco-modules.md` | v1 |
-| `state/`, `bootstrap/`, `components/`, `screens/`, `ink/`, `outputStyles/`, `entrypoints/`, `cli/`, `server/` | `coco-state`, `coco-session`, `coco-tui`, `coco-cli` | `crate-coco-app.md` | v1 |
+| `state/`, `bootstrap/`, `components/`, `screens/`, `ink/`, `outputStyles/`, `entrypoints/`, `cli/`, `server/` | `coco-agent-host`, `coco-app-runtime`, `coco-session`, `coco-tui`, `coco-cli` | `crate-coco-app.md` | v1 |
 | `bridge/` | `coco-bridge` | `crate-coco-bridge.md` | v1 |
 | `coordinator/`, `utils/swarm/` | `coco-coordinator` | `crate-coco-coordinator.md` | v2 |
 | `vim/` | `coco-vim` | `crate-coco-vim.md` | v2 |
@@ -655,7 +656,10 @@ TS `hooks/` has 85 files. In React, hooks are the primary mechanism for connecti
 Key v1 hooks: `useTasksV2` (file watcher → tokio::fs), `useFileHistorySnapshotInit` (HashMap state), `useIDEIntegration` (bridge callbacks).
 Key v2 hooks: `useSwarmInitialization` (coordinator), `useHistorySearch` (regex + typeahead), `useScheduledTasks` (tokio::time cron).
 
-Similarly, `context/` (9 React Contexts) maps to fields in `coco-state::AppState` — React's Context.Provider pattern is replaced by `Arc<RwLock<AppState>>` shared across components.
+Similarly, `context/` (9 React Contexts) maps to the owning runtime resource or
+TUI projection. Rust does not recreate a global context-provider state bag;
+session state lives in `SessionRuntime`/`ToolAppState`, while display state
+lives in `coco_tui::state::AppState`.
 
 ## Previously Missing TS Mappings (now added to ts-to-rust-mapping.md)
 
@@ -686,7 +690,7 @@ Added in Round 2 review:
 | `ui/single-render-path-refactor.md` | Refactor plan to collapse the streaming→scrollback seam onto a single render path (codex-rs stable/tail watermark model), removing the `#160` provisional-commit / finalize-reconcile machinery and restoring native-scrollback Core Decision #4. |
 | `ui/tui-v2-design.md` | TUI v2 target: fair three-way comparison (coco / codex-rs / jcode), root-cause of the streaming-seam churn, anchored finalize without rasterized fingerprint reconciliation (§6.2/§6.2.1, twice source-corrected), engine-owned viewport seating, and the staged Scope B implementation plan (§10). Supersedes the dual-projection model in `ui/single-render-path-refactor.md` as the forward design. |
 | `rtk-integration-design.md` | RTK (Rust Token Killer) integration: two-tier Bash output compression (subprocess rewrite → embedded post-exec filter core), `Feature::Rtk` + `RtkConfig`/`RtkEngine`, shared `.rtk/filters.toml` + trust store, rr-rtk evaluation, grep/glob formatting absorptions, savings projections + metrics |
-| `multi-session-app-server-plan.md` | Multi-session AppServer design (v6.3): one process hosting many root sessions behind `LiveSessionRegistry`; actor-style runtime split, `SessionEnvelope`/`session_seq` event routing, surface model with per-surface capabilities, protocol adapters (local/JSON-RPC/web/desktop/IM), hub `coco-event-hub.v2` reconciliation, no-compat cut-over with demolition list, decision log D-1..D-54. |
+| `multi-session-app-server-plan.md` | Multi-session AppServer design (v6.4): one process hosting many root sessions behind `LiveSessionRegistry`; actor-style runtime split, `SessionEnvelope`/`session_seq` event routing, surface model with per-surface capabilities, protocol adapters (local/JSON-RPC/web/desktop/IM), hub `coco-event-hub.v2` reconciliation, no-compat cut-over with demolition list, the v6.4 adversarial-review findings/remediation register (R-*/G-*/H-*) with the multi-session gate list, decision log D-1..D-60. |
 | `config-file-map.md` | Every file coco-rs reads/writes, which crate owns it |
 | `audit-gaps.md` | Gap analysis with fix status and priority |
 | `current-gap-fix-plan.md` | Current prioritized fix plan for active gaps, plus stale audit rows to clean up before assigning implementation work. |

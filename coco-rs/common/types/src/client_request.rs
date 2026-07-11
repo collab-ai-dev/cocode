@@ -428,7 +428,7 @@ pub struct ApprovalResolveParams {
     /// `annotations`) back into the tool's data envelope.
     ///
     /// In-process equivalent is `coco_tool_runtime::ToolPermissionResolution.updated_input`
-    /// (TUI mode). Consumed by `app/cli/src/sdk_server/approval_bridge.rs`.
+    /// (TUI mode). Consumed by `app/agent-host/src/sdk_server/approval_bridge.rs`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_input: Option<serde_json::Value>,
     /// Optional content blocks (typically image attachments) the SDK client

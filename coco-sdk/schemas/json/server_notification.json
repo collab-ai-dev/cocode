@@ -72,7 +72,7 @@
       ]
     },
     {
-      "description": "One Message appended to engine MessageHistory.\n\n`session_id` + `agent_id` envelope (plan §11 F9): merged-timeline\nconsumers (AgentTeams) demux per session/agent off the same event\nstream. `agent_id` is `None` for the main agent; `Some` for\nteammates / subagents. Single-session SDK consumers may ignore\nboth fields (`#[serde(default)]` keeps the wire forward-compat).",
+      "description": "One Message appended to engine MessageHistory.\n\n`session_id` + `agent_id` envelope: merged-timeline\nconsumers (AgentTeams) demux per session/agent off the same event\nstream. `agent_id` is `None` for the main agent; `Some` for\nteammates / subagents. Single-session SDK consumers may ignore\nboth fields (`#[serde(default)]` keeps the wire forward-compat).",
       "type": "object",
       "properties": {
         "method": {
@@ -6872,7 +6872,11 @@
           "type": "object",
           "properties": {
             "agent_id": {
-              "type": "string"
+              "description": "The spawned subagent's id. `None` until the id is known —\nthe accumulator sees only the tool call, not the spawned\n`AgentId`, so it is absent rather than an empty-string lie.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "agent_type": {
               "type": "string"
@@ -6900,7 +6904,6 @@
           },
           "required": [
             "type",
-            "agent_id",
             "agent_type",
             "description",
             "status"

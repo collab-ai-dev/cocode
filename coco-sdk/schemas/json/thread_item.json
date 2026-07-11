@@ -176,7 +176,11 @@
           "type": "object",
           "properties": {
             "agent_id": {
-              "type": "string"
+              "description": "The spawned subagent's id. `None` until the id is known —\nthe accumulator sees only the tool call, not the spawned\n`AgentId`, so it is absent rather than an empty-string lie.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "agent_type": {
               "type": "string"
@@ -204,7 +208,6 @@
           },
           "required": [
             "type",
-            "agent_id",
             "agent_type",
             "description",
             "status"

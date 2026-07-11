@@ -8,7 +8,7 @@
 //!
 //! This watcher owns **only** the KAIROS-side latch. The generic
 //! `date_change` reminder has its own latch on the engine
-//! ([`coco_state::ToolAppState::last_emitted_date`]) which fires for
+//! ([`coco_types::ToolAppState::last_emitted_date`]) which fires for
 //! every session regardless of mode. Two latches because they tick
 //! independently: the reminder must fire on session-resume even when
 //! the rollover happened while no turn was running, while the

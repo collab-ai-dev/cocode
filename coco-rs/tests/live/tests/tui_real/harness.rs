@@ -1,6 +1,6 @@
 //! `RealTuiHarness` — drives the real-LLM TUI path in-process.
 //!
-//! Construction mirrors `coco_cli::tui_runner::run_tui` step-for-step,
+//! Construction mirrors `coco_agent_host::tui_runner::run_tui` step-for-step,
 //! using the same public bootstrap helpers (`build_runtime_config_for_cli`,
 //! `build_engine_resources`, `SessionRuntime::build`,
 //! `install_session_late_binds`, `TuiPermissionBridge`). The only
@@ -28,18 +28,18 @@ use anyhow::Context as _;
 use anyhow::Result;
 use anyhow::anyhow;
 use clap::Parser as _;
+use coco_agent_host::headless::build_runtime_config_for_cli;
+use coco_agent_host::session_bootstrap::EngineResources;
+use coco_agent_host::session_bootstrap::build_engine_resources;
+use coco_agent_host::session_bootstrap::install_session_late_binds;
+use coco_agent_host::session_runtime::SessionHandle;
+use coco_agent_host::session_runtime::SessionRuntime;
+use coco_agent_host::session_runtime::SessionRuntimeBuildOpts;
+use coco_agent_host::tui_permission_bridge::PendingApprovals;
+use coco_agent_host::tui_permission_bridge::TuiPermissionBridge;
+use coco_agent_host::tui_permission_bridge::new_pending_map;
+use coco_agent_host::tui_permission_bridge::resolve_pending;
 use coco_cli::Cli;
-use coco_cli::headless::build_runtime_config_for_cli;
-use coco_cli::session_bootstrap::EngineResources;
-use coco_cli::session_bootstrap::build_engine_resources;
-use coco_cli::session_bootstrap::install_session_late_binds;
-use coco_cli::session_runtime::SessionHandle;
-use coco_cli::session_runtime::SessionRuntime;
-use coco_cli::session_runtime::SessionRuntimeBuildOpts;
-use coco_cli::tui_permission_bridge::PendingApprovals;
-use coco_cli::tui_permission_bridge::TuiPermissionBridge;
-use coco_cli::tui_permission_bridge::new_pending_map;
-use coco_cli::tui_permission_bridge::resolve_pending;
 use coco_session::SessionManager;
 use coco_tool_runtime::ToolPermissionBridgeRef;
 use coco_tui::AppState;
@@ -279,7 +279,7 @@ impl RealTuiHarness {
         argv.extend(cfg.extra_argv);
 
         let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-        let cli = Cli::parse_from(&argv_refs);
+        let cli = Cli::parse_from(&argv_refs).agent_host_options();
 
         // Stage 1: layered runtime config (settings.json + env + flags).
         let runtime_config = build_runtime_config_for_cli(&cli, &cwd)
@@ -307,7 +307,9 @@ impl RealTuiHarness {
         // existing coco_cli_deepseek suite does; it's a known minor cost
         // vs full prod-fidelity.
         let session_manager = Arc::new(SessionManager::new(
-            coco_cli::paths::runtime_paths().memory_base().to_path_buf(),
+            coco_agent_host::paths::runtime_paths()
+                .memory_base()
+                .to_path_buf(),
         ));
         let _ = session_manager.create(&model_id, &cwd);
 
@@ -824,7 +826,7 @@ impl Drop for RealTuiHarness {
 }
 
 /// Drive the real engine for the subset of `UserCommand` variants this
-/// harness exercises. Stripped from `coco_cli::tui_runner::run_agent_driver`
+/// harness exercises. Stripped from `coco_agent_host::tui_runner::run_agent_driver`
 /// — slash interception, `/clear`, `/compact`, rewind, and plan-approval
 /// are private to that file or have dedicated coverage elsewhere.
 async fn run_real_agent_driver(

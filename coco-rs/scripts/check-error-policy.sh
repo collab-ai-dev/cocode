@@ -3,7 +3,7 @@
 #
 # Three tiers (classified by crate path under coco-rs/):
 #
-#   Tier 1 — terminals     app/cli, app/tui, exec/*, tests/*
+#   Tier 1 — applications  app/cli, app/agent-host, app/tui, exec/*, tests/*
 #                          anyhow OK; no rules enforced.
 #
 #   Tier 2 — libraries     utils/*, vercel-ai/*, bridge, retrieval, voice, tui-ui
@@ -24,7 +24,6 @@
 #   - keybindings               leaf parser, ParseError is intentionally
 #                               stringly per parser.rs (user-facing messages,
 #                               not matchable variants — no StatusCode story)
-#   - app/state                 state tree, no error-returning surface
 #   - core/messages             pure data normalization, no error-returning surface
 #   - [dev-dependencies]        anyhow stays useful in tests
 #   - *.test.rs / tests/ / main.rs / pub(crate) etc.
@@ -49,7 +48,7 @@ ALLOWLIST_FILE="scripts/error-policy-allowlist.txt"
 
 is_tier1_terminal() {
     case "$1" in
-        app/cli|app/tui|exec/*|tests/*) return 0 ;;
+        app/cli|app/agent-host|app/tui|exec/*|tests/*) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -82,11 +81,12 @@ is_tier3_main_trunk() {
         # tracing::warn!), so the "must depend on coco-error" rule does
         # not apply — same rationale as services/mcp-types.
         services/wire-dump)                   return 1 ;;
-        # Fenced background-review substrate: the only fallible public API is
-        # the `LockOutcome` enum (its own `Error(String)` channel) plus a thin
+        # Fenced maintenance substrate: the only fallible public API is
+        # the `MaintenanceLockOutcome` enum (its own `Error(String)` channel)
+        # plus a thin
         # `io::Result` fs helper — no cross-layer coco-error classification is
         # needed. Same rationale as services/wire-dump.
-        background-review)                    return 1 ;;
+        maintenance)                    return 1 ;;
         # Fire-and-forget learning loop: every public entry point reports
         # through an outcome enum (CuratorOutcome / SkillReviewOutcome /
         # ReviewTrigger) consumed by detached background tasks — no Result
@@ -94,7 +94,7 @@ is_tier3_main_trunk() {
         # classify. Same rationale as services/wire-dump.
         skill-learn)                          return 1 ;;
         keybindings)                          return 1 ;;
-        app/state|core/messages)              return 1 ;;
+        core/messages)                        return 1 ;;
         *) return 0 ;;
     esac
 }

@@ -1,0 +1,104 @@
+[package]
+name = "coco-agent-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Compile the real cpal microphone backend for voice input. Off by default so
+# `cargo build` / CI stay light (no ALSA/CoreAudio system deps); enabled in the
+# shipped coco binary. Without it, voice is present but reports "no microphone".
+voice = ["coco-voice/capture"]
+# Also compile the on-device Whisper backend (whisper.cpp). Off by default: it
+# needs a C++ toolchain (cmake + libclang) at build time. On macOS this pulls
+# the Metal GPU backend automatically (target-specific dep in coco-voice).
+voice-local = ["voice", "coco-voice/local-voice"]
+
+[dependencies]
+coco-types.workspace = true
+coco-llm-types.workspace = true
+coco-error.workspace = true
+coco-bridge.workspace = true
+coco-sandbox.workspace = true
+coco-commands.workspace = true
+coco-config.workspace = true
+coco-config-reload.workspace = true
+coco-hooks.workspace = true
+coco-session.workspace = true
+coco-inference.workspace = true
+coco-provider-auth.workspace = true
+coco-compact.workspace = true
+coco-memory.workspace = true
+coco-skill-learn.workspace = true
+coco-shell.workspace = true
+coco-tool-runtime.workspace = true
+coco-tools.workspace = true
+coco-workflow.workspace = true
+coco-query.workspace = true
+coco-system-reminder.workspace = true
+coco-cron.workspace = true
+coco-messages.workspace = true
+coco-context.workspace = true
+coco-mcp.workspace = true
+coco-mcp-skills.workspace = true
+coco-rmcp-client.workspace = true
+coco-lsp.workspace = true
+coco-permissions.workspace = true
+coco-plugins.workspace = true
+coco-skills.workspace = true
+coco-output-styles.workspace = true
+coco-coordinator.workspace = true
+coco-tasks.workspace = true
+coco-app-runtime.workspace = true
+coco-app-server.workspace = true
+coco-app-server-client.workspace = true
+coco-app-server-transport.workspace = true
+coco-hub-connector.workspace = true
+coco-exec-server.workspace = true
+coco-git.workspace = true
+coco-paths.workspace = true
+coco-subagent.workspace = true
+coco-tui.workspace = true
+coco-voice.workspace = true
+coco-utils-audio.workspace = true
+coco-utils-string.workspace = true
+coco-keybindings = { workspace = true, features = ["loader"] }
+coco-otel.workspace = true
+coco-model-card.workspace = true
+coco-file-watch.workspace = true
+coco-utils-common.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+base64.workspace = true
+libc.workspace = true
+
+dirs.workspace = true
+chrono.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+jsonc-parser.workspace = true
+anyhow.workspace = true
+tokio = { workspace = true, features = ["full"] }
+async-trait.workspace = true
+thiserror.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
+reqwest.workspace = true
+tracing.workspace = true
+shlex.workspace = true
+futures = { workspace = true, features = ["std"] }
+
+[build-dependencies]
+# Used by build.rs only, to stamp provenance into `cocode --version`.
+coco-utils-common.workspace = true
+
+[dev-dependencies]
+coco-frontmatter.workspace = true
+coco-utils-cargo-bin.workspace = true
+coco-utils-pty.workspace = true
+http.workspace = true
+pretty_assertions.workspace = true
+tempfile.workspace = true
+tokio-tungstenite.workspace = true
+wiremock.workspace = true

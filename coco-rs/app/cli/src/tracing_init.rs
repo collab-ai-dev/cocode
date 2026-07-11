@@ -154,7 +154,7 @@ fn subscriber_opts_from_cli_with_sources(
 
 fn load_settings_for_logging(cli: &Cli, cwd: &Path) -> Result<Settings> {
     let flag_settings = cli.settings.as_deref().map(Path::new);
-    let roots = crate::paths::settings_roots_for_cwd(cwd);
+    let roots = coco_agent_host::paths::settings_roots_for_cwd(cwd);
     Ok(coco_config::settings::load_settings_for_roots(&roots, flag_settings)?.merged)
 }
 
@@ -191,8 +191,6 @@ pub fn detect_mode(cli: &Cli) -> Mode {
         return match cmd {
             Commands::Chat { .. } | Commands::Review { .. } => Mode::Headless,
             Commands::Sdk => Mode::Sdk,
-            // Every other subcommand prints a short result and exits;
-            // installing a subscriber would only add log noise.
             _ => Mode::Skip,
         };
     }
@@ -323,7 +321,7 @@ fn expand_bare_level(raw: &str) -> String {
 fn emit_ready_anchor(mode: Mode, handle: &SubscriberHandle, location: bool) {
     match handle.log_path.as_ref() {
         Some(path) => tracing::info!(
-            target: "coco_cli::startup",
+            target: "coco_agent_host::startup",
             coco_version = env!("CARGO_PKG_VERSION"),
             mode = mode.as_str(),
             log_filter = %handle.effective_filter,
@@ -333,7 +331,7 @@ fn emit_ready_anchor(mode: Mode, handle: &SubscriberHandle, location: bool) {
             "subscriber ready"
         ),
         None => tracing::info!(
-            target: "coco_cli::startup",
+            target: "coco_agent_host::startup",
             coco_version = env!("CARGO_PKG_VERSION"),
             mode = mode.as_str(),
             log_filter = %handle.effective_filter,

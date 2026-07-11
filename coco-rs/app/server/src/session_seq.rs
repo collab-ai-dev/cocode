@@ -1,9 +1,9 @@
 //! Process-wide durable `session_seq` allocation.
 //!
 //! One allocator per process is the multi-session plan's "single stamping
-//! seam" (§10.1): every durable-envelope producer draws from the same
+//! seam": every durable-envelope producer draws from the same
 //! per-session counters, so the union of all forwarder paths stays strictly
-//! monotonic per session. Restart continuity (plan D-39/D-47) comes from two
+//! monotonic per session. Restart continuity comes from two
 //! halves owned here:
 //!
 //! - a persist hook fired at bounded intervals so a crash loses at most
@@ -38,6 +38,12 @@ pub struct SessionSeqAllocator {
 
 struct AllocatorState {
     next: HashMap<SessionId, i64>,
+    /// Last seq actually handed out by `next()` this epoch. Distinct from
+    /// `next` so `high_water` reports issued reality: after a resume
+    /// skip-ahead with no allocation, `next` is `watermark + window + 1` but
+    /// nothing was issued, so persisting `next - 1` would inflate the
+    /// watermark by ~`window` every idle resume→close cycle.
+    issued: HashMap<SessionId, i64>,
     last_persisted: HashMap<SessionId, i64>,
     persist_hook: Option<SessionSeqPersistHook>,
     skip_ahead_window: i64,
@@ -54,6 +60,7 @@ impl SessionSeqAllocator {
         Self {
             inner: Mutex::new(AllocatorState {
                 next: HashMap::new(),
+                issued: HashMap::new(),
                 last_persisted: HashMap::new(),
                 persist_hook: None,
                 skip_ahead_window: DEFAULT_SKIP_AHEAD_WINDOW,
@@ -91,6 +98,7 @@ impl SessionSeqAllocator {
             let next = inner.next.entry(session_id.clone()).or_insert(1);
             let seq = *next;
             *next += 1;
+            inner.issued.insert(session_id.clone(), seq);
             let due = match inner.last_persisted.get(session_id) {
                 Some(last) => seq - *last >= WATERMARK_PERSIST_INTERVAL,
                 None => true,
@@ -119,19 +127,20 @@ impl SessionSeqAllocator {
             *next = floor;
         }
         // Force a persist on the first post-resume allocation so the new
-        // epoch's watermark lands quickly.
+        // epoch's watermark lands quickly. The skip-ahead bumped `next` but
+        // issued nothing yet, so `issued` stays untouched.
         inner.last_persisted.remove(session_id);
     }
 
-    /// Current high-water mark (last allocated seq) for close-time persistence.
-    ///
-    /// Counter state is deliberately kept for the process lifetime — a
-    /// close-then-resume in one process continues the in-memory counter with
-    /// no hole, and dropping it would risk a same-process seq restart when a
-    /// resumed transcript predates watermark persistence.
+    /// Last seq actually issued this epoch, for close-time persistence.
+    /// Returns `None` when nothing was allocated (e.g. a resume that closed
+    /// without emitting), so the close-time persister leaves the prior
+    /// watermark standing instead of inflating it by the skip-ahead window
+    ///. Counter state is deliberately kept for the process lifetime so
+    /// a same-process close-then-resume continues without a hole.
     pub fn high_water(&self, session_id: &SessionId) -> Option<i64> {
         let inner = self.state();
-        inner.next.get(session_id).map(|next| next - 1)
+        inner.issued.get(session_id).copied()
     }
 }
 

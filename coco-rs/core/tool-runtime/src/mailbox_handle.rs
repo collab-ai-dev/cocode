@@ -1,8 +1,8 @@
 //! Teammate mailbox handle — write structured protocol messages into
-//! a recipient's inbox without depending on `app/state` from core.
+//! a recipient's inbox without depending on `coco-coordinator` from core.
 //!
-//! **Layering**: definition here; implementation in `coco-state` (which
-//! owns the real file I/O in `swarm_mailbox.rs`); consumers in
+//! **Layering**: definition here; implementation in `coco-coordinator` (which
+//! owns the real mailbox I/O); consumers in
 //! `coco-tools` (ExitPlanModeTool teammate branch, SendMessageTool).
 //! Mirrors the existing `SideQuery` / `McpHandle` / `AgentHandle` pattern.
 
@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 /// A minimal protocol-message envelope. The tool-side doesn't need the
 /// typed `ProtocolMessage` enum — it hands the already-serialized JSON
-/// text to the handle; app/state parses on the other end if needed.
+/// text to the handle; the coordinator parses on the other end if needed.
 #[derive(Debug, Clone)]
 pub struct MailboxEnvelope {
     /// The message body — typically a JSON-serialized protocol message
@@ -42,7 +42,7 @@ pub struct InboxMessage {
 
 /// Write messages to swarm mailboxes + read the current agent's inbox.
 ///
-/// Implementations wrap `app/state::swarm_mailbox::*`. Absent
+/// Implementations wrap `coco_coordinator::mailbox::*`. Absent
 /// (`NoOpMailboxHandle`) for non-swarm contexts — calls become no-ops
 /// so tools + pollers in single-agent sessions don't crash.
 #[async_trait::async_trait]

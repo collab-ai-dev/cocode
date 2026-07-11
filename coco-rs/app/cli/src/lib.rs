@@ -1,56 +1,12 @@
-//! CLI entry point via clap.
+//! Application host for the `coco` surfaces.
+//!
+//! Owns session-runtime construction, AppServer/SDK request handling, and
+//! protocol-neutral application use cases. The `coco-cli` package owns only
+//! process startup, clap dispatch, terminal presentation, and surface wiring.
 
-pub mod agent_handle_factory;
-pub mod agent_transcript_persistence;
-pub mod at_mention_turn;
-pub mod bash_tool_handle;
-pub mod command_queue_sink;
-pub mod conversation_export;
-pub mod coordinator_mode_resume;
-pub mod cron_tick;
-pub mod disk_task_output;
-pub mod elicitation_hooks;
 pub mod embedded_hub;
-pub mod event_hub;
-pub mod file_changed_watcher;
-pub mod fork_dispatcher;
-pub mod goal_command;
-pub mod headless;
-pub mod hook_agent_runner;
-pub mod leader_inbox_poller;
-pub mod leader_permission;
-pub mod live_permission_mode;
-pub mod lsp_handle_adapter;
-pub mod mcp_cli;
-pub mod mcp_handle_adapter;
-pub mod model_card_refresh;
-pub mod openai_model_refresh;
-pub mod output;
-pub mod paths;
-pub mod permission_rule_loader;
-pub mod plugin_watch;
-pub mod provider_login;
-pub mod resume_hint;
-pub mod resume_resolver;
-pub mod sandbox_approval_bridge_tui;
-pub mod sandbox_reload;
-pub mod sdk_server;
-pub mod session_bootstrap;
-pub mod session_rename;
-pub mod session_runtime;
-pub mod shell_tool_selection;
-pub mod shutdown;
-pub mod side_query_impl;
-pub mod side_question;
-pub mod skill_watch;
 pub mod startup_profile;
-pub mod task_runtime;
-pub mod team_memory_sync;
-pub mod team_task_list_router;
-pub mod teammate_inbox_pump;
 pub mod tracing_init;
-pub mod tui_permission_bridge;
-pub mod voice_bootstrap;
 
 use clap::Parser;
 use clap::Subcommand;
@@ -85,6 +41,40 @@ pub fn build_provenance() -> coco_utils_common::BuildProvenance {
         BUILD_GIT_SUBJECT,
         BUILD_TIME,
     )
+}
+
+impl Cli {
+    /// Convert parsed surface arguments into the clap-independent host input.
+    pub fn agent_host_options(&self) -> coco_agent_host::AgentHostOptions {
+        coco_agent_host::AgentHostOptions {
+            prompt: self.prompt.clone(),
+            models_main: self.models_main.clone(),
+            settings: self.settings.clone(),
+            event_hub_url: self.event_hub_url.clone(),
+            max_tokens: self.max_tokens,
+            max_turns: self.max_turns,
+            permission_mode: self.permission_mode.clone(),
+            cwd: self.cwd.clone(),
+            resume: self.resume.clone(),
+            system_prompt: self.system_prompt.clone(),
+            append_system_prompt: self.append_system_prompt.clone(),
+            continue_session: self.continue_session,
+            allowed_tools: self.allowed_tools.clone(),
+            disallowed_tools: self.disallowed_tools.clone(),
+            fallback_model: self.fallback_model.clone(),
+            add_dir: self.add_dir.clone(),
+            dangerously_skip_permissions: self.dangerously_skip_permissions,
+            allow_dangerously_skip_permissions: self.allow_dangerously_skip_permissions,
+            no_session_persistence: self.no_session_persistence,
+            json_schema: self.json_schema.clone(),
+            include_hook_events: self.include_hook_events,
+            append_system_prompt_file: self.append_system_prompt_file.clone(),
+            plan_mode_instructions: self.plan_mode_instructions.clone(),
+            setting_sources: self.setting_sources.clone(),
+            fork_session: self.fork_session,
+            session_id: self.session_id.clone(),
+        }
+    }
 }
 
 /// The cocode CLI.

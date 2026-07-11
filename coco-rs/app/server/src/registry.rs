@@ -134,19 +134,14 @@ impl<H: Clone> LiveSessionRegistry<H> {
             .sessions
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(SessionSlot::Loading(mut load)) = sessions.remove(session_id) else {
+        let Some(SessionSlot::Loading(load)) = sessions.remove(session_id) else {
             return SlotConflictSnafu {
                 session_id: session_id.clone(),
                 expected: "Loading",
             }
             .fail();
         };
-        let _ = load.sender.send(Some(Ok(handle.clone())));
-        let next_slot = match load.close_after_load.take() {
-            Some(close) => SessionSlot::Closing(ClosingState { handle, close }),
-            None => SessionSlot::Live(handle),
-        };
-        sessions.insert(session_id.clone(), next_slot);
+        sessions.insert(session_id.clone(), load.promote(handle));
         Ok(())
     }
 
@@ -258,6 +253,7 @@ impl<H: Clone> LiveSessionRegistry<H> {
             .sessions
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Validate both slots before mutating either (no await between).
         let old_handle = match sessions.get(old_session_id) {
             Some(SessionSlot::Live(handle)) => handle.clone(),
             _ => {
@@ -267,21 +263,22 @@ impl<H: Clone> LiveSessionRegistry<H> {
                 .fail();
             }
         };
-        let new_load_sender = match sessions.get(new_session_id) {
-            Some(SessionSlot::Loading(load)) => load.sender.clone(),
-            _ => {
-                return SlotConflictSnafu {
-                    session_id: new_session_id.clone(),
-                    expected: "Loading",
-                }
-                .fail();
+        if !matches!(sessions.get(new_session_id), Some(SessionSlot::Loading(_))) {
+            return SlotConflictSnafu {
+                session_id: new_session_id.clone(),
+                expected: "Loading",
             }
-        };
+            .fail();
+        }
 
         let old_close = CloseState::new();
         let old_close_completion = old_close.completion();
-        let _ = new_load_sender.send(Some(Ok(new_handle.clone())));
-        sessions.insert(new_session_id.clone(), SessionSlot::Live(new_handle));
+        // Consume the new reservation so `promote` can honor a close-after-load
+        // recorded on it instead of a blind `Live` insert.
+        let Some(SessionSlot::Loading(new_load)) = sessions.remove(new_session_id) else {
+            unreachable!("new slot was matched as Loading above");
+        };
+        sessions.insert(new_session_id.clone(), new_load.promote(new_handle));
         sessions.insert(
             old_session_id.clone(),
             SessionSlot::Closing(ClosingState {
@@ -351,6 +348,19 @@ impl<H: Clone> LoadState<H> {
     fn completion(&self) -> LoadCompletion<H> {
         LoadCompletion {
             receiver: self.receiver.clone(),
+        }
+    }
+
+    /// Fire the load-completion signal with `handle` and produce the next
+    /// slot. A `close_after_load` recorded while loading (process shutdown, or a
+    /// close racing a replace reservation) is honored here, so the slot
+    /// moves straight to `Closing` and the waiting close owner task finds it,
+    /// instead of a blind `Live` insert dropping the close request.
+    pub(crate) fn promote(mut self, handle: H) -> SessionSlot<H> {
+        let _ = self.sender.send(Some(Ok(handle.clone())));
+        match self.close_after_load.take() {
+            Some(close) => SessionSlot::Closing(ClosingState { handle, close }),
+            None => SessionSlot::Live(handle),
         }
     }
 }

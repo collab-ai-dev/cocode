@@ -168,32 +168,50 @@ impl ProjectRegistry {
         // served as-is. If the file changed since the entry was built, fall
         // through to rebuild it under the write lock so the next session in this
         // project observes the current settings AND a freshly-loaded plugin
-        // catalog (plugin enable/disable is a project-settings concern). Sessions
-        // already holding the old `Arc` keep their own fold snapshot.
+        // catalog. The staleness check covers the catalog's true inputs
+        // — user `settings.json` `enabled_plugins` and the user plugin dir —
+        // not just project settings. Sessions already holding the old `Arc`
+        // keep their own fold snapshot.
         if let Some(project) = self.read_projects().get(&key)
             && !project.services.config_is_stale()
         {
             return project.services.clone();
         }
 
+        // Miss or stale. Evict + re-check under the write lock, and return early
+        // if a racing caller already made it fresh — but do NOT load under the
+        // lock.
+        {
+            let mut projects = self.write_projects();
+            Self::evict_idle_locked(&mut projects, self.effective_idle_ttl(), Instant::now());
+            if let Some(entry) = projects.get_mut(&key)
+                && !entry.services.config_is_stale()
+            {
+                entry.idle_since = None;
+                return entry.services.clone();
+            }
+        }
+
+        // Load the (vacant or stale) entry OUTSIDE any lock: the disk
+        // scan (settings reads + plugin catalog) must not stall every other
+        // project's lookup behind the write guard. Two callers racing the same
+        // cold/stale project may both load; the second discards its result at
+        // the swap below. That optimistic double-load is far cheaper than
+        // serializing all projects on one held write lock across IO.
+        let services = Arc::new(ProjectServices::load(
+            &key.config_home,
+            key.project_root.clone(),
+        ));
+
         let mut projects = self.write_projects();
-        Self::evict_idle_locked(&mut projects, self.effective_idle_ttl(), Instant::now());
-        // Re-check under the write lock: another caller may have rebuilt it, or
-        // the entry may still be fresh (the read-lock window raced an insert).
-        let config_home = key.config_home.clone();
-        let project_root = key.project_root.clone();
         let entry = match projects.entry(key) {
             Entry::Occupied(mut occupied) => {
                 if occupied.get().services.config_is_stale() {
-                    *occupied.get_mut() = ProjectRegistryEntry::new(Arc::new(
-                        ProjectServices::load(&config_home, project_root),
-                    ));
+                    *occupied.get_mut() = ProjectRegistryEntry::new(services);
                 }
                 occupied.into_mut()
             }
-            Entry::Vacant(vacant) => vacant.insert(ProjectRegistryEntry::new(Arc::new(
-                ProjectServices::load(&config_home, project_root),
-            ))),
+            Entry::Vacant(vacant) => vacant.insert(ProjectRegistryEntry::new(services)),
         };
         entry.idle_since = None;
         entry.services.clone()
@@ -403,21 +421,37 @@ impl ProjectServices {
 #[path = "project_services.test.rs"]
 mod tests;
 
-/// Project-rooted config files tracked by the project-service cache.
+/// The inputs the cached project config + plugin catalog actually read,
+/// fingerprinted so a stale entry rebuilds. The plugin catalog's enabled
+/// set comes from the USER settings file (`config_home/settings.json`
+/// `enabled_plugins`, which a `/plugin disable` writes) plus the user plugin
+/// directory — NOT the project settings file — so a project-only fingerprint
+/// would keep loading a disabled plugin into every new session.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ProjectConfigSnapshot {
     settings_path: PathBuf,
-    settings_fingerprint: FileFingerprint,
+    tracked: Vec<(PathBuf, FileFingerprint)>,
 }
 
 impl ProjectConfigSnapshot {
     fn load(project_root: impl Into<PathBuf>) -> Self {
         let project_root = project_root.into();
         let settings_path = coco_config::global_config::project_settings_path(&project_root);
-        let settings_fingerprint = FileFingerprint::for_path(&settings_path);
+        let config_home = coco_config::global_config::config_home();
+        let tracked = [
+            settings_path.clone(),
+            coco_config::global_config::user_settings_path(),
+            config_home.join("plugins"),
+        ]
+        .into_iter()
+        .map(|path| {
+            let fingerprint = FileFingerprint::for_path(&path);
+            (path, fingerprint)
+        })
+        .collect();
         Self {
             settings_path,
-            settings_fingerprint,
+            tracked,
         }
     }
 
@@ -426,7 +460,9 @@ impl ProjectConfigSnapshot {
     }
 
     pub fn has_changed(&self) -> bool {
-        FileFingerprint::for_path(&self.settings_path) != self.settings_fingerprint
+        self.tracked
+            .iter()
+            .any(|(path, fingerprint)| &FileFingerprint::for_path(path) != fingerprint)
     }
 }
 
@@ -442,8 +478,15 @@ enum FileFingerprint {
 impl FileFingerprint {
     fn for_path(path: &Path) -> Self {
         match std::fs::metadata(path) {
-            Ok(metadata) if metadata.is_file() => Self::Present {
-                len: metadata.len(),
+            // Files: len + mtime. Directories: mtime only (len 0) — a dir's
+            // mtime changes when entries are added/removed, which is exactly a
+            // plugin install/remove.
+            Ok(metadata) if metadata.is_file() || metadata.is_dir() => Self::Present {
+                len: if metadata.is_file() {
+                    metadata.len()
+                } else {
+                    0
+                },
                 modified: metadata.modified().ok(),
             },
             _ => Self::Missing,

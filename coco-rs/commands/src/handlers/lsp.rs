@@ -7,7 +7,7 @@
 //! `LspServersConfig` APIs the standalone `lsp-tui` binary uses.
 //!
 //! The handler intentionally does NOT touch the live
-//! `coco_cli::lsp_handle_adapter::LspManagerAdapter` — that would
+//! `coco_agent_host::lsp_handle_adapter::LspManagerAdapter` — that would
 //! require a runtime-state-aware handler. Config edits take effect on
 //! session restart; the message text states this explicitly so the
 //! user is not surprised.

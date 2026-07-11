@@ -90,6 +90,7 @@ fn all_hub_frames() -> Vec<HubFrame> {
         }),
         HubFrame::BatchAck(BatchAckFrame {
             up_to_seq: cursor_map(9),
+            rejected: Default::default(),
         }),
         HubFrame::Error(ErrorFrame {
             code: "rate_limited".to_string(),
@@ -156,6 +157,7 @@ fn snapshot_cursor_ack_frames_json() {
     });
     let batch_ack = HubFrame::BatchAck(BatchAckFrame {
         up_to_seq: cursor_map(9),
+        rejected: Default::default(),
     });
     let json = serde_json::to_string_pretty(&vec![announce_ack, batch_ack]).unwrap();
     insta::assert_snapshot!("hubframe_cursor_acks", json);

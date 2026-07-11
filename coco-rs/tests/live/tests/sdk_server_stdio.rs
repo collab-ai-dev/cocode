@@ -12,7 +12,7 @@
 //! libtest `#[test]`:
 //!
 //! * Examples in `coco-tests-live` can't see `[dev-dependencies]`, so
-//!   they'd have no access to `coco_cli::sdk_server` / `coco_query` /
+//!   they'd have no access to `coco_agent_host::sdk_server` / `coco_query` /
 //!   `coco_session` / etc. Test targets get the dev-dep graph for free.
 //! * libtest `#[test]` wraps stdout (`running 1 test`, `test result: ok`),
 //!   which would corrupt the NDJSON stream Python parses. With
@@ -38,15 +38,15 @@ use std::sync::Arc;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use coco_agent_host::headless;
+use coco_agent_host::sdk_server::CliInitializeBootstrap;
+use coco_agent_host::sdk_server::LocalAppSessionHandle;
+use coco_agent_host::sdk_server::QueryEngineRunner;
+use coco_agent_host::sdk_server::SdkServer;
+use coco_agent_host::sdk_server::StdioTransport;
+use coco_agent_host::session_runtime::SessionHandle;
+use coco_agent_host::session_runtime::SessionRuntimeBuildOpts;
 use coco_cli::Cli;
-use coco_cli::headless;
-use coco_cli::sdk_server::CliInitializeBootstrap;
-use coco_cli::sdk_server::LocalAppSessionHandle;
-use coco_cli::sdk_server::QueryEngineRunner;
-use coco_cli::sdk_server::SdkServer;
-use coco_cli::sdk_server::StdioTransport;
-use coco_cli::session_runtime::SessionHandle;
-use coco_cli::session_runtime::SessionRuntimeBuildOpts;
 use coco_commands::CommandRegistry;
 use coco_commands::register_extended_builtins;
 use coco_session::SessionManager;
@@ -121,7 +121,7 @@ fn run() -> Result<()> {
 async fn serve(args: Args) -> Result<()> {
     use clap::Parser;
     let model_arg = format!("{}/{}", args.provider, args.model);
-    let cli = Cli::parse_from(["coco", "--models.main", &model_arg, "sdk"]);
+    let cli = Cli::parse_from(["coco", "--models.main", &model_arg, "sdk"]).agent_host_options();
 
     let cwd = std::env::current_dir().context("read cwd")?;
     let sessions_dir = tempfile::tempdir().context("create sessions tmpdir")?;
