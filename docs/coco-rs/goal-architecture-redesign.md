@@ -47,7 +47,7 @@ The target decision is:
 6. Keep the durable goal snapshot outside model-visible conversation history and
    outside compaction summaries.
 7. Re-inject the authoritative objective, budget, plan reference, and completion
-   contract on every autonomous goal turn through one typed goal-context reminder.
+   contract on every goal-owned turn through one typed goal-context reminder.
 8. Run a mandatory `GoalCompletionCoordinator` after every goal-owned turn. Workers
    submit candidates, while only `GoalCompletionGate` may validate evidence and
    persist completion. Natural turn termination is never proof of completion.
@@ -57,6 +57,13 @@ The target decision is:
    authority for goal status or proof of completion.
 11. Remove the existing `ActiveGoal + ManagedHookKind::Goal + GoalStatusPayload`
    compatibility semantics. Backward compatibility is out of scope.
+12. While a goal is active, treat every ordinary user submission as guidance for that
+   goal through the existing input paths. The UI exposes one send action: it uses the
+   existing `CommandQueue` when a turn is running and the existing normal turn-start
+   path when idle. Goal ownership is decided when the turn/input is consumed; no
+   second queue, durable guidance aggregate, or goal-specific queue UI is introduced.
+   Objective, completion-contract, status, and budget mutations remain explicit goal
+   control-plane operations such as `/goal edit`.
 
 There is no transitional Stop Hook design. Implementation proceeds directly to the
 first-class goal runtime and cuts every surface over to it in one authority change.
@@ -85,7 +92,8 @@ polish:
 6. How execution plans survive turns, compaction, resume, and explicit forks.
 7. How system reminders re-anchor the worker.
 8. How provider, hook, task, usage, and persistence failures change state.
-9. How user work, pause, clear, and queued continuation races are resolved.
+9. How user guidance, goal edits, pause, clear, and queued continuation races are
+   resolved.
 10. How completion is claimed and what evidence can prove it.
 
 In this document, execution strength means observable runtime properties:
@@ -95,9 +103,9 @@ In this document, execution strength means observable runtime properties:
 - **Recoverability:** wait, failure, compaction, and restart have explicit re-entry
   paths.
 - **Convergence:** terminal claims, budgets, and anti-loop policies are defined.
-- **Preemption:** committed human turns take priority at idle admission; explicit
-  interruption cancels autonomous work, while opt-in mid-turn steering remains
-  attached to the running turn.
+- **Guidance responsiveness:** committed user guidance joins the running goal turn at
+  a safe boundary or takes priority over a context-only autonomous continuation when
+  the session is between turns. Explicit interruption pauses autonomous work.
 - **Context fidelity:** the worker retains or reconstructs the information required
   to pursue the original objective.
 - **Verifiability:** completion is supported by authoritative evidence.
@@ -142,6 +150,10 @@ Strengths:
   paragraph.
 - Achieved, unmet, and failed status attachments include duration, iteration, and
   output-token statistics.
+- The existing steering path already provides one-send UX for an active turn:
+  `CommandQueue` carries human text and images across per-turn `QueryEngine` rebuilds,
+  drains at tool-safe boundaries, preserves raw user text in history, and emits stable
+  queued/dequeued ids. This is a useful delivery mechanism for goal guidance.
 
 Weaknesses:
 
@@ -155,6 +167,9 @@ Weaknesses:
 - Resume reconstructs in-memory state and the hook but does not start work.
 - The kickoff prompt states the objective once, but there is no goal-specific durable
   execution-plan handoff or mandatory reminder on every autonomous iteration.
+- `CommandQueue` is only the running-turn path. Idle submission already follows the
+  normal turn-start path, so the target runtime must bind that turn to the active goal
+  at admission rather than trying to make `CommandQueue` schedule idle work.
 
 ### 3.2 Hermes: after-turn judge and adapter queue
 
@@ -256,6 +271,16 @@ Primary evidence:
   token/time accounting.
 - `codex-rs/ext/goal/templates/goals/continuation.md` re-injects the full objective,
   budget, current-state evidence policy, completion audit, and blocked audit.
+- Codex TUI exposes one ordinary send action. It routes the submission to
+  `turn/steer` when a regular turn is running and to `turn/start` when the thread is
+  idle (`tui/src/app/thread_routing.rs:562-669`). The goal extension then binds every
+  non-Plan turn that starts while the goal is `Active` or `BudgetLimited` to the
+  current goal (`ext/goal/src/extension.rs:201-239`). User guidance is therefore part
+  of goal execution rather than a separately classified unrelated turn.
+- Objective changes use the explicit thread-goal control plane. An edit updates the
+  durable objective and injects `objective_updated` context into a running turn
+  (`ext/goal/src/runtime.rs:189-208`); ordinary free-form submission does not mutate
+  the stored objective.
 
 Strengths:
 
@@ -265,6 +290,9 @@ Strengths:
   mutating a replacement goal.
 - There is no extra judge in the ordinary after-turn hot path.
 - Tool-finish accounting can detect a budget boundary before the turn naturally ends.
+- One send action gives user guidance timing-sensitive delivery without asking the
+  user to choose between "normal turn" and "steer": running work is steered, while
+  idle submission starts a goal-accounted turn.
 - Resume, turn error, usage limit, and external mutation have explicit lifecycle
   behavior.
 - Recovery from an error stop is a first-class flow: external
@@ -286,6 +314,9 @@ Weaknesses:
   durable goal plan. The goal continuation prompt recommends keeping it current but
   does not re-inject the latest plan content.
 - The implementation assumes a reliable thread lifecycle and persistent state store.
+- Goal binding is inferred from active status at turn start rather than proven by a
+  durable per-turn lease. This gives the intended product semantics but cannot reject
+  stale guidance or late work with the precision required by the target design.
 - The interrupt/abort path accounts usage but never emits the idle lifecycle
   (`core/src/tasks/mod.rs` emits it only from the graceful `on_task_finished`
   path), so an interrupted goal stays `Active` with no continuation owner until an
@@ -382,8 +413,10 @@ independently validate that evidence.
 ### 4.5 Codex context behavior
 
 Codex starts a regular turn through the same `Session::try_start_turn_if_idle()`. It
-does not call `fork_thread()`. Pending human work, active tasks, and Plan mode are
-checked before automatic idle work is accepted.
+does not call `fork_thread()`. Active tasks and Plan mode are checked before automatic
+idle work is accepted. The TUI's single send action steers a running regular turn or
+starts a new turn when idle; if the goal remains active, the goal extension accounts
+that new non-Plan turn as goal work.
 
 Local compaction uses `replace_compacted_history()` to replace active model context
 with bounded user messages, a summary, and re-injected initial/world-state context.
@@ -552,7 +585,7 @@ Two binding paths produce the same invariants:
    stays fixed until a `SpecRevision` edit.
 2. **Mid-goal Plan mode.** Exiting Plan mode re-binds the current artifact by
    recording the new revision/digest and emits the one-shot
-   `goal_plan_activated` reminder; the first autonomous turn must reconcile the
+   `goal_plan_activated` reminder; the first goal-owned execution turn must reconcile the
    plan against the unchanged objective (section 9.2).
 
 Plan-goal association is structural, not semantic. The session owns exactly one
@@ -570,7 +603,7 @@ binding and drift detection already answer deterministically.
 
 #### Cross-turn materialization
 
-Before every autonomous goal turn, a `GoalContextMaterializer` should read:
+Before every goal-owned turn, a `GoalContextMaterializer` should read:
 
 1. the latest durable `GoalSnapshot`;
 2. the referenced plan file, if present;
@@ -578,7 +611,9 @@ Before every autonomous goal turn, a `GoalContextMaterializer` should read:
 4. the latest bounded progress and blocker checkpoint;
 5. the remaining goal budget.
 
-It should produce one bounded typed context fragment. For a large plan it should
+It should produce one bounded typed goal-context fragment. Ordinary user input
+continues to arrive through the normal `UserMessage`/steering path and is not copied
+into this fragment. For a large plan the context fragment should
 include the path, digest/revision, headings, active or unchecked steps, and explicit
 verification commands, then instruct the worker to read the file before changing it.
 It must not copy an unbounded plan body into every prompt.
@@ -594,7 +629,7 @@ but it must not become the scheduler or durable store.
 
 The target injection policy is:
 
-- `goal_context`: mandatory on every autonomous goal turn;
+- `goal_context`: mandatory on every goal-owned turn;
 - `goal_objective_changed`: one-shot steering when the user edits the objective;
 - `goal_plan_changed`: one-shot notice when the file digest changed outside the
   current worker turn;
@@ -726,7 +761,7 @@ The bounded-latency claim must be stated honestly:
 Mitigations that keep discovery latency low without a per-turn model call:
 
 - the mandatory `goal_context` reminder describes the `report_goal_turn` protocol
-  on every autonomous turn;
+  on every goal-owned turn;
 - an `Unreported` turn triggers the one-shot `goal_report_missing` steering
   reminder on the next turn (section 5.5);
 - deterministic contract signals are evaluated on every coordinator pass, so a
@@ -736,8 +771,9 @@ A per-turn model probe was rejected: it would reintroduce per-turn latency and
 cost for exactly the goals least able to validate the probe's verdict, and its
 prose-level evidence is the weakest input the gate could receive. What is adopted
 instead is a bounded periodic completion probe (section 12.5) for goals without
-deterministic check coverage: every N autonomous turns (default five), one model
-assessment over structured durable state nudges an apparently finished worker to
+deterministic check coverage: every N autonomous continuations since the most recent
+user-guided turn (default five), one model assessment over structured durable state
+nudges an apparently finished worker to
 report. The probe has no terminal authority and its failure is a safe no-op. It
 creates a completion-discovery opportunity at the probe interval without claiming a
 hard latency bound that the default free-form evidence policy cannot always prove.
@@ -824,7 +860,7 @@ This proves a runtime defect independently of model quality or user preference.
 | Default runaway guard | No goal-level guard | 20 goal turns | No default goal-turn guard |
 | Waiting | Detects live task but lacks wake owner | Process/session/deadline barrier | Lifecycle-driven, but no equivalent general wait contract |
 | Error status | Active may remain orphaned | Usually continue; parse errors pause | Blocked/usage-limited/budget-limited |
-| User preemption | Constrained by one engine loop | FIFO priority | Atomic idle-start checks; abort path does not re-arm continuation |
+| User guidance during a goal | Queued steering inside the current engine loop | Queued as a normal user-role continuation/input | One send action: steer when running, start a goal-accounted turn when idle |
 | Resume | Reinstall hook, no automatic turn | Restore manager; surface turn drives it | Active auto-continues; Paused/Blocked/UsageLimited prompt to resume; external `set(Active)` re-arms immediately |
 | Durable identity | Condition text | Session key | `goal_id` and expected id |
 | Authority count | Four competing locations | DB plus live object | Persistent row |
@@ -860,7 +896,8 @@ The persisted snapshot conceptually contains:
 - status and typed status reason;
 - current work state: queued lease, running lease/turn, or registered wait identity;
 - plan artifact reference and last observed plan revision/digest;
-- autonomous turn budget, optional token budget, and committed usage;
+- autonomous-continuation turn budget, optional token budget, total goal-turn count,
+  and committed usage;
 - current wait condition and registered wake identity;
 - bounded progress, completion-rejection, and blocker checkpoints;
 - created and updated timestamps.
@@ -962,7 +999,7 @@ database or private lock that bypasses the session store.
 | Persisted state | Resume behavior |
 |---|---|
 | Session write lease held by another process | Reject writable resume as `session_in_use`; offer read-only inspection or opening a fork with a new session id |
-| `active` and execution mode | Restore plan/context, publish snapshot, then schedule at idle after pending human work |
+| `active` and execution mode | Restore plan/context, publish the snapshot, then schedule the next autonomous turn at the first eligible idle edge |
 | `active` while Plan or Review mode is selected | Normalize to `waiting(mode_gate)` and register a mode-change wake |
 | `waiting(deadline)` | Re-register the timer; wake immediately when the persisted deadline is already due |
 | `waiting(task)` | Reconcile task ids with `TaskManager`; re-register terminal subscriptions |
@@ -1006,10 +1043,10 @@ artifact:
 2. Entering Plan mode never clears, completes, or replaces the goal.
 3. A goal created while Plan mode is active is persisted as
    `waiting(mode_gate=plan)`; no automatic turn starts.
-4. Entering Plan mode during a goal-owned turn cancels that autonomous turn at the
+4. Entering Plan mode during a goal-owned turn cancels that execution turn at the
    safe turn boundary and persists `waiting(mode_gate=plan)` before another turn can
    start.
-5. Plan-mode turns do not consume autonomous goal turns, goal tokens, blocker streaks,
+5. Plan-mode turns do not consume goal turns, goal tokens, blocker streaks,
    or completion-verifier attempts.
 6. `report_goal_turn` and autonomous wait/block tools are not exposed in Plan mode.
    User control-plane actions such as edit, pause, clear, and budget change remain
@@ -1025,7 +1062,7 @@ and verification commands, but it cannot silently narrow the original objective 
 completion contract. A user edit to the objective increments `SpecRevision`; an agent
 edit to the plan increments plan revision only.
 
-The first autonomous turn after Plan mode must receive:
+The first goal-owned execution turn after Plan mode must receive:
 
 - the unchanged authoritative objective;
 - the current plan artifact id, path display, digest, and bounded active sections;
@@ -1055,10 +1092,12 @@ Natural model termination means only "this logical turn ended." If the goal rema
 active, the supervisor starts another turn. Every turn still passes through a hard
 completion coordinator; there is no per-turn **model judge**.
 
-Only a turn carrying a valid `GoalLease` may submit `GoalTurnDisposition`. This
-prevents an unrelated human turn or stale sub-agent from proposing completion. The
-report is a candidate input, not a status mutation. A human can still pause, clear,
-edit, or explicitly request a goal-bound continuation through the control plane.
+Only a turn carrying a valid `GoalLease` may submit `GoalTurnDisposition`. While the
+goal is active, ordinary user guidance is delivered into such a goal-owned turn; it
+does not create an unbound turn. The lease still prevents stale sub-agents, revoked
+turns, and work from a replaced goal from proposing completion. The report is a
+candidate input, not a status mutation. A human can pause, clear, edit, or resume the
+goal through the control plane.
 
 A worker completion candidate contains:
 
@@ -1121,6 +1160,55 @@ Relevant source boundaries are `coco-rs/app/cli/src/tui_runner/goal_commands.rs`
 The final `coco-rs` TUI follows the Codex control-plane shape, with explicit plan and
 wait visibility.
 
+#### One-send goal-guidance semantics
+
+While a goal is `active` in execution mode, every ordinary free-form submission is
+guidance for that goal. There is no user-visible choice between "send normally" and
+"send to the current goal", and no unbound conversational turn in that state. Slash
+commands, approval answers, structured tool responses, and explicit goal controls are
+not ordinary free-form submissions and retain their own typed paths.
+
+The data path is the same one non-goal conversation already uses:
+
+1. If a turn is running, TUI/SDK submission enters the existing session-scoped
+   `CommandQueue`. Existing queue ids, text/image support, edit/retrieve/re-submit UI,
+   priority ordering, raw transcript messages, API-only wrapping, and safe-boundary
+   drain are reused unchanged.
+2. If the session is idle, submission follows the existing normal `turn/start` path
+   and becomes the initial user message. It is not first inserted into
+   `CommandQueue`.
+
+Goal behavior is selected only at the consumer boundaries:
+
+- **turn admission:** when a non-Plan turn starts and the goal is active, atomically
+  claim/bind the current goal lease to that turn and inject `goal_context`;
+- **steering drain:** a human queue item is still an ordinary user message; because
+  the receiving turn is goal-owned, it inherits that turn's accounting and completion
+  semantics without carrying a second goal-specific queue identity;
+- **turn finalization:** steering accepted after the turn's last model request forces
+  another goal turn before completion can be committed, so the model gets a chance to
+  address it.
+
+This intentionally has the same persistence guarantee as ordinary conversation. A
+steering item that has not yet entered transcript/history may be lost on process
+restart; the goal runtime adds no durable guidance journal. `CommandQueue` remains the
+only editable queue and the current queue UI remains the only retrieve/edit/re-submit
+surface.
+
+The race between user input and autonomous continuation is resolved by the existing
+per-session turn slot. If normal `turn/start` wins, the consumer binds that turn to the
+active goal. If autonomous continuation wins, the same user submission observes a
+running turn and enters `CommandQueue`. Both outcomes are goal-owned and require no
+second admission queue.
+
+Plan/Review mode is the deliberate mode-gate exception. Free-form input there remains
+related to the goal's planning or review process, but it is a Plan/Review turn: it
+does not execute the goal, hold an execution lease, consume goal budget, or expose
+goal disposition tools. Exiting the mode rebinds the plan and resumes normal
+goal-guidance semantics. For paused, blocked, usage-limited, or budget-limited goals,
+ordinary submission does not silently bypass the stopped status; the surface offers
+the corresponding resume, dependency, or budget action first.
+
 #### Commands and actions
 
 | Interaction | Behavior |
@@ -1128,11 +1216,12 @@ wait visibility.
 | `/goal` | Open the current goal detail view; show usage help when absent |
 | `/goal <objective>` | Create a goal; confirm before replacing any unfinished goal |
 | `/goal edit` | Edit objective/contract through a dedicated editor; use expected spec revision |
-| `/goal pause` | Atomically cancel queued/running autonomous work and persist paused |
+| `/goal pause` | Atomically cancel queued/running goal work and persist paused |
 | `/goal resume` | Validate context/plan, transition active, and schedule at idle |
 | `/goal clear` | Confirm when work is running; cancel lease and append clear audit event |
 | `/goal plan` | Open the resolved plan file through the existing editor handoff |
-| `/goal budget` | Show or edit autonomous-turn and token budgets |
+| `/goal budget` | Show or edit autonomous-continuation and token budgets |
+| ordinary send while goal is active | Use the existing input path: `CommandQueue` when running, normal `turn/start` when idle; the consumer binds either path to the goal |
 
 No command handler calls `QueryEngine` directly. Create/resume commits an active
 snapshot with a queued lease and returns; `GoalSupervisor` observes that committed
@@ -1145,7 +1234,8 @@ The detail view displays:
 - status, typed reason, spec revision, and state version;
 - lifecycle owner: running turn, queued lease, or registered wake;
 - plan file display path, revision/digest, and active steps;
-- autonomous turns used/remaining, tokens used/budget, and elapsed active time;
+- total goal turns, autonomous continuations used/remaining, tokens used/budget, and
+  elapsed active time;
 - current wait condition or blocker evidence;
 - last bounded progress checkpoint;
 - last completion rejection and missing evidence;
@@ -1170,9 +1260,14 @@ The detail view displays:
   prompt explaining what must change.
 - `Ctrl+C` during a goal-owned turn atomically pauses the goal before cancelling the
   turn, preventing an immediate idle restart.
-- A new ordinary human-turn request does not pause the goal and wins the next idle
-  admission. Explicit mid-turn steering is a separate action and stays bound to the
-  current goal lease.
+- The composer has one send action while a goal is active. A submission steers the
+  running goal turn through the existing queue; if no turn is running, it uses the
+  normal turn-start path. The user does not choose a separate ordinary-turn action or
+  interact with a second queue.
+- Free-form guidance never changes the objective, completion contract, budget, or
+  status. Those mutations require `/goal edit` or another explicit goal control-plane
+  action. To do unrelated work in the same session, the user pauses or clears the
+  goal first; a separate session remains independent.
 - Objective/contract/budget edits include expected spec revision. Pause, clear, and
   interrupt target the current goal id and apply to the latest state, so frequent
   usage updates do not make safety controls spuriously stale. A real stale-id/spec
@@ -1181,7 +1276,7 @@ The detail view displays:
   session registry.
 - Session switchers show a compact goal-status badge, and the global footer shows the
   count of active background goals. Switching the visible session does not silently
-  pause an explicitly autonomous goal.
+  pause an active goal.
 - Ephemeral sessions reject goal creation with a clear "persist the session first"
   action, matching the useful Codex behavior.
 
@@ -1193,16 +1288,16 @@ are also required:
 | Concern | Failure if omitted | Final decision |
 |---|---|---|
 | Session write ownership | Two processes resume one session and append conflicting state versions | `SessionStore::require_write_lease` grants one writable runtime per session id across processes |
-| Single scheduling owner | Duplicate or missing turns | Only `GoalSupervisor` starts autonomous work |
-| Context and compaction | Objective or plan drift after summary | Re-materialize durable goal and plan context every autonomous turn |
-| Human preemption | Goal competes with user work | A committed human-turn request wins idle admission; explicit mid-turn steering remains part of the running goal lease |
-| Budgets and cost | Runaway spend | Default 20 autonomous turns; optional explicit token budget; total input+output accounting |
+| Single autonomous owner | Duplicate or missing continuation turns | Only `GoalSupervisor` starts autonomous turns; normal user starts use the existing AppServer slot and are goal-bound by the consumer |
+| Context and compaction | Objective or plan drift after summary | Re-materialize durable goal and plan context every goal-owned turn |
+| User guidance | Input races a running or queued continuation | Reuse one normal input path and one existing `CommandQueue`; consumer-side turn admission/drain binds the input to the active goal |
+| Budgets and cost | Runaway spend | Default 20 autonomous continuations across the goal lifetime; user-guided turns do not spend that quota, while all goal-owned turns count toward optional token budget and total usage |
 | Background tasks and deadlines | Active-but-idle waits | Durable typed wait plus registered task/timer wake |
 | Permission prompts | Autonomous work hangs or bypasses authority | Persist `waiting(permission)`; never weaken normal tool permissions |
 | Provider/rate-limit errors | Silent loop or silent stop | Typed retry policy and explicit limited/blocked/paused transitions |
 | Idempotency | Duplicate accounting, completion, or starts | Goal id, spec revision, state version, lease id, and effect id on lifecycle writes |
 | Multi-session isolation | Work starts in the wrong session | Every command, event, lease, and turn port call carries explicit session id |
-| Cross-session fairness | One goal monopolizes provider/tool capacity | A small process-wide autonomous-admission semaphore uses FIFO/round-robin fairness among sessions in that process |
+| Cross-session fairness | One goal monopolizes provider/tool capacity | A small process-wide autonomous-admission service uses round-robin fairness among background continuations; normal user turns retain interactive AppServer priority |
 | Shared workspace concurrency | Two independent sessions or processes may intentionally use one checkout | Workspace sharing is allowed and is not a correctness lock; sessions remain isolated by session id, and current-state evidence is revalidated before completion |
 | Sub-agents | Child completes or mutates parent goal incorrectly | Parent supervisor owns the goal; children return evidence/progress only unless explicitly delegated a scoped child contract |
 | Explicit conversation fork | Two autonomous workers mutate the same workspace | Copy plan, do not auto-clone active goal; explicit paused clone only |
@@ -1237,9 +1332,11 @@ signals is not a no-progress turn (section 12.2).
 3. Durable state is committed before live projections and notifications change.
 4. One OS-backed session write lease protects every writable materialization of a
    session id across processes.
-5. Every autonomous turn has an explicit session id, goal id, spec revision, and lease id.
-6. A committed human turn wins idle admission; explicit mid-turn steering has separate
-   lease-bound semantics.
+5. Every goal-owned turn has an explicit session id, goal id, spec revision, and lease id.
+6. While a goal is active, the existing submission operation covers both timing
+   cases: `CommandQueue` steering for a running turn and normal `turn/start` when
+   idle. Goal ownership is assigned at consumption; objective and contract changes
+   remain explicit edits.
 7. Goal context is reconstructed from durable state; it is not trusted to compaction.
 8. Plan content remains a separate durable artifact.
 9. Status transitions use exhaustive Rust enums and reducer tests.
@@ -1252,28 +1349,27 @@ signals is not a no-progress turn (section 12.2).
 ```text
  SessionStore -- required SessionWriteLease --> SessionRuntime
                                                    ^
- user / SDK / TUI -> GoalCommandService -----------|
-                                                   |
-                                           GoalRuntimeHandle
-                  durable commit | live projection
-                               v
- Session metadata <---- GoalSnapshot + GoalEvent ----> protocol/TUI
-                               |
-                      pure GoalState reducer
-                               |
-     turn/task/idle events -> GoalSupervisor -> SessionTurnPort
-                                  |                    |
-                                  |                    v
-                                  |              QueryEngine
-                                  |                    |
-                                  |                    v
- GoalRuntimeHandle <------ GoalCompletionGate <- GoalCompletionCoordinator
-                                  |
-                        GoalContextMaterializer
-                         |        |         |
-                  GoalSnapshot  PlanArtifactService  task/todo state
-                                  |
-                       typed goal reminder
+ goal controls -> GoalCommandService -> GoalRuntimeHandle -> GoalSnapshot
+                                             |
+                                             v
+                                      GoalSupervisor
+                                             |
+                                    autonomous continuation
+                                             v
+ user / SDK / TUI -> existing SubmitInput -> AppServer turn slot
+                               |                     |
+                        running turn               idle turn
+                               v                     v
+                        CommandQueue ----------> QueryEngine
+                                                     ^
+                                                     |
+                              GoalRuntimeHandle.bind_turn_if_active
+                                                     |
+                              GoalContextMaterializer + goal tools
+                                                     |
+                                                     v
+ GoalRuntimeHandle <- GoalCompletionGate <- GoalCompletionCoordinator
+          +---------------- snapshot/event ----------------> protocol/TUI
 ```
 
 #### `coco-goals`: pure domain crate
@@ -1312,7 +1408,10 @@ Owned by `SessionRuntime`, this component should:
 - append the new snapshot/event to session persistence;
 - update the live projection only after durable success;
 - emit protocol events after commit;
-- expose read-only snapshots to tools, TUI, and context materialization.
+- expose read-only snapshots to tools, TUI, and context materialization;
+- at the AppServer turn-admission boundary, bind a normal non-Plan turn to the active
+  goal lease before it starts. This consumer-side binding is used for both ordinary
+  idle submission and autonomous continuation.
 
 This is deliberately not a generic repository trait hierarchy. The existing session
 metadata abstraction is sufficient.
@@ -1326,18 +1425,21 @@ The supervisor consumes:
 - task terminal notifications;
 - deadline wake events;
 - goal mutation events;
-- user queue state;
+- session turn-slot and live queue state;
 - usage and budget signals.
 
 It performs an atomic claim using `(goal_id, lease_id)` under the goal transition lock
-and starts work through `SessionTurnPort`. No TUI, SDK handler, hook, or command queue
-may independently run an autonomous goal turn.
+and starts autonomous work through `SessionTurnPort`. No TUI, SDK handler, hook, or
+command queue may independently run an autonomous goal turn. A normal idle user
+submission still uses the existing turn-start path; the shared admission boundary
+claims the queued goal lease and makes that turn goal-owned.
 
 Queued and running ownership is represented by a durable lease record. This goal
 lease is distinct from the session write lease: the session lease excludes a second
-writer process, while the goal lease identifies one autonomous work attempt inside
+writer process, while the goal lease identifies one goal-owned work attempt inside
 the owning runtime. Starting a turn transitions `queued(lease_id)` to
-`running(lease_id, turn_id)` under the current state version. An unfinished turn
+`running(lease_id, turn_id)` under the current state version whether the start came
+from user input or the supervisor. An unfinished turn
 commits the next queued lease as part of its stop transition. Resume treats a
 persisted running lease as stale, reconciles any known turn result, and otherwise
 replaces it with a new queued lease. This closes the persist-then-schedule crash
@@ -1370,16 +1472,23 @@ completion only from an optional protocol event. A first version may adapt the
 existing local AppServer bridge or `QueryEngineRunner`. The multi-session target
 resolves a `SessionHandle` through AppServer.
 
-Before starting, the port passes through one small process-wide
+The owned-completion contract applies to user-started goal turns too. The existing
+AppServer `turn/start` admission hands the same runner completion handle to
+`GoalRuntimeHandle` when `bind_turn_if_active` succeeds; `SessionTurnPort` is the
+autonomous caller's adapter over that shared turn slot, not a second user-input path.
+
+Before starting, autonomous work passes through one small process-wide
 `AutonomousAdmission` service. It provides bounded cross-session concurrency and
 round-robin fairness for sessions in that process. It does not serialize by
 workspace: distinct sessions and processes may intentionally share a checkout. It
 does not own goal state or continuation policy; it only admits an already-durable
-queued lease.
+queued lease. Normal user-started turns continue to use interactive AppServer
+admission and are not routed through the autonomous fairness semaphore.
 
-Do not repurpose `CommandQueue` as the idle scheduler. It is a mid-turn steering queue
-and can contribute priority/origin information, but it does not own thread-idle turn
-creation.
+Do not repurpose `CommandQueue` as the idle scheduler. It remains the existing
+session-scoped mid-turn steering queue with the existing queue UI and persistence
+semantics. Goal binding belongs to the receiving turn, not to a second queue item
+type.
 
 #### `GoalContextMaterializer`: bounded model context
 
@@ -1401,8 +1510,8 @@ pub struct GoalTurnContext {
 }
 ```
 
-The reminder adapter escapes untrusted fields and renders stable instructions
-separately.
+The reminder adapter escapes untrusted goal fields and renders stable runtime
+instructions separately. Ordinary input remains in the existing user-message path.
 
 #### `GoalEvidenceRecord`: runtime-owned provenance
 
@@ -1435,7 +1544,7 @@ well-owned evidence.
 
 #### `GoalCompletionCoordinator` and `GoalCompletionGate`
 
-`GoalCompletionCoordinator` is invoked by `GoalSupervisor` for every goal-owned turn
+`GoalCompletionCoordinator` is invoked by the goal runtime for every goal-owned turn
 result. It is deterministic orchestration, not an LLM judge. It normalizes the worker
 report, synthesizes `Unreported`, evaluates changed contract signals, creates mandatory
 boundary-audit candidates, and routes the result.
@@ -1464,6 +1573,10 @@ candidate is not equivalent to completion.
 In the target architecture, `QueryEngine::run` executes one logical turn:
 
 - it does not read durable goal state to run an outer autonomous loop;
+- when turn admission bound an active goal, its caller provides typed goal context;
+- ordinary initial input remains the normal `UserMessage`, and the existing
+  `CommandQueue` continues to deliver input accepted after the turn starts at safe
+  internal boundaries;
 - a goal Stop Hook does not veto terminal behavior;
 - it emits ordinary turn lifecycle, usage, and tool outcomes;
 - the supervisor decides whether another turn is needed after the turn returns.
@@ -1496,7 +1609,7 @@ pub enum GoalLease {
 }
 ```
 
-Use newtypes for goal, lease, spec revision, state version, and artifact identity;
+Use newtypes for goal, lease, guidance, spec revision, state version, and artifact identity;
 closed enums for all reasons; and non-zero integer types for configured positive limits. The pure reducer
 returns typed transition errors using the workspace error conventions. It does not
 use string status matching, wildcard fallbacks, async locks, or I/O.
@@ -1510,7 +1623,7 @@ Recommended closed status set:
 | `paused` | No | User interrupt, no progress, unavailable context/verifier/scheduler | User resume |
 | `blocked` | No | Typed, evidenced impasse or terminal execution error | User resume/edit |
 | `usage_limited` | No | Provider/account quota | Reset wake or user resume |
-| `budget_limited` | No | Autonomous-turn or token budget | Increase the exhausted budget and resume, or complete |
+| `budget_limited` | No | Autonomous-continuation or token budget | Increase the exhausted budget and resume, or complete |
 | `completed` | No | Gate-authorized completion candidate | New goal replaces it |
 
 ```text
@@ -1534,15 +1647,19 @@ Recommended defaults:
 
 - autonomous continuation turns: 20;
 - token budget: none unless explicitly requested;
-- completion probe interval: five autonomous turns, only for goals without
-  completion-relevant check coverage;
+- completion probe interval: five autonomous continuations since the most recent
+  user-guided turn, only for goals without completion-relevant check coverage;
 - completion verifier attempts: one per gate evaluation;
 - transient scheduler retries: bounded exponential backoff, at most three attempts,
   then `paused(scheduler_unavailable)`.
 
-Query `max_turns` and goal continuation turns are different. The first limits the
-agent/tool loop inside one logical turn. The second limits autonomous turns across the
-goal lifecycle.
+Query `max_turns` and autonomous goal continuations are different. The first limits
+the agent/tool loop inside one logical turn. The second prevents unattended looping:
+it increments only when `GoalSupervisor` starts a goal turn autonomously. Initial
+creation and a normal user-started goal turn remain
+goal-owned but do not spend this autonomous-turn quota. Guidance injected after an
+autonomous turn has already started does not retroactively refund that turn; it does
+reset the completion-probe cadence after the turn is reconciled.
 
 Token accounting should use total input plus output deltas from session
 `UsageAccounting`, not an output-token-only display delta.
@@ -1552,12 +1669,15 @@ at tool-finish and turn-stop boundaries. This preserves mid-turn budget enforcem
 without appending a snapshot for every streamed token. UI usage notifications may be
 coalesced, but the final committed totals and budget transition are durable.
 
-Only a turn started with a valid goal lease consumes goal turn/token/time budgets.
-Ordinary human turns remain unbound even while a goal exists, so an unrelated user
-question cannot consume or complete the goal. Human steering injected into an already
-goal-bound turn inherits that turn's lease. This is more precise than Codex's current
-non-Plan active-goal accounting and makes the budget specifically an autonomous-work
-budget.
+Only a turn started with a valid goal lease contributes goal usage. Every goal-owned
+turn increments the total goal-turn audit count and contributes token/time usage; the
+optional token budget therefore covers both user-guided and autonomous work. Guidance
+injected into a running turn inherits that lease and does not create another logical
+turn. A normal user-started turn records `GoalTurnTrigger::UserInput`, while a
+context-only continuation or registered wake records an autonomous trigger and spends
+the autonomous-turn quota. Plan/Review turns and typed control-plane operations spend
+neither quota. This preserves Codex's one-send product semantics while keeping the
+default 20-turn guard focused on unattended execution.
 
 ### 11.2 Background work and waits
 
@@ -1639,9 +1759,10 @@ Visibility rules:
 - `report_goal_turn` and `get_goal` are registered only for a turn holding a
   valid goal lease, and are injected eagerly into that turn's tool list, never
   deferred behind lazy tool discovery: a mandatory protocol tool must be visible
-  without a search. Ordinary human turns do not see `report_goal_turn` even
-  while a goal exists, because they are not goal-owned and cannot submit
-  dispositions (section 9.3).
+  without a search. An ordinary submission while the goal is active is delivered to
+  a goal-owned turn and therefore sees the same lease-bound tools. Plan/Review turns
+  and turns after the goal stops remain unbound and cannot submit dispositions
+  (sections 9.2-9.4).
 - `create_goal` is registered only on explicit user or system request; it is not
   part of the ambient tool list.
 - No goal tool is visible in Plan or Review mode (section 9.2).
@@ -1853,7 +1974,7 @@ candidate or mandatory boundary audit:
 - `verified`: persist `completed` and stop scheduling;
 - `rejected`: persist `active` with bounded reasons and schedule another turn;
 - `unavailable`: persist `paused(verification_unavailable)`;
-- do not spend a verifier call after an ordinary turn that has progress and no
+- do not spend a verifier call after a goal turn that has progress and no
   completion/boundary candidate.
 
 The verifier receives the objective, completion contract, plan reference, bounded
@@ -1874,6 +1995,8 @@ missing evidence. Goals that must complete unattended should persist
 goal turn finalizes
   -> GoalCompletionCoordinator always runs
   -> load report or synthesize Unreported
+  -> compare accepted human-input generation with last model-visible generation
+  -> newer human input exists -> persist active + queued lease; do not complete yet
   -> evaluate changed deterministic contract signals
   -> determine proposed non-completion transition
   -> add boundary-audit candidate before a system stop boundary
@@ -1897,6 +2020,15 @@ goal turn finalizes
          unavailable at probe audit -> persist active + queued lease + probe cooldown
 ```
 
+This uses turn-local consumer state, not a second queue. The input/drain consumer
+increments a `human_input_generation` only for ordinary human messages and records
+the latest generation included in each model request. Finalization compares the two
+under the same per-session admission boundary used for completion. A newer accepted
+generation means the input has not yet influenced the worker, so completion is
+deferred to the next goal turn. The counter is in-memory like the existing queue;
+input arriving after the completion commit belongs to the now-normal conversation
+state.
+
 ### 12.5 Completion probe: bounded discovery aid
 
 Goals without deterministic check coverage keep worker self-report as the primary
@@ -1906,7 +2038,8 @@ completion probe bounds this without reintroducing a per-turn judge.
 
 Trigger and cadence:
 
-- runs at most once every N autonomous turns (default five, configurable);
+- runs at most once every N autonomous continuations since the most recent
+  user-guided turn (default five, configurable);
 - only for goals whose contract contains no completion-relevant `Check` items,
   because checks already give the coordinator cheap per-turn discovery signals;
 - suppressed while waiting or paused, and for a cooldown after any candidate,
@@ -1983,6 +2116,11 @@ and explicit mutations rather than a generic partial object merge:
   `action` is a closed user/system action enum such as pause or resume;
 - `session/goal/clear { session_id, goal_id }`.
 
+Ordinary free-form submission keeps the existing surface action. When the durable
+snapshot is active, the existing `turn/start` consumer binds the new non-Plan turn to
+the goal, while the existing `turn/steer`/`CommandQueue` path feeds the already-bound
+running turn. No goal-specific input RPC or queue protocol is added.
+
 Agent `report_goal_turn` requests enter the coordinator through the same runtime
 boundary but cannot mutate status directly. This prevents clients or stale model
 turns from forging completion through a generic `set` request.
@@ -2031,9 +2169,12 @@ Because backward compatibility is explicitly excluded, old `GoalStatusPayload` a
 | Race | Required rule |
 |---|---|
 | Two processes resume the same session | `SessionStore::require_write_lease` admits one writable runtime; the loser receives `session_in_use` before recovery or mutation |
-| Committed human turn vs queued goal continuation | AppServer admission linearizes the two requests; a human turn committed before the autonomous claim wins, and the goal waits for the next idle edge |
+| User input vs queued continuation | The existing AppServer turn slot linearizes them. If normal `turn/start` wins, admission binds that turn to the goal and rejects the stale autonomous start; if continuation wins, the input follows the existing running-turn steering path |
+| User input vs running-turn stop | Attempt the existing steer against the observed turn id; if the turn already stopped, retry through the existing normal turn-start path, whose consumer binds the new turn to the still-active goal |
+| User input vs completion commit | Under the session admission/finalization boundary, compare accepted human-input generation with the last model-visible generation. Input accepted first defers completion; input accepted after completion is ordinary post-goal conversation |
 | Pause/clear vs queued continuation | Under the goal transition lock, revoke lease and persist status; stale start is rejected |
 | Objective edit vs running turn | Spec revision increments and the running lease is revoked; next turn uses the new objective |
+| Objective edit vs user input | Preserve normal session message ordering; the explicitly edited objective remains the authoritative goal context on the next goal-owned turn |
 | Plan edit vs queued turn | Re-materialize on claim or reject stale plan digest |
 | Two idle notifications | `(goal_id, lease_id)` starts exactly one turn |
 | Old usage event vs replacement goal | Goal id/lease id/effect id mismatch rejects accounting |
@@ -2046,21 +2187,11 @@ sessions may observe each other's file changes, so completion evidence and plan
 digests are revalidated against current state; ordinary filesystem and version-control
 conflict behavior remains visible to the workers and users.
 
-Human-turn requests and mid-turn steering are distinct operations:
-
-- `QueueHumanTurn` requests a new ordinary turn. It remains outside goal accounting
-  and participates in the AppServer idle-admission arbitration above.
-- `SteerCurrentTurn` uses the existing `CommandQueue` behavior. When accepted during a
-  goal-owned turn it is injected at the safe internal boundary, inherits that turn's
-  goal lease, and consumes its accounting. The UI/API must label this as steering,
-  not promise that it will run first as a separate turn.
-
-The linearization point is the AppServer per-session turn-admission critical section,
-not the goal mutex alone. A human request that arrives after a goal turn has already
-started does not retroactively win that admission; it either explicitly steers the
-running turn or waits as the next human turn. This is the precise meaning of human
-priority and avoids an impossible "wins every race" promise across two independent
-queues.
+Active-goal free-form input uses the same operation and storage as ordinary
+conversation. The only Goal-specific logic is consumer-side: turn admission binds an
+idle normal start to the active goal, queue drain inherits the running turn's binding,
+and finalization checks whether newer queued input has actually been model-visible.
+No additional input authority, queue, persistence record, or UI state exists.
 
 For a running goal turn, pause/clear/Plan-mode entry first revokes the durable lease
 under the transition lock, then requests turn cancellation. Already-started external
@@ -2074,8 +2205,9 @@ follow-up scheduling events from the revoked lease are rejected.
 | Writable resume while session lease is held | No goal transition; reject runtime materialization with typed `session_in_use` and optional owner diagnostics |
 | Storage backend cannot guarantee the session lease | No goal transition; fail closed with `session_lock_unsupported` |
 | Explicit user interrupt | `paused(user_interrupted)` |
-| New human-turn request arrives | Do not pause; queue the unbound human turn, which wins the next eligible admission before the goal resumes |
-| Explicit mid-turn steering arrives | Inject at a safe internal boundary under the running goal lease; do not represent it as an unbound human turn |
+| Free-form input arrives during a running goal turn | Use the existing `CommandQueue`; the bound consumer treats it as goal guidance and accounts it under the current lease |
+| Free-form input arrives between goal turns | Use the existing normal turn-start path; admission claims the active goal's queued lease for that turn |
+| Free-form submission arrives while goal is stopped or mode-gated | Do not bypass the status/mode gate; offer the typed resume/budget/dependency action or run the selected Plan/Review flow |
 | Provider usage limit | `usage_limited`; register a reset wake when the provider reports a reset time |
 | Retryable provider error exhausted in-turn | `waiting(provider_backoff)` with a deadline wake; at most three consecutive backoff waits, then `blocked(execution_error)` |
 | Non-retryable provider/tool-loop error | `blocked(execution_error)`; resumable per section 11.3 |
@@ -2128,7 +2260,8 @@ the goal domain, supervisor, adapters, and protocol are new.
 | Durable state | Session-scoped persistence survives resume and compression rotation | First-class typed goal row and identity prevent projection drift | Versioned session snapshot with goal/spec/state/lease identities under one storage-owned session write lease |
 | Continuation | New normal turns improve preemption and observability | Thread idle lifecycle is the correct single owner | Session-scoped supervisor starts same-session logical turns |
 | Completion | Mandatory after-turn orchestration catches omitted claims, but the model judge sees weak evidence | Controlled terminal tool and active-goal continuation provide a hard gate, but discovery is worker-driven | Mandatory non-LLM coordinator plus multi-source candidates, runtime-owned evidence records, and exclusive evidence gate |
-| Runaway control | Default 20 turns is an effective guard | Token/time accounting and mid-turn budget steering are strong | Default 20 autonomous turns plus optional token budget and total-token accounting |
+| Runaway control | Default 20 turns is an effective guard | Token/time accounting and mid-turn budget steering are strong | Default 20 autonomous continuations; user-guided goal turns do not spend that quota, while optional token budget and usage cover all goal-owned work |
+| User input during active goal | Continuation prompts and user input share the normal message queue | One TUI send action steers a running turn or starts a goal-accounted idle turn | Reuse the same behavior: existing queue when running, normal start when idle, and consumer-side goal binding; objective changes remain explicit edits |
 | Error stop and resume | API failure fails open to continue, which preserves liveness but is unbounded | Turn error becomes blocked; external `set(Active)` immediately re-arms continuation and the TUI prompts to resume Paused/Blocked/UsageLimited goals, but abort leaves an idle Active goal and BudgetLimited is terminal | Transient errors wait under a bounded backoff wake; non-retryable errors block but resume with one action committing a queued lease atomically; interrupt pauses explicitly |
 | Completion ergonomics | Every-turn judge needs no user setup but pays per turn and can mis-terminate | `update_goal` self-report is friction-free but can spin indefinitely when the worker never claims | Self-report stays primary with no mandatory contract review; checks veto cheaply; a bounded N-turn probe nudges without authority; hard boundaries stop |
 | Plan handoff | Re-inject active todo state after compaction | Re-inject authoritative objective every continuation; reject Plan-mode auto-start | Reuse durable coco plan file and materialize it with the goal reminder every turn |
@@ -2158,15 +2291,18 @@ Add red tests for:
 8. Plan mode prevents goal scheduling and accounting, then wakes on exit;
 9. user interrupt does not immediately bounce into another turn;
 10. clear racing a queued continuation rejects stale work;
-11. a committed human turn wins idle admission, while explicit steering remains
-    bound to the running goal lease;
+11. one free-form submission racing the turn boundary follows either the existing
+    steering path or normal turn-start path, and both consumers bind it to the active
+    goal;
 12. compaction followed by continuation re-injects objective and plan reference;
 13. external plan edit is observed before the next goal turn;
 14. completion cannot be inferred solely from completed plan checkboxes;
 15. evidence from another goal, lease, or turn is rejected;
 16. exhausting the autonomous-turn budget requires an atomic budget raise before
     resume;
-17. TUI receives the same snapshot as SDK and headless surfaces.
+17. Goal mode reuses the existing queue edit/retrieve/re-submit UI with no second
+    queue or goal-specific pending-input state;
+18. TUI receives the same snapshot as SDK and headless surfaces.
 
 ### Phase 1: domain and durable state
 
@@ -2194,13 +2330,15 @@ Add red tests for:
 - Implement the mandatory coordinator and exclusive gate with the minimal persisted
   completion policy needed for vertical tests; no caller can write completed directly.
 - Register lease-bound `get_goal` and `report_goal_turn`.
-- Add AppServer-linearized human-turn priority, explicit steering semantics, durable
-  goal-lease claims, and duplicate-idle suppression.
-- Add default goal-turn cap and total-token accounting.
+- Add one-send active-goal input consumption: reuse normal turn start and
+  `CommandQueue`, bind both at the AppServer turn boundary, and suppress duplicate
+  autonomous idle starts.
+- Add default autonomous-continuation cap, total goal-turn audit count, and
+  total-token accounting.
 - Add deadline-wake prepare/commit/activate/recheck infrastructure.
 - Add typed provider-error mapping with bounded `waiting(provider_backoff)` wakes.
 - Inject a minimal authoritative objective/budget/completion-contract context so no
-  autonomous turn starts unanchored.
+  goal-owned turn starts unanchored.
 
 Exit criterion: the active-goal invariant passes model/property tests, and TUI,
 headless, and SDK each pass one multi-turn end-to-end test behind a construction-only
@@ -2254,13 +2392,14 @@ Do not keep a compatibility shim, dual-write bridge, or runtime fallback.
 
 1. A first turn stops without completion; a second turn starts automatically.
 2. A worker completion candidate can only complete through `GoalCompletionGate`.
-3. Default goal-turn cap enters `budget_limited(kind=turns)`.
+3. Default autonomous-continuation cap enters `budget_limited(kind=turns)`.
 4. Token budget enters `budget_limited` and injects only one wrap-up.
 5. Provider usage limit enters `usage_limited`.
 6. Terminal execution error enters `blocked`.
 7. Background work does not burn continuation turns and wakes on completion.
-8. A committed human-turn request races continuation and wins the next admission;
-   explicit mid-turn steering remains bound to the running goal lease.
+8. One free-form submission uses existing steering when the goal turn is running and
+   normal turn start when it is idle; a boundary race binds either consumer to the
+   active goal without creating a second queue.
 9. Clear after queueing prevents stale continuation start.
 10. Restart/resume automatically continues an active goal.
 11. Compaction cannot change the goal snapshot.
@@ -2308,43 +2447,51 @@ Do not keep a compatibility shim, dual-write bridge, or runtime fallback.
     expected spec revision.
 39. Goal creation rejects a contract containing semantic criteria when the
     selected policy has neither a verifier nor user acceptance.
-40. A contract compiled entirely to deterministic checks completes with no model
+40. An in-memory steering item lost on restart has the same behavior in Goal and
+    non-Goal turns; no Goal-specific recovery record is created.
+41. Queue edit, retrieve, and re-submit use the existing queue id and TUI flow while a
+    goal is active.
+42. A completion candidate racing a newer human-input generation is deferred until a
+    goal-owned model request has consumed that input.
+43. Plan/Review input remains goal-related but does not acquire an execution lease or
+    consume goal budget.
+44. A contract compiled entirely to deterministic checks completes with no model
     call in discovery, judgment, or authorization, even when the worker never
     reports.
-41. A document-alignment criterion yields per-claim verdicts with evidence
+45. A document-alignment criterion yields per-claim verdicts with evidence
     references, and a changed document digest invalidates prior verdicts.
-42. The completion probe fires at the configured interval only for goals without
+46. The completion probe fires at the configured interval only for goals without
     completion-relevant check coverage, and never back-to-back.
-43. A `LikelyComplete` probe verdict injects the one-shot reminder; a subsequent
+47. A `LikelyComplete` probe verdict injects the one-shot reminder; a subsequent
     candidate-less turn raises a probe-escalated audit through the gate.
-44. Probe failure, timeout, or invalid output changes no goal state, and a probe
+48. Probe failure, timeout, or invalid output changes no goal state, and a probe
     verdict can never directly complete or pause a goal.
-45. A failing approved check vetoes a worker completion candidate under every
+49. A failing approved check vetoes a worker completion candidate under every
     policy; passing checks alone complete the goal only under `contract_checks`.
-46. `report_goal_turn` and `get_goal` are visible only on turns holding a valid
+50. `report_goal_turn` and `get_goal` are visible only on turns holding a valid
     goal lease and are injected eagerly, not via deferred tool discovery.
-47. A candidate on a goal without deterministic coverage spends exactly one
+51. A candidate on a goal without deterministic coverage spends exactly one
     evidence review; review rejection returns `active` with per-requirement
     gaps, and no review runs on ordinary progress turns.
-48. A second writable materialization of the same session id fails with
+52. A second writable materialization of the same session id fails with
     `session_in_use`; releasing the lease or terminating the owner process allows a
     fresh process to acquire the OS lock and reload the latest state.
-49. Session reads and listing remain available while another process holds the write
+53. Session reads and listing remain available while another process holds the write
     lease, but no mutating store API is callable without the matching lease capability.
-50. A runner panic or event-channel close without `TurnEnded` resolves its owned
+54. A runner panic or event-channel close without `TurnEnded` resolves its owned
     `GoalTurnHandle` to an error outcome and cannot leave a durable running lease.
-51. A task or deadline satisfied between watcher preparation and waiting-state commit
+55. A task or deadline satisfied between watcher preparation and waiting-state commit
     is observed by the post-commit predicate recheck and queues one continuation.
-52. A missing or failed volatile wake watcher is recreated by level-triggered
+56. A missing or failed volatile wake watcher is recreated by level-triggered
     supervisor reconciliation from the durable wake identity.
-53. Evidence created under another goal id, lease id, turn id, or session cannot pass
+57. Evidence created under another goal id, lease id, turn id, or session cannot pass
     ownership validation; the model cannot mint a valid `GoalEvidenceRecord`.
-54. A rejected or unavailable probe-escalated audit returns to `active` with one
+58. A rejected or unavailable probe-escalated audit returns to `active` with one
     queued lease and cooldown; it never tries to commit a nonexistent original pause
     transition.
-55. `PlanArtifactService` observes content and digest atomically, advances revision
+59. `PlanArtifactService` observes content and digest atomically, advances revision
     only on accepted digest change, and resolves only session-owned artifact ids.
-56. A file/remote storage backend that cannot guarantee exclusive session locking
+60. A file/remote storage backend that cannot guarantee exclusive session locking
     rejects writable materialization with `session_lock_unsupported` rather than
     silently continuing unlocked.
 
@@ -2353,6 +2500,8 @@ Do not keep a compatibility shim, dual-write bridge, or runtime fallback.
 - session write-lease contention from a second process;
 - owner process exit while holding the session lock, followed by recovery acquisition;
 - event channel full or closed;
+- user submission concurrent with autonomous start, turn stop, objective edit, and
+  completion authorization;
 - turn runner panic or return without a terminal event;
 - transcript append failure;
 - AppServer turn start rejected or busy;
@@ -2375,6 +2524,7 @@ Metrics must exclude objective and plan content. Record:
   without persisting user content;
 - goal created/resumed/completed/blocked/paused/cleared;
 - continuation queued/started/rejected/retried;
+- goal-bound turns split by user-started versus autonomous trigger;
 - active and waiting duration;
 - goal turns/tokens/time;
 - plan materialization success/failure and digest change;
@@ -2400,12 +2550,15 @@ The refactor is complete only when all conditions hold:
   path has a tested supervisor transition.
 - Work advances across multiple logical turns without user input.
 - Ordinary continuation never forks the worker session.
-- Plan/Review mode never runs or accounts autonomous goal work.
+- Plan/Review mode never runs or accounts goal execution work.
 - Leaving Plan mode re-materializes the current plan and resumes eligible work.
 - Context compaction summarizes conversation only; goal and plan references survive
   independently.
-- Every autonomous turn receives the authoritative objective, budget, current plan
+- Every goal-owned turn receives the authoritative objective, budget, current plan
   reference, and completion policy.
+- Every ordinary free-form submission while the goal is active uses the same input
+  and queue path as normal conversation. The receiving turn is goal-bound at
+  consumption, and queue edit/retrieve/re-submit behavior remains unchanged.
 - User interrupt produces an explicit paused state.
 - Every non-terminal stopped status resumes through one validated path that
   commits a queued lease in the same transaction.
@@ -2439,7 +2592,9 @@ The refactor is complete only when all conditions hold:
 1. A goal is a session aggregate, not a Hook.
 2. A continuation is a new logical turn in the same session, not a query-local retry
    and not a full worker fork.
-3. `GoalSupervisor` is the only automatic continuation owner.
+3. `GoalSupervisor` is the only autonomous continuation scheduler. Normal user input
+   keeps the existing turn-start/steering paths, whose consumers claim the active goal
+   lease when applicable.
 4. `SessionStore::require_write_lease` permits one writable materialization of a
    session id across processes; the session lease belongs to storage, not to goals.
 5. A durable snapshot is the single goal source of truth; runtime, UI, events, and
@@ -2450,23 +2605,26 @@ The refactor is complete only when all conditions hold:
    `PlanArtifactService`. It is referenced and re-materialized, not copied into the
    goal row.
 8. One mandatory typed goal reminder re-injects objective, budget, plan state, wait
-   results, and completion policy on every autonomous turn.
+   results, and completion policy on every goal-owned turn. User input remains in the
+   existing user-message and steering paths.
 9. Every goal turn passes through `GoalCompletionCoordinator`; worker reports,
    deterministic contracts, and boundary audits produce candidates, and only
    `GoalCompletionGate` may persist completion.
 10. Runtime-owned evidence records bind proof to session, goal, lease, turn, and
     source before the worker cites it.
-11. The default autonomous-turn budget is 20; token budget is explicit-only, and
-    exhausted budgets require an atomic raise before resume.
-12. A committed human turn wins the next idle admission; explicit mid-turn steering
-    remains bound to the current goal lease. Stale autonomous work is rejected by
-    goal id and lease id.
-13. Plan/Review mode gates autonomous work and goal accounting without hiding or
+11. The default autonomous-continuation budget is 20; user-guided goal turns do not
+    spend it. Token budget is explicit-only, covers all goal-owned work, and exhausted
+    budgets require an atomic raise before resume.
+12. While a goal is active, the product exposes one free-form send action. It reuses
+    `CommandQueue` for a running turn and normal `turn/start` when idle; consumer-side
+    admission/drain supplies Goal context, accounting, and completion semantics.
+    Objective and contract changes require explicit goal edits.
+13. Plan/Review mode gates goal execution and accounting without hiding or
     clearing the goal.
 14. TUI is a snapshot-driven control plane with explicit plan, wait, budget, and
     evidence visibility.
-15. Every turn end commits a queued lease, durable recoverable wait, or non-active status.
-    Active-but-idle is invalid.
+15. Every goal-owned turn end commits a queued lease, durable recoverable wait, or
+    non-active status. Active-but-idle is invalid.
 16. Different sessions and processes may share a workspace; workspace sharing never
     permits two writable owners of the same session id.
 17. Cut directly to the final runtime. Do not add any new goal behavior to the managed
