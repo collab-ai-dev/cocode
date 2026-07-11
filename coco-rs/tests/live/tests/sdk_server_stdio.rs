@@ -41,8 +41,8 @@ use anyhow::anyhow;
 use coco_agent_host::headless;
 use coco_agent_host::sdk_server::CliInitializeBootstrap;
 use coco_agent_host::sdk_server::LocalAppSessionHandle;
-use coco_agent_host::sdk_server::QueryEngineRunner;
 use coco_agent_host::sdk_server::SdkServer;
+use coco_agent_host::sdk_server::SessionTurnExecutor;
 use coco_agent_host::sdk_server::StdioTransport;
 use coco_agent_host::session_runtime::SessionHandle;
 use coco_agent_host::session_runtime::SessionRuntimeBuildOpts;
@@ -212,8 +212,7 @@ async fn serve(args: Args) -> Result<()> {
         .with_initialize_bootstrap(bootstrap)
         .with_startup_cwd(cwd.clone());
 
-    let runner = Arc::new(QueryEngineRunner::new(
-        session_handle,
+    let runner = Arc::new(SessionTurnExecutor::new(
         cli.max_turns.or(Some(8)),
         Some(system_prompt),
     ));

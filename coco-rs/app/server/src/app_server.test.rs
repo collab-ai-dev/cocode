@@ -1117,7 +1117,13 @@ fn resolve_server_request_completes_pending_reply() {
     });
 
     let resolved = server
-        .resolve_server_request(&session_id, reply)
+        .resolve_server_request(
+            &coco_types::InteractiveTarget {
+                session_id,
+                surface_id: surface_id.clone(),
+            },
+            reply,
+        )
         .expect("resolve request");
 
     assert_eq!(resolved.pending, routed.pending);
@@ -1177,12 +1183,85 @@ fn resolve_server_request_rejects_wrong_session_and_keeps_pending() {
     });
 
     let err = server
-        .resolve_server_request(&wrong_session_id, reply)
+        .resolve_server_request(
+            &coco_types::InteractiveTarget {
+                session_id: wrong_session_id,
+                surface_id: surface_id.clone(),
+            },
+            reply,
+        )
         .expect_err("wrong session should fail");
 
     assert!(matches!(
         err,
         AppServerError::ServerRequestWrongSession { .. }
+    ));
+    let routing = server.routing().read().expect("routing lock");
+    assert_eq!(
+        routing.pending_server_requests_for_surface(&surface_id),
+        vec![routed.pending]
+    );
+}
+
+#[test]
+fn resolve_server_request_rejects_rebound_surface_and_keeps_pending() {
+    let server = AppServer::<TestHandle>::new(1, 8);
+    let session_id = test_session_id("sess-1");
+    let connection = ConnectionKey::for_test(49);
+    let surface_id = SurfaceId::from("surface-original");
+    let rebound_surface_id = SurfaceId::from("surface-rebound");
+    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(8);
+    let (request_tx, mut request_rx) = tokio::sync::mpsc::channel(8);
+    {
+        let mut routing = server.routing().write().expect("routing lock");
+        routing.connect_with_request_sender(connection, event_tx, request_tx);
+        routing
+            .attach_surface_with_options(
+                connection,
+                surface_id.clone(),
+                session_id.clone(),
+                AttachSurfaceOptions {
+                    role: SurfaceRole::Interactive,
+                    capabilities: SurfaceCapabilities {
+                        notifications: true,
+                        ..SurfaceCapabilities::default()
+                    },
+                    ..AttachSurfaceOptions::default()
+                },
+            )
+            .expect("attach interactive");
+    }
+    let routed = server
+        .route_server_request(
+            session_id.clone(),
+            SurfaceCapability::Notifications,
+            None,
+            test_server_request(),
+        )
+        .expect("route request");
+    let delivery = request_rx.try_recv().expect("request delivery");
+    let reply = ServerRequestReply::UserInput(UserInputResolveParams {
+        target: coco_types::InteractiveTarget {
+            session_id: session_id.clone(),
+            surface_id: rebound_surface_id.clone(),
+        },
+        request_id: delivery.request_id.as_display(),
+        answer: "yes".to_string(),
+    });
+
+    let error = server
+        .resolve_server_request(
+            &coco_types::InteractiveTarget {
+                session_id,
+                surface_id: rebound_surface_id,
+            },
+            reply,
+        )
+        .expect_err("a rebound surface must not resolve the old surface request");
+
+    assert!(matches!(
+        error,
+        AppServerError::ServerRequestWrongSurface { .. }
     ));
     let routing = server.routing().read().expect("routing lock");
     assert_eq!(

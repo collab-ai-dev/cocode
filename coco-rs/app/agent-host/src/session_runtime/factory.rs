@@ -90,6 +90,10 @@ pub struct SessionRuntimeBootstrapSource {
 }
 
 impl SessionRuntimeBootstrapSource {
+    pub fn from_source(source: Arc<dyn BootstrapSource>) -> Self {
+        Self { source }
+    }
+
     /// Source backed by a pre-built bundle (tests / legacy startup snapshot).
     pub fn startup_snapshot(bootstrap: SessionRuntimeBootstrap) -> Self {
         Self {

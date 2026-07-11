@@ -48,8 +48,8 @@ Protocol: `TurnStarted` (runner-emitted, once per cycle — see
 `CompactionStarted`, `ContextCompacted`, `Error` (budget nudge),
 `QueueStateChanged`, `CommandQueued`, `CommandDequeued`.
 
-**Cycle TurnId contract.** Runners (`tui_runner`, `sdk_runner`,
-`QueryEngineRunner`, harnesses) generate one `TurnId::generate()` per
+**Cycle TurnId contract.** Runners (`tui_runner`, `SessionTurnExecutor`,
+harnesses) generate one `TurnId::generate()` per
 user-prompt cycle and pass it into `engine.run_with_messages` /
 `run_with_events`. `engine_session::run_internal_with_messages` emits
 `TurnStarted` with that id; every internal `TurnEnded` emission inside

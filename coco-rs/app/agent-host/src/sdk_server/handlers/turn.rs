@@ -15,7 +15,7 @@ use tracing::{info, warn};
 
 use super::{
     ActiveTurnHandles, ActiveTurnStartError, ActiveTurnStartState, HandlerContext, HandlerResult,
-    SdkServerState, ShortcutTurnState, TurnHandoff, runtime, session, session::forward_turn_events,
+    ShortcutTurnState, runtime, session, session::forward_turn_events,
 };
 use crate::sdk_server::outbound::{OutboundMessage, send_session_event};
 
@@ -80,30 +80,21 @@ pub(super) async fn handle_turn_start(
     };
 
     let notif_tx = ctx.notif_tx.clone();
-    let state_for_turn = ctx.state.clone();
     let session_for_start = session.clone();
     let turn_session_id_for_error = turn_session_id.clone();
     let turn_id = match start_active_turn_for_runtime(
         &session,
-        &ctx.state,
         turn_session_id,
         move |start: ActiveTurnStartState| {
-            let handoff = TurnHandoff {
-                session_id: start.session_id.clone(),
-                history: start.handoff.history,
-                app_state: start.handoff.app_state,
-                plan_mode_instructions: start.plan_mode_instructions,
-            };
-
             info!(
-                session_id = %handoff.session_id,
+                session_id = %start.session_id,
                 turn_id = %start.turn_id,
                 "SdkServer: turn/start"
             );
 
             // Event-forwarder bridge: the runner writes to `inner_tx`; the
             // forwarder task reads events, intercepts `SessionResult` to
-            // fold per-turn stats into state-level SDK accounting, and forwards
+            // fold per-turn stats into runtime-owned accounting, and forwards
             // everything else (sans SessionStarted / SessionResult) to the
             // real `notif_tx`.
             //
@@ -111,17 +102,12 @@ pub(super) async fn handle_turn_start(
             // run_with_events" assumption from the SDK's "one SessionResult
             // per session" wire contract. See `event-system-design.md`.
             //
-            // The forwarder is parameterized by the owner session_id so it
-            // can refuse to fold stats into a DIFFERENT session after
-            // archive + session/start has replaced the slot.
             let (inner_tx, inner_rx) = mpsc::channel::<CoreEvent>(256);
-            let forwarder_state = state_for_turn.clone();
             let forwarder_handle = tokio::spawn(forward_turn_events(
                 inner_rx,
                 notif_tx,
-                forwarder_state,
                 session_for_start.clone(),
-                handoff.session_id.clone(),
+                start.session_id.clone(),
             ));
 
             // Spawn the turn as a detached task so `turn/start` returns the
@@ -141,7 +127,6 @@ pub(super) async fn handle_turn_start(
                         app_server_for_task,
                         params,
                         turn_id_for_task.clone(),
-                        handoff,
                         inner_tx,
                         cancel_token_for_task,
                     )
@@ -249,7 +234,7 @@ async fn handle_turn_start_observability_shortcut(
         .history
         .lock()
         .await
-        .push(Arc::new(coco_messages::create_meta_message(&text)));
+        .push(coco_messages::create_meta_message(&text));
 
     HandlerResult::ok(coco_types::TurnStartResult {
         turn_id: shortcut_turn.turn_id,
@@ -368,14 +353,14 @@ async fn handle_turn_start_memory_shortcut(
                 .await;
         }
         TurnStartMemoryShortcut::Summary => {
-            let history = shortcut_turn.history.lock().await.clone();
-            let tokens = coco_messages::estimate_tokens_for_messages(&history);
+            let history = shortcut_turn.history.lock().await.snapshot();
+            let tokens = coco_messages::estimate_tokens_for_messages(history.as_slice());
             let last_msg_id = history
                 .last()
                 .and_then(|message| message.uuid())
                 .map(uuid::Uuid::to_string);
             let had_tool_calls =
-                coco_messages::count_tool_calls_in_last_assistant_turn(&history) > 0;
+                coco_messages::count_tool_calls_in_last_assistant_turn(history.as_slice()) > 0;
             let _ = memory_runtime
                 .session_memory
                 .force(tokens, last_msg_id, had_tool_calls)
@@ -429,7 +414,7 @@ async fn handle_turn_start_btw_shortcut(
         let mut history = shortcut_turn.history.lock().await;
         for message in messages {
             let message = Arc::new(message);
-            history.push(message.clone());
+            history.push_arc(message.clone());
             let _ = send_session_event(
                 &ctx.notif_tx,
                 shortcut_turn.session_id.clone(),
@@ -462,30 +447,15 @@ async fn handle_turn_start_goal_shortcut(
             });
         }
     };
-    let (history_handle, app_state) = {
-        let Some(session_id) = ctx.active_session_id().await else {
-            return Err(HandlerResult::Err {
-                code: coco_types::error_codes::INVALID_REQUEST,
-                message: "no active session; call session/start first".into(),
-                data: None,
-            });
-        };
-        if runtime_handle.has_active_turn() {
-            return Err(HandlerResult::Err {
-                code: coco_types::error_codes::INVALID_REQUEST,
-                message: "a turn is already running; call turn/interrupt first".into(),
-                data: None,
-            });
-        }
-        let Some(handoff) = ctx.state.session_handoff_snapshot(&session_id) else {
-            return Err(HandlerResult::Err {
-                code: coco_types::error_codes::INTERNAL_ERROR,
-                message: "session handoff state is missing".into(),
-                data: None,
-            });
-        };
-        (handoff.history, handoff.app_state)
-    };
+    if runtime_handle.has_active_turn() {
+        return Err(HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "a turn is already running; call turn/interrupt first".into(),
+            data: None,
+        });
+    }
+    let history_handle = Arc::clone(runtime_handle.history());
+    let app_state = Arc::clone(runtime_handle.app_state());
 
     let runtime = &runtime_handle;
     let current_engine_config = runtime.current_engine_config().await;
@@ -497,7 +467,7 @@ async fn handle_turn_start_goal_shortcut(
         trust_rejected: false,
     };
     let tokens_at_start = runtime.session_usage_snapshot().await.totals.output_tokens;
-    let history_snapshot = history_handle.lock().await.clone();
+    let history_snapshot = history_handle.lock().await.to_vec();
     let outcome = crate::goal_command::resolve_goal_request(
         request,
         &app_state,
@@ -583,23 +553,18 @@ async fn handle_turn_start_compact_shortcut(
     };
 
     let notif_tx = ctx.notif_tx.clone();
-    let state_for_turn = ctx.state.clone();
     let runtime_for_start = runtime.clone();
     let Some(turn_session_id) = ctx.active_session_id().await else {
         return active_turn_start_error(ActiveTurnStartError::NoActiveSession);
     };
     let turn_id = match start_active_turn_for_runtime(
         &runtime,
-        &ctx.state,
         turn_session_id,
         move |start: ActiveTurnStartState| {
-            let history = start.handoff.history;
             let (inner_tx, inner_rx) = mpsc::channel::<CoreEvent>(256);
-            let forwarder_state = state_for_turn.clone();
             let forwarder_handle = tokio::spawn(forward_turn_events(
                 inner_rx,
                 notif_tx,
-                forwarder_state,
                 runtime_for_start.clone(),
                 start.session_id.clone(),
             ));
@@ -613,7 +578,6 @@ async fn handle_turn_start_compact_shortcut(
                 // forwards the terminal `TurnEnded`, not here.
                 run_manual_compact_shortcut(
                     runtime_for_task,
-                    history,
                     request,
                     turn_id_for_task.clone(),
                     inner_tx,
@@ -639,22 +603,15 @@ async fn handle_turn_start_compact_shortcut(
 
 fn start_active_turn_for_runtime(
     session: &crate::session_runtime::SessionHandle,
-    state: &SdkServerState,
     session_id: coco_types::SessionId,
     build: impl FnOnce(ActiveTurnStartState) -> ActiveTurnHandles,
 ) -> Result<coco_types::TurnId, ActiveTurnStartError> {
-    let Some(handoff) = state.session_handoff_snapshot(&session_id) else {
-        return Err(ActiveTurnStartError::MissingHandoff);
-    };
-    let plan_mode_instructions = state.session_plan_mode_instructions(&session_id);
     session
         .start_active_turn(move |turn_id, cancel_token| {
             build(ActiveTurnStartState {
                 session_id,
                 turn_id,
                 cancel_token,
-                handoff,
-                plan_mode_instructions,
             })
         })
         .map_err(|()| ActiveTurnStartError::TurnAlreadyRunning)
@@ -662,7 +619,6 @@ fn start_active_turn_for_runtime(
 
 async fn run_manual_compact_shortcut(
     session: crate::session_runtime::SessionHandle,
-    history_handle: Arc<tokio::sync::Mutex<Vec<Arc<coco_messages::Message>>>>,
     request: coco_commands::handlers::compact::CompactRequest,
     turn_id: TurnId,
     event_tx: mpsc::Sender<CoreEvent>,
@@ -677,11 +633,7 @@ async fn run_manual_compact_shortcut(
         .await;
     let runtime = &session;
     let engine = runtime.build_engine(cancel).await;
-    let combined = history_handle.lock().await.clone();
-    let mut history = coco_messages::MessageHistory::new();
-    for message in combined {
-        history.push_arc(message);
-    }
+    let mut history = runtime.history().lock().await.snapshot();
 
     let command_args = request.custom_instructions;
     let custom_instructions = if command_args.is_empty() {
@@ -698,11 +650,6 @@ async fn run_manual_compact_shortcut(
         .run_manual_compact(&mut history, &event_tx_opt, request)
         .await;
 
-    let compacted = history.to_vec();
-    {
-        let mut sdk_history = history_handle.lock().await;
-        *sdk_history = compacted;
-    }
     {
         let mut runtime_history = runtime.history().lock().await;
         *runtime_history = history;
@@ -724,7 +671,7 @@ async fn run_manual_compact_shortcut(
 }
 
 async fn sdk_append_slash_text(
-    history_handle: &Arc<tokio::sync::Mutex<Vec<Arc<coco_messages::Message>>>>,
+    history_handle: &Arc<tokio::sync::Mutex<coco_messages::MessageHistory>>,
     notif_tx: &mpsc::Sender<OutboundMessage>,
     session_id: coco_types::SessionId,
     command: &str,
@@ -738,7 +685,7 @@ async fn sdk_append_slash_text(
 }
 
 async fn sdk_append_goal_status(
-    history_handle: &Arc<tokio::sync::Mutex<Vec<Arc<coco_messages::Message>>>>,
+    history_handle: &Arc<tokio::sync::Mutex<coco_messages::MessageHistory>>,
     notif_tx: &mpsc::Sender<OutboundMessage>,
     session_id: coco_types::SessionId,
     payload: coco_types::GoalStatusPayload,
@@ -756,7 +703,7 @@ async fn sdk_append_goal_status(
 
 async fn sdk_append_goal_status_and_slash_text(
     session: &crate::session_runtime::SessionHandle,
-    history_handle: &Arc<tokio::sync::Mutex<Vec<Arc<coco_messages::Message>>>>,
+    history_handle: &Arc<tokio::sync::Mutex<coco_messages::MessageHistory>>,
     notif_tx: &mpsc::Sender<OutboundMessage>,
     payload: coco_types::GoalStatusPayload,
     args: &str,
@@ -800,7 +747,7 @@ async fn sdk_emit_active_goal_snapshot(
 }
 
 async fn sdk_append_messages(
-    history_handle: &Arc<tokio::sync::Mutex<Vec<Arc<coco_messages::Message>>>>,
+    history_handle: &Arc<tokio::sync::Mutex<coco_messages::MessageHistory>>,
     notif_tx: &mpsc::Sender<OutboundMessage>,
     session_id: coco_types::SessionId,
     messages: Vec<coco_messages::Message>,
@@ -808,7 +755,7 @@ async fn sdk_append_messages(
     let mut history = history_handle.lock().await;
     for message in messages {
         let message = Arc::new(message);
-        history.push(message.clone());
+        history.push_arc(message.clone());
         let _ = send_session_event(
             notif_tx,
             session_id.clone(),
@@ -861,21 +808,12 @@ async fn mint_shortcut_turn(ctx: &HandlerContext) -> Result<ShortcutTurnState, H
             ActiveTurnStartError::TurnAlreadyRunning,
         ));
     }
-    let session_id = ctx
-        .active_session_id()
-        .await
-        .ok_or(ActiveTurnStartError::NoActiveSession)
-        .map_err(active_turn_start_error)?;
-    let turn_id = ctx.state.next_turn_id(&session_id);
-    let handoff = ctx
-        .state
-        .session_handoff_snapshot(&session_id)
-        .ok_or(ActiveTurnStartError::MissingHandoff)
-        .map_err(active_turn_start_error)?;
+    let session_id = runtime.session_id().clone();
+    let turn_id = runtime.next_turn_id();
     Ok(ShortcutTurnState {
         session_id,
         turn_id,
-        history: handoff.history,
+        history: Arc::clone(runtime.history()),
     })
 }
 
@@ -889,11 +827,6 @@ fn active_turn_start_error(error: ActiveTurnStartError) -> HandlerResult {
         ActiveTurnStartError::TurnAlreadyRunning => HandlerResult::Err {
             code: coco_types::error_codes::INVALID_REQUEST,
             message: "a turn is already running; call turn/interrupt first".into(),
-            data: None,
-        },
-        ActiveTurnStartError::MissingHandoff => HandlerResult::Err {
-            code: coco_types::error_codes::INTERNAL_ERROR,
-            message: "session handoff state is missing".into(),
             data: None,
         },
     }
@@ -1087,23 +1020,35 @@ fn resolve_app_server_request(
             data: None,
         });
     };
-    let Some(session_id) = &ctx.target_session_id else {
+    let Some(_session_id) = &ctx.target_session_id else {
         return Err(HandlerResult::Err {
             code: coco_types::error_codes::INVALID_REQUEST,
             message: format!("{kind} resolve requires an interactive target"),
             data: None,
         });
     };
-    app_server
-        .resolve_server_request(session_id, reply)
-        .map(|_| ())
-        .map_err(|error| HandlerResult::Err {
+    let Some(target) = reply.interactive_target().cloned() else {
+        return Err(HandlerResult::Err {
             code: coco_types::error_codes::INVALID_REQUEST,
-            message: format!("cannot resolve pending {kind} request {request_id}: {error}"),
-            data: Some(serde_json::json!({
-                "kind": "pending_request_mismatch",
-                "request_id": request_id,
-                "session_id": session_id,
-            })),
+            message: format!("{kind} resolve requires an interactive reply target"),
+            data: None,
+        });
+    };
+    app_server
+        .resolve_server_request(&target, reply)
+        .map(|_| ())
+        .map_err(|error| {
+            let error = crate::sdk_server::session_lifecycle::app_server_lifecycle_error(
+                "resolve pending server request",
+                error,
+            );
+            HandlerResult::Err {
+                code: error.code,
+                message: format!(
+                    "cannot resolve pending {kind} request {request_id}: {}",
+                    error.message
+                ),
+                data: error.data,
+            }
         })
 }

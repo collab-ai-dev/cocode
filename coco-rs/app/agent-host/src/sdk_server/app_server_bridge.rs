@@ -24,10 +24,7 @@ use tracing::warn;
 use super::session_lifecycle::*;
 use crate::sdk_server::{
     dispatcher::spawn_sdk_outbound_writer,
-    handlers::{
-        HandlerContext, HandlerResult, SdkServerState, SessionHandoffState, SessionMetadata,
-        dispatch_client_request, session,
-    },
+    handlers::{HandlerContext, HandlerResult, SdkServerState, dispatch_client_request, session},
     outbound::{OutboundMessage, ProcessEvent, event_agent_id},
     session_data::{LocalSessionDataRequest, LocalSessionDataView},
     transport::{SdkTransport, TransportError},
@@ -93,24 +90,15 @@ pub struct AppServerSdkHandler {
 #[derive(Clone)]
 pub struct LocalAppSessionHandle {
     session_id: SessionId,
-    runtime: Option<crate::session_runtime::SessionHandle>,
+    runtime: crate::session_runtime::SessionHandle,
 }
 
 impl LocalAppSessionHandle {
-    pub(super) fn snapshot(session_id: SessionId) -> Self {
+    pub fn from_runtime(runtime: crate::session_runtime::SessionHandle) -> Self {
+        let session_id = runtime.session_id().clone();
         Self {
             session_id,
-            runtime: None,
-        }
-    }
-
-    pub fn from_runtime(
-        session_id: SessionId,
-        runtime: crate::session_runtime::SessionHandle,
-    ) -> Self {
-        Self {
-            session_id,
-            runtime: Some(runtime),
+            runtime,
         }
     }
 
@@ -118,61 +106,26 @@ impl LocalAppSessionHandle {
         &self.session_id
     }
 
-    pub(super) fn runtime(&self) -> Option<&crate::session_runtime::SessionHandle> {
-        self.runtime.as_ref()
+    pub(super) fn runtime(&self) -> &crate::session_runtime::SessionHandle {
+        &self.runtime
     }
 
-    pub(super) fn has_runtime(&self) -> bool {
-        self.runtime.is_some()
-    }
-
-    pub fn into_session(self) -> Option<crate::session_runtime::SessionHandle> {
+    pub fn into_session(self) -> crate::session_runtime::SessionHandle {
         self.runtime
-    }
-
-    pub(super) fn require_runtime(
-        self,
-        action: &str,
-    ) -> Result<crate::session_runtime::SessionHandle, JsonRpcDispatchError> {
-        let session_id = self.session_id.clone();
-        self.into_session().ok_or_else(|| JsonRpcDispatchError {
-            code: coco_types::error_codes::INTERNAL_ERROR,
-            message: format!(
-                "local AppServer session {session_id} {action} without a runtime handle"
-            ),
-            data: None,
-        })
-    }
-
-    pub fn require_runtime_anyhow(
-        self,
-        action: &str,
-    ) -> anyhow::Result<crate::session_runtime::SessionHandle> {
-        let session_id = self.session_id.clone();
-        self.into_session().ok_or_else(|| {
-            anyhow::anyhow!(
-                "local AppServer session {session_id} {action} without a runtime handle"
-            )
-        })
     }
 
     pub(crate) async fn live_summary_and_history(
         &self,
-    ) -> Option<(
+    ) -> (
         coco_types::SdkSessionSummary,
         Vec<Arc<coco_messages::Message>>,
-    )> {
-        let runtime = self.runtime()?;
-        let current_session_id = runtime.current_typed_session_id().await;
-        if current_session_id.as_str() != self.session_id.as_str() {
-            return None;
-        }
-
+    ) {
+        let runtime = self.runtime();
         let config = runtime.current_engine_config().await;
         let history = runtime.history().lock().await.to_vec();
         let usage = runtime.session_usage_snapshot().await;
         let timestamp = chrono::Utc::now().to_rfc3339();
-        Some((
+        (
             coco_types::SdkSessionSummary {
                 session_id: self.session_id.clone(),
                 model: config.model_id,
@@ -187,11 +140,15 @@ impl LocalAppSessionHandle {
                     .saturating_add(usage.totals.output_tokens),
             },
             history,
-        ))
+        )
     }
 }
 
 impl AppServerSdkHandler {
+    pub async fn set_turn_runner(&self, runner: Arc<dyn super::handlers::TurnRunner>) {
+        self.state.install_turn_runner(runner).await;
+    }
+
     pub fn new(state: Arc<SdkServerState>, notif_tx: mpsc::Sender<OutboundMessage>) -> Self {
         Self {
             state,
@@ -348,25 +305,20 @@ impl JsonRpcRequestHandler for AppServerSdkHandler {
             let state = Arc::clone(&self.state);
             let turn_drain_timeout = self.turn_drain_timeout;
             return Box::pin(async move {
-                let replacement = state.runtime_replacement_snapshot().await;
-                if let Some(replacement) = replacement {
-                    return start_sdk_session_with_runtime_replacement(
-                        app_server,
-                        state,
-                        connection,
-                        params,
-                        Arc::clone(&connection_profile),
-                        replacement,
-                        turn_drain_timeout,
-                    )
-                    .await;
-                }
-                start_sdk_session_with_scoped_state(
+                let replacement = state.runtime_replacement_snapshot().await.ok_or_else(|| {
+                    JsonRpcDispatchError {
+                        code: coco_types::error_codes::INVALID_REQUEST,
+                        message: "session/start requires a runtime factory".to_string(),
+                        data: Some(serde_json::json!({ "kind": "runtime_factory_required" })),
+                    }
+                })?;
+                start_sdk_session_with_runtime_replacement(
                     app_server,
                     state,
                     connection,
                     params,
-                    Arc::clone(&connection_profile),
+                    connection_profile,
+                    replacement,
                     turn_drain_timeout,
                 )
                 .await
@@ -380,25 +332,20 @@ impl JsonRpcRequestHandler for AppServerSdkHandler {
             let state = Arc::clone(&self.state);
             let turn_drain_timeout = self.turn_drain_timeout;
             return Box::pin(async move {
-                let replacement = state.runtime_replacement_snapshot().await;
-                if let Some(replacement) = replacement {
-                    return resume_sdk_session_with_runtime_replacement(
-                        app_server,
-                        state,
-                        connection,
-                        params,
-                        Arc::clone(&connection_profile),
-                        replacement,
-                        turn_drain_timeout,
-                    )
-                    .await;
-                }
-                resume_sdk_session_with_scoped_state(
+                let replacement = state.runtime_replacement_snapshot().await.ok_or_else(|| {
+                    JsonRpcDispatchError {
+                        code: coco_types::error_codes::INVALID_REQUEST,
+                        message: "session/resume requires a runtime factory".to_string(),
+                        data: Some(serde_json::json!({ "kind": "runtime_factory_required" })),
+                    }
+                })?;
+                resume_sdk_session_with_runtime_replacement(
                     app_server,
                     state,
                     connection,
                     params,
-                    Arc::clone(&connection_profile),
+                    connection_profile,
+                    replacement,
                     turn_drain_timeout,
                 )
                 .await
@@ -533,25 +480,20 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
             let state = Arc::clone(&self.state);
             let turn_drain_timeout = self.turn_drain_timeout;
             return Box::pin(async move {
-                let replacement = state.runtime_replacement_snapshot().await;
-                if let Some(replacement) = replacement {
-                    return start_sdk_session_with_runtime_replacement(
-                        app_server,
-                        state,
-                        connection,
-                        params,
-                        Arc::clone(&connection_profile),
-                        replacement,
-                        turn_drain_timeout,
-                    )
-                    .await;
-                }
-                start_sdk_session_with_scoped_state(
+                let replacement = state.runtime_replacement_snapshot().await.ok_or_else(|| {
+                    JsonRpcDispatchError {
+                        code: coco_types::error_codes::INVALID_REQUEST,
+                        message: "session/start requires a runtime factory".to_string(),
+                        data: Some(serde_json::json!({ "kind": "runtime_factory_required" })),
+                    }
+                })?;
+                start_sdk_session_with_runtime_replacement(
                     app_server,
                     state,
                     connection,
                     params,
-                    Arc::clone(&connection_profile),
+                    connection_profile,
+                    replacement,
                     turn_drain_timeout,
                 )
                 .await
@@ -565,25 +507,20 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
             let state = Arc::clone(&self.state);
             let turn_drain_timeout = self.turn_drain_timeout;
             return Box::pin(async move {
-                let replacement = state.runtime_replacement_snapshot().await;
-                if let Some(replacement) = replacement {
-                    return resume_sdk_session_with_runtime_replacement(
-                        app_server,
-                        state,
-                        connection,
-                        params,
-                        Arc::clone(&connection_profile),
-                        replacement,
-                        turn_drain_timeout,
-                    )
-                    .await;
-                }
-                resume_sdk_session_with_scoped_state(
+                let replacement = state.runtime_replacement_snapshot().await.ok_or_else(|| {
+                    JsonRpcDispatchError {
+                        code: coco_types::error_codes::INVALID_REQUEST,
+                        message: "session/resume requires a runtime factory".to_string(),
+                        data: Some(serde_json::json!({ "kind": "runtime_factory_required" })),
+                    }
+                })?;
+                resume_sdk_session_with_runtime_replacement(
                     app_server,
                     state,
                     connection,
                     params,
-                    Arc::clone(&connection_profile),
+                    connection_profile,
+                    replacement,
                     turn_drain_timeout,
                 )
                 .await
@@ -682,7 +619,40 @@ fn resolve_request_runtime(
     JsonRpcDispatchError,
 > {
     if let ClientRequest::SessionArchive(params) = request {
-        return Ok((Some(params.target.session_id().clone()), None));
+        let session_id = params.target.session_id().clone();
+        let app_server = app_server.ok_or_else(|| JsonRpcDispatchError {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "session/archive requires AppServer routing".to_string(),
+            data: None,
+        })?;
+        let handle = match &params.target {
+            coco_types::ArchiveTarget::Interactive(target) => {
+                app_server
+                    .validate_interactive_target(connection, target)
+                    .map_err(|error| {
+                        crate::sdk_server::session_lifecycle::app_server_lifecycle_error(
+                            "resolve archive target",
+                            error,
+                        )
+                    })?
+                    .handle
+            }
+            coco_types::ArchiveTarget::Orphaned(_) => app_server
+                .validate_orphan_archive_target(&session_id)
+                .map_err(|error| {
+                    crate::sdk_server::session_lifecycle::app_server_lifecycle_error(
+                        "validate orphan archive target",
+                        error,
+                    )
+                })?,
+        };
+        return Ok((
+            Some(session_id.clone()),
+            Some(crate::sdk_server::handlers::SessionRequestContext {
+                session_id,
+                runtime: handle.runtime().clone(),
+            }),
+        ));
     }
     let Some(target) = request.interactive_target() else {
         let Some(target) = request.session_target() else {
@@ -690,7 +660,7 @@ fn resolve_request_runtime(
         };
         let runtime = app_server
             .and_then(|server| server.registry().get(&target.session_id))
-            .and_then(LocalAppSessionHandle::into_session);
+            .map(LocalAppSessionHandle::into_session);
         return Ok((
             Some(target.session_id.clone()),
             runtime.map(
@@ -714,18 +684,7 @@ fn resolve_request_runtime(
                 error,
             )
         })?;
-    let runtime = validated
-        .handle
-        .runtime()
-        .cloned()
-        .ok_or_else(|| JsonRpcDispatchError {
-            code: coco_types::error_codes::INTERNAL_ERROR,
-            message: format!(
-                "targeted AppServer session {} has no runtime handle",
-                target.session_id
-            ),
-            data: None,
-        })?;
+    let runtime = validated.handle.runtime().clone();
     Ok((
         Some(target.session_id.clone()),
         Some(crate::sdk_server::handlers::SessionRequestContext {
@@ -952,7 +911,6 @@ impl AppServerLocalBridge {
     where
         F: Future<Output = anyhow::Result<crate::session_runtime::SessionHandle>> + Send + 'static,
     {
-        let registry_session_id = session_id.clone();
         let handle = load_local_app_server_session_with_factory(
             &self.app_server,
             session_id.clone(),
@@ -961,13 +919,13 @@ impl AppServerLocalBridge {
                     coco_app_server::RegistryError::load_failed(error.to_string())
                 })?;
                 Ok::<LocalAppSessionHandle, coco_app_server::RegistryError>(
-                    LocalAppSessionHandle::from_runtime(registry_session_id, runtime),
+                    LocalAppSessionHandle::from_runtime(runtime),
                 )
             },
         )
         .await
         .map_err(|error| anyhow::anyhow!("{}", error.message))?;
-        handle.require_runtime_anyhow("loaded")
+        Ok(handle.into_session())
     }
 
     pub async fn load_session_runtime_from_factory(
@@ -979,7 +937,7 @@ impl AppServerLocalBridge {
             load_local_app_server_session_runtime(&self.app_server, session_id, runtime_factory)
                 .await
                 .map_err(|error| anyhow::anyhow!("{}", error.message))?;
-        handle.require_runtime_anyhow("loaded")
+        Ok(handle.into_session())
     }
 
     pub async fn load_session_runtime_from_factory_with_cwd(
@@ -996,7 +954,7 @@ impl AppServerLocalBridge {
         )
         .await
         .map_err(|error| anyhow::anyhow!("{}", error.message))?;
-        handle.require_runtime_anyhow("loaded")
+        Ok(handle.into_session())
     }
 
     pub async fn replace_session_runtime<F>(
@@ -1008,7 +966,6 @@ impl AppServerLocalBridge {
     where
         F: Future<Output = anyhow::Result<crate::session_runtime::SessionHandle>> + Send + 'static,
     {
-        let registry_session_id = new_session_id.clone();
         replace_local_app_server_session_with_factory(
             Arc::clone(&self.app_server),
             Arc::clone(&self.handler.state),
@@ -1018,22 +975,13 @@ impl AppServerLocalBridge {
                 let runtime = factory.await.map_err(|error| {
                     coco_app_server::RegistryError::load_failed(error.to_string())
                 })?;
-                Ok(LocalAppSessionHandle::from_runtime(
-                    registry_session_id,
-                    runtime,
-                ))
+                Ok(LocalAppSessionHandle::from_runtime(runtime))
             },
             self.handler.turn_drain_timeout,
         )
         .await
-        .and_then(|replacement| {
-            replacement
-                .map(|(handle, surface_id)| {
-                    handle
-                        .require_runtime("replaced")
-                        .map(|runtime| (runtime, surface_id))
-                })
-                .transpose()
+        .map(|replacement| {
+            replacement.map(|(handle, surface_id)| (handle.into_session(), surface_id))
         })
         .map_err(|error| anyhow::anyhow!("{}", error.message))
     }
@@ -1047,7 +995,6 @@ impl AppServerLocalBridge {
     where
         F: Future<Output = anyhow::Result<crate::session_runtime::SessionHandle>> + Send + 'static,
     {
-        let registry_session_id = new_session_id.clone();
         replace_detached_local_app_server_session_with_factory(
             Arc::clone(&self.app_server),
             Arc::clone(&self.handler.state),
@@ -1057,15 +1004,12 @@ impl AppServerLocalBridge {
                 let runtime = factory.await.map_err(|error| {
                     coco_app_server::RegistryError::load_failed(error.to_string())
                 })?;
-                Ok(LocalAppSessionHandle::from_runtime(
-                    registry_session_id,
-                    runtime,
-                ))
+                Ok(LocalAppSessionHandle::from_runtime(runtime))
             },
             self.handler.turn_drain_timeout,
         )
         .await
-        .and_then(|handle| handle.require_runtime("replaced"))
+        .map(LocalAppSessionHandle::into_session)
         .map_err(|error| anyhow::anyhow!("{}", error.message))
     }
 
@@ -1214,10 +1158,13 @@ impl AppServerLocalBridge {
         } else {
             return None;
         };
+        let runtime = self
+            .app_server
+            .registry()
+            .get(&session_id)
+            .map(LocalAppSessionHandle::into_session)?;
         Some(session::build_aggregated_session_result(
-            &session_id,
-            self.handler.state.as_ref(),
-            "end_turn",
+            &runtime, "end_turn",
         ))
     }
 
@@ -1230,7 +1177,6 @@ impl AppServerLocalBridge {
     where
         F: Future<Output = anyhow::Result<crate::session_runtime::SessionHandle>> + Send + 'static,
     {
-        let registry_session_id = new_session_id.clone();
         let replacement = replace_local_app_server_session_with_factory_and_close_reason(
             Arc::clone(&self.app_server),
             Arc::clone(&self.handler.state),
@@ -1240,10 +1186,7 @@ impl AppServerLocalBridge {
                 let runtime = factory.await.map_err(|error| {
                     coco_app_server::RegistryError::load_failed(error.to_string())
                 })?;
-                Ok(LocalAppSessionHandle::from_runtime(
-                    registry_session_id,
-                    runtime,
-                ))
+                Ok(LocalAppSessionHandle::from_runtime(runtime))
             },
             coco_hooks::orchestration::ExitReason::Clear,
             self.handler.turn_drain_timeout,
@@ -1253,41 +1196,11 @@ impl AppServerLocalBridge {
 
         match replacement {
             Some((handle, surface_id)) => {
-                let runtime = handle.require_runtime_anyhow("replaced")?;
+                let runtime = handle.into_session();
                 Ok(Some((runtime, surface_id)))
             }
             None => Ok(None),
         }
-    }
-
-    pub async fn install_session_snapshot(
-        &self,
-        session_id: SessionId,
-        cwd: impl Into<String>,
-        model: impl Into<String>,
-    ) {
-        let cwd = cwd.into();
-        let model = model.into();
-        if let Err(error) = register_local_app_server_session(
-            &self.app_server,
-            LocalAppSessionHandle::snapshot(session_id.clone()),
-        )
-        .await
-        {
-            warn!(?error, session_id = %session_id, "local AppServer registry snapshot install failed");
-        }
-        self.handler
-            .state
-            .set_session_metadata(session_id.clone(), SessionMetadata { cwd, model });
-        self.handler
-            .state
-            .set_session_handoff(session_id.clone(), SessionHandoffState::new());
-        self.handler
-            .state
-            .clear_session_plan_mode_instructions(&session_id);
-        self.handler
-            .state
-            .reset_session_accounting(session_id.clone());
     }
 
     pub async fn install_session_runtime(&self, session: crate::session_runtime::SessionHandle) {
@@ -1295,60 +1208,29 @@ impl AppServerLocalBridge {
             Arc::clone(&self.app_server),
             &session,
         );
-        let (
-            session_id,
-            cwd,
-            model,
-            bypass_permissions_available,
-            app_state,
-            history,
-            session_manager,
-        ) = {
+        let (session_id, bypass_permissions_available, session_manager) = {
             let runtime = &session;
             let session_id = session.session_id().clone();
-            let cwd = runtime
-                .current_cwd()
-                .read()
-                .await
-                .to_string_lossy()
-                .into_owned();
             let config = runtime.current_engine_config().await;
-            let history = runtime.history().lock().await.iter().cloned().collect();
             (
                 session_id,
-                cwd,
-                config.model_id.clone(),
                 config.permission_mode_availability.bypass_permissions,
-                Arc::clone(runtime.app_state()),
-                history,
                 Arc::clone(runtime.session_manager()),
             )
         };
         if let Err(error) = register_local_app_server_session(
             &self.app_server,
-            LocalAppSessionHandle::from_runtime(session_id.clone(), session.clone()),
+            LocalAppSessionHandle::from_runtime(session.clone()),
         )
         .await
         {
             warn!(?error, session_id = %session_id, "local AppServer registry install failed");
         }
 
+        session.reset_session_accounting();
         self.handler
             .state
-            .set_session_metadata(session_id.clone(), SessionMetadata { cwd, model });
-        self.handler.state.set_session_handoff(
-            session_id.clone(),
-            SessionHandoffState {
-                history: Arc::new(tokio::sync::Mutex::new(history)),
-                app_state,
-            },
-        );
-        self.handler
-            .state
-            .clear_session_plan_mode_instructions(&session_id);
-        self.handler
-            .state
-            .reset_session_accounting(session_id.clone());
+            .touch_session_activity(session_id.clone());
         self.handler
             .state
             .set_bypass_permissions_available(bypass_permissions_available);

@@ -184,6 +184,13 @@ impl<H: Clone> LocalClientConnection<H> {
         &mut self.server_requests
     }
 
+    /// Transfer ownership of the actionable request stream to a dedicated
+    /// callback task while retaining this connection for ordinary requests.
+    pub fn take_server_requests(&mut self) -> tokio::sync::mpsc::Receiver<ServerRequestDelivery> {
+        let (_sender, replacement) = tokio::sync::mpsc::channel(1);
+        std::mem::replace(&mut self.server_requests, replacement)
+    }
+
     pub fn lifecycle_mut(&mut self) -> &mut tokio::sync::mpsc::Receiver<SurfaceLifecycleEffect> {
         &mut self.lifecycle
     }

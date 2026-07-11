@@ -60,11 +60,3 @@ async fn connection_factory_owns_independent_initialize_state() {
         .await
         .expect("connection B remains usable");
 }
-
-#[test]
-fn local_app_session_handle_keeps_immutable_registry_identity() {
-    let session_id = coco_types::SessionId::try_new("session-a").unwrap();
-    let handle = LocalAppSessionHandle::snapshot(session_id.clone());
-    assert_eq!(handle.session_id(), &session_id);
-    assert!(!handle.has_runtime());
-}

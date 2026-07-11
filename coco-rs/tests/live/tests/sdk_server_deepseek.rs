@@ -4,7 +4,7 @@
 //! TypeScript SDK client speaks NDJSON-over-stdio to the `coco sdk`
 //! subprocess. The transport is `InMemoryTransport::pair()` instead
 //! of stdio so the test crate can drive both ends in-process; the
-//! server side is the real `SdkServer` with a real `QueryEngineRunner`
+//! server side is the real `SdkServer` with a real `SessionTurnExecutor`
 //! talking to live DeepSeek.
 //!
 //! Coverage adds *over* `coco_cli_deepseek` (the `coco -p` headless

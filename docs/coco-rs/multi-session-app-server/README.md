@@ -1,6 +1,7 @@
 # Multi-Session AppServer
 
-Status: implemented and release-validated on 2026-07-11.
+Status: implemented, delivery blockers closed, and release-validated on
+2026-07-11.
 
 This directory is the single source of truth for coco-rs multi-session
 AppServer architecture. It replaces the former
@@ -60,6 +61,9 @@ defines only the cross-cutting session ownership, routing, and host boundaries.
 | Multiple initialized connections | Landed | One immutable `ConnectionProfile` per connection |
 | Concurrent turn/runtime isolation | Landed | Registry-selected `SessionHandle` on every turn/control |
 | Session-scoped MCP/file history/reload | Landed | Owned below `SessionHandle` |
+| Orphan archive authorization | Landed | Proved before handler side effects |
+| Package H production isolation suite | Landed | All 11 required scenarios covered by 16 bounded tests |
+| Legacy SDK pending callback map | Removed | AppServer is the sole callback owner |
 | SDK process session slots | Reduced to keyed projections | No runtime-selection authority |
 | Whole-runtime actor | Not implemented and not required | Reject as a v1 prerequisite |
 | `ProjectHeavyServices` | Not implemented and poorly named | Reject; add capability-named services only when needed |
@@ -105,11 +109,12 @@ entire workspace and the production AppServer path:
 
 - `just quick-check` passed, including all seam checks and
   `cargo clippy --workspace --all-features --tests` with zero warnings;
-- `cargo nextest run --workspace --no-fail-fast` passed all 13,606 executed
+- `cargo nextest run --workspace --no-fail-fast` passed all 13,611 executed
   tests; four tests were skipped by their existing test configuration;
-- the host integration suite passed six production-handler scenarios covering
-  multi-session authority, cross-connection rejection, orphan lifecycle, and
-  event/replay identity;
+- the host integration suite now passes sixteen production-handler scenarios
+  with real runtimes, including concurrent turns, project/local config writes,
+  callback authority, orphan resume/lifecycle, reload ownership,
+  slow-consumer replay recovery, event identity, and concurrent shutdown;
 - focused agent-host, app-server, app-server-client, and types tests passed
   309, 89, 34, and 300 tests respectively;
 - `git diff --check` and the removed-architecture symbol audit passed.
@@ -119,3 +124,27 @@ turns, fast-mode changes, thinking-level changes, and file rewind could build
 an interactive target before attaching the local bridge surface. Those paths
 now explicitly attach the selected session before dispatch. All 88 TUI runner
 tests and the full workspace suite passed after the fix.
+
+## Delivery-blocker closure (2026-07-11)
+
+The final delivery audit closed three follow-up findings:
+
+1. Orphan archive authorization now runs during request-runtime resolution,
+   before the archive handler can take, cancel, or drain an active turn, clear
+   activity, or emit an archive result. An orphan target for an interactively
+   owned session returns `InteractiveOwnerConflict` without mutating the
+   runtime; a barrier-backed regression test proves the running turn survives.
+2. Package H completion is tracked by its eleven required behaviors, not by
+   counting `#[tokio::test]` attributes. The sixteen-test host suite covers the
+   full A/B runtime, connection, config, callback, orphan, reload, replay,
+   slow-consumer, and shutdown matrix. Every concurrent or lifecycle scenario
+   has an overall bounded timeout.
+3. The unused SDK `pending_map` module, its self-tests, and its public export
+   were deleted. Callback ownership and reply correlation now live only in
+   AppServer and validate connection, surface, session, and request id.
+
+The post-fix final gate passed affected all-features clippy, all 13,611
+workspace Rust tests (four existing skips), schema and Python code-generation
+checks, and 107 Python SDK tests (ten environment-gated skips). See
+[remediation-plan.md](remediation-plan.md#implementation-status-2026-07-11)
+for the work-package and package-H evidence matrix.

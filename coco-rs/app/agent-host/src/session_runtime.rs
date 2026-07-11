@@ -1,7 +1,7 @@
 //! Per-session runtime container shared by both TUI and SDK runners.
 //!
 //! The TUI runner (`tui_runner::run_tui` / `run_agent_driver`) and the SDK
-//! runner (`sdk_server::sdk_runner::QueryEngineRunner`) both need to:
+//! executor (`sdk_server::sdk_runner::SessionTurnExecutor`) both need to:
 //!
 //! 1. Construct ~12 per-session subsystem state objects at startup
 //! (`FileReadState`, `SessionMemoryService`, `HookRegistry`,
@@ -62,7 +62,8 @@ pub(crate) use roles::resolve_model_selection_from_runtime_config;
 pub(crate) use roles::thinking_level_for_effort_from;
 pub(crate) use sandbox::{build_sandbox_state, sandbox_settings_deny_paths};
 pub use session_handle::SessionHandle;
-pub(crate) use turn::{ActiveTurnHandles, SessionTurnCoordinator};
+pub use turn::SessionStats;
+pub(crate) use turn::{ActiveTurnHandles, SessionAccounting, SessionTurnCoordinator};
 
 #[derive(Clone)]
 pub(crate) struct McpRegistrationStatus {

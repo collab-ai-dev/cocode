@@ -1,5 +1,30 @@
 # Verified Architecture Review
 
+Resolution status: all confirmed R1-R11 gaps were addressed by the breaking
+refactor. The evidence below is retained as the review of the pre-refactor
+baseline; the production ownership model is documented in
+[current-architecture.md](current-architecture.md).
+
+## Post-refactor delivery audit
+
+Three follow-up delivery findings were also confirmed and resolved on
+2026-07-11:
+
+- orphan archive authorization had occurred after handler side effects; it now
+  proves orphan authority before dispatch and is protected by a regression test
+  in which an owned session's active turn remains live after rejection;
+- the earlier integration-test count did not by itself prove all package-H
+  scenarios; the suite now contains semantic coverage for every one of the
+  eleven requirements, with overall bounded timeouts for all concurrent and
+  lifecycle cases;
+- the SDK `pending_map` module was unused outside its own tests after callback
+  ownership moved to AppServer; the module, tests, and public export were
+  removed.
+
+These are closed findings, not amendments to the pre-refactor R1-R11 analysis
+below. The evidence mapping is recorded in
+[remediation-plan.md](remediation-plan.md#package-h-evidence-matrix).
+
 This review re-derived each reported issue from production call paths and then
 looked for code or tests that would refute it. The purpose is to distinguish
 real correctness gaps from differences between an aspirational document and a

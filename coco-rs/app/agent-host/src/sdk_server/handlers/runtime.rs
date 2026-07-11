@@ -41,12 +41,6 @@ pub(super) async fn handle_set_model(
                 cfg.model_id = model_for_config;
             })
             .await;
-        // the metadata write must target the SAME routed session as the
-        // engine-config write above (previously it wrote the scoped/active
-        // session, a different session during replacement windows) so the
-        // session/list overlay stays coherent with the runtime.
-        ctx.state
-            .update_session_model(&session_id, new_model.clone());
         info!(
             session_id = %session_id,
             old_model = %old_model,
@@ -56,24 +50,11 @@ pub(super) async fn handle_set_model(
         return HandlerResult::ok_empty();
     }
 
-    let Some(session_id) = ctx.active_session_id().await else {
-        return HandlerResult::Err {
-            code: coco_types::error_codes::INVALID_REQUEST,
-            message: "no active session".into(),
-            data: None,
-        };
-    };
-    let old_model = ctx
-        .state
-        .update_session_model(&session_id, new_model.clone())
-        .unwrap_or_else(|| DEFAULT_SDK_MODEL.into());
-    info!(
-        session_id = %session_id,
-        old_model = %old_model,
-        new_model = %new_model,
-        "SdkServer: control/setModel"
-    );
-    HandlerResult::ok_empty()
+    HandlerResult::Err {
+        code: coco_types::error_codes::INVALID_REQUEST,
+        message: "control/setModel requires a live targeted runtime".into(),
+        data: None,
+    }
 }
 
 /// `control/setModelRole` — apply an in-memory role/provider/model override.
@@ -168,12 +149,11 @@ pub(super) async fn handle_set_model_role(
     runtime
         .model_runtimes()
         .set_role_moa_endpoint_override(params.role, moa_endpoint);
-    // keep the scoped metadata model in step with a Main-role change so the
-    // session/list overlay (which reads metadata.model) does not diverge from
-    // the runtime after a `setModelRole` on the main role.
     if params.role == coco_types::ModelRole::Main {
-        ctx.state
-            .update_session_model(session_runtime.session_id(), display_model_id.clone());
+        let main_model_id = display_model_id.clone();
+        session_runtime
+            .update_engine_config(move |config| config.model_id = main_model_id)
+            .await;
     }
     info!(
         role = %params.role.as_str(),
@@ -274,58 +254,11 @@ pub(super) async fn handle_set_permission_mode(
         return HandlerResult::ok_empty();
     }
 
-    let Some(session_id) = ctx.active_session_id().await else {
-        return HandlerResult::Err {
-            code: coco_types::error_codes::INVALID_REQUEST,
-            message: "no active session".into(),
-            data: None,
-        };
-    };
-    info!(
-        session_id = %session_id,
-        mode = ?params.mode,
-        "SdkServer: control/setPermissionMode"
-    );
-    let Some(handoff) = ctx.state.session_handoff_snapshot(&session_id) else {
-        return HandlerResult::Err {
-            code: coco_types::error_codes::INTERNAL_ERROR,
-            message: "session handoff state is missing".into(),
-            data: None,
-        };
-    };
-    let app_state = handoff.app_state;
-    // Provenance for the Auto-entry dangerous-rule strip must come from the
-    // SAME live base the transition writes — this session's handoff
-    // `app_state`, NOT the SessionRuntime base. Reading the session's own base
-    // keeps strip/restore coherent.
-    let (previous_mode, live_allow_rules) = {
-        let guard = app_state.read().await;
-        (
-            guard
-                .permissions
-                .mode
-                .unwrap_or(coco_types::PermissionMode::Default),
-            guard.permissions.allow_rules.clone(),
-        )
-    };
-    let change = crate::live_permission_mode::apply_to_app_state(
-        &app_state,
-        previous_mode,
-        params.mode,
-        &live_allow_rules,
-        coco_permissions::PlanModeAutoOptions::default(),
-    )
-    .await;
-    crate::live_permission_mode::publish_outbound_if_changed(
-        &ctx.notif_tx,
-        session_id.clone(),
-        params.mode,
-        crate::live_permission_mode::sdk_bypass_available(&ctx.state),
-        change.changed,
-    )
-    .await;
-
-    HandlerResult::ok_empty()
+    HandlerResult::Err {
+        code: coco_types::error_codes::INVALID_REQUEST,
+        message: "control/setPermissionMode requires a live targeted runtime".into(),
+        data: None,
+    }
 }
 
 /// `control/setThinking` — mutate the session's thinking level.

@@ -1,6 +1,6 @@
-//! Tests for the `QueryEngineRunner`.
+//! Tests for the `SessionTurnExecutor`.
 //!
-//! `QueryEngineRunner` now holds `SessionHandle` whose
+//! `SessionTurnExecutor` receives a `SessionHandle` whose
 //! construction needs a full `RuntimeConfig` + provider clients +
 //! settings layers — building one in a unit test would essentially
 //! rebuild `run_sdk_mode`. End-to-end behavior is exercised via the
@@ -16,7 +16,6 @@ use super::*;
 #[test]
 fn runner_is_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<QueryEngineRunner>();
     assert_send_sync::<SessionTurnExecutor>();
 }
 

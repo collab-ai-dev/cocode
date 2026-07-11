@@ -21,7 +21,7 @@ it expose typed errors and SDK handlers translate failures to protocol results.
 | `sdk_server::app_server_bridge::AppServerSdkHandler` | Runtime-backed AppServer request handler shared by JSON-RPC SDK and local in-process adapters |
 | `sdk_server::AppServerLocalBridge` | Local AppServer client bridge for TUI/headless cut-over: wires AppServer, LocalClientAdapter, LocalServerClient, shared handler, and event forwarding |
 | `sdk_server::StdioTransport` | stdin/stdout NDJSON transport |
-| `sdk_server::QueryEngineRunner` | Bridges `QueryEngine` to SDK control messages |
+| `sdk_server::SessionTurnExecutor` | Executes a turn against the already-selected `SessionHandle`; shared by SDK, TUI, headless, and harness paths. |
 | `sdk_server::CliInitializeBootstrap` | Session bootstrap from `initialize` control request |
 | `sdk::ModelUsage` + schemas | SDK wire types |
 | `model_factory::*` | Builds `Arc<dyn LanguageModelV4>` from provider/model config |
@@ -30,21 +30,22 @@ it expose typed errors and SDK handlers translate failures to protocol results.
 | `project_services::ProjectServices` | Project-rooted plugin catalog plus command, skill, hook, MCP, and LSP discovery shared by sessions with the same project root |
 | `session_runtime::SessionRuntimeFactory` | Owned construction seam for building `SessionHandle`s from cloneable startup inputs and a target session id. |
 
-## Known Multi-Session Boundary
+## Multi-Session Ownership
 
-The shared AppServer registry/routing infrastructure is multi-slot, but the SDK
-execution path is not yet safe to describe as fully multi-session. Several
-session-scoped requests lack an explicit `(session_id, surface_id)` target;
-`StateQueryEngineRunner`, MCP, file-history, and reload paths still consult or
-replace process-singleton SDK slots. Initialize-derived inputs and connection
-writer/correlation state also lack a complete per-connection owner. The
-breaking target removes implicit
-sole-surface inference and resolves one `SessionHandle` from the AppServer
-registry for every session operation. Those slots must not be deleted
-literally: migrate all consumers to session-owned capabilities first, prove
-behavior parity and A/B isolation, then remove only the duplicate process
-owners. See `docs/coco-rs/multi-session-app-server/README.md`; the exhaustive
-request and connection contract is in `protocol-scope.md` in that directory.
+AppServer validates every interactive `(connection, surface, session)` target
+and hands the handler one opaque `SessionHandle`. Runtime selection is never
+repeated in a runner or handler. The runtime owns history, engine/app state,
+MCP, reload supervisors, file history, active-turn cancellation, turn ids, and
+aggregate turn accounting. `SdkServerState` owns only process services and
+projections: the runner implementation, bootstrap/factory inputs, persistence,
+activity timestamps, and durable event sequence allocation.
+
+Accepted connections own immutable initialize profiles, bounded outbound
+writers, and callback correlation. Callback replies are accepted only when
+connection, surface, session, and request id all match pending AppServer
+ownership. Do not add sole-session inference, optional live-runtime handles, or
+process-keyed session capability maps. See
+`docs/coco-rs/multi-session-app-server/README.md` and `protocol-scope.md`.
 
 ## Startup Flow
 
@@ -96,15 +97,9 @@ bridge bootstrap, SDK-hosted MCP registration, and MCP handlers use
 The SDK production runtime replacement context sits behind
 `RuntimeReplacementState`; SDK startup installs it and AppServer start/resume
 interception reads it through `SdkServerState` methods.
-The SDK runtime reload subscriber sits behind `RuntimeReloadState`; runtime
-install aborts and replaces the sandbox reload task through `SdkServerState`
-methods instead of a raw task slot.
-MCP tool-registration reports sit behind `McpRegistrationState`; `mcp/status`
-requests ask `SdkServerState` for the status projection instead of reading the
-report map directly.
-SDK file-history state plus config home sit behind `FileHistoryStateSlot`, so
-rewind handlers and runtime install paths use `SdkServerState` snapshots and
-install methods instead of raw slots.
+Reload supervisors, MCP registration reports, file-history state, and config
+home are owned by `SessionRuntime` and reached only through the validated
+`SessionHandle`. `SdkServerState` must not mirror any of these capabilities.
 Pre-runtime initialize bootstrap data, startup cwd, the SDK agent-progress
 opt-in flag, and startup-authorized bypass capability sit behind
 `BootstrapState`.
@@ -200,7 +195,7 @@ composition over `AppSessionDataSource` / `AppSessionDataHandle`, while
 `sdk_server::session_data` supplies the concrete `SessionManager` callbacks and
 live-handle snapshots. The persisted list/read/turn loaders in
 `sdk_server::session_data` are shared by that AppServer local view and the
-remaining legacy SDK handlers, so the live-overlay path has one owner while
+SDK session-data handlers, so the live-overlay path has one owner while
 the JSONL `SessionManager` boundary remains in `coco-agent-host`.
 The local AppServer bridge exposes `shutdown_registered_sessions`, which
 drains all registered AppServer slots through the same concrete close cascade
@@ -244,24 +239,19 @@ Use `install_session_runtime` when TUI/headless have already built a
 `SessionRuntime`; it snapshots the existing session id/cwd/model into the
 shared handler state instead of issuing a fresh `session/start`, installs the
 runtime's `SessionManager` so local `session/list`, `session/read`, and
-`session/turns/list` see persisted transcripts, and installs a `QueryEngineRunner` so local
-`turn/start` requests have the same engine runner as the SDK bridge.
+`session/turns/list` see persisted transcripts, and installs the shared
+`SessionTurnExecutor` so local `turn/start` uses the same execution path as the
+SDK bridge.
 TUI, headless, and SDK bootstraps now construct their initial runtime through
 `SessionRuntimeFactory`; the factory owns the cloneable build inputs and can
 build explicit-id handles. TUI/headless startup reserve the fresh/resume target
 id before runtime construction and SDK startup reserves a fresh startup id;
 all three load that initial runtime through an AppServer `spawn_load` owner
 task. Resume/fork therefore no longer creates a throwaway startup identity
-first. Production SDK `session/start` now builds the client-started runtime
-through the same factory inside the AppServer load/replace owner task, closes
-the explicitly identified startup placeholder slot (including a slot observed
-only by passive surfaces), then swaps `SdkServerState.session_runtime` and
-installs scoped SDK state maps for the constructed handle without writing the
-process-global active identity; the legacy handler now rejects `session/start` when a
-runtime is already installed without the AppServer replacement context.
-The shared `session/resume` handler only hydrates an installed runtime that is
-already on the requested id; different-id runtime-backed resume must use the
-AppServer replacement path.
+first. Production SDK `session/start` builds the client-started runtime through
+the same factory inside the AppServer load/replace owner task and closes the
+explicit startup placeholder slot. Start/resume without a configured runtime
+factory fail closed with the stable `runtime_factory_required` error.
 The local bridge has runtime-backed `spawn_replace` /
 `spawn_replace_detached` helpers that return the constructed runtime handle to
 callers. The TUI driver now has a swappable current-session owner: each command
@@ -273,40 +263,13 @@ same factory-backed replacement ordering in production: the AppServer bridge
 loads the persisted session, builds the target runtime inside the AppServer
 load/replace owner task, replays resume hydration plus SDK late binds, commits
 the AppServer slot/surface switch, and only then swaps
-`SdkServerState.session_runtime` and installs scoped SDK state maps without
-writing process-global active identity. The state-owned SDK turn handoff carries the
-resumed transcript history and runtime app state so the next SDK `turn/start`
-continues from the loaded chain; construction failure leaves the prior
-SDK/AppServer live slot untouched. Runtime-backed SDK control
-paths now update/read model, permission mode, thinking level, and cwd from the
-installed runtime first; turn id counters, aggregate archive accounting, and
-active-turn handles/cancellation sit behind `TurnState`. Legacy cwd/model
-metadata, session-scoped plan-mode instruction snapshots, SDK turn handoff
-history, and live app state sit behind `ScopedSessionState`; callers still
-enter through `SdkServerState` methods. The SDK singleton active identity is
-deleted. Approval, user-input, and elicitation waiter maps sit behind
-`PendingClientRequestState`, with turn resolve/cancel handlers entering
-through `SdkServerState` methods instead of touching maps directly.
-Direct legacy start/resume install the same scoped SDK state maps; unscoped handlers
-resolve a sole scoped session when no AppServer surface or installed runtime
-identifies the session. AppServer-routed requests also
-carry an optional connection-scoped session id from the sole attached
-interactive surface; runtime controls, rewind, normal and shortcut turn setup,
-and other simple readers prefer that scope, then the installed runtime's scoped
-state, before falling back to a sole scoped state.
-Runtime-backed SDK session/start and session/resume, scoped archive, and
-AppServer close cleanup operate by routed session id instead of requiring the
-SDK active identity. The REPL bridge control handler also falls back to the
-installed runtime's current session id for bridge-origin
-controls. Per-turn `SessionResult` accounting for scoped turns folds while the
-routed session's scoped state is still live, so it also no longer requires the
-process-global active identity. SDK/AppServer fallback event stamping, unscoped runtime-backed
-turn cleanup, and live session-data overlay now prefer runtime/scoped state;
-process-level bridge fallbacks share
-`SdkServerState::runtime_or_active_session_id()`. AppServer runtime replacement
-and no-runtime-replacement `session/start` / `session/resume` install scoped
-SDK state and rely on AppServer registry/surface ownership instead of claiming
-a process-global identity. TUI, headless, and SDK runtime construction uses
+the AppServer registry only after construction and hydration succeed;
+construction failure leaves the prior slot untouched. Runtime-backed controls
+read and mutate only the validated handle. Turn ids, active tasks,
+cancellation, and aggregate archive accounting are owned together by the
+runtime's `SessionTurnCoordinator`. Server requests and callback waiters are
+owned and correlated by AppServer, including the originating surface.
+TUI, headless, and SDK runtime construction uses
 `SessionRuntimeFactory` with a `SessionRuntimeBootstrapSource`. Production
 factories use the per-session fold source: each target cwd rebuilds
 `RuntimeConfig` plus the derived model, system prompt, startup permission state,
@@ -376,11 +339,9 @@ owner directly.
 `SessionRuntime` is now the resource-owner struct itself instead of a wrapper
 around a separate `SessionRuntimeResources` field.
 `control/updateEnv` now applies to the installed runtime's session-owned shell
-env store, which Bash/PowerShell providers snapshot before future shell spawns;
-the no-runtime SDK fallback still acknowledges the request without storing an
-unused singleton map. SDK `context/usage` reads the installed runtime's main
-context directly, so it no longer depends on SDK handoff state when a runtime is
-present. The TUI skill watcher now uses the swappable current-session owner when
+env store, which Bash/PowerShell providers snapshot before future shell spawns.
+SDK `context/usage` reads the selected runtime's main context directly. The TUI
+skill watcher now uses the swappable current-session owner when
 handling debounced file changes, so skill ConfigChange hooks, catalog reload,
 and slash-command refresh target
 the post-resume / post-branch runtime. The TUI cron tick driver also reads the
@@ -402,7 +363,7 @@ for event-hub startup, reload subscriptions, command waits, resume/clear
 hydration, goal state, rewind, plugin/agent/permission payloads, and
 model/thinking updates, so it has no remaining `SessionHandle::runtime()` escape
 calls. SDK startup MCP/event-hub setup, structured-output enablement,
-setup/start hooks, and file-history handoff now also call through the startup
+setup/start hooks, and file-history setup now also call through the startup
 `SessionHandle`, and the current-session config-change watcher fires hooks
 through the swappable handle directly. SDK turn/runtime/session handlers now use
 installed `SessionHandle`s directly for memory shortcuts, goal state, manual
@@ -410,9 +371,9 @@ compact, model/permission/color updates, tag toggling, and resume hydration;
 remaining production `.runtime()` calls are local AppServer registry snapshot
 extraction points (`LocalAppSessionHandle`) or tests.
 Local `session/start` and `session/resume` register the session in the local
-`AppServer` registry; resume first closes any previous local live slot for the
-single-session bridge so the resumed session can load without leaking registry
-state. Local `session/archive` drives the AppServer close path so attached
+`AppServer` registry; TUI resume replaces its explicitly selected live slot so
+the resumed session can load without leaking registry state. Local
+`session/archive` drives the AppServer close path so attached
 surfaces receive `SessionEnded` lifecycle notifications.
 `turn/start` lifecycle events must use the same `TurnId` returned by the
 synchronous `TurnStartResult`; `AppServerLocalBridge::start_turn_and_wait_for_end`
@@ -498,8 +459,7 @@ TUI teammate current-work interrupt now routes through
 request on the same local AppServer path as the SDK handler.
 TUI teammate/subagent cancellation routes through local AppServer
 `LocalServerClient::stop_task`; the SDK handler uses the installed `TaskRuntime`
-when present and only falls back to active-turn cancellation for legacy
-SDK-only sessions with no installed `SessionRuntime`.
+when present and otherwise cancels the selected runtime's active turn.
 TUI Ctrl+B background-all foreground tasks routes through
 `LocalServerClient::background_all_tasks`, which dispatches the AppServer
 `control/backgroundAllTasks` request and returns the ids that transitioned.

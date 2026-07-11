@@ -346,6 +346,10 @@ impl SessionHandle {
         self.runtime.apply_session_env_updates(env)
     }
 
+    pub fn session_env_snapshot(&self) -> Option<std::collections::HashMap<String, String>> {
+        self.runtime.session_env_snapshot()
+    }
+
     pub async fn explain_permission_risk(
         &self,
         params: coco_permissions::ExplainerParams<'_>,
@@ -566,6 +570,22 @@ impl SessionHandle {
         ) -> super::ActiveTurnHandles,
     ) -> Result<coco_types::TurnId, ()> {
         self.runtime.turn_coordinator.start(&self.session_id, build)
+    }
+
+    pub(crate) fn next_turn_id(&self) -> coco_types::TurnId {
+        self.runtime.turn_coordinator.next_turn_id(&self.session_id)
+    }
+
+    pub(crate) fn reset_session_accounting(&self) {
+        self.runtime.turn_coordinator.reset_accounting();
+    }
+
+    pub(crate) fn session_accounting_snapshot(&self) -> super::SessionAccounting {
+        self.runtime.turn_coordinator.accounting_snapshot()
+    }
+
+    pub(crate) fn accumulate_session_result(&self, params: &coco_types::SessionResultParams) {
+        self.runtime.turn_coordinator.accumulate_result(params);
     }
 
     pub(crate) fn active_turn_cancel_token(&self) -> Option<tokio_util::sync::CancellationToken> {

@@ -5,6 +5,55 @@ the current protocol and does not preserve target-less request compatibility.
 The normative architecture is in [target-architecture.md](target-architecture.md),
 and every request scope is defined in [protocol-scope.md](protocol-scope.md).
 
+## Implementation status (2026-07-11)
+
+The required multi-session remediation is complete and release-validated.
+This plan is retained as the acceptance record; future-tense sections below
+describe the implementation order that was used.
+
+| Work package | Status | Evidence |
+|---|---|---|
+| A: scope contract | Complete | Exhaustive request scopes and required typed targets landed |
+| B: AppServer validation | Complete | Central target validation plus pre-handler orphan authorization landed |
+| C: connection isolation | Complete | Per-connection profile/writer/correlation and callback requirements landed |
+| D: client authority | Complete | Local and remote session clients inject typed authority |
+| E: canonical runtime | Complete | `SessionTurnExecutor` always receives the validated `SessionHandle` |
+| F: session capabilities | Complete | Turn, MCP, history, rewind, reload, hooks, sandbox, and approvals are session-owned |
+| G: lifecycle semantics | Complete | Replace, closing resume, orphan archive, close cascade, and concurrent shutdown landed |
+| H: production isolation | Complete | Sixteen production-handler tests cover all eleven required scenarios |
+| I: v1 hardening | Complete for delivery | Opaque capability boundaries, lock lint, and ownership cleanup landed; measurement-driven actors/services and product adapters remain intentionally optional/deferred |
+
+The final follow-up also deleted the unused SDK `pending_map` module and moved
+orphan archive authorization ahead of all handler side effects. Final gates:
+
+- affected all-features clippy passed with zero warnings;
+- all 13,611 executed workspace Rust tests passed; four existing tests were
+  skipped by configuration;
+- schema and Python protocol generation checks passed;
+- 107 Python SDK tests passed; ten environment-gated tests were skipped;
+- `git diff --check` and removed-architecture symbol audits passed.
+
+### Package H evidence matrix
+
+| # | Required behavior | Production-path evidence |
+|---|---|---|
+| 1 | One connection isolates A/B turns, controls, reads, rewinds, interrupts | `one_connection_runs_and_interrupts_two_runtime_backed_turns_independently` |
+| 2 | Two initialized connections isolate profile/cwd/config/tools/MCP/history/writer while running concurrently | `two_initialized_connections_keep_profiles_runtimes_and_writers_isolated` |
+| 3 | Cross-connection, passive, and mismatched targets fail with stable errors | `cross_connection_surface_authority_is_rejected_without_mutation`, `passive_surface_cannot_issue_interactive_mutation`, `mismatched_session_surface_pair_is_rejected_with_stable_kind` |
+| 4 | Project and local writes resolve from the targeted cwd | `targeted_project_and_local_config_writes_cannot_modify_the_sibling_project` |
+| 5 | Callback replies cannot cross connection/surface/session/request id | `callback_reply_cannot_cross_session_on_the_same_connection` plus the rebound-surface invalidation case |
+| 6 | Orphan resume rejects incompatible requirements and accepts compatible ones | `orphan_resume_enforces_callback_requirements_before_rebinding` |
+| 7 | Reload subscriptions coexist and targeted close/replacement reaps only its runtime | `reload_supervisors_coexist_and_close_reaps_only_the_target_runtime` |
+| 8 | Events/replay retain session and turn identity | `session_events_and_replay_never_cross_session_identity` |
+| 9 | Shutdown drains A/B concurrently | `process_shutdown_drains_both_runtime_backed_sessions` |
+| 10 | Disconnect fails callbacks closed, preserves the turn, then permits orphan archive | `disconnected_session_is_archived_through_explicit_orphan_authority` |
+| 11 | Slow-consumer disconnect/reconnect replays both sessions without loss or leakage | `slow_consumer_disconnects_whole_connection_and_both_sessions_replay_cleanly` |
+
+All concurrent and lifecycle scenarios use an overall bounded timeout;
+barriers and semaphores provide deterministic concurrency coordination. The
+additional `orphan_archive_rejects_owned_session_before_turn_or_runtime_side_effects`
+test protects the delivery-blocking authorization-order regression.
+
 ## Execution contract
 
 - Land only green commits. Characterization cases may be demonstrated as

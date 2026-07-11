@@ -1,6 +1,6 @@
 //! `HookSuccess` reminder via the **UserPromptSubmit** path.
 //!
-//! Engine wiring: `QueryEngineRunner::run_turn` calls
+//! Engine wiring: `SessionTurnExecutor::run_turn` calls
 //! `runtime.fire_user_prompt_submit_hooks(prompt)` BEFORE building the
 //! per-turn engine. Each successful hook with non-empty stdout pushes a
 //! `HookEvent::Success { hook_event: UserPromptSubmit, ... }` onto the

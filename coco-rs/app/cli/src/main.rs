@@ -1102,7 +1102,7 @@ async fn run_sdk_mode(
     )
     .await
     .map_err(|error| anyhow::anyhow!("{}", error.message))?;
-    let session_handle = loaded_handle.require_runtime_anyhow("loaded")?;
+    let session_handle = loaded_handle.into_session();
     let mcp_manager = Arc::new(tokio::sync::Mutex::new(
         coco_mcp::McpConnectionManager::new_with_runtime_config(
             global_config::config_home(),
@@ -1268,7 +1268,7 @@ async fn run_sdk_mode(
         .list_live_sessions()
         .into_iter()
         .filter_map(|summary| app_server.registry().get(&summary.session_id))
-        .filter_map(coco_agent_host::sdk_server::LocalAppSessionHandle::into_session)
+        .map(coco_agent_host::sdk_server::LocalAppSessionHandle::into_session)
         .collect::<Vec<_>>();
     let app_server_for_shutdown = Arc::clone(&app_server);
     let state_for_shutdown = state.clone();
@@ -1314,7 +1314,7 @@ async fn run_sdk_mode(
         // Persist coordinator mode at exit so a later `--resume` re-derives the
         // role (R2). The SDK leader path previously never wrote it, silently
         // dropping the coordinator role on resume.
-        let session_id = session_runtime.current_typed_session_id().await;
+        let session_id = session_runtime.session_id().clone();
         coco_agent_host::coordinator_mode_resume::persist_session_mode(
             session_runtime.session_manager(),
             &session_id,

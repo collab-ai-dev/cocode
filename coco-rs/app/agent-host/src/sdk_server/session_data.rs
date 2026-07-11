@@ -59,14 +59,9 @@ impl AppSessionDataSource for LocalSessionDataView {
 
     fn live_session_fallback(
         &self,
-        session_id: SessionId,
+        _session_id: SessionId,
     ) -> BoxFuture<'_, Result<Option<LiveSessionDataSnapshot>, AppSessionDataError>> {
-        Box::pin(async move {
-            live_sdk_session_summary_and_history(&self.state, &session_id)
-                .await
-                .map(live_session_data_snapshot)
-                .transpose()
-        })
+        Box::pin(async { Ok(None) })
     }
 }
 
@@ -75,10 +70,8 @@ impl AppSessionDataHandle for LocalAppSessionHandle {
         &self,
     ) -> BoxFuture<'_, Result<Option<LiveSessionDataSnapshot>, AppSessionDataError>> {
         Box::pin(async move {
-            self.live_summary_and_history()
-                .await
-                .map(live_session_data_snapshot)
-                .transpose()
+            let snapshot = live_session_data_snapshot(self.live_summary_and_history().await)?;
+            Ok(Some(snapshot))
         })
     }
 }
@@ -231,34 +224,6 @@ pub(crate) async fn persisted_session_turns_list(
             "session/turns/list task panicked: {join_err}"
         ))),
     }
-}
-
-pub(super) async fn live_sdk_session_summary_and_history(
-    state: &Arc<SdkServerState>,
-    session_id: &SessionId,
-) -> Option<(
-    coco_types::SdkSessionSummary,
-    Vec<std::sync::Arc<coco_messages::Message>>,
-)> {
-    let metadata = state.session_metadata_snapshot(session_id)?;
-    let handoff = state.session_handoff_snapshot(session_id)?;
-    let history = handoff.history.lock().await.clone();
-    let accounting = state.session_accounting_snapshot(session_id);
-    let timestamp = chrono::Utc::now().to_rfc3339();
-    Some((
-        coco_types::SdkSessionSummary {
-            session_id: session_id.clone(),
-            model: metadata.model,
-            cwd: metadata.cwd,
-            created_at: timestamp.clone(),
-            updated_at: Some(timestamp),
-            title: None,
-            message_count: history.len() as i32,
-            total_tokens: accounting.stats.usage.input_tokens.total
-                + accounting.stats.usage.output_tokens.total,
-        },
-        history,
-    ))
 }
 
 fn session_manager_or_invalid(

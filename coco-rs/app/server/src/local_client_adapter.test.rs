@@ -192,7 +192,13 @@ fn local_adapter_registers_request_and_lifecycle_channels() {
         answer: "yes".to_string(),
     });
     let resolved = server
-        .resolve_server_request(&surface.session_id, reply)
+        .resolve_server_request(
+            &coco_types::InteractiveTarget {
+                session_id: surface.session_id.clone(),
+                surface_id: surface.surface_id,
+            },
+            reply,
+        )
         .expect("resolve request");
     assert_eq!(resolved.pending, routed.pending);
 }

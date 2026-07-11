@@ -136,11 +136,8 @@ impl SessionRuntime {
     /// `QueryEngineConfig`. Used by SDK paths whose per-turn config
     /// fields (model, session_id, max_*) come from the
     /// `turn/start` request and override the runtime defaults.
-    /// `app_state_override` lets the caller pin a specific
-    /// `ToolAppState` Arc - SDK passes `Some(handoff.app_state)` so
-    /// per-session app state and the compaction observers built from
-    /// it stay coherent. TUI passes `None` and inherits
-    /// `runtime.app_state`.
+    /// `app_state_override` lets fork callers pin a distinct `ToolAppState`;
+    /// normal session turns inherit `runtime.app_state`.
     pub async fn build_engine_from_config(
         &self,
         config: QueryEngineConfig,
@@ -236,13 +233,9 @@ impl SessionRuntime {
     /// single source of truth for "what subsystems an engine needs" -
     /// both runners route through this so a new subsystem only needs
     /// adding here, not in two transport-specific spots.
-    /// `app_state_override`: when `Some`, this Arc is what the engine
-    /// gets via `with_app_state`, AND it's what the compaction
-    /// observers reset on `notify_all`. When `None`, falls back to the
-    /// runtime's own `app_state`. Without this override, SDK's
-    /// `handoff.app_state` would be installed on the engine but
-    /// `runtime.app_state` would be reset by observers - the two would
-    /// drift after every compaction.
+    /// `app_state_override`: when `Some`, this Arc is what the engine gets via
+    /// `with_app_state` and what compaction observers reset. When `None`, the
+    /// runtime's own session state is used.
     pub(super) async fn wire_engine(
         &self,
         mut engine: QueryEngine,

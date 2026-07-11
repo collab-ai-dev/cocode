@@ -21,8 +21,8 @@ use std::{
 use chrono::{DateTime, Utc};
 use coco_error::{ErrorExt, Location, StatusCode, stack_trace_debug};
 use coco_types::{
-    RequestId, ServerRequest, ServerRequestDelivery, SessionEnvelope, SessionId, SurfaceDelivery,
-    SurfaceId, SurfaceLifecycleEffect, SurfaceLifecycleEffectKind, TurnId,
+    InteractiveTarget, RequestId, ServerRequest, ServerRequestDelivery, SessionEnvelope, SessionId,
+    SurfaceDelivery, SurfaceId, SurfaceLifecycleEffect, SurfaceLifecycleEffectKind, TurnId,
 };
 use snafu::Snafu;
 
@@ -330,6 +330,11 @@ pub enum CompleteServerRequestError {
         request_id: RequestId,
         expected_session_id: SessionId,
         actual_session_id: SessionId,
+    },
+    WrongSurface {
+        request_id: RequestId,
+        expected_surface_id: SurfaceId,
+        actual_surface_id: SurfaceId,
     },
     WrongConnection {
         request_id: RequestId,
@@ -760,18 +765,25 @@ impl RoutingState {
     pub fn complete_server_request(
         &mut self,
         request_id: &RequestId,
-        session_id: &SessionId,
+        target: &InteractiveTarget,
     ) -> Result<PendingServerRequest, CompleteServerRequestError> {
         let Some(pending) = self.pending_server_requests.get(request_id) else {
             return Err(CompleteServerRequestError::NotFound {
                 request_id: request_id.clone(),
             });
         };
-        if &pending.session_id != session_id {
+        if pending.session_id != target.session_id {
             return Err(CompleteServerRequestError::WrongSession {
                 request_id: request_id.clone(),
                 expected_session_id: pending.session_id.clone(),
-                actual_session_id: session_id.clone(),
+                actual_session_id: target.session_id.clone(),
+            });
+        }
+        if pending.surface_id != target.surface_id {
+            return Err(CompleteServerRequestError::WrongSurface {
+                request_id: request_id.clone(),
+                expected_surface_id: pending.surface_id.clone(),
+                actual_surface_id: target.surface_id.clone(),
             });
         }
         self.remove_pending_server_request(request_id)
