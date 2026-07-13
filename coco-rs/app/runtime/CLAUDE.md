@@ -9,7 +9,7 @@ persistence rather than defining a lower-level resource primitive.
 
 | Type | Purpose |
 |------|---------|
-| `ProcessRuntime` | Process-lifetime owner for the project registry manager. |
+| `ProcessRuntime` | Process-lifetime owner for the project registry manager and its explicit background-task shutdown policy. |
 | `ProjectRegistry` | Per-project cache with freshness checks and idle eviction. |
 | `ProjectServices` | Shared project-rooted config snapshot and plugin catalog. |
 | `ProjectConfigSnapshot` | Fingerprint-tracked project settings inputs. |

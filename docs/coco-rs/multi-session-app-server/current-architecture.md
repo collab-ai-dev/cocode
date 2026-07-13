@@ -239,8 +239,10 @@ start builder hydrates that initial history before the first turn.
 
 The resulting runtimes are similar, but the ordering and ownership are not one
 fully shared lifecycle until shared conformance coverage proves the same
-boundary across all connection styles and the remaining process-service stop
-policy is explicit.
+boundary across all connection styles. The process-level project-service owner
+now has an explicit background-task shutdown policy; CLI process exit and SDK
+remote-host shutdown both call it instead of relying on static drop or process
+termination.
 
 ## Close and delete behavior
 

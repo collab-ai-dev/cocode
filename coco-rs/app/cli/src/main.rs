@@ -27,6 +27,7 @@ use coco_agent_host::{
     resume_resolver,
     resume_resolver::ResumePlan,
 };
+use coco_app_runtime::ProcessRuntime;
 use coco_cli::{
     Cli, Commands, McpAction,
     execution_plan::{ExecutionMode, ExecutionPlan, IoCapabilities, build_execution_plan},
@@ -94,6 +95,22 @@ fn sdk_sidecar_config_from_runtime_config(
     config
 }
 
+struct ProcessRuntimeShutdownGuard {
+    runtime: Arc<ProcessRuntime>,
+}
+
+impl ProcessRuntimeShutdownGuard {
+    fn new(runtime: Arc<ProcessRuntime>) -> Self {
+        Self { runtime }
+    }
+}
+
+impl Drop for ProcessRuntimeShutdownGuard {
+    fn drop(&mut self) {
+        self.runtime.shutdown_background_tasks();
+    }
+}
+
 fn main() -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -135,7 +152,8 @@ async fn async_main() -> Result<()> {
     // returns `None` and never installs a global subscriber.
     let _tracing_handle = tracing_init::install(&cli, &startup_cwd, &execution_plan)?;
     coco_cli::startup_profile::mark("subscriber_installed");
-    let process_runtime = coco_app_runtime::ProcessRuntime::global();
+    let process_runtime = ProcessRuntime::global();
+    let _process_runtime_shutdown = ProcessRuntimeShutdownGuard::new(process_runtime.clone());
 
     tracing::info!(
         target: "coco_agent_host::startup",

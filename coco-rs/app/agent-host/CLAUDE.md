@@ -559,8 +559,10 @@ prewarming the live manager.
 project_root)`. `ProcessRuntime::global()` is the process-level owner for the
 `ProjectRegistryManager` background idle sweep, and startup threads the same
 `Arc<ProcessRuntime>` into TUI, SDK, headless, session runtime, and LSP reload
-paths. The sweep evicts only entries with no external strong references, so
-live sessions keep their shared project services attached.
+paths. CLI process exit and SDK remote-host shutdown call
+`ProcessRuntime::shutdown_background_tasks()` explicitly; the sweep evicts only
+entries with no external strong references, so live sessions keep their shared
+project services attached.
 
 `config_home` remains the root for user/global artifacts such as logs,
 plugins, settings, output styles, models, task lists, and file-history

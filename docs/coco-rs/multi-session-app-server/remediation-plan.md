@@ -467,9 +467,12 @@ Implementation status, 2026-07-13:
   driver uses the same coordinator while keeping its final metadata checkpoint
   between AppServer drain and Event Hub flush; SDK remote-host shutdown uses
   it after sidecar/listener shutdown.
-- Still open in Phase F: complete process-service stop policy and a shared
-  lifecycle conformance suite across local TUI-style, local headless, stdio
-  SDK, and sidecar connections.
+- `ProcessRuntime` now exposes an explicit background-task shutdown policy for
+  process-owned project services. CLI process exit covers all early-return
+  modes through a guard, and SDK remote-host shutdown calls the same policy
+  after AppServer/Event Hub drain.
+- Still open in Phase F: add a shared lifecycle conformance suite across local
+  TUI-style, local headless, stdio SDK, and sidecar connections.
 
 Changes:
 

@@ -39,6 +39,7 @@ pub struct PreparedHost {
     state: Arc<AppServerHostState>,
     app_server: Arc<RemoteAppServer>,
     adapter: RemoteJsonRpcAdapter,
+    process_runtime: Arc<ProcessRuntime>,
     app_server_turn_drain_timeout: Duration,
     plugin_notifications: Option<mpsc::Receiver<CoreEvent>>,
     event_hub_connector: Option<ProcessEventHub>,
@@ -96,6 +97,7 @@ impl PreparedHost {
             state,
             app_server,
             app_server_turn_drain_timeout,
+            process_runtime,
             event_hub_connector,
             _event_hub_membership_watcher,
             ..
@@ -116,6 +118,7 @@ impl PreparedHost {
                 _event_hub_membership_watcher,
             )
             .await;
+        process_runtime.shutdown_background_tasks();
         shutdown.into_result("remote")
     }
 }
@@ -238,6 +241,7 @@ impl HostBuilder {
             state,
             app_server,
             adapter,
+            process_runtime,
             app_server_turn_drain_timeout,
             plugin_notifications: Some(plugin_notif_rx),
             event_hub_connector,
