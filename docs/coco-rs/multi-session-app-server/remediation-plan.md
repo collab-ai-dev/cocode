@@ -471,12 +471,15 @@ Implementation status, 2026-07-13:
   process-owned project services. CLI process exit covers all early-return
   modes through a guard, and SDK remote-host shutdown calls the same policy
   after AppServer/Event Hub drain.
-- A shared lifecycle conformance regression now runs one start/read/close
-  contract against the local typed AppServer surface and the JSON-RPC AppServer
-  bridge.
-- Still open in Phase F: extend that shared conformance suite to the concrete
-  stdio SDK and sidecar transport bindings, and add resume-specific assertions
-  to the same matrix.
+- Shared lifecycle conformance now covers start/read/close and durable
+  resume/read/close across the local typed AppServer surface, the direct
+  JSON-RPC AppServer bridge, and the concrete Unix NDJSON sidecar binding on
+  Unix. SDK stdio coverage lives in `coco-sdk-server`, where the transport
+  boundary belongs, and drives the same lifecycle contract through
+  `SdkServer::run_app_server_connection` plus `InMemoryTransport`.
+- Still open in Phase F: extend the concrete sidecar matrix beyond Unix NDJSON
+  where relevant, and add production-surface smoke coverage for the exact TUI
+  and headless startup adapters if later Phase F changes move those adapters.
 
 Changes:
 
@@ -495,11 +498,15 @@ Changes:
 
 Tests and gate:
 
-- the same lifecycle conformance suite runs against local typed and JSON-RPC
-  AppServer bridge surfaces for start/read/close;
-- extend the same suite to local TUI-style, local headless-style, stdio SDK,
-  and sidecar connection bindings;
-- resume hydration/history/callback requirements are identical;
+- the same lifecycle conformance suite runs against local typed, JSON-RPC
+  AppServer bridge, and concrete Unix NDJSON sidecar surfaces for
+  start/read/close and durable resume/read/close;
+- SDK stdio runs the same lifecycle contract from the SDK transport crate
+  without reversing the `agent-host` -> `sdk-server` dependency direction;
+- extend sidecar coverage beyond Unix NDJSON only when that transport is
+  changed or when platform-specific behavior needs validation;
+- resume hydration/history/callback requirements are identical across the
+  covered surfaces;
 - no production surface calls `SessionFactory` directly;
 - no production surface directly mutates registry/runtime state;
 - all surfaces return the same typed close failure outcome;

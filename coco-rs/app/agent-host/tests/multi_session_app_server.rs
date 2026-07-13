@@ -21,12 +21,13 @@ use coco_app_server::{
     LocalClientSubscribeOutcome, SurfaceCapability,
 };
 use coco_app_server_client::ClientError;
-use coco_app_server_transport::{JsonRpcFrame, JsonRpcId, JsonRpcRequest};
+use coco_app_server_transport::{JsonRpcFrame, JsonRpcId, JsonRpcNotification, JsonRpcRequest};
 use coco_types::{
     ClientRequestMethod, ConfigWriteParams, ConfigWriteTarget, CoreEvent, HookCallbackMatcher,
     HookEventType, InitializeParams, InteractiveTarget, ServerNotification, SessionCloseParams,
     SessionCloseTarget, SessionDeleteParams, SessionEnvelope, SessionReadParams, SessionReadResult,
-    SessionStartParams, SessionStartResult, SessionState, SessionTarget,
+    SessionResumeParams, SessionResumeResult, SessionStartParams, SessionStartResult, SessionState,
+    SessionTarget,
 };
 use tokio::sync::mpsc;
 
@@ -50,6 +51,8 @@ async fn fixture() -> Fixture {
 enum LifecycleConformanceSurface {
     LocalTyped,
     JsonRpc,
+    #[cfg(unix)]
+    UnixSidecar,
 }
 
 impl LifecycleConformanceSurface {
@@ -57,10 +60,12 @@ impl LifecycleConformanceSurface {
         match self {
             Self::LocalTyped => "local_typed",
             Self::JsonRpc => "json_rpc",
+            #[cfg(unix)]
+            Self::UnixSidecar => "unix_sidecar",
         }
     }
 
-    fn connect(self, fixture: &Fixture) -> LifecycleConformanceClient {
+    async fn connect(self, fixture: &Fixture) -> LifecycleConformanceClient {
         match self {
             Self::LocalTyped => LifecycleConformanceClient::LocalTyped {
                 client: LocalServerClient::connect_local(&fixture.adapter),
@@ -76,6 +81,81 @@ impl LifecycleConformanceSurface {
                     next_request_id: 1,
                 }
             }
+            #[cfg(unix)]
+            Self::UnixSidecar => {
+                let dir = tempfile::tempdir().expect("sidecar socket dir");
+                let socket_path = dir.path().join("app-server.sock");
+                let (outbound_tx, outbound_rx) = mpsc::channel(16);
+                let handler = Arc::new(
+                    AppServerHostHandler::with_local_app_server_and_turn_drain_timeout(
+                        Arc::clone(&fixture.state),
+                        outbound_tx,
+                        Arc::clone(&fixture.server),
+                        coco_agent_host::app_server_host::APP_SERVER_TURN_DRAIN_TIMEOUT,
+                    ),
+                );
+                let outbound_forwarder =
+                    coco_agent_host::app_server_host::spawn_app_server_local_outbound_forwarder(
+                        Arc::clone(&fixture.server),
+                        Arc::clone(&fixture.state),
+                        outbound_rx,
+                        Arc::new(std::sync::RwLock::new(None)),
+                    );
+                let adapter =
+                    coco_agent_host::app_server_host::RemoteJsonRpcAdapter::with_channel_capacity(
+                        Arc::clone(&fixture.server),
+                        /*channel_capacity*/ 16,
+                    );
+                let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+                let listener_task = tokio::spawn({
+                    let adapter = adapter.clone();
+                    let handler = Arc::clone(&handler);
+                    let socket_path = socket_path.clone();
+                    async move {
+                        adapter
+                            .bind_and_run_unix_listener_until_shutdown(
+                                socket_path,
+                                handler,
+                                shutdown_rx,
+                            )
+                            .await
+                            .map_err(|error| error.to_string())
+                    }
+                });
+                let mut transport =
+                    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                        loop {
+                            match coco_app_server_transport::connect_ndjson_unix(&socket_path).await
+                            {
+                                Ok(transport) => break transport,
+                                Err(_) => tokio::task::yield_now().await,
+                            }
+                        }
+                    })
+                    .await
+                    .expect("sidecar listener starts");
+                let mut next_request_id = 1;
+                let mut notifications = Vec::new();
+                let frame = request_over_ndjson_transport(
+                    &mut transport,
+                    &mut next_request_id,
+                    &mut notifications,
+                    ClientRequestMethod::Initialize,
+                    InitializeParams::default(),
+                    "unix sidecar initialize",
+                )
+                .await;
+                json_rpc_success::<serde_json::Value>(frame, "unix sidecar initialize");
+                LifecycleConformanceClient::UnixSidecar {
+                    _socket_dir: dir,
+                    transport,
+                    shutdown_tx: Some(shutdown_tx),
+                    listener_task,
+                    outbound_forwarder,
+                    next_request_id,
+                    notifications,
+                }
+            }
         }
     }
 }
@@ -87,6 +167,16 @@ enum LifecycleConformanceClient {
     JsonRpc {
         connection: RemoteJsonRpcConnection,
         next_request_id: i64,
+    },
+    #[cfg(unix)]
+    UnixSidecar {
+        _socket_dir: tempfile::TempDir,
+        transport: coco_app_server_transport::NdjsonUnixConnection,
+        shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+        listener_task: tokio::task::JoinHandle<Result<(), String>>,
+        outbound_forwarder: tokio::task::JoinHandle<()>,
+        next_request_id: i64,
+        notifications: Vec<JsonRpcNotification>,
     },
 }
 
@@ -117,6 +207,24 @@ impl LifecycleConformanceClient {
                     .await;
                 json_rpc_success(frame, "json-rpc session/start")
             }
+            #[cfg(unix)]
+            Self::UnixSidecar {
+                transport,
+                next_request_id,
+                notifications,
+                ..
+            } => {
+                let frame = request_over_ndjson_transport(
+                    transport,
+                    next_request_id,
+                    notifications,
+                    ClientRequestMethod::SessionStart,
+                    params,
+                    "unix sidecar session/start",
+                )
+                .await;
+                json_rpc_success(frame, "unix sidecar session/start")
+            }
         }
     }
 
@@ -141,6 +249,71 @@ impl LifecycleConformanceClient {
                     )
                     .await;
                 json_rpc_success(frame, "json-rpc session/read")
+            }
+            #[cfg(unix)]
+            Self::UnixSidecar {
+                transport,
+                next_request_id,
+                notifications,
+                ..
+            } => {
+                let frame = request_over_ndjson_transport(
+                    transport,
+                    next_request_id,
+                    notifications,
+                    ClientRequestMethod::SessionRead,
+                    params,
+                    "unix sidecar session/read",
+                )
+                .await;
+                json_rpc_success(frame, "unix sidecar session/read")
+            }
+        }
+    }
+
+    async fn session_resume(
+        &mut self,
+        fixture: &Fixture,
+        params: SessionResumeParams,
+    ) -> SessionResumeResult {
+        match self {
+            Self::LocalTyped { client } => client
+                .session_resume(&fixture.handler, params)
+                .await
+                .expect("local session/resume"),
+            Self::JsonRpc {
+                connection,
+                next_request_id,
+            } => {
+                let frame = connection
+                    .dispatch_client_request(
+                        json_rpc_request(
+                            next_request_id,
+                            ClientRequestMethod::SessionResume,
+                            params,
+                        ),
+                        &fixture.handler,
+                    )
+                    .await;
+                json_rpc_success(frame, "json-rpc session/resume")
+            }
+            #[cfg(unix)]
+            Self::UnixSidecar {
+                transport,
+                next_request_id,
+                notifications,
+                ..
+            } => {
+                let frame = request_over_ndjson_transport(
+                    transport,
+                    next_request_id,
+                    notifications,
+                    ClientRequestMethod::SessionResume,
+                    params,
+                    "unix sidecar session/resume",
+                )
+                .await;
+                json_rpc_success(frame, "unix sidecar session/resume")
             }
         }
     }
@@ -167,6 +340,79 @@ impl LifecycleConformanceClient {
                     .await;
                 json_rpc_success::<()>(frame, "json-rpc session/close");
             }
+            #[cfg(unix)]
+            Self::UnixSidecar {
+                transport,
+                next_request_id,
+                notifications,
+                ..
+            } => {
+                let frame = request_over_ndjson_transport(
+                    transport,
+                    next_request_id,
+                    notifications,
+                    ClientRequestMethod::SessionClose,
+                    params,
+                    "unix sidecar session/close",
+                )
+                .await;
+                json_rpc_success::<()>(frame, "unix sidecar session/close");
+            }
+        }
+    }
+
+    async fn wait_for_session_result_stop_reason(
+        &mut self,
+        fixture: &Fixture,
+        session_id: &coco_types::SessionId,
+    ) -> Option<String> {
+        match self {
+            Self::LocalTyped { .. } | Self::JsonRpc { .. } => {
+                wait_for_observed_outbound(fixture, |event| {
+                    event.session_id == *session_id && event.kind == "session/result"
+                })
+                .await
+                .session_result_stop_reason
+            }
+            #[cfg(unix)]
+            Self::UnixSidecar {
+                transport,
+                notifications,
+                ..
+            } => loop {
+                if let Some(stop_reason) = notifications.iter().find_map(|notification| {
+                    notification_session_result_stop_reason(notification, session_id)
+                }) {
+                    break Some(stop_reason);
+                }
+                let frame = transport
+                    .recv_frame()
+                    .await
+                    .expect("unix sidecar receive session/result")
+                    .expect("unix sidecar frame before EOF");
+                record_wire_frame_notifications(frame, notifications);
+            },
+        }
+    }
+
+    async fn shutdown(self) {
+        match self {
+            Self::LocalTyped { .. } | Self::JsonRpc { .. } => {}
+            #[cfg(unix)]
+            Self::UnixSidecar {
+                mut shutdown_tx,
+                listener_task,
+                outbound_forwarder,
+                ..
+            } => {
+                if let Some(shutdown_tx) = shutdown_tx.take() {
+                    let _ = shutdown_tx.send(());
+                }
+                let _ =
+                    tokio::time::timeout(std::time::Duration::from_secs(2), listener_task).await;
+                outbound_forwarder.abort();
+                let _ = outbound_forwarder.await;
+            }
         }
     }
 }
@@ -192,6 +438,126 @@ fn json_rpc_success<T: serde::de::DeserializeOwned>(frame: JsonRpcFrame, context
         }
         JsonRpcFrame::Error(error) => panic!("{context} failed: {:?}", error.error),
         other => panic!("{context} returned unexpected frame: {other:?}"),
+    }
+}
+
+fn append_durable_transcript_seed(
+    fixture: &Fixture,
+    session_id: &coco_types::SessionId,
+    seed_text: &str,
+) {
+    let runtime = fixture
+        .server
+        .registry()
+        .get(session_id)
+        .expect("live runtime for transcript seed")
+        .into_session();
+    runtime
+        .session_manager_handle()
+        .store_for(runtime.original_cwd())
+        .append_message(
+            session_id.as_str(),
+            &coco_session::storage::TranscriptEntry {
+                entry_type: "user".to_string(),
+                uuid: format!("{session_id}-resume-seed"),
+                parent_uuid: None,
+                logical_parent_uuid: None,
+                session_id: Some(session_id.clone()),
+                cwd: runtime.original_cwd().to_string_lossy().into_owned(),
+                timestamp: "2026-07-13T00:00:00Z".to_string(),
+                version: None,
+                git_branch: None,
+                is_sidechain: false,
+                agent_id: None,
+                message: Some(serde_json::json!({"role": "user", "content": seed_text})),
+                usage: None,
+                model: None,
+                request_id: None,
+                cost_usd: None,
+                extra: serde_json::Map::new(),
+            },
+        )
+        .expect("seed durable transcript");
+}
+
+#[cfg(unix)]
+async fn request_over_ndjson_transport<T: serde::Serialize>(
+    transport: &mut coco_app_server_transport::NdjsonUnixConnection,
+    next_request_id: &mut i64,
+    notifications: &mut Vec<JsonRpcNotification>,
+    method: ClientRequestMethod,
+    params: T,
+    context: &str,
+) -> JsonRpcFrame {
+    let request = json_rpc_request(next_request_id, method, params);
+    let expected_id = request.id.clone();
+    transport
+        .send_frame(&JsonRpcFrame::Request(request))
+        .await
+        .expect("send NDJSON transport request");
+    recv_matching_ndjson_response(transport, expected_id, notifications, context).await
+}
+
+#[cfg(unix)]
+async fn recv_matching_ndjson_response(
+    transport: &mut coco_app_server_transport::NdjsonUnixConnection,
+    expected_id: JsonRpcId,
+    notifications: &mut Vec<JsonRpcNotification>,
+    context: &str,
+) -> JsonRpcFrame {
+    loop {
+        let frame = transport
+            .recv_frame()
+            .await
+            .expect("receive NDJSON transport frame")
+            .expect("NDJSON transport returned EOF");
+        match frame {
+            JsonRpcFrame::Success(success) if success.id == expected_id => {
+                return JsonRpcFrame::Success(success);
+            }
+            JsonRpcFrame::Error(error) if error.id == expected_id => {
+                return JsonRpcFrame::Error(error);
+            }
+            JsonRpcFrame::Notification(notification) => notifications.push(notification),
+            other => panic!("{context} received unexpected frame: {other:?}"),
+        }
+    }
+}
+
+fn record_wire_frame_notifications(
+    frame: JsonRpcFrame,
+    notifications: &mut Vec<JsonRpcNotification>,
+) {
+    if let JsonRpcFrame::Notification(notification) = frame {
+        notifications.push(notification);
+    }
+}
+
+fn notification_session_result_stop_reason(
+    notification: &JsonRpcNotification,
+    session_id: &coco_types::SessionId,
+) -> Option<String> {
+    match notification.method.as_str() {
+        "session/result" => {
+            let params = notification.params.as_ref()?;
+            (params.get("session_id")? == session_id.as_str())
+                .then(|| params.get("stop_reason")?.as_str().map(str::to_string))?
+        }
+        "session/event" => {
+            let envelope = notification.params.as_ref()?.get("envelope")?;
+            (envelope.get("session_id")? == session_id.as_str()).then(|| {
+                let event = envelope.get("event")?;
+                (event.get("layer")?.as_str()? == "protocol").then_some(())?;
+                let payload = event.get("payload")?;
+                (payload.get("method")?.as_str()? == "session/result").then_some(())?;
+                payload
+                    .get("params")?
+                    .get("stop_reason")?
+                    .as_str()
+                    .map(str::to_string)
+            })?
+        }
+        _ => None,
     }
 }
 
@@ -874,10 +1240,14 @@ async fn session_start_initial_messages_seed_lifecycle_owned_history() {
 #[tokio::test]
 async fn lifecycle_conformance_surfaces_share_start_read_close_contract() {
     tokio::time::timeout(std::time::Duration::from_secs(20), async {
-        for surface in [
+        let mut surfaces = vec![
             LifecycleConformanceSurface::LocalTyped,
             LifecycleConformanceSurface::JsonRpc,
-        ] {
+        ];
+        #[cfg(unix)]
+        surfaces.push(LifecycleConformanceSurface::UnixSidecar);
+
+        for surface in surfaces {
             lifecycle_conformance_start_read_close(surface).await;
         }
     })
@@ -885,9 +1255,27 @@ async fn lifecycle_conformance_surfaces_share_start_read_close_contract() {
     .expect("lifecycle conformance timed out");
 }
 
+#[tokio::test]
+async fn lifecycle_conformance_surfaces_share_resume_contract() {
+    tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        let mut surfaces = vec![
+            LifecycleConformanceSurface::LocalTyped,
+            LifecycleConformanceSurface::JsonRpc,
+        ];
+        #[cfg(unix)]
+        surfaces.push(LifecycleConformanceSurface::UnixSidecar);
+
+        for surface in surfaces {
+            lifecycle_conformance_resume(surface).await;
+        }
+    })
+    .await
+    .expect("lifecycle resume conformance timed out");
+}
+
 async fn lifecycle_conformance_start_read_close(surface: LifecycleConformanceSurface) {
     let fixture = fixture().await;
-    let mut client = surface.connect(&fixture);
+    let mut client = surface.connect(&fixture).await;
     let seed_text = format!("seeded-through-{}", surface.label());
 
     let started = client
@@ -949,16 +1337,111 @@ async fn lifecycle_conformance_start_read_close(surface: LifecycleConformanceSur
         "{} session/close must remove the live registry slot",
         surface.label()
     );
-    let final_result = wait_for_observed_outbound(&fixture, |event| {
-        event.session_id == started.session_id && event.kind == "session/result"
-    })
-    .await;
     assert_eq!(
-        final_result.session_result_stop_reason.as_deref(),
+        client
+            .wait_for_session_result_stop_reason(&fixture, &started.session_id)
+            .await
+            .as_deref(),
         Some("closed"),
         "{} close result reason",
         surface.label()
     );
+    client.shutdown().await;
+}
+
+async fn lifecycle_conformance_resume(surface: LifecycleConformanceSurface) {
+    let fixture = fixture().await;
+    let mut client = surface.connect(&fixture).await;
+    let seed_text = format!("resumed-through-{}", surface.label());
+
+    let started = client
+        .session_start(&fixture, SessionStartParams::default())
+        .await;
+    let surface_id = started
+        .surface_id
+        .clone()
+        .expect("session/start must return an interactive surface id");
+    append_durable_transcript_seed(&fixture, &started.session_id, &seed_text);
+
+    client
+        .session_close(
+            &fixture,
+            SessionCloseParams {
+                target: SessionCloseTarget::Interactive {
+                    target: InteractiveTarget {
+                        session_id: started.session_id.clone(),
+                        surface_id,
+                    },
+                },
+            },
+        )
+        .await;
+    assert!(
+        fixture.server.list_live_sessions().is_empty(),
+        "{} pre-resume close must remove the live registry slot",
+        surface.label()
+    );
+
+    let resumed = client
+        .session_resume(
+            &fixture,
+            SessionResumeParams {
+                target: SessionTarget {
+                    session_id: started.session_id.clone(),
+                },
+            },
+        )
+        .await;
+    assert_eq!(resumed.session.session_id, started.session_id);
+    let resumed_surface_id = resumed
+        .surface_id
+        .clone()
+        .expect("session/resume must return an interactive surface id");
+    let live = fixture.server.list_live_sessions();
+    assert_eq!(
+        live.len(),
+        1,
+        "{} resumed live session count",
+        surface.label()
+    );
+    assert_eq!(live[0].session_id, started.session_id);
+    assert_eq!(live[0].surface_counts.attached, 1);
+
+    let read = client
+        .session_read(
+            &fixture,
+            SessionReadParams {
+                target: SessionTarget {
+                    session_id: started.session_id.clone(),
+                },
+                cursor: None,
+                limit: None,
+            },
+        )
+        .await;
+    assert_eq!(read.session.session_id, started.session_id);
+    assert!(
+        read.messages
+            .iter()
+            .any(|message| message.to_string().contains(&seed_text)),
+        "{} session/read must expose resumed durable history",
+        surface.label()
+    );
+
+    client
+        .session_close(
+            &fixture,
+            SessionCloseParams {
+                target: SessionCloseTarget::Interactive {
+                    target: InteractiveTarget {
+                        session_id: started.session_id.clone(),
+                        surface_id: resumed_surface_id,
+                    },
+                },
+            },
+        )
+        .await;
+    client.shutdown().await;
 }
 
 #[tokio::test]

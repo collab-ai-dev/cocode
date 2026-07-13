@@ -237,15 +237,17 @@ same local bridge. Test/embedding headless callers that already hold typed
 messages pass them as `session/start.initial_messages`; the AppServer-owned
 start builder hydrates that initial history before the first turn.
 
-The resulting runtimes are similar, but the ordering and ownership are not one
-fully shared lifecycle until shared conformance coverage proves the same
-boundary across all connection styles. A shared lifecycle conformance regression
-now runs the same start/read/close assertions against the local typed surface
-and the JSON-RPC AppServer bridge; stdio SDK and sidecar transport binding
-coverage still need to join that suite. The process-level project-service
-owner now has an explicit background-task shutdown policy; CLI process exit and
-SDK remote-host shutdown both call it instead of relying on static drop or
-process termination.
+The resulting runtimes are similar, but the ordering and ownership remain
+transitional until production-surface startup adapters are covered end to end.
+The shared lifecycle conformance coverage now verifies start/read/close and
+durable resume/read/close against the local typed surface, the JSON-RPC
+AppServer bridge, and the concrete Unix NDJSON sidecar binding on Unix. SDK
+stdio is covered in `coco-sdk-server` through `SdkServer::run_app_server_connection`
+and `InMemoryTransport`, keeping SDK transport tests in the crate that owns the
+SDK wire boundary. WebSocket and Windows named-pipe sidecar bindings are not
+part of that matrix yet. The process-level project-service owner now has an
+explicit background-task shutdown policy; CLI process exit and SDK remote-host
+shutdown both call it instead of relying on static drop or process termination.
 
 ## Close and delete behavior
 

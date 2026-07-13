@@ -324,8 +324,12 @@ AppServer-owned runtime builder hydrates history before the first turn instead
 of the headless surface mutating history after startup. AppServer drain and
 Event Hub membership-watcher stop/flush now use a shared
 `ShutdownCoordinator` across headless, TUI, and SDK remote-host shutdown.
-Remaining gap: shared lifecycle conformance coverage does not yet span all
-connection styles.
+Shared lifecycle conformance now spans local typed, direct JSON-RPC, concrete
+Unix NDJSON sidecar, and SDK stdio transport paths for the core
+start/read/close plus durable resume/read/close contract. Remaining coverage
+gaps are narrower: WebSocket and Windows named-pipe sidecars are not in the
+matrix, and exact production TUI/headless startup adapter smoke tests should
+only be added when those adapters move again.
 
 ### V2-R8: `coco-agent-host` is not protocol-neutral
 
