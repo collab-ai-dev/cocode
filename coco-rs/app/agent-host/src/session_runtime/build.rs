@@ -148,7 +148,7 @@ impl SessionRuntime {
         // `AgentHandle` so the forked extraction / dream subagents
         // spawn against the same swarm runtime that user-facing
         // `Agent` tool spawns use.
-        // The handle starts as `NoOpAgentHandle`; the SDK / TUI
+        // The handle starts as `NoOpAgentHandle`; the AppServer / TUI
         // runner calls `MemoryRuntime::install_agent` once the real
         // `SwarmAgentHandle` is built. Recall + system-prompt
         // rendering work without an agent handle.
@@ -590,8 +590,8 @@ impl SessionRuntime {
 
         // ── Agent definition catalog ──
         // Build the per-session [`AgentDefinitionStore`] once at startup
-        // so AgentTool's dynamic prompt sees the same set the SDK
-        // `initialize.agents` listing returns. The snapshot inspector
+        // so AgentTool's dynamic prompt sees the same set the initialize
+        // `agents` listing returns. The snapshot inspector
         // wires `pending_snapshot_update` per definition so `/agents show`
         // can flag drift without each consumer re-running the
         // `check_agent_memory_snapshot` IO.
@@ -601,21 +601,21 @@ impl SessionRuntime {
         // [`Self::reload_agent_catalog`]; this initial build lives on
         // the blocking pool because the markdown loader is sync IO.
         let auto_memory_enabled = runtime_config.memory_activation.active;
-        // Initial agent-catalog load. SDK-supplied agents from
+        // Initial agent-catalog load. Client-supplied agents from
         // `initialize.agents` get injected here on session start —
-        // they live on `SessionRuntime.sdk_supplied_agents` until
-        // [`Self::set_sdk_supplied_agents`] is called by the SDK
+        // they live on `SessionRuntime.client_supplied_agents` until
+        // [`Self::set_client_supplied_agents`] is called by the remote client
         // `initialize` handler, which fires BEFORE `session/start`.
-        // For pure TUI / SDK-less paths the Vec is empty.
+        // For pure TUI / client-less paths the Vec is empty.
         let initial_agent_snapshot = {
             let catalog = builtin_agent_catalog;
             let paths = agent_search_paths.clone();
             let cwd_for_inspector = cwd.clone();
             let home_for_inspector =
                 dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
-            // SDK-supplied agents are an empty Vec at this point — the
+            // Client-supplied agents are an empty Vec at this point — the
             // SessionRuntime is being constructed for the FIRST time;
-            // `set_sdk_supplied_agents` hasn't been called yet. The
+            // `set_client_supplied_agents` hasn't been called yet. The
             // reload path picks them up once they're stashed.
             tokio::task::spawn_blocking(move || {
                 let mut store = coco_subagent::AgentDefinitionStore::new(catalog, paths);

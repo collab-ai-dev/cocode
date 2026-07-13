@@ -1,6 +1,6 @@
 //! `HookAdditionalContext` reminder via the **SessionStart** path.
 //!
-//! Engine wiring: `SessionRuntime::fire_session_start_hooks("startup")`
+//! Engine wiring: `SessionRuntime::fire_session_start_hooks(SessionStartSource::Startup)`
 //! runs `coco_hooks::orchestration::execute_session_start`, which pushes
 //! a `HookEvent::AdditionalContext` onto the shared
 //! `SyncHookEventBuffer` whenever a hook returns non-empty

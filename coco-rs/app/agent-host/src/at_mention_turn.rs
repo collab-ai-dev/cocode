@@ -1,5 +1,5 @@
 //! Shared `@`-mention resolution + turn-message construction used by every
-//! entry path (TUI, headless, SDK).
+//! entry path (TUI, headless, AppServer).
 //!
 //! Resolves `@path` mentions to file content, renders them as synthetic
 //! `Read`-tool narration wrapped in `<system-reminder>`, and tracks the

@@ -3,30 +3,17 @@ pub(super) async fn run_file_history_diff_command(
     event_tx: &mpsc::Sender<CoreEvent>,
     args: &str,
 ) {
-    let Some(file_history) = session.file_history() else {
-        emit_slash_text(
-            event_tx,
-            "diff",
-            args,
-            "File history is not enabled for this session.",
-        )
-        .await;
-        return;
-    };
-
     let mut parts = args.split_whitespace();
     match parts.next() {
         Some("session") => {
-            let session_id = session.current_typed_session_id().await.to_string();
-            let rendered = {
-                let file_history = file_history.read().await;
-                file_history
-                    .render_session_diff(session.config_home(), &session_id)
-                    .await
-            };
-            let text = match rendered {
+            let text = match session_controls::file_history_diff(
+                Some(session.clone()),
+                FileHistoryDiffTarget::Session,
+            )
+            .await
+            {
                 Ok(diff) => format_file_history_diff("Session diff", diff),
-                Err(err) => format!("Unable to build session diff: {err}"),
+                Err(error) => format_file_history_diff_error(error),
             };
             emit_slash_text(event_tx, "diff", args, &text).await;
         }
@@ -35,28 +22,14 @@ pub(super) async fn run_file_history_diff_command(
                 emit_slash_text(event_tx, "diff", args, "Usage: /diff turn <message-id>").await;
                 return;
             };
-            let session_id = session.current_typed_session_id().await.to_string();
-            let rendered = {
-                let file_history = file_history.read().await;
-                let Some(next_message_id) =
-                    next_file_history_snapshot_id(&file_history, message_id)
-                else {
-                    emit_slash_text(event_tx, "diff", args, "No snapshot found for message id.")
-                        .await;
-                    return;
-                };
-                file_history
-                    .render_diff_between(
-                        message_id,
-                        next_message_id.as_deref(),
-                        session.config_home(),
-                        &session_id,
-                    )
-                    .await
-            };
-            let text = match rendered {
+            let text = match session_controls::file_history_diff(
+                Some(session.clone()),
+                FileHistoryDiffTarget::Turn { message_id },
+            )
+            .await
+            {
                 Ok(diff) => format_file_history_diff("Turn diff", diff),
-                Err(err) => format!("Unable to build turn diff: {err}"),
+                Err(error) => format_file_history_diff_error(error),
             };
             emit_slash_text(event_tx, "diff", args, &text).await;
         }
@@ -72,20 +45,19 @@ pub(super) async fn run_file_history_diff_command(
     }
 }
 
-pub(super) fn next_file_history_snapshot_id(
-    file_history: &coco_context::FileHistoryState,
-    message_id: &str,
-) -> Option<Option<String>> {
-    let idx = file_history
-        .snapshots
-        .iter()
-        .position(|snapshot| snapshot.message_id == message_id)?;
-    Some(
-        file_history
-            .snapshots
-            .get(idx + 1)
-            .map(|snapshot| snapshot.message_id.clone()),
-    )
+pub(super) fn format_file_history_diff_error(error: SessionControlError) -> String {
+    match error {
+        SessionControlError::FileDiffNotEnabled => {
+            "File history is not enabled for this session.".to_string()
+        }
+        SessionControlError::FileDiffSnapshotMissing(_) => {
+            "No snapshot found for message id.".to_string()
+        }
+        SessionControlError::FileDiffOperation { context, source } => {
+            format!("Unable to build {context}: {source}")
+        }
+        error => error.to_string(),
+    }
 }
 
 pub(super) fn format_file_history_diff(title: &str, diff: coco_context::RenderedDiff) -> String {
@@ -125,7 +97,7 @@ pub(super) fn append_truncated_file_history_diff(out: &mut String, diff: &str) {
 pub(super) async fn run_tasks_command(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
     name: &str,
     args: &str,
 ) {
@@ -140,9 +112,19 @@ pub(super) async fn run_tasks_command(
     let mut parts = trimmed.split_whitespace();
     match parts.next() {
         Some("list") => {
-            local_app_server_bridge
-                .install_session_runtime(session.clone())
+            if let Err(error) = local_app_server_bridge
+                .bind_interactive_session(session.clone(), None)
+                .await
+            {
+                emit_slash_text(
+                    event_tx,
+                    name,
+                    args,
+                    &format!("Failed to bind AppServer session: {error}"),
+                )
                 .await;
+                return;
+            }
             match local_app_server_bridge
                 .client()
                 .task_list(
@@ -171,9 +153,19 @@ pub(super) async fn run_tasks_command(
                 emit_slash_text(event_tx, name, args, "Usage: /tasks detail <id>").await;
                 return;
             };
-            local_app_server_bridge
-                .install_session_runtime(session.clone())
+            if let Err(error) = local_app_server_bridge
+                .bind_interactive_session(session.clone(), None)
+                .await
+            {
+                emit_slash_text(
+                    event_tx,
+                    name,
+                    args,
+                    &format!("Failed to bind AppServer session: {error}"),
+                )
                 .await;
+                return;
+            }
             match local_app_server_bridge
                 .client()
                 .task_detail(
@@ -200,9 +192,19 @@ pub(super) async fn run_tasks_command(
                 emit_slash_text(event_tx, name, args, "Usage: /tasks cancel <id>").await;
                 return;
             };
-            local_app_server_bridge
-                .install_session_runtime(session.clone())
+            if let Err(error) = local_app_server_bridge
+                .bind_interactive_session(session.clone(), None)
+                .await
+            {
+                emit_slash_text(
+                    event_tx,
+                    name,
+                    args,
+                    &format!("Failed to bind AppServer session: {error}"),
+                )
                 .await;
+                return;
+            }
             match local_app_server_bridge
                 .client()
                 .stop_task(
@@ -244,26 +246,20 @@ pub(super) async fn run_tasks_command(
 pub(super) async fn toggle_fast_mode_through_app_server(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &mut coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
 ) {
-    let runtime = session;
-    let cfg = runtime.current_engine_config().await;
-    let requested = !cfg.fast_mode;
-    let active = requested && coco_config::is_fast_mode_supported_by_model(&cfg.model_id);
-    local_app_server_bridge
-        .install_session_runtime(session.clone())
-        .await;
-    let bridge_session_id = runtime.current_typed_session_id().await;
-    if let Err(error) =
-        local_app_server_bridge.ensure_interactive_surface(bridge_session_id.clone())
+    let active = match session_controls::next_fast_mode_state(Some(session.clone())).await {
+        Ok(active) => active,
+        Err(error) => {
+            warn!(%error, "TUI ToggleFastMode could not resolve next fast mode state");
+            return;
+        }
+    };
+    if let Err(error) = local_app_server_bridge
+        .bind_interactive_session(session.clone(), Some(event_tx.clone()))
+        .await
     {
-        warn!(%error, "TUI ToggleFastMode could not attach interactive AppServer surface");
-        return;
-    }
-    if let Err(error) =
-        local_app_server_bridge.start_passive_event_pump(bridge_session_id, event_tx.clone())
-    {
-        warn!(%error, "TUI ToggleFastMode could not attach local AppServer event pump");
+        warn!(%error, "TUI ToggleFastMode could not bind local AppServer session");
         return;
     }
 
@@ -287,7 +283,7 @@ pub(super) async fn toggle_fast_mode_through_app_server(
 pub(super) async fn set_thinking_level_through_app_server(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &mut coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
     level: String,
 ) {
     let effort = match level.parse::<coco_types::ReasoningEffort>() {
@@ -297,21 +293,11 @@ pub(super) async fn set_thinking_level_through_app_server(
             return;
         }
     };
-    let runtime = session;
-    local_app_server_bridge
-        .install_session_runtime(session.clone())
-        .await;
-    let bridge_session_id = runtime.current_typed_session_id().await;
-    if let Err(error) =
-        local_app_server_bridge.ensure_interactive_surface(bridge_session_id.clone())
+    if let Err(error) = local_app_server_bridge
+        .bind_interactive_session(session.clone(), Some(event_tx.clone()))
+        .await
     {
-        warn!(%error, "TUI SetThinkingLevel could not attach interactive AppServer surface");
-        return;
-    }
-    if let Err(error) =
-        local_app_server_bridge.start_passive_event_pump(bridge_session_id, event_tx.clone())
-    {
-        warn!(%error, "TUI SetThinkingLevel could not attach local AppServer event pump");
+        warn!(%error, "TUI SetThinkingLevel could not bind local AppServer session");
         return;
     }
 
@@ -401,6 +387,7 @@ pub(super) fn plan_command_query_after_flip(args: &str) -> Option<&str> {
 /// with the description; if already in plan mode, ignore the
 use std::collections::HashMap;
 
+use coco_agent_host::session_controls::{self, FileHistoryDiffTarget, SessionControlError};
 use coco_query::CoreEvent;
 use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;

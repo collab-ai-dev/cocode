@@ -1,4 +1,4 @@
-//! `ServerRequest` — agent-to-SDK protocol requests requiring responses.
+//! `ServerRequest` — server-to-client protocol requests requiring responses.
 //!
 //! See `event-system-design.md` §5.2.
 
@@ -31,7 +31,7 @@ SDK client must reply via the corresponding `ClientRequest` variant.",
         /// Ask the user a question via the SDK client (e.g. multiple choice).
         /// Expected response: `ClientRequest::UserInputResolve`.
         "input/requestUserInput" => RequestUserInput(RequestUserInputParams),
-        /// Route an MCP JSON-RPC message to the SDK-hosted MCP server.
+        /// Route an MCP JSON-RPC message to the client-hosted MCP server.
         /// Expected response: `ClientRequest::McpRouteMessageResponse`.
         "mcp/routeMessage" => McpRouteMessage(McpRouteMessageParams),
         /// Invoke an SDK-registered hook callback.
@@ -97,7 +97,7 @@ pub struct RequestUserInputParams {
     pub default: Option<String>,
 }
 
-/// Route an MCP JSON-RPC message to an SDK-hosted server.
+/// Route an MCP JSON-RPC message to a client-hosted server.
 /// Correlation is via the outer JSON-RPC `request_id` on the envelope —
 /// no inner `request_id`. The SDK replies with a `McpRouteMessageResult`
 /// payload carrying the forwarded MCP server's JSON-RPC response.
@@ -398,10 +398,10 @@ pub struct SetModelRoleResult {
 pub struct InitializeResult {
     /// Slash commands the client can invoke.
     #[serde(default)]
-    pub commands: Vec<SdkSlashCommand>,
+    pub commands: Vec<InitializeSlashCommand>,
     /// Subagents available for the `Agent` tool.
     #[serde(default)]
-    pub agents: Vec<SdkAgentInfo>,
+    pub agents: Vec<InitializeAgentInfo>,
     /// Currently-selected output style (e.g. `"default"`, `"explanatory"`).
     pub output_style: String,
     /// All output styles the server knows about.
@@ -409,10 +409,10 @@ pub struct InitializeResult {
     pub available_output_styles: Vec<String>,
     /// Available models.
     #[serde(default)]
-    pub models: Vec<SdkModelInfo>,
+    pub models: Vec<InitializeModelInfo>,
     /// Account / auth info for the logged-in user.
     #[serde(default)]
-    pub account: SdkAccountInfo,
+    pub account: InitializeAccountInfo,
     /// Process PID — used by SDK clients for tmux socket isolation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
@@ -431,12 +431,11 @@ pub struct InitializeResult {
 }
 
 /// Slash command descriptor for `InitializeResult.commands`.
-/// Named `SdkSlashCommand` to avoid colliding with the existing coco-rs
-/// `commands` crate notion of a slash command (which has richer
-/// internal fields not on the SDK wire).
+/// Kept distinct from the richer coco-rs `commands` crate slash-command
+/// model; initialize only advertises the fields clients need.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SdkSlashCommand {
+pub struct InitializeSlashCommand {
     /// Command name without the leading `/`.
     pub name: String,
     /// Description shown in help / completion UI.
@@ -447,12 +446,11 @@ pub struct SdkSlashCommand {
 }
 
 /// Available subagent descriptor for `InitializeResult.agents`.
-/// Named `SdkAgentInfo` to avoid colliding with `event::AgentInfo`
-/// (the payload for the `agents/registered` notification, which has a
-/// different schema — `description: Option<String>` without `model`).
+/// Kept distinct from `event::AgentInfo`, the payload for the
+/// `agents/registered` notification, which has a different schema.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SdkAgentInfo {
+pub struct InitializeAgentInfo {
     /// Agent type identifier (e.g. `"Explore"`).
     pub name: String,
     /// Description of when to use this agent.
@@ -464,12 +462,9 @@ pub struct SdkAgentInfo {
 
 /// Model capability descriptor for `InitializeResult.models`. The wire uses
 /// `value` + camelCase capability keys.
-/// Named `SdkModelInfo` to match the existing re-export name at the
-/// crate root and to leave breathing room for other model-info shapes
-/// (e.g. per-provider config models) elsewhere in the codebase.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SdkModelInfo {
+pub struct InitializeModelInfo {
     /// Model identifier used in API calls (e.g. `"claude-opus-4-6"`).
     pub value: String,
     /// Human-readable display name.
@@ -524,7 +519,7 @@ pub enum EffortLevel {
 /// — clients that don't sign in get an empty struct.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SdkAccountInfo {
+pub struct InitializeAccountInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -555,14 +550,14 @@ pub struct SdkAccountInfo {
         default,
         skip_serializing_if = "Option::is_none"
     )]
-    pub api_provider: Option<ApiProvider>,
+    pub api_provider: Option<InitializeApiProvider>,
 }
 
 /// Active API backend.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum ApiProvider {
+pub enum InitializeApiProvider {
     FirstParty,
     Bedrock,
     Vertex,
@@ -572,7 +567,7 @@ pub enum ApiProvider {
 /// Minimal session metadata returned by `session/list` and `session/read`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SdkSessionSummary {
+pub struct SessionSummary {
     pub session_id: crate::SessionId,
     pub model: String,
     pub cwd: String,
@@ -591,7 +586,7 @@ pub struct SdkSessionSummary {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionListResult {
-    pub sessions: Vec<SdkSessionSummary>,
+    pub sessions: Vec<SessionSummary>,
 }
 
 /// Response to `ClientRequest::SessionRead`.
@@ -600,7 +595,7 @@ pub struct SessionListResult {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionReadResult {
-    pub session: SdkSessionSummary,
+    pub session: SessionSummary,
     /// Messages paginated by `cursor`/`limit` from the original request.
     #[serde(default)]
     pub messages: Vec<serde_json::Value>,
@@ -613,7 +608,7 @@ pub struct SessionReadResult {
 /// One transcript turn span returned by `session/turns/list`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SdkSessionTurnSummary {
+pub struct SessionTurnSummary {
     /// Numeric ordinal among derived transcript turns, starting at 0.
     pub index: i32,
     /// Cursor into `session/read` for the first message in this turn span.
@@ -634,9 +629,9 @@ pub struct SdkSessionTurnSummary {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionTurnsListResult {
-    pub session: SdkSessionSummary,
+    pub session: SessionSummary,
     #[serde(default)]
-    pub turns: Vec<SdkSessionTurnSummary>,
+    pub turns: Vec<SessionTurnSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
     #[serde(default)]
@@ -678,7 +673,7 @@ pub struct SessionSubscribeEnvelope {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionResumeResult {
-    pub session: SdkSessionSummary,
+    pub session: SessionSummary,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surface_id: Option<crate::SurfaceId>,
 }

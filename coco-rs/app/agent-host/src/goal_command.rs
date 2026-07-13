@@ -113,6 +113,128 @@ pub fn format_latest_goal_history_status(
     Some(format_active_goal_status(&goal))
 }
 
+pub struct GoalStatusModal {
+    pub title: String,
+    pub body: String,
+}
+
+pub async fn build_goal_status_modal_for_session(
+    session: &crate::session_runtime::SessionHandle,
+    fallback_text: String,
+) -> GoalStatusModal {
+    if let Some(goal) = session.active_goal_snapshot().await {
+        let current_output_tokens = session.session_usage_snapshot().await.totals.output_tokens;
+        return GoalStatusModal {
+            title: "Goal active".to_string(),
+            body: active_goal_modal_body(&goal, current_output_tokens),
+        };
+    }
+    let history = session.history_messages().await;
+    if let Some(goal) = find_latest_goal_status(&history)
+        && goal.met
+        && !goal.failed
+        && !goal.sentinel
+    {
+        return GoalStatusModal {
+            title: "Goal achieved".to_string(),
+            body: achieved_goal_modal_body(&goal),
+        };
+    }
+    GoalStatusModal {
+        title: "Goal".to_string(),
+        body: fallback_text,
+    }
+}
+
+fn active_goal_modal_body(goal: &coco_types::ActiveGoal, current_output_tokens: i64) -> String {
+    let mut lines = vec![
+        format!(
+            "Running: {}",
+            format_goal_duration_ms(unix_time_ms().saturating_sub(goal.set_at_ms))
+        ),
+        format!(
+            "Tokens: {}",
+            current_output_tokens.saturating_sub(goal.tokens_at_start)
+        ),
+        format!("Iterations: {}", format_goal_iterations(goal.iterations)),
+        String::new(),
+        "Goal:".to_string(),
+        goal.condition.clone(),
+    ];
+    if let Some(reason) = goal
+        .last_reason
+        .as_deref()
+        .map(format_goal_last_reason)
+        .filter(|reason| !reason.is_empty())
+    {
+        lines.extend([String::new(), "Last check:".to_string(), reason]);
+    }
+    lines.extend([String::new(), "/goal clear to stop early".to_string()]);
+    lines.join("\n")
+}
+
+fn achieved_goal_modal_body(goal: &coco_types::GoalStatusPayload) -> String {
+    let mut lines = Vec::new();
+    let mut stats = Vec::new();
+    if let Some(duration_ms) = goal.duration_ms {
+        stats.push(format!("duration {}", format_goal_duration_ms(duration_ms)));
+    }
+    if let Some(iterations) = goal.iterations {
+        stats.push(format!(
+            "{} {}",
+            iterations,
+            if iterations == 1 { "turn" } else { "turns" }
+        ));
+    }
+    if let Some(tokens) = goal.tokens {
+        stats.push(format!("{} tokens", tokens.max(0)));
+    }
+    if !stats.is_empty() {
+        lines.push(format!("Stats: {}", stats.join(" · ")));
+        lines.push(String::new());
+    }
+    lines.push("Goal:".to_string());
+    lines.push(goal.condition.clone());
+    if let Some(reason) = goal
+        .reason
+        .as_deref()
+        .map(format_goal_last_reason)
+        .filter(|reason| !reason.is_empty())
+    {
+        lines.extend([String::new(), "Reason:".to_string(), reason]);
+    }
+    lines.join("\n")
+}
+
+fn format_goal_iterations(iterations: i32) -> String {
+    if iterations <= 0 {
+        "not yet evaluated".to_string()
+    } else {
+        format!(
+            "{} {}",
+            iterations,
+            if iterations == 1 { "turn" } else { "turns" }
+        )
+    }
+}
+
+fn format_goal_duration_ms(ms: i64) -> String {
+    let seconds = (ms / 1000).max(0);
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3600 {
+        format!("{}m", seconds / 60)
+    } else {
+        let hours = seconds / 3600;
+        let minutes = (seconds % 3600) / 60;
+        if minutes == 0 {
+            format!("{hours}h")
+        } else {
+            format!("{hours}h{minutes}m")
+        }
+    }
+}
+
 pub fn find_restorable_goal_condition(messages: &[Arc<coco_messages::Message>]) -> Option<String> {
     for message in messages.iter().rev() {
         let coco_messages::Message::Attachment(attachment) = message.as_ref() else {
@@ -176,6 +298,96 @@ pub fn active_goal_changed_notification(
     ))
 }
 
+pub fn goal_status_message(payload: coco_types::GoalStatusPayload) -> coco_messages::Message {
+    coco_messages::Message::Attachment(coco_messages::AttachmentMessage::silent_goal_status(
+        payload,
+    ))
+}
+
+pub fn goal_status_and_slash_messages(
+    payload: coco_types::GoalStatusPayload,
+    args: &str,
+    text: &str,
+) -> Vec<coco_messages::Message> {
+    let mut messages = vec![goal_status_message(payload)];
+    messages.extend(crate::session_messages::slash_text_messages(
+        "goal", args, text, /*is_sensitive*/ false,
+    ));
+    messages
+}
+
+pub async fn append_goal_status_to_history(
+    session: &crate::session_runtime::SessionHandle,
+    payload: coco_types::GoalStatusPayload,
+) -> Vec<Arc<coco_messages::Message>> {
+    session
+        .append_messages_to_history(vec![goal_status_message(payload)])
+        .await
+}
+
+pub async fn append_goal_status_and_slash_to_history(
+    session: &crate::session_runtime::SessionHandle,
+    payload: coco_types::GoalStatusPayload,
+    args: &str,
+    text: &str,
+) -> Vec<Arc<coco_messages::Message>> {
+    let messages = goal_status_and_slash_messages(payload, args, text);
+    let appended = session.append_messages_to_history(messages.clone()).await;
+    session.persist_local_transcript_messages(&messages).await;
+    appended
+}
+
+pub async fn persist_active_goal_snapshot(
+    session: &crate::session_runtime::SessionHandle,
+) -> Option<coco_types::ActiveGoal> {
+    let goal = session.active_goal_snapshot().await;
+    session
+        .persist_goal_metadata(goal.as_ref().map(|goal| {
+            coco_session::GoalMetadata::from_active_goal(goal, /*met*/ false)
+        }))
+        .await;
+    goal
+}
+
+pub async fn resolve_goal_request_for_session(
+    session: &crate::session_runtime::SessionHandle,
+    request: coco_commands::GoalCommandRequest,
+    trust_rejected: bool,
+) -> GoalOutcome {
+    let history_snapshot = session.history_messages().await;
+    resolve_goal_request_for_session_with_history(
+        session,
+        request,
+        &history_snapshot,
+        trust_rejected,
+    )
+    .await
+}
+
+pub async fn resolve_goal_request_for_session_with_history(
+    session: &crate::session_runtime::SessionHandle,
+    request: coco_commands::GoalCommandRequest,
+    history: &[Arc<coco_messages::Message>],
+    trust_rejected: bool,
+) -> GoalOutcome {
+    let current_engine_config = session.current_engine_config().await;
+    let gate = GoalGate {
+        hooks_restricted: current_engine_config.disable_all_hooks
+            || current_engine_config.allow_managed_hooks_only,
+        trust_rejected,
+    };
+    let tokens_at_start = session.session_usage_snapshot().await.totals.output_tokens;
+    resolve_goal_request(
+        request,
+        session.app_state(),
+        session.hook_registry().as_ref(),
+        history,
+        tokens_at_start,
+        gate,
+    )
+    .await
+}
+
 pub fn goal_status_sentinel(met: bool, condition: String) -> coco_types::GoalStatusPayload {
     coco_types::GoalStatusPayload {
         met,
@@ -224,7 +436,7 @@ pub fn prompt_from_hook(hook: &coco_hooks::HookDefinition) -> Option<String> {
 /// `/goal` *is* a Stop hook, so when hooks are restricted the feature is
 /// structurally unavailable. `trust_rejected` is the **interactive-only**
 /// workspace-trust check; it is always `false` for non-interactive surfaces
-/// (SDK / headless), which deliberately skip the trust gate (the upstream
+/// (AppServer / headless), which deliberately skip the trust gate (the upstream
 /// carve-out for headless / CI usage).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GoalGate {
@@ -233,7 +445,7 @@ pub struct GoalGate {
 }
 
 /// Side effects a `/goal` dispatch resolves to, decoupled from each runner's
-/// I/O substrate (TUI events vs SDK history vs headless `Vec`). The caller
+/// I/O substrate (TUI events vs AppServer history vs headless `Vec`). The caller
 /// performs the actual emit / append / engine-run via its own sinks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GoalOutcome {
@@ -266,7 +478,7 @@ pub fn goal_display_args(request: &coco_commands::GoalCommandRequest) -> &str {
     }
 }
 
-/// Single source of truth for `/goal` dispatch across the TUI, SDK, and
+/// Single source of truth for `/goal` dispatch across the TUI, AppServer, and
 /// headless runners. Performs the app-state and hook-registry mutations and
 /// returns the I/O the caller must carry out via its own sinks.
 ///

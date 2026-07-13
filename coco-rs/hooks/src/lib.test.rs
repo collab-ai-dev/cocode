@@ -469,7 +469,7 @@ fn test_prompt_handler() {
             panic!("expected PromptText, got CommandOutput");
         }
         HookExecutionResult::LlmOutput { .. } => panic!("expected non-LLM variant"),
-        HookExecutionResult::SdkOutput(_) => panic!("expected non-SDK variant"),
+        HookExecutionResult::ClientOutput(_) => panic!("expected non-client variant"),
     }
 }
 
@@ -496,7 +496,7 @@ async fn test_command_hook_execution() {
             panic!("expected CommandOutput, got PromptText");
         }
         HookExecutionResult::LlmOutput { .. } => panic!("expected non-LLM variant"),
-        HookExecutionResult::SdkOutput(_) => panic!("expected non-SDK variant"),
+        HookExecutionResult::ClientOutput(_) => panic!("expected non-client variant"),
     }
 }
 
@@ -1282,7 +1282,7 @@ async fn test_command_hook_custom_shell() {
             panic!("expected CommandOutput, got PromptText");
         }
         HookExecutionResult::LlmOutput { .. } => panic!("expected non-LLM variant"),
-        HookExecutionResult::SdkOutput(_) => panic!("expected non-SDK variant"),
+        HookExecutionResult::ClientOutput(_) => panic!("expected non-client variant"),
     }
 }
 

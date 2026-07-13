@@ -13,7 +13,7 @@
 //! Plan→Default transition in history.
 
 use anyhow::Result;
-use coco_agent_host::sdk_server::SdkTransport;
+use coco_sdk_server::SdkTransport;
 use coco_types::AttachmentKind;
 use coco_types::ClientRequestMethod;
 

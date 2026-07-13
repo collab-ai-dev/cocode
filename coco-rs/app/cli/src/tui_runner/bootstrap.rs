@@ -179,19 +179,14 @@ pub async fn run_tui(
         .map(|plan| plan.cwd.clone())
         .unwrap_or_else(|| cwd.clone());
     let mut local_app_server_bridge =
-        coco_agent_host::sdk_server::AppServerLocalBridge::with_server_config(
-            Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+        coco_agent_host::app_server_host::AppServerLocalBridge::with_server_config(
+            Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
             &runtime_config.server,
         );
     let runtime_factory_cli = Arc::new(cli);
-    let runtime_factory = crate::session_runtime::SessionRuntimeFactory::new(
-        crate::session_runtime::SessionRuntimeFactoryOpts {
+    let runtime_factory = crate::session_runtime::SessionRuntimeFactory::from_host_config(
+        crate::session_runtime::SessionRuntimeFactoryHostConfig {
             cli: Arc::clone(&runtime_factory_cli),
-            bootstrap_source:
-                crate::session_runtime::SessionRuntimeBootstrapSource::per_session_fold(
-                    Arc::clone(&runtime_factory_cli),
-                    process_runtime.clone(),
-                ),
             cwd: cwd.clone(),
             model_runtimes: None,
             session_manager,
@@ -203,24 +198,15 @@ pub async fn run_tui(
             is_non_interactive: false,
         },
     );
-    let session_handle = local_app_server_bridge
-        .load_session_runtime_from_factory_with_cwd(
+    let runtime_binding = local_app_server_bridge
+        .load_session_runtime_binding_from_factory(
             initial_session_id.clone(),
             runtime_factory.clone(),
             initial_runtime_cwd.clone(),
         )
         .await?;
-    let event_hub_connector = {
-        let session_id = session_handle.current_typed_session_id().await;
-        coco_agent_host::event_hub::RuntimeEventHubConnector::spawn_for_session(
-            session_handle.runtime_config(),
-            session_id,
-            &initial_runtime_cwd,
-        )
-    };
-    if let Some(connector) = &event_hub_connector {
-        local_app_server_bridge.set_hub_connector_sender(connector.sender());
-    }
+    let session_handle = runtime_binding.session;
+    let event_hub_connector = runtime_binding.event_hub_connector;
     let runtime = &session_handle;
     let current_session = Arc::new(RwLock::new(session_handle.clone()));
     let (mut runtime_reload_subscriptions, display_settings_rx, config_reload_errors_rx) =
@@ -237,44 +223,22 @@ pub async fn run_tui(
         .set_notification_session(Arc::downgrade(&current_session))
         .await;
 
-    // Post-build late-binds shared with SDK: task runtime, agent
-    // transcript persistence, agent-team wiring, fork dispatcher.
-    // Without this TUI used to silently miss background AgentTool,
-    // resume, and `/btw`. MCP handle is `None` until TUI grows its
-    // own `McpConnectionManager` bootstrap.
-    let lsp_handle = coco_agent_host::session_bootstrap::build_lsp_handle_if_enabled(
-        process_runtime.clone(),
-        runtime.runtime_config(),
-        &coco_config::global_config::config_home(),
-        runtime.project_root(),
-    )
-    .await;
-    install_session_late_binds(
+    coco_agent_host::session_bootstrap::install_session_integrations(
         session_handle.clone(),
         &initial_runtime_cwd,
-        None,
-        lsp_handle,
-        Some(notification_tx.clone()),
+        process_runtime.clone(),
+        coco_agent_host::session_bootstrap::SessionIntegrationOptions {
+            event_sink: Some(notification_tx.clone()),
+            leader_permission_bridge: Some(tui_permission_bridge.clone()),
+            ..Default::default()
+        },
     )
     .await?;
-    // Unified MCP bootstrap: load config-file + plugin MCP servers, attach the
-    // manager/handle, and connect in the background. The TUI now grows its own
-    // `McpConnectionManager` (was SDK-only) — `None` builds a fresh one.
-    coco_agent_host::session_bootstrap::bootstrap_session_mcp(
-        &session_handle,
-        &initial_runtime_cwd,
-        None,
-        /*await_connect*/ false,
-    )
-    .await;
     coco_cli::startup_profile::mark("session_late_binds");
 
-    let bridge_session_id = runtime.current_typed_session_id().await;
     local_app_server_bridge
-        .install_session_runtime(session_handle.clone())
-        .await;
-    local_app_server_bridge.ensure_interactive_surface(bridge_session_id.clone())?;
-    local_app_server_bridge.start_passive_event_pump(bridge_session_id, notification_tx.clone())?;
+        .bind_interactive_session(session_handle.clone(), Some(notification_tx.clone()))
+        .await?;
     local_app_server_bridge
         .client()
         .keep_alive(local_app_server_bridge.handler())
@@ -311,8 +275,8 @@ pub async fn run_tui(
     // then debounce-pushes local edits. Fire-and-forget on the interactive
     // path; no-ops unless team memory is enabled, the repo has a github
     // `origin` slug, and a claude.ai OAuth token is present.
-    coco_agent_host::team_memory_sync::bootstrap(
-        runtime.runtime_config(),
+    coco_agent_host::team_memory_sync::spawn_for_session(
+        runtime,
         cwd.clone(),
         coco_config::global_config::config_home(),
     );
@@ -325,54 +289,13 @@ pub async fn run_tui(
     // handshake (threaded into `run_agent_driver` below); `None` for a
     // leader. `pump_cancel` lets the exit path stop the pump so it drops
     // its `command_tx` clone and the driver can shut down.
-    let mut teammate_turn_done_tx: Option<mpsc::Sender<String>> = None;
     let pump_cancel = CancellationToken::new();
-    if runtime
-        .runtime_config()
-        .features
-        .enabled(coco_types::Feature::AgentTeams)
-    {
-        match coco_coordinator::identity::resolve_teammate_identity() {
-            None => {
-                // Leader session: register the human approval queue + spawn the
-                // continuous 1s inbox poll so worker prompts/idle/shutdown
-                // surface even while the leader is idle.
-                // Shared with the headless/SDK leader paths.
-                coco_agent_host::leader_inbox_poller::install_leader(
-                    session_handle.clone(),
-                    Some(tui_permission_bridge.clone()),
-                )
-                .await;
-            }
-            Some(identity) => {
-                // Seed this teammate's live permission rules from the team's
-                // allowed paths (gap 8) so it inherits the team's write fences
-                // without prompting. Seed into the session's shared overlay Arc
-                // (the same Arc `build_engine` injects onto every engine and the
-                // pump extends live on a leader `TeamPermissionUpdate`) — the
-                // cross-process analog of the in-process `TeammateControlState`.
-                let live_rules = runtime.live_permission_rules();
-                live_rules.write().await.extend(
-                    coco_coordinator::runner_loop::load_team_allowed_path_rules(
-                        &identity.team_name,
-                    ),
-                );
-                // Cross-process teammate: pump this teammate's mailbox into
-                // TUI turns. `command_tx` is cloned BEFORE `App::new` consumes
-                // it below; the pump injects `SubmitInput` and serializes on
-                // the completion handshake.
-                let (tx, rx) = mpsc::channel::<String>(16);
-                teammate_turn_done_tx = Some(tx);
-                coco_agent_host::teammate_inbox_pump::spawn(
-                    identity,
-                    command_tx.clone(),
-                    rx,
-                    pump_cancel.clone(),
-                    live_rules,
-                );
-            }
-        }
-    }
+    let teammate_turn_done_tx = coco_agent_host::teammate_inbox_pump::spawn_for_current_teammate(
+        runtime,
+        command_tx.clone(),
+        pump_cancel.clone(),
+    )
+    .await;
 
     // Official marketplace auto-install. Fire-and-forget on the interactive
     // path only: retry-gated + backoff, opt-out via
@@ -389,9 +312,9 @@ pub async fn run_tui(
     // same lifecycle registration, surface replacement, and runtime handler
     // boundary.
     let startup_session_start_source = if resume_plan.is_some() {
-        "resume"
+        coco_hooks::orchestration::SessionStartSource::Resume
     } else {
-        "startup"
+        coco_hooks::orchestration::SessionStartSource::Startup
     };
     if let Some(plan) = resume_plan {
         tracing::info!(
@@ -418,10 +341,9 @@ pub async fn run_tui(
         // `COCO_COORDINATOR_MODE` *before*
         // the coordinator badge (below) and the first per-turn system
         // prompt are computed, so both reflect the resumed session's mode.
-        if let Some(warning) = coco_agent_host::coordinator_mode_resume::reconcile_on_resume(
-            plan.conversation.mode.as_deref(),
-            &runtime.runtime_config().features,
-        ) {
+        if let Some(warning) =
+            runtime.reconcile_session_mode_on_resume(plan.conversation.mode.as_deref())
+        {
             emit_slash_text(&notification_tx, "resume", "", warning).await;
         }
         eprintln!(
@@ -451,11 +373,7 @@ pub async fn run_tui(
     // hot path. Coordinator mode auto-enables independently and ignores
     // this flag.
     if coco_config::env::is_env_truthy(coco_config::EnvKey::CocoAgentSummaryEnable) {
-        runtime
-            .app_state()
-            .write()
-            .await
-            .agent_progress_summaries_enabled = true;
+        runtime.set_agent_progress_summaries_enabled(true).await;
     }
 
     // Create TUI app
@@ -466,32 +384,28 @@ pub async fn run_tui(
         .apply_display_settings(coco_tui::DisplaySettings::from_runtime_config(
             runtime.runtime_config(),
         ));
-    app.state_mut().ui.coordinator_mode_active =
-        coco_subagent::is_coordinator_mode(&runtime.runtime_config().features);
+    let initial_ui_flags =
+        coco_agent_host::session_dialogs::build_initial_session_ui_flags_payload(runtime);
+    app.state_mut().ui.coordinator_mode_active = initial_ui_flags.coordinator_mode_active;
 
     // Hydrate the composer's up-arrow history from the persistent
     // cross-session store (`<config_home>/history.jsonl`), project-scoped
     // to this cwd and newest-first. Text-only recall — paste pills are
     // re-snapshotted per session, matching codex cross-session behaviour.
     {
-        let project = cwd.to_string_lossy();
-        let session_id = runtime.current_typed_session_id().await;
-        let texts = coco_session::PromptHistory::new(runtime.config_home(), &project, &session_id)
-            .get_history()
-            .into_iter()
-            .map(|e| e.display)
-            .collect();
+        let project = cwd.to_string_lossy().to_string();
+        let texts = runtime.prompt_history_texts(project).await;
         app.state_mut().ui.input.hydrate_history(texts);
     }
     app = app.with_display_settings_reload(display_settings_rx);
     app = app.with_config_reload_errors(config_reload_errors_rx);
     // Voice input (Feature::Voice): build the STT engine + capture + session and
     // install it. No-op when voice is disabled; best-effort on failure.
-    app = coco_agent_host::voice_bootstrap::install_voice(app, runtime.runtime_config());
+    app = coco_agent_host::voice_bootstrap::install_for_session(app, runtime);
 
     // Wire file_history_enabled into TUI session state so the rewind
     // modal knows whether to show code restore options.
-    app.state_mut().session.file_history_enabled = runtime.file_history().is_some();
+    app.state_mut().session.file_history_enabled = initial_ui_flags.file_history_enabled;
 
     // Seed the capability gates that control the Shift+Tab cycle
     // (`PermissionMode::next_in_cycle`) and the plan-mode exit
@@ -507,13 +421,10 @@ pub async fn run_tui(
     // otherwise stay empty until a fallback fires. Provider is the
     // authoritative id from the resolved Main role; the picker keeps
     // a prefix-match fallback for unregistered builtins.
-    app.state_mut().session.model = model_id.clone();
-    app.state_mut().session.provider = runtime
-        .runtime_config()
-        .model_roles
-        .get(coco_types::ModelRole::Main)
-        .map(|spec| spec.provider.clone())
-        .unwrap_or_default();
+    let initial_model_status =
+        coco_agent_host::session_dialogs::build_initial_model_status_payload(runtime, &model_id);
+    app.state_mut().session.model = initial_model_status.model_id;
+    app.state_mut().session.provider = initial_model_status.provider;
     // Seed cwd + git branch so the header's "where am I" rows render on
     // the first frame. Production TUI doesn't install `SessionBootstrap`,
     // so the engine's `emit_session_started` never fires the
@@ -525,18 +436,7 @@ pub async fn run_tui(
     // Mirror `SessionStarted`'s thinking-level seed: read the model's
     // registered default so the header's effort dial reflects the real
     // starting state, not the `ReasoningEffort::Auto` fallback.
-    if let Some(default_effort) = runtime
-        .runtime_config()
-        .model_roles
-        .get(coco_types::ModelRole::Main)
-        .and_then(|spec| {
-            runtime
-                .runtime_config()
-                .model_registry
-                .resolve(&spec.provider, &spec.model_id)
-        })
-        .and_then(|resolved| resolved.info.default_thinking_level)
-    {
+    if let Some(default_effort) = initial_model_status.default_effort {
         app.state_mut().session.thinking_effort = default_effort;
     }
 
@@ -546,19 +446,21 @@ pub async fn run_tui(
     // `builtin_models_partial`) means L1 `config home/models.json` entries
     // and L2 `providers.<n>.models.<id>` overrides are visible.
     {
-        let mut catalog = build_model_catalog(runtime.runtime_config());
-        let provider_statuses = build_provider_statuses(runtime.runtime_config());
-        let by_role = build_model_by_role(runtime.runtime_config());
+        let mut catalog = model_catalog_from_infos(
+            coco_agent_host::session_dialogs::build_model_catalog_payload(runtime),
+        );
+        let provider_statuses = provider_statuses_from_infos(
+            coco_agent_host::session_dialogs::build_provider_status_payload(runtime),
+        );
+        let by_role = build_model_by_role_from_payload(
+            coco_agent_host::session_dialogs::build_model_role_bindings_payload(runtime),
+        );
         let state = app.state_mut();
         state.session.model_catalog = std::mem::take(&mut catalog);
         state.session.provider_statuses = provider_statuses;
         state.session.model_by_role = by_role;
-        state.session.available_models = runtime
-            .runtime_config()
-            .settings
-            .merged
-            .available_models
-            .clone();
+        state.session.available_models =
+            coco_agent_host::session_dialogs::available_models_payload(runtime);
     }
 
     // Seed `available_commands` so the `/` autocomplete popup and the
@@ -591,11 +493,12 @@ pub async fn run_tui(
     // re-pushes the updated set via the same notification used for
     // `available_commands`.
     {
-        let snapshot = runtime.agent_catalog_snapshot().await;
-        let agents: Vec<coco_tui::autocomplete::AgentInfo> = snapshot
-            .active()
-            .map(coco_tui::autocomplete::AgentInfo::from_definition)
-            .collect();
+        let agents: Vec<coco_tui::autocomplete::AgentInfo> =
+            coco_agent_host::session_dialogs::build_active_agent_definitions_payload(runtime)
+                .await
+                .iter()
+                .map(coco_tui::autocomplete::AgentInfo::from_definition)
+                .collect();
         app.state_mut().session.available_agents = agents;
     }
 
@@ -706,10 +609,7 @@ pub async fn run_tui(
     // Capture the session id BEFORE dropping the App — the TUI's Drop
     // restores the terminal but moves the AppState out of reach.
     let state_session_id = app.state().session.session_id.clone();
-    let runtime_session_id = runtime_for_resume_hint
-        .current_typed_session_id()
-        .await
-        .to_string();
+    let runtime_session_id = runtime_for_resume_hint.session_id().to_string();
     let session_id = state_session_id.or({
         if runtime_session_id.is_empty() {
             None
@@ -886,14 +786,6 @@ impl TuiRuntimeReloadSubscriptions {
                 publisher.subscribe(),
                 self.display_settings_tx.clone(),
             ));
-            if let Some(state) = runtime.sandbox_state() {
-                self.handles
-                    .push(coco_agent_host::sandbox_reload::spawn_sandbox_reload(
-                        state,
-                        &publisher,
-                        runtime.original_cwd().clone(),
-                    ));
-            }
             self.handles.push(spawn_model_runtime_reload(
                 runtime.model_runtimes(),
                 &publisher,
@@ -901,12 +793,14 @@ impl TuiRuntimeReloadSubscriptions {
         }
 
         if let Some(state) = runtime.sandbox_state() {
-            state.set_approval_bridge(std::sync::Arc::new(
+            let approval_bridge: coco_sandbox::SandboxApprovalBridgeRef = std::sync::Arc::new(
                 coco_agent_host::sandbox_approval_bridge_tui::TuiSandboxApprovalBridge::new(
                     self.notification_tx.clone(),
                     self.pending_approvals.clone(),
                 ),
-            ));
+            );
+            runtime.set_sandbox_approval_bridge(approval_bridge);
+            runtime.install_sandbox_reload_supervisor().await;
             state.start_violation_monitor();
             if let Some(mut rx) = state.take_violation_observer() {
                 let tx = self.notification_tx.clone();

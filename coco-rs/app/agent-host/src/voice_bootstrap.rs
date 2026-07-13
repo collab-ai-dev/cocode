@@ -16,9 +16,12 @@ use coco_inference::TranscriptionModelV4;
 use coco_tui::App;
 use coco_types::Feature;
 
+use crate::session_runtime::SessionHandle;
+
 /// Install voice input onto `app` when `Feature::Voice` is enabled. Returns the
 /// app unchanged (with a warning log) on any failure.
-pub fn install_voice(app: App, runtime_config: &RuntimeConfig) -> App {
+pub fn install_for_session(app: App, session: &SessionHandle) -> App {
+    let runtime_config = session.runtime_config();
     if !runtime_config.features.enabled(Feature::Voice) {
         return app;
     }

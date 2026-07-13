@@ -25,8 +25,8 @@ fn test_format_turn_summary() {
 }
 
 #[test]
-fn test_sdk_message_serialization() {
-    let msg = SdkMessage::Result {
+fn test_ndjson_message_serialization() {
+    let msg = NdjsonMessage::Result {
         text: "done".to_string(),
         turns: 3,
     };

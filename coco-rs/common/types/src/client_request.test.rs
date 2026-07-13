@@ -123,7 +123,7 @@ fn request_scope_classifies_representative_methods() {
 #[test]
 fn connection_profile_normalizes_and_freezes_callback_requirements() {
     let mut params = InitializeParams {
-        sdk_mcp_servers: Some(vec![" beta ".into(), "alpha".into(), "alpha".into()]),
+        client_mcp_servers: Some(vec![" beta ".into(), "alpha".into(), "alpha".into()]),
         ..Default::default()
     };
     params.hooks = Some(std::collections::HashMap::from([(
@@ -136,7 +136,7 @@ fn connection_profile_normalizes_and_freezes_callback_requirements() {
     )]));
     let profile = ConnectionProfile::try_from(params).unwrap();
     assert_eq!(
-        profile.initialize().sdk_mcp_servers.as_ref().unwrap(),
+        profile.initialize().client_mcp_servers.as_ref().unwrap(),
         &["alpha".to_string(), "beta".to_string()]
     );
     let requirements = profile.callback_requirements();

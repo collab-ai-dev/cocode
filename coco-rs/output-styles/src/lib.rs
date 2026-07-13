@@ -11,8 +11,8 @@
 //! wires the resolved [`OutputStyleConfig`] into:
 //!
 //! - [`coco_context::build_system_prompt`] (system-prompt section)
-//! - `coco_query::SessionBootstrap` (per-turn reminder name + SDK init)
-//! - The SDK `available_output_styles` accessor.
+//! - `coco_query::SessionBootstrap` (per-turn reminder name + initialize response)
+//! - The initialize `available_output_styles` accessor.
 //!
 //! The crate intentionally does not depend on `coco_config` so it can
 //! be reused by any caller that already has a settings-derived

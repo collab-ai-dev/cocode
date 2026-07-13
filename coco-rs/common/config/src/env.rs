@@ -261,9 +261,9 @@ pub enum EnvKey {
     /// WSL). Read by `coco_tui::keyboard_modes`.
     CocoTuiKeyboardEnhancementDisable,
     CocoVerifyPlan,
-    /// Opt non-interactive (SDK / headless) sessions INTO file-history
-    /// checkpointing. SDK/headless sessions default OFF; interactive defaults ON.
-    CocoFileCheckpointingSdkEnable,
+    /// Opt non-interactive sessions INTO file-history checkpointing.
+    /// Non-interactive sessions default OFF; interactive defaults ON.
+    CocoFileCheckpointingNoninteractiveEnable,
     /// Disable file-history checkpointing for every session, overriding the
     /// settings/interactive default.
     CocoFileCheckpointingDisable,
@@ -487,7 +487,9 @@ impl EnvKey {
             Self::CocoTeamsDir => "COCO_TEAMS_DIR",
             Self::CocoTuiKeyboardEnhancementDisable => "COCO_TUI_KEYBOARD_ENHANCEMENT_DISABLE",
             Self::CocoVerifyPlan => "COCO_VERIFY_PLAN",
-            Self::CocoFileCheckpointingSdkEnable => "COCO_FILE_CHECKPOINTING_SDK_ENABLE",
+            Self::CocoFileCheckpointingNoninteractiveEnable => {
+                "COCO_FILE_CHECKPOINTING_NONINTERACTIVE_ENABLE"
+            }
             Self::CocoFileCheckpointingDisable => "COCO_FILE_CHECKPOINTING_DISABLE",
             Self::CocoCompactDisableAuto => "COCO_COMPACT_DISABLE_AUTO",
             Self::CocoCompactDisable => "COCO_COMPACT_DISABLE",

@@ -1,5 +1,5 @@
 //! Shared `/btw` side-question fork logic for both the TUI runner and the
-//! SDK `turn/start` handler. (`runSideQuestion` +
+//! AppServer `turn/start` handler. (`runSideQuestion` +
 //! `extractSideQuestionResponse`): wrap the question in a tool-less
 //! "lightweight agent" system-reminder, run a one-shot fork that shares the
 //! parent's prompt cache, then flatten the answer out of the per-block
@@ -10,6 +10,8 @@ use std::sync::Arc;
 use coco_query::forked_agent::{ForkDispatcherRef, ForkedAgentOptions, deny_all_handle};
 use coco_types::CacheSafeParams;
 use coco_types::ForkLabel;
+
+use crate::session_runtime::SessionHandle;
 
 /// Prepended (as a `<system-reminder>`) to every `/btw` question so the fork
 /// model knows it is a separate, tool-less, one-off agent and does not
@@ -34,11 +36,30 @@ CRITICAL CONSTRAINTS:
 
 Simply answer the question with the information you have.</system-reminder>";
 
+/// Run `/btw` against a live session, selecting the same prompt-cache source
+/// as the TUI/AppServer adapters used to select manually.
+pub async fn run_side_question_for_session(
+    session: Option<SessionHandle>,
+    question: &str,
+) -> String {
+    let Some(session) = session else {
+        return "(fork dispatcher not installed — /btw requires CLI bootstrap)".to_string();
+    };
+    let cache = match session.last_cache_safe_params().await {
+        Some(cache) => cache,
+        None => session.fallback_cache_safe_params().await,
+    };
+    match session.current_fork_dispatcher().await {
+        None => "(fork dispatcher not installed — /btw requires CLI bootstrap)".to_string(),
+        Some(dispatcher) => run_side_question_fork(&cache, &dispatcher, question).await,
+    }
+}
+
 /// Run the side question as a one-shot, tool-less fork that shares the
 /// parent's prompt cache, and return the answer text (or a degraded
 /// explanation on tool-attempt / API error / empty response). The `cache`
 /// and `dispatcher` come from the caller's surface — the TUI runtime's
-/// `last_cache_safe_params` or the SDK's persistent engine.
+/// `last_cache_safe_params` or the AppServer session engine.
 /// `runSideQuestion`; the parent conversation is never mutated.
 pub async fn run_side_question_fork(
     cache: &CacheSafeParams,

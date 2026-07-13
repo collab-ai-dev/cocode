@@ -138,24 +138,6 @@ pub(super) fn parse_slash_command(text: &str) -> Option<(&str, &str)> {
     })
 }
 
-pub(super) fn format_slash_command_metadata(name: &str, args: &str) -> String {
-    let mut body =
-        format!("<command-message>{name}</command-message>\n<command-name>/{name}</command-name>");
-    let trimmed_args = args.trim();
-    if !trimmed_args.is_empty() {
-        body.push_str(&format!("\n<command-args>{trimmed_args}</command-args>"));
-    }
-    body
-}
-
-pub(super) fn create_slash_metadata_message(metadata: &str) -> coco_messages::Message {
-    let attachment = coco_messages::AttachmentMessage::api(
-        coco_types::AttachmentKind::SlashCommandMetadata,
-        coco_messages::LlmMessage::user_text(metadata),
-    );
-    coco_messages::Message::Attachment(attachment)
-}
-
 pub(super) async fn prepare_external_editor_request(
     pending_editor_requests: &mut HashMap<String, PendingEditorRequest>,
     request: PendingEditorRequest,
@@ -277,37 +259,6 @@ pub(super) fn classify_sentinel_trigger(text: &str) -> Option<SentinelTrigger> {
     None
 }
 
-/// Mutating subcommand of `/permissions`. `None` for the read-only
-/// (`list` / no-arg) path, which falls through to the registry handler.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum PermissionsMutation {
-    Allow(String),
-    Deny(String),
-    Reset,
-}
-
-pub(super) fn parse_permissions_mutation(args: &str) -> Option<PermissionsMutation> {
-    let trimmed = args.trim();
-    if trimmed == "reset" {
-        return Some(PermissionsMutation::Reset);
-    }
-    if let Some(tool) = trimmed.strip_prefix("allow ") {
-        let tool = tool.trim();
-        if tool.is_empty() {
-            return None;
-        }
-        return Some(PermissionsMutation::Allow(tool.to_string()));
-    }
-    if let Some(tool) = trimmed.strip_prefix("deny ") {
-        let tool = tool.trim();
-        if tool.is_empty() {
-            return None;
-        }
-        return Some(PermissionsMutation::Deny(tool.to_string()));
-    }
-    None
-}
-
 /// Resolve `/<name> <args>` through the registry and route the result.
 /// What's left for the caller to do after [`handle_slash_outcome`]
 /// has processed an outcome.
@@ -361,7 +312,7 @@ pub(super) async fn handle_slash_outcome(
     event_tx: &mpsc::Sender<CoreEvent>,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     pending_editor_requests: &mut HashMap<String, PendingEditorRequest>,
-    local_app_server_bridge: &mut coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> SlashFollowup {
     match outcome {
         SlashOutcome::Handled => SlashFollowup::Done,
@@ -486,7 +437,7 @@ pub(super) async fn process_idle_command_queue(
     session: &crate::session_runtime::SessionHandle,
     current_session: &SharedSessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &mut coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     pending_editor_requests: &mut HashMap<String, PendingEditorRequest>,
     title_gen_attempted: &Arc<RwLock<std::collections::HashSet<String>>>,
@@ -526,7 +477,7 @@ pub(super) async fn drain_queued_slash_commands(
     session: &crate::session_runtime::SessionHandle,
     current_session: &SharedSessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &mut coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     pending_editor_requests: &mut HashMap<String, PendingEditorRequest>,
     title_gen_attempted: &Arc<RwLock<std::collections::HashSet<String>>>,
@@ -536,20 +487,16 @@ pub(super) async fn drain_queued_slash_commands(
     process_runtime: &Arc<ProcessRuntime>,
     cwd: &std::path::Path,
 ) {
-    let runtime = &session;
-    while let Some(cmd) = runtime
-        .command_queue()
-        .dequeue_first_matching(|c| c.is_slash_command && c.agent_id.is_none())
-        .await
+    while let Some(cmd) = coco_agent_host::session_queue::dequeue_next_slash_command(session).await
     {
         let _ = event_tx
             .send(CoreEvent::Protocol(ServerNotification::CommandDequeued {
-                id: cmd.id.to_string(),
+                id: cmd.id,
             }))
             .await;
         let _ = event_tx
             .send(CoreEvent::Protocol(ServerNotification::QueueStateChanged {
-                queued: runtime.command_queue().len().await as i32,
+                queued: cmd.remaining_queued as i32,
             }))
             .await;
 
@@ -579,7 +526,7 @@ pub(super) async fn drain_queued_slash_commands(
                 thinking_level,
                 model_runtime_source,
             } => {
-                let session_id = runtime.current_typed_session_id().await;
+                let session_id = session.session_id().clone();
                 spawn_slash_run_engine_turn(
                     SlashEnginePrompt {
                         content,
@@ -677,7 +624,7 @@ pub(super) async fn drain_queued_slash_commands(
                     model_runtime_source,
                 } = run_goal_command(session, event_tx, request).await
                 {
-                    let session_id = runtime.current_typed_session_id().await;
+                    let session_id = session.session_id().clone();
                     spawn_slash_run_engine_turn(
                         SlashEnginePrompt {
                             content,

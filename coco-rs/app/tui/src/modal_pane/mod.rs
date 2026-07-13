@@ -16,6 +16,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use tokio::sync::mpsc;
 
+use crate::command::SlashTranscriptEntry;
 use crate::command::SystemPushKind;
 use crate::command::UserCommand;
 use crate::events::TuiCommand;
@@ -308,11 +309,14 @@ pub(crate) async fn close_modal_with_feedback(
     state.ui.dismiss_modal();
     match dismiss {
         Some(PickerDismiss::Slash { name, message }) => {
-            let messages = coco_messages::build_slash_command_messages(
-                name, /*args*/ "", message, /*is_sensitive*/ false,
-            );
+            let entry = SlashTranscriptEntry::Result {
+                name: name.to_string(),
+                args: String::new(),
+                text: message.to_string(),
+                is_error: false,
+            };
             let _ = command_tx
-                .send(UserCommand::PushSlashResult { messages })
+                .send(UserCommand::PushSlashResult { entry })
                 .await;
         }
         Some(PickerDismiss::System { message }) => {
@@ -581,14 +585,14 @@ pub(crate) async fn route_confirm(
                 match state.ui.apply_theme_setting(choice.setting.clone()) {
                     Ok(()) => match crate::theme::save_theme_setting(&choice.setting) {
                         Ok(_path) => {
-                            let messages = coco_messages::build_slash_command_messages(
-                                "theme",
-                                /*args*/ "",
-                                &format!("Theme set to {}", choice.label),
-                                /*is_sensitive*/ false,
-                            );
+                            let entry = SlashTranscriptEntry::Result {
+                                name: "theme".to_string(),
+                                args: String::new(),
+                                text: format!("Theme set to {}", choice.label),
+                                is_error: false,
+                            };
                             let _ = command_tx
-                                .send(crate::command::UserCommand::PushSlashResult { messages })
+                                .send(crate::command::UserCommand::PushSlashResult { entry })
                                 .await;
                         }
                         Err(err) => state.ui.add_toast(crate::state::ui::Toast::error(format!(

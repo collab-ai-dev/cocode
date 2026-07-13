@@ -2,6 +2,8 @@ use std::fmt;
 use std::future::Future;
 use std::time::Duration;
 
+use crate::session_runtime::SessionHandle;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShutdownDrainOutcome {
     Clean,
@@ -35,6 +37,28 @@ where
     E: fmt::Display,
 {
     drain_with_timeout_or_signal(timeout, drain, std::future::pending()).await
+}
+
+/// Wait for scheduled turn-end extraction/session-memory work before process
+/// exit so partial writes are not dropped.
+pub async fn drain_session_memory(session: &SessionHandle) {
+    if let Some(memory_runtime) = session.memory_runtime() {
+        let _ = memory_runtime
+            .drain(coco_memory::service::extract::DEFAULT_DRAIN_TIMEOUT)
+            .await;
+    }
+}
+
+/// Persist coordinator-mode metadata needed for a later resume.
+pub async fn persist_session_resume_mode(session: &SessionHandle) {
+    session.persist_session_mode().await;
+}
+
+/// Final interactive-session checkpoint after local AppServer shutdown.
+pub async fn flush_interactive_session_exit_checkpoint(session: &SessionHandle) {
+    session.re_append_session_metadata().await;
+    session.persist_session_mode().await;
+    session.flush_session_usage_snapshot().await;
 }
 
 pub async fn drain_with_timeout_or_signal<F, E, S>(

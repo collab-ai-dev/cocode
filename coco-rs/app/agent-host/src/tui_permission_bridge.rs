@@ -145,7 +145,7 @@ impl TuiPermissionBridge {
         let Some(session) = self.notification_session().await else {
             return true;
         };
-        settings_allow_always_allow_options(&session.runtime_config().settings)
+        session_allows_always_allow_options(&session)
     }
 
     /// Generate an on-demand LLM risk explanation for a pending permission
@@ -162,6 +162,10 @@ impl TuiPermissionBridge {
         let session = self.notification_session().await?;
         session.explain_permission_risk(params).await
     }
+}
+
+pub fn session_allows_always_allow_options(session: &SessionHandle) -> bool {
+    settings_allow_always_allow_options(&session.runtime_config().settings)
 }
 
 pub fn settings_allow_always_allow_options(settings: &coco_config::SettingsWithSource) -> bool {
@@ -314,7 +318,7 @@ impl ToolPermissionBridge for TuiPermissionBridge {
 /// `content_blocks` carries optional image attachments (etc.) the user
 /// pasted alongside the answer. Today the TUI doesn't have a paste-into-
 /// question gesture so callers pass `None`; the bridge plumbing is in
-/// place so SDK clients (which already ship the field via
+/// place so remote clients (which already ship the field via
 /// `ApprovalResolveParams.content_blocks`) flow through unchanged.
 #[allow(clippy::too_many_arguments)]
 pub async fn resolve_pending(

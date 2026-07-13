@@ -385,7 +385,7 @@
         "sessions": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/SdkSessionSummary"
+            "$ref": "#/$defs/SessionSummary"
           }
         },
         "type": {
@@ -4790,7 +4790,11 @@
         "HIGH"
       ]
     },
-    "SdkSessionSummary": {
+    "SessionId": {
+      "description": "Branded session identifier.",
+      "type": "string"
+    },
+    "SessionSummary": {
       "description": "Minimal session metadata returned by `session/list` and `session/read`.",
       "type": "object",
       "properties": {
@@ -4835,10 +4839,6 @@
         "cwd",
         "created_at"
       ]
-    },
-    "SessionId": {
-      "description": "Branded session identifier.",
-      "type": "string"
     },
     "SharedV4FileData": {
       "description": "File data as a tagged discriminated union (v4 spec).\n\n- `Data` — raw bytes or base64-encoded string.\n- `Url`  — a URL pointing to the file.\n- `Reference` — a provider reference (`{ [provider]: id }`).\n- `Text` — inline text content.",

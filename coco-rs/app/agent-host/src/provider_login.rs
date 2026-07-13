@@ -15,6 +15,8 @@ use coco_provider_auth::AuthService;
 use coco_provider_auth::LoginOptions;
 use coco_types::OAuthFlowId;
 
+use crate::session_runtime::SessionHandle;
+
 /// Process-wide, lazily-built `AuthService` shared by every client-construction
 /// site (Main via `create_api_client`, role runtimes, subagents,
 /// side-queries). One instance per process means exactly one
@@ -232,6 +234,15 @@ pub async fn run_login_session(
         "✓ Logged in to `{}` ({}) as {who} ({plan}). Bind a model role to `{}` to use it.",
         status.provider_name, status.display_name, status.provider_name
     ))
+}
+
+pub async fn run_login_for_session(
+    session: &SessionHandle,
+    provider: Option<String>,
+    url_sink: Arc<dyn Fn(String) + Send + Sync>,
+) -> Result<String> {
+    let cwd = session.current_cwd().read().await.clone();
+    run_login_session(provider, &cwd, url_sink).await
 }
 
 /// In-session `/logout`: clears credentials on the **shared** `AuthService`.

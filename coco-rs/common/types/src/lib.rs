@@ -33,6 +33,7 @@ pub mod messages;
 // (`coco_types::messages::*`) stays available for the operations-layer
 // re-export in `coco-messages`.
 pub use messages::*;
+mod hook_callback_output;
 mod permission;
 pub mod persisted_output;
 mod plugin;
@@ -40,10 +41,10 @@ mod provider;
 mod provider_auth_status;
 mod rate_limit;
 mod sandbox;
-mod sdk_hook_output;
 mod server_request;
 pub mod side_query;
 mod stream;
+mod stream_accumulator;
 mod surface;
 mod task;
 mod task_list;
@@ -67,7 +68,8 @@ pub use rate_limit::RateLimitEntry;
 
 // Attachment taxonomy (full `AttachmentKind` catalog + coverage)
 pub use attachment_kind::{
-    AttachmentEvent, AttachmentKind, Coverage, SdkConsumption, coverage_of, sdk_consumption_of,
+    AttachmentEvent, AttachmentKind, Coverage, SessionResultConsumption, coverage_of,
+    session_result_consumption_of,
 };
 
 // Prompt-cache shared types (consumed by services/inference + app/query;
@@ -124,6 +126,7 @@ pub use event::{
     TurnStartedParams, WorkflowDialogEntry, WorkflowDialogPayload, WorktreeEnteredParams,
     WorktreeExitedParams,
 };
+pub use stream_accumulator::StreamAccumulator;
 
 // Surface delivery DTOs shared by server routing and client adapters.
 pub use surface::{
@@ -134,11 +137,11 @@ pub use surface::{
 pub use client_request::{
     AgentInterruptCurrentWorkParams, ApplyPermissionUpdateParams, ApprovalDecision,
     ApprovalResolveParams, ArchiveTarget, BackgroundAllTasksResult, CancelRequestParams,
-    ClientRequest, ClientRequestMethod, ConfigApplyFlagsParams, ConfigReadParams, ConfigReadTarget,
-    ConfigWriteParams, ConfigWriteTarget, ConnectionProfile, ConnectionProfileError,
-    ElicitationResolveParams, HookCallbackMatcher, InitializeParams, InteractiveTarget,
-    McpReconnectParams, McpSetServersParams, McpToggleParams, RequestScope,
-    ResetSessionPermissionRulesResult, RewindFilesParams, SdkAgentDefinition, SessionArchiveParams,
+    ClientAgentDefinition, ClientRequest, ClientRequestMethod, ConfigApplyFlagsParams,
+    ConfigReadParams, ConfigReadTarget, ConfigWriteParams, ConfigWriteTarget, ConnectionProfile,
+    ConnectionProfileError, ElicitationResolveParams, HookCallbackMatcher, InitializeParams,
+    InteractiveTarget, McpReconnectParams, McpSetServersParams, McpToggleParams, RequestScope,
+    ResetSessionPermissionRulesResult, RewindFilesParams, SessionArchiveParams,
     SessionCallbackRequirements, SessionCostResult, SessionReadParams, SessionRenameParams,
     SessionRenameResult, SessionReplaceParams, SessionReplacement, SessionResumeParams,
     SessionStartParams, SessionStatusResult, SessionSubscribeParams, SessionTarget,
@@ -148,12 +151,12 @@ pub use client_request::{
     UserInputResolveParams, request_scope,
 };
 
-// SDK hook callback output (stable wire format; mirrors
-// `hookJSONOutputSchema`). Single source of truth for the SDK
+// Hook callback output (stable wire format; mirrors
+// `hookJSONOutputSchema`). Single source of truth for the hook callback
 // boundary and for hook orchestration's stdout parser.
-pub use sdk_hook_output::{
-    ElicitationAction, HookCallbackResult, HookDecision, HookSpecificOutput, McpRouteMessageResult,
-    PermissionRequestDecision, SdkHookOutput,
+pub use hook_callback_output::{
+    ElicitationAction, HookCallbackOutput, HookCallbackResult, HookDecision, HookSpecificOutput,
+    McpRouteMessageResult, PermissionRequestDecision,
 };
 
 // Server request types (Phase 2 — SDK control protocol, agent → SDK)
@@ -163,19 +166,19 @@ pub use context_usage::{
     source_group,
 };
 pub use server_request::{
-    ApiProvider as SdkApiProvider, AskForApprovalParams as ServerAskForApprovalParams,
-    AttachmentTypeBreakdown, ConfigReadResult, ContextAgent, ContextMcpTool, ContextMemoryFile,
-    ContextSkill, ContextUsageCategory, ContextUsageResult, EffortLevel as SdkEffortLevel,
-    HookCallbackParams as ServerHookCallbackParams, HookReloadResult, InitializeResult,
-    McpConnectionStatus, McpRouteMessageParams as ServerMcpRouteMessageParams, McpServerStatus,
-    McpSetServersResult, McpSkippedToolStatus, McpStatusResult, MessageBreakdown,
-    PluginReloadResult, RequestElicitationParams as ServerRequestElicitationParams,
-    RequestUserInputParams as ServerRequestUserInputParams, RewindFilesResult, SdkAccountInfo,
-    SdkAgentInfo, SdkModelInfo, SdkSessionSummary, SdkSessionTurnSummary, SdkSlashCommand,
+    AskForApprovalParams as ServerAskForApprovalParams, AttachmentTypeBreakdown, ConfigReadResult,
+    ContextAgent, ContextMcpTool, ContextMemoryFile, ContextSkill, ContextUsageCategory,
+    ContextUsageResult, EffortLevel, HookCallbackParams as ServerHookCallbackParams,
+    HookReloadResult, InitializeAccountInfo, InitializeAgentInfo, InitializeApiProvider,
+    InitializeModelInfo, InitializeResult, InitializeSlashCommand, McpConnectionStatus,
+    McpRouteMessageParams as ServerMcpRouteMessageParams, McpServerStatus, McpSetServersResult,
+    McpSkippedToolStatus, McpStatusResult, MessageBreakdown, PluginReloadResult,
+    RequestElicitationParams as ServerRequestElicitationParams,
+    RequestUserInputParams as ServerRequestUserInputParams, RewindFilesResult,
     ServerCancelRequestParams, ServerRequest, ServerRequestMethod, SessionListResult,
     SessionReadResult, SessionReplaceResult, SessionResumeResult, SessionStartResult,
-    SessionSubscribeEnvelope, SessionSubscribeResult, SessionTurnsListResult, SetModelRoleResult,
-    ToolTypeBreakdown, TurnStartResult,
+    SessionSubscribeEnvelope, SessionSubscribeResult, SessionSummary, SessionTurnSummary,
+    SessionTurnsListResult, SetModelRoleResult, ToolTypeBreakdown, TurnStartResult,
 };
 
 // JSON-RPC envelope types (Phase 2 — wire format)

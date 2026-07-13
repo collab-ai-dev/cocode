@@ -1,7 +1,7 @@
 //! Application host for the `coco` surfaces.
 //!
 //! Owns session-runtime construction, AppServer/SDK request handling, and
-//! protocol-neutral application use cases. The `coco-cli` package owns only
+//! protocol-neutral application behavior. The `coco-cli` package owns only
 //! process startup, clap dispatch, terminal presentation, and surface wiring.
 
 pub mod embedded_hub;

@@ -13,28 +13,19 @@
 //! FileHistoryState
 //! ```
 
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use tokio::sync::{Mutex, RwLock, mpsc};
 use tracing::{debug, info, warn};
 
 use coco_config::{EnvKey, env};
-use coco_query::{CoreEvent, QueuePriority, QueuedCommand, QueuedImage, ServerNotification};
-use coco_system_reminder::QueueOrigin;
+use coco_query::{CoreEvent, QueuedImage, ServerNotification};
 use coco_tui::{App, UserCommand, app::create_channels};
 use coco_types::{SlashCommandStatusKind, TuiOnlyEvent};
 use tokio_util::sync::CancellationToken;
 
-use coco_agent_host::{
-    resume_resolver::ResumePlan,
-    session_bootstrap::{build_engine_resources, install_session_late_binds},
-};
+use coco_agent_host::{resume_resolver::ResumePlan, session_bootstrap::build_engine_resources};
 use coco_app_runtime::ProcessRuntime;
 
 mod bootstrap;
@@ -70,7 +61,7 @@ use turn_postprocessing::*;
 pub(super) type SharedSessionHandle = Arc<RwLock<crate::session_runtime::SessionHandle>>;
 
 fn interactive_session(
-    bridge: &coco_agent_host::sdk_server::AppServerLocalBridge,
+    bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> &coco_agent_host::local_client::LocalSessionClient {
     let Some(session) = bridge.interactive_session() else {
         panic!("TUI command requires an attached interactive AppServer surface");
@@ -79,13 +70,13 @@ fn interactive_session(
 }
 
 fn interactive_target(
-    bridge: &coco_agent_host::sdk_server::AppServerLocalBridge,
+    bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> coco_types::InteractiveTarget {
     interactive_session(bridge).interactive_target()
 }
 
 fn session_target(
-    bridge: &coco_agent_host::sdk_server::AppServerLocalBridge,
+    bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> coco_types::SessionTarget {
     interactive_session(bridge).session_target()
 }

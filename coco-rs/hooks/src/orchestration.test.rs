@@ -79,11 +79,11 @@ impl crate::HookLlmHandle for BlockingPromptLlm {
 }
 
 #[tokio::test]
-async fn sdk_callback_hook_routes_through_registered_runtime_callback() {
+async fn client_callback_hook_routes_through_registered_runtime_callback() {
     let registry = make_registry(vec![HookDefinition {
         event: HookEventType::PreToolUse,
         matcher: Some("Bash".to_string()),
-        handler: HookHandler::SdkCallback {
+        handler: HookHandler::ClientCallback {
             callback_id: "cb-1".to_string(),
             timeout_ms: None,
         },
@@ -98,19 +98,19 @@ async fn sdk_callback_hook_routes_through_registered_runtime_callback() {
     }]);
     let called = Arc::new(AtomicBool::new(false));
     let called_for_callback = called.clone();
-    registry.set_sdk_hook_callback(Arc::new(move |request| {
+    registry.set_client_hook_callback(Arc::new(move |request| {
         assert_eq!(request.callback_id, "cb-1");
         assert_eq!(request.event, HookEventType::PreToolUse);
         assert_eq!(request.tool_use_id.as_deref(), Some("tool-1"));
         called_for_callback.store(true, Ordering::SeqCst);
-        // Typed SdkHookOutput — no JSON round-trip. PreToolUse deny
+        // Typed HookCallbackOutput — no JSON round-trip. PreToolUse deny
         // via hookSpecificOutput is the canonical shape for "block
         // this tool with a reason".
         Box::pin(async {
-            Ok(coco_types::SdkHookOutput {
+            Ok(coco_types::HookCallbackOutput {
                 hook_specific_output: Some(coco_types::HookSpecificOutput::PreToolUse {
                     permission_decision: Some(coco_types::HookPermissionDecision::Deny),
-                    permission_decision_reason: Some("sdk denied".into()),
+                    permission_decision_reason: Some("client denied".into()),
                     updated_input: None,
                     additional_context: None,
                 }),
@@ -134,14 +134,14 @@ async fn sdk_callback_hook_routes_through_registered_runtime_callback() {
     let err = result
         .blocking_error
         .as_ref()
-        .expect("SDK callback deny should produce blocking_error");
-    assert_eq!(err.blocking_error, "sdk denied");
-    // Regression guard: SDK callback denials carry `HookBlockingSource::Sdk`
+        .expect("client callback deny should produce blocking_error");
+    assert_eq!(err.blocking_error, "client denied");
+    // Regression guard: client callback denials carry `HookBlockingSource::ClientCallback`
     // — not `Command(label)`. Telemetry and log filtering can distinguish
-    // SDK denials from shell-command denials without parsing the label.
+    // client denials from shell-command denials without parsing the label.
     match &err.source {
-        HookBlockingSource::Sdk { callback_id } => assert_eq!(callback_id, "cb-1"),
-        other => panic!("expected HookBlockingSource::Sdk, got {other:?}"),
+        HookBlockingSource::ClientCallback { callback_id } => assert_eq!(callback_id, "cb-1"),
+        other => panic!("expected HookBlockingSource::ClientCallback, got {other:?}"),
     }
 }
 
@@ -260,7 +260,7 @@ fn test_aggregate_suppresses_validation_error_from_context() {
         status_message: None,
         async_rewake: false,
         source: HookBlockingSource::Command("h".into()),
-        sdk_output: None,
+        client_output: None,
         llm_verdict: None,
     };
     let agg = aggregate_results(std::slice::from_ref(&result));
@@ -293,7 +293,7 @@ fn test_aggregate_results_blocking() {
         status_message: None,
         async_rewake: false,
         source: HookBlockingSource::Command(String::new()),
-        sdk_output: None,
+        client_output: None,
         llm_verdict: None,
     }];
     let agg = aggregate_results(&results);
@@ -318,7 +318,7 @@ fn test_aggregate_results_json_permission_deny() {
         status_message: None,
         async_rewake: false,
         source: HookBlockingSource::Command(String::new()),
-        sdk_output: None,
+        client_output: None,
         llm_verdict: None,
     }];
     let agg = aggregate_results(&results);
@@ -342,7 +342,7 @@ fn test_aggregate_results_json_permission_allow() {
         status_message: None,
         async_rewake: false,
         source: HookBlockingSource::Command(String::new()),
-        sdk_output: None,
+        client_output: None,
         llm_verdict: None,
     }];
     let agg = aggregate_results(&results);
@@ -362,7 +362,7 @@ fn test_aggregate_results_flat_permission_ask() {
         status_message: None,
         async_rewake: false,
         source: HookBlockingSource::Command(String::new()),
-        sdk_output: None,
+        client_output: None,
         llm_verdict: None,
     }];
     let agg = aggregate_results(&results);
@@ -386,7 +386,7 @@ fn test_aggregate_results_additional_context() {
             status_message: None,
             async_rewake: false,
             source: HookBlockingSource::Command(String::new()),
-            sdk_output: None,
+            client_output: None,
             llm_verdict: None,
         },
         SingleHookResult {
@@ -398,7 +398,7 @@ fn test_aggregate_results_additional_context() {
             status_message: None,
             async_rewake: false,
             source: HookBlockingSource::Command(String::new()),
-            sdk_output: None,
+            client_output: None,
             llm_verdict: None,
         },
     ];
@@ -421,7 +421,7 @@ fn test_aggregate_results_failed_plaintext_not_injected() {
         status_message: None,
         async_rewake: false,
         source: HookBlockingSource::Command(String::new()),
-        sdk_output: None,
+        client_output: None,
         llm_verdict: None,
     }];
     let agg = aggregate_results(&results);
@@ -1473,7 +1473,7 @@ fn test_aggregate_with_hook_specific_output() {
         status_message: None,
         async_rewake: false,
         source: HookBlockingSource::Command(String::new()),
-        sdk_output: None,
+        client_output: None,
         llm_verdict: None,
     }];
     let agg = aggregate_results(&results);
@@ -1498,7 +1498,7 @@ fn test_aggregate_with_hook_specific_output_permission_ask() {
         status_message: None,
         async_rewake: false,
         source: HookBlockingSource::Command(String::new()),
-        sdk_output: None,
+        client_output: None,
         llm_verdict: None,
     }];
     let agg = aggregate_results(&results);
@@ -1565,7 +1565,7 @@ fn test_aggregate_elicitation_decline_blocks() {
         status_message: None,
         async_rewake: false,
         source: HookBlockingSource::Command(String::new()),
-        sdk_output: None,
+        client_output: None,
         llm_verdict: None,
     }];
     let agg = aggregate_results(&results);

@@ -153,7 +153,7 @@ async fn main_runtime_snapshot_uses_main_model_context_metadata() {
 }
 
 #[tokio::test]
-async fn sdk_model_selection_resolves_bare_model_against_main_provider() {
+async fn model_selection_resolves_bare_model_against_main_provider() {
     let home = TempDir::new().expect("home tempdir");
     let runtime = build_runtime_with_main(&home, "deepseek-openai", "deepseek-v4-pro").await;
 
@@ -171,7 +171,7 @@ async fn sdk_model_selection_resolves_bare_model_against_main_provider() {
 }
 
 #[test]
-fn sdk_model_selection_accepts_configured_moa_preset() {
+fn model_selection_accepts_configured_moa_preset() {
     let home = TempDir::new().expect("home tempdir");
     let mut presets = std::collections::BTreeMap::new();
     presets.insert(
@@ -223,6 +223,114 @@ fn sdk_model_selection_accepts_configured_moa_preset() {
     assert!(resolve_model_selection_from_runtime_config(&runtime_config, "moa/missing").is_none());
 }
 
+#[tokio::test]
+async fn model_role_selection_keeps_moa_display_binding_for_main() {
+    let home = TempDir::new().expect("home tempdir");
+    let mut presets = std::collections::BTreeMap::new();
+    presets.insert(
+        "default".to_string(),
+        coco_config::MoaPresetSettings {
+            aggregator: Some(ProviderModelSelection {
+                provider: "anthropic".to_string(),
+                model_id: "claude-sonnet-4-6".to_string(),
+            }),
+            reference_models: vec![ProviderModelSelection {
+                provider: "openai".to_string(),
+                model_id: "gpt-5-4".to_string(),
+            }],
+            ..Default::default()
+        },
+    );
+    let settings = SettingsWithSource {
+        merged: Settings {
+            models: coco_config::ModelSelectionSettings {
+                main: Some(RoleSlots::new(ProviderModelSelection {
+                    provider: "anthropic".into(),
+                    model_id: "claude-sonnet-4-6".into(),
+                })),
+                ..Default::default()
+            },
+            moa: coco_config::MoaSettings {
+                default_preset: Some("default".to_string()),
+                presets,
+            },
+            ..Default::default()
+        },
+        per_source: std::collections::HashMap::new(),
+        source_paths: std::collections::HashMap::new(),
+    };
+    let runtime_config = coco_config::build_runtime_config_with(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+        CatalogPaths::empty_in(home.path()),
+        coco_config::parse_enabled_setting_sources(None),
+    )
+    .expect("runtime config");
+    let cli = AgentHostOptions::default();
+    let factory = SessionRuntimeFactory::new(SessionRuntimeFactoryOpts {
+        cli: Arc::new(cli),
+        bootstrap_source: SessionRuntimeBootstrapSource::startup_snapshot(
+            SessionRuntimeBootstrap {
+                model_id: crate::headless::resolve_main_model(&runtime_config).model_id,
+                runtime_config: Arc::new(runtime_config),
+                tools: Arc::new(coco_tool_runtime::ToolRegistry::new()),
+                system_prompt: "test".to_string(),
+                permission_mode_availability: coco_types::PermissionModeAvailability::default(),
+                permission_mode: coco_types::PermissionMode::default(),
+                command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(
+                    coco_commands::CommandRegistry::new(),
+                ))),
+                skill_manager: Arc::new(coco_skills::SkillManager::new()),
+                project_services: Arc::new(coco_app_runtime::ProjectServices::load(
+                    home.path(),
+                    home.path(),
+                )),
+                agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
+            },
+        ),
+        cwd: home.path().to_path_buf(),
+        model_runtimes: None,
+        session_manager: Arc::new(coco_session::SessionManager::new(
+            home.path().join("sessions"),
+        )),
+        fast_model_spec: None,
+        permission_bridge: None,
+        process_runtime: coco_app_runtime::ProcessRuntime::global(),
+        builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
+        is_non_interactive: false,
+    });
+    let runtime = factory.build(None).await.expect("build SessionRuntime");
+
+    let change = runtime
+        .apply_model_role_selection(super::SessionModelRoleSelection {
+            role: coco_types::ModelRole::Main,
+            provider: coco_config::MOA_PROVIDER.to_string(),
+            model_id: "default".to_string(),
+            effort: Some(ReasoningEffort::High),
+        })
+        .await
+        .expect("apply model role selection");
+
+    assert_eq!(change.display_provider, "moa");
+    assert_eq!(change.display_model_id, "default");
+    assert_eq!(change.effort, Some(ReasoningEffort::High));
+    assert_eq!(runtime.current_engine_config().await.model_id, "default");
+    let snapshot = runtime
+        .model_role_change_snapshot(coco_types::ModelRole::Main, Some(ReasoningEffort::Low))
+        .await
+        .expect("main role change snapshot");
+    assert_eq!(snapshot.display_provider, "moa");
+    assert_eq!(snapshot.display_model_id, "default");
+    assert_eq!(snapshot.effort, Some(ReasoningEffort::Low));
+    let resolved = runtime
+        .resolve_role(coco_types::ModelRole::Main)
+        .await
+        .expect("resolved main role");
+    assert_eq!(resolved.spec.provider, "anthropic");
+    assert_eq!(resolved.spec.model_id, "claude-sonnet-4-6");
+}
+
 #[test]
 fn thinking_level_for_effort_uses_current_model_metadata() {
     let model = coco_config::ModelInfo {
@@ -257,6 +365,40 @@ async fn orchestration_ctx_factory_can_run_inside_runtime_thread() {
     let updated_config = factory();
     assert!(updated_config.disable_all_hooks);
     assert!(updated_config.allow_managed_hooks_only);
+}
+
+#[test]
+fn refresh_live_permissions_preserves_plan_latches_when_mode_unchanged() {
+    let mut app_state = coco_types::ToolAppState {
+        permissions: coco_types::LiveToolPermissionState {
+            mode: Some(coco_types::PermissionMode::Plan),
+            pre_plan_mode: Some(coco_types::PermissionMode::Auto),
+            stripped_dangerous_rules: Some(coco_types::PermissionRulesBySource::default()),
+            ..Default::default()
+        },
+        plan_mode_entry_ms: Some(42),
+        ..Default::default()
+    };
+
+    super::permissions::refresh_live_permissions_for_turn(
+        &mut app_state,
+        super::SessionTurnPermissionRefresh {
+            fallback_previous_mode: coco_types::PermissionMode::Default,
+            permission_mode: coco_types::PermissionMode::Plan,
+            allow_rules: coco_types::PermissionRulesBySource::default(),
+            deny_rules: coco_types::PermissionRulesBySource::default(),
+            ask_rules: coco_types::PermissionRulesBySource::default(),
+            permission_rule_source_roots: std::collections::HashMap::new(),
+            plan_auto_options: coco_permissions::PlanModeAutoOptions::default(),
+        },
+    );
+
+    assert_eq!(
+        app_state.permissions.pre_plan_mode,
+        Some(coco_types::PermissionMode::Auto)
+    );
+    assert!(app_state.permissions.stripped_dangerous_rules.is_some());
+    assert_eq!(app_state.plan_mode_entry_ms, Some(42));
 }
 
 #[tokio::test]

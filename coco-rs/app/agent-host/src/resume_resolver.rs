@@ -3,7 +3,7 @@
 //! and the live session id the new turn should write under).
 //!
 //! Keeping the flag-resolution logic in one place lets `main.rs`,
-//! `tui_runner.rs`, and `sdk_server::sdk_runner` all reuse it without
+//! `tui_runner.rs`, and `app_server_host::SessionTurnExecutor` all reuse it without
 //! duplicating the "id vs jsonl path vs --continue most-recent" rules.
 //!
 //! The resolver is filesystem-only; it never touches model runtimes,

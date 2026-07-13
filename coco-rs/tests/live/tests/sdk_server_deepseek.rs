@@ -18,7 +18,7 @@ mod common;
 mod sdk_server;
 
 use anyhow::Result;
-use coco_agent_host::sdk_server::SdkTransport;
+use coco_sdk_server::SdkTransport;
 use coco_types::ClientRequestMethod;
 use coco_types::NotificationMethod;
 
@@ -39,11 +39,11 @@ async fn test_sdk_initialize_deepseek_openai() -> Result<()> {
 
     // Response should at least be an object; SDK protocol returns the
     // initialize bootstrap (cwd, model, slash_commands, …). Spec
-    // shape is in `coco_agent_host::sdk::InitializeResponse`.
+    // shape is in the shared protocol DTOs.
     let obj = resp
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("initialize response is not an object: {resp}"))?;
-    // The actual InitializeResponse shape (per `coco_agent_host::sdk`) carries
+    // The actual InitializeResponse shape carries
     // pid, account, models, commands, agents, output_style, plus
     // protocol/version markers. Assert on a subset that has to be
     // present.

@@ -199,26 +199,26 @@ fn is_api_visible_matches_ts_normalize_attachment_for_api_returns_empty() {
 }
 
 #[test]
-fn sdk_consumption_matches_ts_query_engine_special_cases() {
+fn session_result_consumption_matches_ts_query_engine_special_cases() {
     // TS `QueryEngine.ts` has attachment branches for:
-    // - `structured_output` -> final SDK result `structured_output`
+    // - `structured_output` -> final session result `structured_output`
     // - `max_turns_reached` -> terminal `error_max_turns` result
-    // - `queued_command` -> SDK user replay when replay mode is enabled
+    // - `queued_command` -> user replay when replay mode is enabled
     assert_eq!(
-        AttachmentKind::StructuredOutput.sdk_consumption(),
-        SdkConsumption::ResultField {
+        AttachmentKind::StructuredOutput.session_result_consumption(),
+        SessionResultConsumption::ResultField {
             field: "structured_output"
         }
     );
     assert_eq!(
-        AttachmentKind::MaxTurnsReached.sdk_consumption(),
-        SdkConsumption::TerminalResult {
+        AttachmentKind::MaxTurnsReached.session_result_consumption(),
+        SessionResultConsumption::TerminalResult {
             subtype: "error_max_turns"
         }
     );
     assert_eq!(
-        AttachmentKind::QueuedCommand.sdk_consumption(),
-        SdkConsumption::ReplayUserMessage
+        AttachmentKind::QueuedCommand.session_result_consumption(),
+        SessionResultConsumption::ReplayUserMessage
     );
 
     for k in AttachmentKind::all() {
@@ -229,9 +229,9 @@ fn sdk_consumption_matches_ts_query_engine_special_cases() {
                 | AttachmentKind::QueuedCommand
         );
         assert_eq!(
-            k.is_sdk_consumed(),
+            k.is_session_result_consumed(),
             expected,
-            "SDK consumption drift for {k:?}"
+            "session-result consumption drift for {k:?}"
         );
     }
 }

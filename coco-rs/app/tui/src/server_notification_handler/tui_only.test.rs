@@ -10,7 +10,7 @@ use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_messages::UserContent;
 use coco_messages::UserMessage;
-use coco_types::SdkSessionSummary;
+use coco_types::SessionSummary;
 use coco_types::SlashCommandInfo;
 use coco_types::TuiOnlyEvent;
 use uuid::Uuid;
@@ -313,7 +313,7 @@ fn open_session_browser_populates_resume_picker() {
     let consumed = handle(
         &mut state,
         TuiOnlyEvent::OpenSessionBrowser {
-            sessions: vec![SdkSessionSummary {
+            sessions: vec![SessionSummary {
                 session_id: test_session_id("s1"),
                 model: "claude-sonnet-4-6".to_string(),
                 cwd: "/repo".to_string(),

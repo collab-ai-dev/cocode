@@ -201,28 +201,52 @@ impl FileWatchRegistrationContext {
 }
 
 impl SessionRuntime {
+    pub fn set_client_hook_callback(&self, callback: coco_hooks::ClientHookCallback) {
+        self.hook_resources
+            .registry()
+            .set_client_hook_callback(callback);
+    }
+
+    pub fn register_hook_definitions<I>(&self, hooks: I) -> usize
+    where
+        I: IntoIterator<Item = coco_hooks::HookDefinition>,
+    {
+        let registry = self.hook_resources.registry();
+        hooks.into_iter().fold(0, |count, hook| {
+            count + usize::from(registry.register_deduped(hook))
+        })
+    }
+
+    pub async fn wrap_send_elicitation_with_hooks(
+        self: &Arc<Self>,
+        server_name: String,
+        base: coco_mcp::SendElicitation,
+    ) -> coco_mcp::SendElicitation {
+        let elicit_counter = self
+            .engine_state_resources
+            .app_state()
+            .read()
+            .await
+            .elicitation_pending_count
+            .clone();
+        crate::elicitation_hooks::wrap_send_elicitation_with_hooks(
+            server_name,
+            self.hook_resources.registry(),
+            self.orchestration_ctx_factory(),
+            Some(elicit_counter),
+            base,
+        )
+    }
+
     /// Fire SessionStart hooks for the given source. The result is buffered
     /// into `sync_hook_buffer` to surface as reminders on the next turn.
-    /// Runners call this once at session bootstrap (TUI / SDK) so the
+    /// Runners call this once at session bootstrap (TUI / AppServer) so the
     /// first turn's reminder pass picks up the events. Failure is
     /// logged + tolerated; no panic on hook misconfig.
-    pub async fn fire_session_start_hooks(&self, source: &str) {
-        // `source` is the closed enum `('startup' | 'resume' | 'clear' | 'compact')`.
-        // Parse here so callers using bare strings still work, but log + skip if
-        // the string is unrecognised to avoid wiring an out-of-spec value.
-        let parsed_source = match source {
-            "startup" => coco_hooks::orchestration::SessionStartSource::Startup,
-            "resume" => coco_hooks::orchestration::SessionStartSource::Resume,
-            "clear" => coco_hooks::orchestration::SessionStartSource::Clear,
-            "compact" => coco_hooks::orchestration::SessionStartSource::Compact,
-            other => {
-                warn!(
-                    source = other,
-                    "SessionStart hook fired with unrecognised source; skipping"
-                );
-                return;
-            }
-        };
+    pub async fn fire_session_start_hooks(
+        &self,
+        source: coco_hooks::orchestration::SessionStartSource,
+    ) {
         let cfg = self.current_engine_config().await;
         let session_id = self.current_typed_session_id().await;
         let ctx = coco_hooks::orchestration::OrchestrationContext {
@@ -254,7 +278,7 @@ impl SessionRuntime {
         match coco_hooks::orchestration::execute_session_start(
             &hook_registry,
             &ctx,
-            parsed_source,
+            source,
             /*agent_type*/ None,
             model_arg,
         )
@@ -270,7 +294,7 @@ impl SessionRuntime {
                 }
             }
             Err(e) => {
-                warn!(error = %e, source, "SessionStart hook execution failed at startup");
+                warn!(error = %e, ?source, "SessionStart hook execution failed at startup");
             }
         }
     }
@@ -384,7 +408,7 @@ impl SessionRuntime {
     }
 
     /// Fire Notification hooks. Called from `TuiPermissionBridge` /
-    /// `SdkPermissionBridge` when the user is about to be asked for
+    /// `AppServerPermissionBridge` when the user is about to be asked for
     /// input (`permission_prompt`), and from any future idle / elicitation
     /// prompts. Output is fire-and-forget — awaited only to preserve
     /// ordering before the actual UI notification, never to block the
@@ -461,7 +485,7 @@ impl SessionRuntime {
     /// Fire CwdChanged hooks.
     /// Callers must capture the old cwd before mutating
     /// `std::env::current_dir`. Surfacing the helper lets ad-hoc
-    /// cwd-mutating code paths (worktree exit, SDK setCwd control) wire
+    /// cwd-mutating code paths (worktree exit, AppServer setCwd control) wire
     /// the hook without re-implementing the orchestration context build.
     pub async fn fire_cwd_changed_hooks(&self, old_cwd: &str, new_cwd: &str) {
         let cfg = self.current_engine_config().await;

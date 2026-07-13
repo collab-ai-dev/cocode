@@ -1,8 +1,8 @@
 //! Interactive-TUI sandbox approval bridge.
 //!
-//! The SDK path installs [`crate::sdk_server::SdkSandboxApprovalBridge`] to
-//! surface a denied sandbox operation over the NDJSON control channel. This is
-//! the interactive-TUI counterpart: when a sandboxed path/network operation is
+//! The AppServer host path installs its own sandbox approval bridge to surface
+//! a denied sandbox operation over the active remote surface. This is the
+//! interactive-TUI counterpart: when a sandboxed path/network operation is
 //! about to be denied, [`crate::session_runtime::SessionRuntime`]'s
 //! `Arc<SandboxState>` consults the installed bridge, and this implementation
 //! turns that into a `SandboxApprovalRequired` overlay in the user's terminal.

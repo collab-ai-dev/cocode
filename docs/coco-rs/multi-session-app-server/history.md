@@ -114,7 +114,7 @@ agent-host, app-server, app-server-client, and types suites also passed in full.
 ## Ownership hardening follow-up (2026-07-11)
 
 A final production-path audit removed the remaining duplicate SDK session
-owners. `LocalAppSessionHandle` now always contains a live `SessionHandle`;
+owners. `AppSessionHandle` now always contains a live `SessionHandle`;
 start/resume without a runtime factory fail closed. `SessionTurnExecutor` is
 the only turn executor across SDK, TUI, headless, and live harnesses. Turn ids,
 active tasks, cancellation, and aggregate accounting moved from process-keyed

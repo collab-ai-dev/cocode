@@ -188,14 +188,14 @@ the targeted command run until that batch is complete.
 
 - `app/server/src/json_rpc_adapter.rs`
 - `app/server/src/json_rpc_adapter.test.rs`
-- `app/agent-host/src/sdk_server/app_server_bridge.rs`
-- `app/agent-host/src/sdk_server/app_server_bridge.test.rs`
-- `app/agent-host/src/sdk_server/handlers/initialize_state.rs`
-- `app/agent-host/src/sdk_server/handlers/bootstrap_state.rs`
-- `app/agent-host/src/sdk_server/handlers/connection_state.rs`
-- `app/agent-host/src/sdk_server/handlers/server_request_state.rs`
-- `app/agent-host/src/sdk_server/handlers/pending_client_request_state.rs`
-- `app/agent-host/src/sdk_server/handlers/mcp_registration_state.rs`
+- `app/agent-host/src/app_server_host/local_bridge.rs`
+- `app/agent-host/src/app_server_host/local_bridge.test.rs`
+- `app/agent-host/src/app_server_host/bootstrap_state.rs`
+- `app/agent-host/src/app_server_host/initialize_bootstrap.rs`
+- `app/agent-host/src/app_server_host/outbound.rs`
+- `app/agent-host/src/app_server_host/sdk_mcp_bridge.rs`
+- `app/sdk-server/src/app_server_transport.rs`
+- `app/sdk-server/src/dispatcher.rs`
 
 ### Tests and gate
 
@@ -268,11 +268,11 @@ just quick-check
 
 ### Primary files
 
-- `app/agent-host/src/sdk_server/handlers/dispatch.rs`
-- `app/agent-host/src/sdk_server/dispatcher.rs`
-- `app/agent-host/src/sdk_server/sdk_runner.rs`
-- `app/agent-host/src/sdk_server/sdk_runner.test.rs`
-- `app/agent-host/src/sdk_server/handlers/mod.rs`
+- `app/agent-host/src/app_server_host/request_dispatch.rs`
+- `app/sdk-server/src/dispatcher.rs`
+- `app/agent-host/src/app_server_host/session_turn_executor.rs`
+- `app/agent-host/src/app_server_host/session_turn_executor.test.rs`
+- `app/agent-host/src/app_server_host/request_handlers/mod.rs`
 - `app/agent-host/src/session_runtime.rs`
 
 ### Tests and gate
@@ -303,15 +303,13 @@ shutdown, and is stopped and awaited by the close cascade.
 
 ### Primary files
 
-- `app/agent-host/src/sdk_server/handlers/mcp.rs`
-- `app/agent-host/src/sdk_server/handlers/rewind.rs`
-- `app/agent-host/src/sdk_server/handlers/session_runtime_state.rs`
-- `app/agent-host/src/sdk_server/handlers/mcp_manager_state.rs`
-- `app/agent-host/src/sdk_server/handlers/file_history_state.rs`
-- `app/agent-host/src/sdk_server/handlers/runtime_reload_state.rs`
-- `app/agent-host/src/session_runtime/session_handle.rs`
+- `app/agent-host/src/app_server_host/request_handlers/mcp.rs`
+- `app/agent-host/src/app_server_host/request_handlers/rewind.rs`
+- `app/agent-host/src/app_server_host/state.rs`
+- `app/agent-host/src/app_server_host/session_lifecycle.rs`
 - `app/agent-host/src/session_runtime/resources.rs`
 - `app/agent-host/src/session_runtime/reload.rs`
+- `app/agent-host/src/session_runtime/session_handle.rs`
 - `app/agent-host/src/session_runtime/state/file_history.rs`
 
 ### Phase gate
@@ -361,8 +359,8 @@ disconnected client never needs resume-then-archive to release a runtime.
 - `app/server/src/registry.rs`
 - `app/server/src/registry.test.rs`
 - `app/server/src/app_server.rs`
-- `app/agent-host/src/sdk_server/session_lifecycle.rs`
-- `app/agent-host/src/sdk_server/app_server_bridge.rs`
+- `app/agent-host/src/app_server_host/session_lifecycle.rs`
+- `app/agent-host/src/app_server_host/local_bridge.rs`
 
 ### Gate
 

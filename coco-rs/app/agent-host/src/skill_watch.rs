@@ -100,7 +100,8 @@ pub fn spawn_current_session(
                     let session_cwd = session.current_cwd().read().await.clone();
                     let count = session.reload_plugins(&session_cwd).await;
                     tracing::info!(commands = count, "skills changed: command registry rebuilt");
-                    let snapshot = session.current_command_registry().await.snapshot_for_ui();
+                    let snapshot =
+                        crate::session_dialogs::build_available_commands_payload(&session).await;
                     let _ = notify_tx
                         .send(CoreEvent::Tui(TuiOnlyEvent::AvailableCommandsRefreshed {
                             commands: snapshot,

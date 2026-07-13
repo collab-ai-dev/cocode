@@ -27,7 +27,7 @@ pub enum McpTransport {
     SseIde,
     Http,
     WebSocket,
-    Sdk,
+    ClientHosted,
     ClaudeAiProxy,
 }
 
@@ -39,7 +39,7 @@ pub enum McpServerConfig {
     Sse(McpSseConfig),
     Http(McpHttpConfig),
     WebSocket(McpWsConfig),
-    Sdk(McpSdkConfig),
+    ClientHosted(McpClientHostedConfig),
     ClaudeAiProxy(McpClaudeAiProxyConfig),
 }
 
@@ -126,7 +126,7 @@ pub struct McpWsConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct McpSdkConfig {
+pub struct McpClientHostedConfig {
     pub name: String,
 }
 

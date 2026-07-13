@@ -111,6 +111,7 @@ members = [
     "app/query",
     "app/runtime",
     "app/agent-host",
+    "app/sdk-server",
     "app/server",
     "app/server-client",
     "app/server-transport",
@@ -247,6 +248,7 @@ coco-output-styles = { path = "output-styles" }
 coco-query = { path = "app/query" }
 coco-app-runtime = { path = "app/runtime" }
 coco-agent-host = { path = "app/agent-host" }
+coco-sdk-server = { path = "app/sdk-server" }
 coco-app-server = { path = "app/server" }
 coco-app-server-client = { path = "app/server-client" }
 coco-app-server-transport = { path = "app/server-transport" }

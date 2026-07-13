@@ -2,7 +2,7 @@
 //! bootstrap code.
 //!
 //! Centralizes path construction that was previously duplicated across
-//! `main.rs`, `tui_runner.rs`, and `run_sdk_mode`: the sessions
+//! CLI startup, TUI startup, and remote startup: the sessions
 //! directory, the agent search paths, and the output-style directories.
 //!
 //! Session workspace resolution (`SessionWorkspace`, `resolve_project_root`,
@@ -62,7 +62,7 @@ pub fn managed_output_style_dir() -> PathBuf {
 /// Directory list for output styles in priority order
 /// (lowest to highest): user → project → managed.
 ///
-/// Returned for the SDK `available_output_styles` `discover_*` legacy
+/// Returned for the initialize `available_output_styles` `discover_*` legacy
 /// path; new code prefers
 /// [`coco_output_styles::OutputStyleManager::builder`] which accepts
 /// each source separately so priority is enforced explicitly.

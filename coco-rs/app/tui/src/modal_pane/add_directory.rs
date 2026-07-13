@@ -15,6 +15,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use tokio::sync::mpsc;
 
+use crate::command::SlashTranscriptEntry;
 use crate::command::UserCommand;
 use crate::events::TuiCommand;
 use crate::i18n::t;
@@ -158,11 +159,14 @@ async fn on_submit(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>)
 async fn on_cancel(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
     state.ui.dismiss_modal();
     let cancelled = t!("dialog.add_dir_cancelled").to_string();
-    let messages = coco_messages::build_slash_command_messages(
-        "add-dir", /*args*/ "", &cancelled, /*is_sensitive*/ false,
-    );
+    let entry = SlashTranscriptEntry::Result {
+        name: "add-dir".to_string(),
+        args: String::new(),
+        text: cancelled,
+        is_error: false,
+    };
     let _ = command_tx
-        .send(UserCommand::PushSlashResult { messages })
+        .send(UserCommand::PushSlashResult { entry })
         .await;
 }
 

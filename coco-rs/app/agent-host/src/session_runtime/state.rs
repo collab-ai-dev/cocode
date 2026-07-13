@@ -40,14 +40,14 @@ impl SessionRuntime {
 
     /// The tool registry shared by every engine instance.
     /// Callers that need to register or deregister tools at runtime (e.g.
-    /// the SDK MCP lifecycle handlers) use this to mutate the registry
+    /// the client-hosted MCP lifecycle handlers) use this to mutate the registry
     /// via its interior-mutability API.
     pub fn tools(&self) -> &Arc<ToolRegistry> {
         self.execution.tools()
     }
 
     /// Session-scoped sandbox state. Cheap-clone via `Arc`; consumers
-    /// (fork dispatch, SDK handler) inherit the same instance so
+    /// (fork dispatch, AppServer adapters) inherit the same instance so
     /// `SandboxState::update_config` hot-reloads propagate everywhere.
     pub fn sandbox_state(&self) -> Option<Arc<coco_sandbox::SandboxState>> {
         self.sandbox_resources.sandbox_state.clone()
@@ -83,7 +83,7 @@ impl SessionRuntime {
 
     /// Install the live `McpConnectionManager` so reload paths can re-register
     /// plugin-contributed MCP servers. Call this after `SessionRuntime::build`
-    /// on entry points that own a manager (the SDK path today).
+    /// on entry points that own a manager (the AppServer path today).
     pub async fn attach_mcp_manager(
         &self,
         manager: Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>,
@@ -191,9 +191,9 @@ impl SessionRuntime {
         self.engine_state_resources.app_state()
     }
 
-    /// Apply SDK `/env` updates to the session-scoped shell environment.
+    /// Apply AppServer `control/updateEnv` updates to the session-scoped shell environment.
     ///
-    /// Empty values mean "unset", matching the historical SDK
+    /// Empty values mean "unset", matching the remote
     /// `control/updateEnv` convention. When shell tools are disabled there is
     /// no consumer, but we still count the accepted update for telemetry and
     /// protocol compatibility.
@@ -238,6 +238,88 @@ impl SessionRuntime {
         self.config_resources.config_home()
     }
 
+    pub async fn prompt_history_texts(&self, project: String) -> Vec<String> {
+        let config_home = self.config_home().clone();
+        let session_id = self.current_typed_session_id().await;
+        tokio::task::spawn_blocking(move || {
+            coco_session::PromptHistory::new(&config_home, &project, &session_id)
+                .get_history()
+                .into_iter()
+                .map(|entry| entry.display)
+                .collect()
+        })
+        .await
+        .unwrap_or_default()
+    }
+
+    pub async fn persist_prompt_history_entry(
+        &self,
+        project: String,
+        display: String,
+    ) -> anyhow::Result<()> {
+        let config_home = self.config_home().clone();
+        let session_id = self.current_typed_session_id().await;
+        tokio::task::spawn_blocking(move || {
+            coco_session::PromptHistory::new(&config_home, &project, &session_id)
+                .add(&display)
+                .map_err(anyhow::Error::from)
+        })
+        .await?
+    }
+
+    pub async fn clear_awaiting_plan_approval_if_matches(&self, request_id: &str) -> bool {
+        let mut guard = self.engine_state_resources.app_state().write().await;
+        if guard.awaiting_plan_approval_request_id.as_deref() != Some(request_id) {
+            return false;
+        }
+        guard.awaiting_plan_approval = false;
+        guard.awaiting_plan_approval_request_id = None;
+        true
+    }
+
+    pub async fn has_exited_plan_mode(&self) -> bool {
+        self.engine_state_resources
+            .app_state()
+            .read()
+            .await
+            .has_exited_plan_mode
+    }
+
+    pub async fn set_agent_progress_summaries_enabled(&self, enabled: bool) {
+        self.engine_state_resources
+            .app_state()
+            .write()
+            .await
+            .agent_progress_summaries_enabled = enabled;
+    }
+
+    pub fn configured_plans_dir(&self) -> std::path::PathBuf {
+        coco_context::resolve_plans_directory(
+            self.config_home(),
+            self.runtime_config().paths.project_dir.as_deref(),
+            self.runtime_config()
+                .settings
+                .merged
+                .plans_directory
+                .as_deref(),
+        )
+    }
+
+    pub fn session_plan_file_path(&self) -> std::path::PathBuf {
+        let plans_dir = self.configured_plans_dir();
+        let session_id = self.current_typed_session_id_snapshot();
+        coco_context::get_plan_file_path(session_id.as_str(), &plans_dir, /*agent_id*/ None)
+    }
+
+    pub fn unscoped_session_plan_text(&self, session_id: &coco_types::SessionId) -> Option<String> {
+        let plans_dir = coco_context::resolve_plans_directory(
+            self.config_home(),
+            /*project_dir*/ None,
+            /*setting*/ None,
+        );
+        coco_context::get_plan(session_id.as_str(), &plans_dir, /*agent_id*/ None)
+    }
+
     pub fn runtime_config(&self) -> &Arc<coco_config::RuntimeConfig> {
         self.config_resources.runtime_config()
     }
@@ -259,6 +341,39 @@ impl SessionRuntime {
 
     pub async fn session_usage_snapshot(&self) -> coco_types::SessionUsageSnapshot {
         self.turn_resources.usage_accounting().snapshot().await
+    }
+
+    pub async fn active_goal_snapshot(&self) -> Option<coco_types::ActiveGoal> {
+        self.engine_state_resources
+            .app_state()
+            .read()
+            .await
+            .active_goal
+            .clone()
+    }
+
+    pub async fn restore_goal_from_history(
+        &self,
+        messages: &[Arc<coco_messages::Message>],
+        trust_rejected: bool,
+    ) -> Option<coco_types::ActiveGoal> {
+        let cfg = self.current_engine_config().await;
+        let goal = crate::goal_command::restore_goal_from_history(
+            messages,
+            self.engine_state_resources.app_state(),
+            self.hook_resources.registry().as_ref(),
+            self.session_usage_snapshot().await.totals.output_tokens,
+            crate::goal_command::GoalGate {
+                hooks_restricted: cfg.disable_all_hooks || cfg.allow_managed_hooks_only,
+                trust_rejected,
+            },
+        )
+        .await;
+        self.persist_goal_metadata(goal.as_ref().map(|goal| {
+            coco_session::GoalMetadata::from_active_goal(goal, /*met*/ false)
+        }))
+        .await;
+        goal
     }
 
     pub async fn persist_goal_metadata(&self, goal: Option<coco_session::GoalMetadata>) {
@@ -322,6 +437,335 @@ impl SessionRuntime {
         {
             warn!(error = %e, session_id = %session_id, "failed to persist local transcript messages");
         }
+    }
+
+    pub async fn append_messages_to_history(
+        &self,
+        messages: Vec<coco_messages::Message>,
+    ) -> Vec<Arc<coco_messages::Message>> {
+        let mut history = self.history_resources.history().lock().await;
+        messages
+            .into_iter()
+            .map(|message| {
+                let message = Arc::new(message);
+                history.push_arc(message.clone());
+                message
+            })
+            .collect()
+    }
+
+    pub async fn append_messages_to_history_and_emit(
+        &self,
+        messages: Vec<coco_messages::Message>,
+        event_tx: Option<mpsc::Sender<coco_types::CoreEvent>>,
+    ) -> Vec<Arc<coco_messages::Message>> {
+        let mut history = self.history_resources.history().lock().await;
+        for message in messages {
+            coco_query::history_sync::history_push_and_emit(&mut history, message, &event_tx).await;
+        }
+        history.to_vec()
+    }
+
+    pub async fn history_messages(&self) -> Vec<Arc<coco_messages::Message>> {
+        self.history_resources.history().lock().await.to_vec()
+    }
+
+    pub async fn truncate_history_at_user_message(
+        &self,
+        message_id: &str,
+    ) -> Result<super::SessionHistoryTruncateResult, usize> {
+        let mut history = self.history_resources.history().lock().await;
+        let Some(idx) = history
+            .as_slice()
+            .iter()
+            .position(|message| match message.as_ref() {
+                Message::User(user) => user.uuid.to_string() == message_id,
+                _ => false,
+            })
+        else {
+            return Err(history.len());
+        };
+        let pre_count = history.len();
+        history.truncate(idx);
+        Ok(super::SessionHistoryTruncateResult {
+            keep_count: idx,
+            pre_count,
+            removed: pre_count.saturating_sub(idx),
+        })
+    }
+
+    pub async fn append_arc_messages_to_history_and_snapshot(
+        &self,
+        messages: Vec<Arc<coco_messages::Message>>,
+    ) -> Vec<Arc<coco_messages::Message>> {
+        let mut history = self.history_resources.history().lock().await;
+        for message in messages {
+            history.push_arc(message);
+        }
+        history.to_vec()
+    }
+
+    async fn replace_history(&self, history: coco_messages::MessageHistory) {
+        *self.history_resources.history().lock().await = history;
+    }
+
+    pub async fn replace_history_with_arc_messages(
+        &self,
+        messages: Vec<Arc<coco_messages::Message>>,
+    ) {
+        let mut history = coco_messages::MessageHistory::new();
+        for message in messages {
+            history.push_arc(message);
+        }
+        self.replace_history(history).await;
+    }
+
+    pub async fn commit_engine_turn_history(&self, history: coco_messages::MessageHistory) {
+        self.replace_history(history).await;
+    }
+
+    pub async fn commit_compacted_history(&self, history: coco_messages::MessageHistory) {
+        self.replace_history(history).await;
+    }
+
+    pub async fn re_append_session_metadata(&self) {
+        let session_id = self.current_typed_session_id().await.to_string();
+        let manager = Arc::clone(self.session_manager());
+        let _ =
+            tokio::task::spawn_blocking(move || manager.re_append_session_metadata(&session_id))
+                .await;
+    }
+
+    pub async fn has_persisted_title(&self) -> bool {
+        let session_id = self.current_typed_session_id().await.to_string();
+        let manager = Arc::clone(self.session_manager());
+        tokio::task::spawn_blocking(move || {
+            manager
+                .load(&session_id)
+                .map(|session| session.title.is_some())
+                .unwrap_or(false)
+        })
+        .await
+        .unwrap_or(false)
+    }
+
+    pub async fn persist_session_title(&self, name: String) -> anyhow::Result<()> {
+        let session_id = self.current_typed_session_id().await.to_string();
+        let manager = Arc::clone(self.session_manager());
+        tokio::task::spawn_blocking(move || manager.set_title(&session_id, &name))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|inner| inner.map_err(anyhow::Error::from))
+            .map(|_| ())
+    }
+
+    pub async fn title_generation_conversation_text(&self) -> String {
+        let history = self.history_resources.history().lock().await;
+        coco_session::title_generator::extract_conversation_text(history.as_slice())
+    }
+
+    pub async fn list_persisted_session_summaries(
+        &self,
+    ) -> anyhow::Result<coco_types::SessionListResult> {
+        let manager = Arc::clone(self.session_manager());
+        tokio::task::spawn_blocking(move || {
+            let sessions = manager.list()?;
+            let summaries = sessions
+                .into_iter()
+                .map(|session| {
+                    Ok(coco_types::SessionSummary {
+                        session_id: coco_types::SessionId::try_new(session.id)?,
+                        model: session.model,
+                        cwd: session.working_dir.to_string_lossy().into_owned(),
+                        created_at: session.created_at,
+                        updated_at: session.updated_at,
+                        title: session.title,
+                        message_count: session.message_count,
+                        total_tokens: session.total_tokens,
+                    })
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            Ok(coco_types::SessionListResult {
+                sessions: summaries,
+            })
+        })
+        .await?
+    }
+
+    pub async fn persist_session_mode(&self) {
+        let session_id = self.current_typed_session_id().await;
+        let manager = Arc::clone(self.session_manager());
+        let features = self.runtime_config().features.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            crate::coordinator_mode_resume::persist_session_mode(
+                manager.as_ref(),
+                &session_id,
+                &features,
+            )
+        })
+        .await;
+    }
+
+    pub fn reconcile_session_mode_on_resume(
+        &self,
+        stored_mode: Option<&str>,
+    ) -> Option<&'static str> {
+        crate::coordinator_mode_resume::reconcile_on_resume(
+            stored_mode,
+            &self.runtime_config().features,
+        )
+    }
+
+    pub async fn toggle_tag(&self, tag: String) -> anyhow::Result<(SessionId, bool)> {
+        let session_id = self.current_typed_session_id().await;
+        let session_id_for_toggle = session_id.to_string();
+        let manager = Arc::clone(self.session_manager());
+        let (_, added) =
+            tokio::task::spawn_blocking(move || manager.toggle_tag(&session_id_for_toggle, &tag))
+                .await
+                .map_err(anyhow::Error::from)?
+                .map_err(anyhow::Error::from)?;
+        Ok((session_id, added))
+    }
+
+    pub async fn rewind_files(
+        &self,
+        request: super::SessionFileRewindRequest,
+    ) -> Result<super::SessionFileRewindResult, super::SessionFileRewindError> {
+        let Some(history_arc) = self.file_history().cloned() else {
+            return Err(super::SessionFileRewindError::NotEnabled);
+        };
+        let session_id = self.current_typed_session_id().await;
+        let config_home = self.config_home().clone();
+
+        {
+            let history = history_arc.read().await;
+            if !history.can_restore(&request.user_message_id) {
+                return Err(super::SessionFileRewindError::SnapshotMissing(
+                    request.user_message_id,
+                ));
+            }
+        }
+
+        let stats = {
+            let history = history_arc.read().await;
+            history
+                .get_diff_stats(&request.user_message_id, &config_home, session_id.as_str())
+                .await
+                .map_err(|source| super::SessionFileRewindError::Operation {
+                    context: if request.dry_run {
+                        "file rewind dry run"
+                    } else {
+                        "file rewind preview"
+                    },
+                    source: anyhow::Error::from(source),
+                })?
+        };
+
+        if request.dry_run {
+            return Ok(super::SessionFileRewindResult {
+                files_changed: stats.files_changed,
+                insertions: stats.insertions,
+                deletions: stats.deletions,
+                dry_run: true,
+            });
+        }
+
+        let restored = {
+            let history = history_arc.read().await;
+            history
+                .rewind(&request.user_message_id, &config_home, session_id.as_str())
+                .await
+                .map_err(|source| super::SessionFileRewindError::Operation {
+                    context: "file rewind apply",
+                    source: anyhow::Error::from(source),
+                })?
+        };
+
+        Ok(super::SessionFileRewindResult {
+            files_changed: restored,
+            insertions: stats.insertions,
+            deletions: stats.deletions,
+            dry_run: false,
+        })
+    }
+
+    pub async fn render_session_file_diff(
+        &self,
+    ) -> Result<coco_context::RenderedDiff, super::SessionFileDiffError> {
+        let Some(history_arc) = self.file_history().cloned() else {
+            return Err(super::SessionFileDiffError::NotEnabled);
+        };
+        let session_id = self.current_typed_session_id().await.to_string();
+        let config_home = self.config_home().clone();
+        let file_history = history_arc.read().await;
+        file_history
+            .render_session_diff(&config_home, &session_id)
+            .await
+            .map_err(|source| super::SessionFileDiffError::Operation {
+                context: "session file diff",
+                source: anyhow::Error::from(source),
+            })
+    }
+
+    pub async fn rewind_diff_stats(
+        &self,
+        message_id: &str,
+    ) -> Result<Option<coco_context::DiffStats>, super::SessionFileDiffError> {
+        self.rewind_diff_stats_between(message_id, None).await
+    }
+
+    pub async fn rewind_diff_stats_between(
+        &self,
+        message_id: &str,
+        next_message_id: Option<&str>,
+    ) -> Result<Option<coco_context::DiffStats>, super::SessionFileDiffError> {
+        let Some(history_arc) = self.file_history().cloned() else {
+            return Err(super::SessionFileDiffError::NotEnabled);
+        };
+        let session_id = self.current_typed_session_id().await.to_string();
+        let config_home = self.config_home().clone();
+        let file_history = history_arc.read().await;
+        if !file_history.can_restore(message_id) {
+            return Ok(None);
+        }
+        file_history
+            .get_diff_stats_between(message_id, next_message_id, &config_home, &session_id)
+            .await
+            .map(Some)
+            .map_err(|source| super::SessionFileDiffError::Operation {
+                context: "rewind diff stats",
+                source: anyhow::Error::from(source),
+            })
+    }
+
+    pub async fn render_turn_file_diff(
+        &self,
+        message_id: &str,
+    ) -> Result<coco_context::RenderedDiff, super::SessionFileDiffError> {
+        let Some(history_arc) = self.file_history().cloned() else {
+            return Err(super::SessionFileDiffError::NotEnabled);
+        };
+        let session_id = self.current_typed_session_id().await.to_string();
+        let config_home = self.config_home().clone();
+        let file_history = history_arc.read().await;
+        let Some(next_message_id) = next_file_history_snapshot_id(&file_history, message_id) else {
+            return Err(super::SessionFileDiffError::SnapshotMissing(
+                message_id.to_string(),
+            ));
+        };
+        file_history
+            .render_diff_between(
+                message_id,
+                next_message_id.as_deref(),
+                &config_home,
+                &session_id,
+            )
+            .await
+            .map_err(|source| super::SessionFileDiffError::Operation {
+                context: "turn file diff",
+                source: anyhow::Error::from(source),
+            })
     }
 
     pub async fn pre_clear_rewind_messages(&self) -> Option<Vec<Arc<Message>>> {
@@ -434,7 +878,7 @@ impl SessionRuntime {
         self.execution.model_runtimes()
     }
 
-    /// Resolve an SDK/user-supplied model string into a concrete
+    /// Resolve a client/user-supplied model string into a concrete
     /// provider/model pair using the same registry snapshot that built
     /// this session. `provider/model_id` is accepted directly; bare
     /// model ids first bind to the current Main provider, then to the
@@ -460,7 +904,7 @@ impl SessionRuntime {
     /// runtime, so without the clear the prior session's UUIDs leak
     /// into the new session and any colliding new write gets silently
     /// suppressed.
-    pub async fn seed_transcript_dedup<I>(&self, uuids: I)
+    pub(crate) async fn seed_transcript_dedup<I>(&self, uuids: I)
     where
         I: IntoIterator<Item = uuid::Uuid>,
     {
@@ -479,7 +923,7 @@ impl SessionRuntime {
     /// `agent_id: None` for a subagent resume would silently drop
     /// every Level-2 replacement and force the model to re-read the
     /// full tool result, breaking prompt-cache stability.
-    pub async fn seed_tool_result_replacement_state(
+    pub(crate) async fn seed_tool_result_replacement_state(
         &self,
         messages: &[Message],
         session_id: &SessionId,
@@ -665,6 +1109,110 @@ impl SessionRuntime {
         );
     }
 
+    pub async fn set_model_id(&self, model_id: String) -> String {
+        let old_model = self.current_engine_config().await.model_id;
+        self.update_engine_config(move |engine_config| {
+            engine_config.model_id = model_id;
+        })
+        .await;
+        old_model
+    }
+
+    pub async fn set_thinking_level(&self, thinking_level: Option<coco_types::ThinkingLevel>) {
+        self.update_engine_config(move |engine_config| {
+            engine_config.thinking_level = thinking_level;
+        })
+        .await;
+    }
+
+    pub async fn set_fast_mode(&self, active: bool) {
+        self.update_engine_config(move |engine_config| {
+            engine_config.fast_mode = active;
+        })
+        .await;
+    }
+
+    pub async fn set_requires_structured_output(&self, active: bool) {
+        self.update_engine_config(move |engine_config| {
+            engine_config.requires_structured_output = active;
+        })
+        .await;
+    }
+
+    pub async fn set_skill_overrides(&self, skill_overrides: Arc<coco_config::SkillOverrideTiers>) {
+        self.update_engine_config(move |engine_config| {
+            engine_config.skill_overrides = skill_overrides;
+        })
+        .await;
+    }
+
+    pub async fn apply_session_start_config(&self, config: super::SessionStartRuntimeConfig) {
+        let model_id = config.model_id;
+        let permission_mode = config.permission_mode;
+        let plan_mode_custom_instructions = config.plan_mode_custom_instructions;
+        let requires_structured_output = config.requires_structured_output;
+        self.update_engine_config(move |engine_config| {
+            if let Some(model_id) = model_id {
+                engine_config.model_id = model_id;
+            }
+            if let Some(permission_mode) = permission_mode {
+                engine_config.permission_mode = permission_mode;
+            }
+            if let Some(custom_instructions) = plan_mode_custom_instructions {
+                engine_config.plan_mode_settings.custom_instructions = custom_instructions;
+            }
+            if requires_structured_output {
+                engine_config.requires_structured_output = true;
+            }
+        })
+        .await;
+
+        if permission_mode.is_none() && !config.agent_progress_summaries_enabled {
+            return;
+        }
+
+        let mut app_state = self.engine_state_resources.app_state().write().await;
+        if let Some(mode) = permission_mode {
+            // Brand-new session: the engine config / rules are not part of a
+            // turn build yet, so the Auto-entry stash starts empty. The
+            // evaluator-facing strip in ToolContextFactory::build, keyed on
+            // live mode==Auto, is the runtime guard once a turn starts.
+            let live_allow_rules = coco_types::PermissionRulesBySource::new();
+            let previous = app_state
+                .permissions
+                .mode
+                .unwrap_or(coco_types::PermissionMode::Default);
+            coco_permissions::apply_permission_mode_transition_to_app_state(
+                &mut app_state,
+                previous,
+                mode,
+                &live_allow_rules,
+                coco_permissions::PlanModeAutoOptions::default(),
+            );
+        }
+        if config.agent_progress_summaries_enabled {
+            app_state.agent_progress_summaries_enabled = true;
+        }
+    }
+
+    pub async fn apply_turn_runtime_config(&self, config: super::SessionTurnRuntimeConfig) {
+        self.update_engine_config(move |engine_config| {
+            engine_config.is_non_interactive = config.is_non_interactive;
+            engine_config.avoid_permission_prompts = config.avoid_permission_prompts;
+            engine_config.permission_mode = config.permission_mode;
+            engine_config.permission_mode_availability = config.permission_mode_availability;
+            engine_config.permission_rule_source_roots = config.permission_rule_source_roots;
+            engine_config.max_turns = config.max_turns;
+            engine_config.total_token_budget = config.total_token_budget;
+            engine_config.cwd_override = config.cwd_override;
+            engine_config.tool_filter = config.tool_filter;
+            engine_config.plans_directory = config.plans_directory;
+            engine_config.plan_mode_settings.custom_instructions =
+                config.plan_mode_custom_instructions;
+        })
+        .await;
+    }
+
     pub async fn seed_todo_list_snapshot(&self, key: String, items: Vec<coco_types::TodoRecord>) {
         let handle = self.handle_resources.todo_list.read().await.clone();
         handle.write(&key, items.clone()).await;
@@ -676,7 +1224,31 @@ impl SessionRuntime {
         }
     }
 
+    pub async fn set_agent_color(&self, color: Option<coco_types::AgentColorName>) {
+        self.engine_state_resources
+            .app_state()
+            .write()
+            .await
+            .agent_color = color;
+    }
+
     pub async fn todo_list_snapshot(&self, key: &str) -> Vec<coco_types::TodoRecord> {
         self.handle_resources.todo_list.read().await.read(key).await
     }
+}
+
+fn next_file_history_snapshot_id(
+    file_history: &coco_context::FileHistoryState,
+    message_id: &str,
+) -> Option<Option<String>> {
+    let idx = file_history
+        .snapshots
+        .iter()
+        .position(|snapshot| snapshot.message_id == message_id)?;
+    Some(
+        file_history
+            .snapshots
+            .get(idx + 1)
+            .map(|snapshot| snapshot.message_id.clone()),
+    )
 }

@@ -35,7 +35,7 @@ valid Rust implementation.
 The review followed these paths:
 
 1. canonical `ClientRequest` DTO -> remote/local client helper;
-2. JSON-RPC/local adapter -> `AppServerSdkHandler` request context;
+2. JSON-RPC/local adapter -> `AppServerHostHandler` request context;
 3. handler target resolution -> `TurnRunner` and runtime-control handlers;
 4. registry slot transition -> host lifecycle wrapper;
 5. per-session runtime construction -> project config and integration setup;
@@ -57,7 +57,7 @@ Evidence:
 - `RemoteSessionClient` stores both identifiers, but `query()` delegates to
   connection-level `turn_start(params)` and `interrupt()` delegates to
   connection-level `turn_interrupt()` without injecting either identifier.
-- `AppServerSdkHandler` derives scope with
+- `AppServerHostHandler` derives scope with
   `sole_interactive_session_for_connection`. Routing intentionally returns
   `None` when that connection owns two interactive surfaces for two different
   sessions.
@@ -232,8 +232,8 @@ engine construction.
 
 Evidence:
 
-- listener connections reuse one `AppServerSdkHandler` backed by one
-  `SdkServerState`;
+- listener connections reuse one `AppServerHostHandler` backed by one
+  `AppServerHostState`;
 - `InitializeState` is one shared set of `RwLock`s containing SDK agents,
   plan-mode instructions, and hook callbacks; related initialize-derived
   preferences also live on shared `BootstrapState`, so a later connection can

@@ -10,6 +10,8 @@ use coco_types::SessionId;
 use uuid::Uuid;
 
 use crate::BUILD_PACKAGE_VERSION;
+use crate::app_server_host::AppServerLocalBridge;
+use crate::session_runtime::SessionHandle;
 use crate::shutdown::ShutdownDrainOutcome;
 
 const CHANNEL_CAPACITY: usize = 1024;
@@ -25,6 +27,19 @@ pub struct RuntimeEventHubConnector {
 }
 
 impl RuntimeEventHubConnector {
+    pub fn spawn_and_attach_for_session(
+        bridge: &AppServerLocalBridge,
+        session: &SessionHandle,
+        cwd: &Path,
+    ) -> Option<Self> {
+        let connector =
+            Self::spawn_for_session(session.runtime_config(), session.session_id().clone(), cwd);
+        if let Some(connector) = &connector {
+            bridge.set_hub_connector_sender(connector.sender());
+        }
+        connector
+    }
+
     pub fn spawn_for_session(
         runtime_config: &coco_config::RuntimeConfig,
         session_id: SessionId,

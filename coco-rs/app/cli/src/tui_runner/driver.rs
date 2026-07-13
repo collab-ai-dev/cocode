@@ -6,7 +6,7 @@ pub(super) async fn run_agent_driver(
     mut command_rx: mpsc::Receiver<UserCommand>,
     event_tx: mpsc::Sender<CoreEvent>,
     current_session: SharedSessionHandle,
-    mut local_app_server_bridge: coco_agent_host::sdk_server::AppServerLocalBridge,
+    mut local_app_server_bridge: coco_agent_host::app_server_host::AppServerLocalBridge,
     pending_approvals: coco_agent_host::tui_permission_bridge::PendingApprovals,
     runtime_reload_subscriptions: Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
     runtime_factory: crate::session_runtime::SessionRuntimeFactory,
@@ -99,7 +99,9 @@ pub(super) async fn run_agent_driver(
             }
             _ = {
                 let session = current_session.read().await.clone();
-                async move { session.command_queue().wait_for_change().await }
+                async move {
+                    coco_agent_host::session_queue::wait_for_command_queue_change(&session).await
+                }
             } => {
                 let session = current_session.read().await.clone();
                 process_idle_command_queue(
@@ -108,13 +110,13 @@ pub(super) async fn run_agent_driver(
                     &event_tx,
                     &mut local_app_server_bridge,
                     &active_turn,
-                        &mut pending_editor_requests,
-                        &title_gen_attempted,
-                        &turn_done_tx,
-                        &runtime_reload_subscriptions,
-                        &runtime_factory,
-                        &process_runtime,
-                        &cwd,
+                    &mut pending_editor_requests,
+                    &title_gen_attempted,
+                    &turn_done_tx,
+                    &runtime_reload_subscriptions,
+                    &runtime_factory,
+                    &process_runtime,
+                    &cwd,
                 )
                 .await;
                 continue;
@@ -123,7 +125,7 @@ pub(super) async fn run_agent_driver(
         // Re-read each turn so `/clear` regen picks up the new id.
         let session = current_session.read().await.clone();
         let runtime = &session;
-        let session_id = runtime.current_typed_session_id().await;
+        let session_id = runtime.session_id().clone();
         match command {
             UserCommand::SubmitInput {
                 user_message_id,
@@ -200,13 +202,12 @@ pub(super) async fn run_agent_driver(
                 drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
 
                 let turn_id = uuid::Uuid::new_v4();
-                local_app_server_bridge
-                    .install_session_runtime(session.clone())
-                    .await;
                 if let Err(error) = local_app_server_bridge
-                    .start_passive_event_pump(session_id.clone(), event_tx.clone())
+                    .bind_interactive_session(session.clone(), Some(event_tx.clone()))
+                    .await
                 {
-                    tracing::warn!(%error, "TUI SubmitInput could not refresh local AppServer event pump");
+                    tracing::warn!(%error, "TUI SubmitInput could not bind local AppServer session");
+                    continue;
                 }
                 let mut monitor_client = local_app_server_bridge.connect_local_client();
                 // live-only tail attach with no replay cursor. `Some (0)`
@@ -248,10 +249,12 @@ pub(super) async fn run_agent_driver(
                         // after our TUI-side drain + retries. Re-enqueue the prompt
                         // so it runs at the next idle drain instead of dropping the
                         // user's submit.
-                        let queued = QueuedCommand::new(params.prompt, QueuePriority::Next)
-                            .with_origin(QueueOrigin::Human)
-                            .with_images(image_data_to_queued(&images));
-                        runtime.command_queue().enqueue(queued).await;
+                        let _ = coco_agent_host::session_queue::enqueue_human_prompt(
+                            &session,
+                            params.prompt,
+                            image_data_to_queued(&images),
+                        )
+                        .await;
                         tracing::warn!(
                             "TUI SubmitInput turn/start still busy after retries; re-enqueued prompt"
                         );
@@ -330,7 +333,7 @@ pub(super) async fn run_agent_driver(
                 let session_t = session.clone();
                 let active_turn_t = active_turn.clone();
                 let turn_done_tx_t = turn_done_tx.clone();
-                let cwd = runtime.current_engine_config().await.workspace_cwd();
+                let cwd = runtime.workspace_cwd().await;
                 tokio::spawn(async move {
                     run_prompt_mode_bash(
                         &cwd,
@@ -348,15 +351,14 @@ pub(super) async fn run_agent_driver(
             UserCommand::PersistPromptHistory { display } => {
                 // Append to the cross-session composer history off the
                 // dispatch thread — the JSONL append takes an advisory file
-                // lock. Session id is re-read each time so entries written
-                // after `/resume` or `/clear` carry the new session tag.
-                let config_home = runtime.config_home().clone();
+                // lock.
+                let runtime_t = runtime.clone();
                 let project = cwd.to_string_lossy().to_string();
-                let session_id = runtime.current_typed_session_id().await;
-                tokio::task::spawn_blocking(move || {
-                    let history =
-                        coco_session::PromptHistory::new(&config_home, &project, &session_id);
-                    if let Err(e) = history.add(&display) {
+                tokio::spawn(async move {
+                    if let Err(e) = runtime_t
+                        .persist_prompt_history_entry(project, display)
+                        .await
+                    {
                         warn!(target: "coco_agent_host::history", error = %e,
                             "failed to persist prompt history");
                     }
@@ -373,7 +375,7 @@ pub(super) async fn run_agent_driver(
             }
 
             UserCommand::OpenPlanEditor => {
-                let path = runtime_session_plan_file_path(&session).await;
+                let path = runtime_session_plan_file_path(&session);
                 prepare_external_editor_request(
                     &mut pending_editor_requests,
                     PendingEditorRequest::Plan { path },
@@ -697,26 +699,25 @@ pub(super) async fn run_agent_driver(
                 // Async restore-preview diff for the selected checkpoint.
                 // `stats == None` carries `fileHistoryCanRestore == false`;
                 // the TUI suppresses code-restore choices for that row.
-                if let Some(fh) = runtime.file_history() {
-                    let fh = fh.read().await;
-                    let stats = if fh.can_restore(&message_id) {
-                        match fh
-                            .get_diff_stats(&message_id, runtime.config_home(), session_id.as_str())
-                            .await
-                        {
-                            Ok(stats) => Some(diff_stats_to_payload(stats)),
-                            Err(_) => Some(coco_types::RewindDiffStatsPayload::default()),
-                        }
-                    } else {
-                        None
-                    };
-                    let _ = event_tx
-                        .send(CoreEvent::Tui(TuiOnlyEvent::RewindRestorePreviewReady {
-                            message_id,
-                            stats,
-                        }))
-                        .await;
-                }
+                let stats = match coco_agent_host::session_controls::rewind_diff_stats(
+                    Some(runtime.clone()),
+                    &message_id,
+                )
+                .await
+                {
+                    Ok(Some(stats)) => Some(diff_stats_to_payload(stats)),
+                    Ok(None) => None,
+                    Err(
+                        coco_agent_host::session_controls::SessionControlError::FileDiffNotEnabled,
+                    ) => continue,
+                    Err(_) => Some(coco_types::RewindDiffStatsPayload::default()),
+                };
+                let _ = event_tx
+                    .send(CoreEvent::Tui(TuiOnlyEvent::RewindRestorePreviewReady {
+                        message_id,
+                        stats,
+                    }))
+                    .await;
             }
             UserCommand::RequestDiffStatsBatch { message_ids } => {
                 // For each non-synthetic picker row, resolve
@@ -726,38 +727,37 @@ pub(super) async fn run_agent_driver(
                 // Uses the snapshot pair instead of walking
                 // `msg.toolUseResult.structuredPatch` because
                 // coco_messages has no typed tool-output side channel.
-                if let Some(fh) = runtime.file_history() {
-                    let fh = fh.read().await;
-                    let mut rows = Vec::with_capacity(message_ids.len());
-                    for (idx, message_id) in message_ids.iter().enumerate() {
-                        let metadata = if fh.can_restore(message_id) {
-                            let next = message_ids.get(idx + 1).map(String::as_str);
-                            match fh
-                                .get_diff_stats_between(
-                                    message_id,
-                                    next,
-                                    runtime.config_home(),
-                                    session_id.as_str(),
-                                )
-                                .await
-                            {
-                                Ok(stats) => Some(diff_stats_to_payload(stats)),
-                                Err(_) => Some(coco_types::RewindDiffStatsPayload::default()),
-                            }
-                        } else {
-                            None
-                        };
-                        rows.push(coco_types::RewindRowMetadata {
-                            message_id: message_id.clone(),
-                            metadata,
-                        });
-                    }
-                    let _ = event_tx
-                        .send(CoreEvent::Tui(TuiOnlyEvent::RewindRowMetadataReady {
-                            rows,
-                        }))
-                        .await;
+                let mut rows = Vec::with_capacity(message_ids.len());
+                for (idx, message_id) in message_ids.iter().enumerate() {
+                    let next = message_ids.get(idx + 1).map(String::as_str);
+                    let metadata = match coco_agent_host::session_controls::rewind_diff_stats_between(
+                        Some(runtime.clone()),
+                        message_id,
+                        next,
+                    )
+                    .await
+                    {
+                        Ok(Some(stats)) => Some(diff_stats_to_payload(stats)),
+                        Ok(None) => None,
+                        Err(coco_agent_host::session_controls::SessionControlError::FileDiffNotEnabled) => {
+                            rows.clear();
+                            break;
+                        }
+                        Err(_) => Some(coco_types::RewindDiffStatsPayload::default()),
+                    };
+                    rows.push(coco_types::RewindRowMetadata {
+                        message_id: message_id.clone(),
+                        metadata,
+                    });
                 }
+                if rows.is_empty() && !message_ids.is_empty() {
+                    continue;
+                }
+                let _ = event_tx
+                    .send(CoreEvent::Tui(TuiOnlyEvent::RewindRowMetadataReady {
+                        rows,
+                    }))
+                    .await;
             }
 
             UserCommand::Interrupt(_reason) => {
@@ -781,9 +781,13 @@ pub(super) async fn run_agent_driver(
             }
 
             UserCommand::InterruptAgentCurrentWork { agent_id } => {
-                local_app_server_bridge
-                    .install_session_runtime(session.clone())
-                    .await;
+                if let Err(error) = local_app_server_bridge
+                    .bind_interactive_session(session.clone(), None)
+                    .await
+                {
+                    tracing::warn!(%agent_id, %error, "Interrupt: could not bind local AppServer session");
+                    continue;
+                }
                 match local_app_server_bridge
                     .client()
                     .agent_interrupt_current_work(
@@ -821,7 +825,14 @@ pub(super) async fn run_agent_driver(
                 // time we reach here only rare I/O races land in the
                 // error arm. Toast the failure and move on — the
                 // wizard is already closed.
-                match prepare_agent_create(&session, &name, &description, source).await {
+                match coco_agent_host::session_agents::prepare_agent_create(
+                    &session,
+                    &name,
+                    &description,
+                    source,
+                )
+                .await
+                {
                     Ok(path) => {
                         prepare_external_editor_request(
                             &mut pending_editor_requests,
@@ -852,7 +863,9 @@ pub(super) async fn run_agent_driver(
                 let event_tx_t = event_tx.clone();
                 let path_display = path.display().to_string();
                 tokio::spawn(async move {
-                    if let Err(err) = std::fs::remove_file(&path) {
+                    if let Err(err) =
+                        coco_agent_host::session_agents::delete_agent_file(&session_t, path).await
+                    {
                         tracing::warn!(
                             target: "coco::agents",
                             %path_display,
@@ -863,7 +876,6 @@ pub(super) async fn run_agent_driver(
                     }
                     // After delete, rebuild the payload and re-push so
                     // the dialog refreshes without the deleted row.
-                    session_t.reload_agent_catalog().await;
                     refresh_agents_dialog(&session_t, &event_tx_t).await;
                 });
             }
@@ -876,9 +888,13 @@ pub(super) async fn run_agent_driver(
                 // folds into `SessionState.subagents` so the Running
                 // tab refreshes on the next frame. No additional event
                 // wiring needed here.
-                local_app_server_bridge
-                    .install_session_runtime(session.clone())
-                    .await;
+                if let Err(error) = local_app_server_bridge
+                    .bind_interactive_session(session.clone(), None)
+                    .await
+                {
+                    tracing::warn!(%task_id, %error, "CancelSubagent: could not bind local AppServer session");
+                    continue;
+                }
                 match local_app_server_bridge
                     .client()
                     .stop_task(
@@ -906,57 +922,46 @@ pub(super) async fn run_agent_driver(
                 // (mid-turn `Now` drain or end-of-turn full drain).
                 // When a turn is active, the prompt is enqueued instead
                 // of starting a fresh turn.
-                if prompt.trim().is_empty() {
+                let Some(queued) = coco_agent_host::session_queue::enqueue_human_prompt(
+                    &session,
+                    prompt,
+                    image_data_to_queued(&images),
+                )
+                .await
+                else {
                     continue;
-                }
-                let queued = QueuedCommand::new(prompt, QueuePriority::Next)
-                    .with_origin(QueueOrigin::Human)
-                    .with_images(image_data_to_queued(&images));
-                let id = queued.id;
-                let preview = queued.preview();
-                let editable = queued.is_editable_by_user();
-                runtime.command_queue().enqueue(queued).await;
+                };
                 // Round-trip notify: the TUI display
                 // (`SessionState::queued_commands`) is a projection of
                 // engine state and waits for this event to update —
                 // see `update.rs::QueueInput` (no optimistic push).
                 let _ = event_tx
                     .send(CoreEvent::Protocol(ServerNotification::CommandQueued {
-                        id: id.to_string(),
-                        preview,
-                        editable,
+                        id: queued.id.to_string(),
+                        preview: queued.preview,
+                        editable: queued.editable,
                     }))
                     .await;
             }
 
             UserCommand::EditQueuedCommand { id } => {
-                let Ok(uuid) = uuid::Uuid::parse_str(&id) else {
-                    let _ = event_tx
-                        .send(CoreEvent::Tui(TuiOnlyEvent::QueuedCommandEditUnavailable {
-                            id,
-                            reason: "invalid queued command id".to_string(),
-                        }))
-                        .await;
-                    continue;
+                let queued = match coco_agent_host::session_queue::remove_queued_command_for_edit(
+                    &session, &id,
+                )
+                .await
+                {
+                    Ok(queued) => queued,
+                    Err(error) => {
+                        let _ = event_tx
+                            .send(CoreEvent::Tui(TuiOnlyEvent::QueuedCommandEditUnavailable {
+                                id,
+                                reason: error.to_string(),
+                            }))
+                            .await;
+                        continue;
+                    }
                 };
-                let Some(queued) = runtime.command_queue().remove_by_id(uuid).await else {
-                    let _ = event_tx
-                        .send(CoreEvent::Tui(TuiOnlyEvent::QueuedCommandEditUnavailable {
-                            id,
-                            reason: "queued command was already processed".to_string(),
-                        }))
-                        .await;
-                    continue;
-                };
-                let id = queued.id.to_string();
-                let images = queued
-                    .images
-                    .into_iter()
-                    .map(|image| coco_types::QueuedCommandEditImage {
-                        media_type: image.media_type,
-                        data_base64: image.data_base64,
-                    })
-                    .collect();
+                let id = queued.id.clone();
                 let _ = event_tx
                     .send(CoreEvent::Protocol(ServerNotification::CommandDequeued {
                         id: id.clone(),
@@ -966,7 +971,7 @@ pub(super) async fn run_agent_driver(
                     .send(CoreEvent::Tui(TuiOnlyEvent::QueuedCommandEditReady {
                         id,
                         prompt: queued.prompt,
-                        images,
+                        images: queued.images,
                     }))
                     .await;
             }
@@ -975,50 +980,27 @@ pub(super) async fn run_agent_driver(
                 current_input,
                 current_cursor,
             } => {
-                let queued = runtime.command_queue().dequeue_all_editable().await;
-                if queued.is_empty() {
-                    let _ = event_tx
-                        .send(CoreEvent::Tui(TuiOnlyEvent::QueuedCommandEditUnavailable {
-                            id: String::new(),
-                            reason: "no editable queued commands".to_string(),
-                        }))
-                        .await;
-                    continue;
-                }
+                let queued =
+                    match coco_agent_host::session_queue::dequeue_editable_commands_for_edit(
+                        &session,
+                        &current_input,
+                        current_cursor,
+                    )
+                    .await
+                    {
+                        Ok(queued) => queued,
+                        Err(error) => {
+                            let _ = event_tx
+                                .send(CoreEvent::Tui(TuiOnlyEvent::QueuedCommandEditUnavailable {
+                                    id: String::new(),
+                                    reason: error.to_string(),
+                                }))
+                                .await;
+                            continue;
+                        }
+                    };
 
-                let ids: Vec<String> = queued.iter().map(|cmd| cmd.id.to_string()).collect();
-                let mut queued_text = String::new();
-                for cmd in &queued {
-                    if !queued_text.is_empty() {
-                        queued_text.push('\n');
-                    }
-                    queued_text.push_str(&cmd.prompt);
-                }
-                let mut prompt = queued_text.clone();
-                if !current_input.is_empty() {
-                    if !prompt.is_empty() {
-                        prompt.push('\n');
-                    }
-                    prompt.push_str(&current_input);
-                }
-                let cursor = if queued_text.is_empty() {
-                    current_cursor
-                } else {
-                    queued_text
-                        .len()
-                        .saturating_add(1)
-                        .saturating_add(current_cursor)
-                };
-                let images = queued
-                    .into_iter()
-                    .flat_map(|cmd| cmd.images)
-                    .map(|image| coco_types::QueuedCommandEditImage {
-                        media_type: image.media_type,
-                        data_base64: image.data_base64,
-                    })
-                    .collect();
-
-                for id in &ids {
+                for id in &queued.ids {
                     let _ = event_tx
                         .send(CoreEvent::Protocol(ServerNotification::CommandDequeued {
                             id: id.clone(),
@@ -1027,15 +1009,15 @@ pub(super) async fn run_agent_driver(
                 }
                 let _ = event_tx
                     .send(CoreEvent::Protocol(ServerNotification::QueueStateChanged {
-                        queued: runtime.command_queue().len().await as i32,
+                        queued: queued.remaining_queued as i32,
                     }))
                     .await;
                 let _ = event_tx
                     .send(CoreEvent::Tui(TuiOnlyEvent::QueuedCommandsEditReady {
-                        ids,
-                        prompt,
-                        cursor,
-                        images,
+                        ids: queued.ids,
+                        prompt: queued.prompt,
+                        cursor: queued.cursor,
+                        images: queued.images,
                     }))
                     .await;
             }
@@ -1062,43 +1044,42 @@ pub(super) async fn run_agent_driver(
             }
 
             UserCommand::SetPermissionMode { mode } => {
-                let cur_session_id = runtime.current_typed_session_id().await;
-                let cfg = runtime.current_engine_config().await;
+                let permission_status =
+                    match coco_agent_host::session_controls::permission_mode_status(Some(
+                        session.clone(),
+                    ))
+                    .await
+                    {
+                        Ok(status) => status,
+                        Err(error) => {
+                            warn!(
+                                error = %error,
+                                "TUI SetPermissionMode could not read permission mode status"
+                            );
+                            continue;
+                        }
+                    };
                 if mode == coco_types::PermissionMode::BypassPermissions
-                    && !cfg.permission_mode_availability.bypass_permissions
+                    && !permission_status.bypass_available
                 {
                     warn!(
-                        session_id = %cur_session_id,
+                        session_id = %permission_status.session_id,
                         requested = ?mode,
                         "TUI SetPermissionMode denied: bypass capability gate is off"
                     );
                     continue;
                 }
-                local_app_server_bridge
-                    .install_session_runtime(session.clone())
-                    .await;
-                let bridge_session_id = runtime.current_typed_session_id().await;
-                if let Err(error) =
-                    local_app_server_bridge.ensure_interactive_surface(bridge_session_id.clone())
-                {
-                    warn!(
-                        session_id = %cur_session_id,
-                        error = %error,
-                        "TUI SetPermissionMode could not attach local AppServer surface"
-                    );
-                    continue;
-                }
                 if let Err(error) = local_app_server_bridge
-                    .start_passive_event_pump(bridge_session_id, event_tx.clone())
+                    .bind_interactive_session(session.clone(), Some(event_tx.clone()))
+                    .await
                 {
                     warn!(
-                        session_id = %cur_session_id,
+                        session_id = %permission_status.session_id,
                         error = %error,
-                        "TUI SetPermissionMode could not attach local AppServer event pump"
+                        "TUI SetPermissionMode could not bind local AppServer session"
                     );
                     continue;
                 }
-                let previous = cfg.permission_mode;
                 if let Err(error) = local_app_server_bridge
                     .client()
                     .set_permission_mode(
@@ -1111,7 +1092,7 @@ pub(super) async fn run_agent_driver(
                     .await
                 {
                     warn!(
-                        session_id = %cur_session_id,
+                        session_id = %permission_status.session_id,
                         requested = ?mode,
                         error = %error,
                         "TUI SetPermissionMode via AppServerLocalBridge failed"
@@ -1119,8 +1100,8 @@ pub(super) async fn run_agent_driver(
                     continue;
                 }
                 info!(
-                    session_id = %cur_session_id,
-                    from = ?previous,
+                    session_id = %permission_status.session_id,
+                    from = ?permission_status.current,
                     to = ?mode,
                     "TUI SetPermissionMode propagated to engine_config + app_state",
                 );
@@ -1208,13 +1189,9 @@ pub(super) async fn run_agent_driver(
                 } else {
                     // Clear the leader-side awaiting flag so the
                     // reminder can stop nagging about this request.
-                    let mut guard = runtime.app_state().write().await;
-                    if guard.awaiting_plan_approval_request_id.as_deref()
-                        == Some(request_id.as_str())
-                    {
-                        guard.awaiting_plan_approval = false;
-                        guard.awaiting_plan_approval_request_id = None;
-                    }
+                    runtime
+                        .clear_awaiting_plan_approval_if_matches(&request_id)
+                        .await;
                 }
             }
 
@@ -1235,8 +1212,8 @@ pub(super) async fn run_agent_driver(
                 .await;
 
                 let always_allow_options_allowed =
-                    coco_agent_host::tui_permission_bridge::settings_allow_always_allow_options(
-                        &runtime.runtime_config().settings,
+                    coco_agent_host::tui_permission_bridge::session_allows_always_allow_options(
+                        runtime,
                     );
                 if pending_entry.is_some()
                     && !always_allow_options_allowed
@@ -1387,27 +1364,9 @@ pub(super) async fn run_agent_driver(
             }
 
             UserCommand::FireIdleNotification { message } => {
-                // The TUI detected an idle window past the idle threshold;
-                // route through the hook orchestrator so registered
-                // `Notification` hooks fire with
-                // `notification_type = "idle_prompt"`.
-                let registry = runtime.hook_registry();
-                let factory = runtime.orchestration_ctx_factory();
-                let ctx = (factory)();
-                if ctx.disable_all_hooks {
-                    continue;
-                }
-                if let Err(e) = coco_hooks::orchestration::execute_notification(
-                    &registry,
-                    &ctx,
-                    "idle_prompt",
-                    &message,
-                    /*title*/ None,
-                )
-                .await
-                {
-                    tracing::warn!(error = %e, "idle_prompt notification hook failed");
-                }
+                runtime
+                    .fire_notification_hooks("idle_prompt", &message, /*title*/ None)
+                    .await;
             }
 
             UserCommand::BackgroundAllTasks => {
@@ -1421,8 +1380,11 @@ pub(super) async fn run_agent_driver(
                 // `output_file` populated) flows when the bg task
                 // actually terminates. Idempotent — a second press with
                 // no foreground tasks transitions nothing.
-                match background_all_tasks_through_app_server(&session, &local_app_server_bridge)
-                    .await
+                match background_all_tasks_through_app_server(
+                    &session,
+                    &mut local_app_server_bridge,
+                )
+                .await
                 {
                     Ok(result) => {
                         let count = result.len();
@@ -1442,39 +1404,56 @@ pub(super) async fn run_agent_driver(
                 // sees it via the same `MessageAppended` event stream as
                 // engine-pushed content. See
                 // `engine-tui-unified-transcript-plan.md` §3 Commit 2.
-                let msg = build_system_message_from_push_kind(kind);
-                let mut h = runtime.history().lock().await;
-                let event_tx_opt = Some(event_tx.clone());
-                coco_query::history_sync::history_push_and_emit(&mut h, msg, &event_tx_opt).await;
+                coco_agent_host::session_messages::append_system_push_to_history_and_emit(
+                    runtime,
+                    event_tx.clone(),
+                    kind,
+                )
+                .await;
             }
 
             UserCommand::RetryPermissionDenied { tool_name, message } => {
                 drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
-                let messages = {
-                    let msg = build_system_message_from_push_kind(
+                let messages =
+                    coco_agent_host::session_messages::append_system_push_to_history_and_emit(
+                        runtime,
+                        event_tx.clone(),
                         coco_tui::SystemPushKind::PermissionRetry { tool_name, message },
-                    );
-                    let mut h = runtime.history().lock().await;
-                    let event_tx_opt = Some(event_tx.clone());
-                    coco_query::history_sync::history_push_and_emit(&mut h, msg, &event_tx_opt)
-                        .await;
-                    h.to_vec()
-                };
+                    )
+                    .await;
                 spawn_history_turn(messages, &session, &event_tx, &active_turn, &turn_done_tx)
                     .await;
             }
 
-            UserCommand::PushSlashResult { messages } => {
-                // Pre-built slash echo+result `Message::User`s (see
-                // `command_tags`). Push each through engine authority so the
-                // transcript view, SDK, and JSONL converge — and so the
-                // per-message `is_visible_in_transcript_only` gate is the
-                // single source of truth for model visibility.
-                let mut h = runtime.history().lock().await;
-                let event_tx_opt = Some(event_tx.clone());
-                for msg in messages {
-                    coco_query::history_sync::history_push_and_emit(&mut h, msg, &event_tx_opt)
+            UserCommand::PushSlashResult { entry } => {
+                // TUI owns localized text and interaction policy; host owns
+                // the engine message envelopes and transcript authority.
+                match entry {
+                    coco_tui::SlashTranscriptEntry::Result {
+                        name,
+                        args,
+                        text,
+                        is_error,
+                    } => {
+                        coco_agent_host::session_messages::append_slash_result_to_history_and_emit(
+                            runtime,
+                            event_tx.clone(),
+                            &name,
+                            &args,
+                            &text,
+                            is_error,
+                        )
                         .await;
+                    }
+                    coco_tui::SlashTranscriptEntry::ContextUsage { args, result } => {
+                        coco_agent_host::session_messages::append_context_usage_to_history_and_emit(
+                            runtime,
+                            event_tx.clone(),
+                            &args,
+                            *result,
+                        )
+                        .await;
+                    }
                 }
             }
 
@@ -1533,39 +1512,8 @@ pub(super) async fn run_agent_driver(
     // don't propagate out of the driver.
     {
         let session = current_session.read().await.clone();
-        let runtime = &session;
-        let session_id = runtime.current_typed_session_id().await;
-        let session_id_string = session_id.to_string();
-        let mgr = Arc::clone(runtime.session_manager());
-        // Snapshot the session's coordinator-mode state at the exit
-        // checkpoint so `--resume` re-derives it via
-        // `reconcile_on_resume`. Gated on agent-teams so non-team
-        // transcripts stay clean. `Option<&'static str>` is Send → moved
-        // into the blocking closure alongside the re-append.
-        let mode = runtime
-            .runtime_config()
-            .features
-            .enabled(coco_types::Feature::AgentTeams)
-            .then(|| {
-                if coco_subagent::is_coordinator_mode(&runtime.runtime_config().features) {
-                    "coordinator"
-                } else {
-                    "normal"
-                }
-            });
-        if let Err(e) = tokio::task::spawn_blocking(move || {
-            let _ = mgr.re_append_session_metadata(&session_id_string);
-            if let Some(mode) = mode {
-                let _ = mgr.save_mode(&session_id_string, mode);
-            }
-        })
-        .await
-        {
-            warn!(error = %e, "shutdown re-append task join failed");
-        }
+        coco_agent_host::shutdown::flush_interactive_session_exit_checkpoint(&session).await;
     }
-    let session = current_session.read().await.clone();
-    session.flush_session_usage_snapshot().await;
     info!("Agent driver stopped");
     app_server_shutdown
 }

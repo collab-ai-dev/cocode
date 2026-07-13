@@ -3,8 +3,8 @@
 //!
 //! Every second it reads the schedule store, asks the pure
 //! [`coco_cron::CronTickState`] which tasks crossed a fire boundary, and for
-//! each fire enqueues the task's prompt onto the session [`CommandQueue`] with
-//! [`QueueOrigin::Cron`]. The enqueue wakes the idle agent driver
+//! each fire enqueues the task's prompt through the session queue with cron
+//! origin. The enqueue wakes the idle agent driver
 //! (`tui_runner::run_agent_driver` selects on `command_queue().wait_for_change`),
 //! so the scheduled prompt runs as a turn; if a turn is already in flight it
 //! drains at the next turn boundary. Recurring tasks are rescheduled (and their
@@ -16,7 +16,7 @@
 //! (missed one-shots are surfaced as a batched notification — see
 //! [`build_missed_notification`]).
 //!
-//! TUI-only: the headless (`coco -p`) and SDK paths are one-shot / have no
+//! TUI-only: the headless (`coco -p`) and AppServer paths are one-shot / have no
 //! queue-drain pump, so a fired prompt would have nobody to run it. Durable
 //! tasks created in those modes still persist to disk and fire in a later
 //! interactive session.
@@ -27,9 +27,6 @@ use std::time::Duration;
 use coco_cron::CronTickState;
 use coco_cron::CronTiming;
 use coco_cron::RECURRING_MAX_AGE_MS;
-use coco_query::QueuePriority;
-use coco_query::QueuedCommand;
-use coco_system_reminder::QueueOrigin;
 use coco_tool_runtime::CronTask;
 use coco_types::SessionId;
 use tokio::task::JoinHandle;
@@ -114,7 +111,6 @@ pub fn spawn_current_session(
 
 async fn process_missed_for_session(session: &SessionHandle) {
     let store = session.schedule_store();
-    let queue = session.command_queue().clone();
 
     // Surface missed one-shot tasks as one batched notification, then remove
     // them so the tick doesn't fire them directly. Recurring tasks that came
@@ -133,19 +129,13 @@ async fn process_missed_for_session(session: &SessionHandle) {
         .iter()
         .filter(|t| missed_ids.iter().any(|m| m == &t.id))
         .collect();
-    queue
-        .enqueue(
-            QueuedCommand::new(build_missed_notification(&missed), QueuePriority::Later)
-                .with_origin(QueueOrigin::Cron),
-        )
-        .await;
+    crate::session_queue::enqueue_cron_prompt(session, build_missed_notification(&missed)).await;
     let refs: Vec<&str> = missed_ids.iter().map(String::as_str).collect();
     let _ = store.remove_cron_tasks(&refs).await;
 }
 
 async fn process_tick_for_session(session: &SessionHandle, state: &mut CronTickState) {
     let store = session.schedule_store();
-    let queue = session.command_queue().clone();
     let project_root = session.project_root().clone();
     let current_cwd = Arc::clone(session.current_cwd());
     let loop_sentinel_state = session.loop_sentinel_state().clone();
@@ -184,11 +174,7 @@ async fn process_tick_for_session(session: &SessionHandle, state: &mut CronTickS
                     loop_persistent_preamble_enabled,
                 )
             };
-            queue
-                .enqueue(
-                    QueuedCommand::new(prompt, QueuePriority::Later).with_origin(QueueOrigin::Cron),
-                )
-                .await;
+            crate::session_queue::enqueue_cron_prompt(session, prompt).await;
         }
         if fire.recurring && !fire.aged {
             let _ = store.mark_cron_tasks_fired(&[&fire.id], now).await;

@@ -123,7 +123,7 @@ It does not depend on query execution or aggregate application integrations.
 
 ### `coco-agent-host`
 
-Owns application use cases:
+Owns application operations:
 
 - `SessionRuntime`, `SessionHandle`, and factory;
 - construction from per-session folded configuration;
@@ -327,8 +327,8 @@ Rules:
 
 - `SessionHandle::session_id()` is immutable and lock-free;
 - no public `Deref<Target = SessionRuntime>` and no public `runtime()` escape;
-- host use cases are methods on `SessionHandle` or focused internal service
-  handles;
+- shared host operations are methods on `SessionHandle` or focused internal
+  service handles;
 - the shutdown token is private to runtime/lifecycle code;
 - mutable locks guard small invariants, not I/O or whole turns;
 - a turn task owns long-running engine work and reports completion back to
@@ -389,8 +389,9 @@ return a new handler. A connection handler snapshots its profile into each
 start/resume construction request; it never installs live session resources
 back into process state.
 
-The current `SdkServerState` must be decomposed field by field. This is the
-required destination map, not merely a suggestion to remove four slots:
+The former broad SDK process state has been narrowed into
+`AppServerHostState` plus SDK connection-adapter state. Any remaining
+process-state additions should follow this destination map:
 
 | Current field | Required target owner |
 |---|---|

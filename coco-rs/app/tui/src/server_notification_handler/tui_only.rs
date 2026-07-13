@@ -14,6 +14,7 @@
 use coco_messages::SystemMessageLevel;
 use coco_types::TuiOnlyEvent;
 
+use crate::command::SlashTranscriptEntry;
 use crate::command::SystemPushKind;
 use crate::i18n::t;
 use crate::state::AppState;
@@ -461,11 +462,14 @@ pub(super) fn handle(
             // `MessageHistory` so transcript view, SDK, and JSONL converge.
             // No in-tree command sets `is_sensitive`, so redaction is a
             // no-op today (the builder still honors it for future commands).
-            let messages = coco_messages::build_slash_command_messages(
-                &name, &args, &text, /*is_sensitive*/ false,
-            );
+            let entry = SlashTranscriptEntry::Result {
+                name: name.clone(),
+                args,
+                text,
+                is_error: false,
+            };
             if let Err(e) =
-                command_tx.try_send(crate::command::UserCommand::PushSlashResult { messages })
+                command_tx.try_send(crate::command::UserCommand::PushSlashResult { entry })
             {
                 tracing::warn!(
                     target: "coco_tui::system_push",
@@ -491,9 +495,12 @@ pub(super) fn handle(
             // not a modal. Build the `❯ /context` echo + the typed system
             // snapshot and round-trip them through engine history so transcript
             // / SDK / JSONL converge (same path as /help).
-            let messages = coco_messages::build_context_usage_messages(/*args*/ "", result);
+            let entry = SlashTranscriptEntry::ContextUsage {
+                args: String::new(),
+                result: Box::new(result),
+            };
             if let Err(e) =
-                command_tx.try_send(crate::command::UserCommand::PushSlashResult { messages })
+                command_tx.try_send(crate::command::UserCommand::PushSlashResult { entry })
             {
                 tracing::warn!(
                     target: "coco_tui::system_push",
@@ -844,15 +851,14 @@ pub(super) fn handle(
                     (false, t!("slash.permissions.usage_deny").to_string())
                 }
             };
-            let messages = if is_error {
-                coco_messages::build_slash_command_error_messages(&name, &args, &text)
-            } else {
-                coco_messages::build_slash_command_messages(
-                    &name, &args, &text, /*is_sensitive*/ false,
-                )
+            let entry = SlashTranscriptEntry::Result {
+                name: name.clone(),
+                args,
+                text,
+                is_error,
             };
             if let Err(e) =
-                command_tx.try_send(crate::command::UserCommand::PushSlashResult { messages })
+                command_tx.try_send(crate::command::UserCommand::PushSlashResult { entry })
             {
                 tracing::warn!(
                     target: "coco_tui::system_push",

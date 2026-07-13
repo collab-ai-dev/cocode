@@ -1993,10 +1993,22 @@ async fn esc_on_memory_dialog_records_transcript_result() {
     // Dismiss emits a transcript system line (`❯ /memory` + `⎿ Cancelled memory editing`),
     // not a toast.
     match rx.try_recv() {
-        Ok(UserCommand::PushSlashResult { messages }) => assert!(
-            format!("{messages:?}").contains("Cancelled memory editing"),
-            "expected dismiss text in {messages:?}"
-        ),
+        Ok(UserCommand::PushSlashResult {
+            entry:
+                crate::command::SlashTranscriptEntry::Result {
+                    name,
+                    text,
+                    is_error,
+                    ..
+                },
+        }) => {
+            assert_eq!(name, "memory");
+            assert!(!is_error);
+            assert!(
+                text.contains("Cancelled memory editing"),
+                "expected dismiss text in {text:?}"
+            );
+        }
         other => panic!("expected PushSlashResult, got {other:?}"),
     }
 }
@@ -2020,10 +2032,22 @@ async fn esc_on_theme_picker_emits_dismiss_slash_result() {
 
     assert!(!state.ui.has_active_surface(), "theme picker dismissed");
     match rx.try_recv() {
-        Ok(UserCommand::PushSlashResult { messages }) => assert!(
-            format!("{messages:?}").contains("Theme picker dismissed"),
-            "expected dismiss text in {messages:?}"
-        ),
+        Ok(UserCommand::PushSlashResult {
+            entry:
+                crate::command::SlashTranscriptEntry::Result {
+                    name,
+                    text,
+                    is_error,
+                    ..
+                },
+        }) => {
+            assert_eq!(name, "theme");
+            assert!(!is_error);
+            assert!(
+                text.contains("Theme picker dismissed"),
+                "expected dismiss text in {text:?}"
+            );
+        }
         other => panic!("expected PushSlashResult, got {other:?}"),
     }
 }

@@ -819,7 +819,7 @@
           "$ref": "#/$defs/InteractiveTarget"
         },
         "updated_input": {
-          "description": "Optional rewritten tool input the SDK client supplies at\napproval time. When `Some`, the engine substitutes this for the\nmodel-emitted input before invoking the tool. Used by\n`AskUserQuestion` to ship user-selected `answers` (and optional\n`annotations`) back into the tool's data envelope.\n\nIn-process equivalent is `coco_tool_runtime::ToolPermissionResolution.updated_input`\n(TUI mode). Consumed by `app/agent-host/src/sdk_server/approval_bridge.rs`."
+          "description": "Optional rewritten tool input the SDK client supplies at\napproval time. When `Some`, the engine substitutes this for the\nmodel-emitted input before invoking the tool. Used by\n`AskUserQuestion` to ship user-selected `answers` (and optional\n`annotations`) back into the tool's data envelope.\n\nIn-process equivalent is `coco_tool_runtime::ToolPermissionResolution.updated_input`\n(TUI mode). Consumed by the SDK approval bridge in `coco-agent-host`."
         }
       },
       "required": [
@@ -872,6 +872,133 @@
       },
       "required": [
         "request_id"
+      ]
+    },
+    "ClientAgentDefinition": {
+      "description": "Client-supplied custom subagent spec carried on `InitializeParams.agents`.\n\nWire-level DTO. **Distinct** from the internal [`crate::AgentDefinition`]\nwhich is the resolved post-load representation merged from markdown /\nplugin / client sources.",
+      "type": "object",
+      "properties": {
+        "background": {
+          "description": "Run as a fire-and-forget background task when invoked.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "criticalSystemReminder_EXPERIMENTAL": {
+          "description": "Experimental critical system reminder appended to the system prompt.\nWire field name: `criticalSystemReminder_EXPERIMENTAL`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "Natural-language description shown in the AgentTool prompt list.",
+          "type": "string"
+        },
+        "disallowed_tools": {
+          "description": "Explicit tool deny-list.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "effort": {
+          "description": "Reasoning effort selector.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "initial_prompt": {
+          "description": "Auto-submitted as the first user turn when this agent is the main thread.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_turns": {
+          "description": "Hard ceiling on agentic turns before the agent stops.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "mcp_servers": {
+          "description": "Per-agent MCP servers (`string` name-ref or inline `{name: config}` map).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/AgentMcpServerSpec"
+          }
+        },
+        "memory": {
+          "description": "Auto-loading scope for agent memory files (`user` / `project` / `local`).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MemoryScope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "description": "Model alias / full id / `\"inherit\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "description": "Permission mode override for tool executions.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "prompt": {
+          "description": "Agent system prompt body.",
+          "type": "string"
+        },
+        "skills": {
+          "description": "Skill names auto-loaded into the agent context.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "tools": {
+          "description": "Allowed tool names. `None` inherits all parent tools.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "description",
+        "prompt"
       ]
     },
     "ConfigApplyFlagsParams": {
@@ -1038,7 +1165,7 @@
       ]
     },
     "InitializeParams": {
-      "description": "Sent once at session start for capability negotiation. Carries hooks,\nSDK MCP servers, output format, system prompt, and agent definitions\nso the agent can construct its registries before the first turn.",
+      "description": "Sent once at session start for capability negotiation. Carries hooks,\nclient MCP servers, output format, system prompt, and agent definitions\nso the agent can construct its registries before the first turn.",
       "type": "object",
       "properties": {
         "agentProgressSummaries": {
@@ -1055,7 +1182,7 @@
             "null"
           ],
           "additionalProperties": {
-            "$ref": "#/$defs/SdkAgentDefinition"
+            "$ref": "#/$defs/ClientAgentDefinition"
           }
         },
         "append_system_prompt": {
@@ -1064,6 +1191,16 @@
             "string",
             "null"
           ]
+        },
+        "client_mcp_servers": {
+          "description": "Client-provided MCP server names (to skip env-configured ones).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
         },
         "hooks": {
           "description": "Hook callbacks keyed by event type.",
@@ -1253,16 +1390,6 @@
             "boolean",
             "null"
           ]
-        },
-        "sdk_mcp_servers": {
-          "description": "SDK-provided MCP server names (to skip env-configured ones).",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
         },
         "system_prompt": {
           "description": "Full system prompt override.",
@@ -1707,133 +1834,6 @@
       "required": [
         "target",
         "user_message_id"
-      ]
-    },
-    "SdkAgentDefinition": {
-      "description": "SDK-supplied custom subagent spec carried on `InitializeParams.agents`.\n\nWire-level DTO. **Distinct** from the internal [`crate::AgentDefinition`]\nwhich is the resolved post-load representation merged from markdown /\nplugin / SDK sources.",
-      "type": "object",
-      "properties": {
-        "background": {
-          "description": "Run as a fire-and-forget background task when invoked.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "criticalSystemReminder_EXPERIMENTAL": {
-          "description": "Experimental critical system reminder appended to the system prompt.\nWire field name: `criticalSystemReminder_EXPERIMENTAL`.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "description": {
-          "description": "Natural-language description shown in the AgentTool prompt list.",
-          "type": "string"
-        },
-        "disallowed_tools": {
-          "description": "Explicit tool deny-list.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        },
-        "effort": {
-          "description": "Reasoning effort selector.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ReasoningEffort"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "initial_prompt": {
-          "description": "Auto-submitted as the first user turn when this agent is the main thread.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "max_turns": {
-          "description": "Hard ceiling on agentic turns before the agent stops.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32"
-        },
-        "mcp_servers": {
-          "description": "Per-agent MCP servers (`string` name-ref or inline `{name: config}` map).",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/AgentMcpServerSpec"
-          }
-        },
-        "memory": {
-          "description": "Auto-loading scope for agent memory files (`user` / `project` / `local`).",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/MemoryScope"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "model": {
-          "description": "Model alias / full id / `\"inherit\"`.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "permission_mode": {
-          "description": "Permission mode override for tool executions.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PermissionMode"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "prompt": {
-          "description": "Agent system prompt body.",
-          "type": "string"
-        },
-        "skills": {
-          "description": "Skill names auto-loaded into the agent context.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        },
-        "tools": {
-          "description": "Allowed tool names. `None` inherits all parent tools.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "required": [
-        "description",
-        "prompt"
       ]
     },
     "SessionArchiveParams": {

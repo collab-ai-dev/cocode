@@ -5,7 +5,7 @@ Slash command registry and built-in implementations (help, config, clear, compac
 ## Key Types
 - `CommandHandler` trait — `execute(args: &str) -> Result<String>`
 - `RegisteredCommand` — metadata (`CommandBase` from coco-types) + optional handler + `is_enabled` feature-flag gate
-- `CommandRegistry` — name-keyed map with alias lookup; filter views: `visible()`, `sdk_safe()` (strips `is_sensitive`), `safe_for(CommandSafety)`
+- `CommandRegistry` — name-keyed map with alias lookup; filter views: `visible()`, `client_visible()` (strips `is_sensitive`), `safe_for(CommandSafety)`
 - `BuiltinCommand` / `AsyncBuiltinCommand` — sync and async built-in handler wrappers
 - `builtin_base()`, `builtin_base_ext()` — construct default `CommandBase` with safety + argument-hint options
 - `register_builtins()` — registers the starter ~25; `register_extended_builtins` in `implementations::`

@@ -95,7 +95,8 @@ pub(crate) fn expand_map(
 }
 
 /// Expand env references across a parsed config: stdio `command`/`args`/`env`
-/// and remote `url`/`headers`. `sdk` and `claudeai_proxy` are left untouched.
+/// and remote `url`/`headers`. `client_hosted` and `claudeai_proxy` are left
+/// untouched.
 /// Returns the deduplicated list of referenced-but-unset variables (no default
 /// supplied).
 pub(crate) fn expand_config(config: &mut McpServerConfig, lookup: &impl EnvLookup) -> Vec<String> {
@@ -124,7 +125,7 @@ pub(crate) fn expand_config(config: &mut McpServerConfig, lookup: &impl EnvLooku
             c.url = expand_str(&c.url, lookup, &mut missing);
             c.headers = expand_map(&c.headers, lookup, &mut missing);
         }
-        McpServerConfig::Sdk(_) | McpServerConfig::ClaudeAiProxy(_) => {}
+        McpServerConfig::ClientHosted(_) | McpServerConfig::ClaudeAiProxy(_) => {}
     }
     missing.sort();
     missing.dedup();

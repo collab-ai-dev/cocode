@@ -4,7 +4,7 @@ use anyhow::Result;
 
 use coco_app_runtime::ProjectServices;
 
-use super::SessionRuntime;
+use super::{SessionPluginReloadReport, SessionRuntime};
 
 impl SessionRuntime {
     /// Re-register plugin-contributed MCP servers with the attached
@@ -177,6 +177,50 @@ impl SessionRuntime {
             .reload_plugin_mcp_servers_with(project_services.clone())
             .await;
         count
+    }
+
+    /// Reload the session's plugin-backed runtime environment and return
+    /// protocol-neutral snapshots for control surfaces.
+    pub async fn reload_plugin_environment(&self) -> SessionPluginReloadReport {
+        let cwd = self.original_cwd().clone();
+        self.reload_plugins(&cwd).await;
+        self.reload_agent_catalog().await;
+        self.reload_lsp_servers().await;
+        let hook_error_count = match self.reload_hooks().await {
+            Ok(_) => 0,
+            Err(error) => {
+                tracing::warn!(target: "coco::plugins", %error, "plugin reload: hook reload failed");
+                1
+            }
+        };
+
+        let command_registry = self.current_command_registry().await;
+        let commands: Vec<String> = command_registry
+            .snapshot_for_ui()
+            .into_iter()
+            .map(|command| command.name)
+            .collect();
+        let agent_catalog = self.current_agent_catalog().await;
+        let agents: Vec<String> = agent_catalog
+            .active()
+            .map(|agent| agent.name.clone())
+            .collect();
+        let project_dir = self
+            .current_engine_config()
+            .await
+            .project_dir
+            .unwrap_or_else(|| cwd.clone());
+        let plugins = coco_plugins::load_all_installed_plugins(self.config_home(), &project_dir)
+            .iter()
+            .map(|plugin| plugin.id.to_string())
+            .collect();
+
+        SessionPluginReloadReport {
+            plugins,
+            commands,
+            agents,
+            hook_error_count,
+        }
     }
 
     /// Reload the live `HookRegistry` from the latest `RuntimeConfig`

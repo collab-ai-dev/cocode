@@ -2437,7 +2437,7 @@ pub enum TuiOnlyEvent {
     /// `/resume` with no args opens the saved-chat picker;
     /// `/resume <id-or-name>` bypasses this and resumes directly.
     OpenSessionBrowser {
-        sessions: Vec<crate::SdkSessionSummary>,
+        sessions: Vec<crate::SessionSummary>,
     },
     /// Rewind picker per-row metadata, emitted once on picker mount.
     ///

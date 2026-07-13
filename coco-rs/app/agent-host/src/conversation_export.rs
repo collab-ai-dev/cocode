@@ -1,10 +1,11 @@
 //! `/export` conversation rendering — turn the live `MessageHistory` into a
 //! Markdown / JSON / plain-text document.
 //! (`renderMessagesToPlainText`): the full transcript including tool activity,
-//! since an agentic session is mostly tool use. The file-writing + cwd
-//! resolution lives in `tui_runner::run_export` (it needs the runtime).
+//! since an agentic session is mostly tool use.
 
 use std::sync::Arc;
+
+use crate::session_runtime::SessionHandle;
 
 /// Export output format, inferred from the target filename's extension.
 #[derive(Clone, Copy)]
@@ -51,6 +52,34 @@ impl ExportFormat {
             Self::Json => render_conversation_json(messages),
             Self::Text => render_conversation_text(messages),
         }
+    }
+}
+
+pub async fn export_conversation_for_session(session: &SessionHandle, args: &str) -> String {
+    let arg = args.trim();
+    // A bare format keyword comes from the modal -> timestamped default name;
+    // anything else is treated as the target filename.
+    let (format, filename) = match ExportFormat::from_keyword(&arg.to_ascii_lowercase()) {
+        Some(format) => {
+            let ts = chrono::Local::now().format("%Y-%m-%d-%H%M%S");
+            (format, format!("conversation-{ts}.{}", format.ext()))
+        }
+        None => {
+            let format = ExportFormat::from_filename(arg);
+            let filename = if arg.contains('.') {
+                arg.to_string()
+            } else {
+                format!("{arg}.{}", format.ext())
+            };
+            (format, filename)
+        }
+    };
+    let history = session.history_messages().await;
+    let body = format.render(&history);
+    let path = session.original_cwd().join(&filename);
+    match tokio::fs::write(&path, body).await {
+        Ok(()) => format!("Conversation exported to {}", path.display()),
+        Err(error) => format!("Failed to write export to {}: {error}", path.display()),
     }
 }
 

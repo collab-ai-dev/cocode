@@ -36,22 +36,22 @@ use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 
-/// Request delivered to an SDK-registered hook callback.
+/// Request delivered to a remote-client-registered hook callback.
 #[derive(Debug, Clone)]
-pub struct SdkHookCallbackRequest {
+pub struct ClientHookCallbackRequest {
     pub callback_id: String,
     pub event: HookEventType,
     pub input: serde_json::Value,
     pub tool_use_id: Option<String>,
 }
 
-/// Callback returns the typed `SdkHookOutput` directly — no JSON
+/// Callback returns the typed `HookCallbackOutput` directly — no JSON
 /// round-trip. The orchestration layer applies the typed output to
-/// `AggregatedHookResult` via [`crate::orchestration::apply_sdk_hook_output`].
-pub type SdkHookCallbackFuture =
-    Pin<Box<dyn Future<Output = Result<coco_types::SdkHookOutput>> + Send>>;
-pub type SdkHookCallback =
-    Arc<dyn Fn(SdkHookCallbackRequest) -> SdkHookCallbackFuture + Send + Sync + 'static>;
+/// `AggregatedHookResult` via [`crate::orchestration::apply_client_hook_output`].
+pub type ClientHookCallbackFuture =
+    Pin<Box<dyn Future<Output = Result<coco_types::HookCallbackOutput>> + Send>>;
+pub type ClientHookCallback =
+    Arc<dyn Fn(ClientHookCallbackRequest) -> ClientHookCallbackFuture + Send + Sync + 'static>;
 
 /// Hook definition — an event handler with matcher, command, and priority.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,9 +145,9 @@ pub enum HookHandler {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout_ms: Option<i64>,
     },
-    /// Invoke a callback registered by the SDK client for this session.
+    /// Invoke a callback registered by the remote client for this session.
     #[serde(skip)]
-    SdkCallback {
+    ClientCallback {
         callback_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout_ms: Option<i64>,
@@ -172,11 +172,11 @@ pub enum HookExecutionResult {
     },
     /// Prompt text to inject into the conversation.
     PromptText(String),
-    /// SDK-supplied callback returned a typed
-    /// [`coco_types::SdkHookOutput`]. Aggregation handles this via the
-    /// typed `apply_sdk_hook_output` path instead of round-tripping
+    /// client-supplied callback returned a typed
+    /// [`coco_types::HookCallbackOutput`]. Aggregation handles this via the
+    /// typed `apply_client_hook_output` path instead of round-tripping
     /// through JSON / `parse_hook_output`.
-    SdkOutput(coco_types::SdkHookOutput),
+    ClientOutput(coco_types::HookCallbackOutput),
 }
 
 /// Sink used by `asyncRewake` hooks to enqueue a task-notification without
@@ -259,10 +259,10 @@ pub struct HookRegistry {
     /// the settings-hook round-trip invariant.
     ///
     function_hooks: std::sync::RwLock<Vec<FunctionHook>>,
-    /// Runtime-only callback used by SDK-supplied hooks. This is not part
+    /// Runtime-only callback used by client-supplied hooks. This is not part
     /// of settings serialization; `initialize.hooks` registers
-    /// `HookHandler::SdkCallback` values that dispatch through this slot.
-    sdk_hook_callback: std::sync::RwLock<Option<SdkHookCallback>>,
+    /// `HookHandler::ClientCallback` values that dispatch through this slot.
+    client_hook_callback: std::sync::RwLock<Option<ClientHookCallback>>,
 }
 
 impl HookRegistry {
@@ -308,14 +308,14 @@ impl HookRegistry {
         removed
     }
 
-    pub fn set_sdk_hook_callback(&self, callback: SdkHookCallback) {
-        if let Ok(mut slot) = self.sdk_hook_callback.write() {
+    pub fn set_client_hook_callback(&self, callback: ClientHookCallback) {
+        if let Ok(mut slot) = self.client_hook_callback.write() {
             *slot = Some(callback);
         }
     }
 
-    pub fn sdk_hook_callback(&self) -> Option<SdkHookCallback> {
-        self.sdk_hook_callback
+    pub fn client_hook_callback(&self) -> Option<ClientHookCallback> {
+        self.client_hook_callback
             .read()
             .ok()
             .and_then(|slot| slot.clone())
@@ -1181,9 +1181,11 @@ async fn execute_hook_inner(
             );
             Ok(HookExecutionResult::PromptText(prompt.clone()))
         }
-        HookHandler::SdkCallback { callback_id, .. } => Err(crate::HooksError::generic(format!(
-            "SDK hook callback {callback_id:?} cannot run without the SDK runtime bridge"
-        ))),
+        HookHandler::ClientCallback { callback_id, .. } => {
+            Err(crate::HooksError::generic(format!(
+                "client hook callback {callback_id:?} cannot run without the runtime callback bridge"
+            )))
+        }
     }
 }
 
@@ -1719,10 +1721,10 @@ fn apply_timeout_to_handler(handler: HookHandler, timeout_secs: Option<i64>) -> 
             model,
             timeout_ms: Some(ms),
         },
-        HookHandler::SdkCallback {
+        HookHandler::ClientCallback {
             callback_id,
             timeout_ms: None,
-        } => HookHandler::SdkCallback {
+        } => HookHandler::ClientCallback {
             callback_id,
             timeout_ms: Some(ms),
         },
@@ -1844,7 +1846,9 @@ fn dedup_key(hook: &HookDefinition) -> String {
         HookHandler::Prompt { prompt, .. } => format!("prompt:{prompt}"),
         HookHandler::Http { url, .. } => format!("http:{url}"),
         HookHandler::Agent { prompt, .. } => format!("agent:{prompt}"),
-        HookHandler::SdkCallback { callback_id, .. } => format!("sdk:{callback_id}"),
+        HookHandler::ClientCallback { callback_id, .. } => {
+            format!("client_callback:{callback_id}")
+        }
     };
     format!(
         "{handler_key}\0{}",

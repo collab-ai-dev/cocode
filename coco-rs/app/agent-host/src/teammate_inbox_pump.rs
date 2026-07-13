@@ -77,9 +77,39 @@ use coco_coordinator::teammate::format_as_teammate_message;
 use coco_coordinator::types::TeammateIdentity;
 use coco_tui::UserCommand;
 
+use crate::session_runtime::SessionHandle;
+
 /// Mailbox poll cadence (500 ms) — this pump is the cross-process analog of
 /// the in-process runner loop.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Spawn this session's cross-process teammate pump when the process identity
+/// and AgentTeams feature gate say this TUI is a teammate. Returns the
+/// completion sender that the driver uses to release the pump after each turn.
+pub async fn spawn_for_current_teammate(
+    session: &SessionHandle,
+    command_tx: mpsc::Sender<UserCommand>,
+    cancel: CancellationToken,
+) -> Option<mpsc::Sender<String>> {
+    if !session
+        .runtime_config()
+        .features
+        .enabled(coco_types::Feature::AgentTeams)
+    {
+        return None;
+    }
+    let identity = coco_coordinator::identity::resolve_teammate_identity()?;
+    let live_rules = session.live_permission_rules();
+    live_rules
+        .write()
+        .await
+        .extend(coco_coordinator::runner_loop::load_team_allowed_path_rules(
+            &identity.team_name,
+        ));
+    let (turn_done_tx, turn_done_rx) = mpsc::channel::<String>(16);
+    spawn(identity, command_tx, turn_done_rx, cancel, live_rules);
+    Some(turn_done_tx)
+}
 
 /// Spawn the cross-process teammate inbox pump. The caller guarantees this
 /// process is a teammate (identity resolved) with agent-teams enabled.
