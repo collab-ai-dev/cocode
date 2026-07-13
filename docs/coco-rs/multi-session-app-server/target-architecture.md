@@ -28,72 +28,96 @@ Non-goals:
 - speculative project-shared mutable services;
 - a multi-session TUI user interface;
 - public unauthenticated network listeners;
-- transport or UI types in session runtime crates;
+- transport or UI types in agent-host session modules;
+- eliminating every adjacent agent-host/CLI/transport cleanup in this refactor;
 - preserving unsupported flags or placeholder commands.
+
+## Delivery constraints
+
+Architecture convergence is part of the target:
+
+1. prove the four lifecycle invariants before moving files or changing crate
+   boundaries;
+2. change surface dependency direction only after lifecycle contracts are
+   frozen, without changing their behavior;
+3. narrow APIs and reorganize modules only after the dependency graph is
+   stable, without changing protocol schemas;
+4. keep the crate graph and no-new-runtime-crate decision in this document
+   frozen unless a correctness invariant is shown to be impossible;
+5. treat unrelated cleanup and additional transport/platform coverage as later
+   work, not as a reason to expand an active gate.
+
+Each lifecycle operation has one named owner and one externally meaningful
+completion point. A component-level event, registry promotion, cancellation
+request, or task spawn is not completion unless the operation contract says so.
+The exact workstream gates are normative in `remediation-plan.md`.
 
 ## Dependency architecture
 
-The target crates are:
+The target reuses the existing crates and repairs their ownership boundaries:
 
 ```text
-common/core/services
-        ^
-        |
-coco-app-runtime
-  process/project/bootstrap contracts
-        ^
-        |
-coco-agent-runtime                 coco-app-server
-  session aggregate                    registry/routing/replay
-        ^                                  ^
-        +----------- coco-agent-host ------+
-                      process host,
-                      protocol handlers,
-                      local host client
-                          ^
-             +------------+-------------+
-             |            |             |
-     coco-tui-runner  coco-headless  coco-sdk-server
-             ^            ^             ^
-             +------------+-------------+
-                          |
-                       coco-cli
+common/core/services       coco-app-server/client/transport
+        ^                               ^
+        |                               |
+coco-app-runtime <----- coco-agent-host-+
+ process/bootstrap       process host + private session aggregate
+                               ^
+                  +------------+-------------+
+                  |                          |
+        app/cli/src/{tui,headless,sdk}   coco-sdk-server
+          executable composition        reusable SDK transport adapter
 ```
-
-### `coco-agent-runtime` (new)
-
-Owns application session behavior without AppServer, transport, or TUI types:
-
-- `SessionRuntime`, construction, and private resource ownership;
-- `LiveSession`/focused capabilities;
-- turn coordination and engine assembly;
-- history, persistence, usage, file history, and session config;
-- hooks, MCP, LSP, sandbox, tasks, memory, skills, commands, and reload;
-- session close preparation and integration teardown.
-
-It may depend on `coco-app-runtime`, query/core/services, and common DTOs. It
-must not depend on `coco-app-server`, `coco-app-server-client`, `coco-tui`, or
-transport crates.
 
 ### `coco-agent-host`
 
-Owns the application-specific AppServer host:
+Owns the application-specific AppServer host and its private session aggregate:
 
 - `HostBuilder` and fully initialized `PreparedHost`;
 - `AppServer<AppSessionHandle>` composition;
 - connection handler factory and protocol dispatch;
 - start/resume/replace/close/delete orchestration;
+- `SessionRuntime`, focused session capabilities, and turn coordination;
+- history, usage, hooks, MCP, LSP, sandbox, tasks, memory, and reload ownership;
 - local typed host client used by local surfaces;
 - process session catalog and sequence allocation;
 - registry-driven Event Hub membership/egress;
 - process shutdown coordination.
 
-It depends on `coco-agent-runtime` and AppServer crates. It does not depend on
-TUI crates.
+It depends on AppServer, application runtime, query/core/services, and common
+DTO crates. It does not depend on TUI or SDK transport crates. This refactor
+does not introduce `coco-agent-runtime`: moving the same implementation into a
+new crate before a second consumer exists would add a dependency boundary
+without reducing ownership complexity. Future extraction requires a clean
+facade plus demonstrated reuse or measurable compile/dependency benefit; it
+must move, never copy, the implementation.
 
-### `coco-tui-runner` (new)
+### `coco-cli`
 
-Owns the TUI surface composition that currently lives in CLI and agent-host:
+The executable crate owns clap, `ExecutionPlan`, sandbox/tracing pre-dispatch,
+and three direct surface directories. There is no intermediate `surfaces/`
+directory and no new runner crate:
+
+```text
+app/cli/src/
+  main.rs
+  tui/
+    mod.rs
+    bootstrap.rs
+    driver.rs
+    ...
+  headless/
+    mod.rs
+    input.rs
+    runner.rs
+    output.rs
+    signal.rs
+  sdk/
+    mod.rs
+    runner.rs
+```
+
+`tui/` owns:
 
 - terminal lifecycle and TEA application loop;
 - TUI channels and presentation-only state hydration;
@@ -101,20 +125,28 @@ Owns the TUI surface composition that currently lives in CLI and agent-host:
 - editor, keybinding, theme, voice, and teammate UI policy;
 - mapping TUI commands to typed local host-client operations.
 
-It depends on `coco-tui` and `coco-agent-host`. It does not receive raw
-`SessionRuntime` or session locks.
-
-### `coco-headless`
-
-Owns one-shot/scripting surface policy:
+`headless/` owns:
 
 - structured input/output formats;
 - prompt/stdin handling;
 - typed local host-client lifecycle;
 - turn completion/result rendering;
-- non-interactive permission policy.
+- non-interactive permission and process-signal policy.
 
-It does not host config/bootstrap helpers for other surfaces.
+It does not receive `SessionHandle`, construct a runtime, or host shared
+config/model/session-factory helpers. Those remain in agent-host under neutral
+bootstrap/session names.
+
+`sdk/` owns only executable SDK-mode composition:
+
+- conversion from `ExecutionPlan::Sdk` to startup inputs;
+- `PreparedHost` construction/invocation;
+- sidecar/listener configuration chosen by the CLI;
+- process signal and shutdown policy;
+- calling the SDK transport adapter.
+
+The current `coco-sdk-server::startup::run_sdk_mode` orchestration moves here.
+Transport implementations do not.
 
 ### `coco-sdk-server`
 
@@ -125,51 +157,15 @@ Continues to own SDK transport only:
 - JSON-RPC correlation and rendering;
 - callback replies bound to the connection.
 
-It receives a `PreparedHost`; it does not construct a session.
-
-### `coco-cli`
-
-Owns only:
-
-- clap schema;
-- pure conversion to `ExecutionPlan`;
-- sandbox pre-dispatch;
-- startup cwd and tracing installation from the plan;
-- embedded listener policy;
-- invocation of the selected surface/command.
+It remains a separate reusable crate for SDK clients, IDE integrations,
+sidecars, and transport tests. It receives host/connection capabilities; it
+does not select CLI mode, build a session, or own process policy. Renaming or
+folding this working transport boundary into the binary is out of scope.
 
 ## Module organization
 
 Modules are organized by owner and behavior, not by filename prefixes or one
 file per processing step.
-
-Suggested `coco-agent-runtime` layout:
-
-```text
-src/
-  lib.rs
-  session/
-    mod.rs
-    builder.rs
-    handle.rs
-    identity.rs
-    turn.rs
-    lifecycle.rs
-    history.rs
-    controls.rs
-  integrations/
-    mod.rs
-    hooks.rs
-    mcp.rs
-    lsp.rs
-    sandbox.rs
-    tasks.rs
-    memory.rs
-  engine/
-    mod.rs
-    build.rs
-    config.rs
-```
 
 Suggested `coco-agent-host` layout:
 
@@ -182,6 +178,24 @@ src/
     state.rs
     shutdown.rs
     event_hub.rs
+  session/
+    mod.rs
+    builder.rs
+    handle.rs
+    identity.rs
+    turn.rs
+    teardown.rs
+    task_scope.rs
+    history.rs
+    controls.rs
+  integrations/
+    mod.rs
+    hooks.rs
+    mcp.rs
+    lsp.rs
+    sandbox.rs
+    tasks.rs
+    memory.rs
   protocol/
     mod.rs
     handler.rs
@@ -207,6 +221,8 @@ Rules:
 - `lib.rs` re-exports only intentional facade types;
 - keep modules near the 800-line repository target;
 - do not create tiny pass-through files unless they own an invariant;
+- do not split `host`, `protocol`, or `lifecycle` into one file per trivial
+  processing step;
 - tests remain companion `*.test.rs` files;
 - protocol dispatch is exhaustive in one host match after AppServer scope
   resolution; lifecycle requests are not matched again in a second fallback
@@ -294,18 +310,25 @@ pub struct SessionBuildRequest {
     pub session_id: SessionId,
     pub cwd: AbsolutePathBuf,
     pub connection_profile: Arc<ConnectionProfile>,
+    pub execution: SessionExecutionPolicy,
     pub callback_requirements: SessionCallbackRequirements,
     pub interaction: InteractionPolicy,
     pub file_history: FileHistoryPolicy,
 }
 ```
 
+`SessionExecutionPolicy` is the validated one-owner representation of start
+model, permission, turn/budget limits, system-prompt replacement/append, JSON
+schema, and plan-mode instructions. `ConnectionProfile` contains only
+connection capabilities/resources. No field is accepted by the protocol and
+then discarded during this conversion.
+
 There is no startup snapshot runtime, no mutable runtime identity, and no
 post-construction callback-requirement install.
 
 ## Session capability design
 
-`SessionRuntime` is private to `coco-agent-runtime`. The registry stores a
+`SessionRuntime` is private to `coco-agent-host::session`. The registry stores a
 cloneable live capability with immutable identity:
 
 ```rust
@@ -384,29 +407,37 @@ The turn coordinator owns:
 ```text
 Idle
   -> Running { turn_id, cancel, turn_task, forwarder_task }
-  -> Finishing
-  -> Idle + committed accounting + terminal event
+  -> Finishing { lifecycle owner still holds admission }
+  -> committed history/accounting + joined tasks + terminal delivery
+  -> Idle
 ```
 
-The terminal event is emitted only after:
+The lifecycle owner, not the event forwarder, performs the transition. The
+terminal event is emitted only after:
 
 1. engine task completion;
 2. event forwarder drain;
 3. history/accounting commit.
 
-A new turn cannot clear or replace handles belonging to a previous turn.
+A new turn cannot start until terminal delivery has completed and the owner has
+returned the coordinator to Idle. Event forwarding may report data but cannot
+clear active handles or make the session admit another turn.
 
 ## Lifecycle semantics
 
 ### Start
 
-`session/start` builds one runtime from the calling profile and requested cwd,
-promotes it to Live, and attaches an interactive surface. A process-local
-caller may provide an explicit `SessionId` when startup policy already resolved
-the identity; otherwise the lifecycle owner mints one. Process-local
-test/embedding callers may also provide typed `initial_messages`; startup
-hydrates that history inside the lifecycle-owned runtime builder before the
-first turn. It never replaces another session.
+Remote `session/start` contains per-session execution policy but no client
+chosen `SessionId`, `initial_messages`, or initial prompt. The server mints one
+identity, proves its slot is Missing, builds one runtime from the calling
+profile, promotes it to Live, and attaches an interactive surface as one owner
+operation. Loading, Live, or Closing conflicts have zero runtime/config/history
+side effects. It never loads, rebinds, or replaces another session.
+
+A non-serialized `LocalStartSeed` may supply a chosen fresh id and typed history
+for process-local tests/embeddings. It still requires a Missing slot and uses
+the same owner. Production history restoration uses resume; user input starts
+with `turn/start`.
 
 ### Resume
 
@@ -422,6 +453,13 @@ registry/routing commit. The source client is consumed. Pre-commit failure
 returns the source client; post-commit close failure never resurrects the old
 identity.
 
+Every replace branch, including an already-live destination, runs under one
+AppServer-owned owner task with a retained completion handle. Success is
+reported only after destination commit and source close complete. A failure
+after commit returns a typed `CommittedCloseFailed` lifecycle outcome carrying
+the committed destination identity; it is never logged and converted to
+success. Panics cannot strand a slot in Closing.
+
 The clear destination is a first-class `session/replace` variant. The handler
 captures the source runtime snapshot, constructs a fresh destination identity,
 applies clear-preserved state, emits clear SessionStart hooks, and closes the
@@ -434,21 +472,29 @@ clear replacement runtime directly.
 It accepts explicit interactive or orphan authority as defined in
 `protocol-scope.md`.
 
-One owner performs this sequence:
+One owner performs this sequence under one absolute `Instant` deadline:
 
 1. mark the slot Closing and reject new turns;
 2. cancel the active turn;
-3. await turn and forwarder under one configured deadline;
+3. await turn and forwarder using the remaining time from that deadline;
 4. abort and await either task that exceeds the deadline;
 5. stop/await session background tasks and reload supervisors;
 6. run bounded SessionEnd hooks;
 7. flush history, usage, and sequence watermark;
 8. close MCP/LSP/sandbox/file resources;
 9. cancel the session shutdown token;
-10. build and route the final `SessionResult`;
-11. detach surfaces and remove the registry slot.
+10. build and route the final `SessionResult` through process egress;
+11. complete the local egress handoff and membership retirement;
+12. detach surfaces and remove the registry slot.
 
-No session event may be emitted after close completion.
+Session-owned work is registered in a narrow lifecycle task supervisor
+(`JoinSet`, `TaskTracker`, or equivalent). On timeout the owner cancels,
+aborts, and joins every registered task before returning a structured non-clean
+close outcome. Sequential waits do not each receive the full timeout. No
+session event may be emitted after close completion. This is a bounded local
+queue/replay handoff, not a wait for a remote Hub network acknowledgement;
+connector outage is process-egress health and does not extend session close or
+block unrelated sessions.
 
 ### Delete
 
@@ -471,16 +517,19 @@ Close and delete are never combined implicitly.
 
 Event Hub egress is process-host state, not session-owned state.
 
-`ProcessEventHub` subscribes to AppServer lifecycle changes and maintains the
-announced live-session set. On connect/reconnect it announces a registry
-snapshot. Lifecycle changes either update membership through the Hub protocol
-or force a bounded reconnect if the protocol has no update frame.
+`ProcessEventHub` subscribes to a dedicated AppServer lifecycle revision, not
+general session activity, and maintains announced plus retiring membership. On
+connect/reconnect it announces a registry snapshot containing Live sessions
+and Closing sessions whose final local egress handoff is incomplete. Lifecycle
+changes either update membership through the Hub protocol or force a bounded
+reconnect if the protocol has no update frame.
 
 Rules:
 
 - no placeholder session;
-- every live session is represented in membership;
-- resume cursors are requested for every live session;
+- every Live or retiring Closing session is represented in membership;
+- resume cursors are requested for every represented session;
+- close retires membership only after the final event is handed to egress;
 - event envelopes still carry their own authoritative session id;
 - one session's config cannot silently retarget process egress; Event Hub URL
   is resolved as explicit process-host policy;
@@ -493,7 +542,7 @@ Rules:
 1. stop accepting connections and lifecycle starts;
 2. begin close for every registry slot;
 3. drain sessions concurrently under the process deadline;
-4. abort remaining session owner tasks and await aborts;
+4. cancel, abort, and join all remaining session and lifecycle owner tasks;
 5. flush Event Hub;
 6. stop project-service managers and watchers;
 7. return a structured non-clean outcome when any phase fails or times out.
@@ -505,11 +554,16 @@ ordering and failure semantics do not.
 
 The target adds repository checks for:
 
-- no `coco-agent-host` or `coco-agent-runtime` dependency on `coco-tui`;
+- no `coco-agent-host` dependency on `coco-tui` or `coco-sdk-server`;
 - no AppServer dependency below the host layer;
 - no public session method returning `Mutex`, `RwLock`, or internal managers;
 - no production computed string byte slicing;
 - no accepted CLI flag without an execution-plan consumer and behavioral test;
+- no accepted protocol field without a validation/consumption site or explicit
+  rejection test;
+- serialized `SessionStartParams` has no session id or initial history;
+- legacy start identity/history fields are rejected, not ignored;
+- start/resume success surface ids are required;
 - exhaustive request scope and dispatch matches;
 - `clippy::await_holding_lock = deny` remains enabled;
 - session/turn telemetry fields remain required.

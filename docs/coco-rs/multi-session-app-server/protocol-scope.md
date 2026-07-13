@@ -4,6 +4,23 @@ This document is normative. Every request has exactly one scope and all live
 mutations carry explicit authority. The v2 protocol intentionally removes
 `session/archive` and introduces separate close and delete operations.
 
+## Change control
+
+Wire changes are limited to Workstream 1 and must be required by an explicit
+CS-1 through CS-4 gate. CS-1 owns the start/initialize field corrections; CS-3
+may add the already-specified stable post-commit/timeout error data. At the end
+of Workstream 1, this wire contract and generated SDK/schema artifacts are
+frozen for the surface-boundary and internal-cleanup workstreams.
+
+- a process-local construction need never adds a serialized remote field;
+- an accepted field has a validation/consumption site or is removed/rejected;
+- surface directory moves and agent-host module cleanup cannot change DTOs,
+  request scopes, error semantics, or completion meanings;
+- a newly discovered convenience or cleanup does not reopen the protocol;
+- before Workstream 1 closes, a change requires a failing test tied to its CS
+  gate; after it closes, reopening requires evidence that a frozen invariant
+  cannot be satisfied by the contract.
+
 ## Identity and authority types
 
 ```rust
@@ -66,6 +83,57 @@ Rules:
 - disconnect removes callback routes and surfaces but does not cancel an
   otherwise valid running turn.
 
+### Profile versus session policy
+
+`initialize` contains only connection-lifetime capabilities and resources:
+client identity/capabilities, callback and hook support, client-hosted MCP
+servers, supplied agents, and prompt-suggestion/progress capabilities. It does
+not carry model, permission, prompt, structured-output, budget, cwd, or other
+per-session execution policy.
+
+`session/start` owns per-session execution policy. The accepted fields are the
+requested cwd, model, permission mode, maximum turns, USD budget,
+replacement and appended system prompts, JSON schema, and plan-mode
+instructions. Each accepted field is validated and consumed during the one
+session fold. A field may not be accepted as a documented no-op.
+
+`SessionStartParams.initial_prompt` is removed. A user prompt is a separate
+`turn/start` after the session and its interactive authority exist. Duplicate
+model/prompt/schema fields are removed from `initialize` rather than resolved
+through precedence rules. Agent-definition behavior is a separate contract.
+
+## Start contract
+
+The serialized remote `SessionStartParams` contains neither `session_id` nor
+`initial_messages`. The server mints the `SessionId`; a remote caller cannot
+guess an existing identity and use start as resume, attach, or mutation.
+Legacy/unknown identity and history fields are rejected as invalid params, not
+silently ignored.
+
+Start is valid only when the minted registry slot is Missing. Loading, Live,
+and Closing are stable conflicts, checked before a runtime is exposed or any
+configuration/history mutation can occur. Build, promotion, and interactive
+surface attachment are one lifecycle-owner operation. Failure leaves no live
+runtime and no routing entry.
+
+Process-local tests or embeddings that genuinely need a chosen fresh identity
+or prebuilt history use a non-serialized internal input:
+
+```rust
+pub(crate) struct LocalStartSeed {
+    pub session_id: SessionId,
+    pub initial_messages: Vec<Message>,
+}
+```
+
+This seam still requires a Missing slot and runs through the same lifecycle
+owner. It is not part of JSON-RPC, schemas, generated SDKs, or the public
+remote client. Production resume/history hydration uses `session/resume`.
+
+`session/start` and `session/resume` success results both carry the session
+identity and require `surface_id`; clients must not infer or recover a missing
+surface through a compatibility fallback.
+
 ## Request scopes
 
 ### Connection scoped
@@ -80,7 +148,7 @@ Rules:
 
 | Request | Required data | Behavior |
 |---|---|---|
-| `session/start` | start options, optional process-local `initial_messages` | mints/builds one session, hydrates any supplied initial history, and attaches an interactive surface |
+| `session/start` | per-session execution policy; no client id/history/user prompt | server mints/builds one new session and atomically attaches an interactive surface |
 | `session/resume` | `SessionTarget` | loads/rebinds one identity and attaches an interactive surface |
 | `session/replace` | source `InteractiveTarget` plus typed destination (`fresh`, `resume`, or `clear`) | atomically replaces one surface/session identity |
 | `session/subscribe` | `SessionTarget` plus replay cursor | attaches a passive surface |
@@ -183,6 +251,18 @@ Exact field factoring may reuse existing result DTOs, but the contract is:
 - session close waits for the terminal turn event before emitting final
   `SessionResult`.
 
+## Replace protocol
+
+`session/replace` consumes the source interactive authority and has one owner
+for all destination variants, including an already-live destination.
+
+- pre-commit failure leaves the source attached and returns an error;
+- clean success means destination commit and source close both completed;
+- post-commit source-close failure cannot roll back routing and returns typed
+  `CommittedCloseFailed` data containing the committed destination target;
+- caller cancellation does not cancel the owner operation;
+- panic/timeout resolves all Loading/Closing state and completion waiters.
+
 ## Close protocol
 
 `session/close` is runtime lifecycle only.
@@ -194,7 +274,9 @@ Interactive close:
 3. run the deterministic close cascade;
 4. emit final `SessionResult` and lifecycle effects;
 5. remove the slot and detach surfaces;
-6. return success only after no session task can emit another event.
+6. complete the bounded local process-egress handoff (not a remote network ack)
+   and retire Hub membership;
+7. return success only after no session task can emit another event.
 
 Orphan close:
 
@@ -251,6 +333,7 @@ While orphaned:
 - passive clients expose subscription/read operations only;
 - close consumes an interactive client;
 - replace consumes the source interactive client;
+- successful start/resume returns a required interactive surface id;
 - orphan close and delete are connection-level operations with explicit target;
 - low-level unscoped mutation helpers are not public;
 - local and remote clients expose equivalent authority boundaries.
@@ -268,3 +351,8 @@ Adding a request requires:
 3. local and remote typed client support where applicable;
 4. behavioral authority tests;
 5. an update to this document.
+
+The protocol test suite also maintains an accepted-field audit: every field in
+every request DTO must have a production validation/consumption site or an
+explicit rejection test. Serialization plus code generation is not evidence
+that a field is implemented.

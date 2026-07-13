@@ -3,7 +3,9 @@
 Audit baseline: production tree on 2026-07-13.
 
 This document is descriptive. It includes defects and transitional behavior;
-it is not the target design.
+it is not the target design. Listing a defect here does not automatically make
+it a blocker for the active workstream; admission and ordering follow the
+convergence gates in `remediation-plan.md`.
 
 ## Crate topology
 
@@ -83,16 +85,15 @@ TUI startup is implemented in `coco-cli/src/tui_runner/bootstrap.rs`. It:
 3. creates the session manager and TUI channels/permission bridge;
 4. constructs `SessionRuntimeFactory`;
 5. constructs a one-slot `AppServerLocalBridge`;
-6. builds and registers a runtime;
-7. installs integrations, reload subscriptions, watchers, and hooks;
-8. binds an interactive local surface;
-9. directly hydrates startup resume state when the runtime already has the
-   target id;
-10. creates TUI state and spawns the command driver;
-11. drains AppServer and Event Hub through `ShutdownCoordinator` during exit.
+6. calls local `session/start` or `session/resume`, which builds/registers the
+   runtime and attaches the interactive surface through AppServer;
+7. creates TUI state and spawns the command driver;
+8. routes the migrated control paths through typed local bridge calls;
+9. drains AppServer and Event Hub through `ShutdownCoordinator` during exit.
 
 The TUI runner contains application operations as well as presentation policy.
-Its module tree is about 7,300 non-test lines.
+Agent-host still supplies several TUI-specific permission, voice, teammate,
+image, and command adapters, so dependency direction remains inverted.
 
 ### Headless
 
@@ -101,13 +102,14 @@ Headless execution is implemented in `coco-agent-host::headless`. It:
 1. resolves some local slash commands before runtime construction;
 2. folds config and constructs model/tool startup state;
 3. constructs another `SessionRuntimeFactory` and one-slot local bridge;
-4. builds/registers a runtime and installs integrations;
-5. directly seeds resume transcript state;
-6. applies live turn configuration directly through `SessionHandle`;
-7. starts a turn through local AppServer;
-8. waits for `TurnEnded` through local AppServer and uses the completion's
+4. calls local `session/start` or `session/resume` so AppServer owns runtime
+   registration and history hydration;
+5. still applies some live turn configuration directly through
+   `SessionHandle`;
+6. starts a turn through local AppServer;
+7. waits for `TurnEnded` through local AppServer and uses the completion's
    embedded per-turn session result directly;
-9. drains the local server and Event Hub through `ShutdownCoordinator`.
+8. drains the local server and Event Hub through `ShutdownCoordinator`.
 
 The headless module is also the shared home of config/model/permission bootstrap
 helpers used by other surfaces, despite its surface-specific name.
@@ -153,9 +155,13 @@ forwarding session events to the Hub.
 - an optional runtime-replacement context;
 - the per-session sequence allocator.
 
-It is constructed with `Default` and made usable through later `install_*`
-calls. Some startup installs use `try_write` and panic if the lock is not
-immediately available.
+Production remote startup supplies several values through `HostInputs`, but
+`HostInputs` derives `Default` and all principal services remain optional.
+`AppServerHostState::default`, a fail-closed runner, and public/local
+`install_turn_runner`/`install_session_manager` seams still permit a partially
+configured host. The old startup `try_write`/panic bootstrap path is gone; the
+remaining defect is type-level optionality and replacement after construction,
+not lock contention.
 
 Every accepted remote connection gets an `AppServerHostHandler` clone with a
 new connection-profile slot. Interactive request targeting is resolved through
@@ -237,6 +243,22 @@ same local bridge. Test/embedding headless callers that already hold typed
 messages pass them as `session/start.initial_messages`; the AppServer-owned
 start builder hydrates that initial history before the first turn.
 
+That transitional start DTO is not authority-safe. Because serialized start
+also accepts `session_id` and the generic load path returns an existing Live
+handle, a second connection can reach and mutate runtime state before surface
+attachment rejects the ownership conflict. The start mapping also ignores
+declared `max_turns`, `max_budget_usd`, system-prompt variants, and
+`initial_prompt`. Initialize duplicates several session-policy fields, while
+start/resume response surface ids are optional. These are current defects, not
+v2 compatibility requirements.
+
+Replace ownership is also inconsistent. The already-live destination path
+commits routing and launches old-session close with a bare `tokio::spawn`, then
+returns success without a retained owner/completion. Other replacement paths
+use `spawn_replace`, but destination promotion can resolve the waiter before a
+source-close failure is known. Post-commit close failure therefore has no
+uniform typed result today.
+
 The resulting runtimes are similar, but the ordering and ownership remain
 transitional until production-surface startup adapters are covered end to end.
 The shared lifecycle conformance coverage now verifies start/read/close and
@@ -269,13 +291,13 @@ storage operations:
    - rejects any Loading/Live/Closing registry slot with `SessionStillLive`;
    - calls `SessionManager::delete` only after the live-slot check passes.
 
-Remaining defects: terminal turn/accounting ordering is still not proven by an
-authoritative `TurnEnded` contract. Phase A now has compiled regressions for
-timeout abort/join, successful-close no-late outbound events, byte-for-byte
-close preservation, and close-during-turn accounting, but those regressions
-still need to be run in the next batched test pass. Generated Python/TypeScript
-clients still need lifecycle conformance coverage beyond codegen and unit
-tests.
+Remaining defects: the event forwarder clears turn admission before
+`SessionTurnExecutor` commits the engine's final history, so an immediate next
+turn can read stale history. Active turn and forwarder drains each receive the
+full configured timeout rather than sharing one deadline, and close has no
+single registry of all session-owned background tasks. Generated
+Python/TypeScript clients still need lifecycle conformance coverage beyond
+codegen and unit tests.
 
 ## Event and Hub flow
 
@@ -294,6 +316,13 @@ forwarding a session event to the Hub. The remaining gaps are validation and
 protocol edge coverage: close, replace, reconnect cursor behavior, and event
 identity/ack isolation still need dedicated regressions. SDK remote startup
 and A/B start membership are covered by focused regressions.
+
+There is also a semantic gap before those tests: the watcher subscribes to a
+general activity revision and derives membership from
+`list_live_sessions()`, which excludes Closing slots. The close owner emits its
+final `SessionResult` while the slot is Closing. Membership can therefore be
+re-announced without that identity before final egress is enqueued, and a
+reconnect cursor negotiation may omit the final event.
 
 ## Module and dependency shape
 
@@ -316,7 +345,8 @@ Current `coco-cli` characteristics:
 - a large TUI application driver;
 - mode-specific startup and shutdown policy;
 - many direct dependencies on application/core crates;
-- placeholder or no-op flags/subcommands.
+- direct `main.rs` dependency on `coco-sdk-server::run_sdk_mode` startup
+  orchestration.
 
 ## Test coverage and gaps
 
@@ -324,14 +354,15 @@ Existing production tests cover explicit authority, two-session runtime and
 integration isolation, callbacks, replay, reload ownership, slow consumers,
 orphan authority, and concurrent registry shutdown.
 
-They do not currently prove:
+The focused `coco-app-server` suite (92 tests) and `coco-agent-host` suites (331
+unit, 26 multi-session integration, and one WebSocket test) passed during this
+audit. They do not currently prove:
 
-- close preserves JSONL;
-- delete is a separate explicit operation;
-- timed-out close leaves no detached work or late events;
-- terminal accounting includes the drained turn;
-- CLI flags select the documented modes;
-- SDK startup begins with an empty registry;
-- Event Hub announces all current live sessions;
+- remote start cannot name/mutate another live or orphaned session;
+- every accepted initialize/start field is consumed or rejected;
+- an immediate next turn sees the just-completed engine history;
+- replace waits for and reports source close failure on every branch;
+- every session/background/lifecycle owner task is joined under one deadline;
+- Hub close/replace/reconnect includes final-event cursor state;
 - agent-host has no TUI dependency;
 - session public APIs do not expose raw locks.
