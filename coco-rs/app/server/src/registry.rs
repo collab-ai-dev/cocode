@@ -82,6 +82,21 @@ impl<H: Clone> LiveSessionRegistry<H> {
         Ok(previous)
     }
 
+    /// Session ids that must stay announced to process egress: Live plus
+    /// retiring Closing slots. A Closing session's final `SessionResult` may
+    /// still be in flight, so it must remain in Hub membership until its slot is
+    /// removed by the completed close cascade (CS-4 / R17). Loading slots are
+    /// not yet announced.
+    pub fn list_announced(&self) -> Vec<SessionId> {
+        self.sessions
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|&(_, slot)| matches!(slot, SessionSlot::Live(_) | SessionSlot::Closing(_)))
+            .map(|(session_id, _)| session_id.clone())
+            .collect()
+    }
+
     pub fn list_live(&self) -> Vec<SessionId> {
         self.sessions
             .read()

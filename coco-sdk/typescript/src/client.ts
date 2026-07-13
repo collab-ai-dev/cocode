@@ -235,9 +235,6 @@ export class CocoClient {
         agents: this.options.agents ?? null,
         hooks: this.options.hooks ?? null,
         client_mcp_servers: this.options.sdkMcpServers ?? null,
-        system_prompt: this.options.systemPrompt ?? null,
-        append_system_prompt: this.options.appendSystemPrompt ?? null,
-        json_schema: this.options.jsonSchema ?? null,
         agentProgressSummaries: this.options.agentProgressSummaries ?? null,
         prompt_suggestions: this.options.promptSuggestions ?? null,
       },
@@ -255,6 +252,7 @@ export class CocoClient {
         permission_mode: this.options.permissionMode ?? null,
         system_prompt: this.options.systemPrompt ?? null,
         append_system_prompt: this.options.appendSystemPrompt ?? null,
+        json_schema: this.options.jsonSchema ?? null,
       },
     })) as unknown as SessionStartResult;
     this.sessionId = result.session_id;

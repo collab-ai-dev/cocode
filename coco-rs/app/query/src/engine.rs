@@ -68,6 +68,11 @@ pub(crate) struct LastCompactState {
 /// only the methods exposed by these impls, never the fields directly.
 pub struct QueryEngine {
     pub(crate) config: QueryEngineConfig,
+    /// Immutable session identity for this engine. Moved out of the mutable
+    /// `QueryEngineConfig` so per-turn config edits can never rotate the id
+    /// (which would split-brain the `SessionHandle` snapshot, the seq
+    /// allocator's per-session domain, and the persisted transcript).
+    pub(crate) session_id: coco_types::SessionId,
     pub(crate) tools: Arc<ToolRegistry>,
     pub(crate) cancel: CancellationToken,
     pub(crate) turn_abort: TurnAbortSignal,

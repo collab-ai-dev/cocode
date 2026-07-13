@@ -185,10 +185,6 @@ class CommandTypeTag(str, Enum):
 class CompactTrigger(str, Enum):
     manual = "manual"
     auto = "auto"
-    reactive = "reactive"
-    time_based = "time_based"
-    session_memory = "session_memory"
-    context_collapse = "context_collapse"
 
 
 class CompactionHookType(str, Enum):
@@ -4261,15 +4257,12 @@ class InitializeParams(BaseModel):
         default=None, alias="agentProgressSummaries"
     )
     agents: dict[str, ClientAgentDefinition] | None = None
-    append_system_prompt: str | None = None
     client_mcp_servers: list[str] | None = None
     hooks: dict[str, list[HookCallbackMatcher]] | None = None
-    json_schema: Any = None
     plan_mode_instructions: str | None = Field(
         default=None, alias="planModeInstructions"
     )
     prompt_suggestions: bool | None = None
-    system_prompt: str | None = None
 
 
 class InteractiveTarget(BaseModel):
@@ -4330,13 +4323,11 @@ class SessionResumeParams(BaseModel):
 class SessionStartParams(BaseModel):
     append_system_prompt: str | None = None
     cwd: str | None = None
-    initial_messages: list[Message] | None = None
-    initial_prompt: str | None = None
+    json_schema: Any = None
     max_budget_usd: float | None = None
     max_turns: int | None = None
     model: str | None = None
     permission_mode: PermissionMode | None = None
-    session_id: SessionId | None = None
     system_prompt: str | None = None
 
 
@@ -6038,7 +6029,7 @@ class SessionReadResult(BaseModel):
 
 class SessionResumeResult(BaseModel):
     session: SessionSummary
-    surface_id: SurfaceId | None = None
+    surface_id: SurfaceId
 
 
 class SessionStartInput(BaseModel):
@@ -6055,7 +6046,7 @@ class SessionStartInput(BaseModel):
 
 class SessionStartResult(BaseModel):
     session_id: SessionId
-    surface_id: SurfaceId | None = None
+    surface_id: SurfaceId
 
 
 class SessionUsageSourceEntry(BaseModel):

@@ -674,8 +674,9 @@ pub struct SessionSubscribeEnvelope {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionResumeResult {
     pub session: SessionSummary,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub surface_id: Option<crate::SurfaceId>,
+    /// The interactive surface attached by a successful resume. Required: a
+    /// successful lifecycle call always attaches an interactive surface.
+    pub surface_id: crate::SurfaceId,
 }
 
 /// Response to `ClientRequest::SessionStart`.
@@ -686,8 +687,9 @@ pub struct SessionResumeResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStartResult {
     pub session_id: crate::SessionId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub surface_id: Option<crate::SurfaceId>,
+    /// The interactive surface attached by a successful start. Required: a
+    /// successful lifecycle call always attaches an interactive surface.
+    pub surface_id: crate::SurfaceId,
 }
 
 /// Response to explicit `session/replace`. The source surface keeps its

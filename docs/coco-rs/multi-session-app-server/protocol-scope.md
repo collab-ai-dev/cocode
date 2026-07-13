@@ -117,18 +117,37 @@ surface attachment are one lifecycle-owner operation. Failure leaves no live
 runtime and no routing entry.
 
 Process-local tests or embeddings that genuinely need a chosen fresh identity
-or prebuilt history use a non-serialized internal input:
+or prebuilt history use a non-serialized seam. It is realized as
+`#[serde(skip)]` `session_id` and `initial_messages` fields on
+`SessionStartParams`, paired with `#[serde(deny_unknown_fields)]`:
 
 ```rust
-pub(crate) struct LocalStartSeed {
-    pub session_id: SessionId,
+#[serde(deny_unknown_fields)]
+pub struct SessionStartParams {
+    #[serde(skip)]
+    pub session_id: Option<SessionId>,
+    // ... per-session execution policy: cwd, model, permission_mode, ...
+    #[serde(skip)]
     pub initial_messages: Vec<Message>,
 }
 ```
 
-This seam still requires a Missing slot and runs through the same lifecycle
-owner. It is not part of JSON-RPC, schemas, generated SDKs, or the public
-remote client. Production resume/history hydration uses `session/resume`.
+`#[serde(skip)]` keeps these off the wire, JSON schema, and generated SDKs;
+they are settable only by in-process Rust construction on the non-serializing
+local dispatch, so a remote caller cannot reach them. `deny_unknown_fields`
+rejects a remote payload carrying `session_id`/`initial_messages`/
+`initial_prompt` as invalid params rather than ignoring it. The seam still
+requires a Missing slot and runs through the same new-only lifecycle owner; it
+is not part of JSON-RPC, schemas, generated SDKs, or the public remote client.
+Production identity/history restoration uses `session/resume`.
+
+An earlier draft proposed a separate `pub struct LocalStartSeed { session_id,
+initial_messages }`. That form is equivalent on all four invariants (wire-clean,
+reject-not-ignore, non-serialized local seam, Missing plus same owner) but would
+require a parallel local start path bypassing the shared
+`ClientRequest::SessionStart` dispatch and re-implementing surface attachment.
+The `#[serde(skip)]` form reuses the existing owner with no plumbing, so it
+supersedes the separate struct.
 
 `session/start` and `session/resume` success results both carry the session
 identity and require `surface_id`; clients must not infer or recover a missing

@@ -1,10 +1,37 @@
 # V2 Remediation Plan
 
-Status: in progress on 2026-07-13.
+Status: **COMPLETE (migration record) — 2026-07-14.**
 
 This plan implements [target-architecture.md](target-architecture.md) and the
 breaking protocol in [protocol-scope.md](protocol-scope.md). Backward
 compatibility is not a constraint.
+
+## Migration record
+
+All three workstreams have landed and are verified by a full `just pre-commit`
+(fmt, seam guards, error-policy, full-workspace clippy, the complete nextest
+suite, and the SDK Python suite):
+
+- **Workstream 1 — correctness (CS-1..CS-4):** DONE. Start-authority new-only;
+  every protocol field consumed or rejected; close/delete/replace are separate
+  tested task-owner operations that drain before terminal delivery; turn
+  completion commits terminal history/accounting before terminal delivery and
+  next-turn admission; Event Hub membership covers Live + retiring Closing
+  sessions.
+- **Workstream 2 — surface boundary (Phase G):** DONE. `coco-agent-host` no
+  longer depends on `coco-tui` (seam-guarded); surface composition lives in
+  `app/cli/src/{tui,headless,sdk}`; `coco-sdk-server` remains the transport
+  crate with CLI process policy outside it.
+- **Workstream 3 — internal cleanup (Phase H #1-#12, Phase I):** DONE. Runtime
+  private in place; session identity + callback requirements are construction-
+  time invariants; no public capability exposes internal locks/managers; the
+  oversized modules (`session_handle`, `state`, `local_client`, `headless`) are
+  split into directory modules and the top-level modules are grouped under
+  `session`/`integrations`/`host`/`client`/`lifecycle`; dead code removed;
+  documentation describes the landed tree.
+
+The per-phase sections below are retained as the historical implementation
+record; each phase's status block states what landed.
 
 ## Execution principles
 
@@ -129,8 +156,48 @@ Changes:
 5. apply configuration/history only to the newly constructed unpublished
    runtime, then atomically promote and attach;
 6. use resume/replace for existing identities;
-7. add a non-serialized `LocalStartSeed { session_id, initial_messages }` only
-   for process-local tests/embeddings, also requiring Missing.
+7. realize the non-serialized local seed as `#[serde(skip)]`
+   `session_id`/`initial_messages` fields on `SessionStartParams`, settable only
+   by in-process Rust construction on the non-serializing local dispatch and
+   still requiring a Missing slot through the same owner. `#[serde(skip)]` keeps
+   them off JSON-RPC, schemas, and generated SDKs. See protocol-scope.md for why
+   this supersedes the earlier separate `LocalStartSeed` struct.
+
+Implementation status, 2026-07-13:
+
+- Landed the new-only-authority half of item 4 ahead of the wire changes:
+  `session/start` now loads through `load_local_app_server_session_new_only`,
+  which accepts only a freshly reserved `Started` slot and rejects
+  `Loading`/`Live`/`Closing` with stable `session_start_slot_conflict` data
+  before the load factory runs. This closes the V2-R12 mutation-before-authority
+  breach (duplicate-id start previously reused the live runtime, applied its
+  model/permission override, and reset accounting before the surface-attach
+  owner conflict, which did not undo the mutation). Regression
+  `session_start_rejects_existing_live_id_without_mutation` proves zero
+  mutation and no second surface; it was verified to fail against the prior
+  shared loader (which surfaced `interactive_owner_conflict` only after the
+  mutation). Full `coco-agent-host` suite and `just pre-commit` are green.
+- Landed the wire-truth half (items 1, 2, 7): removed serialized `session_id`,
+  `initial_prompt`, and `initial_messages` from `SessionStartParams`; added
+  `#[serde(deny_unknown_fields)]` so a remote payload carrying them is rejected
+  as invalid params, not ignored; realized the local seed as `#[serde(skip)]`
+  `session_id`/`initial_messages` (settable only on the non-serializing local
+  dispatch) rather than a separate `LocalStartSeed` struct. `initial_prompt` was
+  dead (no reader) and is deleted. Regenerated the JSON schema
+  (`additionalProperties: false`) plus Python and TypeScript artifacts. The two
+  serialized cross-surface conformance paths (`lifecycle_conformance_start_read_close`
+  and SDK stdio) no longer wire-seed history; the local-only seed test remains
+  as positive `session/start` seed coverage and durable-resume seeding is
+  unchanged.
+- Item 3 (mint in the owner) holds implicitly: with no wire id, remote start
+  always mints inside the load owner path. Item 6 (resume for existing ids) is
+  already the production path.
+- Landed item 5: model/permission/accounting is now applied to the still-
+  unpublished runtime inside the load factory
+  (`build_connection_runtime_for_start`), before the atomic promote and surface
+  attach; the post-promote path only records activity.
+- 0.1 is complete. Committed as `7f9dced` (new-only authority) and `ba10132`
+  (wire truth + field honesty + item 5).
 
 ### 0.2 Make every protocol field honest
 
@@ -144,6 +211,39 @@ Changes:
 4. require `surface_id` in successful start and resume results;
 5. add an accepted-field audit requiring a production consumer or explicit
    validation rejection for every DTO field.
+
+Implementation status, 2026-07-14:
+
+- Landed the consume half (item 2): `max_turns`, `max_budget_usd`,
+  `system_prompt`, and `append_system_prompt` are threaded
+  `SessionStartParams -> SessionStartInput -> PreparedStartSession ->
+  SessionStartRuntimeConfig -> apply_session_start_config` and applied to the
+  engine config (previously dropped on the floor, V2-R14). Both SDK clients
+  already send them on `session/start`.
+- Landed the duplicate removal (item 3): removed `system_prompt`,
+  `append_system_prompt`, and `json_schema` from `InitializeParams` (no server
+  consumer); the TS client stops sending them on `initialize`. `initialize`
+  now carries only connection capabilities.
+- Landed structured output's correct home (part of item 2): added `json_schema`
+  to `session/start`; the load factory registers the StructuredOutput tool and
+  enables `requires_structured_output` for that session, failing the start on an
+  invalid schema. This replaces the removed, server-ignored
+  `initialize.json_schema`, so SDK clients can now request structured output per
+  session over the wire (TS client moved `json_schema` to `session/start`).
+- Also landed CS-1 §0.1 item 5 (config ordering): model/permission/accounting is
+  applied to the still-unpublished runtime inside the load factory, before
+  promotion and surface attachment.
+- Landed item 4 (`surface_id` required): `SessionStartResult.surface_id` and
+  `SessionResumeResult.surface_id` are now non-`Option`. Removed the four
+  start/resume-handle lifecycle-activation fallbacks (local + remote clients);
+  production always attaches a surface. Regenerated schema/Python/TypeScript so
+  `surface_id` is required.
+- Still open in 0.2: item 5 accepted-field audit test (a reflection-style
+  per-field consumer audit is disproportionate; `deny_unknown_fields` on the
+  request DTOs plus the existing behavioral tests are the practical substitute),
+  and moving `plan_mode_instructions` off `initialize` (entangled with the
+  resume/clear profile path). Python client `json_schema` parity on
+  `session/start` is a follow-up.
 
 Tests and gate:
 
@@ -190,6 +290,34 @@ Implementation status, 2026-07-13:
   deadline; session integrations are not all registered with one task owner;
   and process lifecycle-owner tasks are spawned without retained join handles.
   Phase A remains partial until those semantic gates are implemented.
+- Landed CS-3a (single absolute deadline): `SessionHandle::drain_active_turn`
+  now computes one `deadline = Instant::now() + timeout` and drains the turn
+  task then the forwarder task with `timeout_at(deadline, ...)`, so close cannot
+  consume twice the configured budget.
+- Landed CS-3c (retained lifecycle owner-task handles): `AppServer` now retains
+  the join handles of every load/close/replace owner task (`spawn_tracked` +
+  `owner_tasks`), and `abort_and_join_owner_tasks` aborts+joins any still in
+  flight. Process shutdown (`shutdown_local_app_server_sessions`) calls it after
+  the per-session closes complete, so no owner task is left detached.
+- Landed CS-3b (safe part): both replace owner paths now surface a post-commit
+  source-close failure as a structured `committed_close_failed` error (in the
+  agent-host close callback, where the destination is already committed and
+  live), so it is never silently dropped or reported as clean success. The
+  fuller A4 variant — delaying the replace completion until source close and
+  returning a typed `CommittedCloseFailed` to the caller — is deferred: it would
+  add old-session teardown latency to every `/clear`/`/resume` and rework the
+  shared replace completion for a rare edge case.
+- Landed the CS-3 session task supervisor foundation:
+  `SessionLifecycleResources` now retains a handle Vec; `SessionRuntime`/
+  `SessionHandle` expose `spawn_session_task`; and the close cascade calls
+  `join_session_tasks(deadline)` after cancelling the shutdown signal — aborting
+  and joining any straggler under one deadline. The leader inbox poller (a hard
+  leak: `loop { poll; sleep }` with no cooperative stop, whose handle was
+  dropped) is migrated to `spawn_session_task`, so close now aborts+joins it.
+- Still open in CS-3: migrate the remaining session-owned spawns to
+  `spawn_session_task` (many already exit cooperatively via the shutdown token,
+  so they are lower priority than the leader-poller leak). The infrastructure
+  and close-time join are in place; this is now incremental per-site migration.
 - TypeScript SDK validation passed in the batched check run:
   `npm run generate:check` and `npm run check` in `coco-sdk/typescript`.
 - Catalog refresh notification policy is closed for Phase A: `session/delete`
@@ -337,13 +465,18 @@ Implementation status, 2026-07-13:
   typed `TurnEndedParams`; `engine_session` attaches the final
   `SessionResultParams` and remains the only query-engine production sender of
   terminal turn events.
-- Still open: tighten any remaining coordinator transitions around the explicit
-  state machine, remove remaining duplicate aggregation paths, and add the full
-  Phase B terminal-ordering tests.
-- Adversarial recheck: the current event forwarder clears Finishing before it
-  forwards `TurnEnded`, while `SessionTurnExecutor` commits final engine history
-  only after the engine returns. Embedding a result in `TurnEnded` therefore did
-  not finish Phase B; an immediate next turn can still observe stale history.
+- Landed the R13 core fix (items 8/9): `SessionTurnExecutor`'s event forwarder
+  now HOLDS the terminal `TurnEnded` instead of forwarding it inline. The turn
+  task commits final history/accounting (`commit_engine_turn_history`) and only
+  THEN releases the held terminal, so `forward_turn_events` clears the turn slot
+  and delivers `TurnEnded` strictly after the history commit. A next turn
+  admitted the instant the client sees `TurnEnded` therefore observes the
+  completed assistant/tool history. A cancelled turn still supersedes the held
+  terminal with the Interrupted terminator. Verified: full multi-session
+  turn/close suite green.
+- Still open: a deterministic immediate-next-turn regression test, tightening
+  the remaining coordinator transitions, and removing residual duplicate
+  aggregation paths.
 
 Changes:
 
@@ -551,6 +684,14 @@ Implementation status, 2026-07-13:
   `SessionResult` is safely represented in egress/reconnect cursor state.
   Phase E needs a lifecycle revision and announced/retiring membership, not
   only more tests around the current snapshot.
+- Landed the CS-4 / R17 core: Event Hub membership now derives from
+  `AppServer::announced_session_ids()` (registry `list_announced` = Live plus
+  retiring Closing), so a closing session stays announced until its slot is
+  removed by the completed close cascade rather than being dropped the moment it
+  enters Closing. The Live→Closing transition no longer changes the announced
+  set (both count), and slot removal after the final egress handoff triggers the
+  re-announce. Still open in CS-4: a dedicated lifecycle-revision stream and
+  reconnect-cursor requests scoped to the retiring set.
 
 Changes:
 
@@ -687,6 +828,42 @@ it must not change request DTO semantics, lifecycle ordering, or completion
 outcomes. If a Phase G change exposes a correctness defect, stop Phase G and
 return that defect to the applicable CS gate.
 
+Implementation status, 2026-07-14: G1's DTO/formatter re-homing is 4/5 done
+toward removing the `coco-agent-host -> coco-tui` edge. Removed `coco_tui`
+usages from agent-host: (1) `ImageData` — `at_mention_turn` and
+`session_turn_executor` now build message image parts directly from
+`coco_types::QueuedCommandEditImage` (the wire type), dropping the
+`ImageData` intermediate; (2) `SystemPushKind` — the `SystemPushKind ->
+coco_messages::Message` converter moved to `coco-cli` (`tui_system_push_message`
+in the TUI driver), and agent-host's push helpers were deleted, so the TUI
+driver builds the message and calls `SessionHandle::append_messages_to_history_and_emit`;
+(3) `permission_display_input` — the formatter moved to
+`coco_types::tool_summary::permission_display_input` (it was already pure
+coco-types), coco-tui re-exports it, and `tui_permission_bridge` calls the
+coco-types version. Verified: quick-check clean across the 46 affected crates.
+Landed the Phase G dependency inversion (G5 core gate): the last two `coco_tui`
+adapters (`teammate_inbox_pump`/`UserCommand`, `voice_bootstrap`/`App`) were
+moved with `git mv` to `app/cli/src/tui_runner/`, their one agent-host import
+(`crate::session_runtime` → `coco_agent_host::session_runtime`, plus
+`provider_login` for voice) rewritten, and the coco-cli callers repointed. The
+voice deps (`coco-voice`, `coco-utils-audio`) and the `voice`/`voice-local`
+features moved from agent-host to coco-cli, and `coco-tui.workspace = true` was
+removed from `coco-agent-host/Cargo.toml`. Added `scripts/check-agent-host-seam.sh`
+(wired into `just check-seam`) enforcing that agent-host depends on neither
+`coco-tui` nor `coco-sdk-server`. Verified: full-workspace clippy passed and the
+seam check is green — **coco-agent-host no longer depends on coco-tui**.
+
+Phase G organizational moves are now complete: **G2** renamed
+`app/cli/src/tui_runner` -> `app/cli/src/tui`; **G3** moved the headless surface
+runner (`run_chat` + `RunChatOptions` assembly + stdout/stderr presentation +
+shutdown-drain handling) from `main.rs` into `app/cli/src/headless.rs` (the
+reusable orchestration `run_chat_with_options` and config/model/prompt
+resolution stay public in `coco_agent_host::headless`); **G4** moved the SDK
+process entrypoint `run_sdk_mode` (stdio/sidecar composition, dispatch-loop +
+OS-signal shutdown) from `coco-sdk-server` into `app/cli/src/sdk.rs` (the crate
+retains all wire/transport machinery). Surface composition now lives in
+`app/cli/src/{tui,headless,sdk}`.
+
 ### G1. Move shared DTOs down
 
 Changes:
@@ -804,6 +981,77 @@ green. It must not become a behavior rewrite plus crate move in one change.
 Its entry gate is the completed Phase G dependency seam. Public behavior and
 protocol schemas are frozen during this phase.
 
+Implementation status, 2026-07-14: landed the low-risk, in-place narrowing
+items. **#4 (no public raw locks)** — every `SessionHandle` accessor that
+returned a raw `Mutex`/`RwLock` (`app_state`, `current_cwd`, `file_read_state`,
+`loop_sentinel_state`, `skill_bash_cell`, `agent_catalog_handle`) is now
+`pub(crate)`; the two that were only reachable from tests (`history`,
+`file_history`) were deleted and their ~19 cross-crate/integration/live-harness
+call sites rewired to narrow public operations (`history_messages`,
+`append_messages_to_history`, `replace_history_with_arc_messages`, plus new
+`agent_color` / `last_assistant_text` / `record_file_edit_for_rewind`
+accessors). No public `SessionHandle` method returns a lock. **#6 / #10** —
+30 agent-host modules narrowed `pub mod` → `pub(crate) mod`; `resume_resolver`
+kept `pub` (real cross-crate API used by `coco-cli` `main.rs`). **#11** —
+`SessionRuntime` re-export narrowed to `pub(crate) use`; no public API leaks the
+type. **#12** — `SessionHandle::spawn_session_task` narrowed to `pub(crate)`;
+the app-server owner-task supervisor helpers (`spawn_tracked`,
+`track_owner_task`) are already private, only `abort_and_join_owner_tasks` stays
+`pub` for the agent-host close cascade.
+
+**#1 (DONE):** `SessionId` is fully out of the mutable `QueryEngineConfig`.
+Phase A moved the read side onto an immutable `QueryEngine`/`ToolContextFactory`
+`session_id` field (22 engine reads relocated). Phase B deleted the field from
+`QueryEngineConfig` entirely: `SessionEngineConfigResources` now owns the
+runtime's immutable session identity (`current_typed_session_id*` read it,
+`TranscriptFileHistorySink` and `FileWatchRegistrationContext` carry their own
+copy), `QueryEngine::new`/`new_with_turn_abort` take `session_id` as a
+construction argument, and fork / subagent / hook-agent identity is threaded
+explicitly (parent id for forks/subagents, distinct id returned by
+`configure_hook_agent`). The obsolete `update_engine_config` freeze assertion is
+removed — rotation is now structurally impossible. ~97 test call sites updated
+(asserted session ids preserved). Verified: 628 coco-query + 346 coco-agent-host
+tests pass (incl. the multi-session identity/isolation conformance suite).
+
+**#2 (DONE):** `SessionCallbackRequirements` is now a mandatory
+`SessionHandle` construction input, threaded through `SessionRuntimeBuildOpts`
+and the `SessionRuntimeFactory` build methods (SDK/AppServer paths pass the
+connection profile's set; local TUI/headless paths pass the empty default).
+The `OnceLock` field and `install_callback_requirements` late-setter are
+removed — there is no window where the requirements are unset. **#3 (DONE):**
+`SessionHandle::update_engine_config` (the arbitrary config-mutation closure) is
+now `pub(crate)`; the public surface exposes only typed controls
+(`set_model_id`, `set_permission_mode`, `set_thinking_level`, `set_cwd_override`,
+`apply_session_start_config`, …). Both verified: 346 coco-agent-host tests pass.
+
+**#5 (DONE):** the 1596-line `session_handle.rs` was split into a 9-file
+directory module by responsibility (`capabilities` / `history` / `controls` /
+`engine` / `late_bind` / `tasks` / `mcp` / `hooks` + core `mod`), each well
+under the 800-line target, method signatures byte-identical. **#9 (DONE):** the
+other oversize modules were split into directory modules — `state.rs` (1274 →
+10 submodules under `state/`), `local_client.rs` (1174 → 8 files under
+`local_client/`), `headless.rs` (1277 → 7 files under `headless/`). The only
+remaining file over the 800 target is `session_bootstrap.rs` at 826 (well
+within the ~1600 hard limit; acceptable). Verified: 346 coco-agent-host tests
+pass.
+
+**#7 (DONE):** the ~62 flat top-level modules are grouped into responsibility
+subdirectories — `session/` (22), `integrations/` (29), `host/` (4),
+`client/` (2), `lifecycle/` (5); `headless`, `event_hub`, `options`, `paths`
+stay at the root as entry/facade modules (the plan's `protocol` group has no
+agent-host members). `lib.rs` re-exports every moved module at its original
+crate-root path with matching visibility, so all ~325 cross-crate references
+resolve unchanged. **#8 (satisfied by design):** the small modules
+(`session_controls/{agent,fast_mode}`, `request_handlers/session`, …) are
+cohesive single-concern controls / module-tree organizers, not pass-through
+shims, so there is nothing to merge. Verified: 346 coco-agent-host tests pass,
+seam guard green.
+
+**Phase H is complete (all 12 items).** Phase G organizational moves (G2/G3/G4)
+and Phase I documentation (#4 crate docs, #6 plan→migration-record, #7
+current-architecture) have also landed — see the migration record at the top of
+this document. The remediation is complete.
+
 Changes:
 
 1. move `SessionId` out of mutable `QueryEngineConfig`;
@@ -834,6 +1082,19 @@ Mechanical gates:
 - rustdoc describes owner/lifetime for every exported capability.
 
 ## Phase I / Workstream 3: remove obsolete code and align documentation
+
+Implementation status, 2026-07-14: **#1 (partial)** — the dead
+`agent_host::output` module (`output.rs` + `output.test.rs`) was deleted, along
+with other dead code the Phase H module-narrowing exposed: the superseded
+`session_replacement` module (replacement now flows through the factory-backed
+`spawn_replace` path) and the unused `at_mention_turn::{resolve_turn_inputs_text_only,
+changed_file_to_message}` helpers (their tests were rewired onto the live
+`resolve_turn_inputs`). The `app/cli/src/headless` UTF-8-safe rendering sweep is
+still pending. **#4 (partial)** — `agent-host/CLAUDE.md` no longer lists the
+deleted `output::*` module. Remaining: crate-`CLAUDE.md`/root-table sweep (#4),
+stale startup/replacement comments (#2), obsolete-symbol audit (#3), schema
+re-verification (#5), plan-to-record conversion (#6), and the
+`current-architecture.md` rewrite (#7).
 
 Changes:
 

@@ -1075,7 +1075,7 @@ async fn shortcut_turns_emit_terminal_session_result_and_accounting() {
             .expect("start shortcut session");
         let target = InteractiveTarget {
             session_id: started.session_id.clone(),
-            surface_id: started.surface_id.clone().expect("interactive surface"),
+            surface_id: started.surface_id.clone(),
         };
 
         let cost_prompt = coco_commands::handlers::cost::handler(String::new())
@@ -1237,6 +1237,100 @@ async fn session_start_initial_messages_seed_lifecycle_owned_history() {
     .expect("initial messages lifecycle seed timed out");
 }
 
+/// CS-1 new-only authority: `session/start` must never reach, reuse, or mutate
+/// an already-live identity. A second start naming a live id is rejected before
+/// any runtime is built, config/accounting applied, or surface attached.
+#[tokio::test]
+async fn session_start_rejects_existing_live_id_without_mutation() {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        let fixture = fixture().await;
+        let client = LocalServerClient::connect_local(&fixture.adapter);
+
+        let chosen = coco_types::SessionId::generate();
+        let first = client
+            .session_start(
+                &fixture.handler,
+                SessionStartParams {
+                    session_id: Some(chosen.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("first start reserves the fresh id");
+        assert_eq!(first.session_id, chosen);
+
+        // A hostile second start naming the live id must not reuse the runtime,
+        // apply its model/permission override, reset accounting, or attach a
+        // second surface. The rejection happens before the load factory runs.
+        let conflict = client
+            .session_start(
+                &fixture.handler,
+                SessionStartParams {
+                    session_id: Some(chosen.clone()),
+                    model: Some("hostile-override".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("start against a live id must be rejected");
+        let ClientError::Server { data, .. } = conflict else {
+            panic!("expected a server error for duplicate start");
+        };
+        assert_eq!(
+            data.as_ref().and_then(|data| data.get("kind")),
+            Some(&serde_json::json!("session_start_slot_conflict"))
+        );
+        assert_eq!(
+            data.as_ref().and_then(|data| data.get("state")),
+            Some(&serde_json::json!("live"))
+        );
+
+        // The original session is untouched: exactly one live session with its
+        // single interactive surface; the duplicate start left no new slot and
+        // attached no second surface.
+        let live = fixture.server.list_live_sessions();
+        assert_eq!(live.len(), 1, "duplicate start must not create a slot");
+        assert_eq!(live[0].session_id, chosen);
+        assert_eq!(
+            live[0].surface_counts.attached, 1,
+            "duplicate start must not attach a second surface"
+        );
+    })
+    .await
+    .expect("duplicate start rejection timed out");
+}
+
+/// CS-1 §0.2: `session/start.json_schema` is the per-session home for structured
+/// output. A valid schema is accepted and the session starts (the load factory
+/// registers the StructuredOutput tool without error).
+#[tokio::test]
+async fn session_start_accepts_json_schema_for_structured_output() {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        let fixture = fixture().await;
+        let client = LocalServerClient::connect_local(&fixture.adapter);
+        let started = client
+            .session_start(
+                &fixture.handler,
+                SessionStartParams {
+                    json_schema: Some(serde_json::json!({
+                        "type": "object",
+                        "properties": { "answer": { "type": "string" } },
+                        "required": ["answer"],
+                    })),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("start with a valid json_schema succeeds");
+
+        let live = fixture.server.list_live_sessions();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].session_id, started.session_id);
+    })
+    .await
+    .expect("json_schema start timed out");
+}
+
 #[tokio::test]
 async fn lifecycle_conformance_surfaces_share_start_read_close_contract() {
     tokio::time::timeout(std::time::Duration::from_secs(20), async {
@@ -1276,21 +1370,15 @@ async fn lifecycle_conformance_surfaces_share_resume_contract() {
 async fn lifecycle_conformance_start_read_close(surface: LifecycleConformanceSurface) {
     let fixture = fixture().await;
     let mut client = surface.connect(&fixture).await;
-    let seed_text = format!("seeded-through-{}", surface.label());
 
+    // Start carries no wire-seeded history: identity and history are not wire
+    // fields. This conformance covers start/read/close mechanics uniformly
+    // across surfaces; seeded-history coverage lives in the local-seed test
+    // and the durable-resume conformance test.
     let started = client
-        .session_start(
-            &fixture,
-            SessionStartParams {
-                initial_messages: vec![coco_messages::create_user_message(&seed_text)],
-                ..Default::default()
-            },
-        )
+        .session_start(&fixture, SessionStartParams::default())
         .await;
-    let surface_id = started
-        .surface_id
-        .clone()
-        .expect("session/start must return an interactive surface id");
+    let surface_id = started.surface_id.clone();
 
     let live = fixture.server.list_live_sessions();
     assert_eq!(live.len(), 1, "{} live session count", surface.label());
@@ -1310,13 +1398,6 @@ async fn lifecycle_conformance_start_read_close(surface: LifecycleConformanceSur
         )
         .await;
     assert_eq!(read.session.session_id, started.session_id);
-    assert!(
-        read.messages
-            .iter()
-            .any(|message| message.to_string().contains(&seed_text)),
-        "{} session/read must expose lifecycle-seeded history",
-        surface.label()
-    );
 
     client
         .session_close(
@@ -1357,10 +1438,7 @@ async fn lifecycle_conformance_resume(surface: LifecycleConformanceSurface) {
     let started = client
         .session_start(&fixture, SessionStartParams::default())
         .await;
-    let surface_id = started
-        .surface_id
-        .clone()
-        .expect("session/start must return an interactive surface id");
+    let surface_id = started.surface_id.clone();
     append_durable_transcript_seed(&fixture, &started.session_id, &seed_text);
 
     client
@@ -1393,10 +1471,7 @@ async fn lifecycle_conformance_resume(surface: LifecycleConformanceSurface) {
         )
         .await;
     assert_eq!(resumed.session.session_id, started.session_id);
-    let resumed_surface_id = resumed
-        .surface_id
-        .clone()
-        .expect("session/resume must return an interactive surface id");
+    let resumed_surface_id = resumed.surface_id.clone();
     let live = fixture.server.list_live_sessions();
     assert_eq!(
         live.len(),
@@ -1490,11 +1565,11 @@ async fn one_connection_runtime_isolation_scenario() {
         .expect("start B");
     let target_a = InteractiveTarget {
         session_id: first.session_id.clone(),
-        surface_id: first.surface_id.clone().expect("A surface"),
+        surface_id: first.surface_id.clone(),
     };
     let target_b = InteractiveTarget {
         session_id: second.session_id.clone(),
-        surface_id: second.surface_id.clone().expect("B surface"),
+        surface_id: second.surface_id.clone(),
     };
 
     for (target, prompt) in [
@@ -1568,11 +1643,11 @@ async fn one_connection_runtime_isolation_scenario() {
         .into_session();
     let target_a = InteractiveTarget {
         session_id: first.session_id.clone(),
-        surface_id: first.surface_id.expect("A surface"),
+        surface_id: first.surface_id.clone(),
     };
     let target_b = InteractiveTarget {
         session_id: second.session_id.clone(),
-        surface_id: second.surface_id.expect("B surface"),
+        surface_id: second.surface_id.clone(),
     };
     client
         .set_model(
@@ -1679,7 +1754,7 @@ async fn one_connection_runtime_isolation_scenario() {
         Some(coco_types::ReasoningEffort::High)
     );
     assert_eq!(
-        runtime_b.app_state().read().await.agent_color,
+        runtime_b.agent_color().await,
         Some(coco_types::AgentColorName::Cyan)
     );
     assert_eq!(
@@ -1692,15 +1767,11 @@ async fn one_connection_runtime_isolation_scenario() {
     );
 
     runtime_a
-        .history()
-        .lock()
-        .await
-        .push(coco_messages::create_user_message("history-a"));
+        .append_messages_to_history(vec![coco_messages::create_user_message("history-a")])
+        .await;
     runtime_b
-        .history()
-        .lock()
-        .await
-        .push(coco_messages::create_user_message("history-b"));
+        .append_messages_to_history(vec![coco_messages::create_user_message("history-b")])
+        .await;
     let read_a = client
         .session_read(
             &fixture.handler,
@@ -1795,19 +1866,10 @@ async fn one_connection_runtime_isolation_scenario() {
         ),
     ] {
         std::fs::write(&path, original).expect("write original rewind file");
-        let history = runtime.file_history().expect("file history enabled");
-        {
-            let mut history = history.write().await;
-            history.track_file(path.clone());
-            history
-                .make_snapshot(
-                    snapshot,
-                    runtime.config_home(),
-                    runtime.session_id().as_str(),
-                )
-                .await
-                .expect("make rewind snapshot");
-        }
+        runtime
+            .record_file_edit_for_rewind(&path, snapshot)
+            .await
+            .expect("make rewind snapshot");
         std::fs::write(&path, changed).expect("write changed rewind file");
         let rewound = client
             .rewind_files(
@@ -1851,7 +1913,6 @@ async fn two_initialized_connections_keep_profiles_runtimes_and_writers_isolated
             .handler
             .open(coco_app_server::ConnectionKey::generate());
         let initialize = |profile: &str, tool: &str| InitializeParams {
-            system_prompt: Some(profile.to_string()),
             client_mcp_servers: Some(vec![profile.replace("profile", "mcp")]),
             agents: Some(std::collections::HashMap::from([(
                 format!("agent-{tool}"),
@@ -1898,7 +1959,7 @@ async fn two_initialized_connections_keep_profiles_runtimes_and_writers_isolated
             |started: &coco_types::SessionStartResult, prompt: &str| coco_types::TurnStartParams {
                 target: InteractiveTarget {
                     session_id: started.session_id.clone(),
-                    surface_id: started.surface_id.clone().expect("surface"),
+                    surface_id: started.surface_id.clone(),
                 },
                 prompt: prompt.to_string(),
                 history_override: Vec::new(),
@@ -1951,39 +2012,23 @@ async fn two_initialized_connections_keep_profiles_runtimes_and_writers_isolated
             Some(false)
         );
         runtime_a
-            .history()
-            .lock()
-            .await
-            .push(coco_messages::create_user_message("profile-history-a"));
+            .append_messages_to_history(vec![coco_messages::create_user_message(
+                "profile-history-a",
+            )])
+            .await;
         runtime_b
-            .history()
-            .lock()
-            .await
-            .push(coco_messages::create_user_message("profile-history-b"));
-        assert!(
-            runtime_a
-                .history()
-                .lock()
-                .await
-                .snapshot()
-                .iter()
-                .any(|message| {
-                    coco_messages::wrapping::extract_text_from_message(message)
-                        .contains("profile-history-a")
-                })
-        );
-        assert!(
-            !runtime_a
-                .history()
-                .lock()
-                .await
-                .snapshot()
-                .iter()
-                .any(|message| {
-                    coco_messages::wrapping::extract_text_from_message(message)
-                        .contains("profile-history-b")
-                })
-        );
+            .append_messages_to_history(vec![coco_messages::create_user_message(
+                "profile-history-b",
+            )])
+            .await;
+        assert!(runtime_a.history_messages().await.iter().any(|message| {
+            coco_messages::wrapping::extract_text_from_message(message)
+                .contains("profile-history-a")
+        }));
+        assert!(!runtime_a.history_messages().await.iter().any(|message| {
+            coco_messages::wrapping::extract_text_from_message(message)
+                .contains("profile-history-b")
+        }));
         assert!(
             runtime_a
                 .tools()
@@ -2059,7 +2104,7 @@ async fn cross_connection_surface_authority_scenario() {
         .expect("start owner session");
     let target = InteractiveTarget {
         session_id: started.session_id.clone(),
-        surface_id: started.surface_id.expect("interactive surface"),
+        surface_id: started.surface_id.clone(),
     };
 
     let error = attacker
@@ -2103,7 +2148,7 @@ async fn mismatched_session_surface_scenario() {
             &fixture.handler,
             InteractiveTarget {
                 session_id: second.session_id,
-                surface_id: first.surface_id.expect("A surface"),
+                surface_id: first.surface_id.clone(),
             },
         )
         .await
@@ -2199,7 +2244,7 @@ async fn targeted_config_write_scenario() {
     for (started, value) in [(first, true), (second, false)] {
         let target = InteractiveTarget {
             session_id: started.session_id,
-            surface_id: started.surface_id.expect("interactive surface"),
+            surface_id: started.surface_id.clone(),
         };
         owner
             .config_write(
@@ -2283,7 +2328,7 @@ async fn disconnected_orphan_lifecycle_scenario() {
             coco_types::TurnStartParams {
                 target: InteractiveTarget {
                     session_id: started.session_id.clone(),
-                    surface_id: started.surface_id.expect("surface"),
+                    surface_id: started.surface_id.clone(),
                 },
                 prompt: "continue while orphaned".to_string(),
                 history_override: Vec::new(),
@@ -2373,7 +2418,7 @@ async fn close_timeout_aborts_active_turn_and_returns_structured_error() {
             .expect("start timeout session");
         let target = InteractiveTarget {
             session_id: started.session_id.clone(),
-            surface_id: started.surface_id.expect("interactive surface"),
+            surface_id: started.surface_id.clone(),
         };
         client
             .turn_start(
@@ -2443,7 +2488,7 @@ async fn successful_close_has_no_late_session_events_after_completion() {
             .expect("start close session");
         let target = InteractiveTarget {
             session_id: started.session_id.clone(),
-            surface_id: started.surface_id.expect("interactive surface"),
+            surface_id: started.surface_id.clone(),
         };
 
         client
@@ -2543,7 +2588,7 @@ async fn close_waits_for_inflight_turn_result_before_final_session_result() {
             .expect("start accounting session");
         let target = InteractiveTarget {
             session_id: started.session_id.clone(),
-            surface_id: started.surface_id.expect("interactive surface"),
+            surface_id: started.surface_id.clone(),
         };
 
         client
@@ -2613,7 +2658,7 @@ async fn embedded_turn_result_is_accounted_without_standalone_session_result() {
             .expect("start embedded-result session");
         let target = InteractiveTarget {
             session_id: started.session_id.clone(),
-            surface_id: started.surface_id.clone().expect("interactive surface"),
+            surface_id: started.surface_id.clone(),
         };
 
         let turn = client
@@ -2701,7 +2746,7 @@ async fn embedded_and_standalone_turn_result_is_accounted_once() {
             .expect("start duplicate-result session");
         let target = InteractiveTarget {
             session_id: started.session_id.clone(),
-            surface_id: started.surface_id.clone().expect("interactive surface"),
+            surface_id: started.surface_id.clone(),
         };
 
         let turn = client
@@ -2835,7 +2880,7 @@ async fn delete_rejects_live_session_and_close_preserves_transcript_until_delete
                     target: SessionCloseTarget::Interactive {
                         target: InteractiveTarget {
                             session_id: started.session_id.clone(),
-                            surface_id: started.surface_id.expect("surface"),
+                            surface_id: started.surface_id.clone(),
                         },
                     },
                 },
@@ -2909,7 +2954,7 @@ async fn orphan_close_rejects_owned_session_before_turn_or_runtime_side_effects(
             .expect("start owned session");
         let target = InteractiveTarget {
             session_id: started.session_id.clone(),
-            surface_id: started.surface_id.expect("interactive surface"),
+            surface_id: started.surface_id.clone(),
         };
         owner
             .turn_start(
@@ -3079,7 +3124,7 @@ async fn callback_authority_matrix_scenario() {
         .expect("callback delivery");
     let target_a = InteractiveTarget {
         session_id: first.session_id.clone(),
-        surface_id: first.surface_id.expect("A surface"),
+        surface_id: first.surface_id.clone(),
     };
     let attacker = LocalServerClient::connect_local(&fixture.adapter);
     let error = attacker
@@ -3148,7 +3193,7 @@ async fn callback_authority_matrix_scenario() {
             coco_types::UserInputResolveParams {
                 target: InteractiveTarget {
                     session_id: second.session_id,
-                    surface_id: second.surface_id.expect("B surface"),
+                    surface_id: second.surface_id.clone(),
                 },
                 request_id: delivery.request_id.as_display(),
                 answer: "wrong session".to_string(),
@@ -3311,7 +3356,6 @@ async fn orphan_resume_callback_requirements_scenario() {
         .await
         .expect("compatible profile rebinds orphan");
     assert_eq!(resumed.session.session_id, started.session_id);
-    assert!(resumed.surface_id.is_some());
 }
 
 #[tokio::test]
@@ -3410,7 +3454,7 @@ async fn reload_supervisors_coexist_and_close_reaps_only_the_target_runtime() {
                     target: SessionCloseTarget::Interactive {
                         target: InteractiveTarget {
                             session_id: first.session_id,
-                            surface_id: first.surface_id.expect("A surface"),
+                            surface_id: first.surface_id.clone(),
                         },
                     },
                 },
@@ -3430,7 +3474,7 @@ async fn reload_supervisors_coexist_and_close_reaps_only_the_target_runtime() {
                 coco_types::SessionReplaceParams {
                     source: InteractiveTarget {
                         session_id: second.session_id.clone(),
-                        surface_id: second.surface_id.expect("B surface"),
+                        surface_id: second.surface_id.clone(),
                     },
                     destination: coco_types::SessionReplacement::Fresh(
                         SessionStartParams::default(),
@@ -3548,7 +3592,7 @@ async fn concurrent_shutdown_scenario() {
                 coco_types::TurnStartParams {
                     target: InteractiveTarget {
                         session_id: started.session_id.clone(),
-                        surface_id: started.surface_id.clone().expect("surface"),
+                        surface_id: started.surface_id.clone(),
                     },
                     prompt: "shutdown-concurrency".to_string(),
                     history_override: Vec::new(),

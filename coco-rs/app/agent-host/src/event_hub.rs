@@ -125,14 +125,14 @@ pub fn spawn_app_server_membership_watcher(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut revisions = app_server.subscribe_session_activity();
-        let mut last_live_sessions = app_server_live_session_ids(&app_server);
+        let mut last_live_sessions = app_server_announced_session_ids(&app_server);
         if !last_live_sessions.is_empty() {
             updater
                 .update_live_sessions(last_live_sessions.clone())
                 .await;
         }
         while revisions.changed().await.is_ok() {
-            let next_live_sessions = app_server_live_session_ids(&app_server);
+            let next_live_sessions = app_server_announced_session_ids(&app_server);
             if next_live_sessions == last_live_sessions {
                 continue;
             }
@@ -168,7 +168,7 @@ impl ProcessEventHubEgress {
     ) where
         H: Clone + Send + Sync + 'static,
     {
-        let live_sessions = app_server_live_session_ids(app_server);
+        let live_sessions = app_server_announced_session_ids(app_server);
         if live_sessions == *last_live_sessions {
             return;
         }
@@ -181,17 +181,16 @@ impl ProcessEventHubEgress {
     }
 }
 
-pub fn app_server_live_session_ids<H>(
+/// Sessions to announce to the Hub: Live plus retiring Closing slots, so a
+/// closing session stays in membership until its final local-egress handoff
+/// completes and its slot is removed (CS-4 / R17).
+pub fn app_server_announced_session_ids<H>(
     app_server: &coco_app_server::AppServer<H>,
 ) -> Vec<coco_types::SessionId>
 where
     H: Clone + Send + Sync + 'static,
 {
-    app_server
-        .list_live_sessions()
-        .into_iter()
-        .map(|summary| summary.session_id)
-        .collect()
+    app_server.announced_session_ids()
 }
 
 fn announce_frame(live_sessions: Vec<SessionId>, cwd: &Path) -> AnnounceFrame {

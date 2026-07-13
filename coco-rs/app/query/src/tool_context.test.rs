@@ -20,7 +20,6 @@ fn test_config() -> QueryEngineConfig {
     QueryEngineConfig {
         model_id: "claude-test".into(),
         permission_mode: PermissionMode::Default,
-        session_id: coco_types::SessionId::try_new("session-abc").unwrap(),
         ..Default::default()
     }
 }
@@ -50,6 +49,7 @@ fn factory_with_live_rules(
     live_command_rules: Arc<RwLock<Vec<coco_types::PermissionRule>>>,
 ) -> ToolContextFactory {
     ToolContextFactory {
+        session_id: coco_types::SessionId::try_new("session-abc").unwrap(),
         config,
         tools: Arc::new(ToolRegistry::new()),
         turn_abort: TurnAbortSignal::from_token(tokio_util::sync::CancellationToken::new()),

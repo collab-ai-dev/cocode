@@ -258,6 +258,7 @@ async fn structured_output_no_tool_turns_stop_at_retry_cap() {
     };
     let engine = QueryEngine::new(
         config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
         client,
         structured_output_tools(),
         CancellationToken::new(),
@@ -321,6 +322,7 @@ async fn structured_output_tool_failure_cap_emits_failed_turn() {
     };
     let engine = QueryEngine::new(
         config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
         client,
         structured_output_tools(),
         CancellationToken::new(),
@@ -508,6 +510,7 @@ async fn run_case(config: QueryEngineConfig) -> (Vec<Vec<LlmMessage>>, usize, bo
     let client = crate::test_support::model_runtime_registry(model);
     let engine = QueryEngine::new(
         config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
         client,
         skill_tools(),
         CancellationToken::new(),
@@ -717,6 +720,7 @@ async fn agent_mentions_reminder_sources_from_wired_catalog() {
     };
     let engine = QueryEngine::new(
         config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
         client,
         skill_tools(),
         CancellationToken::new(),

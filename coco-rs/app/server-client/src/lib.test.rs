@@ -89,7 +89,7 @@ async fn remote_json_rpc_client_typed_methods_encode_and_decode_results() {
     incoming
         .handle_frame(JsonRpcFrame::Success(JsonRpcSuccess::new(
             start_request.id,
-            serde_json::json!({ "session_id": session_id }),
+            serde_json::json!({ "session_id": session_id, "surface_id": "surface-typed-client" }),
         )))
         .await
         .expect("handle session/start response");
@@ -1296,7 +1296,7 @@ async fn remote_session_start_handle_uses_result_surface_id() {
 }
 
 #[tokio::test]
-async fn remote_session_resume_handle_accepts_replaced_lifecycle() {
+async fn remote_session_resume_handle_uses_result_surface_id() {
     let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
     let (client, incoming, events) = RemoteJsonRpcClient::new(outbound_tx);
     let mut demux = RemoteEventDemux::new(events);
@@ -1329,25 +1329,12 @@ async fn remote_session_resume_handle_accepts_replaced_lifecycle() {
                     "created_at": "2026-07-08T00:00:00Z",
                     "message_count": 0,
                     "total_tokens": 0
-                }
+                },
+                "surface_id": "surface-remote-resume-handle"
             }),
         )))
         .await
         .expect("handle resume response");
-    incoming
-        .handle_frame(JsonRpcFrame::Notification(JsonRpcNotification::new(
-            "session/lifecycle",
-            Some(serde_json::json!({
-                "surface_id": "surface-remote-resume-handle",
-                "effect": {
-                    "type": "session_replaced",
-                    "old_session_id": "sess-remote-old",
-                    "new_session_id": session_id,
-                },
-            })),
-        )))
-        .await
-        .expect("handle resume lifecycle");
 
     let remote_session = resume_task
         .await

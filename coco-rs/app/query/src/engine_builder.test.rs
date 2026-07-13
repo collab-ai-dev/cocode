@@ -4,12 +4,6 @@ use super::*;
 use coco_types::ReasoningEffort;
 use coco_types::ThinkingLevel;
 
-#[test]
-fn query_engine_config_default_has_valid_session_id() {
-    let config = QueryEngineConfig::default();
-    assert_eq!(config.session_id.as_str(), "test-session");
-}
-
 /// `CacheSafeParams.effort` capture precedence: the explicit engine
 /// config level (layer 1, Ctrl+T / picker) wins over the serving
 /// slot's bound effort (layer 2, `models.<role>.<slot>.effort`);

@@ -36,6 +36,10 @@ pub struct AppServer<H> {
     server_request_waiters: std::sync::Mutex<
         std::collections::HashMap<RequestId, tokio::sync::oneshot::Sender<ServerRequestReply>>,
     >,
+    /// Retained join handles for lifecycle owner tasks (load/close/replace) so
+    /// process shutdown can abort and join any still in flight rather than
+    /// detaching them (CS-3c).
+    owner_tasks: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 impl<H: Clone> AppServer<H> {
@@ -60,6 +64,7 @@ impl<H: Clone> AppServer<H> {
             )),
             activity: SessionActivityTracker::default(),
             server_request_waiters: std::sync::Mutex::new(std::collections::HashMap::new()),
+            owner_tasks: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -694,6 +699,14 @@ impl<H: Clone> AppServer<H> {
             .contains_key(session_id)
     }
 
+    /// Session ids that must remain announced to process egress: Live plus
+    /// retiring Closing slots whose final `SessionResult` may still be in
+    /// flight. Used by Event Hub membership so a closing session is not dropped
+    /// before its final local-egress handoff completes (CS-4 / R17).
+    pub fn announced_session_ids(&self) -> Vec<SessionId> {
+        self.registry.list_announced()
+    }
+
     pub fn route_server_request(
         &self,
         session_id: SessionId,
@@ -771,6 +784,43 @@ impl<H> AppServer<H>
 where
     H: Clone + Send + Sync + 'static,
 {
+    fn track_owner_task(&self, handle: tokio::task::JoinHandle<()>) {
+        let mut tasks = self
+            .owner_tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        tasks.retain(|task| !task.is_finished());
+        tasks.push(handle);
+    }
+
+    /// Spawn a lifecycle owner task and retain its join handle for shutdown.
+    fn spawn_tracked<F>(&self, future: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let handle = tokio::spawn(future);
+        self.track_owner_task(handle);
+    }
+
+    /// Abort and join any lifecycle owner tasks still in flight. Process
+    /// shutdown calls this after per-session closes complete, so no owner task
+    /// is left detached past the shutdown deadline (CS-3c).
+    pub async fn abort_and_join_owner_tasks(&self) {
+        let tasks = {
+            let mut guard = self
+                .owner_tasks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            std::mem::take(&mut *guard)
+        };
+        for task in tasks {
+            if !task.is_finished() {
+                task.abort();
+            }
+            let _ = task.await;
+        }
+    }
+
     pub fn spawn_load<F>(
         self: &Arc<Self>,
         session_id: SessionId,
@@ -793,7 +843,7 @@ where
                     unreachable!("reserved load must be observable as Loading");
                 };
                 let server = Arc::clone(self);
-                tokio::spawn(async move {
+                self.spawn_tracked(async move {
                     let mut guard = OwnerGuard::new(
                         Arc::clone(&server),
                         OwnerGuardAction::FailLoad(session_id.clone()),
@@ -841,7 +891,7 @@ where
         {
             CloseStart::Started { handle, completion } => {
                 let server = Arc::clone(self);
-                tokio::spawn(async move {
+                self.spawn_tracked(async move {
                     let mut guard = OwnerGuard::new(
                         Arc::clone(&server),
                         OwnerGuardAction::Close(session_id.clone()),
@@ -862,7 +912,7 @@ where
                 if should_spawn {
                     let server = Arc::clone(self);
                     let close_session_id = session_id.clone();
-                    tokio::spawn(async move {
+                    self.spawn_tracked(async move {
                         // Not guarded during the load wait: a load failure fires
                         // the close signal and removes the slot (there is nothing
                         // to close). Guard only the actual cascade below.
@@ -940,7 +990,7 @@ where
         };
 
         let server = Arc::clone(self);
-        tokio::spawn(async move {
+        self.spawn_tracked(async move {
             let mut guard = OwnerGuard::new(
                 Arc::clone(&server),
                 OwnerGuardAction::Close(session_id.clone()),
@@ -972,7 +1022,7 @@ where
             .begin_replace(&old_session_id, new_session_id.clone())
             .context(RegistrySnafu)?;
         let server = Arc::clone(self);
-        tokio::spawn(async move {
+        self.spawn_tracked(async move {
             let mut guard = OwnerGuard::new(
                 Arc::clone(&server),
                 OwnerGuardAction::FailLoad(new_session_id.clone()),
@@ -1041,7 +1091,7 @@ where
             .begin_replace(&old_session_id, new_session_id.clone())
             .context(RegistrySnafu)?;
         let server = Arc::clone(self);
-        tokio::spawn(async move {
+        self.spawn_tracked(async move {
             let mut guard = OwnerGuard::new(
                 Arc::clone(&server),
                 OwnerGuardAction::FailLoad(new_session_id.clone()),

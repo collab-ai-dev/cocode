@@ -108,8 +108,7 @@ impl LiveSdkServer {
         };
         handle
             .into_session()
-            .history()
-            .lock()
+            .history_messages()
             .await
             .iter()
             .map(|a| (**a).clone())

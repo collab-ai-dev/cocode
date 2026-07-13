@@ -1,0 +1,24 @@
+//! Session runtime construction, controls, dialogs, and per-session operations.
+
+pub(crate) mod at_mention_turn;
+pub mod conversation_export;
+pub mod goal_command;
+pub mod session_agents;
+pub mod session_bootstrap;
+pub(crate) mod session_close;
+pub mod session_compaction;
+pub mod session_controls;
+pub(crate) mod session_data;
+pub mod session_dialogs;
+pub mod session_labels;
+pub(crate) mod session_mcp;
+pub(crate) mod session_memory;
+pub mod session_messages;
+pub mod session_queue;
+pub mod session_rename;
+pub(crate) mod session_resume;
+pub mod session_runtime;
+pub mod session_slash;
+pub(crate) mod session_start;
+pub(crate) mod side_question;
+pub mod task_runtime;

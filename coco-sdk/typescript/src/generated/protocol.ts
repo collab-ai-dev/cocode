@@ -1351,7 +1351,6 @@ export interface InitializeModelInfo {
 export interface InitializeParams {
   agentProgressSummaries?: boolean | null;
   agents?: { [key: string]: ClientAgentDefinition; } | null;
-  append_system_prompt?: string | null;
   client_mcp_servers?: Array<string> | null;
   hooks?: {
   ConfigChange?: Array<HookCallbackMatcher>;
@@ -1382,10 +1381,8 @@ export interface InitializeParams {
   WorktreeCreate?: Array<HookCallbackMatcher>;
   WorktreeRemove?: Array<HookCallbackMatcher>;
 } | null;
-  json_schema?: unknown;
   planModeInstructions?: string | null;
   prompt_suggestions?: boolean | null;
-  system_prompt?: string | null;
 }
 
 /**
@@ -2804,7 +2801,7 @@ export interface SessionResumeParams {
  */
 export interface SessionResumeResult {
   session: SessionSummary;
-  surface_id?: SurfaceId | null;
+  surface_id: SurfaceId;
 }
 
 /**
@@ -2824,17 +2821,21 @@ export interface SessionStartInput {
 
 /**
  * Params for `session/start`.
+ *
+ * The serialized wire form carries only per-session execution policy — never a
+ * session identity or history. A remote caller therefore cannot name or resume
+ * an existing session through start; the server mints the identity. Unknown
+ * fields (including legacy `session_id`/`initial_messages`/`initial_prompt`)
+ * are rejected as invalid params, not silently ignored.
  */
 export interface SessionStartParams {
   append_system_prompt?: string | null;
   cwd?: string | null;
-  initial_messages?: Array<Message>;
-  initial_prompt?: string | null;
+  json_schema?: unknown;
   max_budget_usd?: number | null;
   max_turns?: number | null;
   model?: string | null;
   permission_mode?: PermissionMode | null;
-  session_id?: SessionId | null;
   system_prompt?: string | null;
 }
 
@@ -2846,7 +2847,7 @@ export interface SessionStartParams {
  */
 export interface SessionStartResult {
   session_id: SessionId;
-  surface_id?: SurfaceId | null;
+  surface_id: SurfaceId;
 }
 
 /**

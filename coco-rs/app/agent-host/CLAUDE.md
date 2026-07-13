@@ -28,7 +28,6 @@ it expose typed errors and adapters translate failures to protocol results.
 | `remote_host::RemoteAppServerBridgeHost` | Narrow remote transport-facing capability handle for opening JSON-RPC/AppServer bindings without exposing raw host state. |
 | `coco_types::*` protocol schemas | Shared AppServer request/result and notification DTOs used by adapters. |
 | `model_factory::*` | Builds `Arc<dyn LanguageModelV4>` from provider/model config |
-| `output::*` | Non-interactive output formatters (text/json/stream-json) |
 | `headless` / `headless_support` | Print-mode orchestration plus goal/slash, transcript, tool-filter, and additional-directory helpers |
 | `project_services::ProjectServices` | Project-rooted plugin catalog plus command, skill, hook, MCP, and LSP discovery shared by sessions with the same project root |
 | `session_runtime::SessionRuntimeFactory` | Owned construction seam for building `SessionHandle`s from cloneable startup inputs and a target session id. |
@@ -59,7 +58,7 @@ process-keyed session capability maps. See
    (NDJSON over stdio, `initialize`/`interrupt`/`can_use_tool`/
    `set_permission_mode`/...)
 4. Print mode → local AppServer control bridge +
-   local `turn/start` + `output::*` formatter
+   local `turn/start` + `coco-cli`'s `headless` output formatter
 5. The CLI TUI surface uses the same local AppServer bridge while retaining
    terminal lifecycle and presentation policy in `coco-cli`.
 

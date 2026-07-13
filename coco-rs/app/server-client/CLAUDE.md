@@ -36,10 +36,10 @@ server implementation. In-process client composition lives in
   for remote surface attachments. They expose typed identity and read
   events/lifecycle through `RemoteEventDemux`; `RemoteSessionClient` owns
   query/interrupt/replace/close helpers, while `RemotePassiveSessionClient`
-  only reads snapshots and events. Remote start/resume handle helpers must mint
-  handles from a server-provided `SurfaceId`: prefer the optional
-  `surface_id` on the result DTO and fall back to the matching lifecycle
-  activation for older streams.
+  only reads snapshots and events. Remote start/resume handle helpers mint
+  handles directly from the required `surface_id` on the start/resume result
+  DTO; a successful lifecycle call always attaches an interactive surface, so
+  there is no optional-surface lifecycle-activation fallback.
 - `RemoteJsonRpcClient::subscribe_session` is the passive remote attach path.
   It dispatches `session/subscribe`, returns a `RemotePassiveSessionClient`
   only after AppServer attaches the passive surface, preserves replayed

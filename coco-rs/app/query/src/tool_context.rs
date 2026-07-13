@@ -90,6 +90,10 @@ pub(crate) fn resolve_tool_search_strategy(
 /// by value so a caller can construct one factory and reuse it across turns.
 pub(crate) struct ToolContextFactory {
     pub(crate) config: QueryEngineConfig,
+    /// Immutable session identity, copied from the owning `QueryEngine`.
+    /// Kept out of the mutable `config` so per-call overrides cannot rotate
+    /// the session id used for tool-context history keys and telemetry.
+    pub(crate) session_id: coco_types::SessionId,
     pub(crate) tools: Arc<ToolRegistry>,
     pub(crate) turn_abort: TurnAbortSignal,
     pub(crate) mailbox: Option<MailboxHandleRef>,
@@ -326,7 +330,7 @@ impl ToolContextFactory {
             self.config.plans_directory.as_deref(),
         );
         let session_plan_file = Some(coco_context::get_plan_file_path(
-            self.config.session_id.as_str(),
+            self.session_id.as_str(),
             &plans_directory,
             self.config.agent_id_str(),
         ));
@@ -378,7 +382,7 @@ impl ToolContextFactory {
                     .map(Vec::len)
                     .unwrap_or(0);
                 tracing::debug!(
-                    session_id = %self.config.session_id,
+                    session_id = %self.session_id,
                     live_count,
                     base_command_count,
                     merged_command_count,
@@ -435,7 +439,7 @@ impl ToolContextFactory {
                 })
                 .collect();
             tracing::debug!(
-                session_id = %self.config.session_id,
+                session_id = %self.session_id,
                 file_allow_rules = ?file_allow_rules,
                 "tool_context: file read/edit allow-rule snapshot for this batch \
                  (frozen at engine build; mid-cycle approvals land on the next build)",
@@ -666,7 +670,7 @@ impl ToolContextFactory {
             file_read_state: self.file_read_state.clone(),
             file_history: self.file_history.clone(),
             config_home: self.config_home.clone(),
-            session_id_for_history: Some(self.config.session_id.to_string()),
+            session_id_for_history: Some(self.session_id.to_string()),
             tool_output_store: self.tool_output_store.clone(),
             transcript_path: self.transcript_path.clone(),
             approval_feedback: None,

@@ -333,6 +333,7 @@ impl ClientRequest {
 /// so the agent can construct its registries before the first turn.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InitializeParams {
     /// Hook callbacks keyed by event type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -340,15 +341,6 @@ pub struct InitializeParams {
     /// Client-provided MCP server names (to skip env-configured ones).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_mcp_servers: Option<Vec<String>>,
-    /// JSON schema for structured output.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub json_schema: Option<serde_json::Value>,
-    /// Full system prompt override.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub system_prompt: Option<String>,
-    /// Text appended to the default system prompt.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub append_system_prompt: Option<String>,
     /// Custom workflow body for the plan-mode system reminder.
     #[serde(
         default,
@@ -540,10 +532,22 @@ pub struct ClientAgentDefinition {
 }
 
 /// Params for `session/start`.
+///
+/// The serialized wire form carries only per-session execution policy — never a
+/// session identity or history. A remote caller therefore cannot name or resume
+/// an existing session through start; the server mints the identity. Unknown
+/// fields (including legacy `session_id`/`initial_messages`/`initial_prompt`)
+/// are rejected as invalid params, not silently ignored.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SessionStartParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Local-only start seed: a chosen fresh identity for in-process
+    /// embeddings/tests. `#[serde(skip)]` keeps it off the wire, schema, and
+    /// generated SDKs, so it is settable only by local Rust construction on the
+    /// non-serializing local dispatch. The new-only start owner still requires a
+    /// Missing slot for it; production identity selection uses `session/resume`.
+    #[serde(skip)]
     pub session_id: Option<SessionId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
@@ -559,14 +563,15 @@ pub struct SessionStartParams {
     pub system_prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub append_system_prompt: Option<String>,
-    /// Optional initial user prompt to run immediately after start.
+    /// JSON schema for structured output. When present, the session registers
+    /// the StructuredOutput tool and requires a structured final result. This is
+    /// the per-session home for structured output (it is not an `initialize`
+    /// capability).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub initial_prompt: Option<String>,
-    /// Optional initial history installed before the first turn.
-    ///
-    /// Used by process-local embeddings/tests that already hold typed
-    /// messages. Production resume should use `session/resume`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub json_schema: Option<serde_json::Value>,
+    /// Local-only initial history seed, paired with `session_id`. Non-serialized
+    /// (see `session_id`); production history restoration uses `session/resume`.
+    #[serde(skip)]
     pub initial_messages: Vec<crate::messages::Message>,
 }
 

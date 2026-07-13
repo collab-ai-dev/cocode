@@ -149,7 +149,14 @@ pub async fn run() -> Result<()> {
                     let tools = tools.clone();
                     Box::pin(async move {
                         let runtimes = coco_query::test_support::model_runtime_registry(model);
-                        QueryEngine::new(cfg, runtimes, tools, cancel.unwrap_or_default(), None)
+                        QueryEngine::new(
+                            cfg,
+                            coco_types::SessionId::try_new("test-session").unwrap(),
+                            runtimes,
+                            tools,
+                            cancel.unwrap_or_default(),
+                            None,
+                        )
                     })
                 },
             );

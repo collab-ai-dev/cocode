@@ -4398,6 +4398,7 @@
       "type": "object"
     },
     "InitializeParams": {
+      "additionalProperties": false,
       "description": "Sent once at session start for capability negotiation. Carries hooks,\nclient MCP servers, output format, system prompt, and agent definitions\nso the agent can construct its registries before the first turn.",
       "properties": {
         "agentProgressSummaries": {
@@ -4414,13 +4415,6 @@
           "description": "Custom agent definitions keyed by name.",
           "type": [
             "object",
-            "null"
-          ]
-        },
-        "append_system_prompt": {
-          "description": "Text appended to the default system prompt.",
-          "type": [
-            "string",
             "null"
           ]
         },
@@ -4606,9 +4600,6 @@
             "null"
           ]
         },
-        "json_schema": {
-          "description": "JSON schema for structured output."
-        },
         "planModeInstructions": {
           "description": "Custom workflow body for the plan-mode system reminder.",
           "type": [
@@ -4620,13 +4611,6 @@
           "description": "Enable prompt suggestions in the output stream.",
           "type": [
             "boolean",
-            "null"
-          ]
-        },
-        "system_prompt": {
-          "description": "Full system prompt override.",
-          "type": [
-            "string",
             "null"
           ]
         }
@@ -9903,24 +9887,20 @@
           "$ref": "#/$defs/SessionSummary"
         },
         "surface_id": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SurfaceId"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/SurfaceId",
+          "description": "The interactive surface attached by a successful resume. Required: a\nsuccessful lifecycle call always attaches an interactive surface."
         }
       },
       "required": [
-        "session"
+        "session",
+        "surface_id"
       ],
       "title": "SessionResumeResult",
       "type": "object"
     },
     "SessionStartParams": {
-      "description": "Params for `session/start`.",
+      "additionalProperties": false,
+      "description": "Params for `session/start`.\n\nThe serialized wire form carries only per-session execution policy \u2014 never a\nsession identity or history. A remote caller therefore cannot name or resume\nan existing session through start; the server mints the identity. Unknown\nfields (including legacy `session_id`/`initial_messages`/`initial_prompt`)\nare rejected as invalid params, not silently ignored.",
       "properties": {
         "append_system_prompt": {
           "type": [
@@ -9934,19 +9914,8 @@
             "null"
           ]
         },
-        "initial_messages": {
-          "description": "Optional initial history installed before the first turn.\n\nUsed by process-local embeddings/tests that already hold typed\nmessages. Production resume should use `session/resume`.",
-          "items": {
-            "$ref": "#/$defs/Message"
-          },
-          "type": "array"
-        },
-        "initial_prompt": {
-          "description": "Optional initial user prompt to run immediately after start.",
-          "type": [
-            "string",
-            "null"
-          ]
+        "json_schema": {
+          "description": "JSON schema for structured output. When present, the session registers\nthe StructuredOutput tool and requires a structured final result. This is\nthe per-session home for structured output (it is not an `initialize`\ncapability)."
         },
         "max_budget_usd": {
           "format": "double",
@@ -9978,16 +9947,6 @@
             }
           ]
         },
-        "session_id": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SessionId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "system_prompt": {
           "type": [
             "string",
@@ -10004,18 +9963,13 @@
           "$ref": "#/$defs/SessionId"
         },
         "surface_id": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SurfaceId"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/SurfaceId",
+          "description": "The interactive surface attached by a successful start. Required: a\nsuccessful lifecycle call always attaches an interactive surface."
         }
       },
       "required": [
-        "session_id"
+        "session_id",
+        "surface_id"
       ],
       "title": "SessionStartResult",
       "type": "object"

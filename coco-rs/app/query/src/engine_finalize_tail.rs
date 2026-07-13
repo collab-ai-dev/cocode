@@ -676,7 +676,7 @@ impl QueryEngine {
         let is_subagent = self.config.agent_id.is_some();
         // A cancelled cycle is an undelivered turn — don't count or review it.
         let turn_delivered = !self.cancel.is_cancelled();
-        let _ = runtime.maybe_review(turn_delivered, is_subagent, &self.config.session_id, || {
+        let _ = runtime.maybe_review(turn_delivered, is_subagent, &self.session_id, || {
             history.to_vec()
         });
     }

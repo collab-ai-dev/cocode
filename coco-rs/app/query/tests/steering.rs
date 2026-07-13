@@ -270,8 +270,15 @@ async fn e2e_steering_drains_into_history_and_reaches_next_turn() {
     // the engine share this same `Arc`-backed handle.
     let queue = CommandQueue::new();
 
-    let engine = QueryEngine::new(config, client, bash_only_tools(), cancel, None)
-        .with_command_queue(queue.clone());
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        bash_only_tools(),
+        cancel,
+        None,
+    )
+    .with_command_queue(queue.clone());
 
     // Producer task: wait long enough for the engine to enter
     // `do_generate` (mock parks for 150 ms there) and inject the

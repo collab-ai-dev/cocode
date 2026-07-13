@@ -35,15 +35,12 @@ Useful properties:
 - `coco-app-runtime` owns process/project/bootstrap contracts rather than query
   execution.
 
-The omitted but important current edge is:
-
-```text
-coco-agent-host -> coco-tui
-```
-
-That edge exists because agent-host contains TUI permission, voice, teammate,
-image, and message adapters. It contradicts the intended protocol-neutral host
-boundary.
+The former `coco-agent-host -> coco-tui` edge has been removed (Phase G).
+The TUI-specific adapters (voice bootstrap, teammate action bridge) moved to
+`coco-cli`, the `SystemPushKind`/permission-display formatters were re-homed to
+`coco-messages`/`coco-types`, and a seam guard
+(`scripts/check-agent-host-seam.sh`) now forbids agent-host from depending on
+`coco-tui` or `coco-sdk-server`. Agent-host is protocol-neutral.
 
 ## Process startup today
 
@@ -212,12 +209,14 @@ resource structs, including:
 accounting using short `std::sync::Mutex` critical sections plus an atomic turn
 counter. A whole-runtime actor is not used.
 
-`SessionHandle` keeps `Arc<SessionRuntime>` private, but exposes a very broad
-forwarding API. Several methods return raw locks or internal manager/registry
-handles. Session identity is duplicated between the immutable handle and
-mutable `QueryEngineConfig`; mutation is guarded by a runtime assertion.
-Callback requirements are installed after construction through `OnceLock` and
-default to empty when read before installation.
+`SessionHandle` keeps `Arc<SessionRuntime>` private and exposes a forwarding
+API split across responsibility submodules (`session_handle/{capabilities,
+history,controls,engine,late_bind,tasks,mcp,hooks}`). No public method returns a
+raw `Mutex`/`RwLock` (the lock accessors are `pub(crate)` or replaced by narrow
+snapshot ops). Session identity lives only on the immutable handle /
+`SessionEngineConfigResources` — it was removed from the mutable
+`QueryEngineConfig` entirely, so a config edit cannot rotate it. Callback
+requirements are a mandatory construction input (no `OnceLock` late install).
 
 ## Start, resume, and replace
 
@@ -328,16 +327,17 @@ reconnect cursor negotiation may omit the final event.
 
 Current `coco-agent-host` characteristics:
 
-- 69 public modules from `lib.rs`;
-- 71 non-test, non-`lib.rs` Rust files at the source root;
-- 18 top-level `session_*` files plus another 16 `app_server_host/session_*`
-  files;
-- both flat `session_*` files and fragmented `app_server_host` lifecycle step
-  files;
-- direct dependencies on most application domains plus `coco-tui`;
-- large modules including `session_handle.rs`, `headless.rs`, `local_client.rs`,
-  and session runtime state;
-- a public output module with no production callers.
+- most `lib.rs` modules narrowed to `pub(crate)`; `SessionRuntime` is
+  crate-private; the facade exposes intentional capabilities only;
+- the previously oversized modules are split into directory modules, each file
+  well under the 800-line target: `session_handle/` (9 files), `state/` (10),
+  `local_client/` (8), `headless/` (7);
+- protocol-neutral: no dependency on `coco-tui` or `coco-sdk-server` (seam-guarded);
+- the dead `output` module (no production callers) and the superseded
+  `session_replacement` module were removed;
+- top-level module grouping under `session`/`integrations`/`host`/`protocol`/
+  `lifecycle`/`client` (Phase H #7) is not yet applied — modules remain flat at
+  the source root.
 
 Current `coco-cli` characteristics:
 

@@ -118,7 +118,14 @@ async fn probe_progress_tx(streaming: bool) -> bool {
         streaming_tool_execution: streaming,
         ..Default::default()
     };
-    let engine = QueryEngine::new(config, client, tools, CancellationToken::new(), None);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        CancellationToken::new(),
+        None,
+    );
     engine
         .run("probe")
         .await

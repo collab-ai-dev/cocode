@@ -143,7 +143,7 @@ impl QueryEngine {
         name = "compaction",
         fields(
             trigger = "reactive",
-            session_id = %self.config.session_id,
+            session_id = %self.session_id,
             history_len = history.len(),
         ),
     )]
@@ -676,7 +676,7 @@ impl QueryEngine {
                 tracing::info!(
                     target: "coco_query::kairos_rollover",
                     yesterday = %yesterday.format("%Y-%m-%d"),
-                    session_id = %self.config.session_id,
+                    session_id = %self.session_id,
                     "KAIROS daily-log rollover detected",
                 );
             }

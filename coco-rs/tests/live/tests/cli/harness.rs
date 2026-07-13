@@ -214,6 +214,7 @@ pub async fn run_session(
     });
     let mut engine = QueryEngine::new(
         config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
         model_runtimes,
         tools,
         cancel,
@@ -338,6 +339,7 @@ pub async fn run_session_with_steering(
     });
     let mut engine = QueryEngine::new(
         config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
         model_runtimes,
         tools,
         cancel,

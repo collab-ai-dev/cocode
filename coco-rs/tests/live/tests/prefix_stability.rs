@@ -211,7 +211,14 @@ async fn deepseek_request_prefix_is_byte_stable_across_turns() -> Result<()> {
         ..QueryEngineConfig::default()
     };
 
-    let engine = QueryEngine::new(cfg, model_runtimes, tools, CancellationToken::new(), None);
+    let engine = QueryEngine::new(
+        cfg,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        model_runtimes,
+        tools,
+        CancellationToken::new(),
+        None,
+    );
 
     let (tx, mut rx) = mpsc::channel::<CoreEvent>(512);
     let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });

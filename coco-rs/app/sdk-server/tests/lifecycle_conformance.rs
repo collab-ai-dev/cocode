@@ -171,7 +171,6 @@ async fn sdk_stdio_shares_start_read_close_lifecycle_contract() {
             "sdk stdio initialize",
         );
 
-        let seed_text = "seeded-through-sdk-stdio";
         let resume_seed_text = "resumed-through-sdk-stdio";
         let started: SessionStartResult = json_rpc_success(
             request(
@@ -179,19 +178,13 @@ async fn sdk_stdio_shares_start_read_close_lifecycle_contract() {
                 &mut next_request_id,
                 &mut notifications,
                 ClientRequestMethod::SessionStart,
-                SessionStartParams {
-                    initial_messages: vec![coco_messages::create_user_message(seed_text)],
-                    ..Default::default()
-                },
+                SessionStartParams::default(),
                 "sdk stdio session/start",
             )
             .await,
             "sdk stdio session/start",
         );
-        let surface_id = started
-            .surface_id
-            .clone()
-            .expect("session/start must return interactive surface id");
+        let surface_id = started.surface_id.clone();
         let live = fixture.server.list_live_sessions();
         assert_eq!(live.len(), 1);
         assert_eq!(live[0].session_id, started.session_id);
@@ -216,11 +209,6 @@ async fn sdk_stdio_shares_start_read_close_lifecycle_contract() {
             "sdk stdio session/read",
         );
         assert_eq!(read.session.session_id, started.session_id);
-        assert!(
-            read.messages
-                .iter()
-                .any(|message| message.to_string().contains(seed_text))
-        );
         append_durable_transcript_seed(&fixture, &started.session_id, resume_seed_text);
 
         json_rpc_success::<()>(
@@ -271,10 +259,7 @@ async fn sdk_stdio_shares_start_read_close_lifecycle_contract() {
             "sdk stdio session/resume",
         );
         assert_eq!(resumed.session.session_id, started.session_id);
-        let resumed_surface_id = resumed
-            .surface_id
-            .clone()
-            .expect("session/resume must return interactive surface id");
+        let resumed_surface_id = resumed.surface_id.clone();
         let resumed_read: SessionReadResult = json_rpc_success(
             request(
                 &fixture.client,

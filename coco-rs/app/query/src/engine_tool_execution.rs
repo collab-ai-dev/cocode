@@ -236,7 +236,7 @@ impl QueryEngine {
             permission_denials: &mut acc.permission_denials,
             state_tracker,
             permission_bridge: self.permission_bridge.as_ref(),
-            session_id: &self.config.session_id,
+            session_id: &self.session_id,
             cancel: &self.cancel,
             auto_mode_state: self.auto_mode_state.as_ref(),
             denial_tracker: self.denial_tracker.as_ref(),

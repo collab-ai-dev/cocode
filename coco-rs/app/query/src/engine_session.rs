@@ -67,7 +67,7 @@ impl QueryEngine {
             coco_types::ServerNotification::MessageAppended {
                 message: user_msg.clone(),
                 identity: coco_types::ServerNotificationIdentity::new(
-                    Some(self.config.session_id.clone()),
+                    Some(self.session_id.clone()),
                     self.config.agent_id_string(),
                 ),
             },
@@ -130,7 +130,7 @@ impl QueryEngine {
         skip_all,
         name = "session",
         fields(
-            session_id = %self.config.session_id,
+            session_id = %self.session_id,
             agent_id = ?self.config.agent_id,
             model_id = %self.config.model_id,
         ),
@@ -222,10 +222,7 @@ impl QueryEngine {
         let mut history = MessageHistory::new();
         // Stamp F9 envelope so every emit from this engine invocation
         // carries the active session + agent identity.
-        history.set_envelope(
-            self.config.session_id.clone(),
-            self.config.agent_id_string(),
-        );
+        history.set_envelope(self.session_id.clone(), self.config.agent_id_string());
         let (result, accumulated_usage, pending_success_terminal) = self
             .run_session_loop(
                 turn_messages,
@@ -408,7 +405,7 @@ impl QueryEngine {
         let _delivered = emit_protocol(
             event_tx,
             ServerNotification::SessionStarted(coco_types::SessionStartedParams {
-                session_id: self.config.session_id.clone(),
+                session_id: self.session_id.clone(),
                 protocol_version: bootstrap.protocol_version.clone(),
                 cwd: bootstrap.cwd.clone(),
                 model: self.config.model_id.clone(),
@@ -441,7 +438,7 @@ impl QueryEngine {
         error_msg: String,
     ) -> coco_types::SessionResultParams {
         coco_types::SessionResultParams {
-            session_id: self.config.session_id.clone(),
+            session_id: self.session_id.clone(),
             total_turns: 0,
             duration_ms: 0,
             duration_api_ms: 0,
@@ -514,7 +511,7 @@ impl QueryEngine {
         }
 
         coco_types::SessionResultParams {
-            session_id: self.config.session_id.clone(),
+            session_id: self.session_id.clone(),
             total_turns: qr.turns,
             duration_ms: qr.duration_ms,
             duration_api_ms: qr.duration_api_ms,
@@ -544,7 +541,7 @@ impl QueryEngine {
     /// Build an orchestration context from the engine's config.
     pub(crate) fn orchestration_ctx(&self) -> OrchestrationContext {
         OrchestrationContext {
-            session_id: self.config.session_id.clone(),
+            session_id: self.session_id.clone(),
             cwd: self.config.workspace_cwd(),
             project_dir: self.config.project_dir.clone(),
             permission_mode: Some(format!("{:?}", self.config.permission_mode)),

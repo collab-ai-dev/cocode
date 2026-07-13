@@ -489,21 +489,11 @@ impl RemoteJsonRpcClient {
 
     pub async fn session_start_handle(
         &self,
-        demux: &mut RemoteEventDemux,
+        _demux: &mut RemoteEventDemux,
         params: SessionStartParams,
     ) -> Result<RemoteSessionClient, ClientError> {
         let started = self.session_start(params).await?;
-        let surface_id = match started.surface_id {
-            Some(surface_id) => surface_id,
-            None => {
-                demux
-                    .next_session_activation(&started.session_id)
-                    .await
-                    .ok_or(ClientError::Disconnected)?
-                    .surface_id
-            }
-        };
-        Ok(self.session_handle(started.session_id, surface_id))
+        Ok(self.session_handle(started.session_id, started.surface_id))
     }
 
     pub async fn session_resume(
@@ -524,22 +514,11 @@ impl RemoteJsonRpcClient {
 
     pub async fn session_resume_handle(
         &self,
-        demux: &mut RemoteEventDemux,
+        _demux: &mut RemoteEventDemux,
         params: SessionResumeParams,
     ) -> Result<RemoteSessionClient, ClientError> {
         let resumed = self.session_resume(params).await?;
-        let session_id = resumed.session.session_id;
-        let surface_id = match resumed.surface_id {
-            Some(surface_id) => surface_id,
-            None => {
-                demux
-                    .next_session_activation(&session_id)
-                    .await
-                    .ok_or(ClientError::Disconnected)?
-                    .surface_id
-            }
-        };
-        Ok(self.session_handle(session_id, surface_id))
+        Ok(self.session_handle(resumed.session.session_id, resumed.surface_id))
     }
 
     pub async fn session_list(&self) -> Result<SessionListResult, ClientError> {
