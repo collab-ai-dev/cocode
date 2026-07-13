@@ -6,7 +6,8 @@ use coco_agent_host::{
     AgentHostOptions,
     app_server_host::{
         AppServerHostHandler, AppServerHostState, HostInputs, OutboundMessage,
-        RuntimeReplacementContext, TurnRunner, shutdown_local_app_server_sessions,
+        RemoteJsonRpcConnection, RuntimeReplacementContext, TurnRunner,
+        shutdown_local_app_server_sessions,
     },
     app_session::AppSessionHandle,
     local_client::LocalServerClient,
@@ -20,11 +21,12 @@ use coco_app_server::{
     LocalClientSubscribeOutcome, SurfaceCapability,
 };
 use coco_app_server_client::ClientError;
+use coco_app_server_transport::{JsonRpcFrame, JsonRpcId, JsonRpcRequest};
 use coco_types::{
-    ConfigWriteParams, ConfigWriteTarget, CoreEvent, HookCallbackMatcher, HookEventType,
-    InitializeParams, InteractiveTarget, ServerNotification, SessionCloseParams,
-    SessionCloseTarget, SessionDeleteParams, SessionEnvelope, SessionReadParams,
-    SessionStartParams, SessionState,
+    ClientRequestMethod, ConfigWriteParams, ConfigWriteTarget, CoreEvent, HookCallbackMatcher,
+    HookEventType, InitializeParams, InteractiveTarget, ServerNotification, SessionCloseParams,
+    SessionCloseTarget, SessionDeleteParams, SessionEnvelope, SessionReadParams, SessionReadResult,
+    SessionStartParams, SessionStartResult, SessionState, SessionTarget,
 };
 use tokio::sync::mpsc;
 
@@ -42,6 +44,155 @@ struct Fixture {
 
 async fn fixture() -> Fixture {
     fixture_with_turn_gate(None).await
+}
+
+#[derive(Debug, Clone, Copy)]
+enum LifecycleConformanceSurface {
+    LocalTyped,
+    JsonRpc,
+}
+
+impl LifecycleConformanceSurface {
+    fn label(self) -> &'static str {
+        match self {
+            Self::LocalTyped => "local_typed",
+            Self::JsonRpc => "json_rpc",
+        }
+    }
+
+    fn connect(self, fixture: &Fixture) -> LifecycleConformanceClient {
+        match self {
+            Self::LocalTyped => LifecycleConformanceClient::LocalTyped {
+                client: LocalServerClient::connect_local(&fixture.adapter),
+            },
+            Self::JsonRpc => {
+                let adapter =
+                    coco_agent_host::app_server_host::RemoteJsonRpcAdapter::with_channel_capacity(
+                        Arc::clone(&fixture.server),
+                        /*channel_capacity*/ 16,
+                    );
+                LifecycleConformanceClient::JsonRpc {
+                    connection: adapter.connect(),
+                    next_request_id: 1,
+                }
+            }
+        }
+    }
+}
+
+enum LifecycleConformanceClient {
+    LocalTyped {
+        client: LocalServerClient<AppSessionHandle>,
+    },
+    JsonRpc {
+        connection: RemoteJsonRpcConnection,
+        next_request_id: i64,
+    },
+}
+
+impl LifecycleConformanceClient {
+    async fn session_start(
+        &mut self,
+        fixture: &Fixture,
+        params: SessionStartParams,
+    ) -> SessionStartResult {
+        match self {
+            Self::LocalTyped { client } => client
+                .session_start(&fixture.handler, params)
+                .await
+                .expect("local session/start"),
+            Self::JsonRpc {
+                connection,
+                next_request_id,
+            } => {
+                let frame = connection
+                    .dispatch_client_request(
+                        json_rpc_request(
+                            next_request_id,
+                            ClientRequestMethod::SessionStart,
+                            params,
+                        ),
+                        &fixture.handler,
+                    )
+                    .await;
+                json_rpc_success(frame, "json-rpc session/start")
+            }
+        }
+    }
+
+    async fn session_read(
+        &mut self,
+        fixture: &Fixture,
+        params: SessionReadParams,
+    ) -> SessionReadResult {
+        match self {
+            Self::LocalTyped { client } => client
+                .session_read(&fixture.handler, params)
+                .await
+                .expect("local session/read"),
+            Self::JsonRpc {
+                connection,
+                next_request_id,
+            } => {
+                let frame = connection
+                    .dispatch_client_request(
+                        json_rpc_request(next_request_id, ClientRequestMethod::SessionRead, params),
+                        &fixture.handler,
+                    )
+                    .await;
+                json_rpc_success(frame, "json-rpc session/read")
+            }
+        }
+    }
+
+    async fn session_close(&mut self, fixture: &Fixture, params: SessionCloseParams) {
+        match self {
+            Self::LocalTyped { client } => client
+                .session_close(&fixture.handler, params)
+                .await
+                .expect("local session/close"),
+            Self::JsonRpc {
+                connection,
+                next_request_id,
+            } => {
+                let frame = connection
+                    .dispatch_client_request(
+                        json_rpc_request(
+                            next_request_id,
+                            ClientRequestMethod::SessionClose,
+                            params,
+                        ),
+                        &fixture.handler,
+                    )
+                    .await;
+                json_rpc_success::<()>(frame, "json-rpc session/close");
+            }
+        }
+    }
+}
+
+fn json_rpc_request<T: serde::Serialize>(
+    next_request_id: &mut i64,
+    method: ClientRequestMethod,
+    params: T,
+) -> JsonRpcRequest {
+    let id = *next_request_id;
+    *next_request_id += 1;
+    JsonRpcRequest::new(
+        JsonRpcId::Number(id),
+        method.as_str(),
+        Some(serde_json::to_value(params).expect("serialize JSON-RPC params")),
+    )
+}
+
+fn json_rpc_success<T: serde::de::DeserializeOwned>(frame: JsonRpcFrame, context: &str) -> T {
+    match frame {
+        JsonRpcFrame::Success(success) => {
+            serde_json::from_value(success.result).expect("decode JSON-RPC success result")
+        }
+        JsonRpcFrame::Error(error) => panic!("{context} failed: {:?}", error.error),
+        other => panic!("{context} returned unexpected frame: {other:?}"),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -718,6 +869,96 @@ async fn session_start_initial_messages_seed_lifecycle_owned_history() {
     })
     .await
     .expect("initial messages lifecycle seed timed out");
+}
+
+#[tokio::test]
+async fn lifecycle_conformance_surfaces_share_start_read_close_contract() {
+    tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        for surface in [
+            LifecycleConformanceSurface::LocalTyped,
+            LifecycleConformanceSurface::JsonRpc,
+        ] {
+            lifecycle_conformance_start_read_close(surface).await;
+        }
+    })
+    .await
+    .expect("lifecycle conformance timed out");
+}
+
+async fn lifecycle_conformance_start_read_close(surface: LifecycleConformanceSurface) {
+    let fixture = fixture().await;
+    let mut client = surface.connect(&fixture);
+    let seed_text = format!("seeded-through-{}", surface.label());
+
+    let started = client
+        .session_start(
+            &fixture,
+            SessionStartParams {
+                initial_messages: vec![coco_messages::create_user_message(&seed_text)],
+                ..Default::default()
+            },
+        )
+        .await;
+    let surface_id = started
+        .surface_id
+        .clone()
+        .expect("session/start must return an interactive surface id");
+
+    let live = fixture.server.list_live_sessions();
+    assert_eq!(live.len(), 1, "{} live session count", surface.label());
+    assert_eq!(live[0].session_id, started.session_id);
+    assert_eq!(live[0].surface_counts.attached, 1);
+
+    let read = client
+        .session_read(
+            &fixture,
+            SessionReadParams {
+                target: SessionTarget {
+                    session_id: started.session_id.clone(),
+                },
+                cursor: None,
+                limit: None,
+            },
+        )
+        .await;
+    assert_eq!(read.session.session_id, started.session_id);
+    assert!(
+        read.messages
+            .iter()
+            .any(|message| message.to_string().contains(&seed_text)),
+        "{} session/read must expose lifecycle-seeded history",
+        surface.label()
+    );
+
+    client
+        .session_close(
+            &fixture,
+            SessionCloseParams {
+                target: SessionCloseTarget::Interactive {
+                    target: InteractiveTarget {
+                        session_id: started.session_id.clone(),
+                        surface_id,
+                    },
+                },
+            },
+        )
+        .await;
+
+    assert!(
+        fixture.server.list_live_sessions().is_empty(),
+        "{} session/close must remove the live registry slot",
+        surface.label()
+    );
+    let final_result = wait_for_observed_outbound(&fixture, |event| {
+        event.session_id == started.session_id && event.kind == "session/result"
+    })
+    .await;
+    assert_eq!(
+        final_result.session_result_stop_reason.as_deref(),
+        Some("closed"),
+        "{} close result reason",
+        surface.label()
+    );
 }
 
 #[tokio::test]

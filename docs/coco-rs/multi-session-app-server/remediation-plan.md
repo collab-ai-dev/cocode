@@ -471,8 +471,12 @@ Implementation status, 2026-07-13:
   process-owned project services. CLI process exit covers all early-return
   modes through a guard, and SDK remote-host shutdown calls the same policy
   after AppServer/Event Hub drain.
-- Still open in Phase F: add a shared lifecycle conformance suite across local
-  TUI-style, local headless, stdio SDK, and sidecar connections.
+- A shared lifecycle conformance regression now runs one start/read/close
+  contract against the local typed AppServer surface and the JSON-RPC AppServer
+  bridge.
+- Still open in Phase F: extend that shared conformance suite to the concrete
+  stdio SDK and sidecar transport bindings, and add resume-specific assertions
+  to the same matrix.
 
 Changes:
 
@@ -491,8 +495,10 @@ Changes:
 
 Tests and gate:
 
-- the same lifecycle conformance suite runs against local TUI-style, local
-  headless-style, stdio SDK, and sidecar connections;
+- the same lifecycle conformance suite runs against local typed and JSON-RPC
+  AppServer bridge surfaces for start/read/close;
+- extend the same suite to local TUI-style, local headless-style, stdio SDK,
+  and sidecar connection bindings;
 - resume hydration/history/callback requirements are identical;
 - no production surface calls `SessionFactory` directly;
 - no production surface directly mutates registry/runtime state;
