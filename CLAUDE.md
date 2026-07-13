@@ -298,8 +298,9 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 
 | Crate | Purpose |
 |-------|---------|
-| `cli` | Thin `coco` entry: clap schema, subcommand/process policy, listener wiring, and TUI surface loop |
-| `agent-host` | Agent-session host: session composition, local AppServer client facade, SDK/headless handlers, and runtime integrations |
+| `cli` | Thin `coco` entry: clap schema, subcommand/process policy, mode selection, and TUI surface loop |
+| `agent-host` | Agent-session host: session composition, local AppServer client facade, protocol-neutral AppServer handlers, headless operations, and runtime integrations |
+| `sdk-server` | SDK JSON-RPC/NDJSON adapter: stdio/sidecar transport, outbound writer, callback correlation, and AppServer bridge wiring |
 | `runtime` | Transport-independent process/project resources, workspace paths, and session bootstrap contracts |
 | `server` | Multi-session lifecycle/routing registry plus local and JSON-RPC adapters |
 | `server-client` | Remote AppServer JSON-RPC client, per-surface demux, and transport owners; independent of the server implementation |

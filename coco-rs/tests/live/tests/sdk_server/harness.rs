@@ -13,22 +13,24 @@
 
 use std::sync::Arc;
 
-use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use coco_agent_host::AgentHostOptions;
+use coco_agent_host::app_server_host::{
+    AppServerHostState, CliInitializeBootstrap, RuntimeReplacementContext, SessionTurnExecutor,
+};
 use coco_agent_host::headless;
-use coco_agent_host::sdk_server::CliInitializeBootstrap;
-use coco_agent_host::sdk_server::InMemoryTransport;
-use coco_agent_host::sdk_server::LocalAppSessionHandle;
-use coco_agent_host::sdk_server::SdkServer;
-use coco_agent_host::sdk_server::SdkTransport;
-use coco_agent_host::sdk_server::SessionTurnExecutor;
-use coco_agent_host::session_runtime::SessionHandle;
-use coco_agent_host::session_runtime::SessionRuntimeBuildOpts;
+use coco_agent_host::remote_host::RemoteAppServer;
+use coco_agent_host::session_runtime::{
+    SessionRuntimeBootstrapSource, SessionRuntimeFactory, SessionRuntimeFactoryOpts,
+};
+use coco_app_runtime::SessionRuntimeBootstrap;
 use coco_cli::Cli;
 use coco_commands::CommandRegistry;
 use coco_commands::register_extended_builtins;
+use coco_sdk_server::InMemoryTransport;
+use coco_sdk_server::SdkServer;
+use coco_sdk_server::SdkTransport;
 use coco_session::SessionManager;
 use coco_tool_runtime::ToolRegistry;
 use coco_types::ClientRequestMethod;
@@ -59,15 +61,9 @@ pub struct LiveSdkServer {
     /// assertions. Reminder tests (`skill_listing`) plant files here
     /// pre-build; using `keep()` would leak the dir, so we own it.
     pub _cwd_dir: TempDir,
-    /// Reference to the running session runtime. Held to keep the
-    /// runtime's per-session subsystems alive for the lifetime of
-    /// the harness. Note: the SDK runner's per-turn engine writes
-    /// history to `SessionHandle.history` (read via
-    /// [`Self::history_snapshot`]), NOT to `runtime.history` — so
-    /// reminder assertions go through the server-state path, not
-    /// this field directly.
-    #[allow(dead_code)]
-    pub session_runtime: SessionHandle,
+    /// Shared AppServer used by the SDK connection adapter. History snapshots
+    /// read the live runtime handle registered by `session/start`.
+    pub app_server: Arc<RemoteAppServer>,
     /// Resolved (provider, model) for the harness, for diagnostic use.
     /// Underscore-prefixed because no test reads them today; future
     /// failure messages may want to grab them via field access.
@@ -103,7 +99,14 @@ impl LiveSdkServer {
     }
 
     async fn history_snapshot_now(&self) -> Vec<coco_messages::Message> {
-        self.session_runtime
+        let Some(session_id) = self.app_server.registry().list_live().into_iter().next() else {
+            return Vec::new();
+        };
+        let Some(handle) = self.app_server.registry().get(&session_id) else {
+            return Vec::new();
+        };
+        handle
+            .into_session()
             .history()
             .lock()
             .await
@@ -260,42 +263,36 @@ pub async fn build_live_server_with_options(
     let process_runtime = coco_app_runtime::ProcessRuntime::global();
     let project_services = process_runtime.project_services(&cwd, cwd.clone());
 
-    let session_handle = SessionHandle::build(SessionRuntimeBuildOpts {
-        cli: &cli,
-        runtime_config: Arc::new(runtime_config),
-        config_reloader: None,
+    let runtime_config = Arc::new(runtime_config);
+    let bootstrap_source =
+        SessionRuntimeBootstrapSource::startup_snapshot(SessionRuntimeBootstrap {
+            runtime_config: Arc::clone(&runtime_config),
+            tools,
+            model_id: model_id.clone(),
+            system_prompt: system_prompt.clone(),
+            permission_mode_availability: coco_types::PermissionModeAvailability::new(
+                startup.bypass_available,
+                startup.auto_available,
+            ),
+            permission_mode: startup.mode,
+            command_registry: Arc::clone(&command_registry),
+            skill_manager,
+            agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
+            project_services,
+        });
+    let runtime_factory_cli = Arc::new(cli);
+    let runtime_factory = SessionRuntimeFactory::new(SessionRuntimeFactoryOpts {
+        cli: Arc::clone(&runtime_factory_cli),
+        bootstrap_source,
         cwd: cwd.clone(),
-        model_id: model_id.clone(),
-        system_prompt: system_prompt.clone(),
-        permission_mode_availability: coco_types::PermissionModeAvailability::new(
-            startup.bypass_available,
-            startup.auto_available,
-        ),
-        permission_mode: startup.mode,
         model_runtimes: None,
-        tools,
-        session_manager: session_manager.clone(),
+        session_manager: Arc::clone(&session_manager),
         fast_model_spec: None,
         permission_bridge: None,
-        command_registry: command_registry.clone(),
-        skill_manager,
-        process_runtime,
-        project_services,
-        // Empty search paths keep tests deterministic — only
-        // built-ins land in the catalog, so AgentTool's dynamic
-        // prompt is reproducible across runs.
-        agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
+        process_runtime: Arc::clone(&process_runtime),
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
-        session_id_override: None,
         is_non_interactive: true,
-    })
-    .await
-    .with_context(|| format!("build SessionRuntime for {provider}/{model_id}"))?;
-
-    // Mirror `run_sdk_mode`: fire SessionStart hooks once at bootstrap
-    // so settings.json hook entries surface as `hook_*` reminders on
-    // the first turn.
-    session_handle.fire_session_start_hooks("startup").await;
+    });
 
     let bootstrap = Arc::new(
         CliInitializeBootstrap::new("default".to_string()).with_command_registry(command_registry),
@@ -303,25 +300,40 @@ pub async fn build_live_server_with_options(
 
     // Wire the in-memory transport pair.
     let (server_end, client_end) = InMemoryTransport::pair(64);
-    let server = SdkServer::new(server_end)
-        .with_session_manager(session_manager)
-        .with_initialize_bootstrap(bootstrap)
-        .with_startup_cwd(cwd.clone());
+    let state = Arc::new(AppServerHostState::default());
+    state.install_session_manager_for_startup(Arc::clone(&session_manager));
+    state.install_initialize_bootstrap_for_startup(bootstrap);
+    state.install_startup_cwd(cwd.clone());
 
-    let session_runtime = session_handle.clone();
     let runner = Arc::new(SessionTurnExecutor::new(
-        cli.max_turns.or(Some(8)),
+        runtime_factory_cli.max_turns.or(Some(8)),
         Some(system_prompt),
     ));
-    server.set_turn_runner(runner).await;
+    state.install_turn_runner(runner).await;
+
+    let startup_session_id = coco_types::SessionId::generate();
+    state
+        .install_runtime_replacement(RuntimeReplacementContext {
+            startup_session_id,
+            runtime_factory,
+            process_runtime: Arc::clone(&process_runtime),
+            cwd: cwd.clone(),
+            requires_structured_output: false,
+        })
+        .await;
+    let bridge_host =
+        coco_agent_host::remote_host::RemoteAppServerBridgeHost::new(Arc::clone(&state));
+    let server = SdkServer::new(server_end, bridge_host);
 
     let server_arc = Arc::new(server);
     let server_for_task = server_arc.clone();
+    let app_server = Arc::new(RemoteAppServer::new(
+        /*max_sessions*/ 1, /*channel_capacity*/ 64,
+    ));
+    let app_server_for_task = Arc::clone(&app_server);
     let server_task = tokio::spawn(async move {
-        let app_server = Arc::new(coco_app_server::AppServer::<LocalAppSessionHandle>::new(
-            /*max_sessions*/ 1, /*channel_capacity*/ 64,
-        ));
-        let adapter = coco_app_server::JsonRpcAdapter::with_channel_capacity(app_server, 64);
+        let adapter =
+            coco_app_server::JsonRpcAdapter::with_channel_capacity(app_server_for_task, 64);
         let connection = adapter.connect();
         let _ = server_for_task.run_app_server_connection(connection).await;
     });
@@ -331,7 +343,7 @@ pub async fn build_live_server_with_options(
         server_task,
         _sessions_dir: sessions_dir,
         _cwd_dir: cwd_dir,
-        session_runtime,
+        app_server,
         _provider: provider_name,
         _model_id: model_id,
     })

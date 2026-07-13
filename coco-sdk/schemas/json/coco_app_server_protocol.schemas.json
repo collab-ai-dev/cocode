@@ -459,16 +459,6 @@
       ],
       "type": "object"
     },
-    "ApiProvider": {
-      "description": "Active API backend.",
-      "enum": [
-        "firstParty",
-        "bedrock",
-        "vertex",
-        "foundry"
-      ],
-      "type": "string"
-    },
     "ApplyPatchPreview": {
       "description": "Bounded, structured preview of an `apply_patch` body for UI rendering.",
       "properties": {
@@ -653,7 +643,7 @@
           "$ref": "#/$defs/InteractiveTarget"
         },
         "updated_input": {
-          "description": "Optional rewritten tool input the SDK client supplies at\napproval time. When `Some`, the engine substitutes this for the\nmodel-emitted input before invoking the tool. Used by\n`AskUserQuestion` to ship user-selected `answers` (and optional\n`annotations`) back into the tool's data envelope.\n\nIn-process equivalent is `coco_tool_runtime::ToolPermissionResolution.updated_input`\n(TUI mode). Consumed by `app/agent-host/src/sdk_server/approval_bridge.rs`."
+          "description": "Optional rewritten tool input the SDK client supplies at\napproval time. When `Some`, the engine substitutes this for the\nmodel-emitted input before invoking the tool. Used by\n`AskUserQuestion` to ship user-selected `answers` (and optional\n`annotations`) back into the tool's data envelope.\n\nIn-process equivalent is `coco_tool_runtime::ToolPermissionResolution.updated_input`\n(TUI mode). Consumed by the SDK approval bridge in `coco-agent-host`."
         }
       },
       "required": [
@@ -1355,6 +1345,133 @@
         }
       ],
       "title": "Capability"
+    },
+    "ClientAgentDefinition": {
+      "description": "Client-supplied custom subagent spec carried on `InitializeParams.agents`.\n\nWire-level DTO. **Distinct** from the internal [`crate::AgentDefinition`]\nwhich is the resolved post-load representation merged from markdown /\nplugin / client sources.",
+      "properties": {
+        "background": {
+          "description": "Run as a fire-and-forget background task when invoked.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "criticalSystemReminder_EXPERIMENTAL": {
+          "description": "Experimental critical system reminder appended to the system prompt.\nWire field name: `criticalSystemReminder_EXPERIMENTAL`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "Natural-language description shown in the AgentTool prompt list.",
+          "type": "string"
+        },
+        "disallowed_tools": {
+          "description": "Explicit tool deny-list.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "effort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Reasoning effort selector."
+        },
+        "initial_prompt": {
+          "description": "Auto-submitted as the first user turn when this agent is the main thread.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_turns": {
+          "description": "Hard ceiling on agentic turns before the agent stops.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "mcp_servers": {
+          "description": "Per-agent MCP servers (`string` name-ref or inline `{name: config}` map).",
+          "items": {
+            "$ref": "#/$defs/AgentMcpServerSpec"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "memory": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MemoryScope"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Auto-loading scope for agent memory files (`user` / `project` / `local`)."
+        },
+        "model": {
+          "description": "Model alias / full id / `\"inherit\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Permission mode override for tool executions."
+        },
+        "prompt": {
+          "description": "Agent system prompt body.",
+          "type": "string"
+        },
+        "skills": {
+          "description": "Skill names auto-loaded into the agent context.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "tools": {
+          "description": "Allowed tool names. `None` inherits all parent tools.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "description",
+        "prompt"
+      ],
+      "type": "object"
     },
     "ClientRequest": {
       "description": "Bidirectional control protocol \u2014 client-initiated requests.\n\nEach variant carries a unique `method` string used on the wire. The method is the discriminator; params are the variant-specific payload.\n\nSee `event-system-design.md` \u00a75.1 for the base variants and \u00a75.4 for gap additions.",
@@ -3388,6 +3505,85 @@
       ],
       "type": "object"
     },
+    "HookCallbackOutput": {
+      "description": "Hook callback output \u2014 a flat object whose `async` field\ndiscriminates async-mode.",
+      "properties": {
+        "async": {
+          "description": "Async mode opt-in. `Some(true)` \u21d2 this is an async response;\nevery sync field below is ignored and the caller awaits the\nasync result through the side channel. Absent / `Some(false)` \u21d2\nsync response (the rest of the fields apply).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "asyncTimeout": {
+          "description": "Optional async timeout in milliseconds. Only meaningful when\n`async: true`.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "continue": {
+          "description": "Stop the agent loop after this turn when `Some(false)`.\nPair with `stopReason` for the visible message.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HookDecision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Permission-style decision applied to the pending tool call.\n`block` means deny; `approve` means allow."
+        },
+        "hookSpecificOutput": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HookSpecificOutput"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Event-specific structured output. Tagged by `hookEventName`."
+        },
+        "reason": {
+          "description": "Human-readable reason associated with `decision`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stopReason": {
+          "description": "Visible reason when `continue: false`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "suppressOutput": {
+          "description": "Suppress default output rendering for this turn.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "systemMessage": {
+          "description": "Free-form message injected into the conversation as a system\nmessage (visible to model and user).\n`syncHookResponseSchema.systemMessage`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "HookCallbackOutput",
+      "type": "object"
+    },
     "HookCallbackParams": {
       "description": "Invoke an SDK-registered hook callback.\nCorrelation is via the **outer** JSON-RPC `request_id` on the\nenvelope \u2014 there is no inner `request_id` field. The SDK replies\nwith a `HookCallbackResult` payload as the synchronous response.",
       "properties": {
@@ -3416,10 +3612,10 @@
       "type": "object"
     },
     "HookCallbackResult": {
-      "description": "Result body for the synchronous JSON-RPC reply to a\n`hook/callback` server request.\nCorrelation is via the outer JSON-RPC `request_id` on the response\nenvelope \u2014 there is no inner correlation field. The whole body is\nthe hook output in shape; downstream parsers consume\n`SdkHookOutput` directly via [`HookCallbackResult::output`].",
+      "description": "Result body for the synchronous JSON-RPC reply to a\n`hook/callback` server request.\nCorrelation is via the outer JSON-RPC `request_id` on the response\nenvelope \u2014 there is no inner correlation field. The whole body is\nthe hook output in shape; downstream parsers consume\n`HookCallbackOutput` directly via [`HookCallbackResult::output`].",
       "properties": {
         "output": {
-          "$ref": "#/$defs/SdkHookOutput",
+          "$ref": "#/$defs/HookCallbackOutput",
           "description": "Hook output in shape."
         }
       },
@@ -4077,8 +4273,143 @@
       ],
       "type": "object"
     },
+    "InitializeAccountInfo": {
+      "description": "Account + auth info for the logged-in user. All fields optional\n\u2014 clients that don't sign in get an empty struct.",
+      "properties": {
+        "apiKeySource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "apiProvider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InitializeApiProvider"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Active API backend. Anthropic OAuth login only applies when\n`FirstParty`; for third-party providers the other fields are\nabsent and auth is external (AWS creds, gcloud ADC, etc.)."
+        },
+        "email": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "organization": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subscriptionType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tokenSource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "InitializeAgentInfo": {
+      "description": "Available subagent descriptor for `InitializeResult.agents`.\nKept distinct from `event::AgentInfo`, the payload for the\n`agents/registered` notification, which has a different schema.",
+      "properties": {
+        "description": {
+          "description": "Description of when to use this agent.",
+          "type": "string"
+        },
+        "model": {
+          "description": "Model alias this agent uses; `None` means inherit parent model.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Agent type identifier (e.g. `\"Explore\"`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description"
+      ],
+      "type": "object"
+    },
+    "InitializeApiProvider": {
+      "description": "Active API backend.",
+      "enum": [
+        "firstParty",
+        "bedrock",
+        "vertex",
+        "foundry"
+      ],
+      "type": "string"
+    },
+    "InitializeModelInfo": {
+      "description": "Model capability descriptor for `InitializeResult.models`. The wire uses\n`value` + camelCase capability keys.",
+      "properties": {
+        "description": {
+          "description": "Short description of the model's capabilities.",
+          "type": "string"
+        },
+        "displayName": {
+          "description": "Human-readable display name.",
+          "type": "string"
+        },
+        "supportedEffortLevels": {
+          "items": {
+            "$ref": "#/$defs/EffortLevel"
+          },
+          "type": "array"
+        },
+        "supportsAdaptiveThinking": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "supportsAutoMode": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "supportsEffort": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "supportsFastMode": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "value": {
+          "description": "Model identifier used in API calls (e.g. `\"claude-opus-4-6\"`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "displayName",
+        "description"
+      ],
+      "type": "object"
+    },
     "InitializeParams": {
-      "description": "Sent once at session start for capability negotiation. Carries hooks,\nSDK MCP servers, output format, system prompt, and agent definitions\nso the agent can construct its registries before the first turn.",
+      "description": "Sent once at session start for capability negotiation. Carries hooks,\nclient MCP servers, output format, system prompt, and agent definitions\nso the agent can construct its registries before the first turn.",
       "properties": {
         "agentProgressSummaries": {
           "description": "Enable agent progress summaries.",
@@ -4089,7 +4420,7 @@
         },
         "agents": {
           "additionalProperties": {
-            "$ref": "#/$defs/SdkAgentDefinition"
+            "$ref": "#/$defs/ClientAgentDefinition"
           },
           "description": "Custom agent definitions keyed by name.",
           "type": [
@@ -4101,6 +4432,16 @@
           "description": "Text appended to the default system prompt.",
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "client_mcp_servers": {
+          "description": "Client-provided MCP server names (to skip env-configured ones).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
             "null"
           ]
         },
@@ -4293,16 +4634,6 @@
             "null"
           ]
         },
-        "sdk_mcp_servers": {
-          "description": "SDK-provided MCP server names (to skip env-configured ones).",
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
         "system_prompt": {
           "description": "Full system prompt override.",
           "type": [
@@ -4327,7 +4658,7 @@
           "type": "string"
         },
         "account": {
-          "$ref": "#/$defs/SdkAccountInfo",
+          "$ref": "#/$defs/InitializeAccountInfo",
           "default": {},
           "description": "Account / auth info for the logged-in user."
         },
@@ -4335,7 +4666,7 @@
           "default": [],
           "description": "Subagents available for the `Agent` tool.",
           "items": {
-            "$ref": "#/$defs/SdkAgentInfo"
+            "$ref": "#/$defs/InitializeAgentInfo"
           },
           "type": "array"
         },
@@ -4351,7 +4682,7 @@
           "default": [],
           "description": "Slash commands the client can invoke.",
           "items": {
-            "$ref": "#/$defs/SdkSlashCommand"
+            "$ref": "#/$defs/InitializeSlashCommand"
           },
           "type": "array"
         },
@@ -4370,7 +4701,7 @@
           "default": [],
           "description": "Available models.",
           "items": {
-            "$ref": "#/$defs/SdkModelInfo"
+            "$ref": "#/$defs/InitializeModelInfo"
           },
           "type": "array"
         },
@@ -4392,6 +4723,29 @@
         "output_style"
       ],
       "title": "InitializeResult",
+      "type": "object"
+    },
+    "InitializeSlashCommand": {
+      "description": "Slash command descriptor for `InitializeResult.commands`.\nKept distinct from the richer coco-rs `commands` crate slash-command\nmodel; initialize only advertises the fields clients need.",
+      "properties": {
+        "argumentHint": {
+          "description": "Argument hint rendered next to the command (e.g. `\"<file>\"`).",
+          "type": "string"
+        },
+        "description": {
+          "description": "Description shown in help / completion UI.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Command name without the leading `/`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "argumentHint"
+      ],
       "type": "object"
     },
     "InputTokens": {
@@ -4920,7 +5274,7 @@
       "type": "object"
     },
     "McpRouteMessageParams": {
-      "description": "Route an MCP JSON-RPC message to an SDK-hosted server.\nCorrelation is via the outer JSON-RPC `request_id` on the envelope \u2014\nno inner `request_id`. The SDK replies with a `McpRouteMessageResult`\npayload carrying the forwarded MCP server's JSON-RPC response.",
+      "description": "Route an MCP JSON-RPC message to a client-hosted server.\nCorrelation is via the outer JSON-RPC `request_id` on the envelope \u2014\nno inner `request_id`. The SDK replies with a `McpRouteMessageResult`\npayload carrying the forwarded MCP server's JSON-RPC response.",
       "properties": {
         "message": {
           "description": "The raw JSON-RPC message to forward."
@@ -4936,10 +5290,10 @@
       "type": "object"
     },
     "McpRouteMessageResult": {
-      "description": "Result body for the synchronous JSON-RPC reply to a\n`mcp/routeMessage` server request.\nCarries the forwarded JSON-RPC response from the SDK-hosted MCP\nserver verbatim. Correlation is via the outer JSON-RPC\n`request_id` on the response envelope.",
+      "description": "Result body for the synchronous JSON-RPC reply to a\n`mcp/routeMessage` server request.\nCarries the forwarded JSON-RPC response from the client-hosted MCP\nserver verbatim. Correlation is via the outer JSON-RPC\n`request_id` on the response envelope.",
       "properties": {
         "message": {
-          "description": "JSON-RPC message response from the SDK-hosted MCP server."
+          "description": "JSON-RPC message response from the client-hosted MCP server."
         }
       },
       "required": [
@@ -7472,406 +7826,6 @@
       ],
       "type": "object"
     },
-    "SdkAccountInfo": {
-      "description": "Account + auth info for the logged-in user. All fields optional\n\u2014 clients that don't sign in get an empty struct.",
-      "properties": {
-        "apiKeySource": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "apiProvider": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ApiProvider"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Active API backend. Anthropic OAuth login only applies when\n`FirstParty`; for third-party providers the other fields are\nabsent and auth is external (AWS creds, gcloud ADC, etc.)."
-        },
-        "email": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "organization": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "subscriptionType": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "tokenSource": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "SdkAgentDefinition": {
-      "description": "SDK-supplied custom subagent spec carried on `InitializeParams.agents`.\n\nWire-level DTO. **Distinct** from the internal [`crate::AgentDefinition`]\nwhich is the resolved post-load representation merged from markdown /\nplugin / SDK sources.",
-      "properties": {
-        "background": {
-          "description": "Run as a fire-and-forget background task when invoked.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "criticalSystemReminder_EXPERIMENTAL": {
-          "description": "Experimental critical system reminder appended to the system prompt.\nWire field name: `criticalSystemReminder_EXPERIMENTAL`.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "description": {
-          "description": "Natural-language description shown in the AgentTool prompt list.",
-          "type": "string"
-        },
-        "disallowed_tools": {
-          "description": "Explicit tool deny-list.",
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "effort": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ReasoningEffort"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Reasoning effort selector."
-        },
-        "initial_prompt": {
-          "description": "Auto-submitted as the first user turn when this agent is the main thread.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "max_turns": {
-          "description": "Hard ceiling on agentic turns before the agent stops.",
-          "format": "int32",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "mcp_servers": {
-          "description": "Per-agent MCP servers (`string` name-ref or inline `{name: config}` map).",
-          "items": {
-            "$ref": "#/$defs/AgentMcpServerSpec"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "memory": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/MemoryScope"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Auto-loading scope for agent memory files (`user` / `project` / `local`)."
-        },
-        "model": {
-          "description": "Model alias / full id / `\"inherit\"`.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "permission_mode": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PermissionMode"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Permission mode override for tool executions."
-        },
-        "prompt": {
-          "description": "Agent system prompt body.",
-          "type": "string"
-        },
-        "skills": {
-          "description": "Skill names auto-loaded into the agent context.",
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "tools": {
-          "description": "Allowed tool names. `None` inherits all parent tools.",
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "description",
-        "prompt"
-      ],
-      "type": "object"
-    },
-    "SdkAgentInfo": {
-      "description": "Available subagent descriptor for `InitializeResult.agents`.\nNamed `SdkAgentInfo` to avoid colliding with `event::AgentInfo`\n(the payload for the `agents/registered` notification, which has a\ndifferent schema \u2014 `description: Option<String>` without `model`).",
-      "properties": {
-        "description": {
-          "description": "Description of when to use this agent.",
-          "type": "string"
-        },
-        "model": {
-          "description": "Model alias this agent uses; `None` means inherit parent model.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "name": {
-          "description": "Agent type identifier (e.g. `\"Explore\"`).",
-          "type": "string"
-        }
-      },
-      "required": [
-        "name",
-        "description"
-      ],
-      "type": "object"
-    },
-    "SdkHookOutput": {
-      "description": "SDK hook callback output \u2014 a flat object whose `async` field\ndiscriminates async-mode.",
-      "properties": {
-        "async": {
-          "description": "Async mode opt-in. `Some(true)` \u21d2 this is an async response;\nevery sync field below is ignored and the caller awaits the\nasync result through the side channel. Absent / `Some(false)` \u21d2\nsync response (the rest of the fields apply).",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "asyncTimeout": {
-          "description": "Optional async timeout in milliseconds. Only meaningful when\n`async: true`.",
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "continue": {
-          "description": "Stop the agent loop after this turn when `Some(false)`.\nPair with `stopReason` for the visible message.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "decision": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/HookDecision"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Permission-style decision applied to the pending tool call.\n`block` means deny; `approve` means allow."
-        },
-        "hookSpecificOutput": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/HookSpecificOutput"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Event-specific structured output. Tagged by `hookEventName`."
-        },
-        "reason": {
-          "description": "Human-readable reason associated with `decision`.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "stopReason": {
-          "description": "Visible reason when `continue: false`.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "suppressOutput": {
-          "description": "Suppress default output rendering for this turn.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "systemMessage": {
-          "description": "Free-form message injected into the conversation as a system\nmessage (visible to model and user).\n`syncHookResponseSchema.systemMessage`.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "title": "SdkHookOutput",
-      "type": "object"
-    },
-    "SdkModelInfo": {
-      "description": "Model capability descriptor for `InitializeResult.models`. The wire uses\n`value` + camelCase capability keys.\nNamed `SdkModelInfo` to match the existing re-export name at the\ncrate root and to leave breathing room for other model-info shapes\n(e.g. per-provider config models) elsewhere in the codebase.",
-      "properties": {
-        "description": {
-          "description": "Short description of the model's capabilities.",
-          "type": "string"
-        },
-        "displayName": {
-          "description": "Human-readable display name.",
-          "type": "string"
-        },
-        "supportedEffortLevels": {
-          "items": {
-            "$ref": "#/$defs/EffortLevel"
-          },
-          "type": "array"
-        },
-        "supportsAdaptiveThinking": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "supportsAutoMode": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "supportsEffort": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "supportsFastMode": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "value": {
-          "description": "Model identifier used in API calls (e.g. `\"claude-opus-4-6\"`).",
-          "type": "string"
-        }
-      },
-      "required": [
-        "value",
-        "displayName",
-        "description"
-      ],
-      "type": "object"
-    },
-    "SdkSessionSummary": {
-      "description": "Minimal session metadata returned by `session/list` and `session/read`.",
-      "properties": {
-        "created_at": {
-          "type": "string"
-        },
-        "cwd": {
-          "type": "string"
-        },
-        "message_count": {
-          "default": 0,
-          "format": "int32",
-          "type": "integer"
-        },
-        "model": {
-          "type": "string"
-        },
-        "session_id": {
-          "$ref": "#/$defs/SessionId"
-        },
-        "title": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "total_tokens": {
-          "default": 0,
-          "format": "int64",
-          "type": "integer"
-        },
-        "updated_at": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "session_id",
-        "model",
-        "cwd",
-        "created_at"
-      ],
-      "type": "object"
-    },
-    "SdkSlashCommand": {
-      "description": "Slash command descriptor for `InitializeResult.commands`.\nNamed `SdkSlashCommand` to avoid colliding with the existing coco-rs\n`commands` crate notion of a slash command (which has richer\ninternal fields not on the SDK wire).",
-      "properties": {
-        "argumentHint": {
-          "description": "Argument hint rendered next to the command (e.g. `\"<file>\"`).",
-          "type": "string"
-        },
-        "description": {
-          "description": "Description shown in help / completion UI.",
-          "type": "string"
-        },
-        "name": {
-          "description": "Command name without the leading `/`.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "name",
-        "description",
-        "argumentHint"
-      ],
-      "type": "object"
-    },
     "ServerCancelRequestParams": {
       "description": "Cancel a previously-sent ServerRequest.",
       "properties": {
@@ -9414,7 +9368,7 @@
           "type": "object"
         },
         {
-          "description": "Route an MCP JSON-RPC message to the SDK-hosted MCP server.\nExpected response: `ClientRequest::McpRouteMessageResponse`.",
+          "description": "Route an MCP JSON-RPC message to the client-hosted MCP server.\nExpected response: `ClientRequest::McpRouteMessageResponse`.",
           "properties": {
             "method": {
               "const": "mcp/routeMessage",
@@ -9529,7 +9483,7 @@
       "properties": {
         "sessions": {
           "items": {
-            "$ref": "#/$defs/SdkSessionSummary"
+            "$ref": "#/$defs/SessionSummary"
           },
           "type": "array"
         }
@@ -9725,7 +9679,7 @@
           ]
         },
         "session": {
-          "$ref": "#/$defs/SdkSessionSummary"
+          "$ref": "#/$defs/SessionSummary"
         }
       },
       "required": [
@@ -9903,7 +9857,7 @@
       "description": "Response to `ClientRequest::SessionResume`.\nReturned after the server loads a previously-persisted session\nfrom disk and installs it as the active session. The SDK client\ncan then issue `turn/start` to continue the conversation.",
       "properties": {
         "session": {
-          "$ref": "#/$defs/SdkSessionSummary"
+          "$ref": "#/$defs/SessionSummary"
         },
         "surface_id": {
           "anyOf": [
@@ -10159,6 +10113,52 @@
       },
       "required": [
         "target"
+      ],
+      "type": "object"
+    },
+    "SessionSummary": {
+      "description": "Minimal session metadata returned by `session/list` and `session/read`.",
+      "properties": {
+        "created_at": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "message_count": {
+          "default": 0,
+          "format": "int32",
+          "type": "integer"
+        },
+        "model": {
+          "type": "string"
+        },
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total_tokens": {
+          "default": 0,
+          "format": "int64",
+          "type": "integer"
+        },
+        "updated_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session_id",
+        "model",
+        "cwd",
+        "created_at"
       ],
       "type": "object"
     },
@@ -14064,7 +14064,7 @@
           "properties": {
             "sessions": {
               "items": {
-                "$ref": "#/$defs/SdkSessionSummary"
+                "$ref": "#/$defs/SessionSummary"
               },
               "type": "array"
             },

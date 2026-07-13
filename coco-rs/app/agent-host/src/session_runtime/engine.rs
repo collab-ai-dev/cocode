@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use coco_messages::MessageHistory;
@@ -9,6 +10,7 @@ use coco_query::QueryEngineConfig;
 use coco_query::SessionStartHookSideEffectSink;
 use coco_query::SessionStartHookSideEffects;
 use coco_tool_runtime::TurnAbortSignal;
+use coco_types::CoreEvent;
 use coco_types::ToolAppState;
 
 use super::EnginePersistenceMode;
@@ -37,6 +39,31 @@ impl SessionRuntime {
     pub async fn build_engine(&self, cancel: CancellationToken) -> QueryEngine {
         self.build_engine_with_turn_abort(TurnAbortSignal::from_token(cancel))
             .await
+    }
+
+    pub async fn run_manual_compact(
+        &self,
+        request: coco_query::ManualCompactRequest,
+        event_tx: Option<mpsc::Sender<CoreEvent>>,
+        cancel: CancellationToken,
+    ) {
+        let engine = self.build_engine(cancel).await;
+        let mut history = self.history_resources.history().lock().await.snapshot();
+
+        engine
+            .run_manual_compact(&mut history, &event_tx, request)
+            .await;
+
+        {
+            let mut runtime_history = self.history_resources.history().lock().await;
+            *runtime_history = history;
+        }
+
+        let session_id = self.current_typed_session_id().await.to_string();
+        let manager = Arc::clone(self.session_manager());
+        let _ =
+            tokio::task::spawn_blocking(move || manager.re_append_session_metadata(&session_id))
+                .await;
     }
 
     pub async fn build_engine_with_turn_abort(&self, turn_abort: TurnAbortSignal) -> QueryEngine {
@@ -133,11 +160,130 @@ impl SessionRuntime {
     }
 
     /// Build a fresh `QueryEngine` from a caller-provided
-    /// `QueryEngineConfig`. Used by SDK paths whose per-turn config
+    /// `QueryEngineConfig`. Used by AppServer paths whose per-turn config
     /// fields (model, session_id, max_*) come from the
     /// `turn/start` request and override the runtime defaults.
     /// `app_state_override` lets fork callers pin a distinct `ToolAppState`;
     /// normal session turns inherit `runtime.app_state`.
+    async fn prepare_turn_engine_config(
+        &self,
+        request: super::SessionTurnEngineConfigRequest,
+    ) -> super::SessionTurnEngineConfig {
+        let runtime_config = self.runtime_config().as_ref();
+        let (allow_rules, deny_rules, ask_rules) =
+            crate::permission_rule_loader::typed_permission_rules(&runtime_config.settings);
+        let permission_rule_source_roots =
+            crate::permission_rule_loader::permission_rule_source_roots(
+                &runtime_config.settings,
+                self.original_cwd(),
+            );
+        let current_engine_config = self.current_engine_config().await;
+        let turn_cwd = current_engine_config.workspace_cwd();
+        let permission_mode = request
+            .permission_mode
+            .unwrap_or(current_engine_config.permission_mode);
+        let model_runtime_source = request
+            .model_selection
+            .clone()
+            .map(coco_inference::ModelRuntimeSource::Explicit)
+            .unwrap_or(coco_inference::ModelRuntimeSource::Role(
+                coco_types::ModelRole::Main,
+            ));
+        let model_id = request
+            .model_selection
+            .as_ref()
+            .map(|selection| selection.model_id.clone())
+            .unwrap_or_else(|| current_engine_config.model_id.clone());
+        let plan_mode_settings = current_engine_config.plan_mode_settings.clone();
+        let config = QueryEngineConfig {
+            model_id: model_id.clone(),
+            permission_mode,
+            permission_rule_source_roots: permission_rule_source_roots.clone(),
+            max_turns: request
+                .max_turns
+                .or(current_engine_config.max_turns)
+                .or(runtime_config.loop_config.max_turns),
+            total_token_budget: current_engine_config
+                .total_token_budget
+                .or_else(|| runtime_config.loop_config.total_token_budget.map(i64::from)),
+            prompt_cache: self
+                .model_runtimes()
+                .snapshot_for_source(model_runtime_source.clone())
+                .ok()
+                .is_some_and(|snapshot| snapshot.supports_prompt_cache)
+                .then(|| coco_types::PromptCacheConfig {
+                    mode: coco_types::PromptCacheMode::Auto,
+                    ttl: coco_types::CacheTtl::OneHour,
+                    scope: None,
+                    requested_betas: Default::default(),
+                    skip_cache_write: false,
+                }),
+            system_prompt: request
+                .system_prompt
+                .or_else(|| current_engine_config.system_prompt.clone()),
+            streaming_tool_execution: runtime_config.loop_config.enable_streaming_tools,
+            session_id: self.current_typed_session_id().await,
+            tool_config: runtime_config.tool.clone(),
+            sandbox_config: runtime_config.sandbox.clone(),
+            sandbox_state: self.sandbox_state(),
+            memory_config: runtime_config.memory.clone(),
+            shell_config: runtime_config.shell.clone(),
+            active_shell_tool: current_engine_config.active_shell_tool,
+            shell_provider: current_engine_config.shell_provider.clone(),
+            output_rewriter: current_engine_config.output_rewriter.clone(),
+            web_fetch_config: runtime_config.web_fetch.clone(),
+            web_search_config: runtime_config.web_search.clone(),
+            compact: runtime_config.compact.clone(),
+            plan_mode_settings,
+            thinking_level: request
+                .thinking_level
+                .or_else(|| current_engine_config.thinking_level.clone()),
+            features: std::sync::Arc::new(runtime_config.features.clone()),
+            skill_overrides: std::sync::Arc::new(runtime_config.skill_overrides.clone()),
+            tool_overrides: runtime_config.tool_overrides.clone(),
+            include_hook_events: current_engine_config.include_hook_events,
+            ..current_engine_config.clone()
+        };
+
+        self.refresh_live_permissions_for_turn(super::SessionTurnPermissionRefresh {
+            fallback_previous_mode: current_engine_config.permission_mode,
+            permission_mode,
+            allow_rules,
+            deny_rules,
+            ask_rules,
+            permission_rule_source_roots,
+            plan_auto_options: coco_permissions::PlanModeAutoOptions {
+                use_auto_mode_during_plan: current_engine_config.use_auto_mode_during_plan,
+                auto_mode_available: current_engine_config.permission_mode_availability.auto,
+            },
+        })
+        .await;
+
+        super::SessionTurnEngineConfig {
+            config,
+            model_runtime_source,
+            model_id,
+            turn_cwd,
+        }
+    }
+
+    pub async fn build_turn_engine(
+        &self,
+        request: super::SessionTurnEngineConfigRequest,
+        cancel: CancellationToken,
+    ) -> super::SessionTurnEngine {
+        let prepared = self.prepare_turn_engine_config(request).await;
+        let engine = self
+            .build_engine_from_config(prepared.config, cancel, None)
+            .await
+            .with_model_runtime_source(prepared.model_runtime_source);
+        super::SessionTurnEngine {
+            engine,
+            model_id: prepared.model_id,
+            turn_cwd: prepared.turn_cwd,
+        }
+    }
+
     pub async fn build_engine_from_config(
         &self,
         config: QueryEngineConfig,
@@ -178,7 +324,7 @@ impl SessionRuntime {
         app_state_override: Option<Arc<RwLock<ToolAppState>>>,
         persistence: EnginePersistenceMode,
     ) -> QueryEngine {
-        // Top-level SDK/headless session engines get the same live overlay as
+        // Top-level AppServer/headless session engines get the same live overlay as
         // the TUI main engine so a mid-cycle approval takes effect this cycle.
         // Gated to the main session (`MainSession` + no `agent_id`): subagents
         // and forks keep their own isolated config-cloned rules - they must not
@@ -254,7 +400,7 @@ impl SessionRuntime {
         // `self.engine_state_resources.app_state()` (NOT the per-build `app_state` override): a
         // fork/skill/compaction sub-engine carrying a non-Auto override would
         // otherwise clobber it. Every build re-syncs from the single source,
-        // covering all mode-change funnels (TUI + SDK) uniformly without
+        // covering all mode-change funnels (TUI + AppServer) uniformly without
         // threading the flag through each.
         let engine_config = self.current_engine_config().await;
         {

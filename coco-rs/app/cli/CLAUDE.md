@@ -9,10 +9,10 @@ adapters. Reusable application behavior belongs in `coco-agent-host`.
 - The `coco_cli` library target contains only the clap schema and process-only
   helpers; application behavior must stay in `coco-agent-host`.
 - Keep AppServer handlers, session runtime construction, SDK request semantics,
-  and headless use cases in `app/agent-host`.
+  and headless operations in `app/agent-host`.
 - Keep terminal lifecycle, TUI modal/input policy, command-line subcommand
   selection, and OS process policy here.
-- The TUI surface invokes host use cases through `AppServerLocalBridge`; it
+- The TUI surface invokes host application operations through `AppServerLocalBridge`; it
   does not build a second generic runner abstraction.
 
 ## Verification

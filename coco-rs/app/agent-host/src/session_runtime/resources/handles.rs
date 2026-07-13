@@ -177,8 +177,8 @@ pub(in crate::session_runtime) struct SessionAgentCatalogResources {
     /// Active per-session agent catalog snapshot.
     pub(in crate::session_runtime) agent_catalog:
         Arc<RwLock<Arc<coco_subagent::AgentCatalogSnapshot>>>,
-    /// SDK-supplied agent definitions injected into every fresh catalog load.
-    pub(in crate::session_runtime) sdk_supplied_agents:
+    /// Client-supplied agent definitions injected into every fresh catalog load.
+    pub(in crate::session_runtime) client_supplied_agents:
         Arc<RwLock<Vec<coco_types::AgentDefinition>>>,
 }
 
@@ -192,7 +192,7 @@ impl SessionAgentCatalogResources {
             agent_search_paths: Arc::new(RwLock::new(agent_search_paths)),
             builtin_agent_catalog,
             agent_catalog,
-            sdk_supplied_agents: Arc::new(RwLock::new(Vec::new())),
+            client_supplied_agents: Arc::new(RwLock::new(Vec::new())),
         }
     }
 }
@@ -222,7 +222,7 @@ impl SessionMemoryResources {
 
 #[derive(Clone)]
 pub(in crate::session_runtime) struct SessionSandboxResources {
-    /// Session-scoped sandbox state shared by engines, SDK controls, and fork
+    /// Session-scoped sandbox state shared by engines, AppServer controls, and fork
     /// dispatch.
     pub(in crate::session_runtime) sandbox_state: Option<Arc<coco_sandbox::SandboxState>>,
 }

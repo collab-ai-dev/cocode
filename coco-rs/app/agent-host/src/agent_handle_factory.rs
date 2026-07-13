@@ -92,7 +92,7 @@ pub async fn build_agent_team_wiring(
 ) -> Result<AgentTeamWiring> {
     // In-process subagents inherit the leader's `ToolPermissionBridge`
     // (installed on `SessionRuntime` and propagated by `wire_engine`):
-    // SDK leaders forward over `approval/askForApproval`, TUI leaders
+    // AppServer leaders forward over `approval/askForApproval`, TUI leaders
     // drive the permission prompt. No extra channel needed
     // here — the prior in-process mpsc circuit was orphaned and
     // removed in the post-D cleanup pass.

@@ -1377,6 +1377,7 @@ dependencies = [
  "coco-plugins",
  "coco-query",
  "coco-sandbox",
+ "coco-sdk-server",
  "coco-session",
  "coco-shell",
  "coco-skills",
@@ -2335,6 +2336,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "coco-sdk-server"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "coco-agent-host",
+ "coco-app-server",
+ "coco-app-server-transport",
+ "coco-error",
+ "coco-hub-connector",
+ "coco-types",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "snafu",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "coco-secret-redact"
 version = "0.1.1"
 dependencies = [
@@ -2637,6 +2658,7 @@ dependencies = [
  "coco-messages",
  "coco-permissions",
  "coco-query",
+ "coco-sdk-server",
  "coco-session",
  "coco-skills",
  "coco-subagent",

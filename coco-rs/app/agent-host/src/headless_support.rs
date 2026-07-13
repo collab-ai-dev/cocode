@@ -18,7 +18,7 @@ pub(super) fn append_headless_slash_text(
     text: &str,
 ) {
     messages.extend(
-        coco_messages::build_slash_command_messages(command, args, text, false)
+        crate::session_messages::slash_text_messages(command, args, text, false)
             .into_iter()
             .map(std::sync::Arc::new),
     );

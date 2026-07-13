@@ -55,8 +55,8 @@ impl coco_context::FileHistorySnapshotSink for TranscriptFileHistorySink {
 
 /// File-history checkpointing gate. Interactive sessions default ON
 /// (settings flag, unless the disable env is set); non-interactive
-/// (SDK / headless) default OFF and require the SDK-enable env. The
-/// disable env always wins.
+/// sessions default OFF and require the noninteractive-enable env. The disable
+/// env always wins.
 pub(in crate::session_runtime) fn file_checkpointing_enabled(
     settings_enabled: bool,
     is_non_interactive: bool,
@@ -65,7 +65,9 @@ pub(in crate::session_runtime) fn file_checkpointing_enabled(
         return false;
     }
     if is_non_interactive {
-        coco_config::env::is_env_truthy(coco_config::EnvKey::CocoFileCheckpointingSdkEnable)
+        coco_config::env::is_env_truthy(
+            coco_config::EnvKey::CocoFileCheckpointingNoninteractiveEnable,
+        )
     } else {
         settings_enabled
     }

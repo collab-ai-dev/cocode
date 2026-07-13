@@ -6,9 +6,15 @@ use coco_query::QueryEngineConfig;
 
 use super::SessionRuntime;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PermissionModeChange {
+    pub previous: coco_types::PermissionMode,
+    pub changed: bool,
+}
+
 /// Build the live permission base (S1) for the main session's `ToolAppState`
 /// from the loaded rule maps + mode + dirs + source roots. This is the single
-/// seeding shape used at bootstrap, `/clear` re-seed, and the headless/SDK
+/// seeding shape used at bootstrap, `/clear` re-seed, and the headless/AppServer
 /// entry - so the live store (the ONLY permission source the factory
 /// reads each batch) always starts from the same source.
 pub(crate) fn live_permissions(
@@ -35,6 +41,91 @@ pub(crate) fn live_permissions(
 }
 
 impl SessionRuntime {
+    pub async fn set_live_permissions(&self, permissions: coco_types::LiveToolPermissionState) {
+        self.engine_state_resources
+            .app_state()
+            .write()
+            .await
+            .permissions = permissions;
+    }
+
+    pub async fn reset_session_permission_rules(&self) -> (usize, usize) {
+        let mut guard = self.engine_state_resources.app_state().write().await;
+        let cleared_allow_rules = guard
+            .permissions
+            .allow_rules
+            .remove(&coco_types::PermissionRuleSource::Session)
+            .map_or(0, |rules| rules.len());
+        let cleared_deny_rules = guard
+            .permissions
+            .deny_rules
+            .remove(&coco_types::PermissionRuleSource::Session)
+            .map_or(0, |rules| rules.len());
+        (cleared_allow_rules, cleared_deny_rules)
+    }
+
+    pub async fn set_permission_mode(
+        &self,
+        mode: coco_types::PermissionMode,
+    ) -> PermissionModeChange {
+        let fallback_mode = self.current_engine_config().await.permission_mode;
+        self.update_engine_config(move |cfg| cfg.permission_mode = mode)
+            .await;
+
+        let app_state = self.engine_state_resources.app_state();
+        let live_allow_rules = app_state.read().await.permissions.allow_rules.clone();
+        let config = self.current_engine_config().await;
+        let plan_auto_options = coco_permissions::PlanModeAutoOptions {
+            use_auto_mode_during_plan: config.use_auto_mode_during_plan,
+            auto_mode_available: config.permission_mode_availability.auto,
+        };
+
+        let mut guard = app_state.write().await;
+        let previous = guard.permissions.mode.unwrap_or(fallback_mode);
+        let changed = coco_permissions::apply_permission_mode_transition_to_app_state(
+            &mut guard,
+            previous,
+            mode,
+            &live_allow_rules,
+            plan_auto_options,
+        );
+        PermissionModeChange { previous, changed }
+    }
+
+    pub async fn effective_permission_mode(&self) -> coco_types::PermissionMode {
+        let live_mode = self
+            .engine_state_resources
+            .app_state()
+            .read()
+            .await
+            .permissions
+            .mode;
+        match live_mode {
+            Some(mode) => mode,
+            None => self.current_engine_config().await.permission_mode,
+        }
+    }
+
+    pub async fn additional_working_dirs(&self) -> Vec<std::path::PathBuf> {
+        self.engine_state_resources
+            .app_state()
+            .read()
+            .await
+            .permissions
+            .additional_dirs
+            .values()
+            .map(|dir| std::path::PathBuf::from(&dir.path))
+            .collect()
+    }
+
+    pub async fn refresh_live_permissions_for_turn(
+        &self,
+        refresh: super::SessionTurnPermissionRefresh,
+    ) {
+        let mut guard = self.engine_state_resources.app_state().write().await;
+        refresh_live_permissions_for_turn(&mut guard, refresh);
+    }
+
     /// The shared live permission-rule overlay (see field docs). Callers push
     /// mid-cycle approvals / team-rule updates here; every main-session engine
     /// reads it each tool batch.
@@ -48,7 +139,7 @@ impl SessionRuntime {
     /// there is nothing to reconcile/dedup against - the previous base-dedup
     /// step keyed off the now-deleted config rule maps and is gone.
     /// Called from every main-session build path (TUI `build_engine_with_turn_abort`
-    /// and SDK/headless `build_engine_from_config_with_persistence`) so the
+    /// and AppServer/headless `build_engine_from_config_with_persistence`) so the
     /// in-cycle approval mechanism is uniform across transports. NOT called for
     /// subagents/forks - they keep their own isolated config-cloned rules.
     pub(super) async fn prepare_live_permission_overlay(&self, config: &mut QueryEngineConfig) {
@@ -57,7 +148,7 @@ impl SessionRuntime {
     }
 
     /// Single source of truth for applying user-approved permission updates,
-    /// shared by every transport (TUI dialog, SDK approval reply, headless
+    /// shared by every transport (TUI dialog, remote approval reply, headless
     /// permission-prompt tool). Lands the rules in both places they must
     /// reach so in-cycle and cross-cycle behavior stays aligned:
     /// 1. the live `ToolAppState.permissions` base - the single authoritative
@@ -122,4 +213,26 @@ impl SessionRuntime {
             "permission updates applied to live base (ToolAppState.permissions) + disk persist",
         );
     }
+}
+
+pub(crate) fn refresh_live_permissions_for_turn(
+    guard: &mut coco_types::ToolAppState,
+    refresh: super::SessionTurnPermissionRefresh,
+) {
+    let previous_mode = guard
+        .permissions
+        .mode
+        .unwrap_or(refresh.fallback_previous_mode);
+    guard.permissions.allow_rules = refresh.allow_rules;
+    guard.permissions.deny_rules = refresh.deny_rules;
+    guard.permissions.ask_rules = refresh.ask_rules;
+    guard.permissions.permission_rule_source_roots = refresh.permission_rule_source_roots;
+    let live_allow_rules = guard.permissions.allow_rules.clone();
+    coco_permissions::apply_permission_mode_transition_to_app_state(
+        guard,
+        previous_mode,
+        refresh.permission_mode,
+        &live_allow_rules,
+        refresh.plan_auto_options,
+    );
 }

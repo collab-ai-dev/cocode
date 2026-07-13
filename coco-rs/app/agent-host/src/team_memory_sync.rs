@@ -14,7 +14,7 @@
 //! The sync endpoint is Anthropic-first-party only (`/api/claude_code/
 //! team_memory`): the base URL defaults to the Anthropic API base,
 //! overridable via `COCO_TEAM_MEMORY_SYNC_URL`. It is wired on the
-//! interactive (TUI) path only — scripted `-p` / SDK runs do no
+//! interactive (TUI) path only — scripted `-p` / AppServer runs do no
 //! background sync.
 
 use std::path::Path;
@@ -24,6 +24,8 @@ use std::sync::Arc;
 use coco_config::RuntimeConfig;
 use coco_memory::team_sync;
 use tokio::sync::Mutex;
+
+use crate::session_runtime::SessionHandle;
 
 /// Default Anthropic API base for the sync endpoint.
 const DEFAULT_SYNC_BASE_URL: &str = "https://api.anthropic.com";
@@ -88,13 +90,17 @@ fn collect_md_recursive(root: &Path, dir: &Path, out: &mut Vec<team_sync::PushEn
     }
 }
 
-/// Spawn the team-memory pull-then-watch coordinator if all gates pass.
+/// Spawn the team-memory pull-then-watch coordinator for a live session.
 ///
 /// Fire-and-forget on the interactive path: the coordinator task owns the
 /// watcher for the session and is torn down on process exit (matching the
 /// official-marketplace auto-install). No-ops when team memory is
 /// disabled or the repo has no `origin` slug.
-pub fn bootstrap(runtime_config: &RuntimeConfig, cwd: PathBuf, config_home: PathBuf) {
+pub fn spawn_for_session(session: &SessionHandle, cwd: PathBuf, config_home: PathBuf) {
+    spawn_with_config(session.runtime_config(), cwd, config_home);
+}
+
+fn spawn_with_config(runtime_config: &RuntimeConfig, cwd: PathBuf, config_home: PathBuf) {
     if !runtime_config.memory.team_memory_enabled {
         return;
     }

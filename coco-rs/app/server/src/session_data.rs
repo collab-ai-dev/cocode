@@ -1,7 +1,7 @@
 use futures::future::BoxFuture;
 
 use crate::{AppServer, JsonRpcDispatchError};
-use coco_types::{ClientRequest, SdkSessionTurnSummary, SessionId};
+use coco_types::{ClientRequest, SessionId, SessionTurnSummary};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppSessionDataError {
@@ -58,7 +58,7 @@ pub struct LiveSessionDataMessage {
 }
 
 pub struct LiveSessionDataSnapshot {
-    pub summary: coco_types::SdkSessionSummary,
+    pub summary: coco_types::SessionSummary,
     pub messages: Vec<LiveSessionDataMessage>,
 }
 
@@ -375,7 +375,7 @@ pub struct TranscriptTurnEntry<'a> {
 
 pub fn derive_session_turn_summaries<'a>(
     entries: impl IntoIterator<Item = TranscriptTurnEntry<'a>>,
-) -> Vec<SdkSessionTurnSummary> {
+) -> Vec<SessionTurnSummary> {
     let mut spans = Vec::new();
     let mut current: Option<TurnSpanBuilder> = None;
     for (message_index, entry) in entries.into_iter().enumerate() {
@@ -414,8 +414,8 @@ impl TurnSpanBuilder {
         }
     }
 
-    fn finish(self, index: usize) -> SdkSessionTurnSummary {
-        SdkSessionTurnSummary {
+    fn finish(self, index: usize) -> SessionTurnSummary {
+        SessionTurnSummary {
             index: index as i32,
             start_cursor: self.start_message_index.to_string(),
             message_count: self.message_count,

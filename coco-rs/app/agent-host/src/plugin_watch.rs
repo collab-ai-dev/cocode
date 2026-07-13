@@ -2,7 +2,7 @@
 //! `notification_tx`.
 //!
 //! Single source of truth for the wire-up that both interactive (TUI)
-//! and SDK paths need. Plugin changes surface as a notification
+//! and AppServer paths need. Plugin changes surface as a notification
 //! ("Plugins changed. Run /reload-plugins to activate."), never an
 //! auto-reload.
 

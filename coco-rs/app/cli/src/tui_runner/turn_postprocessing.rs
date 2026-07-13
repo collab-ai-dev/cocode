@@ -21,11 +21,23 @@ pub(super) async fn emit_slash_text(
 pub(super) async fn dispatch_context(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> SlashOutcome {
-    local_app_server_bridge
-        .install_session_runtime(session.clone())
+    if let Err(error) = local_app_server_bridge
+        .bind_interactive_session(session.clone(), None)
+        .await
+    {
+        emit_slash_status(
+            event_tx,
+            "context",
+            "failed",
+            SlashCommandStatusKind::Failed {
+                error: format!("could not bind local AppServer session: {error}"),
+            },
+        )
         .await;
+        return SlashOutcome::Handled;
+    }
     match local_app_server_bridge
         .client()
         .context_usage(
@@ -74,18 +86,13 @@ pub(super) async fn maybe_spawn_auto_title(
     title_gen_attempted: &Arc<RwLock<std::collections::HashSet<String>>>,
     session_id: &coco_types::SessionId,
     client: coco_agent_host::local_client::LocalServerClient<
-        coco_agent_host::sdk_server::LocalAppSessionHandle,
+        coco_agent_host::app_session::AppSessionHandle,
     >,
-    handler: coco_agent_host::sdk_server::AppServerSdkHandler,
+    handler: coco_agent_host::app_server_host::AppServerHostHandler,
 ) {
     let runtime = session;
-    let plan_exited = runtime.app_state().read().await.has_exited_plan_mode;
-    let plans_dir = coco_context::resolve_plans_directory(
-        runtime.config_home(),
-        /*project_dir*/ None,
-        /*setting*/ None,
-    );
-    let plan_text = coco_context::get_plan(session_id.as_str(), &plans_dir, /*agent_id*/ None);
+    let plan_exited = runtime.has_exited_plan_mode().await;
+    let plan_text = runtime.unscoped_session_plan_text(session_id);
     let plan_non_empty = plan_text
         .as_deref()
         .map(|t| !t.trim().is_empty())
@@ -125,43 +132,39 @@ pub(super) async fn handle_auto_truncate(
     session: &crate::session_runtime::SessionHandle,
 ) {
     let runtime = session;
-    let mut h = runtime.history().lock().await;
-    let Some(idx) = h.as_slice().iter().position(|m| match m.as_ref() {
-        coco_messages::Message::User(u) => u.uuid.to_string() == message_id,
-        _ => false,
-    }) else {
-        // Auto-restore is fire-and-forget; if the target uuid is gone
-        // (e.g. a compaction wiped it between TUI dispatch and engine
-        // handler), we'd rather skip silently than panic. `warn` so
-        // ops can correlate "auto-restore quietly did nothing" with
-        // an upstream truncation race.
-        tracing::warn!(
-            target: "coco_agent_host::auto_truncate",
-            message_id,
-            history_len = h.len(),
-            "AutoTruncate target message not found in history (likely raced with compaction)",
-        );
-        return;
+    let truncate = match runtime.truncate_history_at_user_message(message_id).await {
+        Ok(result) => result,
+        Err(history_len) => {
+            // Auto-restore is fire-and-forget; if the target uuid is gone
+            // (e.g. a compaction wiped it between TUI dispatch and engine
+            // handler), we'd rather skip silently than panic. `warn` so
+            // ops can correlate "auto-restore quietly did nothing" with
+            // an upstream truncation race.
+            tracing::warn!(
+                target: "coco_agent_host::auto_truncate",
+                message_id,
+                history_len,
+                "AutoTruncate target message not found in history (likely raced with compaction)",
+            );
+            return;
+        }
     };
-    let pre_count = h.len() as i32;
-    let removed = (pre_count - idx as i32).max(0);
-    h.truncate(idx);
     tracing::info!(
         target: "coco_agent_host::auto_truncate",
         message_id,
-        keep_count = idx,
-        removed,
+        keep_count = truncate.keep_count,
+        removed = truncate.removed,
         "AutoTruncate applied",
     );
     coco_otel::events::emit_conversation_rewind(
-        pre_count as i64,
-        h.len() as i64,
-        removed as i64,
-        idx as i64,
+        truncate.pre_count as i64,
+        truncate.keep_count as i64,
+        truncate.removed as i64,
+        truncate.keep_count as i64,
     );
     let _ = event_tx
         .send(CoreEvent::Protocol(ServerNotification::MessageTruncated {
-            keep_count: idx as i64,
+            keep_count: truncate.keep_count as i64,
             identity: coco_types::ServerNotificationIdentity::default(),
         }))
         .await;
@@ -181,7 +184,7 @@ pub(super) async fn handle_rewind(
     rewound_turn: i32,
     event_tx: &mpsc::Sender<CoreEvent>,
     session: &crate::session_runtime::SessionHandle,
-    local_app_server_bridge: &mut coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
 ) {
     let runtime = session;
     use coco_tui::state::RestoreType;
@@ -214,14 +217,13 @@ pub(super) async fn handle_rewind(
     // restore files — summarize keeps the workspace intact, only
     // the conversation is rewritten.
     if matches!(restore_type, RestoreType::Both | RestoreType::CodeOnly)
-        && runtime.file_history().is_some()
+        && runtime.file_history_enabled()
     {
-        local_app_server_bridge
-            .install_session_runtime(session.clone())
-            .await;
-        let session_id = runtime.current_typed_session_id().await;
-        if let Err(error) = local_app_server_bridge.ensure_interactive_surface(session_id) {
-            tracing::warn!(%error, "rewind could not attach interactive AppServer surface");
+        if let Err(error) = local_app_server_bridge
+            .bind_interactive_session(session.clone(), None)
+            .await
+        {
+            tracing::warn!(%error, "rewind could not bind local AppServer session");
             return;
         }
         match local_app_server_bridge
@@ -265,34 +267,26 @@ pub(super) async fn handle_rewind(
     );
 
     if should_truncate {
-        let mut h = runtime.history().lock().await;
-        match h.as_slice().iter().position(|m| match m.as_ref() {
-            coco_messages::Message::User(u) => u.uuid.to_string() == message_id,
-            _ => false,
-        }) {
-            Some(idx) => {
-                let pre_count = h.len() as i32;
-                messages_removed = (pre_count - idx as i32).max(0);
-                h.truncate(idx);
+        match runtime.truncate_history_at_user_message(message_id).await {
+            Ok(truncate) => {
+                messages_removed = i32::try_from(truncate.removed).unwrap_or(i32::MAX);
                 tracing::info!(
                     target: "coco_agent_host::rewind",
                     message_id,
-                    keep_count = idx,
+                    keep_count = truncate.keep_count,
                     messages_removed,
                     files_changed,
                     "Explicit rewind: truncated history",
                 );
                 coco_otel::events::emit_conversation_rewind(
-                    pre_count as i64,
-                    h.len() as i64,
-                    messages_removed as i64,
-                    idx as i64,
+                    truncate.pre_count as i64,
+                    truncate.keep_count as i64,
+                    truncate.removed as i64,
+                    truncate.keep_count as i64,
                 );
-                keep_count_to_emit = Some(idx as i64);
+                keep_count_to_emit = Some(truncate.keep_count as i64);
             }
-            None => {
-                let history_len = h.len();
-                drop(h);
+            Err(history_len) => {
                 if let Some((keep_count, removed, kept)) =
                     runtime.restore_pre_clear_rewind_prefix(message_id).await
                 {
@@ -373,29 +367,42 @@ pub(super) async fn handle_summarize_rewind(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) {
-    let runtime = session;
     use coco_messages::PartialCompactDirection;
     use coco_tui::state::RestoreType;
 
     let (direction, feedback) = match restore_type {
-        RestoreType::SummarizeFrom { feedback } => (PartialCompactDirection::Newest, feedback),
-        RestoreType::SummarizeUpTo { feedback } => (PartialCompactDirection::Oldest, feedback),
+        RestoreType::SummarizeFrom { feedback } => {
+            (PartialCompactDirection::Newest, feedback.clone())
+        }
+        RestoreType::SummarizeUpTo { feedback } => {
+            (PartialCompactDirection::Oldest, feedback.clone())
+        }
         _ => return,
     };
 
-    let messages: Vec<std::sync::Arc<coco_messages::Message>> = {
-        let h = runtime.history().lock().await;
-        h.as_slice().to_vec()
-    };
+    let outcome = coco_agent_host::session_compaction::run_summarize_rewind(
+        session,
+        message_id,
+        direction,
+        feedback,
+        Some(event_tx.clone()),
+    )
+    .await;
 
-    // Pivot index: position of the picked user message in the
-    // history vec.
-    let pivot_index = match messages.iter().position(|m| match m.as_ref() {
-        coco_messages::Message::User(u) => u.uuid.to_string() == message_id,
-        _ => false,
-    }) {
-        Some(i) => i,
-        None => {
+    match outcome {
+        coco_agent_host::session_compaction::SummarizeRewindOutcome::Applied => {
+            // Emit a RewindCompleted with empty target so the TUI
+            // dismisses the modal + shows a toast, but does NOT try
+            // to truncate by message_id (the message is gone after
+            // summarization).
+            let _ = event_tx
+                .send(CoreEvent::Tui(TuiOnlyEvent::RewindCompleted {
+                    target_message_id: String::new(),
+                    files_changed: 0,
+                }))
+                .await;
+        }
+        coco_agent_host::session_compaction::SummarizeRewindOutcome::TargetMissing => {
             warn!(
                 message_id,
                 "summarize-rewind: target message not found in history"
@@ -409,45 +416,8 @@ pub(super) async fn handle_summarize_rewind(
                     },
                 )))
                 .await;
-            return;
         }
-    };
-
-    let engine = runtime.build_engine(CancellationToken::new()).await;
-    let mut history = coco_messages::MessageHistory::new();
-    for arc in messages {
-        history.push_arc(arc);
-    }
-    let event_tx_opt = Some(event_tx.clone());
-    let outcome = engine
-        .run_partial_compact(
-            &mut history,
-            &event_tx_opt,
-            pivot_index,
-            direction,
-            feedback.clone(),
-            /*custom_instructions*/ None,
-        )
-        .await;
-
-    match outcome {
-        coco_compact::CompactOutcome::Applied => {
-            {
-                let mut h = runtime.history().lock().await;
-                *h = history;
-            }
-            // Emit a RewindCompleted with empty target so the TUI
-            // dismisses the modal + shows a toast, but does NOT try
-            // to truncate by message_id (the message is gone after
-            // summarization).
-            let _ = event_tx
-                .send(CoreEvent::Tui(TuiOnlyEvent::RewindCompleted {
-                    target_message_id: String::new(),
-                    files_changed: 0,
-                }))
-                .await;
-        }
-        coco_compact::CompactOutcome::Skipped | coco_compact::CompactOutcome::Failed => {
+        coco_agent_host::session_compaction::SummarizeRewindOutcome::Failed => {
             warn!("partial-compact rewind failed");
             let _ = event_tx
                 .send(CoreEvent::Protocol(coco_query::ServerNotification::Error(
@@ -486,19 +456,12 @@ pub(super) fn spawn_auto_title_task(
     session: crate::session_runtime::SessionHandle,
     plan_text: String,
     client: coco_agent_host::local_client::LocalServerClient<
-        coco_agent_host::sdk_server::LocalAppSessionHandle,
+        coco_agent_host::app_session::AppSessionHandle,
     >,
-    handler: coco_agent_host::sdk_server::AppServerSdkHandler,
+    handler: coco_agent_host::app_server_host::AppServerHostHandler,
 ) {
     tokio::spawn(async move {
-        let session_id = session.current_typed_session_id().await;
-        let session_id_string = session_id.to_string();
-        if session
-            .session_manager()
-            .load(&session_id_string)
-            .map(|session| session.title.is_some())
-            .unwrap_or(false)
-        {
+        if session.has_persisted_title().await {
             return;
         }
 
@@ -511,14 +474,8 @@ pub(super) fn spawn_auto_title_task(
         else {
             return;
         };
-        let session_id = session.current_typed_session_id().await;
-        let session_id_string = session_id.to_string();
-        if session
-            .session_manager()
-            .load(&session_id_string)
-            .map(|session| session.title.is_some())
-            .unwrap_or(false)
-        {
+        let session_id = session.session_id().clone();
+        if session.has_persisted_title().await {
             return;
         }
         let _ = client
@@ -540,23 +497,8 @@ pub(super) fn spawn_auto_title_task(
 /// registry, and notify the TUI so the dialog's toast + `/`
 /// autocomplete pick up the change.
 /// **No user-visible string generation here** — the localized
-/// "Updated N / No changes / Failed: …" toast is rendered by the
-/// TUI from the `SkillOverridesSaved` event payload (the i18n
-/// catalog is anchored at `coco-tui` and can't be reached from
-/// `coco-cli`).
-/// Steps:
-/// - Atomic write to `project config dir/settings.local.json` via
-/// [`coco_config::LocalSettingsWriter::write_local`] — the writer
-/// also republishes `RuntimeConfig` synchronously so the next
-/// agent turn reads the new tiers.
-/// - Rebuild the command registry against the freshly-published
-/// `RuntimeConfig` (NOT the stale snapshot in
-/// `runtime.runtime_config()`) so the `off`-overridden skills drop
-/// out of the visible command set.
-/// - Push `AvailableCommandsRefreshed` so the TUI's `/`
-/// autocomplete updates in the same frame.
-/// - Emit `SkillOverridesSaved` so the TUI renders the localized
-/// toast.
+/// Persist skill override edits through host session controls and forward the
+/// resulting UI notifications. The localized toast stays in `coco-tui`.
 pub(super) async fn handle_write_skill_overrides(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
@@ -565,80 +507,27 @@ pub(super) async fn handle_write_skill_overrides(
     cwd: &std::path::Path,
     flag_settings: Option<&std::path::Path>,
 ) {
-    let runtime = session;
-    let result = match runtime_publisher {
-        Some(publisher) => {
-            let catalogs = coco_config::CatalogPaths::default();
-            let roots =
-                coco_config::SettingsRoots::new(runtime.project_root().clone(), cwd.to_path_buf());
-            let write_result = coco_config::write_local_settings_with_roots(
-                roots,
-                flag_settings.map(std::path::Path::to_path_buf),
-                catalogs,
-                Arc::clone(publisher),
-                patch,
-            )
+    let update = coco_agent_host::session_controls::write_skill_overrides(
+        session,
+        patch,
+        runtime_publisher,
+        cwd,
+        flag_settings,
+    )
+    .await;
+    if let Some(commands) = update.commands {
+        let _ = event_tx
+            .send(CoreEvent::Tui(TuiOnlyEvent::AvailableCommandsRefreshed {
+                commands,
+            }))
             .await;
-            match write_result {
-                Ok(()) => {
-                    // Use the freshly-republished RuntimeConfig so
-                    // the rebuilt registry sees the new tiers — the
-                    // snapshot bound to SessionRuntime at startup
-                    // would silently drop the changes.
-                    let fresh = publisher.current();
-                    // Sync the per-session engine_config too. Per-
-                    // turn QueryEngine builds clone from
-                    // `engine_config.skill_overrides`; without
-                    // this update, every PR2 runtime gate
-                    // (SkillTool / listing budget / reminder source)
-                    // keeps reading the stale snapshot and the
-                    // override silently fails to take effect.
-                    let fresh_tiers = Arc::new(fresh.skill_overrides.clone());
-                    runtime
-                        .update_engine_config(move |cfg| {
-                            cfg.skill_overrides = fresh_tiers;
-                        })
-                        .await;
-                    let _ = runtime.reload_plugins_with(cwd, &fresh).await;
-                    let snapshot = runtime.current_command_registry().await.snapshot_for_ui();
-                    let _ = event_tx
-                        .send(CoreEvent::Tui(TuiOnlyEvent::AvailableCommandsRefreshed {
-                            commands: snapshot,
-                        }))
-                        .await;
-                    coco_types::SkillOverridesSaveResult::Ok
-                }
-                Err(e) => coco_types::SkillOverridesSaveResult::Err {
-                    kind: save_error_kind(&e),
-                    message: e.to_string(),
-                },
-            }
-        }
-        None => coco_types::SkillOverridesSaveResult::Err {
-            kind: coco_types::SkillOverridesSaveErrorKind::NoPublisher,
-            message: "settings hot-reload disabled; restart the process to pick up changes"
-                .to_string(),
-        },
-    };
+    }
 
     let _ = event_tx
-        .send(CoreEvent::Tui(TuiOnlyEvent::SkillOverridesSaved { result }))
+        .send(CoreEvent::Tui(TuiOnlyEvent::SkillOverridesSaved {
+            result: update.result,
+        }))
         .await;
-}
-
-/// Map a [`coco_config::SettingsWriteError`] to its wire-categorical
-/// kind for the TUI to dispatch by category (toast severity / future
-/// retry affordance) rather than rely on string parsing.
-pub(super) fn save_error_kind(
-    e: &coco_config::SettingsWriteError,
-) -> coco_types::SkillOverridesSaveErrorKind {
-    use coco_config::SettingsWriteError as E;
-    use coco_types::SkillOverridesSaveErrorKind as K;
-    match e {
-        E::Io { .. } => K::Io,
-        E::Parse { .. } => K::Parse,
-        E::Rebuild { .. } => K::Rebuild,
-    }
 }
 
 /// Encode TUI paste-pill image bytes as base64 [`QueuedImage`]s for
@@ -730,31 +619,19 @@ pub(super) async fn run_prompt_mode_bash(
         }
     };
 
-    let should_respond = should_prompt_mode_bash_respond(&session) && !command_failed_to_run;
+    let should_respond =
+        coco_agent_host::session_controls::should_respond_to_bash_commands(&session)
+            && !command_failed_to_run;
 
-    // Push the local command into engine MessageHistory so the chat transcript
-    // (TUI + SDK consumers + JSONL) records the bash invocation via the
-    // standard `MessageAppended` event path. When the command is context-only,
-    // prepend the carryover "DO NOT respond" caveat so a later model turn does
-    // not comment on stale shell output.
-    {
-        let mut h = runtime.history().lock().await;
-        let event_tx_opt = Some(event_tx.clone());
-        if !should_respond {
-            let caveat = coco_messages::create_meta_message(
-                "<local-command-caveat>Caveat: The messages below were generated by the user while running local commands. DO NOT respond to these messages or otherwise consider them in your response unless the user explicitly asks you to.</local-command-caveat>",
-            );
-            coco_query::history_sync::history_push_and_emit(&mut h, caveat, &event_tx_opt).await;
-        }
-        let msg = coco_messages::Message::System(coco_messages::SystemMessage::LocalCommand(
-            coco_messages::SystemLocalCommandMessage {
-                uuid: uuid::Uuid::new_v4(),
-                command: command.clone(),
-                output: output.clone(),
-            },
-        ));
-        coco_query::history_sync::history_push_and_emit(&mut h, msg, &event_tx_opt).await;
-    }
+    let history_after_append =
+        coco_agent_host::session_messages::append_local_command_to_history_and_emit(
+            runtime,
+            event_tx.clone(),
+            &command,
+            &output,
+            should_respond,
+        )
+        .await;
 
     let _ = event_tx
         .send(CoreEvent::Tui(TuiOnlyEvent::BashCommandCompleted {
@@ -765,21 +642,13 @@ pub(super) async fn run_prompt_mode_bash(
         .await;
 
     if should_respond {
-        let messages = {
-            let h = runtime.history().lock().await;
-            h.to_vec()
-        };
-        spawn_history_turn(messages, &session, &event_tx, &active_turn, &turn_done_tx).await;
+        spawn_history_turn(
+            history_after_append,
+            &session,
+            &event_tx,
+            &active_turn,
+            &turn_done_tx,
+        )
+        .await;
     }
-}
-
-pub(super) fn should_prompt_mode_bash_respond(
-    session: &crate::session_runtime::SessionHandle,
-) -> bool {
-    session
-        .runtime_config()
-        .settings
-        .merged
-        .respond_to_bash_commands
-        .unwrap_or(true)
 }

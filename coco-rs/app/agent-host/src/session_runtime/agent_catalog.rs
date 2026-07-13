@@ -36,15 +36,15 @@ impl SessionRuntime {
         let cwd = self.current_cwd().read().await.clone();
         let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
         let auto_memory_enabled = self.runtime_config().memory_activation.active;
-        // Clone the SDK-supplied agents Vec into the worker. After
-        // `set_sdk_supplied_agents` populates the slot, every reload
+        // Clone the client-supplied agents Vec into the worker. After
+        // `set_client_supplied_agents` populates the slot, every reload
         // picks up the same set as additional FlagSettings entries.
         // The Vec lives across `session/start` → `session/archive`
-        // cycles so a single SDK connection's `initialize` payload
+        // cycles so a single remote client connection's `initialize` payload
         // survives the whole connection lifetime.
-        let sdk_agents = self
+        let client_agents = self
             .agent_catalog_resources
-            .sdk_supplied_agents
+            .client_supplied_agents
             .read()
             .await
             .clone();
@@ -55,13 +55,13 @@ impl SessionRuntime {
             ));
             store.set_auto_memory_enabled(auto_memory_enabled);
             store.load();
-            // Inject SDK-pushed agents AFTER on-disk load so they
+            // Inject client-pushed agents AFTER on-disk load so they
             // participate in source-precedence resolution (FlagSettings
             // > ProjectSettings > UserSettings > Plugin > BuiltIn).
             // The store re-applies precedence on each `insert_definition`,
-            // so an SDK agent with the same `agent_type` as a built-in
+            // so a client agent with the same `agent_type` as a built-in
             // overrides the built-in.
-            for def in sdk_agents {
+            for def in client_agents {
                 store.insert_definition(def);
             }
             store.snapshot()
@@ -73,18 +73,18 @@ impl SessionRuntime {
         }
     }
 
-    /// Replace the set of SDK-supplied agent definitions used by every
-    /// future catalog (re)load. Called by the SDK `initialize` handler
-    /// when the client pushes `initialize.agents`.
+    /// Replace the set of client-supplied agent definitions used by every
+    /// future catalog (re)load. Called by the remote client `initialize`
+    /// handler when the client pushes `initialize.agents`.
     /// Triggers an immediate `reload_agent_catalog()` so the new agents
     /// land in the active snapshot before the next `turn/start` (the
     /// engine snapshots the catalog when wiring per-turn).
-    pub async fn set_sdk_supplied_agents(&self, agents: Vec<coco_types::AgentDefinition>) {
+    pub async fn set_client_supplied_agents(&self, agents: Vec<coco_types::AgentDefinition>) {
         let count = agents.len();
         {
             let mut slot = self
                 .agent_catalog_resources
-                .sdk_supplied_agents
+                .client_supplied_agents
                 .write()
                 .await;
             *slot = agents;
@@ -93,7 +93,7 @@ impl SessionRuntime {
         tracing::info!(
             target: "coco::session_runtime",
             count,
-            "SDK-supplied agents applied; agent catalog reloaded"
+            "client-supplied agents applied; agent catalog reloaded"
         );
     }
 

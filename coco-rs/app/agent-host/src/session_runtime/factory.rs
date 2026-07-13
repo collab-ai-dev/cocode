@@ -137,11 +137,41 @@ pub struct SessionRuntimeFactoryOpts {
     pub is_non_interactive: bool,
 }
 
+pub struct SessionRuntimeFactoryHostConfig {
+    pub cli: Arc<AgentHostOptions>,
+    pub cwd: PathBuf,
+    pub model_runtimes: Option<Arc<coco_inference::ModelRuntimeRegistry>>,
+    pub session_manager: Arc<SessionManager>,
+    pub fast_model_spec: Option<ModelSpec>,
+    pub permission_bridge: Option<ToolPermissionBridgeRef>,
+    pub process_runtime: Arc<ProcessRuntime>,
+    pub builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog,
+    pub is_non_interactive: bool,
+}
+
 impl SessionRuntimeFactory {
     pub fn new(opts: SessionRuntimeFactoryOpts) -> Self {
         Self {
             opts: Arc::new(opts),
         }
+    }
+
+    pub fn from_host_config(config: SessionRuntimeFactoryHostConfig) -> Self {
+        Self::new(SessionRuntimeFactoryOpts {
+            cli: Arc::clone(&config.cli),
+            bootstrap_source: SessionRuntimeBootstrapSource::per_session_fold(
+                Arc::clone(&config.cli),
+                Arc::clone(&config.process_runtime),
+            ),
+            cwd: config.cwd,
+            model_runtimes: config.model_runtimes,
+            session_manager: config.session_manager,
+            fast_model_spec: config.fast_model_spec,
+            permission_bridge: config.permission_bridge,
+            process_runtime: config.process_runtime,
+            builtin_agent_catalog: config.builtin_agent_catalog,
+            is_non_interactive: config.is_non_interactive,
+        })
     }
 
     pub async fn build_fresh(&self) -> Result<SessionHandle> {

@@ -2,15 +2,7 @@ pub(super) async fn emit_provider_statuses_refresh(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) {
-    let runtime = session;
-    let statuses = build_provider_statuses(runtime.runtime_config())
-        .into_iter()
-        .map(|(provider, status)| coco_types::ProviderStatusInfo {
-            provider,
-            provider_display: status.provider_display,
-            unavailable_reasons: status.unavailable_reasons,
-        })
-        .collect();
+    let statuses = coco_agent_host::session_dialogs::build_provider_status_payload(session);
     let _ = event_tx
         .send(CoreEvent::Tui(TuiOnlyEvent::ProviderStatusesRefreshed {
             statuses,
@@ -23,7 +15,6 @@ pub(super) async fn dispatch_provider_login(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) -> SlashOutcome {
-    let runtime = session;
     let provider = slash_provider_arg(args);
     let tx = event_tx.clone();
     let url_sink: std::sync::Arc<dyn Fn(String) + Send + Sync> = std::sync::Arc::new(move |url| {
@@ -33,8 +24,8 @@ pub(super) async fn dispatch_provider_login(
             text: format!("Opening your browser to sign in. If it doesn't open, visit:\n{url}"),
         }));
     });
-    let cwd = runtime.current_cwd().read().await.clone();
-    match coco_agent_host::provider_login::run_login_session(provider, &cwd, url_sink).await {
+    match coco_agent_host::provider_login::run_login_for_session(session, provider, url_sink).await
+    {
         Ok(msg) => {
             emit_slash_text(event_tx, "login", args, &msg).await;
             emit_provider_statuses_refresh(session, event_tx).await;
@@ -42,7 +33,7 @@ pub(super) async fn dispatch_provider_login(
             // subscription-only models surface in `/model` without a restart.
             let instance =
                 coco_agent_host::provider_login::instance_name(slash_provider_arg(args).as_deref());
-            let base = model_catalog_infos(runtime.runtime_config());
+            let base = coco_agent_host::session_dialogs::build_model_catalog_payload(session);
             coco_agent_host::openai_model_refresh::spawn_after_login(
                 session.clone(),
                 instance,
@@ -121,6 +112,4 @@ use tokio::sync::mpsc;
 
 use super::SlashOutcome;
 use super::emit_slash_text;
-use super::model_controls::build_provider_statuses;
-use super::model_controls::model_catalog_infos;
 use super::slash_provider_arg;

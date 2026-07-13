@@ -4,11 +4,12 @@ use std::{future::Future, pin::Pin, sync::Arc};
 
 use coco_agent_host::{
     AgentHostOptions,
-    local_client::LocalServerClient,
-    sdk_server::{
-        AppServerSdkHandler, LocalAppSessionHandle, RuntimeReplacementContext, SdkServerState,
-        TurnRunner,
+    app_server_host::{
+        AppServerHostHandler, AppServerHostState, RuntimeReplacementContext, TurnRunner,
+        shutdown_local_app_server_sessions,
     },
+    app_session::AppSessionHandle,
+    local_client::LocalServerClient,
     session_runtime::{
         SessionRuntimeBootstrap, SessionRuntimeBootstrapSource, SessionRuntimeFactory,
         SessionRuntimeFactoryOpts,
@@ -28,10 +29,10 @@ use tokio::sync::mpsc;
 
 struct Fixture {
     _home: tempfile::TempDir,
-    state: Arc<SdkServerState>,
-    server: Arc<AppServer<LocalAppSessionHandle>>,
-    adapter: LocalClientAdapter<LocalAppSessionHandle>,
-    handler: AppServerSdkHandler,
+    state: Arc<AppServerHostState>,
+    server: Arc<AppServer<AppSessionHandle>>,
+    adapter: LocalClientAdapter<AppSessionHandle>,
+    handler: AppServerHostHandler,
     turn_observations: tokio::sync::Mutex<mpsc::UnboundedReceiver<TurnObservation>>,
     turn_gate: Option<Arc<TurnGate>>,
     _notification_drain: tokio::task::JoinHandle<()>,
@@ -107,9 +108,9 @@ impl coco_app_runtime::BootstrapSource for IsolatedTestBootstrapSource {
     }
 }
 
-fn spawn_sdk_mcp_responder(
+fn spawn_client_mcp_responder(
     mut requests: mpsc::Receiver<coco_types::ServerRequestDelivery>,
-    server: Arc<AppServer<LocalAppSessionHandle>>,
+    server: Arc<AppServer<AppSessionHandle>>,
     expected_server: &'static str,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -156,7 +157,7 @@ fn spawn_sdk_mcp_responder(
                         }),
                     },
                 )
-                .expect("resolve SDK MCP route request");
+                .expect("resolve client MCP route request");
         }
     })
 }
@@ -165,7 +166,7 @@ impl TurnRunner for RecordingTurnRunner {
     fn run_turn<'a>(
         &'a self,
         session: coco_agent_host::session_runtime::SessionHandle,
-        _app_server: Arc<AppServer<LocalAppSessionHandle>>,
+        _app_server: Arc<AppServer<AppSessionHandle>>,
         params: coco_types::TurnStartParams,
         turn_id: coco_types::TurnId,
         event_tx: mpsc::Sender<CoreEvent>,
@@ -274,10 +275,10 @@ async fn fixture_with_turn_gate(turn_gate: Option<Arc<TurnGate>>) -> Fixture {
         fast_model_spec: None,
         permission_bridge: None,
         process_runtime: Arc::clone(&process_runtime),
-        builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::sdk_noninteractive(),
+        builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::noninteractive(),
         is_non_interactive: false,
     });
-    let state = Arc::new(SdkServerState::default());
+    let state = Arc::new(AppServerHostState::default());
     state.install_startup_cwd(home.path().to_path_buf());
     state
         .install_runtime_replacement(RuntimeReplacementContext {
@@ -292,7 +293,7 @@ async fn fixture_with_turn_gate(turn_gate: Option<Arc<TurnGate>>) -> Fixture {
     let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 16);
     let (notif_tx, mut notif_rx) = mpsc::channel(16);
     let notification_drain = tokio::spawn(async move { while notif_rx.recv().await.is_some() {} });
-    let handler = AppServerSdkHandler::with_local_app_server(
+    let handler = AppServerHostHandler::with_local_app_server(
         Arc::clone(&state),
         notif_tx,
         Arc::clone(&server),
@@ -730,12 +731,12 @@ async fn two_initialized_connections_keep_profiles_runtimes_and_writers_isolated
         let fixture = fixture().await;
         let mut client_a = LocalServerClient::connect_local(&fixture.adapter);
         let mut client_b = LocalServerClient::connect_local(&fixture.adapter);
-        let responder_a = spawn_sdk_mcp_responder(
+        let responder_a = spawn_client_mcp_responder(
             client_a.take_server_requests(),
             Arc::clone(&fixture.server),
             "mcp-a",
         );
-        let responder_b = spawn_sdk_mcp_responder(
+        let responder_b = spawn_client_mcp_responder(
             client_b.take_server_requests(),
             Arc::clone(&fixture.server),
             "mcp-b",
@@ -748,10 +749,10 @@ async fn two_initialized_connections_keep_profiles_runtimes_and_writers_isolated
             .open(coco_app_server::ConnectionKey::generate());
         let initialize = |profile: &str, tool: &str| InitializeParams {
             system_prompt: Some(profile.to_string()),
-            sdk_mcp_servers: Some(vec![profile.replace("profile", "mcp")]),
+            client_mcp_servers: Some(vec![profile.replace("profile", "mcp")]),
             agents: Some(std::collections::HashMap::from([(
                 format!("agent-{tool}"),
-                coco_types::SdkAgentDefinition {
+                coco_types::ClientAgentDefinition {
                     tools: Some(vec![tool.to_string()]),
                     ..Default::default()
                 },
@@ -1577,7 +1578,7 @@ async fn orphan_resume_callback_requirements_scenario() {
         .expect("live callback runtime")
         .into_session();
     runtime
-        .session_manager()
+        .session_manager_handle()
         .store_for(runtime.original_cwd())
         .append_message(
             started.session_id.as_str(),
@@ -1904,7 +1905,7 @@ async fn concurrent_shutdown_scenario() {
 
     tokio::time::timeout(
         std::time::Duration::from_secs(2),
-        coco_agent_host::sdk_server::shutdown_local_app_server_sessions(
+        shutdown_local_app_server_sessions(
             Arc::clone(&fixture.server),
             Arc::clone(&fixture.state),
             std::time::Duration::from_secs(5),

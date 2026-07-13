@@ -296,19 +296,22 @@ impl AttachmentKind {
         }
     }
 
-    /// How the SDK / session-result layer consumes this attachment.
+    /// How the session-result layer consumes this attachment.
     /// Orthogonal to API visibility and transcript rendering. TS
     /// `QueryEngine.ts` records all attachment messages into mutable
-    /// history, but only a few discriminators have special SDK effects:
+    /// history, but only a few discriminators have special result effects:
     /// `structured_output` becomes a result field, `max_turns_reached`
     /// becomes a terminal result, and `queued_command` may replay as a
     /// synthetic user message when replay is enabled.
-    pub const fn sdk_consumption(self) -> SdkConsumption {
-        sdk_consumption_of(self)
+    pub const fn session_result_consumption(self) -> SessionResultConsumption {
+        session_result_consumption_of(self)
     }
 
-    pub const fn is_sdk_consumed(self) -> bool {
-        !matches!(self.sdk_consumption(), SdkConsumption::None)
+    pub const fn is_session_result_consumed(self) -> bool {
+        !matches!(
+            self.session_result_consumption(),
+            SessionResultConsumption::None
+        )
     }
 
     /// Does this attachment render in the UI transcript?
@@ -505,31 +508,31 @@ impl std::fmt::Display for AttachmentKind {
     }
 }
 
-/// SDK-layer side effect for an attachment kind.
+/// Session-result side effect for an attachment kind.
 /// This is not "visible to the model" and not "visible in the TUI"; it is
-/// specifically the `QueryEngine` / SDK result special-case surface.
+/// specifically the `QueryEngine` / session-result special-case surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SdkConsumption {
-    /// Recorded to history/transcript only; SDK layer has no special branch.
+pub enum SessionResultConsumption {
+    /// Recorded to history/transcript only; result layer has no special branch.
     None,
-    /// Copied into a field on the final SDK/session result.
+    /// Copied into a field on the final session result.
     ResultField { field: &'static str },
-    /// Converts the running turn into a terminal SDK result subtype.
+    /// Converts the running turn into a terminal result subtype.
     TerminalResult { subtype: &'static str },
-    /// May be replayed as a synthetic SDK user message.
+    /// May be replayed as a synthetic user message.
     ReplayUserMessage,
 }
 
-pub const fn sdk_consumption_of(kind: AttachmentKind) -> SdkConsumption {
+pub const fn session_result_consumption_of(kind: AttachmentKind) -> SessionResultConsumption {
     match kind {
-        AttachmentKind::StructuredOutput => SdkConsumption::ResultField {
+        AttachmentKind::StructuredOutput => SessionResultConsumption::ResultField {
             field: "structured_output",
         },
-        AttachmentKind::MaxTurnsReached => SdkConsumption::TerminalResult {
+        AttachmentKind::MaxTurnsReached => SessionResultConsumption::TerminalResult {
             subtype: "error_max_turns",
         },
-        AttachmentKind::QueuedCommand => SdkConsumption::ReplayUserMessage,
-        _ => SdkConsumption::None,
+        AttachmentKind::QueuedCommand => SessionResultConsumption::ReplayUserMessage,
+        _ => SessionResultConsumption::None,
     }
 }
 
@@ -787,7 +790,7 @@ pub const fn coverage_of(kind: AttachmentKind) -> Coverage {
         },
         StructuredOutput => Coverage::SilentEvent {
             owner_crate: "core/tool-runtime",
-            note: "tool-produced structured output captured for SDK result",
+            note: "tool-produced structured output captured for session result",
         },
         DynamicSkill => Coverage::SilentEvent {
             owner_crate: "skills",
@@ -804,7 +807,7 @@ pub const fn coverage_of(kind: AttachmentKind) -> Coverage {
         // ── Runtime / UI events, emitted through AttachmentMessage. ──
         MaxTurnsReached => Coverage::SilentEvent {
             owner_crate: "app/query",
-            note: "turn cap stop signal; SDK result branch consumes the payload",
+            note: "turn cap stop signal; session-result branch consumes the payload",
         },
         CurrentSessionMemory => Coverage::RuntimeBookkeeping {
             note: "TS defines the type but has no createAttachmentMessage producer; session memory is consumed by compaction",

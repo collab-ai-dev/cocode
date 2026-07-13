@@ -145,9 +145,10 @@ pub struct HookJsonOutput {
 }
 
 // Event-specific hook output and the PermissionRequest sub-decision
-// live in `coco-types` so the SDK boundary (`SdkHookOutput`) and the
-// internal hook orchestrator parse the same typed shape — no
-// translation layer, no string matching, no serde duplication.
+// live in `coco-types` so the hook callback boundary
+// (`HookCallbackOutput`) and the internal hook orchestrator parse the
+// same typed shape — no translation layer, no string matching, no serde
+// duplication.
 //
 // Re-exported here so existing `coco_hooks::orchestration::*` import
 // paths keep working. `ElicitationAction` is re-exported from
@@ -261,11 +262,11 @@ pub enum HookBlockingSource {
     /// LLM-driven `HookHandler::Agent` hook. Carries the configured
     /// prompt for the same provenance reason as [`Self::Prompt`].
     Agent { prompt: String },
-    /// SDK-supplied [`crate::HookHandler::SdkCallback`] — carries the
+    /// client-supplied [`crate::HookHandler::ClientCallback`] — carries the
     /// `callback_id` registered at `initialize` time so telemetry,
-    /// log filtering, and error rendering can distinguish SDK denials
+    /// log filtering, and error rendering can distinguish client denials
     /// from shell-hook denials.
-    Sdk { callback_id: String },
+    ClientCallback { callback_id: String },
 }
 
 /// Aggregated result from executing all matching hooks for a single event.
@@ -355,18 +356,18 @@ pub struct SingleHookResult {
     pub async_rewake: bool,
     /// Provenance for the [`HookBlockingError`] this result may
     /// produce. Required (no `Option`) so every construction site
-    /// makes an explicit choice — SDK callbacks must carry
-    /// `Sdk { callback_id }`, HTTP hooks carry `Http(url)`, etc.
+    /// makes an explicit choice — client callbacks must carry
+    /// `ClientCallback { callback_id }`, HTTP hooks carry `Http(url)`, etc.
     /// The previous `Option<...>` default-to-Command shape silently
-    /// mis-tagged HTTP and SDK denials as shell-command sources.
+    /// mis-tagged HTTP and client denials as shell-command sources.
     pub source: HookBlockingSource,
-    /// SDK callback typed output, if this result came from an
-    /// `SdkCallback` handler. When `Some`, aggregation applies the
-    /// typed [`coco_types::SdkHookOutput`] directly via
-    /// [`apply_sdk_hook_output`] — no JSON `parse_hook_output`
+    /// client callback typed output, if this result came from an
+    /// `ClientCallback` handler. When `Some`, aggregation applies the
+    /// typed [`coco_types::HookCallbackOutput`] directly via
+    /// [`apply_client_hook_output`] — no JSON `parse_hook_output`
     /// fallback, no string-vs-typed round-trip. `None` for every
     /// other handler kind (Command/Http/Prompt/Agent).
-    pub sdk_output: Option<coco_types::SdkHookOutput>,
+    pub client_output: Option<coco_types::HookCallbackOutput>,
     pub llm_verdict: Option<LlmHookVerdict>,
 }
 
@@ -671,7 +672,7 @@ async fn execute_hooks_parallel_filtered(
     tracing::info!(hook_count = matching.len(), "hook_event firing");
 
     let (tx, mut rx) = mpsc::channel::<SingleHookResult>(matching.len());
-    let sdk_hook_callback = registry.sdk_hook_callback();
+    let client_hook_callback = registry.client_hook_callback();
 
     let policy_set: Option<HashSet<&str>> =
         http_env_var_policy.map(|p| p.iter().map(String::as_str).collect());
@@ -719,16 +720,16 @@ async fn execute_hooks_parallel_filtered(
         let command_label = handler_label(&handler);
         // Tag this spawn with its provenance so `apply_hook_specific_output`
         // and `aggregate_results_for_event` can build `HookBlockingError`
-        // with the correct `HookBlockingSource` variant — SDK callbacks
-        // carry `Sdk { callback_id }` instead of a synthetic `sdk:<id>`
-        // command-label string.
+        // with the correct `HookBlockingSource` variant — client callbacks
+        // carry `ClientCallback { callback_id }` instead of a synthetic
+        // `client_callback:<id>` command-label string.
         let handler_source = derive_handler_source(&handler);
         let hook_id = format!("hook-{idx}");
         let hook_event_str = format!("{event:?}");
         let event_tx = event_tx.cloned();
         let emitter = attachment_emitter.clone();
         let llm_handle_clone = llm_handle.cloned();
-        let sdk_hook_callback = sdk_hook_callback.clone();
+        let client_hook_callback = client_hook_callback.clone();
         let is_async = hook.is_async;
         let async_rewake = hook.async_rewake;
         // Only clone sender for sync hooks. Async hooks deliver
@@ -811,7 +812,7 @@ async fn execute_hooks_parallel_filtered(
                         status_message: None,
                         async_rewake: false,
                         source: handler_source.clone(),
-                        sdk_output: None,
+                        client_output: None,
                         llm_verdict: None,
                     }
                 }
@@ -823,7 +824,7 @@ async fn execute_hooks_parallel_filtered(
                         stdin_input: Some(&input_json),
                         cwd: &cwd,
                         llm_handle: llm_handle_clone.as_ref(),
-                        sdk_hook_callback: sdk_hook_callback.as_ref(),
+                        client_hook_callback: client_hook_callback.as_ref(),
                         event,
                         timeout,
                         transcript_history: transcript_history.clone(),
@@ -869,7 +870,7 @@ async fn execute_hooks_parallel_filtered(
                                 status_message: None,
                                 async_rewake: false,
                                 source: handler_source.clone(),
-                                sdk_output: None,
+                                client_output: None,
                                 llm_verdict: None,
                             }
                         }
@@ -895,7 +896,7 @@ async fn execute_hooks_parallel_filtered(
                                 status_message: None,
                                 async_rewake: false,
                                 source: handler_source.clone(),
-                                sdk_output: None,
+                                client_output: None,
                                 llm_verdict: None,
                             }
                         }
@@ -994,12 +995,12 @@ pub fn aggregate_results_for_event(
             _ => {}
         }
 
-        // **Typed SDK path** — when the callback returned a typed
-        // `SdkHookOutput`, apply it directly without parsing the
+        // **Typed client callback path** — when the callback returned a typed
+        // `HookCallbackOutput`, apply it directly without parsing the
         // legacy shell-hook stdout JSON. Skips the round-trip
         // `Value → string → parse_hook_output` rescue entirely.
-        if let Some(sdk_output) = &r.sdk_output {
-            apply_sdk_hook_output(&mut agg, sdk_output, r, expected_event);
+        if let Some(client_output) = &r.client_output {
+            apply_client_hook_output(&mut agg, client_output, r, expected_event);
             continue;
         }
 
@@ -1176,18 +1177,18 @@ fn merge_permission(
     }
 }
 
-/// Apply a typed [`coco_types::SdkHookOutput`] to the aggregated
+/// Apply a typed [`coco_types::HookCallbackOutput`] to the aggregated
 /// result. Used by [`aggregate_results_for_event`] when the spawn
-/// loop populates `SingleHookResult.sdk_output` from an `SdkCallback`
+/// loop populates `SingleHookResult.client_output` from an `ClientCallback`
 /// handler — bypasses the legacy shell-hook stdout parser.
 ///
 /// Consumes the typed `hookJSONOutputSchema` shape directly. The
 /// top-level fields (`continue`, `suppressOutput`, `decision`, `reason`,
 /// `systemMessage`) and the nested `hookSpecificOutput` union are applied
 /// in one pass.
-fn apply_sdk_hook_output(
+fn apply_client_hook_output(
     agg: &mut AggregatedHookResult,
-    output: &coco_types::SdkHookOutput,
+    output: &coco_types::HookCallbackOutput,
     result: &SingleHookResult,
     expected_event: Option<HookEventType>,
 ) {
@@ -1250,7 +1251,7 @@ fn apply_sdk_hook_output(
                 expected = ?expected_event,
                 claimed = ?claimed,
                 command = %result.command,
-                "SDK hook returned hookSpecificOutput.hookEventName mismatch; ignoring nested fields"
+                "client hook returned hookSpecificOutput.hookEventName mismatch; ignoring nested fields"
             );
         } else {
             apply_hook_specific_output(agg, specific, result);
@@ -3261,7 +3262,7 @@ struct HookExecutionRequest<'a> {
     stdin_input: Option<&'a str>,
     cwd: &'a std::path::Path,
     llm_handle: Option<&'a std::sync::Arc<dyn crate::llm_handle::HookLlmHandle>>,
-    sdk_hook_callback: Option<&'a crate::SdkHookCallback>,
+    client_hook_callback: Option<&'a crate::ClientHookCallback>,
     event: HookEventType,
     timeout: Duration,
     transcript_history: Vec<String>,
@@ -3279,22 +3280,22 @@ async fn run_hook_via_handle_or_fallback(
         stdin_input,
         cwd,
         llm_handle,
-        sdk_hook_callback,
+        client_hook_callback,
         event,
         timeout,
         transcript_history,
         async_options,
     } = request;
 
-    if let HookHandler::SdkCallback { callback_id, .. } = handler {
-        let Some(callback) = sdk_hook_callback else {
+    if let HookHandler::ClientCallback { callback_id, .. } = handler {
+        let Some(callback) = client_hook_callback else {
             return Err(crate::HooksError::generic(format!(
-                "SDK hook callback {callback_id:?} is not installed"
+                "client hook callback {callback_id:?} is not installed"
             )));
         };
         // The hook input is the already-serialized JSON the orchestrator
         // built — parse to a `Value` so the callback receives the same
-        // shape it would have over the SDK wire.
+        // shape it would have over the client callback wire.
         let input = match stdin_input {
             Some(raw) => serde_json::from_str(raw)?,
             None => serde_json::Value::Null,
@@ -3307,18 +3308,18 @@ async fn run_hook_via_handle_or_fallback(
             .or_else(|| input.get("toolUseID"))
             .and_then(serde_json::Value::as_str)
             .map(str::to_string);
-        // Typed end-to-end: callback returns `SdkHookOutput` directly,
-        // we wrap as `HookExecutionResult::SdkOutput`, aggregation
-        // applies it via `apply_sdk_hook_output` — no JSON round-trip,
+        // Typed end-to-end: callback returns `HookCallbackOutput` directly,
+        // we wrap as `HookExecutionResult::ClientOutput`, aggregation
+        // applies it via `apply_client_hook_output` — no JSON round-trip,
         // no `parse_hook_output` rescue.
-        let output = callback(crate::SdkHookCallbackRequest {
+        let output = callback(crate::ClientHookCallbackRequest {
             callback_id: callback_id.clone(),
             event,
             input,
             tool_use_id,
         })
         .await?;
-        return Ok(HookExecutionResult::SdkOutput(output));
+        return Ok(HookExecutionResult::ClientOutput(output));
     }
 
     let Some(llm) = llm_handle else {
@@ -3411,7 +3412,7 @@ async fn run_hook_via_handle_or_fallback(
 /// Resolve timeout for a hook handler — uses the handler's explicit
 /// timeout if set, otherwise a handler-type default.
 ///
-/// Command / Http / SdkCallback fall back to the event-supplied
+/// Command / Http / ClientCallback fall back to the event-supplied
 /// `default`. Prompt and Agent hooks are LLM-driven and use shorter
 /// defaults (30s / 60s) independent of the generic 10-minute
 /// tool-hook timeout, so an unconfigured judge can't hang for minutes.
@@ -3421,7 +3422,7 @@ fn resolve_timeout(handler: &HookHandler, default: Duration) -> Duration {
         HookHandler::Http { timeout_ms, .. } => (*timeout_ms, default),
         HookHandler::Prompt { timeout_ms, .. } => (*timeout_ms, DEFAULT_PROMPT_HOOK_TIMEOUT),
         HookHandler::Agent { timeout_ms, .. } => (*timeout_ms, DEFAULT_AGENT_HOOK_TIMEOUT),
-        HookHandler::SdkCallback { timeout_ms, .. } => (*timeout_ms, default),
+        HookHandler::ClientCallback { timeout_ms, .. } => (*timeout_ms, default),
     };
     explicit
         .and_then(|ms| u64::try_from(ms).ok())
@@ -3443,7 +3444,7 @@ fn derive_handler_source(handler: &HookHandler) -> HookBlockingSource {
         HookHandler::Agent { prompt, .. } => HookBlockingSource::Agent {
             prompt: prompt.clone(),
         },
-        HookHandler::SdkCallback { callback_id, .. } => HookBlockingSource::Sdk {
+        HookHandler::ClientCallback { callback_id, .. } => HookBlockingSource::ClientCallback {
             callback_id: callback_id.clone(),
         },
     }
@@ -3456,7 +3457,9 @@ fn handler_label(handler: &HookHandler) -> String {
         HookHandler::Prompt { prompt, .. } => format!("prompt:{prompt}"),
         HookHandler::Http { url, .. } => url.clone(),
         HookHandler::Agent { prompt, .. } => format!("agent:{prompt}"),
-        HookHandler::SdkCallback { callback_id, .. } => format!("sdk:{callback_id}"),
+        HookHandler::ClientCallback { callback_id, .. } => {
+            format!("client_callback:{callback_id}")
+        }
     }
 }
 
@@ -3503,10 +3506,10 @@ fn process_execution_result(
             status_message: None,
             async_rewake: false,
             source,
-            sdk_output: None,
+            client_output: None,
             llm_verdict: None,
         },
-        HookExecutionResult::SdkOutput(out) => {
+        HookExecutionResult::ClientOutput(out) => {
             // Compute `blocked` directly from the typed output:
             // top-level `decision: 'block'` or
             // `hookSpecificOutput.PreToolUse.permissionDecision: 'deny'`
@@ -3514,7 +3517,7 @@ fn process_execution_result(
             // `action: decline` is also a block. Everything else is a
             // non-blocking success — even with `continue: false`
             // (that's `prevent_continuation`, not a blocking error).
-            let blocked = is_sdk_output_blocking(&out);
+            let blocked = is_client_output_blocking(&out);
             SingleHookResult {
                 command: label.to_string(),
                 succeeded: true,
@@ -3528,7 +3531,7 @@ fn process_execution_result(
                 status_message: None,
                 async_rewake: false,
                 source,
-                sdk_output: Some(out),
+                client_output: Some(out),
                 llm_verdict: None,
             }
         }
@@ -3601,16 +3604,16 @@ fn process_command_like_execution_result(
         status_message: None,
         async_rewake: false,
         source,
-        sdk_output: None,
+        client_output: None,
         llm_verdict,
     }
 }
 
-/// Determine whether a typed `SdkHookOutput` should be treated as a
+/// Determine whether a typed `HookCallbackOutput` should be treated as a
 /// blocking result. Mirrors the rules `aggregate_results_for_event`
 /// applies — used here to set `SingleHookResult.blocked` consistently
 /// before aggregation sees it.
-fn is_sdk_output_blocking(out: &coco_types::SdkHookOutput) -> bool {
+fn is_client_output_blocking(out: &coco_types::HookCallbackOutput) -> bool {
     use coco_types::HookDecision;
     use coco_types::HookPermissionDecision;
     use coco_types::HookSpecificOutput;

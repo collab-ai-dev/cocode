@@ -24,6 +24,24 @@ pub struct RoleOverride {
     pub effort: Option<ReasoningEffort>,
 }
 
+#[derive(Debug, Clone)]
+pub struct SessionModelRoleSelection {
+    pub role: ModelRole,
+    pub provider: String,
+    pub model_id: String,
+    pub effort: Option<ReasoningEffort>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionModelRoleChange {
+    pub role: ModelRole,
+    pub display_provider: String,
+    pub display_model_id: String,
+    pub display_name: String,
+    pub context_window: Option<i64>,
+    pub effort: Option<ReasoningEffort>,
+}
+
 /// Construct a [`ThinkingLevel`] for an effort, threading the current
 /// model's declared `supported_thinking_levels` budget/options when
 /// available. Falls back to a budget-less level so provider-specific
@@ -190,6 +208,127 @@ impl SessionRuntime {
         let mut overrides = self.engine_config_resources.role_overrides().write().await;
         overrides.insert(role, ov);
         Ok(())
+    }
+
+    pub async fn apply_model_role_selection(
+        &self,
+        selection: SessionModelRoleSelection,
+    ) -> anyhow::Result<SessionModelRoleChange> {
+        let SessionModelRoleSelection {
+            role,
+            provider,
+            model_id,
+            effort,
+        } = selection;
+        let moa_endpoint = if provider == coco_config::MOA_PROVIDER {
+            self.runtime_config()
+                .model_roles
+                .moa_preset(&model_id)
+                .cloned()
+        } else {
+            None
+        };
+        let (acting_provider, acting_model_id, display_provider, display_model_id) =
+            if let Some(endpoint) = moa_endpoint.as_ref() {
+                (
+                    endpoint.aggregator.provider.clone(),
+                    endpoint.aggregator.model_id.clone(),
+                    provider,
+                    model_id,
+                )
+            } else {
+                (
+                    provider.clone(),
+                    model_id.clone(),
+                    provider.clone(),
+                    model_id.clone(),
+                )
+            };
+        let resolved_model = self
+            .runtime_config()
+            .model_registry
+            .resolve(&acting_provider, &acting_model_id);
+        let display_name = resolved_model
+            .as_ref()
+            .map(|resolved| {
+                resolved
+                    .info
+                    .display_name
+                    .clone()
+                    .unwrap_or_else(|| acting_model_id.clone())
+            })
+            .unwrap_or_else(|| acting_model_id.clone());
+        let context_window =
+            resolved_model.map(|resolved| resolved.info.context_window.get() as i64);
+        let api = self
+            .runtime_config()
+            .providers
+            .get(&acting_provider)
+            .map(|provider| provider.api)
+            .unwrap_or(coco_types::ProviderApi::Anthropic);
+        let spec = ModelSpec {
+            provider: acting_provider,
+            api,
+            model_id: acting_model_id,
+            display_name: display_name.clone(),
+        };
+        self.apply_role_override(role, RoleOverride { spec, effort })
+            .await?;
+        self.execution
+            .model_runtimes()
+            .set_role_moa_endpoint_override(role, moa_endpoint);
+        if role == ModelRole::Main {
+            let main_model_id = display_model_id.clone();
+            self.update_engine_config(move |config| config.model_id = main_model_id)
+                .await;
+        }
+        Ok(SessionModelRoleChange {
+            role,
+            display_provider,
+            display_model_id,
+            display_name,
+            context_window,
+            effort,
+        })
+    }
+
+    pub async fn model_role_change_snapshot(
+        &self,
+        role: ModelRole,
+        effort: Option<ReasoningEffort>,
+    ) -> Option<SessionModelRoleChange> {
+        let resolved = self.resolve_role(role).await?;
+        let display_endpoint = self
+            .execution
+            .model_runtimes()
+            .moa_endpoint_for_source(&coco_inference::ModelRuntimeSource::Role(role));
+        let (display_provider, display_model_id) = display_endpoint
+            .as_ref()
+            .map(|endpoint| {
+                (
+                    endpoint.display_provider().to_string(),
+                    endpoint.display_model_id().to_string(),
+                )
+            })
+            .unwrap_or_else(|| {
+                (
+                    resolved.spec.provider.clone(),
+                    resolved.spec.model_id.clone(),
+                )
+            });
+        let context_window = self
+            .runtime_config()
+            .model_registry
+            .resolve(&resolved.spec.provider, &resolved.spec.model_id)
+            .map(|model| model.info.context_window.get() as i64);
+        Some(SessionModelRoleChange {
+            role,
+            display_provider,
+            display_model_id,
+            display_name: resolved.spec.display_name,
+            context_window,
+            effort,
+        })
     }
 
     /// Update only the `effort` on an existing role override, preserving

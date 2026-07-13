@@ -12,7 +12,7 @@
 //! libtest `#[test]`:
 //!
 //! * Examples in `coco-tests-live` can't see `[dev-dependencies]`, so
-//!   they'd have no access to `coco_agent_host::sdk_server` / `coco_query` /
+//!   they'd have no access to `coco_sdk_server` / `coco_query` /
 //!   `coco_session` / etc. Test targets get the dev-dep graph for free.
 //! * libtest `#[test]` wraps stdout (`running 1 test`, `test result: ok`),
 //!   which would corrupt the NDJSON stream Python parses. With
@@ -38,17 +38,20 @@ use std::sync::Arc;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use coco_agent_host::app_server_host::{
+    AppServerHostState, CliInitializeBootstrap, RuntimeReplacementContext, SessionTurnExecutor,
+};
 use coco_agent_host::headless;
-use coco_agent_host::sdk_server::CliInitializeBootstrap;
-use coco_agent_host::sdk_server::LocalAppSessionHandle;
-use coco_agent_host::sdk_server::SdkServer;
-use coco_agent_host::sdk_server::SessionTurnExecutor;
-use coco_agent_host::sdk_server::StdioTransport;
-use coco_agent_host::session_runtime::SessionHandle;
-use coco_agent_host::session_runtime::SessionRuntimeBuildOpts;
+use coco_agent_host::remote_host::RemoteAppServer;
+use coco_agent_host::session_runtime::{
+    SessionRuntimeBootstrapSource, SessionRuntimeFactory, SessionRuntimeFactoryOpts,
+};
+use coco_app_runtime::SessionRuntimeBootstrap;
 use coco_cli::Cli;
 use coco_commands::CommandRegistry;
 use coco_commands::register_extended_builtins;
+use coco_sdk_server::SdkServer;
+use coco_sdk_server::StdioTransport;
 use coco_session::SessionManager;
 use coco_tool_runtime::ToolRegistry;
 
@@ -171,58 +174,70 @@ async fn serve(args: Args) -> Result<()> {
     let process_runtime = coco_app_runtime::ProcessRuntime::global();
     let project_services = process_runtime.project_services(&cwd, cwd.clone());
 
-    let session_handle = SessionHandle::build(SessionRuntimeBuildOpts {
-        cli: &cli,
-        runtime_config: Arc::new(runtime_config),
-        config_reloader: None,
+    let runtime_config = Arc::new(runtime_config);
+    let bootstrap_source =
+        SessionRuntimeBootstrapSource::startup_snapshot(SessionRuntimeBootstrap {
+            runtime_config: Arc::clone(&runtime_config),
+            tools,
+            model_id: model_id.clone(),
+            system_prompt: system_prompt.clone(),
+            permission_mode_availability: coco_types::PermissionModeAvailability::new(
+                startup.bypass_available,
+                startup.auto_available,
+            ),
+            permission_mode: startup.mode,
+            command_registry: Arc::clone(&command_registry),
+            skill_manager,
+            agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
+            project_services,
+        });
+    let runtime_factory_cli = Arc::new(cli);
+    let runtime_factory = SessionRuntimeFactory::new(SessionRuntimeFactoryOpts {
+        cli: Arc::clone(&runtime_factory_cli),
+        bootstrap_source,
         cwd: cwd.clone(),
-        model_id: model_id.clone(),
-        system_prompt: system_prompt.clone(),
-        permission_mode_availability: coco_types::PermissionModeAvailability::new(
-            startup.bypass_available,
-            startup.auto_available,
-        ),
-        permission_mode: startup.mode,
         model_runtimes: None,
-        tools,
-        session_manager: session_manager.clone(),
+        session_manager: Arc::clone(&session_manager),
         fast_model_spec: None,
         permission_bridge: None,
-        command_registry: command_registry.clone(),
-        skill_manager,
-        process_runtime,
-        project_services,
-        agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
+        process_runtime: Arc::clone(&process_runtime),
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
-        session_id_override: None,
         is_non_interactive: true,
-    })
-    .await
-    .with_context(|| format!("build SessionRuntime for {}/{model_id}", args.provider))?;
-
-    session_handle.fire_session_start_hooks("startup").await;
+    });
 
     let bootstrap = Arc::new(
         CliInitializeBootstrap::new("default".to_string()).with_command_registry(command_registry),
     );
 
     let transport = StdioTransport::new();
-    let server = SdkServer::new(transport)
-        .with_session_manager(session_manager)
-        .with_initialize_bootstrap(bootstrap)
-        .with_startup_cwd(cwd.clone());
+    let state = Arc::new(AppServerHostState::default());
+    state.install_session_manager_for_startup(Arc::clone(&session_manager));
+    state.install_initialize_bootstrap_for_startup(bootstrap);
+    state.install_startup_cwd(cwd.clone());
 
     let runner = Arc::new(SessionTurnExecutor::new(
-        cli.max_turns.or(Some(8)),
+        runtime_factory_cli.max_turns.or(Some(8)),
         Some(system_prompt),
     ));
-    server.set_turn_runner(runner).await;
+    state.install_turn_runner(runner).await;
+    state
+        .install_runtime_replacement(RuntimeReplacementContext {
+            startup_session_id: coco_types::SessionId::generate(),
+            runtime_factory,
+            process_runtime,
+            cwd: cwd.clone(),
+            requires_structured_output: false,
+        })
+        .await;
+    let bridge_host =
+        coco_agent_host::remote_host::RemoteAppServerBridgeHost::new(Arc::clone(&state));
+    let server = SdkServer::new(transport, bridge_host);
 
     eprintln!(
         "[sdk_server_stdio] ready (provider={} model={model_id}); reading NDJSON from stdin",
         args.provider
     );
-    let app_server = Arc::new(coco_app_server::AppServer::<LocalAppSessionHandle>::new(
+    let app_server = Arc::new(RemoteAppServer::new(
         /*max_sessions*/ 1, /*channel_capacity*/ 256,
     ));
     let adapter = coco_app_server::JsonRpcAdapter::with_channel_capacity(app_server, 256);

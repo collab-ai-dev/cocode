@@ -384,7 +384,9 @@ impl RealTuiHarness {
         // Fire SessionStart hooks to mirror `tui_runner::run_tui` so
         // settings.json hook entries surface as `hook_*` reminders on
         // the first turn.
-        runtime.fire_session_start_hooks("startup").await;
+        runtime
+            .fire_session_start_hooks(coco_hooks::orchestration::SessionStartSource::Startup)
+            .await;
         let runtime = runtime.clone();
 
         // Spawn the driver. Handles SubmitInput / ApprovalResponse /

@@ -54,13 +54,6 @@ class AgentSource(str, Enum):
     policySettings = "policySettings"
 
 
-class ApiProvider(str, Enum):
-    firstParty = "firstParty"
-    bedrock = "bedrock"
-    vertex = "vertex"
-    foundry = "foundry"
-
-
 class ApplyPatchPreviewAction(str, Enum):
     add = "add"
     delete = "delete"
@@ -347,6 +340,13 @@ class HookPermissionDecision(str, Enum):
     allow = "allow"
     deny = "deny"
     ask = "ask"
+
+
+class InitializeApiProvider(str, Enum):
+    firstParty = "firstParty"
+    bedrock = "bedrock"
+    vertex = "vertex"
+    foundry = "foundry"
 
 
 class InstructionsLoadReason(str, Enum):
@@ -2826,7 +2826,7 @@ class TuiOnlyEventOpenSessionBrowser(BaseModel):
     type_: Literal["open_session_browser"] = Field(
         default="open_session_browser", alias="type"
     )
-    sessions: list[SdkSessionSummary]
+    sessions: list[SessionSummary]
 
 
 class TuiOnlyEventRewindRowMetadataReady(BaseModel):
@@ -4145,9 +4145,34 @@ McpServerConfig = StdioMcpServerConfig | SseMcpServerConfig | HttpMcpServerConfi
 # ---------------------------------------------------------------------------
 
 
+class SessionSummary(BaseModel):
+    created_at: str
+    cwd: str
+    model: str
+    session_id: SessionId
+    message_count: int = 0
+    title: str | None = None
+    total_tokens: int = 0
+    updated_at: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Hook input/output types
 # ---------------------------------------------------------------------------
+
+
+class HookCallbackOutput(BaseModel):
+    async_: bool | None = Field(default=None, alias="async")
+    async_timeout: int | None = Field(default=None, alias="asyncTimeout")
+    continue_: bool | None = Field(default=None, alias="continue")
+    decision: HookDecision | None = None
+    hook_specific_output: HookSpecificOutput | None = Field(
+        default=None, alias="hookSpecificOutput"
+    )
+    reason: str | None = None
+    stop_reason: str | None = Field(default=None, alias="stopReason")
+    suppress_output: bool | None = Field(default=None, alias="suppressOutput")
+    system_message: str | None = Field(default=None, alias="systemMessage")
 
 
 # ---------------------------------------------------------------------------
@@ -4207,15 +4232,15 @@ class InitializeParams(BaseModel):
     agent_progress_summaries: bool | None = Field(
         default=None, alias="agentProgressSummaries"
     )
-    agents: dict[str, SdkAgentDefinition] | None = None
+    agents: dict[str, ClientAgentDefinition] | None = None
     append_system_prompt: str | None = None
+    client_mcp_servers: list[str] | None = None
     hooks: dict[str, list[HookCallbackMatcher]] | None = None
     json_schema: Any = None
     plan_mode_instructions: str | None = Field(
         default=None, alias="planModeInstructions"
     )
     prompt_suggestions: bool | None = None
-    sdk_mcp_servers: list[str] | None = None
     system_prompt: str | None = None
 
 
@@ -5103,6 +5128,25 @@ class BudgetExhaustedOutcome(BaseModel):
     budget_tokens: int | None = None
 
 
+class ClientAgentDefinition(BaseModel):
+    description: str
+    prompt: str
+    background: bool | None = None
+    critical_system_reminder_experimental: str | None = Field(
+        default=None, alias="criticalSystemReminder_EXPERIMENTAL"
+    )
+    disallowed_tools: list[str] | None = None
+    effort: ReasoningEffort | None = None
+    initial_prompt: str | None = None
+    max_turns: int | None = None
+    mcp_servers: list[AgentMcpServerSpec] | None = None
+    memory: MemoryScope | None = None
+    model: str | None = None
+    permission_mode: PermissionMode | None = None
+    skills: list[str] | None = None
+    tools: list[str] | None = None
+
+
 class CommandPermissionsPayload(BaseModel):
     allowed_tools: list[str] = Field(alias="allowedTools")
     model: str | None = None
@@ -5319,7 +5363,7 @@ class HookCallbackMatcher(BaseModel):
 
 
 class HookCallbackResult(BaseModel):
-    output: SdkHookOutput
+    output: HookCallbackOutput
 
 
 class HookCancelledPayload(BaseModel):
@@ -5357,17 +5401,55 @@ class HookSystemMessagePayload(BaseModel):
     tool_use_id: str
 
 
+class InitializeAccountInfo(BaseModel):
+    api_key_source: str | None = Field(default=None, alias="apiKeySource")
+    api_provider: InitializeApiProvider | None = Field(
+        default=None, alias="apiProvider"
+    )
+    email: str | None = None
+    organization: str | None = None
+    subscription_type: str | None = Field(default=None, alias="subscriptionType")
+    token_source: str | None = Field(default=None, alias="tokenSource")
+
+
+class InitializeAgentInfo(BaseModel):
+    description: str
+    name: str
+    model: str | None = None
+
+
+class InitializeModelInfo(BaseModel):
+    description: str
+    display_name: str = Field(alias="displayName")
+    value: str
+    supported_effort_levels: list[EffortLevel] = Field(
+        default=None, alias="supportedEffortLevels"
+    )
+    supports_adaptive_thinking: bool | None = Field(
+        default=None, alias="supportsAdaptiveThinking"
+    )
+    supports_auto_mode: bool | None = Field(default=None, alias="supportsAutoMode")
+    supports_effort: bool | None = Field(default=None, alias="supportsEffort")
+    supports_fast_mode: bool | None = Field(default=None, alias="supportsFastMode")
+
+
 class InitializeResult(BaseModel):
     output_style: str
     coco_rs_protocol_version: str = Field(default=None, alias="_cocoRsProtocolVersion")
     coco_rs_version: str = Field(default=None, alias="_cocoRsVersion")
-    account: SdkAccountInfo = {}
-    agents: list[SdkAgentInfo] = []
+    account: InitializeAccountInfo = {}
+    agents: list[InitializeAgentInfo] = []
     available_output_styles: list[str] = []
-    commands: list[SdkSlashCommand] = []
+    commands: list[InitializeSlashCommand] = []
     fast_mode_state: FastModeState | None = None
-    models: list[SdkModelInfo] = []
+    models: list[InitializeModelInfo] = []
     pid: int | None = None
+
+
+class InitializeSlashCommand(BaseModel):
+    argument_hint: str = Field(alias="argumentHint")
+    description: str
+    name: str
 
 
 class InputTokens(BaseModel):
@@ -5853,86 +5935,6 @@ class RewindRowMetadata(BaseModel):
     metadata: RewindDiffStatsPayload | None = None
 
 
-class SdkAccountInfo(BaseModel):
-    api_key_source: str | None = Field(default=None, alias="apiKeySource")
-    api_provider: ApiProvider | None = Field(default=None, alias="apiProvider")
-    email: str | None = None
-    organization: str | None = None
-    subscription_type: str | None = Field(default=None, alias="subscriptionType")
-    token_source: str | None = Field(default=None, alias="tokenSource")
-
-
-class SdkAgentDefinition(BaseModel):
-    description: str
-    prompt: str
-    background: bool | None = None
-    critical_system_reminder_experimental: str | None = Field(
-        default=None, alias="criticalSystemReminder_EXPERIMENTAL"
-    )
-    disallowed_tools: list[str] | None = None
-    effort: ReasoningEffort | None = None
-    initial_prompt: str | None = None
-    max_turns: int | None = None
-    mcp_servers: list[AgentMcpServerSpec] | None = None
-    memory: MemoryScope | None = None
-    model: str | None = None
-    permission_mode: PermissionMode | None = None
-    skills: list[str] | None = None
-    tools: list[str] | None = None
-
-
-class SdkAgentInfo(BaseModel):
-    description: str
-    name: str
-    model: str | None = None
-
-
-class SdkHookOutput(BaseModel):
-    async_: bool | None = Field(default=None, alias="async")
-    async_timeout: int | None = Field(default=None, alias="asyncTimeout")
-    continue_: bool | None = Field(default=None, alias="continue")
-    decision: HookDecision | None = None
-    hook_specific_output: HookSpecificOutput | None = Field(
-        default=None, alias="hookSpecificOutput"
-    )
-    reason: str | None = None
-    stop_reason: str | None = Field(default=None, alias="stopReason")
-    suppress_output: bool | None = Field(default=None, alias="suppressOutput")
-    system_message: str | None = Field(default=None, alias="systemMessage")
-
-
-class SdkModelInfo(BaseModel):
-    description: str
-    display_name: str = Field(alias="displayName")
-    value: str
-    supported_effort_levels: list[EffortLevel] = Field(
-        default=None, alias="supportedEffortLevels"
-    )
-    supports_adaptive_thinking: bool | None = Field(
-        default=None, alias="supportsAdaptiveThinking"
-    )
-    supports_auto_mode: bool | None = Field(default=None, alias="supportsAutoMode")
-    supports_effort: bool | None = Field(default=None, alias="supportsEffort")
-    supports_fast_mode: bool | None = Field(default=None, alias="supportsFastMode")
-
-
-class SdkSessionSummary(BaseModel):
-    created_at: str
-    cwd: str
-    model: str
-    session_id: SessionId
-    message_count: int = 0
-    title: str | None = None
-    total_tokens: int = 0
-    updated_at: str | None = None
-
-
-class SdkSlashCommand(BaseModel):
-    argument_hint: str = Field(alias="argumentHint")
-    description: str
-    name: str
-
-
 class SessionEndInput(BaseModel):
     cwd: str
     reason: ExitReason
@@ -5945,7 +5947,7 @@ class SessionEndInput(BaseModel):
 
 
 class SessionListResult(BaseModel):
-    sessions: list[SdkSessionSummary]
+    sessions: list[SessionSummary]
 
 
 class SessionModelUsage(BaseModel):
@@ -5980,14 +5982,14 @@ class SessionModelUsageEntry(BaseModel):
 
 
 class SessionReadResult(BaseModel):
-    session: SdkSessionSummary
+    session: SessionSummary
     has_more: bool = False
     messages: list[Any] = []
     next_cursor: str | None = None
 
 
 class SessionResumeResult(BaseModel):
-    session: SdkSessionSummary
+    session: SessionSummary
     surface_id: SurfaceId | None = None
 
 

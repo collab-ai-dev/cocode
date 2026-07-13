@@ -1,4 +1,4 @@
-/// Clap-independent inputs consumed by agent-host use cases.
+/// Clap-independent inputs consumed by agent-host application behavior.
 ///
 /// The CLI maps parsed arguments into this value once. Other surfaces and
 /// tests can construct it directly without depending on command-line syntax.

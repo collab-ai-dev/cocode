@@ -38,7 +38,7 @@
       ]
     },
     {
-      "description": "Route an MCP JSON-RPC message to the SDK-hosted MCP server.\nExpected response: `ClientRequest::McpRouteMessageResponse`.",
+      "description": "Route an MCP JSON-RPC message to the client-hosted MCP server.\nExpected response: `ClientRequest::McpRouteMessageResponse`.",
       "type": "object",
       "properties": {
         "method": {
@@ -238,7 +238,7 @@
       ]
     },
     "McpRouteMessageParams": {
-      "description": "Route an MCP JSON-RPC message to an SDK-hosted server.\nCorrelation is via the outer JSON-RPC `request_id` on the envelope \u2014\nno inner `request_id`. The SDK replies with a `McpRouteMessageResult`\npayload carrying the forwarded MCP server's JSON-RPC response.",
+      "description": "Route an MCP JSON-RPC message to a client-hosted server.\nCorrelation is via the outer JSON-RPC `request_id` on the envelope \u2014\nno inner `request_id`. The SDK replies with a `McpRouteMessageResult`\npayload carrying the forwarded MCP server's JSON-RPC response.",
       "type": "object",
       "properties": {
         "message": {

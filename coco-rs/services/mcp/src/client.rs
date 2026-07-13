@@ -69,10 +69,10 @@ const SESSION_INGRESS_MCP_PATHS: [&str; 4] = [
 const MCP_SKILLS_EXTENSION: &str = "io.modelcontextprotocol/skills";
 const MAX_DIRECTORY_READ_PAGES: usize = 20;
 
-pub type SdkRouteFuture =
+pub type ClientRouteFuture =
     Pin<Box<dyn Future<Output = std::result::Result<serde_json::Value, String>> + Send>>;
-pub type SdkRouteMessage =
-    Arc<dyn Fn(String, serde_json::Value) -> SdkRouteFuture + Send + Sync + 'static>;
+pub type ClientRouteMessage =
+    Arc<dyn Fn(String, serde_json::Value) -> ClientRouteFuture + Send + Sync + 'static>;
 
 /// MCP connection manager — manages lifecycle of all MCP server connections.
 ///
@@ -87,14 +87,14 @@ pub struct McpConnectionManager {
     /// Per-server lock used to dedupe headersHelper-triggered reconnects after
     /// tool-call 401/403 responses.
     tool_reconnect_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
-    sdk_route_message: Option<SdkRouteMessage>,
+    client_route_message: Option<ClientRouteMessage>,
     /// Monotonic counter for inner JSON-RPC `id` values used when
     /// bridging messages through `mcp/routeMessage`. Per-manager so two
-    /// SDK MCP servers (or two concurrent `tools/call` invocations) get
+    /// client-hosted MCP servers (or two concurrent `tools/call` invocations) get
     /// distinct ids. Wrapped in `Arc` so `Clone` impl shares the counter
     /// across cloned managers — they cooperate rather than restarting
     /// from 0 each clone.
-    sdk_route_next_id: Arc<AtomicI64>,
+    client_route_next_id: Arc<AtomicI64>,
     tool_timeout_ms: u64,
     tool_idle_timeout_ms: u64,
     config_home: PathBuf,
@@ -118,8 +118,8 @@ impl McpConnectionManager {
             connections: Arc::new(RwLock::new(HashMap::new())),
             rmcp_clients: Arc::new(RwLock::new(HashMap::new())),
             tool_reconnect_locks: Arc::new(Mutex::new(HashMap::new())),
-            sdk_route_message: None,
-            sdk_route_next_id: Arc::new(AtomicI64::new(0)),
+            client_route_message: None,
+            client_route_next_id: Arc::new(AtomicI64::new(0)),
             tool_timeout_ms: DEFAULT_TOOL_TIMEOUT_MS,
             tool_idle_timeout_ms: DEFAULT_TOOL_IDLE_TIMEOUT_MS,
             config_home,
@@ -202,14 +202,14 @@ impl McpConnectionManager {
         }
     }
 
-    /// Install the control-channel router used by SDK-hosted MCP servers.
+    /// Install the control-channel router used by client-hosted MCP servers.
     ///
-    /// SDK MCP servers run in the SDK client process. The manager still owns
+    /// client-hosted MCP servers run in the remote client process. The manager still owns
     /// lifecycle and tool catalog state, but JSON-RPC messages are forwarded
     /// through this callback instead of through a child process or HTTP
     /// transport.
-    pub fn set_sdk_route_message(&mut self, route: SdkRouteMessage) {
-        self.sdk_route_message = Some(route);
+    pub fn set_client_route_message(&mut self, route: ClientRouteMessage) {
+        self.client_route_message = Some(route);
     }
 
     /// Connect to a server by name using `rmcp` SDK.
@@ -360,7 +360,7 @@ impl McpConnectionManager {
             McpServerConfig::Sse(c) => ("sse".to_string(), Some(c.url.clone())),
             McpServerConfig::Http(c) => ("http".to_string(), Some(c.url.clone())),
             McpServerConfig::WebSocket(c) => ("websocket".to_string(), Some(c.url.clone())),
-            McpServerConfig::Sdk(_) => ("sdk".to_string(), None),
+            McpServerConfig::ClientHosted(_) => ("client_hosted".to_string(), None),
             McpServerConfig::ClaudeAiProxy(c) => {
                 ("claudeai-proxy".to_string(), Some(c.url.clone()))
             }
@@ -443,8 +443,8 @@ impl McpConnectionManager {
                 .await
                 .map_err(|e| map_http_connect_error(&http.url, e))?
             }
-            McpServerConfig::Sdk(sdk) => {
-                return self.do_connect_sdk(server_name, sdk).await;
+            McpServerConfig::ClientHosted(config) => {
+                return self.do_connect_client_hosted(server_name, config).await;
             }
             _ => {
                 return Err(McpClientError::UnsupportedTransport);
@@ -571,8 +571,10 @@ impl McpConnectionManager {
             .ok_or_else(|| McpClientError::ServerNotFound {
                 name: server_name.to_string(),
             })?;
-        if matches!(config, McpServerConfig::Sdk(_)) {
-            return self.call_sdk_tool(server_name, tool_name, arguments).await;
+        if matches!(config, McpServerConfig::ClientHosted(_)) {
+            return self
+                .call_client_hosted_tool(server_name, tool_name, arguments)
+                .await;
         }
 
         let failed_client = self.rmcp_client(server_name).await?;
@@ -614,8 +616,10 @@ impl McpConnectionManager {
             .ok_or_else(|| McpClientError::ServerNotFound {
                 name: server_name.to_string(),
             })?;
-        if matches!(config, McpServerConfig::Sdk(_)) {
-            return self.call_sdk_tool(server_name, tool_name, arguments).await;
+        if matches!(config, McpServerConfig::ClientHosted(_)) {
+            return self
+                .call_client_hosted_tool(server_name, tool_name, arguments)
+                .await;
         }
         let client = self.rmcp_client(server_name).await?;
         self.call_tool_with_client(server_name, tool_name, arguments, &config, client)
@@ -747,21 +751,21 @@ impl McpConnectionManager {
         )
     }
 
-    async fn do_connect_sdk(
+    async fn do_connect_client_hosted(
         &self,
         server_name: &str,
-        sdk: &crate::types::McpSdkConfig,
+        config: &crate::types::McpClientHostedConfig,
     ) -> Result<ConnectedMcpServer, McpClientError> {
         let route = self
-            .sdk_route_message
+            .client_route_message
             .as_ref()
             .cloned()
             .ok_or(McpClientError::UnsupportedTransport)?;
 
-        let init = route_sdk_jsonrpc(
+        let init = route_client_hosted_jsonrpc(
             &route,
             server_name,
-            self.sdk_route_next_id.fetch_add(1, Ordering::Relaxed),
+            self.client_route_next_id.fetch_add(1, Ordering::Relaxed),
             "initialize",
             serde_json::json!({
                 "protocolVersion": "2024-11-05",
@@ -773,9 +777,9 @@ impl McpConnectionManager {
             }),
         )
         .await?;
-        let init_result: InitializeResult = parse_sdk_jsonrpc_result(init)?;
+        let init_result: InitializeResult = parse_client_hosted_jsonrpc_result(init)?;
 
-        // MCP notifications have no result. Older SDK-side shims may still
+        // MCP notifications have no result. Older client-side shims may still
         // return an ack; either way the notification should not block connect.
         let _ = route(
             server_name.to_string(),
@@ -786,15 +790,15 @@ impl McpConnectionManager {
         )
         .await;
 
-        let tools_response = route_sdk_jsonrpc(
+        let tools_response = route_client_hosted_jsonrpc(
             &route,
             server_name,
-            self.sdk_route_next_id.fetch_add(1, Ordering::Relaxed),
+            self.client_route_next_id.fetch_add(1, Ordering::Relaxed),
             "tools/list",
             serde_json::json!({}),
         )
         .await?;
-        let tools_result: ListToolsResult = parse_sdk_jsonrpc_result(tools_response)?;
+        let tools_result: ListToolsResult = parse_client_hosted_jsonrpc_result(tools_response)?;
         let tools = tools_result
             .tools
             .into_iter()
@@ -816,25 +820,27 @@ impl McpConnectionManager {
         };
 
         // Fetch resources + prompts when the server advertises them,
-        // routing through the SDK control channel.
+        // routing through the client control channel.
         let resources = if capabilities.resources {
-            self.fetch_resources_for_sdk(&route, server_name).await
+            self.fetch_resources_for_client_hosted(&route, server_name)
+                .await
         } else {
             Vec::new()
         };
         let commands = if capabilities.prompts {
-            self.fetch_prompts_for_sdk(&route, server_name).await
+            self.fetch_prompts_for_client_hosted(&route, server_name)
+                .await
         } else {
             Vec::new()
         };
 
         info!(
             server = %server_name,
-            sdk_name = %sdk.name,
+            client_hosted_name = %config.name,
             tools = tools.len(),
             resources = resources.len(),
             prompts = commands.len(),
-            "SDK MCP server connected and initialized"
+            "client-hosted MCP server connected and initialized"
         );
 
         Ok(ConnectedMcpServer {
@@ -851,19 +857,19 @@ impl McpConnectionManager {
         })
     }
 
-    /// List an SDK-hosted server's resources via the control channel,
+    /// List a client-hosted server's resources via the control channel,
     /// mapping into [`McpResource`]. Parallels [`fetch_resources`] (rmcp path):
     /// a failure is logged and treated as "no resources" — it must not abort
     /// connect.
-    async fn fetch_resources_for_sdk(
+    async fn fetch_resources_for_client_hosted(
         &self,
-        route: &SdkRouteMessage,
+        route: &ClientRouteMessage,
         server_name: &str,
     ) -> Vec<McpResource> {
-        let response = match route_sdk_jsonrpc(
+        let response = match route_client_hosted_jsonrpc(
             route,
             server_name,
-            self.sdk_route_next_id.fetch_add(1, Ordering::Relaxed),
+            self.client_route_next_id.fetch_add(1, Ordering::Relaxed),
             "resources/list",
             serde_json::json!({}),
         )
@@ -871,11 +877,11 @@ impl McpConnectionManager {
         {
             Ok(response) => response,
             Err(e) => {
-                warn!(server = %server_name, "failed to list SDK MCP resources: {e}");
+                warn!(server = %server_name, "failed to list client-hosted MCP resources: {e}");
                 return Vec::new();
             }
         };
-        match parse_sdk_jsonrpc_result::<ListResourcesResult>(response) {
+        match parse_client_hosted_jsonrpc_result::<ListResourcesResult>(response) {
             Ok(result) => result
                 .resources
                 .into_iter()
@@ -887,25 +893,25 @@ impl McpConnectionManager {
                 })
                 .collect(),
             Err(e) => {
-                warn!(server = %server_name, "failed to parse SDK MCP resources: {e}");
+                warn!(server = %server_name, "failed to parse client-hosted MCP resources: {e}");
                 Vec::new()
             }
         }
     }
 
-    /// List an SDK-hosted server's prompts via the control channel, mapping
+    /// List a client-hosted server's prompts via the control channel, mapping
     /// into [`McpPrompt`] (surfaced as MCP slash-commands). Parallels
     /// [`fetch_prompts`] (rmcp path); failures are logged and treated as
     /// "no prompts".
-    async fn fetch_prompts_for_sdk(
+    async fn fetch_prompts_for_client_hosted(
         &self,
-        route: &SdkRouteMessage,
+        route: &ClientRouteMessage,
         server_name: &str,
     ) -> Vec<McpPrompt> {
-        let response = match route_sdk_jsonrpc(
+        let response = match route_client_hosted_jsonrpc(
             route,
             server_name,
-            self.sdk_route_next_id.fetch_add(1, Ordering::Relaxed),
+            self.client_route_next_id.fetch_add(1, Ordering::Relaxed),
             "prompts/list",
             serde_json::json!({}),
         )
@@ -913,11 +919,11 @@ impl McpConnectionManager {
         {
             Ok(response) => response,
             Err(e) => {
-                warn!(server = %server_name, "failed to list SDK MCP prompts: {e}");
+                warn!(server = %server_name, "failed to list client-hosted MCP prompts: {e}");
                 return Vec::new();
             }
         };
-        match parse_sdk_jsonrpc_result::<ListPromptsResult>(response) {
+        match parse_client_hosted_jsonrpc_result::<ListPromptsResult>(response) {
             Ok(result) => result
                 .prompts
                 .into_iter()
@@ -927,38 +933,38 @@ impl McpConnectionManager {
                 })
                 .collect(),
             Err(e) => {
-                warn!(server = %server_name, "failed to parse SDK MCP prompts: {e}");
+                warn!(server = %server_name, "failed to parse client-hosted MCP prompts: {e}");
                 Vec::new()
             }
         }
     }
 
-    async fn call_sdk_tool(
+    async fn call_client_hosted_tool(
         &self,
         server_name: &str,
         tool_name: &str,
         arguments: Option<serde_json::Value>,
     ) -> Result<CallToolResult, McpClientError> {
         let route = self
-            .sdk_route_message
+            .client_route_message
             .as_ref()
             .cloned()
             .ok_or(McpClientError::UnsupportedTransport)?;
-        let response = route_sdk_jsonrpc(
+        let response = route_client_hosted_jsonrpc(
             &route,
             server_name,
-            self.sdk_route_next_id.fetch_add(1, Ordering::Relaxed),
+            self.client_route_next_id.fetch_add(1, Ordering::Relaxed),
             "tools/call",
             serde_json::to_value(CallToolRequestParams {
                 name: tool_name.to_string(),
                 arguments,
             })
             .map_err(|e| McpClientError::ToolCallFailed {
-                message: format!("serialize SDK MCP tools/call: {e}"),
+                message: format!("serialize client-hosted MCP tools/call: {e}"),
             })?,
         )
         .await?;
-        parse_sdk_jsonrpc_result(response)
+        parse_client_hosted_jsonrpc_result(response)
     }
 
     /// Read an MCP resource from a connected server.
@@ -1042,18 +1048,18 @@ impl McpConnectionManager {
             uri: resource_uri.to_string(),
             cursor,
         };
-        if let Some(route) = self.sdk_route_message.as_ref().cloned() {
-            let response = route_sdk_jsonrpc(
+        if let Some(route) = self.client_route_message.as_ref().cloned() {
+            let response = route_client_hosted_jsonrpc(
                 &route,
                 server_name,
-                self.sdk_route_next_id.fetch_add(1, Ordering::Relaxed),
+                self.client_route_next_id.fetch_add(1, Ordering::Relaxed),
                 "resources/directory/read",
                 serde_json::to_value(params).map_err(|e| McpClientError::ToolCallFailed {
-                    message: format!("serialize SDK MCP resources/directory/read: {e}"),
+                    message: format!("serialize client-hosted MCP resources/directory/read: {e}"),
                 })?,
             )
             .await?;
-            return parse_sdk_jsonrpc_result(response);
+            return parse_client_hosted_jsonrpc_result(response);
         }
 
         let clients = self.rmcp_clients.read().await;
@@ -1540,7 +1546,7 @@ fn oauth_login_target(
         )),
         McpServerConfig::Stdio(_)
         | McpServerConfig::WebSocket(_)
-        | McpServerConfig::Sdk(_)
+        | McpServerConfig::ClientHosted(_)
         | McpServerConfig::ClaudeAiProxy(_) => None,
     }
 }
@@ -1635,8 +1641,8 @@ fn parse_headers_helper_output(
     Ok(out)
 }
 
-async fn route_sdk_jsonrpc(
-    route: &SdkRouteMessage,
+async fn route_client_hosted_jsonrpc(
+    route: &ClientRouteMessage,
     server_name: &str,
     id: i64,
     method: &str,
@@ -1671,23 +1677,23 @@ fn server_supports_resource_directory_read(capabilities: &ServerCapabilities) ->
         .unwrap_or(false)
 }
 
-fn parse_sdk_jsonrpc_result<T>(message: serde_json::Value) -> Result<T, McpClientError>
+fn parse_client_hosted_jsonrpc_result<T>(message: serde_json::Value) -> Result<T, McpClientError>
 where
     T: serde::de::DeserializeOwned,
 {
     if let Some(error) = message.get("error") {
         return Err(McpClientError::ToolCallFailed {
-            message: format!("SDK MCP returned error: {error}"),
+            message: format!("client-hosted MCP returned error: {error}"),
         });
     }
     let result = message
         .get("result")
         .cloned()
         .ok_or_else(|| McpClientError::ToolCallFailed {
-            message: format!("SDK MCP response missing result: {message}"),
+            message: format!("client-hosted MCP response missing result: {message}"),
         })?;
     serde_json::from_value(result).map_err(|e| McpClientError::ToolCallFailed {
-        message: format!("parse SDK MCP response: {e}"),
+        message: format!("parse client-hosted MCP response: {e}"),
     })
 }
 

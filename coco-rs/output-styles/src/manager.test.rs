@@ -4,10 +4,10 @@ use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
 #[test]
-fn empty_manager_has_no_active_style_and_default_sdk_name() {
+fn empty_manager_has_no_active_style_and_default_initialize_name() {
     let mgr = OutputStyleManager::empty();
     assert!(mgr.active().is_none());
-    assert_eq!(mgr.active_name_for_sdk(), "default");
+    assert_eq!(mgr.active_name_for_initialize(), "default");
     assert!(mgr.names().is_empty());
 }
 
@@ -15,7 +15,7 @@ fn empty_manager_has_no_active_style_and_default_sdk_name() {
 fn builder_with_default_settings_returns_none_active() {
     let mgr = OutputStyleManager::builder().build();
     assert!(mgr.active().is_none());
-    assert_eq!(mgr.active_name_for_sdk(), "default");
+    assert_eq!(mgr.active_name_for_initialize(), "default");
     // Built-ins surface in the catalog.
     assert!(mgr.names().contains(&"Explanatory".to_string()));
     assert!(mgr.names().contains(&"Learning".to_string()));
@@ -28,7 +28,7 @@ fn builder_resolves_built_in_explanatory() {
         .build();
     let active = mgr.active().expect("Explanatory should be active");
     assert_eq!(active.name, "Explanatory");
-    assert_eq!(mgr.active_name_for_sdk(), "Explanatory");
+    assert_eq!(mgr.active_name_for_initialize(), "Explanatory");
 }
 
 #[test]

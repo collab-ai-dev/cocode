@@ -10,7 +10,7 @@ prompt rendering, tool filter planning, validation diagnostics.
 | `AgentDefinitionStore` | Loads built-ins + per-source markdown agents; exposes a snapshot |
 | `AgentCatalogSnapshot` | Immutable per-turn view of active / all definitions; returned as `Arc<...>` for cheap sharing |
 | `AgentLoadReport` | Diagnostics from the most recent load |
-| `BuiltinAgentCatalog` | Toggle set for optional built-ins (Explore/Plan, verification, coco-guide, SDK disable) |
+| `BuiltinAgentCatalog` | Toggle set for optional built-ins (Explore/Plan, verification, coco-guide, noninteractive disable) |
 | `AgentToolPromptRenderer` | AgentTool prompt string builder |
 | `AgentToolFilter` + `ToolFilterPlan` | Pure tool filter computation; host/coordinator assembly applies the plan to the child `ToolRegistry` |
 | `AllowedAgentTypes` + `parse_allowed_agent_types` | Parse `Agent(...)` / `Task(...)` permission entries |

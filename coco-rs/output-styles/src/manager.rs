@@ -4,7 +4,7 @@
 //! [`OutputStyleConfig`] (or `None` for the default sentinel). It is
 //! constructed once at session bootstrap from settings + on-disk
 //! markdown + enabled plugins, then passed (cheap to clone) into the
-//! system-prompt builder, the SDK init bootstrap, and the per-turn
+//! system-prompt builder, the initialize bootstrap, and the per-turn
 //! reminder pipeline.
 
 use std::path::PathBuf;
@@ -195,7 +195,8 @@ impl OutputStyleManager {
 
     /// All loaded style names in insertion order including built-ins.
     /// Never includes the `default` sentinel — callers that need it
-    /// for the SDK `available_output_styles` field prepend it themselves.
+    /// for the initialize `available_output_styles` field prepend it
+    /// themselves.
     pub fn names(&self) -> Vec<String> {
         self.aggregated.names()
     }
@@ -210,10 +211,10 @@ impl OutputStyleManager {
         &self.verdict
     }
 
-    /// Convenience: name to advertise on the SDK init message. Always
+    /// Convenience: name to advertise on the initialize response. Always
     /// non-empty: returns the resolved name when a force-for-plugin or
     /// settings match exists, otherwise the literal `default` sentinel.
-    pub fn active_name_for_sdk(&self) -> String {
+    pub fn active_name_for_initialize(&self) -> String {
         self.active
             .as_ref()
             .map(|s| s.name.clone())

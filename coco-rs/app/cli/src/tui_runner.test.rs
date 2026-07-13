@@ -73,74 +73,6 @@ fn latest_todo_write_todos_clears_all_completed_snapshot() {
 }
 
 #[cfg(test)]
-mod agent_template_tests {
-    use super::super::build_agent_template;
-    use super::super::yaml_single_quote;
-    use coco_types::AgentColorName;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn yaml_single_quote_doubles_inner_apostrophes() {
-        assert_eq!(yaml_single_quote("plain"), "'plain'");
-        assert_eq!(yaml_single_quote("it's fine"), "'it''s fine'");
-        // Backslashes pass through literally — YAML single-quoted
-        // form treats backslash as a normal character.
-        assert_eq!(yaml_single_quote("a\\b"), "'a\\b'");
-    }
-
-    #[test]
-    fn template_emits_color_line_when_provided() {
-        let body = build_agent_template("Plan", "Plans things.", Some(AgentColorName::Blue));
-        assert!(body.contains("name: Plan"));
-        assert!(body.contains("description: 'Plans things.'"));
-        assert!(body.contains("color: blue"));
-    }
-
-    #[test]
-    fn template_omits_color_line_when_palette_full() {
-        let body = build_agent_template("Plan", "x", None);
-        assert!(!body.contains("color:"));
-    }
-
-    #[test]
-    fn template_round_trips_through_subagent_parser() {
-        // Smoke: hand the wizard's emitted YAML to the live
-        // frontmatter parser to confirm the result is loadable.
-        // Catches accidental YAML syntax drift in the template
-        // (especially around single-quote escaping of inputs that
-        // contain apostrophes).
-        let body = build_agent_template(
-            "demo-agent",
-            "Handles when 'edge' cases collide.",
-            Some(AgentColorName::Green),
-        );
-        // The loader-side flow is two-step: parse the markdown to
-        // split frontmatter+content, then validate the parsed map.
-        // Mirror that here so the test exercises the same pipeline
-        // a real agent file goes through.
-        let parsed = coco_frontmatter::parse(&body);
-        let path = std::path::Path::new("/virtual/demo-agent.md");
-        let (def, errors) = coco_subagent::parse_agent_markdown(
-            path,
-            &parsed.content,
-            &parsed.data,
-            coco_types::AgentSource::UserSettings,
-        )
-        .expect("template must parse as a valid agent definition");
-        assert!(
-            errors.is_empty(),
-            "template must parse without validation errors: {errors:?}"
-        );
-        assert_eq!(def.name, "demo-agent");
-        assert_eq!(
-            def.description.as_deref(),
-            Some("Handles when 'edge' cases collide.")
-        );
-        assert_eq!(def.color, Some(AgentColorName::Green));
-    }
-}
-
-#[cfg(test)]
 mod plan_prompt_editor_tests {
     use super::super::PendingEditorRequest;
     use super::super::emit_editor_prepare_failed;
@@ -212,23 +144,15 @@ use super::ActiveTurn;
 use super::ActiveTurnCancel;
 use super::ActiveTurnDrain;
 use super::LocalRuntimeControlContext;
-use super::PermissionsMutation;
 use super::SentinelTrigger;
-use super::add_dir_already_message;
 use super::apply_resume_plan_through_app_server;
 use super::background_all_tasks_through_app_server;
-use super::build_remote_model_change_reminder;
-use super::build_system_message_from_push_kind;
 use super::classify_sentinel_trigger;
-use super::create_slash_metadata_message;
 use super::dispatch_slash_command;
 use super::drain_active_turn;
 use super::drain_completed_turn;
-use super::format_slash_command_metadata;
 use super::handle_rewind;
-use super::load_resume_plan_for_target;
 use super::parse_editor_command;
-use super::parse_permissions_mutation;
 use super::parse_slash_command;
 use super::process_idle_command_queue;
 use super::run_clear_conversation;
@@ -242,11 +166,13 @@ use super::run_show_status;
 use super::run_side_question;
 use super::session_plan_file_path;
 use super::set_thinking_level_through_app_server;
-use super::should_prompt_mode_bash_respond;
 use super::should_trigger_title_gen;
 use super::slash_unavailable_in_session_message;
 use super::toggle_fast_mode_through_app_server;
 use clap::Parser;
+use coco_agent_host::session_controls::PermissionsMutation;
+use coco_agent_host::session_controls::directory_already_accessible_message;
+use coco_agent_host::session_controls::parse_permissions_mutation;
 use coco_config::CatalogPaths;
 use coco_config::EnvSnapshot;
 use coco_config::RoleSlots;
@@ -270,25 +196,35 @@ use tempfile::TempDir;
 use tokio::sync::Mutex;
 
 #[test]
-fn add_dir_already_message_distinguishes_current_added_and_nested() {
+fn directory_already_accessible_message_distinguishes_current_added_and_nested() {
     let current = std::path::Path::new("/repo");
     let additional = vec![std::path::PathBuf::from("/opt/shared")];
 
     assert_eq!(
-        add_dir_already_message(std::path::Path::new("/repo"), current, &additional).as_deref(),
+        directory_already_accessible_message(std::path::Path::new("/repo"), current, &additional)
+            .as_deref(),
         Some("/repo is already the current working directory.")
     );
     assert_eq!(
-        add_dir_already_message(std::path::Path::new("/opt/shared"), current, &additional)
-            .as_deref(),
+        directory_already_accessible_message(
+            std::path::Path::new("/opt/shared"),
+            current,
+            &additional,
+        )
+        .as_deref(),
         Some("/opt/shared is already added as a working directory.")
     );
     assert_eq!(
-        add_dir_already_message(std::path::Path::new("/repo/src"), current, &additional).as_deref(),
+        directory_already_accessible_message(
+            std::path::Path::new("/repo/src"),
+            current,
+            &additional,
+        )
+        .as_deref(),
         Some("/repo/src is already accessible within the current working directory /repo.")
     );
     assert_eq!(
-        add_dir_already_message(
+        directory_already_accessible_message(
             std::path::Path::new("/opt/shared/tools"),
             current,
             &additional,
@@ -299,7 +235,12 @@ fn add_dir_already_message_distinguishes_current_added_and_nested() {
         )
     );
     assert!(
-        add_dir_already_message(std::path::Path::new("/tmp/other"), current, &additional).is_none()
+        directory_already_accessible_message(
+            std::path::Path::new("/tmp/other"),
+            current,
+            &additional,
+        )
+        .is_none()
     );
 }
 
@@ -328,8 +269,8 @@ async fn shutdown_drain_aborts_stuck_active_turn_after_timeout() {
         let _guard = DropFlag(dropped_for_task);
         std::future::pending::<()>().await;
     });
-    let bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(Arc::new(
-        coco_agent_host::sdk_server::SdkServerState::default(),
+    let bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(Arc::new(
+        coco_agent_host::app_server_host::AppServerHostState::default(),
     ));
     let slot = Arc::new(Mutex::new(Some(ActiveTurn {
         id: uuid::Uuid::new_v4(),
@@ -388,28 +329,44 @@ fn title_gen_skipped_with_empty_plan() {
 
 #[test]
 fn remote_model_change_reminder_is_remote_main_only() {
-    let msg = build_remote_model_change_reminder(ModelRole::Main, "Claude Sonnet 4.6", true)
-        .expect("remote main switch should emit reminder");
+    let msg = coco_agent_host::session_messages::remote_model_change_reminder_message(
+        ModelRole::Main,
+        "Claude Sonnet 4.6",
+        true,
+    )
+    .expect("remote main switch should emit reminder");
     let text = coco_messages::wrapping::extract_text_from_message(&msg);
     assert!(text.contains("<system-reminder>"));
     assert!(text.contains("The model for this session has been changed to Claude Sonnet 4.6."));
     assert!(text.contains("You are now running as Claude Sonnet 4.6."));
 
     assert!(
-        build_remote_model_change_reminder(ModelRole::Main, "Claude Sonnet 4.6", false).is_none()
+        coco_agent_host::session_messages::remote_model_change_reminder_message(
+            ModelRole::Main,
+            "Claude Sonnet 4.6",
+            false,
+        )
+        .is_none()
     );
     assert!(
-        build_remote_model_change_reminder(ModelRole::Plan, "Claude Sonnet 4.6", true).is_none()
+        coco_agent_host::session_messages::remote_model_change_reminder_message(
+            ModelRole::Plan,
+            "Claude Sonnet 4.6",
+            true,
+        )
+        .is_none()
     );
 }
 
 #[test]
 fn permission_retry_system_push_builds_permission_retry_message() {
-    let msg = build_system_message_from_push_kind(SystemPushKind::PermissionRetry {
-        tool_name: "Bash".into(),
-        message: "Permission granted for: Bash. You may now retry this command if you would like."
-            .into(),
-    });
+    let msg =
+        coco_agent_host::session_messages::system_push_message(SystemPushKind::PermissionRetry {
+            tool_name: "Bash".into(),
+            message:
+                "Permission granted for: Bash. You may now retry this command if you would like."
+                    .into(),
+        });
 
     match msg {
         coco_messages::Message::System(coco_messages::SystemMessage::PermissionRetry(retry)) => {
@@ -634,7 +591,7 @@ async fn test_resume_context(
             model_runtimes: Some(coco_query::test_support::model_runtime_registry(Arc::new(
                 QueuedTurnMockModel,
             ))),
-            session_manager: Arc::clone(rt.session_manager()),
+            session_manager: rt.session_manager_handle(),
             fast_model_spec: rt.fast_model_spec().cloned(),
             permission_bridge: None,
             process_runtime: Arc::clone(&process_runtime),
@@ -651,14 +608,13 @@ async fn test_resume_context(
 }
 
 async fn install_test_session_runtime(
-    bridge: &mut coco_agent_host::sdk_server::AppServerLocalBridge,
+    bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
     runtime: &crate::session_runtime::SessionHandle,
 ) {
-    let session_id = runtime.session_id().clone();
-    bridge.install_session_runtime(runtime.clone()).await;
     bridge
-        .ensure_interactive_surface(session_id)
-        .expect("test runtime should attach an interactive AppServer surface");
+        .bind_interactive_session(runtime.clone(), None)
+        .await
+        .expect("test runtime should bind to an interactive AppServer surface");
 }
 
 async fn dispatch_slash_command_for_test(
@@ -666,7 +622,7 @@ async fn dispatch_slash_command_for_test(
     args: &str,
     runtime: &crate::session_runtime::SessionHandle,
     event_tx: &tokio::sync::mpsc::Sender<coco_types::CoreEvent>,
-    local_app_server_bridge: &mut coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> super::SlashOutcome {
     let (current_session, runtime_factory, process_runtime, _cwd) =
         test_resume_context(runtime).await;
@@ -701,7 +657,7 @@ async fn seed_runtime_session_transcript(runtime: &crate::session_runtime::Sessi
     let rt = &runtime;
     let session_id = rt.current_typed_session_id().await;
     let cwd = rt.original_cwd().clone();
-    seed_session_transcript_for_cwd(rt.session_manager().memory_base(), &cwd, &session_id);
+    seed_session_transcript_for_cwd(rt.session_manager_handle().memory_base(), &cwd, &session_id);
 }
 
 fn seed_session_transcript_for_cwd(
@@ -753,7 +709,7 @@ async fn prompt_mode_bash_responds_by_default() {
     let registry = coco_commands::CommandRegistry::new();
     let runtime = build_runtime_with_registry(&home, registry).await;
 
-    assert!(should_prompt_mode_bash_respond(&runtime));
+    assert!(coco_agent_host::session_controls::should_respond_to_bash_commands(&runtime));
 }
 
 #[tokio::test]
@@ -770,7 +726,7 @@ async fn prompt_mode_bash_respects_respond_setting_false() {
     )
     .await;
 
-    assert!(!should_prompt_mode_bash_respond(&runtime));
+    assert!(!coco_agent_host::session_controls::should_respond_to_bash_commands(&runtime));
 }
 
 #[tokio::test]
@@ -791,8 +747,8 @@ async fn idle_queue_processor_starts_pending_prompt_turn() {
     let (turn_done_tx, mut turn_done_rx) = tokio::sync::mpsc::channel(4);
     let mut pending_editor_requests = std::collections::HashMap::new();
     let title_gen_attempted = Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new()));
-    let mut local_app_server_bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
+        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
     let (current_session, runtime_factory, process_runtime, cwd) =
@@ -867,8 +823,8 @@ async fn local_app_server_turn_writes_back_runtime_history() {
     let registry = coco_commands::CommandRegistry::new();
     let runtime = build_runtime_with_registry(&home, registry).await;
     let session_id = runtime.current_typed_session_id().await;
-    let mut local_app_server_bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
+        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
 
@@ -908,8 +864,8 @@ async fn manual_compact_uses_local_app_server_turn_shortcut() {
     let (event_tx, _event_rx) = tokio::sync::mpsc::channel(32);
     let active_turn = Arc::new(Mutex::new(None));
     let (turn_done_tx, mut turn_done_rx) = tokio::sync::mpsc::channel(4);
-    let mut local_app_server_bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
+        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
 
@@ -952,9 +908,9 @@ async fn btw_uses_local_app_server_turn_shortcut() {
     let (event_tx, _event_rx) = tokio::sync::mpsc::channel(32);
     let active_turn = Arc::new(Mutex::new(None));
     let (turn_done_tx, mut turn_done_rx) = tokio::sync::mpsc::channel(4);
-    let state = Arc::new(coco_agent_host::sdk_server::SdkServerState::default());
+    let state = Arc::new(coco_agent_host::app_server_host::AppServerHostState::default());
     let mut local_app_server_bridge =
-        coco_agent_host::sdk_server::AppServerLocalBridge::new(Arc::clone(&state));
+        coco_agent_host::app_server_host::AppServerLocalBridge::new(Arc::clone(&state));
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
 
     let question = "how does caching work?";
@@ -999,8 +955,8 @@ async fn memory_shortcuts_use_local_app_server_turn_shortcuts() {
     let (event_tx, _event_rx) = tokio::sync::mpsc::channel(32);
     let active_turn = Arc::new(Mutex::new(None));
     let (turn_done_tx, mut turn_done_rx) = tokio::sync::mpsc::channel(4);
-    let mut local_app_server_bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
+        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
 
@@ -1053,8 +1009,8 @@ async fn local_app_server_bridge_uses_runtime_session_manager_for_session_list()
     let runtime = build_runtime_with_registry(&home, registry).await;
     let session_id = runtime.current_typed_session_id().await;
     seed_runtime_session_transcript(&runtime).await;
-    let mut local_app_server_bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
+        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
 
@@ -1080,8 +1036,8 @@ async fn local_app_server_bridge_uses_runtime_session_manager_for_session_read()
     let runtime = build_runtime_with_registry(&home, registry).await;
     let session_id = runtime.current_typed_session_id().await;
     seed_runtime_session_transcript(&runtime).await;
-    let mut local_app_server_bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
+        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
 
@@ -1112,8 +1068,8 @@ async fn local_app_server_bridge_reads_live_runtime_handle_history() {
     let registry = coco_commands::CommandRegistry::new();
     let runtime = build_runtime_with_registry(&home, registry).await;
     let session_id = runtime.current_typed_session_id().await;
-    let mut local_app_server_bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
+        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
 
@@ -1156,7 +1112,7 @@ async fn startup_resume_plan_uses_local_app_server_session_resume() {
         coco_types::SessionId::try_new("sess-tui-startup-resume-target").expect("valid session id");
     let rt = &runtime;
     seed_session_transcript_for_cwd(
-        rt.session_manager().memory_base(),
+        rt.session_manager_handle().memory_base(),
         rt.original_cwd(),
         &target_session_id,
     );
@@ -1164,13 +1120,16 @@ async fn startup_resume_plan_uses_local_app_server_session_resume() {
         rt.original_cwd(),
     ));
     append_seed_transcript(&project_store, rt.original_cwd(), &target_session_id);
-    let plan = load_resume_plan_for_target(&runtime, target_session_id.as_str())
-        .await
-        .expect("load resume plan");
+    let plan = coco_agent_host::runtime_resume::load_resume_plan_for_runtime_target(
+        &runtime,
+        target_session_id.as_str(),
+    )
+    .await
+    .expect("load resume plan");
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-    let mut local_app_server_bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
+        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
     local_app_server_bridge
@@ -1240,7 +1199,7 @@ async fn resume_slash_uses_local_app_server_session_resume() {
         coco_types::SessionId::try_new("sess-tui-resume-target").expect("valid session id");
     let rt = &runtime;
     seed_session_transcript_for_cwd(
-        rt.session_manager().memory_base(),
+        rt.session_manager_handle().memory_base(),
         rt.original_cwd(),
         &target_session_id,
     );
@@ -1250,8 +1209,8 @@ async fn resume_slash_uses_local_app_server_session_resume() {
     append_seed_transcript(&project_store, rt.original_cwd(), &target_session_id);
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-    let mut local_app_server_bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
+        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
     local_app_server_bridge
@@ -1326,8 +1285,8 @@ async fn branch_slash_switches_to_fork_through_local_app_server() {
     seed_runtime_session_transcript(&runtime).await;
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(16);
-    let mut local_app_server_bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
+        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
     local_app_server_bridge
@@ -1358,7 +1317,7 @@ async fn branch_slash_switches_to_fork_through_local_app_server() {
     assert_eq!(live.len(), 1);
     assert_eq!(live[0].session_id, new_session_id);
     let forked_session = new_session
-        .session_manager()
+        .session_manager_handle()
         .load(new_session_id.as_str())
         .expect("branch title should persist through local AppServer session/rename");
     assert_eq!(forked_session.title.as_deref(), Some("test fork (Branch)"));
@@ -1405,8 +1364,8 @@ async fn clear_slash_refreshes_local_app_server_session() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(16);
     let reload_subscriptions = test_runtime_reload_subscriptions(&current_session, &tx);
     let active_turn = Arc::new(Mutex::new(None));
-    let mut local_app_server_bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
+        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
     local_app_server_bridge
@@ -1461,8 +1420,8 @@ async fn rename_and_tag_slashes_use_local_app_server_session_metadata_controls()
     let session_id = runtime.current_typed_session_id().await;
     seed_runtime_session_transcript(&runtime).await;
     let (tx, mut rx) = tokio::sync::mpsc::channel(16);
-    let mut local_app_server_bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
+        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
 
@@ -1476,7 +1435,7 @@ async fn rename_and_tag_slashes_use_local_app_server_session_metadata_controls()
     run_session_tag(&runtime, &tx, &local_app_server_bridge, "phase-b").await;
 
     let session = runtime
-        .session_manager()
+        .session_manager_handle()
         .load(session_id.as_str())
         .expect("metadata controls should persist session updates");
     assert_eq!(session.title.as_deref(), Some("phase-b-cleanup"));
@@ -1513,8 +1472,8 @@ async fn cost_and_status_slashes_use_local_app_server_observability() {
     let registry = coco_commands::CommandRegistry::new();
     let runtime = build_runtime_with_registry(&home, registry).await;
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-    let mut local_app_server_bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
+        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
 
@@ -1571,8 +1530,8 @@ async fn tasks_list_and_detail_slashes_use_local_app_server_task_observability()
     runtime.attach_task_runtime(Arc::clone(&task_runtime)).await;
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-    let mut local_app_server_bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
+        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
 
@@ -1655,12 +1614,12 @@ async fn background_all_tasks_uses_local_app_server_control() {
         .await;
     runtime.attach_task_runtime(Arc::clone(&task_runtime)).await;
 
-    let mut local_app_server_bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
+        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
 
-    let task_ids = background_all_tasks_through_app_server(&runtime, &local_app_server_bridge)
+    let task_ids = background_all_tasks_through_app_server(&runtime, &mut local_app_server_bridge)
         .await
         .expect("background-all should dispatch through local AppServer");
 
@@ -1694,8 +1653,8 @@ async fn tasks_cancel_slash_uses_local_app_server_stop_task() {
     runtime.attach_task_runtime(Arc::clone(&task_runtime)).await;
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-    let mut local_app_server_bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
+        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
 
@@ -1733,8 +1692,8 @@ async fn toggle_fast_mode_uses_local_app_server_apply_flags() {
     assert!(!runtime.current_engine_config().await.fast_mode);
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-    let mut local_app_server_bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
+        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
 
     toggle_fast_mode_through_app_server(&runtime, &tx, &mut local_app_server_bridge).await;
@@ -1768,8 +1727,8 @@ async fn set_thinking_level_uses_local_app_server_set_thinking() {
     );
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-    let mut local_app_server_bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
+        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
 
     set_thinking_level_through_app_server(
@@ -1825,8 +1784,8 @@ async fn explicit_file_rewind_restores_files_through_local_app_server() {
     tokio::fs::write(&file, "modified\n").await.unwrap();
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-    let mut local_app_server_bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
+        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
 
     handle_rewind(
@@ -1879,8 +1838,8 @@ async fn model_slash_arg_rejects_unavailable_model() {
     )
     .await;
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-    let mut local_app_server_bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
+        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
 
@@ -1943,8 +1902,8 @@ async fn inactive_slash_command_emits_session_hint_without_running_handler() {
     let home = TempDir::new().expect("tempdir");
     let runtime = build_runtime_with_registry(&home, registry).await;
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-    let mut local_app_server_bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
+        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
 
@@ -1977,7 +1936,7 @@ async fn inactive_slash_command_emits_session_hint_without_running_handler() {
 #[test]
 fn slash_prompt_metadata_matches_ts_shape() {
     assert_eq!(
-        format_slash_command_metadata("simplify", "focus on tests"),
+        coco_agent_host::session_messages::slash_command_metadata("simplify", "focus on tests"),
         "<command-message>simplify</command-message>\n\
          <command-name>/simplify</command-name>\n\
          <command-args>focus on tests</command-args>"
@@ -1987,7 +1946,7 @@ fn slash_prompt_metadata_matches_ts_shape() {
 #[test]
 fn slash_prompt_metadata_omits_empty_args() {
     assert_eq!(
-        format_slash_command_metadata("simplify", ""),
+        coco_agent_host::session_messages::slash_command_metadata("simplify", ""),
         "<command-message>simplify</command-message>\n\
          <command-name>/simplify</command-name>"
     );
@@ -1995,8 +1954,8 @@ fn slash_prompt_metadata_omits_empty_args() {
 
 #[test]
 fn slash_prompt_metadata_message_has_distinct_identity_and_kind() {
-    let metadata = format_slash_command_metadata("simplify", "focus");
-    let message = create_slash_metadata_message(&metadata);
+    let metadata = coco_agent_host::session_messages::slash_command_metadata("simplify", "focus");
+    let message = coco_agent_host::session_messages::slash_metadata_message(&metadata);
     let coco_messages::Message::Attachment(attachment) = message else {
         panic!("slash metadata should be an attachment");
     };

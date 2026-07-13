@@ -3,11 +3,13 @@ use std::sync::Arc;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
 use coco_tool_runtime::AgentHandleRef;
+use coco_tool_runtime::TaskHandle;
 use coco_tool_runtime::ToolRegistry;
 use tokio_util::sync::CancellationToken;
 
 use super::EnginePersistenceMode;
 use super::SessionRuntime;
+use super::SessionTaskError;
 
 impl SessionRuntime {
     /// Publisher for this session's config snapshot when hot-reload is active.
@@ -208,9 +210,9 @@ impl SessionRuntime {
     }
 
     /// Read the currently installed fork dispatcher. Returns `None`
-    /// before bootstrap installs one (or in unit tests). Used by SDK
+    /// before bootstrap installs one (or in unit tests). Used by AppServer
     /// runners that want to dispatch a fork outside of the engine's
-    /// post-turn hook (`/btw` over the SDK protocol).
+    /// post-turn hook (`/btw` over the remote protocol).
     pub async fn current_fork_dispatcher(
         &self,
     ) -> Option<coco_query::forked_agent::ForkDispatcherRef> {
@@ -267,6 +269,41 @@ impl SessionRuntime {
     /// instance with `SwarmAgentHandle`.
     pub async fn current_task_runtime(&self) -> Option<Arc<crate::task_runtime::TaskRuntime>> {
         self.handle_resources.task_runtime.read().await.clone()
+    }
+
+    pub async fn list_session_tasks(&self) -> Option<Vec<coco_types::TaskStateBase>> {
+        let runtime = self.current_task_runtime().await?;
+        Some(runtime.list_tasks().await)
+    }
+
+    pub async fn read_session_task_outputs(
+        &self,
+        task_id: &str,
+    ) -> Result<coco_tool_runtime::TerminalOutputs, SessionTaskError> {
+        let Some(runtime) = self.current_task_runtime().await else {
+            return Err(SessionTaskError::NotAvailable);
+        };
+        runtime
+            .read_terminal_outputs(task_id)
+            .await
+            .map_err(|error| SessionTaskError::Read(error.to_string()))
+    }
+
+    pub async fn stop_session_task(&self, task_id: &str) -> Result<(), SessionTaskError> {
+        let Some(runtime) = self.current_task_runtime().await else {
+            return Err(SessionTaskError::NotAvailable);
+        };
+        runtime
+            .kill_task(task_id)
+            .await
+            .map_err(|error| SessionTaskError::Control(error.to_string()))
+    }
+
+    pub async fn background_all_session_tasks(&self) -> Vec<String> {
+        let Some(runtime) = self.current_task_runtime().await else {
+            return Vec::new();
+        };
+        runtime.manager().background_all_foreground().await
     }
 
     pub async fn attach_task_list(&self, handle: coco_tool_runtime::TaskListHandleRef) {

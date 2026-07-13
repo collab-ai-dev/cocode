@@ -38,6 +38,44 @@ fn active_goal_status_matches_noninteractive_contract() {
 }
 
 #[test]
+fn active_goal_modal_body_includes_runtime_stats_and_last_check() {
+    let goal = coco_types::ActiveGoal {
+        condition: "finish migration".to_string(),
+        iterations: 2,
+        set_at_ms: unix_time_ms().saturating_sub(65_000),
+        tokens_at_start: 10,
+        last_reason: Some(" still missing tests\nrerun ".to_string()),
+    };
+
+    let body = active_goal_modal_body(&goal, 42);
+
+    assert!(body.contains("Running: 1m"));
+    assert!(body.contains("Tokens: 32"));
+    assert!(body.contains("Iterations: 2 turns"));
+    assert!(body.contains("Goal:\nfinish migration"));
+    assert!(body.contains("Last check:\nstill missing tests rerun"));
+    assert!(body.contains("/goal clear to stop early"));
+}
+
+#[test]
+fn achieved_goal_modal_body_formats_stats_and_reason() {
+    let goal = coco_types::GoalStatusPayload {
+        condition: "ship it".to_string(),
+        met: true,
+        duration_ms: Some(3_600_000),
+        iterations: Some(1),
+        tokens: Some(99),
+        reason: Some(" done\nclean ".to_string()),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        achieved_goal_modal_body(&goal),
+        "Stats: duration 1h · 1 turn · 99 tokens\n\nGoal:\nship it\n\nReason:\ndone clean"
+    );
+}
+
+#[test]
 fn find_last_achieved_goal_skips_clear_sentinel() {
     let clear = coco_messages::Message::Attachment(
         coco_messages::AttachmentMessage::silent_goal_status(coco_types::GoalStatusPayload {

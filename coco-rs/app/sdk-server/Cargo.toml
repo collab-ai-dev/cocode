@@ -1,0 +1,27 @@
+[package]
+name = "coco-sdk-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+coco-agent-host.workspace = true
+coco-app-server.workspace = true
+coco-app-server-transport.workspace = true
+coco-error.workspace = true
+coco-hub-connector.workspace = true
+coco-types.workspace = true
+
+async-trait.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+snafu.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tracing.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true

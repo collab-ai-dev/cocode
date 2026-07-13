@@ -38,7 +38,7 @@ in-process bridge because it is the layer that intentionally composes both.
 | Crate | Responsibility |
 |------|----------------|
 | `coco-cli` | `coco` binary, clap schema, subcommand/process policy, listener startup, signals, and interactive TUI loop. |
-| `coco-agent-host` | Agent-session composition, `SessionRuntime`, local AppServer client facade, SDK/headless use cases, runtime integrations, and protocol handlers. |
+| `coco-agent-host` | Agent-session composition, `SessionRuntime`, local AppServer client facade, SDK/headless host operations, runtime integrations, and protocol handlers. |
 | `coco-app-runtime` | Transport-independent process/project scopes, workspace resolution, project cache, and session-bootstrap contracts. |
 | `coco-app-server` | Multi-session lifecycle registry, connection/surface routing, replay, server requests, local adapter, and JSON-RPC adapter. It never constructs an agent runtime. |
 | `coco-app-server-client` | Remote JSON-RPC client, request correlation, remote session handles, per-surface demux, and remote connection tasks. |
@@ -81,7 +81,7 @@ fields without readers or writers were deleted rather than migrated.
 - `coco-tui` receives `CoreEvent`/protocol DTOs through `coco-types`; it does
   not depend on query or agent-host implementation types.
 - In-process AppServer handles live in `coco-agent-host::local_client`, where
-  the server implementation and application use cases are intentionally joined.
+  the server implementation and application operations are intentionally joined.
 
 ## Surface Flow
 

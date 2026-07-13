@@ -325,7 +325,7 @@ impl ClientRequest {
 // ---------------------------------------------------------------------------
 
 /// Sent once at session start for capability negotiation. Carries hooks,
-/// SDK MCP servers, output format, system prompt, and agent definitions
+/// client MCP servers, output format, system prompt, and agent definitions
 /// so the agent can construct its registries before the first turn.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -333,9 +333,9 @@ pub struct InitializeParams {
     /// Hook callbacks keyed by event type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hooks: Option<HashMap<HookEventType, Vec<HookCallbackMatcher>>>,
-    /// SDK-provided MCP server names (to skip env-configured ones).
+    /// Client-provided MCP server names (to skip env-configured ones).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sdk_mcp_servers: Option<Vec<String>>,
+    pub client_mcp_servers: Option<Vec<String>>,
     /// JSON schema for structured output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub json_schema: Option<serde_json::Value>,
@@ -355,7 +355,7 @@ pub struct InitializeParams {
     pub plan_mode_instructions: Option<String>,
     /// Custom agent definitions keyed by name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agents: Option<HashMap<String, SdkAgentDefinition>>,
+    pub agents: Option<HashMap<String, ClientAgentDefinition>>,
     /// Enable prompt suggestions in the output stream.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_suggestions: Option<bool>,
@@ -380,6 +380,10 @@ impl ConnectionProfile {
         &self.initialize
     }
 
+    pub fn client_mcp_server_names(&self) -> Option<&[String]> {
+        self.initialize.client_mcp_servers.as_deref()
+    }
+
     pub fn callback_requirements(&self) -> SessionCallbackRequirements {
         let hook_callback_ids = self
             .initialize
@@ -397,7 +401,7 @@ impl TryFrom<InitializeParams> for ConnectionProfile {
     type Error = ConnectionProfileError;
 
     fn try_from(mut initialize: InitializeParams) -> Result<Self, Self::Error> {
-        if let Some(names) = &mut initialize.sdk_mcp_servers {
+        if let Some(names) = &mut initialize.client_mcp_servers {
             for name in names.iter_mut() {
                 *name = name.trim().to_string();
                 if name.is_empty() {
@@ -441,9 +445,11 @@ pub enum ConnectionProfileError {
 impl std::fmt::Display for ConnectionProfileError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::EmptyMcpServerName => formatter.write_str("SDK MCP server name cannot be empty"),
+            Self::EmptyMcpServerName => {
+                formatter.write_str("client MCP server name cannot be empty")
+            }
             Self::EmptyHookCallbackId => formatter.write_str("hook callback id cannot be empty"),
-            Self::EmptyAgentName => formatter.write_str("SDK agent name cannot be empty"),
+            Self::EmptyAgentName => formatter.write_str("client agent name cannot be empty"),
         }
     }
 }
@@ -474,14 +480,14 @@ pub struct HookCallbackMatcher {
     pub timeout: Option<i64>,
 }
 
-/// SDK-supplied custom subagent spec carried on `InitializeParams.agents`.
+/// Client-supplied custom subagent spec carried on `InitializeParams.agents`.
 ///
 /// Wire-level DTO. **Distinct** from the internal [`crate::AgentDefinition`]
 /// which is the resolved post-load representation merged from markdown /
-/// plugin / SDK sources.
+/// plugin / client sources.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SdkAgentDefinition {
+pub struct ClientAgentDefinition {
     /// Natural-language description shown in the AgentTool prompt list.
     pub description: String,
     /// Agent system prompt body.
@@ -748,7 +754,7 @@ pub struct ApprovalResolveParams {
     /// `annotations`) back into the tool's data envelope.
     ///
     /// In-process equivalent is `coco_tool_runtime::ToolPermissionResolution.updated_input`
-    /// (TUI mode). Consumed by `app/agent-host/src/sdk_server/approval_bridge.rs`.
+    /// (TUI mode). Consumed by the SDK approval bridge in `coco-agent-host`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_input: Option<serde_json::Value>,
     /// Optional content blocks (typically image attachments) the SDK client

@@ -62,6 +62,7 @@ pub use coco_tui_ui::paste::ImageData;
 pub use coco_tui_ui::paste::PasteManager;
 pub use coco_tui_ui::paste::ResolvedInput;
 pub use coco_tui_ui::style::UiStyles;
+pub use command::SlashTranscriptEntry;
 pub use command::SystemPushKind;
 pub use command::UserCommand;
 pub use display_settings::DisplaySettings;

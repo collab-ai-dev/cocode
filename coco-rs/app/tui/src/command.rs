@@ -406,14 +406,22 @@ pub enum UserCommand {
     /// Grant a recently denied auto-mode command and immediately re-query
     /// the model with the updated transcript.
     RetryPermissionDenied { tool_name: String, message: String },
-    /// Push pre-built slash-command transcript messages (echo + result)
-    /// into engine `MessageHistory`. Unlike [`Self::PushSystemMessage`],
-    /// these are `Message::User` envelopes with command tags; they are
-    /// `is_visible_in_transcript_only` (rendered `❯`/`⎿` but not sent
-    /// to the model — slash commands are user↔tool interactions).
-    /// Built via `coco_messages::build_slash_command_messages` so the TUI
-    /// owns the localized text while the engine stays the transcript authority.
-    PushSlashResult {
-        messages: Vec<coco_messages::Message>,
+    /// Push a TUI-originated slash transcript entry into engine
+    /// `MessageHistory`. The TUI owns localized text and interaction
+    /// decisions; the runner/host constructs the engine message envelopes.
+    PushSlashResult { entry: SlashTranscriptEntry },
+}
+
+#[derive(Debug, Clone)]
+pub enum SlashTranscriptEntry {
+    Result {
+        name: String,
+        args: String,
+        text: String,
+        is_error: bool,
+    },
+    ContextUsage {
+        args: String,
+        result: Box<coco_types::ContextUsageResult>,
     },
 }

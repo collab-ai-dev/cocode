@@ -7,8 +7,8 @@
 //!   leader's approval queue, which prompts the human and replies to the
 //!   worker via mailbox.
 //! - **regular plain-text message** (gap 4b) → surface to the leader's model
-//!   as a coordinator-framed entry on the [`coco_query::CommandQueue`]
-//!   (`QueueOrigin::Coordinator`), drained into the leader's next turn. This
+//!   through the session queue as a coordinator-framed entry, drained into the
+//!   leader's next turn. This
 //!   is the teammate→leader content path for BOTH in-process and
 //!   cross-process teammates (both write to the team-lead mailbox).
 //! - **`IdleNotification`** (gap 4b) → same path, formatted as a teammate
@@ -34,10 +34,6 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use coco_coordinator::mailbox;
-use coco_query::CommandQueue;
-use coco_query::QueuePriority;
-use coco_query::QueuedCommand;
-use coco_system_reminder::QueueOrigin;
 
 use crate::session_runtime::SessionHandle;
 
@@ -73,13 +69,13 @@ pub fn spawn(session: SessionHandle) -> tokio::task::JoinHandle<()> {
 /// Safe from any entrypoint: no-op when AgentTeams is off or when this session
 /// is itself a teammate; the poller idles until a team is active. The leak
 /// this closes: previously ONLY the TUI installed the poller, so a headless /
-/// SDK leader that approved a teammate shutdown never ran teardown — leaking
+/// AppServer leader that approved a teammate shutdown never ran teardown — leaking
 /// stale `team.json` membership + orphaned task assignments (even for
 /// in-process teammates, whose teardown is not pane-gated).
 ///
 /// Note: a single-shot `-p` leader exits right after its turn, so the 1 s
 /// background poll may not fire — the bounded end-of-run drain is a separate
-/// follow-up; this install covers long-running leaders (SDK server, interactive).
+/// follow-up; this install covers long-running leaders (remote server, interactive).
 pub async fn install_leader(
     session: SessionHandle,
     bridge: Option<coco_tool_runtime::ToolPermissionBridgeRef>,
@@ -146,7 +142,6 @@ async fn poll_once(session: &SessionHandle, dispatched: &mut HashSet<String>) {
     // Optional: regular/idle messages surface to the model via the command
     // queue and don't need an approval UI; only `PermissionRequest` does.
     let permission_setter = coco_coordinator::teammate::get_leader_permission_queue().await;
-    let queue = session.command_queue();
 
     let messages = mailbox::read_mailbox(TEAM_LEAD_NAME, &team).unwrap_or_default();
     for (idx, m) in messages.iter().enumerate() {
@@ -159,8 +154,8 @@ async fn poll_once(session: &SessionHandle, dispatched: &mut HashSet<String>) {
         // `<teammate_message teammate_id=…>` wrapper; drained at the leader's
         // next turn.
         if !mailbox::is_structured_protocol_message(&m.text) {
-            enqueue_coordinator_message(
-                queue,
+            crate::session_queue::enqueue_coordinator_message(
+                session,
                 mailbox::format_teammate_messages(std::slice::from_ref(m)),
             )
             .await;
@@ -192,7 +187,11 @@ async fn poll_once(session: &SessionHandle, dispatched: &mut HashSet<String>) {
                 let _ = mailbox::mark_message_as_read_by_index(TEAM_LEAD_NAME, &team, idx);
             }
             mailbox::ProtocolMessage::IdleNotification { .. } => {
-                enqueue_coordinator_message(queue, format_idle_notification(&parsed)).await;
+                crate::session_queue::enqueue_coordinator_message(
+                    session,
+                    format_idle_notification(&parsed),
+                )
+                .await;
                 let _ = mailbox::mark_message_as_read_by_index(TEAM_LEAD_NAME, &team, idx);
             }
             mailbox::ProtocolMessage::ShutdownApproved {
@@ -219,19 +218,6 @@ async fn poll_once(session: &SessionHandle, dispatched: &mut HashSet<String>) {
             _ => {}
         }
     }
-}
-
-/// Enqueue a teammate-originated message onto the leader's mid-turn command
-/// queue with `QueueOrigin::Coordinator` framing. Drained into the leader's
-/// next turn as a `queued_command` attachment. `Later` priority so it never
-/// jumps ahead of the human's own queued input.
-async fn enqueue_coordinator_message(queue: &CommandQueue, content: String) {
-    if content.trim().is_empty() {
-        return;
-    }
-    let cmd =
-        QueuedCommand::new(content, QueuePriority::Later).with_origin(QueueOrigin::Coordinator);
-    queue.enqueue(cmd).await;
 }
 
 /// Render an `IdleNotification` as a teammate-attributed status line so the

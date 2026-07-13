@@ -71,25 +71,3 @@ fn format_idle_notification_wrong_variant_is_empty() {
     };
     assert!(format_idle_notification(&other).is_empty());
 }
-
-#[tokio::test]
-async fn enqueue_coordinator_message_tags_origin() {
-    let queue = CommandQueue::new();
-    let framed = "<teammate_message teammate_id=\"alice\">done</teammate_message>".to_string();
-    enqueue_coordinator_message(&queue, framed.clone()).await;
-
-    let cmd = queue.peek(None).await.expect("a queued command");
-    assert_eq!(cmd.origin, Some(QueueOrigin::Coordinator));
-    assert_eq!(cmd.prompt, framed);
-    assert!(
-        !cmd.is_slash_command,
-        "teammate XML must not be parsed as a slash command"
-    );
-}
-
-#[tokio::test]
-async fn enqueue_coordinator_message_skips_empty() {
-    let queue = CommandQueue::new();
-    enqueue_coordinator_message(&queue, "   ".to_string()).await;
-    assert!(queue.is_empty().await);
-}

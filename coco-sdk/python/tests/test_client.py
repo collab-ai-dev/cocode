@@ -17,7 +17,7 @@ from coco_sdk.errors import ProcessError
 from coco_sdk.generated.protocol import (
     ClientRequestMethod,
     NotificationMethod,
-    SdkHookOutput,
+    HookCallbackOutput,
     ServerNotification,
     ServerRequestMethod,
 )
@@ -366,10 +366,10 @@ async def test_client_rewind_files() -> None:
 
 
 @pytest.mark.asyncio
-async def test_client_sdk_hook_output_serializes_camelcase_wire_shape() -> None:
-    """`SdkHookOutput` is the TS-canonical wire shape; the typed Pydantic
+async def test_client_hook_callback_output_serializes_camelcase_wire_shape() -> None:
+    """`HookCallbackOutput` is the TS-canonical wire shape; the typed Pydantic
     model dumps camelCase aliases so the wire matches TS exactly."""
-    output = SdkHookOutput.model_validate(
+    output = HookCallbackOutput.model_validate(
         {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
@@ -527,7 +527,7 @@ async def test_client_initialize_includes_hooks_map() -> None:
 
 
 @pytest.mark.asyncio
-async def test_client_waits_for_sdk_mcp_servers_after_session_start() -> None:
+async def test_client_waits_for_client_mcp_servers_after_session_start() -> None:
     from coco_sdk import tool
 
     @tool(name="ping", description="Ping")
@@ -1045,7 +1045,7 @@ async def test_hook_callback_dispatches_to_registered_handler() -> None:
     # no `callback_id` echo. Correlation is the outer JSON-RPC
     # request_id. The handler returned a flat-format `{behavior, reason}`
     # which the SDK ships verbatim (legacy shape; the typed
-    # SdkHookOutput is preferred but Pydantic models also accept it).
+    # HookCallbackOutput is preferred but Pydantic models also accept it).
     sent = [json.loads(line) for line in transport.sent_lines]
     hook_responses = [m for m in sent if "result" in m and "id" in m]
     assert len(hook_responses) == 1

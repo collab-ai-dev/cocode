@@ -11,7 +11,7 @@ use coco_types::TokenUsage;
 pub enum OutputMode {
     /// Human-readable text output (default).
     Text,
-    /// NDJSON structured output (SDK mode).
+    /// NDJSON structured output.
     Json,
 }
 
@@ -84,7 +84,7 @@ fn render_text(msg: &Message) -> String {
     }
 }
 
-/// Render as NDJSON for SDK protocol.
+/// Render as NDJSON.
 fn render_json(msg: &Message) -> String {
     serde_json::to_string(msg).unwrap_or_default()
 }
@@ -152,10 +152,10 @@ pub fn format_turn_summary(turn: i32, tool_count: i32, duration_ms: i64) -> Stri
     }
 }
 
-/// NDJSON message types for SDK protocol.
+/// NDJSON message types for structured CLI output.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum SdkMessage {
+pub enum NdjsonMessage {
     /// Assistant text response.
     AssistantMessage { text: String },
     /// Tool execution started.
@@ -187,8 +187,8 @@ pub enum SdkMessage {
     Result { text: String, turns: i32 },
 }
 
-/// Write an SDK message to stdout as NDJSON.
-pub fn write_sdk_message(msg: &SdkMessage) {
+/// Write a structured output message to stdout as NDJSON.
+pub fn write_ndjson_message(msg: &NdjsonMessage) {
     if let Ok(json) = serde_json::to_string(msg) {
         println!("{json}");
     }

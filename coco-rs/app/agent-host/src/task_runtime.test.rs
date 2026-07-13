@@ -716,7 +716,7 @@ async fn mark_failed_appends_error_and_flips_status() {
 /// the bg-agent closure in `coordinator::spawn_background` observes
 /// cancel and calls `mark_failed`; for a shell task,
 /// `apply_shell_terminal_state` runs on `WaitOutcome::Cancelled`. Doing
-/// any of that here would double-fire SDK events + notifications.
+/// any of that here would double-fire AppServer events + notifications.
 /// In this unit test no driver exists, so the task remains in Running
 /// state — that's correct behavior at this seam.
 #[tokio::test]

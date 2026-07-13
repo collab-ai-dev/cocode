@@ -12,7 +12,7 @@ coco-cli
   +-- ProcessRuntime
   |     `-- ProjectRegistry -> Arc<ProjectServices>
   |
-  +-- AppServer<LocalAppSessionHandle>
+  +-- AppServer<AppSessionHandle>
   |     +-- LiveSessionRegistry
   |     `-- RoutingState
   |
@@ -24,7 +24,7 @@ coco-cli
 coco-agent-host
   +-- SessionRuntime / SessionHandle
   +-- local typed client
-  +-- SDK handlers and AppServer bridge
+  +-- AppServer host handlers and SDK/local bridges
   +-- QueryEngine turn execution
   `-- MCP/hooks/tasks/persistence application integration
 ```
@@ -140,13 +140,13 @@ There is no useful process-global `AppState`.
 | live slot lifecycle | `LiveSessionRegistry` | process registry, keyed by `SessionId` |
 | connection/surface/replay routing | `RoutingState` | AppServer process |
 | turn ids, aggregate accounting, active-turn tasks/cancellation | `SessionTurnCoordinator` inside `SessionRuntime` | one root session |
-| SDK bootstrap, factory, activity and durable-sequence projections | `SdkServerState` | process services, keyed projections only |
+| AppServer bootstrap, factory, activity and durable-sequence projections | `AppServerHostState` | process services, keyed projections only |
 | immutable initialize inputs | per-connection `ConnectionProfile` | one accepted connection |
 | transport writer and outbound queues | connection runner / adapter | one accepted connection |
 | pending callback correlation | AppServer + connection adapter, keyed by request/session/surface/connection | one originating request |
 | MCP manager and registration reports | `SessionRuntime` integration resources | one root session |
 
-`SdkServerState` retains process services and cheap activity/durable-sequence
+`AppServerHostState` retains process services and cheap activity/durable-sequence
 projections, but it owns no selectable runtime, history, turn counter,
 accounting, active turn, MCP manager, file history, reload slot, connection
 writer, or pending callback map.

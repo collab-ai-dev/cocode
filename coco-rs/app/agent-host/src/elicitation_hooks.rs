@@ -14,7 +14,7 @@
 //! There is no dialog UI yet — every `SendElicitation` call site
 //! returns `Err`. By wrapping the closure with this helper, hooks fire
 //! regardless of whether a UI exists, so users can program-respond to
-//! elicitations through hooks even on headless / SDK paths.
+//! elicitations through hooks even on headless / AppServer paths.
 
 use std::future::Future;
 use std::pin::Pin;

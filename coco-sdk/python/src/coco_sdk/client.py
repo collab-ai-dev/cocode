@@ -41,7 +41,7 @@ from coco_sdk.generated.protocol import (
     PluginReloadRequest,
     PluginReloadResult,
     RewindFilesRequest,
-    SdkHookOutput,
+    HookCallbackOutput,
     ServerNotification,
     ServerNotificationTurnEnded,
     ServerRequestMethod,
@@ -120,13 +120,13 @@ def _safe_parse_notification(line_data: dict[str, Any]) -> ServerNotification | 
 CanUseTool = Callable[[str, dict[str, Any]], Awaitable[ApprovalDecision]]
 
 # Hook handler: (callback_id, event_type, input) -> output.
-# Output may be the typed `SdkHookOutput` (TS-canonical wire shape) or
+# Output may be the typed `HookCallbackOutput` (TS-canonical wire shape) or
 # a bare `dict` for callers that prefer raw form. The client normalizes
 # both via `_normalize_hook_output` (Pydantic models dump via
 # `by_alias=True` so the camelCase wire shape is preserved).
 HookHandler = Callable[
     [str, str, dict[str, Any]],
-    Awaitable[SdkHookOutput | dict[str, Any]],
+    Awaitable[HookCallbackOutput | dict[str, Any]],
 ]
 
 
@@ -245,7 +245,7 @@ class CocoClient:
 
         Three wire requests in sequence:
 
-        1. ``initialize`` — register hooks/agents/SDK MCP servers/JSON
+        1. ``initialize`` — register hooks/agents/client MCP servers/JSON
            schema with coco-rs.
         2. ``session/start`` — create the session shell (returns a
            ``session_id``). Does NOT run a turn — ``initial_prompt``
@@ -261,9 +261,9 @@ class CocoClient:
             )
             self._router.start()
 
-            sdk_mcp_servers = await self._send_initialize()
+            client_mcp_servers = await self._send_initialize()
             await self._send_session_start()
-            await self._wait_for_sdk_mcp_servers(sdk_mcp_servers)
+            await self._wait_for_client_mcp_servers(client_mcp_servers)
             await self._send_turn_start(self._initial_prompt)
             self._started = True
         except BaseException:
@@ -273,14 +273,14 @@ class CocoClient:
     async def _send_initialize(self) -> list[str]:
         """Send the initialize handshake.
 
-        Registers hooks, agents, SDK-hosted MCP servers, structured
+        Registers hooks, agents, client-hosted MCP servers, structured
         output schema, and system-prompt overrides. Skipped if there
         is nothing to register.
         """
-        sdk_mcp_servers: list[str] = []
+        client_mcp_servers: list[str] = []
         if self._tools:
             for tool_def in self._tools:
-                sdk_mcp_servers.append(tool_def.server_name)
+                client_mcp_servers.append(tool_def.server_name)
 
         hooks_map: dict[str, list[HookCallbackMatcher]] | None = None
         if self._hooks:
@@ -304,7 +304,7 @@ class CocoClient:
         params = InitializeRequest.InitializeRequestParams(
             agents=agents_map,
             hooks=hooks_map,
-            sdk_mcp_servers=sdk_mcp_servers or None,
+            client_mcp_servers=client_mcp_servers or None,
             system_prompt=self._system_prompt,
             append_system_prompt=self._append_system_prompt,
             json_schema=self._json_schema,
@@ -314,9 +314,9 @@ class CocoClient:
 
         request = InitializeRequest(params=params)
         await self._request(request)
-        return sdk_mcp_servers
+        return client_mcp_servers
 
-    async def _wait_for_sdk_mcp_servers(self, server_names: list[str]) -> None:
+    async def _wait_for_client_mcp_servers(self, server_names: list[str]) -> None:
         if not server_names:
             return
         deadline = asyncio.get_running_loop().time() + 10.0
@@ -338,10 +338,10 @@ class CocoClient:
                     f"{name}: {error or 'failed'}"
                     for name, error in sorted(failed.items())
                 )
-                raise RuntimeError(f"SDK MCP server connection failed: {details}")
+                raise RuntimeError(f"client MCP server connection failed: {details}")
             if asyncio.get_running_loop().time() >= deadline:
                 names = ", ".join(sorted(pending))
-                raise TimeoutError(f"timed out waiting for SDK MCP servers: {names}")
+                raise TimeoutError(f"timed out waiting for client MCP servers: {names}")
             await asyncio.sleep(0.05)
 
     async def _send_session_start(self) -> None:
@@ -921,7 +921,7 @@ class CocoClient:
                     params.get("input", {}),
                 )
             except Exception as exc:
-                # Handler crashed: emit an empty `SdkHookOutput` so the
+                # Handler crashed: emit an empty `HookCallbackOutput` so the
                 # agent doesn't deadlock. An empty output is TS-canonical
                 # for "no opinion, continue normally" — the previous
                 # default of `{"behavior": "allow"}` was a fail-open
@@ -957,7 +957,7 @@ class CocoClient:
         callback_id: str | None = None,
     ) -> dict[str, Any]:
         """Coerce a hook handler's return value into the canonical
-        ``SdkHookOutput`` wire shape (camelCase).
+        ``HookCallbackOutput`` wire shape (camelCase).
 
         ``None`` and unrecognized return types become ``{}`` —
         TS-canonical "no opinion, continue normally". The previous
@@ -966,7 +966,7 @@ class CocoClient:
         forgets to return a decision doesn't accidentally grant
         permissions.
 
-        Pydantic models (notably ``SdkHookOutput`` itself) are dumped
+        Pydantic models (notably ``HookCallbackOutput`` itself) are dumped
         with ``by_alias=True`` so camelCase field names land on the
         wire — TS expects ``hookSpecificOutput``, ``stopReason``,
         ``additionalContext`` etc.

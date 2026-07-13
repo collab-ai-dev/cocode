@@ -1,19 +1,17 @@
 //! Shared session bootstrap helpers.
 //!
-//! TUI (`tui_runner::run_tui`) and SDK (`run_sdk_mode`) both build
-//! the same per-session subsystems before handing off to their
-//! respective event loops. This module owns the assembly logic so
-//! the two runners cannot drift apart on what gets installed.
+//! Local and remote entrypoints both build the same per-session subsystems
+//! before handing off to their respective event loops. This module owns the
+//! assembly logic so adapters cannot drift apart on what gets installed.
 //!
 //! Two stages:
 //! 1. [`build_engine_resources`] resolves the model client, tool
 //!    registry, and system prompt from
 //!    the already-built [`coco_config::RuntimeConfig`].
-//! 2. [`install_session_late_binds`] performs the post-`SessionRuntime::build`
-//!    wirings (task runtime, agent transcript store, agent-team
-//!    handle, fork dispatcher). The MCP handle is intentionally
-//!    caller-driven because SDK constructs an `McpConnectionManager`
-//!    that the dispatch handlers also need to mutate.
+//! 2. [`install_session_integrations`] composes the post-`SessionRuntime::build`
+//!    wirings: LSP, task runtime, agent transcript store, agent-team handle,
+//!    fork dispatcher, MCP, and leader inbox polling. [`install_session_late_binds`]
+//!    remains the lower-level installer for tests and specialised callers.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -48,7 +46,7 @@ pub struct EngineResources {
     pub startup: StartupPermissionState,
     /// Slash-command registry built once with the full load order
     /// (builtins → extended → skills → plugin contributions → P1 handlers).
-    /// Both the SDK `initialize.commands` advertisement and the TUI
+    /// Both the initialize `commands` advertisement and the local
     /// `dispatch_slash_command` chain resolve through this slot. Wrapped in
     /// `RwLock` so `/reload-plugins` can hot-swap the inner
     /// `Arc<CommandRegistry>` without rebuilding the session — consumers
@@ -63,11 +61,11 @@ pub struct EngineResources {
     /// Resolved output-style catalog + active style. The CLI threads
     /// this into:
     /// - [`Self::system_prompt`](already injected at build time)
-    /// - `SessionBootstrap.output_style` (name only, for SDK init +
+    /// - `SessionBootstrap.output_style` (name only, for initialize +
     ///   the per-turn reminder generator)
-    /// - `CliInitializeBootstrap.{output_style, available_styles}`
+    /// - `app_server_host::CliInitializeBootstrap.{output_style, available_styles}`
     ///
-    /// Stored here so SDK / TUI bootstraps don't each re-build it.
+    /// Stored here so remote / local bootstraps don't each re-build it.
     pub output_style_manager: coco_output_styles::OutputStyleManager,
     pub project_services: Arc<ProjectServices>,
 }
@@ -95,14 +93,14 @@ pub struct EngineResources {
 /// gate to `false`, hiding the tool cleanly instead of throwing on the
 /// first call.
 /// Fire-and-forget startup marketplace maintenance, shared by the TUI,
-/// headless, and SDK entry points. Ensures the official marketplace,
+/// headless, and remote entry points. Ensures the official marketplace,
 /// registers seed marketplaces (`COCO_PLUGIN_SEED_DIR`), reconciles
 /// declared `extraKnownMarketplaces`, then uninstalls plugins that were
 /// delisted from their marketplace.
 ///
 /// Runs on every surface (not just the interactive TUI) so delisting +
 /// seed-marketplace enforcement applies to `coco --print` / `chat` / `review`
-/// and SDK NDJSON sessions too. Non-fatal and never blocks startup: the
+/// and remote sessions too. Non-fatal and never blocks startup: the
 /// official ensure runs first so freshly-cloned manifests are visible to the
 /// delisting diff.
 pub fn spawn_marketplace_startup(config_home: std::path::PathBuf) {
@@ -142,6 +140,84 @@ pub async fn build_lsp_handle_if_enabled(
     Some(Arc::new(adapter))
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SessionLspIntegration {
+    #[default]
+    Enabled,
+    Disabled,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SessionMcpConnectMode {
+    #[default]
+    Background,
+    Await,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SessionLateBindFailure {
+    #[default]
+    Abort,
+    WarnAndContinue,
+}
+
+#[derive(Default)]
+pub struct SessionIntegrationOptions {
+    pub existing_mcp_manager: Option<Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>>,
+    pub event_sink: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    pub leader_permission_bridge: Option<coco_tool_runtime::ToolPermissionBridgeRef>,
+    pub lsp: SessionLspIntegration,
+    pub mcp_connect: SessionMcpConnectMode,
+    pub late_binds_failure: SessionLateBindFailure,
+}
+
+pub async fn install_session_integrations(
+    session: SessionHandle,
+    cwd: &Path,
+    process_runtime: Arc<ProcessRuntime>,
+    options: SessionIntegrationOptions,
+) -> Result<()> {
+    let lsp_handle = match options.lsp {
+        SessionLspIntegration::Enabled => {
+            build_lsp_handle_if_enabled(
+                process_runtime,
+                session.runtime_config(),
+                &global_config::config_home(),
+                session.project_root(),
+            )
+            .await
+        }
+        SessionLspIntegration::Disabled => None,
+    };
+    let late_binds = install_session_late_binds(
+        session.clone(),
+        cwd,
+        None,
+        lsp_handle,
+        options.event_sink.clone(),
+    )
+    .await;
+    match (late_binds, options.late_binds_failure) {
+        (Ok(()), _) => {}
+        (Err(e), SessionLateBindFailure::Abort) => return Err(e),
+        (Err(e), SessionLateBindFailure::WarnAndContinue) => {
+            tracing::warn!(
+                error = %e,
+                "agent/task infrastructure unavailable; spawns degrade"
+            );
+        }
+    }
+    bootstrap_session_mcp(
+        &session,
+        cwd,
+        options.existing_mcp_manager,
+        matches!(options.mcp_connect, SessionMcpConnectMode::Await),
+    )
+    .await;
+    crate::leader_inbox_poller::install_leader(session, options.leader_permission_bridge).await;
+    Ok(())
+}
+
 pub fn build_engine_resources(
     process_runtime: &ProcessRuntime,
     cli: &AgentHostOptions,
@@ -177,7 +253,7 @@ pub fn build_engine_resources(
     let project_services = process_runtime.project_services(&config_home, project_root);
 
     // Resolve the active output style up front: it shapes the system
-    // prompt cache prefix and surfaces on the SDK init message + the
+    // prompt cache prefix and surfaces on initialize + the
     // per-turn reminder generator. Plugin-contributed styles are folded in.
     let plugin_style_sources = project_services.output_style_sources();
     let output_style_manager =
@@ -359,19 +435,19 @@ pub(crate) fn resolve_skill_load_gates_with_add_dirs(
     }
 }
 
-/// Install the post-`SessionRuntime::build` late-binds shared by TUI
-/// and SDK. Without this both runners must independently remember to
+/// Install the post-`SessionRuntime::build` late-binds shared by local and
+/// remote entrypoints. Without this adapters must independently remember to
 /// attach `task_runtime`, `agent_transcript_store`, the agent-team
 /// wiring, and the fork dispatcher — TUI used to forget all four,
 /// causing background AgentTool, transcript resume, and `/btw` to
 /// silently degrade to no-ops.
 ///
-/// `mcp_handle` is optional because TUI does not yet bootstrap an
-/// `McpConnectionManager`. SDK passes `Some (handle)` and gets the
-/// original install ordering preserved (mcp before agent-team).
+/// `mcp_handle` is optional because some adapters do not bootstrap an
+/// `McpConnectionManager`. Passing `Some(handle)` preserves the original
+/// install ordering (mcp before agent-team).
 ///
 /// `lsp_handle` is optional and **independently gated** by
-/// [`coco_types::Feature::Lsp`] at the caller (CLI / SDK / TUI). When
+/// [`coco_types::Feature::Lsp`] at the caller (CLI / remote / TUI). When
 /// `None`, the runtime's LSP slot stays unset and
 /// `LspTool::is_enabled()` reports `false` (via `NoOpLspHandle`), so
 /// the tool is hidden from the model's tool list.
@@ -380,9 +456,9 @@ pub(crate) fn resolve_skill_load_gates_with_add_dirs(
 /// consumes. Wired into the `TaskManager` so background-task and
 /// subagent lifecycle events (`TaskStarted` / `TaskProgress` /
 /// `TaskCompleted`) reach the TUI — without it the manager drops them
-/// silently and the subagent activity panel never populates. TUI passes
-/// `Some (notification_tx.clone())`; SDK/headless pass `None` (they build
-/// their `CoreEvent` channel per-turn after this point).
+/// silently and the subagent activity panel never populates. Local interactive
+/// callers pass `Some(notification_tx.clone())`; noninteractive callers pass
+/// `None` (they build their `CoreEvent` channel per-turn after this point).
 pub async fn install_session_late_binds(
     session: SessionHandle,
     cwd: &Path,
@@ -464,13 +540,13 @@ pub async fn install_session_late_binds(
 
     // MCP handle (if any). Installed BEFORE `install_agent_team` so
     // AgentTool's prompt-time MCP filter sees a populated handle on
-    // the very first engine build, matching the original SDK ordering.
+    // the very first engine build, matching the original remote ordering.
     if let Some(handle) = mcp_handle {
         session.attach_mcp_handle(handle).await;
     }
 
     // LSP handle install: same pattern as MCP. When the caller did the
-    // `Feature::Lsp` gate + manager construction (CLI / SDK), the
+    // `Feature::Lsp` gate + manager construction (CLI / remote), the
     // handle threads in here so per-turn engines pick it up via
     // `wire_engine`. TUI passes `None` (no LSP boot yet).
     if let Some(handle) = lsp_handle {
@@ -507,7 +583,7 @@ pub async fn install_session_late_binds(
     Ok(())
 }
 
-/// Unified MCP bootstrap shared by SDK / headless / TUI (the single
+/// Unified MCP bootstrap shared by remote / headless / TUI (the single
 /// config-driven init the user asked for). Builds (or reuses) the
 /// `McpConnectionManager`, registers config-file servers
 /// (`McpConfigLoader::load` — `.mcp.json`, `.claude/mcp.json`,
@@ -518,8 +594,8 @@ pub async fn install_session_late_binds(
 /// the live `ToolRegistry` so they reach the model. A best-effort MCP skill sync
 /// follows.
 ///
-/// `existing_manager` lets the SDK path share the manager it already handed to
-/// `SdkServer` (for `mcp/setServers`); `None` builds a fresh one for TUI /
+/// `existing_manager` lets a remote adapter share the manager it already handed
+/// to its control server; `None` builds a fresh one for TUI /
 /// headless. No UI: server-initiated elicitations during the connect handshake
 /// are declined.
 pub async fn bootstrap_session_mcp(
@@ -600,7 +676,7 @@ pub async fn bootstrap_session_mcp(
     //   - `true` (headless / single-turn): block so MCP tools are registered
     //     before the first turn. Bounded by the per-server timeout in
     //     `connect_and_register_mcp`.
-    //   - `false` (interactive / long-lived SDK): connect in the background so
+    //   - `false` (interactive / long-lived remote): connect in the background so
     //     startup isn't blocked (codex-rs pattern); tools appear within seconds.
     let registry = session.tools().clone();
     let features = session.runtime_config().features.clone();
@@ -698,9 +774,7 @@ pub(crate) async fn reconcile_mcp_server_registration(
 ) {
     match manager.get_state(name).await {
         Some(coco_mcp::McpConnectionState::Connected(_)) => {
-            let schemas =
-                crate::sdk_server::handlers::mcp::collect_server_schemas_for_manager(manager, name)
-                    .await;
+            let schemas = collect_mcp_server_schemas(manager, name).await;
             let report = coco_tools::register_mcp_tools(registry, name, schemas);
             tracing::info!(
                 server = %name,
@@ -721,6 +795,30 @@ pub(crate) async fn reconcile_mcp_server_registration(
         }
         _ => {}
     }
+}
+
+async fn collect_mcp_server_schemas(
+    manager: &coco_mcp::McpConnectionManager,
+    server_name: &str,
+) -> Vec<coco_tool_runtime::McpToolSchema> {
+    let Some(coco_mcp::McpConnectionState::Connected(server)) =
+        manager.get_state(server_name).await
+    else {
+        return vec![];
+    };
+    server
+        .tools
+        .iter()
+        .map(|tool| coco_tool_runtime::McpToolSchema {
+            server_name: server_name.to_string(),
+            tool_name: tool.name.clone(),
+            description: tool.description.clone(),
+            annotations: coco_tool_runtime::McpToolAnnotations::from_input_schema_meta(
+                &tool.input_schema,
+            ),
+            input_schema: tool.input_schema.clone(),
+        })
+        .collect()
 }
 
 #[cfg(test)]

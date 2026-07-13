@@ -46,6 +46,7 @@ coco-coordinator.workspace = true
 # including system-prompt assembly, fallback chain, permission resolution,
 # CLAUDE.md discovery — the user's actual entry point.
 coco-agent-host.workspace = true
+coco-sdk-server.workspace = true
 coco-cli.workspace = true
 coco-app-runtime.workspace = true
 coco-app-server.workspace = true

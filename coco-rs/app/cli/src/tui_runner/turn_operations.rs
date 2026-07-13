@@ -15,9 +15,9 @@ pub(super) struct ActiveTurnCancel {
     /// AppServer-owned turn: cancellation flows through the same
     /// `turn/interrupt` request the SDK uses.
     pub(super) client: coco_agent_host::local_client::LocalServerClient<
-        coco_agent_host::sdk_server::LocalAppSessionHandle,
+        coco_agent_host::app_session::AppSessionHandle,
     >,
-    pub(super) handler: coco_agent_host::sdk_server::AppServerSdkHandler,
+    pub(super) handler: coco_agent_host::app_server_host::AppServerHostHandler,
     pub(super) target: coco_types::InteractiveTarget,
 }
 
@@ -171,7 +171,7 @@ pub(super) async fn drain_completed_turn(
 pub(super) async fn run_manual_compact(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &mut coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
     custom_instructions: Option<String>,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
@@ -204,20 +204,19 @@ pub(super) async fn run_manual_compact(
 pub(super) async fn run_local_app_server_shortcut_turn(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &mut coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
     prompt: String,
     log_label: &'static str,
 ) {
-    let session_id = session.current_typed_session_id().await;
-    local_app_server_bridge
-        .install_session_runtime(session.clone())
-        .await;
-    if let Err(error) =
-        local_app_server_bridge.start_passive_event_pump(session_id.clone(), event_tx.clone())
+    let session_id = session.session_id().clone();
+    if let Err(error) = local_app_server_bridge
+        .bind_interactive_session(session.clone(), Some(event_tx.clone()))
+        .await
     {
-        tracing::warn!(%error, "{log_label} could not refresh local AppServer event pump");
+        tracing::warn!(%error, "{log_label} could not bind local AppServer session");
+        return;
     }
     let mut monitor_client = local_app_server_bridge.connect_local_client();
     // live-only tail attach with no replay cursor (see SubmitInput site).
@@ -294,27 +293,11 @@ pub(super) async fn run_fork_skill(
     let runtime = session;
     drain_active_turn(active_turn, ActiveTurnDrain::Wait).await;
 
-    let body = match runtime.invoke_skill_fork(name, args).await {
-        Ok(output) => format!("<local-command-stdout>\n{output}\n</local-command-stdout>"),
-        Err(e) => {
-            warn!(skill = %name, error = %e, "fork-mode skill failed");
-            format!("<local-command-stderr>\nSkill '/{name}' failed: {e}\n</local-command-stderr>")
-        }
-    };
-    // Persist the command marker + result via history_push_and_emit so the
-    // TUI transcript renders them and the next turn's model sees what ran.
-    let mut h = runtime.history().lock().await;
-    let event_tx_opt = Some(event_tx.clone());
-    coco_query::history_sync::history_push_and_emit(
-        &mut h,
-        create_slash_metadata_message(&format_slash_command_metadata(name, args)),
-        &event_tx_opt,
-    )
-    .await;
-    coco_query::history_sync::history_push_and_emit(
-        &mut h,
-        coco_messages::create_user_message(&body),
-        &event_tx_opt,
+    coco_agent_host::session_slash::invoke_fork_skill_and_append_result(
+        runtime,
+        event_tx.clone(),
+        name,
+        args,
     )
     .await;
 }
@@ -330,11 +313,11 @@ pub(super) async fn run_clear_conversation(
     control_context: &LocalRuntimeControlContext<'_>,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &mut coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
 ) {
     let runtime = session;
     drain_active_turn(active_turn, ActiveTurnDrain::Wait).await;
-    let old_session_id = runtime.current_typed_session_id().await;
+    let old_session_id = runtime.session_id().clone();
     if let Err(error) = local_app_server_bridge.ensure_interactive_surface(old_session_id.clone()) {
         warn!(
             %error,
@@ -343,8 +326,7 @@ pub(super) async fn run_clear_conversation(
         );
         return;
     }
-    let permissions = runtime.app_state().read().await.permissions.clone();
-    let rewind_messages = runtime.prepare_for_clear_replacement().await;
+    let clear_snapshot = runtime.clear_replacement_snapshot().await;
     let new_session_id = coco_types::SessionId::generate();
     let make_runtime_factory = {
         let runtime_factory = control_context.runtime_factory.clone();
@@ -352,17 +334,15 @@ pub(super) async fn run_clear_conversation(
         let cwd = control_context.cwd.to_path_buf();
         let event_tx = event_tx.clone();
         let new_session_id = new_session_id.clone();
-        let permissions = permissions.clone();
-        let rewind_messages = rewind_messages.clone();
+        let clear_snapshot = clear_snapshot.clone();
         async move {
-            build_runtime_for_clear(
+            coco_agent_host::session_replacement::build_clear_replacement_runtime(
                 runtime_factory,
                 new_session_id,
-                permissions,
-                rewind_messages,
+                clear_snapshot,
                 process_runtime,
                 cwd,
-                event_tx,
+                Some(event_tx),
             )
             .await
         }
@@ -388,9 +368,8 @@ pub(super) async fn run_clear_conversation(
             return;
         }
     };
-    new_session.fire_session_start_hooks("clear").await;
-    local_app_server_bridge
-        .install_session_runtime(new_session.clone())
+    new_session
+        .fire_session_start_hooks(coco_hooks::orchestration::SessionStartSource::Clear)
         .await;
     {
         let mut current = control_context.current_session.write().await;
@@ -402,20 +381,14 @@ pub(super) async fn run_clear_conversation(
         .await
         .install_for_session(&new_session)
         .await;
-    if let Err(error) = local_app_server_bridge.ensure_interactive_surface(new_session_id.clone()) {
-        warn!(
-            %error,
-            session_id = %new_session_id,
-            "/clear could not attach local AppServer interactive surface"
-        );
-    }
-    if let Err(error) =
-        local_app_server_bridge.start_passive_event_pump(new_session_id.clone(), event_tx.clone())
+    if let Err(error) = local_app_server_bridge
+        .bind_interactive_session(new_session.clone(), Some(event_tx.clone()))
+        .await
     {
         warn!(
             %error,
             session_id = %new_session_id,
-            "/clear could not refresh local AppServer event pump"
+            "/clear could not bind local AppServer session"
         );
     }
     let notif = ServerNotification::SessionResetForResume {
@@ -436,7 +409,7 @@ pub(super) async fn run_clear_conversation(
 pub(super) async fn run_dream_consolidation(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &mut coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
 ) {
@@ -465,7 +438,7 @@ pub(super) async fn run_dream_consolidation(
 pub(super) async fn run_session_memory_force(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &mut coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
 ) {
@@ -497,7 +470,7 @@ pub(super) async fn run_session_memory_force(
 pub(super) async fn run_side_question(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &mut coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
     request: coco_commands::handlers::btw::BtwRequest,
@@ -522,49 +495,14 @@ pub(super) async fn run_side_question(
 
 /// `/export <filename>` runner — renders the live conversation `MessageHistory`
 /// (incl. tool activity) and writes it to a file in the session's original cwd,
-/// then confirms the path. The sync registry handler has no runtime access, so
-/// the real export lives here.: the arg
-/// is a FILENAME and the file is written under the cwd. coco infers the format
-/// from the extension (`.md`→markdown, `.json`→json, else plain text) — TS
-/// exports plain text only. The no-arg format-picker modal re-enters here with
-/// a bare format keyword (`markdown`/`json`/`text`), for which a timestamped
-/// default filename is generated.(Clipboard export lives in `/copy`.)
+/// then confirms the path. Clipboard export lives in `/copy`.
 pub(super) async fn run_export(
     args: &str,
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) -> SlashOutcome {
-    let runtime = session;
-    use crate::conversation_export::ExportFormat;
-    let arg = args.trim();
-    // A bare format keyword comes from the modal → timestamped default name;
-    // anything else is treated as the target filename (TS-style).
-    let (format, filename) = match ExportFormat::from_keyword(&arg.to_ascii_lowercase()) {
-        Some(format) => {
-            let ts = chrono::Local::now().format("%Y-%m-%d-%H%M%S");
-            (format, format!("conversation-{ts}.{}", format.ext()))
-        }
-        None => {
-            let format = ExportFormat::from_filename(arg);
-            // Append the inferred extension when the filename carries none.
-            let filename = if arg.contains('.') {
-                arg.to_string()
-            } else {
-                format!("{arg}.{}", format.ext())
-            };
-            (format, filename)
-        }
-    };
-    // Render under the lock, then drop it before the file write / await.
-    let body = {
-        let history = runtime.history().lock().await;
-        format.render(history.as_slice())
-    };
-    let path = runtime.original_cwd().join(&filename);
-    let message = match tokio::fs::write(&path, body).await {
-        Ok(()) => format!("Conversation exported to {}", path.display()),
-        Err(e) => format!("Failed to write export to {}: {e}", path.display()),
-    };
+    let message =
+        coco_agent_host::conversation_export::export_conversation_for_session(session, args).await;
     emit_slash_text(event_tx, "export", args, &message).await;
     SlashOutcome::Handled
 }
@@ -576,11 +514,9 @@ pub(super) async fn run_export(
 pub(super) async fn run_session_rename(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
     request: coco_commands::ParsedRename,
 ) {
-    use coco_agent_host::session_rename::auto_generate_session_name;
-
     // Teammate guard — names are set by the team leader.
     if coco_coordinator::identity::is_teammate() {
         emit_slash_text(
@@ -596,16 +532,14 @@ pub(super) async fn run_session_rename(
 
     // Resolve the new name. `Auto` runs the Fast-role generator
     // against `messages_after_compact_boundary`.
-    let name = match request {
-        coco_commands::ParsedRename::Explicit(n) => n,
-        coco_commands::ParsedRename::Auto => match auto_generate_session_name(session).await {
-            Ok(n) => n,
-            Err(err) => {
-                emit_slash_text(event_tx, "rename", "", err.user_message()).await;
+    let name =
+        match coco_agent_host::session_labels::resolve_rename_name(Some(session), request).await {
+            Ok(name) => name,
+            Err(error) => {
+                emit_slash_text(event_tx, "rename", "", &error.user_message()).await;
                 return;
             }
-        },
-    };
+        };
 
     let text = match local_app_server_bridge
         .client()
@@ -640,9 +574,8 @@ pub(super) async fn run_session_rename(
 pub(super) async fn run_reload_plugins(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) {
-    let runtime = session;
     let result = match local_app_server_bridge
         .client()
         .plugin_reload(
@@ -669,7 +602,8 @@ pub(super) async fn run_reload_plugins(
     );
     emit_slash_text(event_tx, "reload-plugins", "", &body).await;
 
-    let snapshot = runtime.current_command_registry().await.snapshot_for_ui();
+    let snapshot =
+        coco_agent_host::session_dialogs::build_available_commands_payload(session).await;
     let _ = event_tx
         .send(CoreEvent::Tui(TuiOnlyEvent::AvailableCommandsRefreshed {
             commands: snapshot,
@@ -681,7 +615,7 @@ pub(super) async fn run_reload_plugins(
 /// latest `RuntimeConfig` snapshot.
 pub(super) async fn run_reload_hooks(
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) {
     let body = match local_app_server_bridge
         .client()
@@ -702,7 +636,7 @@ pub(super) async fn run_reload_hooks(
 
 pub(super) async fn run_show_cost(
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) {
     match local_app_server_bridge
         .client()
@@ -722,7 +656,7 @@ pub(super) async fn run_show_cost(
 
 pub(super) async fn run_show_status(
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) {
     match local_app_server_bridge
         .client()
@@ -747,64 +681,24 @@ pub(super) async fn run_show_status(
     }
 }
 
-/// persisted to settings.json.
+/// Adds a session-scoped working directory through AppServer permissions.
 pub(super) async fn dispatch_add_dir(
     args: &str,
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> SlashOutcome {
-    let runtime = session;
-    let raw_path = args.trim();
-    let current_cwd = runtime.current_cwd().read().await.clone();
-    let candidate = if Path::new(raw_path).is_absolute() {
-        PathBuf::from(raw_path)
-    } else {
-        current_cwd.join(raw_path)
-    };
-    let absolute = match candidate.canonicalize() {
-        Ok(path) => path,
-        Err(e) => {
-            emit_slash_text(
-                event_tx,
-                "add-dir",
-                args,
-                &format!("Cannot add directory `{raw_path}`: {e}"),
-            )
-            .await;
-            return SlashOutcome::Handled;
-        }
-    };
-    if !absolute.is_dir() {
-        emit_slash_text(
-            event_tx,
-            "add-dir",
-            args,
-            &format!(
-                "Cannot add directory `{}`: not a directory",
-                absolute.display()
-            ),
-        )
-        .await;
-        return SlashOutcome::Handled;
-    }
-
-    let current = canonicalize_or_self(current_cwd);
-    let additional_dirs: Vec<PathBuf> = runtime
-        .app_state()
-        .read()
-        .await
-        .permissions
-        .additional_dirs
-        .values()
-        .map(|dir| canonicalize_or_self(PathBuf::from(&dir.path)))
-        .collect();
-
-    if let Some(message) = add_dir_already_message(&absolute, &current, &additional_dirs) {
-        emit_slash_text(event_tx, "add-dir", args, &message).await;
-        return SlashOutcome::Handled;
-    }
-
+    let prepared =
+        match coco_agent_host::session_controls::prepare_directory_access_update(session, args)
+            .await
+        {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                emit_slash_text(event_tx, "add-dir", args, &error.to_string()).await;
+                return SlashOutcome::Handled;
+            }
+        };
+    let absolute = prepared.path;
     let path = absolute.to_string_lossy().into_owned();
     if !apply_session_add_directory(&path, event_tx, local_app_server_bridge).await {
         return SlashOutcome::Handled;
@@ -819,52 +713,10 @@ pub(super) async fn dispatch_add_dir(
     SlashOutcome::Handled
 }
 
-pub(super) fn canonicalize_or_self(path: PathBuf) -> PathBuf {
-    path.canonicalize().unwrap_or(path)
-}
-
-pub(super) fn add_dir_already_message(
-    directory_path: &Path,
-    current_cwd: &Path,
-    additional_dirs: &[PathBuf],
-) -> Option<String> {
-    if directory_path == current_cwd {
-        return Some(format!(
-            "{} is already the current working directory.",
-            directory_path.display()
-        ));
-    }
-    for working_dir in additional_dirs {
-        if directory_path == working_dir {
-            return Some(format!(
-                "{} is already added as a working directory.",
-                directory_path.display()
-            ));
-        }
-    }
-    if directory_path.starts_with(current_cwd) {
-        return Some(format!(
-            "{} is already accessible within the current working directory {}.",
-            directory_path.display(),
-            current_cwd.display()
-        ));
-    }
-    for working_dir in additional_dirs {
-        if directory_path.starts_with(working_dir) {
-            return Some(format!(
-                "{} is already accessible within the additional working directory {}.",
-                directory_path.display(),
-                working_dir.display()
-            ));
-        }
-    }
-    None
-}
-
 pub(super) async fn apply_session_add_directory(
     path: &str,
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> bool {
     apply_and_persist_permission_update(
         &coco_types::PermissionUpdate::AddDirectories {
@@ -882,7 +734,7 @@ pub(super) async fn apply_session_add_directory(
 pub(super) async fn run_session_tag(
     _session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
     tag: &str,
 ) {
     let result = local_app_server_bridge
@@ -919,7 +771,7 @@ pub(super) async fn run_session_tag(
 pub(super) async fn dispatch_color(
     args: &str,
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> Option<SlashOutcome> {
     use coco_coordinator::identity::is_teammate;
     use coco_types::AgentColorName;
@@ -990,12 +842,8 @@ pub(super) async fn dispatch_color(
 pub(super) async fn dispatch_permissions_mutation(
     args: &str,
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> Option<SlashOutcome> {
-    use coco_types::{
-        PermissionBehavior, PermissionRule, PermissionRuleSource, PermissionRuleValue,
-    };
-
     // Empty `allow` / `deny` (no tool name) is a usage error — surface
     // the hint without falling through to the registry handler. The
     // pure parser returns `None` in that case (vs. None for read-only
@@ -1025,76 +873,27 @@ pub(super) async fn dispatch_permissions_mutation(
         return Some(SlashOutcome::Handled);
     }
 
-    let mutation = parse_permissions_mutation(args)?;
+    let action = coco_agent_host::session_controls::permission_mutation_action(args)?;
 
-    let confirmation = match &mutation {
-        PermissionsMutation::Allow(tool) => {
-            let rule = PermissionRule {
-                source: PermissionRuleSource::Session,
-                behavior: PermissionBehavior::Allow,
-                value: PermissionRuleValue {
-                    tool_pattern: tool.clone(),
-                    rule_content: None,
-                },
-            };
-            if !apply_and_persist_permission_update(
-                &coco_types::PermissionUpdate::AddRules {
-                    rules: vec![rule],
-                    destination: coco_types::PermissionUpdateDestination::Session,
-                },
-                event_tx,
-                local_app_server_bridge,
-            )
-            .await
+    let confirmation = match action {
+        coco_agent_host::session_controls::PermissionMutationAction::Apply {
+            update,
+            confirmation,
+        } => {
+            if !apply_and_persist_permission_update(&update, event_tx, local_app_server_bridge)
+                .await
             {
                 return Some(SlashOutcome::Handled);
             }
-            format!(
-                "Added allow rule for `{tool}`.\n\nSource: Session (highest priority — \
-                 active until end of session or `/permissions reset`)."
-            )
+            confirmation
         }
-        PermissionsMutation::Deny(tool) => {
-            let rule = PermissionRule {
-                source: PermissionRuleSource::Session,
-                behavior: PermissionBehavior::Deny,
-                value: PermissionRuleValue {
-                    tool_pattern: tool.clone(),
-                    rule_content: None,
-                },
-            };
-            if !apply_and_persist_permission_update(
-                &coco_types::PermissionUpdate::AddRules {
-                    rules: vec![rule],
-                    destination: coco_types::PermissionUpdateDestination::Session,
-                },
-                event_tx,
-                local_app_server_bridge,
-            )
-            .await
-            {
-                return Some(SlashOutcome::Handled);
-            }
-            format!(
-                "Added deny rule for `{tool}`.\n\nSource: Session (highest priority — \
-                 active until end of session or `/permissions reset`)."
-            )
-        }
-        PermissionsMutation::Reset => {
+        coco_agent_host::session_controls::PermissionMutationAction::Reset { confirmation } => {
             // Reset is Session-source-only and never persists to disk. Route
             // through AppServer so the TUI does not mutate SessionRuntime.
             if !reset_session_permission_rules(event_tx, local_app_server_bridge).await {
                 return Some(SlashOutcome::Handled);
             }
-            {
-                let config_dir = coco_utils_common::COCO_CONFIG_DIR_NAME;
-                format!(
-                    "Session permission rules reset. Custom session allow/deny entries were cleared; \
-                     built-in read-only tools remain allowed by the active permission mode. File-based rules \
-                     ({config_dir}/settings.json, ~/{config_dir}/settings.json) are unchanged — \
-                     edit those files directly to modify persistent rules."
-                )
-            }
+            confirmation
         }
     };
     emit_slash_text(event_tx, "permissions", args, &confirmation).await;

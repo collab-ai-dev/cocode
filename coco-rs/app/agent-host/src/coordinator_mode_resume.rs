@@ -47,7 +47,7 @@ pub fn reconcile_on_resume(stored_mode: Option<&str>, features: &Features) -> Op
 ///
 /// `save_mode` loads the session and requires an existing transcript, so call
 /// this AFTER at least one turn (end-of-run is fine). The write side was
-/// previously wired ONLY at the TUI exit checkpoint — a headless / SDK leader
+/// previously wired ONLY at the TUI exit checkpoint — a headless / AppServer leader
 /// never persisted the mode, so `--resume` of that session silently dropped
 /// the coordinator role. Runs on every leader entrypoint.
 ///

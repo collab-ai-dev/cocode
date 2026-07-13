@@ -1,9 +1,9 @@
 //! Shared `/rename` helpers used by both the interactive TUI runner
-//! and the SDK / headless runner.
+//! and the AppServer / headless runner.
 //!
 //! The runner-specific pieces (teammate guard, transcript echo,
 //! `emit_slash_text`) stay in each runner; the LLM call and the
-//! dual-write persistence both live here so the SDK and TUI paths
+//! dual-write persistence both live here so the AppServer and TUI paths
 //! can't drift apart.
 //!
 //! ## Side-effects intentionally NOT performed here (G6 / G7)
@@ -18,8 +18,6 @@
 //!   by CLAUDE.md ("Don't design for hypothetical future
 //!   requirements"). When a TUI banner lands, wire the reader and
 //!   add the producer call here in the **same** PR.
-
-use std::sync::Arc;
 
 use coco_types::Capability;
 use coco_types::ModelRole;
@@ -183,16 +181,7 @@ pub async fn generate_session_name_from_text(
 /// `anyhow::Error` so callers can match on
 /// `SessionError::TranscriptNotFound` for a clearer message.
 pub async fn persist_rename(session: &SessionHandle, name: String) -> Result<(), anyhow::Error> {
-    let session_id = session.current_typed_session_id().await;
-    let manager = Arc::clone(session.session_manager());
-    let name_for_set = name.clone();
-    let session_id_for_set = session_id.to_string();
-    tokio::task::spawn_blocking(move || manager.set_title(&session_id_for_set, &name_for_set))
-        .await
-        .map_err(anyhow::Error::from)
-        .and_then(|inner| inner.map_err(anyhow::Error::from))?;
-    session.update_session_registry_name(&name);
-    Ok(())
+    session.persist_session_title(name).await
 }
 
 /// Persist a caller-resolved rename using the same normalization and
@@ -231,8 +220,7 @@ fn map_persist_error(error: anyhow::Error) -> RenamePersistenceError {
 /// concatenating text from User / Assistant messages.
 /// Non-text content (tool calls, attachments, etc.) is skipped.
 async fn snapshot_conversation_text(session: &SessionHandle) -> String {
-    let history = session.history().lock().await;
-    coco_session::title_generator::extract_conversation_text(history.as_slice())
+    session.title_generation_conversation_text().await
 }
 
 #[cfg(test)]

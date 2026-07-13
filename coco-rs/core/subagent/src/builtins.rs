@@ -25,17 +25,16 @@ use crate::builtin_prompts::{
     verification_system_prompt,
 };
 
-/// What the SDK / CLI / TUI passes in to choose which optional built-ins
-/// load.
+/// Caller-selected toggles for optional built-ins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BuiltinAgentCatalog {
     /// `BUILTIN_EXPLORE_PLAN_AGENTS` + `tengu_amber_stoat`.
     pub include_explore_plan: bool,
     /// `VERIFICATION_AGENT` + `tengu_hive_evidence`.
     pub include_verification: bool,
-    /// `coco-guide` is included for non-SDK entrypoints (CLI/TUI).
+    /// `coco-guide` is included for interactive entrypoints (CLI/TUI).
     pub include_coco_guide: bool,
-    /// SDK noninteractive mode disables the entire built-in roster.
+    /// Noninteractive mode disables the entire built-in roster.
     pub disable_all: bool,
     /// Host build embeds search tools (`bfs` / `ugrep`) into the Bash
     /// tool. When true, `coco-guide`'s default tool list swaps
@@ -57,10 +56,10 @@ impl BuiltinAgentCatalog {
         }
     }
 
-    /// SDK noninteractive mode (`CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS`).
+    /// Noninteractive mode (`CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS`).
     /// Disables the entire built-in roster — caller may then inject
     /// extension built-ins via `AgentDefinitionStore::insert_definition`.
-    pub fn sdk_noninteractive() -> Self {
+    pub fn noninteractive() -> Self {
         Self {
             disable_all: true,
             ..Self::default()

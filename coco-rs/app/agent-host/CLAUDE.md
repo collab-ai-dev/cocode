@@ -1,14 +1,17 @@
 # coco-agent-host
 
 Agent-session host shared by CLI surfaces. It owns session-runtime construction,
-the in-process AppServer client facade, SDK/AppServer request handling,
-headless use cases, and runtime integrations.
+the in-process AppServer client facade, protocol-neutral AppServer request
+handling for remote and local adapters, headless operations, and runtime
+integrations.
 It does not own the `coco` process entrypoint or the TUI command loop; those
 remain in `coco-cli` as surface composition.
+It also does not own the SDK JSON-RPC/NDJSON connection adapter; that lives in
+`coco-sdk-server`.
 
 This is a Tier-1 application-composition crate under the workspace error
-policy: startup/use-case assembly may use `anyhow`, while domain crates below
-it expose typed errors and SDK handlers translate failures to protocol results.
+policy: startup/application assembly may use `anyhow`, while domain crates below
+it expose typed errors and adapters translate failures to protocol results.
 
 ## Key Types
 
@@ -16,19 +19,20 @@ it expose typed errors and SDK handlers translate failures to protocol results.
 |------|---------|
 | `AgentHostOptions` | Clap-independent application inputs mapped once by `coco-cli`. |
 | `local_client::LocalServerClient` | In-process typed client over `LocalClientAdapter`; owns local interactive/passive surface handles and receiver demultiplexing without leaking server implementation into the remote client crate. |
-| `sdk_server::SdkServer` | NDJSON control server used by the CLI SDK surface. |
-| `sdk_server::SdkServer::run_app_server_connection` | SDK-server entrypoint for the AppServer bridge; reuses the server's transport, state, and external notification sources while delegating JSON-RPC ownership to `coco-app-server` |
-| `sdk_server::app_server_bridge::AppServerSdkHandler` | Runtime-backed AppServer request handler shared by JSON-RPC SDK and local in-process adapters |
-| `sdk_server::AppServerLocalBridge` | Local AppServer client bridge for TUI/headless cut-over: wires AppServer, LocalClientAdapter, LocalServerClient, shared handler, and event forwarding |
-| `sdk_server::StdioTransport` | stdin/stdout NDJSON transport |
-| `sdk_server::SessionTurnExecutor` | Executes a turn against the already-selected `SessionHandle`; shared by SDK, TUI, headless, and harness paths. |
-| `sdk_server::CliInitializeBootstrap` | Session bootstrap from `initialize` control request |
-| `sdk::ModelUsage` + schemas | SDK wire types |
+| `app_server_host::AppServerHostHandler` | Runtime-backed AppServer request handler shared by remote JSON-RPC and local in-process adapters |
+| `app_server_host::AppServerLocalBridge` | Local AppServer client bridge for TUI/headless cut-over: wires AppServer, LocalClientAdapter, LocalServerClient, shared handler, and event forwarding |
+| `app_server_host::AppServerHostState` | Shared AppServer host projection state: turn runner, startup/bootstrap data, session-manager projection, activity, runtime replacement, and durable sequence allocation. |
+| `app_server_host::SessionTurnExecutor` | Executes a turn against the already-selected `SessionHandle`; shared by remote AppServer, TUI, headless, and harness paths. |
+| `app_server_host::CliInitializeBootstrap` | CLI startup data source for AppServer `initialize` responses |
+| `remote_host::prepare_remote_host` | Remote AppServer host bootstrap: builds shared runtime/AppServer state and host-handler bindings for transport adapters without owning SDK transport. |
+| `remote_host::RemoteAppServerBridgeHost` | Narrow remote transport-facing capability handle for opening JSON-RPC/AppServer bindings without exposing raw host state. |
+| `coco_types::*` protocol schemas | Shared AppServer request/result and notification DTOs used by adapters. |
 | `model_factory::*` | Builds `Arc<dyn LanguageModelV4>` from provider/model config |
 | `output::*` | Non-interactive output formatters (text/json/stream-json) |
 | `headless` / `headless_support` | Print-mode orchestration plus goal/slash, transcript, tool-filter, and additional-directory helpers |
 | `project_services::ProjectServices` | Project-rooted plugin catalog plus command, skill, hook, MCP, and LSP discovery shared by sessions with the same project root |
 | `session_runtime::SessionRuntimeFactory` | Owned construction seam for building `SessionHandle`s from cloneable startup inputs and a target session id. |
+| `session_controls::*` | Protocol-neutral runtime controls for task operations, session status/cost, and context usage; remote/local adapters map these results to their own surfaces. |
 
 ## Multi-Session Ownership
 
@@ -36,7 +40,7 @@ AppServer validates every interactive `(connection, surface, session)` target
 and hands the handler one opaque `SessionHandle`. Runtime selection is never
 repeated in a runner or handler. The runtime owns history, engine/app state,
 MCP, reload supervisors, file history, active-turn cancellation, turn ids, and
-aggregate turn accounting. `SdkServerState` owns only process services and
+aggregate turn accounting. `AppServerHostState` owns only process services and
 projections: the runner implementation, bootstrap/factory inputs, persistence,
 activity timestamps, and durable event sequence allocation.
 
@@ -51,14 +55,15 @@ process-keyed session capability maps. See
 
 1. `coco-cli` maps parsed arguments into `AgentHostOptions`.
 2. Interactive/print/SDK paths fold config, build `ModelRuntimeRegistry`, and register tools + commands.
-3. SDK → `sdk_server` over the AppServer JSON-RPC bridge (NDJSON over stdio,
-   `initialize`/`interrupt`/`can_use_tool`/`set_permission_mode`/...)
+3. SDK mode → `coco-sdk-server` over the AppServer JSON-RPC bridge
+   (NDJSON over stdio, `initialize`/`interrupt`/`can_use_tool`/
+   `set_permission_mode`/...)
 4. Print mode → local AppServer control bridge +
    local `turn/start` + `output::*` formatter
 5. The CLI TUI surface uses the same local AppServer bridge while retaining
    terminal lifecycle and presentation policy in `coco-cli`.
 
-`sdk_server::spawn_sdk_outbound_writer` is the single writer for SDK
+`coco-sdk-server` owns the single writer for SDK
 notifications, replies, and server requests. Session events carry a mandatory
 `SessionId`, are stamped once, and route through the shared AppServer before
 the stdio connection renders its NDJSON notification view. This feeds the
@@ -69,44 +74,37 @@ accumulation; rendered stdio params include `session_id`, `surface_id`,
 `SdkTransport` has frame-level
 `recv_frame` / `send_frame` methods for AppServer traffic; stdio decodes and
 encodes `coco-app-server-transport::JsonRpcFrame` directly.
-`SdkServerState::send_server_request` enqueues outbound server requests as
-frames and resolves matching client `Success`/`Error` reply frames back to the
-SDK hook/MCP callers through
-`SdkServerState::resolve_server_request_frame` before falling back to AppServer
-adapter response handling.
-The installed SDK `TurnRunner` sits behind `TurnRunnerState`; builder setup,
-runtime-bridge replacement, turn dispatch, and tests use `SdkServerState`
-install/snapshot methods instead of raw runner locks.
-The installed SDK `SessionHandle` sits behind `SessionRuntimeState`; SDK
-startup, AppServer replacement, runtime controls, approval/MCP bridges, and
-tests use `SdkServerState` install/snapshot methods instead of raw runtime
-locks.
-The pending server-request waiter map and issued-id counter sit behind the
-SDK handler `ServerRequestState`; callers continue through `SdkServerState`
-methods so request cleanup and frame matching stay centralized.
-The SDK transport handle and ordered outbound writer queue sit behind
-`ConnectionState`; approval, hook, MCP, and bridge code use
-`SdkServerState` accessors instead of raw transport/outbound slots.
-The SDK handler request context, result type, and exhaustive
-`ClientRequest` dispatcher live in `sdk_server::handlers::dispatch`; topical
-handler modules continue to import the re-exported `HandlerContext` /
-`HandlerResult` from `sdk_server::handlers`.
-The optional SDK `McpConnectionManager` sits behind `McpManagerState`; startup,
-bridge bootstrap, SDK-hosted MCP registration, and MCP handlers use
-`SdkServerState` install/snapshot methods instead of reading the raw slot.
+SDK server requests enqueue outbound frames through the connection adapter and
+resolve matching client `Success`/`Error` reply frames back to SDK hook/MCP
+callers before falling back to AppServer adapter response handling.
+The installed AppServer host `TurnRunner` sits behind `TurnRunnerState`;
+builder setup, runtime-bridge replacement, turn dispatch, and tests use
+`AppServerHostState` install/snapshot methods instead of raw runner locks.
+SDK callback correlation, transport handles, and ordered outbound writer queues
+belong to SDK connection adapters, not the host state.
+The AppServer host request context, result type, and exhaustive
+`ClientRequest` dispatcher live in
+`app_server_host::{request_context,request_dispatch}`. Topical per-method
+handlers live in `app_server_host::request_handlers`; the shared outbound
+queue message used by local and SDK adapters lives in `app_server_host::outbound`.
+SDK transport, callback correlation, and outbound writing stay in
+`coco-sdk-server`.
 The SDK production runtime replacement context sits behind
-`RuntimeReplacementState`; SDK startup installs it and AppServer start/resume
-interception reads it through `SdkServerState` methods.
+`app_server_host::RuntimeReplacementState`; SDK startup installs it and
+AppServer start/resume interception reads it through `AppServerHostState`
+methods.
 Reload supervisors, MCP registration reports, file-history state, and config
 home are owned by `SessionRuntime` and reached only through the validated
-`SessionHandle`. `SdkServerState` must not mirror any of these capabilities.
+`SessionHandle`. `AppServerHostState` must not mirror any of these
+capabilities.
 Pre-runtime initialize bootstrap data, startup cwd, the SDK agent-progress
 opt-in flag, and startup-authorized bypass capability sit behind
 `BootstrapState`.
-The SDK handler, dispatcher, and approval-bridge tests run through
-`SdkServer::run_app_server_connection`; the legacy `SdkServer::run` loop has
-been removed, so SDK JSON-RPC ownership lives on the AppServer bridge path.
-`AppServerSdkHandler` also implements the local in-process AppServer request
+The SDK dispatcher and bridge tests run through
+`coco_sdk_server::SdkServer::run_app_server_connection`; the legacy
+`SdkServer::run` loop has been removed, so SDK JSON-RPC ownership lives on the
+AppServer bridge path.
+`AppServerHostHandler` also implements the local in-process AppServer request
 handler trait, so TUI/headless cut-over code can reuse the same exhaustive
 `ClientRequest` dispatcher without adding another runtime dispatch table.
 Local AppServer cut-over code must pair that handler with
@@ -117,17 +115,21 @@ and SDK stamping seams derive `agent_id` from the protocol payload when present.
 `AppServerLocalBridge` is the preferred local entrypoint: it owns the local
 `AppServer`, `LocalServerClient`, shared handler, and outbound forwarder so
 TUI/headless code does not duplicate adapter wiring.
-Session lifecycle interception, runtime-backed start/resume construction,
-replace/close cascades, and scoped-state commit ordering live in
-`sdk_server/session_lifecycle.rs`; idle deadline supervision lives in
-`sdk_server/idle_session_supervisor.rs`. `app_server_bridge.rs` is the adapter
-composition/transport owner and must not absorb those policies again.
+AppServer lifecycle interception and protocol result mapping live in
+`app_server_host/session_lifecycle.rs` alongside the other protocol-neutral
+host pieces: idle deadline supervision, handler dispatch, local bridge
+composition, local event forwarding, session data, close/load/surface helpers,
+and registry register/replace helpers. SDK transport ownership lives in
+`coco-sdk-server`, while AppServer-routed hook callbacks, client-hosted MCP
+routing, sandbox approval routing, and connection-profile runtime binding live
+under `app_server_host`. These modules must not absorb each other's connection
+or runtime policies again.
 Startup runtime construction now passes `SessionRuntimeFactory` into the
 local AppServer bridge load helpers (or the equivalent SDK stdio bridge helper),
-so `SessionRuntimeFactory` to `LocalAppSessionHandle` conversion happens inside
+so `SessionRuntimeFactory` to `AppSessionHandle` conversion happens inside
 the bridge-owned `spawn_load` path instead of in TUI/headless/main startup
 callers.
-Its AppServer registry stores `LocalAppSessionHandle` snapshots rather than
+Its AppServer registry stores `AppSessionHandle` snapshots rather than
 empty `()` handles. Installed runtime snapshots carry the current application-host
 `SessionHandle`, whose session id is an immutable snapshot. Close cascade logic
 checks the registry snapshot before touching runtime-backed state, so stale
@@ -140,22 +142,23 @@ already-live local session refreshes the registry handle without changing
 surface routing.
 AppServer close for local/SDK bridge handles now performs the bridge-owned
 cascade before archiving surfaces: if the closing session still matches the
-SDK active-session state, it cancels the state-owned active turn, waits
+host active-session state, it cancels the state-owned active turn, waits
 boundedly for the turn runner and forwarder to drain, clears the slot, then
 asks the matching `SessionHandle` to fire runtime SessionEnd hooks and cancel
 the runtime shutdown signal. The registry snapshot guard skips fused-runtime
 shutdown when the runtime handle no longer matches the registry snapshot.
-The optional idle-session supervisor is event driven: AppServer activity, SDK
-turn state, and `CommandQueue` revisions wake it, and it sleeps to the earliest
-per-session deadline. Attached surfaces, active turns, and non-empty cross-turn
-queues are never idle; queue enqueue/dequeue timestamps reset the deadline.
+The optional idle-session supervisor is event driven: AppServer activity, host
+session activity, and `CommandQueue` revisions wake it, and it sleeps to the
+earliest per-session deadline. Attached surfaces, active turns, and non-empty
+cross-turn queues are never idle; queue enqueue/dequeue timestamps reset the
+deadline.
 TUI orchestration remains in `coco-cli` and is split by UI ownership rather
-than hidden behind a generic runner. The host exposes application use cases;
+than hidden behind a generic runner. The host exposes application operations;
 the CLI driver retains terminal lifecycle and command-loop policy.
-SDK JSON-RPC mode also uses `LocalAppSessionHandle` in the AppServer registry.
+SDK JSON-RPC mode also uses `AppSessionHandle` in the AppServer registry.
 `session/start`, `session/resume`, and `session/archive` dispatched through
 `SdkServer::run_app_server_connection` apply the same lifecycle registration
-and close path as local requests after the existing SDK handler succeeds.
+and close path as local requests after the shared AppServer handler succeeds.
 Successful JSON-RPC start/resume also attaches an interactive surface to the
 request connection and returns that `SurfaceId` on the result DTO; remote
 clients may still fall back to lifecycle activation when reading older streams.
@@ -192,14 +195,13 @@ live AppServer state over the persisted `SessionManager` response, so a started
 session is visible before its transcript has been written. Persisted data
 remains canonical when available. `coco-app-server` owns the request
 composition over `AppSessionDataSource` / `AppSessionDataHandle`, while
-`sdk_server::session_data` supplies the concrete `SessionManager` callbacks and
-live-handle snapshots. The persisted list/read/turn loaders in
-`sdk_server::session_data` are shared by that AppServer local view and the
-SDK session-data handlers, so the live-overlay path has one owner while
-the JSONL `SessionManager` boundary remains in `coco-agent-host`.
+`crate::session_data` supplies the concrete `SessionManager` projection and
+live-handle snapshot conversion. The AppServer data-source adapter lives under
+`app_server_host`, so persisted list/read/turn loading remains in
+`coco-agent-host` without being owned by the SDK protocol layer.
 The local AppServer bridge exposes `shutdown_registered_sessions`, which
 drains all registered AppServer slots through the same concrete close cascade
-used by `session/archive`: scoped SDK active-turn state is cancelled and
+used by `session/archive`: host active-turn state is cancelled and
 boundedly drained using `RuntimeConfig.server.turn_drain_timeout_secs`
 (`server.turn_drain_timeout_secs`, env
 `COCO_SERVER_TURN_DRAIN_TIMEOUT_SECS`; default 10) before AppServer close
@@ -214,9 +216,45 @@ stdio convert local AppServer shutdown drain and Event Hub connector flush
 failures or timeouts into a nonzero process result after their ordinary cleanup
 has run. Both bounded waits also observe OS interrupt signals and return a
 non-clean shutdown result instead of continuing to wait for the timeout.
-`SdkServerState` keeps persisted-session storage behind install/snapshot
-methods backed by `sdk_server::session_store`, so the remaining `coco-session`
-boundary is localized outside the broad handler state.
+`AppServerHostState` keeps persisted-session storage behind install/snapshot
+methods backed by `app_server_host::session_store`, so the remaining
+`coco-session` boundary is localized outside SDK protocol handling.
+Model/thinking/fast-mode/permission controls, task operations, session
+status/cost, context usage, and file-history diff/rewind live in
+`session_controls.rs`; AppServer handlers should only resolve the validated
+`SessionHandle`, call those controls, publish any protocol notification
+required by the remote surface, and map errors to JSON-RPC.
+Session rename/tag mutations and rename-name resolution live in
+`session_labels.rs`; remote and local adapters should route through that host
+operation instead of resolving or mutating runtime labels inside protocol
+handlers.
+Session MCP status, dynamic server registration, reconnect, toggle, and hook
+wrapping live in `session_mcp.rs`; remote adapter code keeps only elicitation
+request/reply routing and client-hosted MCP transport registration.
+Session memory refresh operations for dream/summary live in `session_memory.rs`;
+remote/local command adapters should keep sentinel parsing and user feedback
+policy outside that module.
+Agents, permissions, workflow, and skills dialog payload assembly live in
+`session_dialogs.rs`; TUI adapters should only decide when to open the terminal
+dialog and how to render it.
+Agent file create staging and template generation live in `session_agents.rs`;
+TUI adapters keep only editor process handoff and local toast/event policy.
+Human command queue entry construction and enqueueing live in
+`session_queue.rs`; TUI adapters keep queue notification rendering and editor
+handoff policy.
+Side-question fork execution and prompt-cache selection for `/btw` live in
+`side_question.rs`; remote/local adapters keep command parsing, message append,
+and surface event policy.
+Goal command resolution, goal status transcript append helpers, and active-goal
+metadata persistence live in `goal_command.rs`; remote/local adapters keep modal
+or notification rendering policy. Do not re-add `SessionHandle` goal-resolution
+forwarders; callers should enter through `goal_command.rs`.
+Manual compact turn execution lives in `session_compaction.rs`; remote/local
+command adapters keep command parsing, active-turn routing, and surface
+completion monitoring policy.
+Session meta/slash metadata message construction and slash text history append
+helpers live in `session_messages.rs`; remote/local adapters keep event emission
+and presentation policy.
 `session/turns/list` derives turn spans from transcript message order until
 persisted transcript entries carry durable turn ids.
 When constructed with a `HubConnectorSender`, the local outbound forwarder
@@ -241,7 +279,7 @@ shared handler state instead of issuing a fresh `session/start`, installs the
 runtime's `SessionManager` so local `session/list`, `session/read`, and
 `session/turns/list` see persisted transcripts, and installs the shared
 `SessionTurnExecutor` so local `turn/start` uses the same execution path as the
-SDK bridge.
+remote AppServer adapters.
 TUI, headless, and SDK bootstraps now construct their initial runtime through
 `SessionRuntimeFactory`; the factory owns the cloneable build inputs and can
 build explicit-id handles. TUI/headless startup reserve the fresh/resume target
@@ -279,10 +317,11 @@ runtime. TUI config-change hooks, sandbox reload, sandbox violation forwarding,
 sandbox approval bridging, model-runtime reload, TUI settings reload, and TUI
 skill-override writes use a runtime-reload subscription owner that reattaches
 to the session-owned publisher after startup, `/resume`, `/branch`, or
-`/clear` replacement. SDK sandbox reload and SDK sandbox approval bridging are
-installed through the shared SDK runtime-state installer, so AppServer-backed
-SDK `session/start` / `session/resume` replacement aborts the old runtime's
-reload subscriber and attaches the new runtime's session-owned publisher.
+`/clear` replacement. AppServer sandbox reload and approval bridging are
+installed through the shared AppServer runtime-state installer, so
+AppServer-backed SDK `session/start` / `session/resume` replacement aborts the
+old runtime's reload subscriber and attaches the new runtime's session-owned
+publisher.
 Compatibility tests may still use
 `SessionRuntimeBootstrapSource::startup_snapshot(...)`. Factory builds can
 also receive an explicit target cwd, and TUI startup resume, TUI `/resume` /
@@ -294,7 +333,7 @@ read from the installed runtime's engine config, while account/auth remains
 bootstrap-owned until those sources grow runtime accessors. SDK-supplied
 agents, initialize hook callbacks, and plan-mode instructions sit behind
 `InitializeState` and are replayed into session start/resume replacement paths
-through `SdkServerState` methods. SDK MCP manager
+through `AppServerHostState` methods. Client-hosted MCP manager
 construction now happens after the startup runtime is loaded and uses that
 runtime's MCP config; TUI/headless MCP bootstrap already builds or reuses
 managers from the session runtime. TUI, headless, and SDK event-hub connectors
@@ -369,7 +408,7 @@ through the swappable handle directly. SDK turn/runtime/session handlers now use
 installed `SessionHandle`s directly for memory shortcuts, goal state, manual
 compact, model/permission/color updates, tag toggling, and resume hydration;
 remaining production `.runtime()` calls are local AppServer registry snapshot
-extraction points (`LocalAppSessionHandle`) or tests.
+extraction points (`AppSessionHandle`) or tests.
 Local `session/start` and `session/resume` register the session in the local
 `AppServer` registry; TUI resume replaces its explicitly selected live slot so
 the resumed session can load without leaking registry state. Local
@@ -397,9 +436,9 @@ longer call the engine directly from the TUI runner.
 Headless embedding/test callers must use `run_chat_with_options` with an
 explicit `RunChatOptions::cwd` unless `AgentHostOptions::cwd` is set; only `main.rs` reads
 process cwd at startup and passes that snapshot into headless execution. SDK
-mode also installs the same startup cwd into `SdkServerState`, so pre-session
-`session/start`, `config/read`, and `config/value/write` requests do not fall
-back to a relative process cwd.
+mode also installs the same startup cwd into `AppServerHostState`, so
+pre-session `session/start`, `config/read`, and `config/value/write` requests
+do not fall back to a relative process cwd.
 TUI `/reload-plugins` routes through this local AppServer client
 (`LocalServerClient::plugin_reload`) while preserving the TUI toast and
 command-palette refresh behavior. TUI `/hooks reload` uses the same local
@@ -436,29 +475,29 @@ TUI permission-mode changes route through
 surface and drains forwarded `PermissionModeChanged` events back into the TUI
 event channel after dispatch.
 TUI fast-mode toggles route through `LocalServerClient::config_apply_flags` with
-the `fast_mode` setting; the SDK handler mutates the installed runtime's
+the `fast_mode` setting; the shared handler mutates the installed runtime's
 engine config and emits `FastModeChanged` from the AppServer path.
 TUI Ctrl+T thinking-level changes route through `LocalServerClient::set_thinking`;
-the SDK handler updates the installed runtime's engine config and emits
+the shared handler updates the installed runtime's engine config and emits
 `ModelRoleChanged` from the AppServer path.
 TUI `/model` picker role/provider/model overrides route through
-`LocalServerClient::set_model_role`; the SDK handler applies the live
+`LocalServerClient::set_model_role`; the shared handler applies the live
 `SessionRuntime` role override and emits `ModelRoleChanged`, while the TUI
 keeps only the picker confirmation/history message.
 TUI `/permissions` editor, `/permissions allow|deny`, approval always-allow,
 and `/add-dir` updates route through `LocalServerClient::apply_permission_update`;
-the SDK handler applies the live permission base and persists writable
+the shared handler applies the live permission base and persists writable
 destinations, while the TUI refreshes the editor overlay from disk afterward
 for editor edits. `/permissions reset` routes through
 `LocalServerClient::reset_session_permission_rules`, clearing only session-scoped
 live allow/deny rules.
 TUI `/color` changes route through `LocalServerClient::set_agent_color`; the SDK
-handler updates the installed runtime's live app-state color.
+path uses the same handler to update the installed runtime's live app-state color.
 TUI teammate current-work interrupt now routes through
 `LocalServerClient::agent_interrupt_current_work`, keeping that runtime-control
-request on the same local AppServer path as the SDK handler.
+request on the same AppServer handler path as SDK clients.
 TUI teammate/subagent cancellation routes through local AppServer
-`LocalServerClient::stop_task`; the SDK handler uses the installed `TaskRuntime`
+`LocalServerClient::stop_task`; the shared handler uses the installed `TaskRuntime`
 when present and otherwise cancels the selected runtime's active turn.
 TUI Ctrl+B background-all foreground tasks routes through
 `LocalServerClient::background_all_tasks`, which dispatches the AppServer
@@ -469,8 +508,8 @@ same local AppServer seam through `LocalServerClient::task_list` and
 `LocalServerClient::task_detail`.
 TUI explicit `/rewind` keeps conversation truncation local to the TUI runner,
 but its file-restore half routes through `LocalServerClient::rewind_files`; the
-bridge installs the runtime's `FileHistoryState` and config home into
-`SdkServerState` when it adopts a `SessionRuntime`.
+bridge reads the runtime's `FileHistoryState` and config home through the
+validated `SessionHandle` when it adopts a `SessionRuntime`.
 In-session TUI `/resume <id>` and `/branch` route through local
 `LocalServerClient::session_resume`; the TUI keeps only target resolution/fork
 creation, coordinator-mode reconciliation, and UI reset/history hydration.

@@ -1,11 +1,11 @@
 use super::*;
 pub(super) async fn background_all_tasks_through_app_server(
     session: &crate::session_runtime::SessionHandle,
-    local_app_server_bridge: &coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> Result<Vec<String>, coco_app_server_client::ClientError> {
     local_app_server_bridge
-        .install_session_runtime(session.clone())
-        .await;
+        .bind_interactive_session(session.clone(), None)
+        .await?;
     local_app_server_bridge
         .client()
         .background_all_tasks(
@@ -22,43 +22,14 @@ pub(super) async fn spawn_command_queue_turn(
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
 ) {
-    let runtime = session;
-    let Some(first) = runtime
-        .command_queue()
-        .dequeue_first_matching(|c| !c.is_slash_command && c.agent_id.is_none())
-        .await
+    let Some(batch) =
+        coco_agent_host::session_queue::dequeue_next_prompt_batch(session, Some(event_tx.clone()))
+            .await
     else {
         return;
     };
-    let first_priority = first.priority;
-    let first_origin = first.origin.clone();
-    let mut queued = vec![first];
-    let mut rest = runtime
-        .command_queue()
-        .dequeue_matching(|c| {
-            !c.is_slash_command
-                && c.agent_id.is_none()
-                && c.priority == first_priority
-                && c.origin == first_origin
-        })
-        .await;
-    queued.append(&mut rest);
 
-    let ids: Vec<String> = queued.iter().map(|cmd| cmd.id.to_string()).collect();
-    let messages = {
-        let mut h = runtime.history().lock().await;
-        let event_tx_opt = Some(event_tx.clone());
-        for cmd in &queued {
-            coco_query::history_sync::history_push_and_emit(
-                &mut h,
-                coco_query::queued_command_to_message(cmd),
-                &event_tx_opt,
-            )
-            .await;
-        }
-        h.to_vec()
-    };
-    for id in ids {
+    for id in batch.ids {
         let _ = event_tx
             .send(CoreEvent::Protocol(ServerNotification::CommandDequeued {
                 id,
@@ -67,11 +38,11 @@ pub(super) async fn spawn_command_queue_turn(
     }
     let _ = event_tx
         .send(CoreEvent::Protocol(ServerNotification::QueueStateChanged {
-            queued: runtime.command_queue().len().await as i32,
+            queued: batch.remaining_queued as i32,
         }))
         .await;
 
-    spawn_history_turn(messages, session, event_tx, active_turn, turn_done_tx).await;
+    spawn_history_turn(batch.messages, session, event_tx, active_turn, turn_done_tx).await;
 }
 
 /// bounded retries when local `turn/start` transiently reports
@@ -95,7 +66,7 @@ pub(super) enum StartTurnBusyError {
 /// dispatch collapses the handler's `HandlerResult::Err` into
 /// `ClientError::Server { code, message }`, so match the stable
 /// `INVALID_REQUEST` code plus the handler's message. A typed domain kind
-/// would be cleaner but lives behind `app/agent-host/src/sdk_server/*`.
+/// would be cleaner once exposed by the shared AppServer host boundary.
 pub(super) fn is_turn_already_running(error: &coco_app_server_client::ClientError) -> bool {
     matches!(
         error,
@@ -110,7 +81,7 @@ pub(super) fn is_turn_already_running(error: &coco_app_server_client::ClientErro
 /// the params are returned so the caller can re-enqueue rather than drop the
 /// submit.
 pub(super) async fn start_turn_with_busy_retry(
-    bridge: &mut coco_agent_host::sdk_server::AppServerLocalBridge,
+    bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
     session_id: &coco_types::SessionId,
     params: coco_types::TurnStartParams,
 ) -> Result<coco_types::TurnStartResult, StartTurnBusyError> {
@@ -135,7 +106,7 @@ pub(super) async fn spawn_history_turn(
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
 ) {
-    let session_id = session.current_typed_session_id().await;
+    let session_id = session.session_id().clone();
     let history_override = match messages
         .iter()
         .map(|message| serde_json::to_value(message.as_ref()))
@@ -148,20 +119,15 @@ pub(super) async fn spawn_history_turn(
         }
     };
 
-    let mut local_app_server_bridge = coco_agent_host::sdk_server::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::sdk_server::SdkServerState::default()),
+    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
+        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
-    local_app_server_bridge
-        .install_session_runtime(session.clone())
-        .await;
-    if let Err(error) = local_app_server_bridge.ensure_interactive_surface(session_id.clone()) {
-        tracing::warn!(%error, "history turn could not attach interactive AppServer surface");
-        return;
-    }
-    if let Err(error) =
-        local_app_server_bridge.start_passive_event_pump(session_id.clone(), event_tx.clone())
+    if let Err(error) = local_app_server_bridge
+        .bind_interactive_session(session.clone(), Some(event_tx.clone()))
+        .await
     {
-        tracing::warn!(%error, "history turn could not attach AppServer event pump");
+        tracing::warn!(%error, "history turn could not bind local AppServer session");
+        return;
     }
     let mut monitor_client = local_app_server_bridge.connect_local_client();
     // live-only tail attach with no replay cursor (see SubmitInput site).
@@ -237,7 +203,7 @@ pub(super) async fn spawn_slash_run_engine_turn(
     prompt: SlashEnginePrompt,
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &mut coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     title_gen_attempted: &Arc<RwLock<std::collections::HashSet<String>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
@@ -249,13 +215,12 @@ pub(super) async fn spawn_slash_run_engine_turn(
         thinking_level,
         model_runtime_source,
     } = prompt;
-    local_app_server_bridge
-        .install_session_runtime(session.clone())
-        .await;
-    if let Err(error) =
-        local_app_server_bridge.start_passive_event_pump(session_id.clone(), event_tx.clone())
+    if let Err(error) = local_app_server_bridge
+        .bind_interactive_session(session.clone(), Some(event_tx.clone()))
+        .await
     {
-        tracing::warn!(%error, "slash RunEngine could not refresh local AppServer event pump");
+        tracing::warn!(%error, "slash RunEngine could not bind local AppServer session");
+        return;
     }
     let mut monitor_client = local_app_server_bridge.connect_local_client();
     // live-only tail attach with no replay cursor (see SubmitInput site).
@@ -334,24 +299,6 @@ pub(super) async fn spawn_slash_run_engine_turn(
     });
 }
 
-/// Record one inline slash-skill invocation. No-op for non-skill commands
-/// (Local/overlay). Usage/telemetry pairing and the blocking-thread dispatch
-/// live in `coco_skills::telemetry`. Keyed on the canonical name so aliases
-/// collapse.
-pub(super) fn record_slash_skill_invocation(
-    cmd: &coco_commands::RegisteredCommand,
-    outcome: coco_skills::telemetry::SkillOutcome,
-) {
-    if !matches!(cmd.command_type, coco_types::CommandType::Prompt(_)) {
-        return;
-    }
-    coco_skills::telemetry::record_invocation_outcome_detached(
-        coco_config::global_config::config_home(),
-        cmd.base.name.clone(),
-        outcome,
-    );
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn dispatch_slash_command(
     name: &str,
@@ -359,7 +306,7 @@ pub(super) async fn dispatch_slash_command(
     session: &crate::session_runtime::SessionHandle,
     current_session: &SharedSessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
-    local_app_server_bridge: &mut coco_agent_host::sdk_server::AppServerLocalBridge,
+    local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
     runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
     process_runtime: &Arc<ProcessRuntime>,
     runtime_reload_subscriptions: &Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
@@ -376,7 +323,8 @@ pub(super) async fn dispatch_slash_command(
     // forms (`allow` / `deny` / `reset`) keep their session-mutation
     // behavior below for power users + SDK parity.
     if name == "permissions" && matches!(args.trim(), "" | "list") {
-        let payload = build_permissions_editor_payload(session).await;
+        let payload =
+            coco_agent_host::session_dialogs::build_permissions_editor_payload(session).await;
         let _ = event_tx
             .send(CoreEvent::Tui(TuiOnlyEvent::OpenPermissionsEditor {
                 payload,
@@ -408,11 +356,8 @@ pub(super) async fn dispatch_slash_command(
     // Resolve aliases (`/reset`, `/new`) to the canonical `clear` name
     // first so they trigger the same flow instead of falling through to
     // the generic registry handler (`clear` declares aliases `['reset', 'new']`).
-    let resolves_to_clear = runtime
-        .current_command_registry()
-        .await
-        .get(name)
-        .is_some_and(|cmd| cmd.base.name == "clear");
+    let resolves_to_clear =
+        coco_agent_host::session_controls::command_resolves_to(session, name, "clear").await;
     if name == "clear" || resolves_to_clear {
         return SlashOutcome::TriggerClear;
     }
@@ -497,10 +442,10 @@ pub(super) async fn dispatch_slash_command(
     // clients pick up the new token immediately. Handled here (not the
     // registry) because the auth flow lives in `app/cli` + needs the runtime.
     if name == "login" {
-        // No-arg `/login` opens the provider picker (built CLI-side from the
-        // OAuth-capable providers); `/login <provider>` logs in directly.
+        // No-arg `/login` opens the provider picker; `/login <provider>` logs
+        // in directly.
         if args.trim().is_empty() {
-            let entries = build_login_entries(runtime.runtime_config());
+            let entries = coco_agent_host::session_dialogs::build_login_entries_payload(session);
             let _ = event_tx
                 .send(CoreEvent::Tui(TuiOnlyEvent::OpenLoginPicker { entries }))
                 .await;
@@ -511,32 +456,22 @@ pub(super) async fn dispatch_slash_command(
     if name == "logout" {
         return dispatch_provider_logout(args, session, event_tx).await;
     }
-    if name == "model" && !args.trim().is_empty() {
-        let available_models = runtime
-            .runtime_config()
-            .settings
-            .merged
-            .available_models
-            .as_deref();
-        if let Some(resolved) = coco_commands::handlers::model::resolve_model(args)
-            && !coco_config::is_model_allowed(
-                resolved.provider,
-                &resolved.model_id,
-                available_models,
-            )
-        {
-            let full_model_name = format!("{}/{}", resolved.provider, resolved.model_id);
-            emit_slash_text(
-                event_tx,
-                "model",
-                args,
-                &format!(
-                    "Model '{full_model_name}' is restricted by your organization's settings. Run /model to choose a different model.",
-                ),
-            )
-            .await;
-            return SlashOutcome::Handled;
-        }
+    if name == "model"
+        && !args.trim().is_empty()
+        && let Some(restricted) =
+            coco_agent_host::session_controls::restricted_model_selection_for_args(session, args)
+    {
+        let full_model_name = format!("{}/{}", restricted.provider, restricted.model_id);
+        emit_slash_text(
+            event_tx,
+            "model",
+            args,
+            &format!(
+                "Model '{full_model_name}' is restricted by your organization's settings. Run /model to choose a different model.",
+            ),
+        )
+        .await;
+        return SlashOutcome::Handled;
     }
     // `/rewind` flows through the standard registry → handler →
     // `DialogSpec::MessageSelector` → `OpenRewindPicker` path. The
@@ -551,70 +486,44 @@ pub(super) async fn dispatch_slash_command(
         return SlashOutcome::Handled;
     }
 
-    // Snapshot once per dispatch — `/reload-plugins` may swap the
-    // registry mid-call, but the snapshot keeps the resolved command
-    // valid through the handler's await chain.
-    let registry_snapshot = runtime.current_command_registry().await;
-    let Some(cmd) = registry_snapshot.get(name) else {
-        return SlashOutcome::NotFound;
-    };
-    if !cmd.is_active() {
-        let text = slash_unavailable_in_session_message(name);
-        emit_slash_text(event_tx, name, args, &text).await;
-        return SlashOutcome::Handled;
-    }
-    if cmd.base.name == "loop" {
-        let cwd = runtime.current_cwd().read().await.clone();
-        let prompt = coco_skills::bundled::loop_skill::prompt_for_command(
-            args,
-            runtime.original_cwd(),
-            &cwd,
-            runtime.runtime_config().loop_config.default_prompt_enabled,
-            runtime.runtime_config().loop_config.dynamic_enabled,
-            runtime
-                .runtime_config()
-                .loop_config
-                .persistent_preamble_enabled,
-            runtime
-                .runtime_config()
-                .features
-                .enabled(coco_types::Feature::AgentTriggersRemote),
-        );
-        return SlashOutcome::RunEngine {
-            content: prompt,
-            metadata: Some(format_slash_command_metadata(&cmd.base.name, args)),
-            thinking_level: None,
-            model_runtime_source: None,
-        };
-    }
-    // Fork-mode skills (`context: fork`) run as a subagent via the
-    // installed `SkillHandle`, not by expanding inline into the main loop.
-    // (`context === 'fork'` →
-    // `executeForkedSlashCommand`); the handler path below only renders
-    // inline expansions. `cmd.base.name` is canonical so the gate's
-    // user-invoked check matches even when the user typed an alias.
-    if let coco_types::CommandType::Prompt(data) = &cmd.command_type
-        && data.context == coco_types::CommandContext::Fork
+    let cmd = match coco_agent_host::session_slash::resolve_registered_command(session, name).await
     {
-        return SlashOutcome::RunForkSkill {
-            name: cmd.base.name.clone(),
-            args: args.to_string(),
-        };
-    }
-    let Some(handler) = cmd.handler.as_ref() else {
-        // Registered shell with no handler. For Prompt-type commands the
-        // safe default is to fall through to the model so it sees the
-        // raw `/foo` — safe default when the loader returns nothing.
-        // Local-type commands genuinely need a handler; surface a
-        // breadcrumb so the user knows the command is mis-wired.
-        if matches!(cmd.command_type, coco_types::CommandType::Prompt(_)) {
+        coco_agent_host::session_slash::ResolvedSlashCommand::NotFound
+        | coco_agent_host::session_slash::ResolvedSlashCommand::PromptWithoutHandler => {
             return SlashOutcome::NotFound;
         }
-        emit_slash_status(event_tx, name, args, SlashCommandStatusKind::NoHandler).await;
-        return SlashOutcome::Handled;
+        coco_agent_host::session_slash::ResolvedSlashCommand::Inactive => {
+            let text = slash_unavailable_in_session_message(name);
+            emit_slash_text(event_tx, name, args, &text).await;
+            return SlashOutcome::Handled;
+        }
+        coco_agent_host::session_slash::ResolvedSlashCommand::Loop { canonical_name } => {
+            let prompt =
+                coco_agent_host::session_controls::build_loop_command_prompt(session, args).await;
+            return SlashOutcome::RunEngine {
+                content: prompt,
+                metadata: Some(coco_agent_host::session_messages::slash_command_metadata(
+                    &canonical_name,
+                    args,
+                )),
+                thinking_level: None,
+                model_runtime_source: None,
+            };
+        }
+        coco_agent_host::session_slash::ResolvedSlashCommand::ForkSkill { canonical_name } => {
+            return SlashOutcome::RunForkSkill {
+                name: canonical_name,
+                args: args.to_string(),
+            };
+        }
+        coco_agent_host::session_slash::ResolvedSlashCommand::NoHandler => {
+            emit_slash_status(event_tx, name, args, SlashCommandStatusKind::NoHandler).await;
+            return SlashOutcome::Handled;
+        }
+        coco_agent_host::session_slash::ResolvedSlashCommand::Executable(command) => command,
     };
 
-    let result = match handler.execute_command(args).await {
+    let result = match cmd.handler.execute_command(args).await {
         Ok(r) => {
             // Skill lifecycle telemetry for the INLINE slash path. Fork-mode
             // skills returned above (RunForkSkill → QuerySkillRuntime records);
@@ -623,11 +532,11 @@ pub(super) async fn dispatch_slash_command(
             // the accrual path the Curator promotes/retires on. `handler` is
             // the resolved trait object, so the registry-wrapper record site is
             // never reached in production.
-            record_slash_skill_invocation(cmd, coco_skills::telemetry::SkillOutcome::Success);
+            cmd.record_skill_invocation(coco_skills::telemetry::SkillOutcome::Success);
             r
         }
         Err(e) => {
-            record_slash_skill_invocation(cmd, coco_skills::telemetry::SkillOutcome::Failure);
+            cmd.record_skill_invocation(coco_skills::telemetry::SkillOutcome::Failure);
             emit_slash_status(
                 event_tx,
                 name,
@@ -677,30 +586,24 @@ pub(super) async fn dispatch_slash_command(
         }
         CommandResult::InjectPrompt(text) => SlashOutcome::RunEngine {
             content: text,
-            metadata: Some(format_slash_command_metadata(&cmd.base.name, args)),
+            metadata: Some(coco_agent_host::session_messages::slash_command_metadata(
+                &cmd.canonical_name,
+                args,
+            )),
             thinking_level: None,
             model_runtime_source: None,
         },
-        CommandResult::MoaOneShot { prompt } => {
-            let preset = runtime
-                .runtime_config()
-                .settings
-                .merged
-                .moa
-                .default_preset_name()
-                .to_string();
-            SlashOutcome::RunEngine {
-                content: prompt,
-                metadata: Some(format_slash_command_metadata(&cmd.base.name, args)),
-                thinking_level: None,
-                model_runtime_source: Some(coco_inference::ModelRuntimeSource::Explicit(
-                    coco_types::ProviderModelSelection {
-                        provider: coco_config::MOA_PROVIDER.to_string(),
-                        model_id: preset,
-                    },
-                )),
-            }
-        }
+        CommandResult::MoaOneShot { prompt } => SlashOutcome::RunEngine {
+            content: prompt,
+            metadata: Some(coco_agent_host::session_messages::slash_command_metadata(
+                &cmd.canonical_name,
+                args,
+            )),
+            thinking_level: None,
+            model_runtime_source: Some(
+                coco_agent_host::session_controls::moa_one_shot_model_runtime_source(session),
+            ),
+        },
         CommandResult::Prompt { parts, .. } => {
             // Concatenate text parts. `File` parts are not yet wired —
             // none of the in-tree Prompt handlers emit them today.
@@ -724,7 +627,10 @@ pub(super) async fn dispatch_slash_command(
             } else {
                 SlashOutcome::RunEngine {
                     content: buf,
-                    metadata: Some(format_slash_command_metadata(&cmd.base.name, args)),
+                    metadata: Some(coco_agent_host::session_messages::slash_command_metadata(
+                        &cmd.canonical_name,
+                        args,
+                    )),
                     thinking_level: match &cmd.command_type {
                         coco_types::CommandType::Prompt(data) => data.thinking_level.clone(),
                         _ => None,
@@ -747,20 +653,12 @@ pub(super) async fn dispatch_slash_command(
             // Truncation of pre-summary rounds is intentionally left to
             // the handler — when no handler emits this today, we err on
             // the side of preserving history rather than dropping it.
-            if !summary.trim().is_empty() {
-                // I-1 (Authority): pre-computed compact summary push
-                // goes through history_push_and_emit so the TUI
-                // TranscriptView and SDK observers see the new
-                // boundary marker, not just the slash text echo.
-                let mut h = runtime.history().lock().await;
-                let event_tx_opt = Some(event_tx.clone());
-                coco_query::history_sync::history_push_and_emit(
-                    &mut h,
-                    coco_compact::build_compact_summary_message(&summary),
-                    &event_tx_opt,
-                )
-                .await;
-            }
+            coco_agent_host::session_messages::append_compact_summary_to_history_and_emit(
+                runtime,
+                event_tx.clone(),
+                &summary,
+            )
+            .await;
             emit_slash_text(event_tx, name, args, &display_text).await;
             SlashOutcome::Handled
         }
@@ -853,54 +751,19 @@ pub(super) async fn dispatch_slash_command(
                         .await;
                 }
                 DialogSpec::WorkflowPicker => {
-                    let cfg = runtime.current_engine_config().await;
-                    let cwd = if let Some(session_cwd) = cfg.session_cwd.as_ref() {
-                        Some(session_cwd.read().await.clone())
-                    } else {
-                        cfg.original_cwd
-                            .clone()
-                            .or_else(|| Some(runtime.original_cwd().clone()))
-                    };
-                    let entries = coco_workflow::list_workflows(cwd)
-                        .into_iter()
-                        .map(|entry| coco_types::WorkflowDialogEntry {
-                            name: entry.name,
-                            description: entry.description,
-                            source_path: entry.source_path.display().to_string(),
-                        })
-                        .collect();
+                    let payload =
+                        coco_agent_host::session_dialogs::build_workflow_dialog_payload(runtime)
+                            .await;
                     let _ = event_tx
-                        .send(CoreEvent::Tui(TuiOnlyEvent::OpenWorkflowPicker {
-                            payload: coco_types::WorkflowDialogPayload { entries },
-                        }))
+                        .send(CoreEvent::Tui(TuiOnlyEvent::OpenWorkflowPicker { payload }))
                         .await;
                 }
                 DialogSpec::SkillsList { mut payload } => {
-                    // The `SkillsHandler` runs through the
-                    // `CommandHandler` trait, which doesn't carry a
-                    // `RuntimeConfig` ref — so it ships every entry
-                    // with empty-tier defaults (`baseline=On`, no
-                    // lock, no `current_local`). Reach into the live
-                    // engine_config here to populate the real
-                    // override / lock state before forwarding to
-                    // the TUI; otherwise the dialog renders every
-                    // row as if no overrides existed and the user's
-                    // edits would silently overwrite policy-locked
-                    // or already-persisted state.
-                    let cfg = runtime.current_engine_config().await;
-                    let skills = runtime.skill_manager();
-                    coco_commands::handlers::skills::enrich_payload_with_tiers(
+                    coco_agent_host::session_dialogs::enrich_skills_dialog_payload(
+                        runtime,
                         &mut payload,
-                        &cfg.skill_overrides,
-                        &skills,
-                    );
-                    // Stamp the live main-model bytes/token ratio so
-                    // the dialog's `~N tok` column tracks the model
-                    // the user is actually talking to. Handler can't
-                    // do this — it has no `QueryEngineConfig` in
-                    // scope.
-                    payload.bytes_per_token =
-                        coco_model_card::bytes_per_token_for_model(&cfg.model_id);
+                    )
+                    .await;
                     let _ = event_tx
                         .send(CoreEvent::Tui(TuiOnlyEvent::OpenSkillsDialog { payload }))
                         .await;
@@ -910,9 +773,9 @@ pub(super) async fn dispatch_slash_command(
                     // looks on disk; running counts are derived TUI-
                     // side from the live `SessionState.subagents`
                     // mirror, so no enrichment is needed here. Mid-
-                    // session edits via stage-5 CRUD trigger a
-                    // `reload_agent_catalog()` and a fresh payload
-                    // round-trip rather than mutating in place.
+                    // session edits route through host agent operations
+                    // and a fresh payload round-trip rather than
+                    // mutating in place.
                     let _ = event_tx
                         .send(CoreEvent::Tui(TuiOnlyEvent::OpenAgentsDialog { payload }))
                         .await;
@@ -963,11 +826,7 @@ pub(super) async fn dispatch_plan(
     // Plan mode opted out via `features.plan_mode = false`: don't flip into
     // Plan, just tell the user. Mirrors the hidden plan-mode tools, the
     // suppressed reminders, and the Plan rung removed from the Shift+Tab cycle.
-    if !runtime
-        .runtime_config()
-        .features
-        .enabled(coco_types::Feature::PlanMode)
-    {
+    if !coco_agent_host::session_controls::plan_mode_feature_enabled(session) {
         emit_slash_text(
             event_tx,
             "plan",
@@ -979,41 +838,19 @@ pub(super) async fn dispatch_plan(
         return SlashOutcome::Handled;
     }
 
-    let session_id = runtime.current_typed_session_id().await;
-    let project_dir = runtime.runtime_config().paths.project_dir.as_deref();
-    let plans_directory_setting = runtime
-        .runtime_config()
-        .settings
-        .merged
-        .plans_directory
-        .as_deref();
-    let plans_dir = session_plans_dir(runtime.config_home(), project_dir, plans_directory_setting);
-
-    // Live cross-turn state (`app_state.permission_mode`) wins when
-    // present, else fall back to the engine_config value (covers the
-    // "app_state not yet primed" case at the start of a fresh session).
-    let live_app_mode = runtime.app_state().read().await.permissions.mode;
-    let prev_mode = match live_app_mode {
-        Some(m) => m,
-        None => runtime.current_engine_config().await.permission_mode,
-    };
-    let was_in_plan = prev_mode == coco_types::PermissionMode::Plan;
+    let session_id = runtime.session_id().clone();
+    let plans_dir = runtime.configured_plans_dir();
 
     // Flip state for ALL `/plan` invocations when not already in plan
     // mode — bare `/plan`, `/plan open`, and `/plan <description>` all
     // consent to plan mode equally.
-    if !was_in_plan {
-        let cfg = runtime.current_engine_config().await;
-        let change = coco_agent_host::live_permission_mode::apply_to_runtime(
-            session,
-            coco_types::PermissionMode::Plan,
-            event_tx,
-            cfg.permission_mode_availability.bypass_permissions,
-        )
-        .await;
+    let plan_mode =
+        coco_agent_host::live_permission_mode::ensure_plan_mode(session, event_tx).await;
+    let was_in_plan = plan_mode.previous == coco_types::PermissionMode::Plan;
+    if plan_mode.changed {
         info!(
-            session_id = %session_id,
-            from = ?change.previous,
+            session_id = %plan_mode.session_id,
+            from = ?plan_mode.previous,
             to = ?coco_types::PermissionMode::Plan,
             "TUI /plan: direct-toggle to Plan mode",
         );
@@ -1084,7 +921,9 @@ pub(super) async fn dispatch_plan(
     match plan_command_query_after_flip(args) {
         Some(desc) => SlashOutcome::RunEngine {
             content: desc.to_string(),
-            metadata: Some(format_slash_command_metadata("plan", args)),
+            metadata: Some(coco_agent_host::session_messages::slash_command_metadata(
+                "plan", args,
+            )),
             thinking_level: None,
             model_runtime_source: None,
         },

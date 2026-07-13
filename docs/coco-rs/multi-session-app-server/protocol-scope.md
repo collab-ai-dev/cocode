@@ -74,7 +74,7 @@ suggestions, or agent-progress preferences. Rules:
   never silently combines old hook registrations with unrelated new callback
   identifiers;
 - callback identifiers and outbound senders never live in process-global
-  `SdkServerState`;
+  `AppServerHostState`;
 - disconnect removes the callback route. An orphaned session stays live but
   cannot issue interactive callbacks until a new interactive surface attaches;
 - hook/approval/elicitation requests route through AppServer to the current

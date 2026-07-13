@@ -303,13 +303,13 @@ fn main() {
     bundle.add::<coco_types::WireApi>("WireApi");
     bundle.add::<coco_types::ApplyPatchToolType>("ApplyPatchToolType");
 
-    // SDK hook callback output — `hookJSONOutputSchema`.
+    // Hook callback output — `hookJSONOutputSchema`.
     // Not reachable from `ClientRequest`/`ServerRequest` (responses
     // ride the synchronous JSON-RPC reply path, which isn't a typed
     // union schema), so each type is registered explicitly
     // for cross-language SDK codegen. `HookSpecificOutput` is a tagged
     // union; its variant payloads come through transitively.
-    bundle.add::<coco_types::SdkHookOutput>("SdkHookOutput");
+    bundle.add::<coco_types::HookCallbackOutput>("HookCallbackOutput");
     bundle.add::<coco_types::HookSpecificOutput>("HookSpecificOutput");
     bundle.add::<coco_types::HookDecision>("HookDecision");
     // `HookPermissionDecision` is shared with the silent attachment
