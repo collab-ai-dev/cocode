@@ -1,4 +1,7 @@
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use coco_types::SessionId;
@@ -19,6 +22,38 @@ pub struct SessionHandle {
 pub struct QueuedCommandStatus {
     pub is_empty: bool,
     pub last_changed_at: Instant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionCloseDrainError {
+    TurnTaskTimeout { timeout: Duration },
+    ForwarderTaskTimeout { timeout: Duration },
+}
+
+impl SessionCloseDrainError {
+    pub(crate) fn task(self) -> &'static str {
+        match self {
+            Self::TurnTaskTimeout { .. } => "turn_task",
+            Self::ForwarderTaskTimeout { .. } => "forwarder_task",
+        }
+    }
+
+    pub(crate) fn timeout(self) -> Duration {
+        match self {
+            Self::TurnTaskTimeout { timeout } | Self::ForwarderTaskTimeout { timeout } => timeout,
+        }
+    }
+}
+
+impl std::fmt::Display for SessionCloseDrainError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "timed out draining {} after {} ms",
+            self.task(),
+            self.timeout().as_millis()
+        )
+    }
 }
 
 impl SessionHandle {
@@ -324,10 +359,10 @@ impl SessionHandle {
         request: coco_query::ManualCompactRequest,
         event_tx: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
         cancel: tokio_util::sync::CancellationToken,
-    ) {
+    ) -> coco_compact::CompactOutcome {
         self.runtime
             .run_manual_compact(request, event_tx, cancel)
-            .await;
+            .await
     }
 
     pub async fn build_engine_from_config(
@@ -1064,25 +1099,34 @@ impl SessionHandle {
         self.active_turn_cancel_token().is_some()
     }
 
-    pub(crate) fn clear_active_turn(&self) -> bool {
-        self.runtime.turn_coordinator.clear()
+    pub(crate) fn mark_active_turn_finishing(&self) -> bool {
+        self.runtime.turn_coordinator.mark_finishing()
     }
 
-    pub(crate) fn take_active_turn(&self) -> Option<super::ActiveTurnHandles> {
-        self.runtime.turn_coordinator.take()
+    pub(crate) fn complete_finishing_active_turn(&self) -> bool {
+        self.runtime.turn_coordinator.complete_finishing()
     }
 
-    async fn drain_active_turn(&self, timeout: std::time::Duration) {
-        let Some(mut active) = self.take_active_turn() else {
-            return;
+    pub(crate) fn take_active_turn_for_drain(&self) -> Option<super::ActiveTurnDrainState> {
+        self.runtime.turn_coordinator.take_for_drain()
+    }
+
+    async fn drain_active_turn(&self, timeout: Duration) -> Result<(), SessionCloseDrainError> {
+        let Some(active) = self.take_active_turn_for_drain() else {
+            return Ok(());
         };
-        active.cancel_token.cancel();
+        let (mut active, cancel_before_drain) = active.into_parts();
+        let mut timeout_error = None;
+        if cancel_before_drain {
+            active.cancel_token.cancel();
+        }
         if tokio::time::timeout(timeout, &mut active.turn_task)
             .await
             .is_err()
         {
             active.turn_task.abort();
             let _ = active.turn_task.await;
+            timeout_error.get_or_insert(SessionCloseDrainError::TurnTaskTimeout { timeout });
         }
         if tokio::time::timeout(timeout, &mut active.forwarder_task)
             .await
@@ -1090,6 +1134,11 @@ impl SessionHandle {
         {
             active.forwarder_task.abort();
             let _ = active.forwarder_task.await;
+            timeout_error.get_or_insert(SessionCloseDrainError::ForwarderTaskTimeout { timeout });
+        }
+        match timeout_error {
+            Some(error) => Err(error),
+            None => Ok(()),
         }
     }
 
@@ -1417,22 +1466,23 @@ impl SessionHandle {
     /// when this handle still owns the expected session id.
     ///
     /// Returns the runtime's current session id when the handle is stale.
-    pub async fn close_if_current_session(
+    pub(crate) async fn close_if_current_session(
         &self,
         expected_session_id: &SessionId,
         reason: coco_hooks::orchestration::ExitReason,
-        turn_drain_timeout: std::time::Duration,
-    ) -> Option<SessionId> {
+        turn_drain_timeout: Duration,
+    ) -> Result<Option<SessionId>, SessionCloseDrainError> {
         let current_session_id = self.runtime.current_typed_session_id().await;
         if current_session_id != *expected_session_id {
-            return Some(current_session_id);
+            return Ok(Some(current_session_id));
         }
 
-        self.drain_active_turn(turn_drain_timeout).await;
+        let drain_result = self.drain_active_turn(turn_drain_timeout).await;
         self.stop_reload_supervisor().await;
         self.runtime.fire_session_end_hooks(reason).await;
         self.runtime.shutdown_signal().cancel();
-        None
+        drain_result?;
+        Ok(None)
     }
 
     pub fn orchestration_ctx_factory(

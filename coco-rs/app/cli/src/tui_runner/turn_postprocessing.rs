@@ -24,15 +24,14 @@ pub(super) async fn dispatch_context(
     local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> SlashOutcome {
     if let Err(error) = local_app_server_bridge
-        .bind_interactive_session(session.clone(), None)
-        .await
+        .activate_existing_interactive_session(session.session_id().clone(), None)
     {
         emit_slash_status(
             event_tx,
             "context",
             "failed",
             SlashCommandStatusKind::Failed {
-                error: format!("could not bind local AppServer session: {error}"),
+                error: format!("could not activate local AppServer session: {error}"),
             },
         )
         .await;
@@ -220,10 +219,9 @@ pub(super) async fn handle_rewind(
         && runtime.file_history_enabled()
     {
         if let Err(error) = local_app_server_bridge
-            .bind_interactive_session(session.clone(), None)
-            .await
+            .activate_existing_interactive_session(session.session_id().clone(), None)
         {
-            tracing::warn!(%error, "rewind could not bind local AppServer session");
+            tracing::warn!(%error, "rewind could not activate local AppServer session");
             return;
         }
         match local_app_server_bridge
@@ -586,8 +584,7 @@ pub(super) async fn run_prompt_mode_bash(
     command: String,
     session: crate::session_runtime::SessionHandle,
     event_tx: mpsc::Sender<CoreEvent>,
-    active_turn: Arc<Mutex<Option<ActiveTurn>>>,
-    turn_done_tx: mpsc::Sender<uuid::Uuid>,
+    response_turn_tx: mpsc::Sender<Vec<std::sync::Arc<coco_messages::Message>>>,
 ) {
     let runtime = &session;
     const MAX_OUTPUT_BYTES: usize = 8 * 1024;
@@ -641,14 +638,7 @@ pub(super) async fn run_prompt_mode_bash(
         }))
         .await;
 
-    if should_respond {
-        spawn_history_turn(
-            history_after_append,
-            &session,
-            &event_tx,
-            &active_turn,
-            &turn_done_tx,
-        )
-        .await;
+    if should_respond && response_turn_tx.send(history_after_append).await.is_err() {
+        tracing::warn!("prompt-mode bash response turn channel closed");
     }
 }

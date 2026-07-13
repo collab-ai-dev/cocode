@@ -653,34 +653,6 @@
       ],
       "type": "object"
     },
-    "ArchiveTarget": {
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "interactive": {
-              "$ref": "#/$defs/InteractiveTarget"
-            }
-          },
-          "required": [
-            "interactive"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "orphaned": {
-              "$ref": "#/$defs/SessionTarget"
-            }
-          },
-          "required": [
-            "orphaned"
-          ],
-          "type": "object"
-        }
-      ]
-    },
     "AskForApprovalParams": {
       "properties": {
         "agent_id": {
@@ -1603,11 +1575,27 @@
         {
           "properties": {
             "method": {
-              "const": "session/archive",
+              "const": "session/close",
               "type": "string"
             },
             "params": {
-              "$ref": "#/$defs/SessionArchiveParams"
+              "$ref": "#/$defs/SessionCloseParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "session/delete",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionDeleteParams"
             }
           },
           "required": [
@@ -2196,7 +2184,8 @@
         "session/read",
         "session/turns/list",
         "session/subscribe",
-        "session/archive",
+        "session/close",
+        "session/delete",
         "session/rename",
         "session/toggleTag",
         "session/cost",
@@ -9451,11 +9440,59 @@
       "title": "ServerRequestMethod",
       "type": "string"
     },
-    "SessionArchiveParams": {
-      "description": "Params for `session/archive`.",
+    "SessionCloseParams": {
+      "description": "Params for `session/close`.",
       "properties": {
         "target": {
-          "$ref": "#/$defs/ArchiveTarget"
+          "$ref": "#/$defs/SessionCloseTarget"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
+    },
+    "SessionCloseTarget": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "interactive",
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/$defs/InteractiveTarget"
+            }
+          },
+          "required": [
+            "kind",
+            "target"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "orphaned",
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/$defs/SessionTarget"
+            }
+          },
+          "required": [
+            "kind",
+            "target"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SessionDeleteParams": {
+      "description": "Params for `session/delete`.",
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
@@ -9723,6 +9760,12 @@
       "description": "Destination selected by explicit `session/replace`.",
       "oneOf": [
         {
+          "enum": [
+            "clear"
+          ],
+          "type": "string"
+        },
+        {
           "additionalProperties": false,
           "properties": {
             "fresh": {
@@ -9891,6 +9934,13 @@
             "null"
           ]
         },
+        "initial_messages": {
+          "description": "Optional initial history installed before the first turn.\n\nUsed by process-local embeddings/tests that already hold typed\nmessages. Production resume should use `session/resume`.",
+          "items": {
+            "$ref": "#/$defs/Message"
+          },
+          "type": "array"
+        },
         "initial_prompt": {
           "description": "Optional initial user prompt to run immediately after start.",
           "type": [
@@ -9922,6 +9972,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/PermissionMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
             },
             {
               "type": "null"
@@ -15040,6 +15100,17 @@
       "properties": {
         "outcome": {
           "$ref": "#/$defs/TurnOutcome"
+        },
+        "session_result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionResultParams"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Complete per-turn result when the emitter owns the final accounting\nsnapshot. AppServer surfaces use this to complete a turn without\npolling session-level projections or waiting for `session/close`."
         },
         "turn_id": {
           "$ref": "#/$defs/TurnId"

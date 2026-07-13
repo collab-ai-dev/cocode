@@ -14,12 +14,14 @@ pub(super) async fn run_agent_driver(
     cwd: std::path::PathBuf,
     flag_settings: Option<std::path::PathBuf>,
     app_server_shutdown_timeout: Duration,
+    event_hub_connector: Option<coco_agent_host::event_hub::ProcessEventHub>,
+    event_hub_membership_watcher: Option<tokio::task::JoinHandle<()>>,
     // Cross-process teammate inbox pump (gap 1) completion handshake. When
     // `Some`, each spawned top-level turn fires its `user_message_id` here on
     // completion so the pump can serialize on its own injected turn. `None`
     // for leader / standalone sessions.
     teammate_turn_done_tx: Option<mpsc::Sender<String>>,
-) -> coco_agent_host::shutdown::ShutdownDrainOutcome {
+) -> coco_agent_host::shutdown::AppServerShutdownOutcome {
     {
         let session = current_session.read().await.clone();
         session.install_side_query_event_tx(event_tx.clone()).await;
@@ -43,6 +45,8 @@ pub(super) async fn run_agent_driver(
     let mut pending_editor_requests: HashMap<String, PendingEditorRequest> = HashMap::new();
     let mut explicit_shutdown = false;
     let (turn_done_tx, mut turn_done_rx) = mpsc::channel::<uuid::Uuid>(16);
+    let (bash_response_tx, mut bash_response_rx) =
+        mpsc::channel::<Vec<Arc<coco_messages::Message>>>(16);
 
     // Observe SIGINT/SIGTERM for the whole driver lifetime. The TUI runs in raw
     // mode, so Ctrl+C never arrives as SIGINT (it is a key event); this arm is
@@ -91,10 +95,22 @@ pub(super) async fn run_agent_driver(
                         &runtime_reload_subscriptions,
                         &runtime_factory,
                         &process_runtime,
-                        &cwd,
                     )
                     .await;
                 }
+                continue;
+            }
+            Some(messages) = bash_response_rx.recv() => {
+                let session = current_session.read().await.clone();
+                spawn_history_turn_through_app_server(
+                    messages,
+                    &session,
+                    &event_tx,
+                    &mut local_app_server_bridge,
+                    &active_turn,
+                    &turn_done_tx,
+                )
+                .await;
                 continue;
             }
             _ = {
@@ -116,7 +132,6 @@ pub(super) async fn run_agent_driver(
                     &runtime_reload_subscriptions,
                     &runtime_factory,
                     &process_runtime,
-                    &cwd,
                 )
                 .await;
                 continue;
@@ -160,9 +175,6 @@ pub(super) async fn run_agent_driver(
                     let control_context = LocalRuntimeControlContext {
                         current_session: &current_session,
                         runtime_reload_subscriptions: &runtime_reload_subscriptions,
-                        runtime_factory: &runtime_factory,
-                        process_runtime: &process_runtime,
-                        cwd: &cwd,
                         turn_done_tx: &turn_done_tx,
                     };
                     match handle_slash_outcome(
@@ -202,11 +214,11 @@ pub(super) async fn run_agent_driver(
                 drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
 
                 let turn_id = uuid::Uuid::new_v4();
-                if let Err(error) = local_app_server_bridge
-                    .bind_interactive_session(session.clone(), Some(event_tx.clone()))
-                    .await
-                {
-                    tracing::warn!(%error, "TUI SubmitInput could not bind local AppServer session");
+                if let Err(error) = local_app_server_bridge.activate_existing_interactive_session(
+                    session_id.clone(),
+                    Some(event_tx.clone()),
+                ) {
+                    tracing::warn!(%error, "TUI SubmitInput could not activate local AppServer session");
                     continue;
                 }
                 let mut monitor_client = local_app_server_bridge.connect_local_client();
@@ -331,8 +343,7 @@ pub(super) async fn run_agent_driver(
                 drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
                 let event_tx_t = event_tx.clone();
                 let session_t = session.clone();
-                let active_turn_t = active_turn.clone();
-                let turn_done_tx_t = turn_done_tx.clone();
+                let bash_response_tx_t = bash_response_tx.clone();
                 let cwd = runtime.workspace_cwd().await;
                 tokio::spawn(async move {
                     run_prompt_mode_bash(
@@ -341,8 +352,7 @@ pub(super) async fn run_agent_driver(
                         command,
                         session_t,
                         event_tx_t,
-                        active_turn_t,
-                        turn_done_tx_t,
+                        bash_response_tx_t,
                     )
                     .await;
                 });
@@ -520,9 +530,6 @@ pub(super) async fn run_agent_driver(
                 let control_context = LocalRuntimeControlContext {
                     current_session: &current_session,
                     runtime_reload_subscriptions: &runtime_reload_subscriptions,
-                    runtime_factory: &runtime_factory,
-                    process_runtime: &process_runtime,
-                    cwd: &cwd,
                     turn_done_tx: &turn_done_tx,
                 };
                 match handle_slash_outcome(
@@ -584,9 +591,6 @@ pub(super) async fn run_agent_driver(
                 let control_context = LocalRuntimeControlContext {
                     current_session: &current_session,
                     runtime_reload_subscriptions: &runtime_reload_subscriptions,
-                    runtime_factory: &runtime_factory,
-                    process_runtime: &process_runtime,
-                    cwd: &cwd,
                     turn_done_tx: &turn_done_tx,
                 };
                 match handle_slash_outcome(
@@ -782,10 +786,9 @@ pub(super) async fn run_agent_driver(
 
             UserCommand::InterruptAgentCurrentWork { agent_id } => {
                 if let Err(error) = local_app_server_bridge
-                    .bind_interactive_session(session.clone(), None)
-                    .await
+                    .activate_existing_interactive_session(session.session_id().clone(), None)
                 {
-                    tracing::warn!(%agent_id, %error, "Interrupt: could not bind local AppServer session");
+                    tracing::warn!(%agent_id, %error, "Interrupt: could not activate local AppServer session");
                     continue;
                 }
                 match local_app_server_bridge
@@ -889,10 +892,9 @@ pub(super) async fn run_agent_driver(
                 // tab refreshes on the next frame. No additional event
                 // wiring needed here.
                 if let Err(error) = local_app_server_bridge
-                    .bind_interactive_session(session.clone(), None)
-                    .await
+                    .activate_existing_interactive_session(session.session_id().clone(), None)
                 {
-                    tracing::warn!(%task_id, %error, "CancelSubagent: could not bind local AppServer session");
+                    tracing::warn!(%task_id, %error, "CancelSubagent: could not activate local AppServer session");
                     continue;
                 }
                 match local_app_server_bridge
@@ -1069,14 +1071,14 @@ pub(super) async fn run_agent_driver(
                     );
                     continue;
                 }
-                if let Err(error) = local_app_server_bridge
-                    .bind_interactive_session(session.clone(), Some(event_tx.clone()))
-                    .await
-                {
+                if let Err(error) = local_app_server_bridge.activate_existing_interactive_session(
+                    session.session_id().clone(),
+                    Some(event_tx.clone()),
+                ) {
                     warn!(
                         session_id = %permission_status.session_id,
                         error = %error,
-                        "TUI SetPermissionMode could not bind local AppServer session"
+                        "TUI SetPermissionMode could not activate local AppServer session"
                     );
                     continue;
                 }
@@ -1421,8 +1423,15 @@ pub(super) async fn run_agent_driver(
                         coco_tui::SystemPushKind::PermissionRetry { tool_name, message },
                     )
                     .await;
-                spawn_history_turn(messages, &session, &event_tx, &active_turn, &turn_done_tx)
-                    .await;
+                spawn_history_turn_through_app_server(
+                    messages,
+                    &session,
+                    &event_tx,
+                    &mut local_app_server_bridge,
+                    &active_turn,
+                    &turn_done_tx,
+                )
+                .await;
             }
 
             UserCommand::PushSlashResult { entry } => {
@@ -1488,24 +1497,13 @@ pub(super) async fn run_agent_driver(
         let session = current_session.read().await.clone();
         drain_pending_memory_extraction(&session).await;
     }
-    let app_server_shutdown = coco_agent_host::shutdown::drain_with_timeout_or_signal(
+    let shutdown_coordinator = coco_agent_host::shutdown::ShutdownCoordinator::new(
+        "local TUI",
         app_server_shutdown_timeout,
-        local_app_server_bridge.shutdown_registered_sessions(),
-        coco_agent_host::shutdown::os_interrupt_signal(),
-    )
-    .await;
-    match &app_server_shutdown {
-        coco_agent_host::shutdown::ShutdownDrainOutcome::Clean => {}
-        coco_agent_host::shutdown::ShutdownDrainOutcome::Failed { message } => {
-            warn!(error = %message, "local AppServer shutdown drain failed")
-        }
-        coco_agent_host::shutdown::ShutdownDrainOutcome::TimedOut { timeout_secs } => {
-            warn!(timeout_secs, "local AppServer shutdown drain timed out")
-        }
-        coco_agent_host::shutdown::ShutdownDrainOutcome::Interrupted => {
-            warn!("local AppServer shutdown drain interrupted by signal")
-        }
-    }
+    );
+    let app_server_shutdown = shutdown_coordinator
+        .drain_app_server(local_app_server_bridge.shutdown_registered_sessions())
+        .await;
     // Re-append metadata one more time at process-exit so the tail window
     // of the final transcript JSONL definitely carries the user's
     // title/tag/agent-name. Best-effort — IO errors here are logged but
@@ -1514,8 +1512,15 @@ pub(super) async fn run_agent_driver(
         let session = current_session.read().await.clone();
         coco_agent_host::shutdown::flush_interactive_session_exit_checkpoint(&session).await;
     }
+    let shutdown = shutdown_coordinator
+        .finish_after_app_server(
+            app_server_shutdown,
+            event_hub_connector,
+            event_hub_membership_watcher,
+        )
+        .await;
     info!("Agent driver stopped");
-    app_server_shutdown
+    shutdown
 }
 
 /// Wait for scheduled turn-end extraction/session-memory work before

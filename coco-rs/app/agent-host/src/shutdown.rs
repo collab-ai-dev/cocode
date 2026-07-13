@@ -2,6 +2,9 @@ use std::fmt;
 use std::future::Future;
 use std::time::Duration;
 
+use tokio::task::JoinHandle;
+
+use crate::event_hub::ProcessEventHub;
 use crate::session_runtime::SessionHandle;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,12 +34,123 @@ impl fmt::Display for ShutdownDrainOutcome {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppServerShutdownOutcome {
+    pub app_server: ShutdownDrainOutcome,
+    pub event_hub: ShutdownDrainOutcome,
+}
+
+impl AppServerShutdownOutcome {
+    pub fn clean() -> Self {
+        Self {
+            app_server: ShutdownDrainOutcome::Clean,
+            event_hub: ShutdownDrainOutcome::Clean,
+        }
+    }
+
+    pub fn is_clean(&self) -> bool {
+        self.app_server.is_clean() && self.event_hub.is_clean()
+    }
+
+    pub fn into_result(self, component: &str) -> anyhow::Result<()> {
+        shutdown_drain_result(&format!("{component} AppServer"), &self.app_server)?;
+        shutdown_drain_result(&format!("{component} Event Hub"), &self.event_hub)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct ShutdownCoordinator {
+    component: &'static str,
+    timeout: Duration,
+}
+
+impl ShutdownCoordinator {
+    pub fn new(component: &'static str, timeout: Duration) -> Self {
+        Self { component, timeout }
+    }
+
+    pub async fn drain_app_server<F, E>(&self, app_server_drain: F) -> ShutdownDrainOutcome
+    where
+        F: Future<Output = Result<(), E>>,
+        E: fmt::Display,
+    {
+        drain_with_timeout_or_signal(self.timeout, app_server_drain, os_interrupt_signal()).await
+    }
+
+    pub async fn drain_app_server_and_event_hub<F, E>(
+        &self,
+        app_server_drain: F,
+        event_hub_connector: Option<ProcessEventHub>,
+        event_hub_membership_watcher: Option<JoinHandle<()>>,
+    ) -> AppServerShutdownOutcome
+    where
+        F: Future<Output = Result<(), E>>,
+        E: fmt::Display,
+    {
+        let app_server = self.drain_app_server(app_server_drain).await;
+        self.finish_after_app_server(
+            app_server,
+            event_hub_connector,
+            event_hub_membership_watcher,
+        )
+        .await
+    }
+
+    pub async fn finish_after_app_server(
+        &self,
+        app_server: ShutdownDrainOutcome,
+        event_hub_connector: Option<ProcessEventHub>,
+        event_hub_membership_watcher: Option<JoinHandle<()>>,
+    ) -> AppServerShutdownOutcome {
+        log_shutdown_outcome(self.component, "AppServer", &app_server);
+        if let Some(handle) = event_hub_membership_watcher {
+            handle.abort();
+        }
+        let event_hub = if let Some(connector) = event_hub_connector {
+            connector
+                .shutdown_and_flush_with_timeout(self.timeout)
+                .await
+        } else {
+            ShutdownDrainOutcome::Clean
+        };
+        AppServerShutdownOutcome {
+            app_server,
+            event_hub,
+        }
+    }
+}
+
+pub fn shutdown_drain_result(
+    component: &str,
+    outcome: &ShutdownDrainOutcome,
+) -> anyhow::Result<()> {
+    if outcome.is_clean() {
+        return Ok(());
+    }
+    Err(anyhow::anyhow!("{component} shutdown drain {outcome}"))
+}
+
 pub async fn drain_with_timeout<F, E>(timeout: Duration, drain: F) -> ShutdownDrainOutcome
 where
     F: Future<Output = Result<(), E>>,
     E: fmt::Display,
 {
     drain_with_timeout_or_signal(timeout, drain, std::future::pending()).await
+}
+
+fn log_shutdown_outcome(component: &str, phase: &str, outcome: &ShutdownDrainOutcome) {
+    match outcome {
+        ShutdownDrainOutcome::Clean => {}
+        ShutdownDrainOutcome::Failed { message } => {
+            tracing::warn!(component, phase, error = %message, "shutdown drain failed");
+        }
+        ShutdownDrainOutcome::TimedOut { timeout_secs } => {
+            tracing::warn!(component, phase, timeout_secs, "shutdown drain timed out");
+        }
+        ShutdownDrainOutcome::Interrupted => {
+            tracing::warn!(component, phase, "shutdown drain interrupted by signal");
+        }
+    }
 }
 
 /// Wait for scheduled turn-end extraction/session-memory work before process

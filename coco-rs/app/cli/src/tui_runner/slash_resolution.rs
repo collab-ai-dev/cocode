@@ -296,9 +296,6 @@ pub(super) struct SlashEnginePrompt {
 pub(super) struct LocalRuntimeControlContext<'a> {
     pub(super) current_session: &'a SharedSessionHandle,
     pub(super) runtime_reload_subscriptions: &'a Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
-    pub(super) runtime_factory: &'a crate::session_runtime::SessionRuntimeFactory,
-    pub(super) process_runtime: &'a Arc<ProcessRuntime>,
-    pub(super) cwd: &'a std::path::Path,
     pub(super) turn_done_tx: &'a mpsc::Sender<uuid::Uuid>,
 }
 
@@ -445,7 +442,6 @@ pub(super) async fn process_idle_command_queue(
     runtime_reload_subscriptions: &Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
     runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
     process_runtime: &Arc<ProcessRuntime>,
-    cwd: &std::path::Path,
 ) {
     if active_turn.lock().await.is_some() {
         return;
@@ -463,12 +459,18 @@ pub(super) async fn process_idle_command_queue(
         runtime_reload_subscriptions,
         runtime_factory,
         process_runtime,
-        cwd,
     )
     .await;
 
     if active_turn.lock().await.is_none() {
-        spawn_command_queue_turn(session, event_tx, active_turn, turn_done_tx).await;
+        spawn_command_queue_turn(
+            session,
+            event_tx,
+            local_app_server_bridge,
+            active_turn,
+            turn_done_tx,
+        )
+        .await;
     }
 }
 
@@ -485,7 +487,6 @@ pub(super) async fn drain_queued_slash_commands(
     runtime_reload_subscriptions: &Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
     runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
     process_runtime: &Arc<ProcessRuntime>,
-    cwd: &std::path::Path,
 ) {
     while let Some(cmd) = coco_agent_host::session_queue::dequeue_next_slash_command(session).await
     {
@@ -565,9 +566,6 @@ pub(super) async fn drain_queued_slash_commands(
                 let control_context = LocalRuntimeControlContext {
                     current_session,
                     runtime_reload_subscriptions,
-                    runtime_factory,
-                    process_runtime,
-                    cwd,
                     turn_done_tx,
                 };
                 run_clear_conversation(

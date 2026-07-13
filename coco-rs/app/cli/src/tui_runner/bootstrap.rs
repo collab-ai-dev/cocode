@@ -170,26 +170,17 @@ pub async fn run_tui(
     // CompactionObserverRegistry, HookRegistry, history Mutex, etc.).
     // Both runners (TUI + SDK) share this construction; the per-turn
     // engine assembly below routes through `runtime.build_engine()`.
-    let initial_session_id = resume_plan
-        .as_ref()
-        .map(|plan| plan.session_id.clone())
-        .unwrap_or_else(coco_types::SessionId::generate);
     let initial_runtime_cwd = resume_plan
         .as_ref()
         .map(|plan| plan.cwd.clone())
         .unwrap_or_else(|| cwd.clone());
-    let mut local_app_server_bridge =
-        coco_agent_host::app_server_host::AppServerLocalBridge::with_server_config(
-            Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
-            &runtime_config.server,
-        );
     let runtime_factory_cli = Arc::new(cli);
     let runtime_factory = crate::session_runtime::SessionRuntimeFactory::from_host_config(
         crate::session_runtime::SessionRuntimeFactoryHostConfig {
             cli: Arc::clone(&runtime_factory_cli),
             cwd: cwd.clone(),
             model_runtimes: None,
-            session_manager,
+            session_manager: Arc::clone(&session_manager),
             fast_model_spec,
             permission_bridge: Some(session_permission_bridge),
             process_runtime: process_runtime.clone(),
@@ -198,15 +189,77 @@ pub async fn run_tui(
             is_non_interactive: false,
         },
     );
-    let runtime_binding = local_app_server_bridge
-        .load_session_runtime_binding_from_factory(
-            initial_session_id.clone(),
-            runtime_factory.clone(),
-            initial_runtime_cwd.clone(),
+    let mut local_app_server_bridge =
+        coco_agent_host::app_server_host::AppServerLocalBridge::with_host_inputs_and_server_config(
+            coco_agent_host::app_server_host::HostInputs {
+                startup_cwd: Some(cwd.clone()),
+                session_manager: Some(Arc::clone(&session_manager)),
+                bypass_permissions_available,
+                runtime_replacement: Some(
+                    coco_agent_host::app_server_host::RuntimeReplacementContext {
+                        runtime_factory: runtime_factory.clone(),
+                        process_runtime: process_runtime.clone(),
+                        cwd: cwd.clone(),
+                        requires_structured_output: runtime_factory_cli.json_schema.is_some(),
+                        integration_options:
+                            coco_agent_host::session_bootstrap::SessionIntegrationOptions {
+                                event_sink: Some(notification_tx.clone()),
+                                leader_permission_bridge: Some(tui_permission_bridge.clone()),
+                                ..Default::default()
+                            },
+                    },
+                ),
+                turn_runner: Some(Arc::new(
+                    coco_agent_host::app_server_host::SessionTurnExecutor::new(None, None),
+                )),
+                ..Default::default()
+            },
+            &runtime_config.server,
+        );
+    let event_hub_connector =
+        coco_agent_host::event_hub::ProcessEventHub::spawn(&runtime_config, &cwd, Vec::new());
+    let event_hub_membership_watcher = event_hub_connector.as_ref().map(|connector| {
+        local_app_server_bridge.set_hub_connector_egress(connector.egress());
+        coco_agent_host::event_hub::spawn_app_server_membership_watcher(
+            Arc::clone(local_app_server_bridge.app_server()),
+            connector.updater(),
         )
-        .await?;
-    let session_handle = runtime_binding.session;
-    let event_hub_connector = runtime_binding.event_hub_connector;
+    });
+    let startup_binding = match &resume_plan {
+        Some(plan) => {
+            tracing::info!(
+                target: "coco_agent_host::resume",
+                session_id = %plan.session_id,
+                source_session_id = %plan.source_session_id,
+                prior_messages = plan.prior_messages.len(),
+                is_fork = plan.is_fork,
+                "resume: starting session through AppServer lifecycle",
+            );
+            local_app_server_bridge
+                .resume_interactive_session(
+                    coco_types::SessionResumeParams {
+                        target: coco_types::SessionTarget {
+                            session_id: plan.session_id.clone(),
+                        },
+                    },
+                    Some(notification_tx.clone()),
+                )
+                .await
+                .map_err(|err| anyhow::anyhow!("startup resume via AppServer failed: {err}"))?
+        }
+        None => local_app_server_bridge
+            .start_interactive_session(
+                coco_types::SessionStartParams {
+                    session_id: Some(coco_types::SessionId::generate()),
+                    cwd: Some(initial_runtime_cwd.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+                Some(notification_tx.clone()),
+            )
+            .await
+            .map_err(|err| anyhow::anyhow!("startup session/start failed: {err}"))?,
+    };
+    let session_handle = startup_binding.session;
     let runtime = &session_handle;
     let current_session = Arc::new(RwLock::new(session_handle.clone()));
     let (mut runtime_reload_subscriptions, display_settings_rx, config_reload_errors_rx) =
@@ -223,22 +276,8 @@ pub async fn run_tui(
         .set_notification_session(Arc::downgrade(&current_session))
         .await;
 
-    coco_agent_host::session_bootstrap::install_session_integrations(
-        session_handle.clone(),
-        &initial_runtime_cwd,
-        process_runtime.clone(),
-        coco_agent_host::session_bootstrap::SessionIntegrationOptions {
-            event_sink: Some(notification_tx.clone()),
-            leader_permission_bridge: Some(tui_permission_bridge.clone()),
-            ..Default::default()
-        },
-    )
-    .await?;
     coco_cli::startup_profile::mark("session_late_binds");
 
-    local_app_server_bridge
-        .bind_interactive_session(session_handle.clone(), Some(notification_tx.clone()))
-        .await?;
     local_app_server_bridge
         .client()
         .keep_alive(local_app_server_bridge.handler())
@@ -306,37 +345,8 @@ pub async fn run_tui(
         coco_config::global_config::config_home(),
     );
 
-    // Honor `--resume` / `--continue` / `--fork-session`. The binary
-    // entry has already loaded the source transcript; route the switch through
-    // the local AppServer so startup resume and in-session `/resume` share the
-    // same lifecycle registration, surface replacement, and runtime handler
-    // boundary.
-    let startup_session_start_source = if resume_plan.is_some() {
-        coco_hooks::orchestration::SessionStartSource::Resume
-    } else {
-        coco_hooks::orchestration::SessionStartSource::Startup
-    };
-    if let Some(plan) = resume_plan {
-        tracing::info!(
-            target: "coco_agent_host::resume",
-            session_id = %plan.session_id,
-            source_session_id = %plan.source_session_id,
-            prior_messages = plan.prior_messages.len(),
-            is_fork = plan.is_fork,
-            "resume: hydrating session",
-        );
-        apply_resume_plan_through_app_server(
-            &plan,
-            &session_handle,
-            &current_session,
-            &notification_tx,
-            &mut local_app_server_bridge,
-            &runtime_factory,
-            &process_runtime,
-            &runtime_reload_subscriptions,
-        )
-        .await
-        .map_err(|err| anyhow::anyhow!("startup resume via AppServer failed: {err}"))?;
+    if let Some(plan) = &resume_plan {
+        emit_resume_plan_ui_state_for_runtime(plan, &session_handle, &notification_tx).await;
         // Reconcile coordinator mode to the resumed session. This flips
         // `COCO_COORDINATOR_MODE` *before*
         // the coordinator badge (below) and the first per-turn system
@@ -360,13 +370,6 @@ pub async fn run_tui(
     // initial missed-task scan targets the final startup runtime.
     let _cron_tick_guard =
         coco_agent_host::cron_tick::spawn_current_session(Arc::clone(&current_session));
-
-    // Fire SessionStart hooks once at session bootstrap. Output queues
-    // onto the shared sync-hook buffer and surfaces as `hook_*` reminders
-    // on the first turn's reminder pass.
-    runtime
-        .fire_session_start_hooks(startup_session_start_source)
-        .await;
 
     // TUI users opt into per-spawn periodic AgentSummary timers via
     // `COCO_AGENT_SUMMARY_ENABLE`. Default off keeps LLM cost off the
@@ -588,6 +591,8 @@ pub async fn run_tui(
         cwd.clone(),
         flag_settings_path,
         app_server_shutdown_timeout,
+        event_hub_connector,
+        event_hub_membership_watcher,
         teammate_turn_done_tx,
     ));
 
@@ -639,27 +644,18 @@ pub async fn run_tui(
     }
 
     // Wait for agent driver to finish its own teardown.
-    let app_server_shutdown = match driver_handle.await {
+    let shutdown = match driver_handle.await {
         Ok(outcome) => outcome,
-        Err(error) => coco_agent_host::shutdown::ShutdownDrainOutcome::Failed {
-            message: error.to_string(),
+        Err(error) => coco_agent_host::shutdown::AppServerShutdownOutcome {
+            app_server: coco_agent_host::shutdown::ShutdownDrainOutcome::Failed {
+                message: error.to_string(),
+            },
+            event_hub: coco_agent_host::shutdown::ShutdownDrainOutcome::Clean,
         },
-    };
-    let event_hub_shutdown = if let Some(connector) = event_hub_connector {
-        connector
-            .shutdown_and_flush_with_timeout(app_server_shutdown_timeout)
-            .await
-    } else {
-        coco_agent_host::shutdown::ShutdownDrainOutcome::Clean
     };
 
     tui_result.map_err(|e| anyhow::anyhow!("TUI error: {e}"))?;
-    if !app_server_shutdown.is_clean() {
-        anyhow::bail!("local AppServer shutdown drain {app_server_shutdown}");
-    }
-    if !event_hub_shutdown.is_clean() {
-        anyhow::bail!("local Event Hub shutdown flush {event_hub_shutdown}");
-    }
+    shutdown.into_result("local")?;
     Ok(())
 }
 

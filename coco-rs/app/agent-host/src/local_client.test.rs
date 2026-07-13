@@ -372,7 +372,7 @@ async fn local_close_session_returns_handle_on_failure() {
         .attach_interactive_session(session_id.clone(), AttachSurfaceOptions::default())
         .expect("attach interactive");
     let handler = RecordingClientRequestHandler::error(LocalClientDispatchError::invalid_params(
-        "archive failed",
+        "close failed",
     ));
 
     let Err((returned, ClientError::Server { message, .. })) =
@@ -382,10 +382,10 @@ async fn local_close_session_returns_handle_on_failure() {
     };
 
     assert_eq!(returned.session_id(), &session_id);
-    assert_eq!(message, "archive failed");
+    assert_eq!(message, "close failed");
     let calls = handler.calls.lock().expect("calls lock");
-    let ClientRequest::SessionArchive(params) = &calls[0] else {
-        panic!("expected session/archive request");
+    let ClientRequest::SessionClose(params) = &calls[0] else {
+        panic!("expected session/close request");
     };
     assert_eq!(params.target.session_id(), &session_id);
 }

@@ -36,9 +36,12 @@ pub async fn dispatch_client_request(req: ClientRequest, ctx: HandlerContext) ->
             message: "session/subscribe requires AppServer routing".to_string(),
             data: None,
         },
-        ClientRequest::SessionArchive(params) => {
-            session::handle_session_archive(params, &ctx).await
-        }
+        ClientRequest::SessionClose(_) => HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "session/close requires AppServer lifecycle routing".to_string(),
+            data: Some(serde_json::json!({ "kind": "app_server_required" })),
+        },
+        ClientRequest::SessionDelete(params) => session::handle_session_delete(params, &ctx).await,
         ClientRequest::SessionRename(params) => session::handle_session_rename(params, &ctx).await,
         ClientRequest::SessionToggleTag(params) => {
             session::handle_session_toggle_tag(params, &ctx).await

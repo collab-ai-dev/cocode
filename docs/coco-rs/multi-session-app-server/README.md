@@ -1,150 +1,107 @@
-# Multi-Session AppServer
+# Multi-Session AppServer Architecture
 
-Status: implemented, delivery blockers closed, and release-validated on
-2026-07-11.
+Status: architecture audit reopened on 2026-07-13. The explicit-target and
+multi-session isolation work remains valuable, but the system is not yet at the
+target architecture described in this directory.
 
-This directory is the single source of truth for coco-rs multi-session
-AppServer architecture. It replaces the former
-`multi-session-app-server-plan.md` and `concurrent-app-server-plan.md`. Those
-documents mixed shipped behavior, rejected identity models, migration logs,
-and unimplemented proposals, so neither was reliable as a current design.
+This directory is the source of truth for the next breaking refactor of the
+coco-rs AppServer host. Backward compatibility with the current CLI flags,
+startup sequence, or removed `session/archive` behavior is not a requirement.
 
 ## Executive decision
 
-The breaking multi-session AppServer refactor is implemented across protocol,
-server, clients, host lifecycle, and session runtime ownership. The existing
-crate split remains intact.
+Retain the parts that already make invalid cross-session selection difficult:
 
-The server already has useful multi-session infrastructure:
+- one root `SessionId`;
+- explicit `SessionTarget` and `InteractiveTarget` DTOs;
+- AppServer-owned registry, surface validation, replay, and callback routing;
+- one selected live-session capability per interactive request;
+- per-session cwd/config/resource construction;
+- a remote client crate that does not depend on the server implementation.
 
-- bounded live-session slots with load, close, replace, and shutdown owners;
-- connection and surface routing with at most one interactive owner per session;
-- passive subscriptions, durable event envelopes, replay, and slow-consumer
-  isolation;
-- per-session configuration folds and per-project catalog caching;
-- separate server, remote client, transport, application host, and runtime
-  crates with the intended dependency direction.
+Rework the application host and surface composition because the current tree
+still has correctness and ownership defects:
 
-Session commands now carry typed targets, accepted connections own immutable
-profiles and callback correlation, and every interactive handler receives the
-`SessionHandle` selected by AppServer validation. MCP, history, reload,
-sandbox, hooks, approvals, active turns, and file rewind are session-owned.
-Closing resume waits and retries, replacement is explicit and atomic, and
-orphan archive has a dedicated authority type.
+- Phase A has started: Rust DTOs and typed local/remote clients now use
+  `session/close` and `session/delete`, and close no longer deletes the JSONL
+  transcript. JSON schemas plus Python/TypeScript generated protocol artifacts
+  now use the new methods, and AppServer internals no longer use
+  archive-oriented names for close routing. Close-owner failures now propagate
+  through close completion with structured timeout data. Terminal turn ordering
+  remains open;
+- declared CLI modes and actual mode selection disagree;
+- SDK startup now creates zero live sessions before the first lifecycle
+  request, but the broader host-builder cleanup remains open;
+- Event Hub is now process-owned egress for SDK, TUI, and headless startup
+  paths, but close/replace/reconnect-cursor regressions are still open;
+- TUI/headless startup plus in-session TUI resume/branch/clear now enter the
+  AppServer lifecycle, headless in-memory initial history is carried by
+  `session/start.initial_messages`, and main TUI shortcut/control paths no
+  longer rebind runtimes from the TUI layer. AppServer drain and Event Hub
+  shutdown now share a coordinator across TUI, headless, and SDK host paths;
+- `coco-agent-host` depends on TUI types and exports most of its implementation;
+- `SessionHandle` exposes raw locks and service handles through a very broad
+  forwarding API;
+- several construction-time invariants are installed after construction.
 
 ## Documents
 
 | Document | Responsibility |
 |---|---|
-| [review.md](review.md) | Evidence-based verification of the reported issues, including counter-hypotheses and severity |
-| [current-architecture.md](current-architecture.md) | What the code does today, including crate dependencies and state ownership |
-| [target-architecture.md](target-architecture.md) | Normative architecture and protocol after the breaking refactor |
-| [protocol-scope.md](protocol-scope.md) | Exhaustive request classification, target DTOs, connection profile, and callback routing |
-| [remediation-plan.md](remediation-plan.md) | Ordered implementation plan, acceptance gates, and test strategy |
-| [history.md](history.md) | Concise migration history and rejected approaches |
+| [review.md](review.md) | Evidence, counter-hypotheses, severity, and verified test gaps from the 2026-07-13 adversarial review |
+| [current-architecture.md](current-architecture.md) | Descriptive account of the current production tree, including known defects |
+| [target-architecture.md](target-architecture.md) | Normative v2 ownership, crate, startup, lifecycle, and shutdown architecture |
+| [protocol-scope.md](protocol-scope.md) | Normative breaking protocol scopes and lifecycle semantics |
+| [remediation-plan.md](remediation-plan.md) | Ordered implementation plan with package-level acceptance gates |
+| [history.md](history.md) | Migration history, retained v1 work, and superseded decisions |
 
-Stable crate-local details remain owned by each crate's `CLAUDE.md`. Event Hub
-wire details remain owned by `docs/coco-rs/event-hub/spec.md`. This directory
-defines only the cross-cutting session ownership, routing, and host boundaries.
+Crate-local implementation guidance remains in each crate's `CLAUDE.md`.
+Event Hub wire encoding remains in `docs/coco-rs/event-hub/spec.md`; this
+directory owns how AppServer lifecycle and live-session membership feed that
+wire protocol.
 
-## Status summary
+## Current status
 
-| Area | Status | Decision |
+| Area | Status | v2 decision |
 |---|---|---|
-| Crate boundaries | Landed | Keep |
-| Registry and lifecycle owner tasks | Landed | Keep model |
-| Event envelope, sequence, replay, fan-out | Landed | Keep |
-| Surface routing and passive observation | Landed | Keep |
-| Per-session cwd/config fold | Landed | Keep |
-| Project catalog/config cache | Landed | Keep; describe honestly |
-| One connection controlling several sessions | Landed | Explicit `InteractiveTarget` authority |
-| Multiple initialized connections | Landed | One immutable `ConnectionProfile` per connection |
-| Concurrent turn/runtime isolation | Landed | Registry-selected `SessionHandle` on every turn/control |
-| Session-scoped MCP/file history/reload | Landed | Owned below `SessionHandle` |
-| Orphan archive authorization | Landed | Proved before handler side effects |
-| Package H production isolation suite | Landed | All 11 required scenarios covered by 16 bounded tests |
-| Legacy SDK pending callback map | Removed | AppServer is the sole callback owner |
-| SDK process session slots | Reduced to keyed projections | No runtime-selection authority |
-| Whole-runtime actor | Not implemented and not required | Reject as a v1 prerequisite |
-| `ProjectHeavyServices` | Not implemented and poorly named | Reject; add capability-named services only when needed |
-| Web/Desktop/IM product adapters | Deferred | Keep outside v1 and outside AppServer core |
-
-## Landed amendments (2026-07-11)
-
-An independent line-level verification of this directory against the
-production tree confirmed every finding in [review.md](review.md) and added
-the following normative decisions:
-
-- `session/archive` takes a typed `ArchiveTarget` so orphaned sessions stay
-  closable without a resume round trip
-  ([protocol-scope.md](protocol-scope.md));
-- orphan-period callback "fail closed" is defined per request family
-  (`NoInteractiveSurface`; approvals become denials, elicitations declines,
-  user input cancellations); nothing parks and the running turn continues
-  ([protocol-scope.md](protocol-scope.md));
-- backpressure is explicitly connection-scoped: channel overflow disconnects
-  the whole connection and all its surfaces; recovery is reconnect plus
-  replay ([target-architecture.md](target-architecture.md));
-- the request-scope classification is one exhaustive `request_scope`
-  function in `common/types`, making an unclassified request a compile
-  error ([protocol-scope.md](protocol-scope.md));
-- `clippy::await_holding_lock` becomes a workspace lint, and session-scoped
-  telemetry must carry `session_id`/`turn_id`
-  ([target-architecture.md](target-architecture.md));
-- the A-D batch is developed as stacked per-package commits with the
-  package H suite checked in first as `#[ignore]` skeletons
-  ([remediation-plan.md](remediation-plan.md)).
+| Explicit request targeting | Landed | Retain |
+| Registry and surface authority | Landed | Retain |
+| Per-connection profile/callback isolation | Landed | Retain |
+| Concurrent A/B runtime isolation | Landed for tested paths | Retain and extend tests |
+| Runtime close versus transcript deletion | Partially landed | Finish close-owner gates and batched SDK validation |
+| Turn drain and terminal result ordering | Partially landed | One lifecycle owner; abort timed-out tasks; result after drain |
+| CLI mode resolution | Partially landed | One typed `ExecutionPlan`; delete unsupported flags |
+| SDK startup | Partially landed | Finish host-builder cleanup; keep zero-session startup |
+| Event Hub live membership | Partially landed | Registry-derived dynamic membership |
+| TUI/headless/SDK lifecycle symmetry | Partial; startup, TUI resume/branch/clear, headless initial history, main TUI controls, and AppServer/Event Hub shutdown migrated | All surfaces use the same client lifecycle operations |
+| Host/TUI dependency direction | Defective | Move TUI composition to `coco-tui-runner` |
+| Agent-host module/API boundary | Defective | Private cohesive modules and narrow facades |
+| Session capability boundary | Partial | No raw locks/managers; construction-time identity and callback requirements |
+| Whole-runtime actor | Rejected | Keep fine-grained synchronization and a small turn coordinator |
+| Project service sharing | Adequate | Add only capability-named services with explicit keys |
 
 ## Completion rule
 
-Multi-session is complete only when tests prove that two independently
-targeted sessions can run concurrently with different cwd, configuration,
-tools, MCP state, histories, controls, events, and shutdown lifecycles without
-cross-session reads or writes. Slot count alone is not completion.
+The v2 refactor is complete only when all of the following are demonstrated:
 
-## Final validation (2026-07-11)
+1. close never deletes the transcript and delete is explicit;
+2. no turn, forwarder, hook, or integration task survives a completed close;
+3. terminal accounting is generated after turn drain and cannot be followed by
+   late session events;
+4. one typed execution plan selects exactly one CLI mode;
+5. SDK startup creates zero live sessions before the first lifecycle request;
+6. TUI, headless, and SDK use the same start/resume/replace/close operations;
+7. Event Hub membership and reconnect cursors cover every live session;
+8. `coco-agent-host` has no dependency on `coco-tui`;
+9. session identity and callback requirements are valid at construction;
+10. public session capabilities expose operations and snapshots, not raw locks;
+11. two real sessions continue to pass authority, runtime, integration, replay,
+    and shutdown isolation tests.
 
-The breaking refactor meets the completion rule. Final validation covered the
-entire workspace and the production AppServer path:
-
-- `just quick-check` passed, including all seam checks and
-  `cargo clippy --workspace --all-features --tests` with zero warnings;
-- `cargo nextest run --workspace --no-fail-fast` passed all 13,611 executed
-  tests; four tests were skipped by their existing test configuration;
-- the host integration suite now passes sixteen production-handler scenarios
-  with real runtimes, including concurrent turns, project/local config writes,
-  callback authority, orphan resume/lifecycle, reload ownership,
-  slow-consumer replay recovery, event identity, and concurrent shutdown;
-- focused agent-host, app-server, app-server-client, and types tests passed
-  309, 89, 34, and 300 tests respectively;
-- `git diff --check` and the removed-architecture symbol audit passed.
-
-The full validation pass exposed one final TUI/local-bridge defect: queue
-turns, fast-mode changes, thinking-level changes, and file rewind could build
-an interactive target before attaching the local bridge surface. Those paths
-now explicitly attach the selected session before dispatch. All 88 TUI runner
-tests and the full workspace suite passed after the fix.
-
-## Delivery-blocker closure (2026-07-11)
-
-The final delivery audit closed three follow-up findings:
-
-1. Orphan archive authorization now runs during request-runtime resolution,
-   before the archive handler can take, cancel, or drain an active turn, clear
-   activity, or emit an archive result. An orphan target for an interactively
-   owned session returns `InteractiveOwnerConflict` without mutating the
-   runtime; a barrier-backed regression test proves the running turn survives.
-2. Package H completion is tracked by its eleven required behaviors, not by
-   counting `#[tokio::test]` attributes. The sixteen-test host suite covers the
-   full A/B runtime, connection, config, callback, orphan, reload, replay,
-   slow-consumer, and shutdown matrix. Every concurrent or lifecycle scenario
-   has an overall bounded timeout.
-3. The unused SDK `pending_map` module, its self-tests, and its public export
-   were deleted. Callback ownership and reply correlation now live only in
-   AppServer and validate connection, surface, session, and request id.
-
-The post-fix final gate passed affected all-features clippy, all 13,611
-workspace Rust tests (four existing skips), schema and Python code-generation
-checks, and 107 Python SDK tests (ten environment-gated skips). See
-[remediation-plan.md](remediation-plan.md#implementation-status-2026-07-11)
-for the work-package and package-H evidence matrix.
+Passing the existing workspace suite is necessary but not sufficient: the
+suite now covers basic close-preserves/delete-removes behavior, CLI execution
+plan behavior, SDK zero-session startup, the `max_sessions = 1` first real
+`session/start` path, and focused Event Hub startup plus A/B membership
+snapshots. Phase A has compiled targeted regressions for byte-for-byte close
+preservation and close timeout cleanup. Close/replace Event Hub membership and
+reconnect-cursor behavior still need explicit batched validation.

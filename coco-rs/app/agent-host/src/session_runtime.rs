@@ -65,9 +65,12 @@ pub(crate) use roles::resolve_model_selection_from_runtime_config;
 pub(crate) use roles::thinking_level_for_effort_from;
 pub use roles::{RoleOverride, SessionModelRoleChange, SessionModelRoleSelection};
 pub(crate) use sandbox::{build_sandbox_state, sandbox_settings_deny_paths};
+pub(crate) use session_handle::SessionCloseDrainError;
 pub use session_handle::SessionHandle;
 pub use turn::SessionStats;
-pub(crate) use turn::{ActiveTurnHandles, SessionAccounting, SessionTurnCoordinator};
+pub(crate) use turn::{
+    ActiveTurnDrainState, ActiveTurnHandles, SessionAccounting, SessionTurnCoordinator,
+};
 
 #[derive(Clone)]
 pub(crate) struct McpRegistrationStatus {

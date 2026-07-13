@@ -1,275 +1,330 @@
 # Current Architecture
 
-This document describes the production tree after the breaking refactor on
-2026-07-11. It is descriptive, not aspirational.
+Audit baseline: production tree on 2026-07-13.
 
-## Runtime composition
+This document is descriptive. It includes defects and transitional behavior;
+it is not the target design.
 
-```text
-coco-cli
-  | process entry, arguments, listeners, signal/shutdown policy
-  |
-  +-- ProcessRuntime
-  |     `-- ProjectRegistry -> Arc<ProjectServices>
-  |
-  +-- AppServer<AppSessionHandle>
-  |     +-- LiveSessionRegistry
-  |     `-- RoutingState
-  |
-  +-- SessionRuntimeFactory
-  |     `-- one SessionHandle per constructed session
-  |
-  `-- SDK/TUI/headless surface policy
+## Crate topology
 
-coco-agent-host
-  +-- SessionRuntime / SessionHandle
-  +-- local typed client
-  +-- AppServer host handlers and SDK/local bridges
-  +-- QueryEngine turn execution
-  `-- MCP/hooks/tasks/persistence application integration
-```
-
-SDK mode constructs one shared `AppServer` with configured
-`server.max_sessions` (default 32). The stdio connection and optional Unix,
-named-pipe, and WebSocket listeners share that registry and routing state.
-
-TUI and headless construct `AppServerLocalBridge`, which deliberately fixes
-`max_sessions` to one. They still use AppServer lifecycle code but retain a
-single-session product surface.
-
-## Crate boundaries
+The durable AppServer split is:
 
 ```text
-coco-types <-------------------------+
-   ^                                 |
-   |                                 |
-coco-app-server-transport <------+   |
-   ^                             |   |
-   |                             |   |
-coco-app-server          coco-app-server-client
-   ^                             ^
-   |                             |
-   +--------- coco-agent-host ---+
-                  ^
-                  |
-             coco-app-runtime
-                  ^
-                  |
-               coco-cli
+coco-types
+   ^
+   +---------------- coco-app-server-transport
+   |                          ^
+   |                          |
+coco-app-server       coco-app-server-client
+   ^                          ^
+   |                          |
+   +-------- coco-agent-host--+
+                 ^
+                 |
+          coco-app-runtime
 ```
 
-The diagram omits the many engine/service dependencies of
-`coco-agent-host`. Important rules:
+Useful properties:
 
-- server and client share canonical DTOs through `coco-types` and frame/I/O
-  primitives through `coco-app-server-transport`;
-- the remote client does not depend on the server implementation;
-- AppServer is generic over its live handle and does not depend on
-  `SessionRuntime`;
-- `coco-agent-host` is the composition layer that knows both AppServer and the
-  concrete session runtime;
-- query/core/service crates do not depend on AppServer crates.
+- server and remote client share DTOs and transport primitives, not server
+  implementation details;
+- `coco-app-server` is generic over a cloneable live handle;
+- query/core/service crates do not depend on AppServer crates;
+- `coco-app-runtime` owns process/project/bootstrap contracts rather than query
+  execution.
 
-These rules are clear, useful, and should not be reversed.
+The omitted but important current edge is:
 
-## Process, project, and session scopes
+```text
+coco-agent-host -> coco-tui
+```
 
-### ProcessRuntime
+That edge exists because agent-host contains TUI permission, voice, teammate,
+image, and message adapters. It contradicts the intended protocol-neutral host
+boundary.
 
-`ProcessRuntime` currently owns:
+## Process startup today
 
-- the process-lifetime `ProjectRegistryManager`;
-- the one-shot application of the project-service idle TTL (the eviction
-  itself runs as a periodic background sweep owned by the registry manager).
+`coco-cli::main` performs sandbox self-dispatch, clap parsing, startup cwd
+capture, tracing installation, process-runtime lookup, argument validation,
+embedded Hub startup, subcommand dispatch, and surface selection.
 
-It is intentionally small. The old design listed model registries, auth,
-transports, session storage, and catalogs as fields it ought to own, but those
-are not present today. A process scope should grow only when it becomes the
-actual lifecycle owner of a resource; it should not become a manifest of
-everything that happens to live for a long time.
+CLI mode selection is centralized in `coco-cli::execution_plan`. It constructs
+a typed `ExecutionPlan` from parsed CLI arguments and injectable stdin/stdout
+terminal capabilities; `main.rs` and `tracing_init.rs` consume that shared plan
+for mode and tracing selection. Mode-dependent validation for
+`--no-session-persistence` and `--plan-mode-instructions` is part of fallible
+pure plan construction. For the default command path:
 
-### ProjectRegistry and ProjectServices
+```text
+--non-interactive                         -> headless
+prompt present or stdout is not a terminal -> headless
+stdin is not a terminal and no prompt      -> headless, stdin is raw prompt
+otherwise                                  -> TUI
+explicit `sdk` subcommand                  -> SDK
+```
 
-`ProjectRegistry` is keyed by `(config_home, project_root)`. It:
+The unsupported global `--no-tui` and `--json` flags have been removed from the
+clap schema; `ps --json` remains because it has concrete behavior. Placeholder
+subcommands that only printed success/not-implemented messages have also been
+removed. Confirmed CLI-only flags with no runner consumer are rejected by clap.
+The retained top-level clap schema is guarded by an accepted-field consumption
+audit test that requires every accepted flag to have an explicit consumer or
+execution-plan policy.
 
-- reuses a published `Arc<ProjectServices>` for the same fresh key;
-- separates different project roots;
-- replaces stale catalog/config entries for later sessions;
-- keeps entries alive while sessions hold an `Arc`;
-- evicts unattached entries after an idle grace period.
+## Surface composition today
 
-`ProjectServices` currently owns:
+### TUI
 
-- `ProjectConfigSnapshot`;
-- `ProjectCatalogSnapshot`, including project/plugin-derived commands, skills,
-  hooks, output styles, agents, and MCP definitions.
+TUI startup is implemented in `coco-cli/src/tui_runner/bootstrap.rs`. It:
 
-It does not own live LSP, retrieval, context discovery, ignore, or MCP process
-instances. The current cold-load algorithm may perform duplicate I/O for two
-same-key racers but publishes and returns one winning `Arc`. This is
-publication deduplication, not strict single-flight execution.
+1. consumes teammate identity environment;
+2. folds startup config and builds engine resources;
+3. creates the session manager and TUI channels/permission bridge;
+4. constructs `SessionRuntimeFactory`;
+5. constructs a one-slot `AppServerLocalBridge`;
+6. builds and registers a runtime;
+7. installs integrations, reload subscriptions, watchers, and hooks;
+8. binds an interactive local surface;
+9. directly hydrates startup resume state when the runtime already has the
+   target id;
+10. creates TUI state and spawns the command driver;
+11. drains AppServer and Event Hub through `ShutdownCoordinator` during exit.
 
-### SessionRuntime
+The TUI runner contains application operations as well as presentation policy.
+Its module tree is about 7,300 non-test lines.
 
-`SessionRuntime` is one resource owner per constructed root session. It owns
-focused resource groups for:
+### Headless
 
-- execution, tools, model runtimes, and engine configuration;
-- history, transcript persistence, usage, and cross-turn `ToolAppState`;
-- session cwd/project anchors and the folded `RuntimeConfig`;
+Headless execution is implemented in `coco-agent-host::headless`. It:
+
+1. resolves some local slash commands before runtime construction;
+2. folds config and constructs model/tool startup state;
+3. constructs another `SessionRuntimeFactory` and one-slot local bridge;
+4. builds/registers a runtime and installs integrations;
+5. directly seeds resume transcript state;
+6. applies live turn configuration directly through `SessionHandle`;
+7. starts a turn through local AppServer;
+8. waits for `TurnEnded` through local AppServer and uses the completion's
+   embedded per-turn session result directly;
+9. drains the local server and Event Hub through `ShutdownCoordinator`.
+
+The headless module is also the shared home of config/model/permission bootstrap
+helpers used by other surfaces, despite its surface-specific name.
+
+### SDK
+
+SDK startup is split between `coco-agent-host::remote_host` and
+`coco-sdk-server`:
+
+1. remote host folds startup config/resources and creates bootstrap metadata;
+2. it constructs shared AppServer state and listeners;
+3. it provides a `RuntimeReplacementContext` through `HostInputs`,
+   containing the `SessionRuntimeFactory`, process runtime, cwd, and
+   structured-output policy;
+4. it does not build or register a runtime during process startup;
+5. SDK server opens stdio and optional sidecar connections;
+6. the first client start/resume builds the first real runtime through the
+   normal AppServer load path;
+7. shutdown closes all registry sessions and flushes any installed Event Hub
+   connector through `ShutdownCoordinator`.
+
+The hidden placeholder session has been removed. Startup cwd, initialize
+bootstrap, startup session manager, and bypass availability now enter
+`AppServerHostState` through `HostInputs` rather than late startup
+install calls. The production remote `TurnRunner` also enters through
+`HostInputs`; local bridge/test overrides can still replace it through
+the explicit test/local seam. A focused regression covers the old
+`max_sessions = 1` hidden-slot failure mode by verifying that the first real
+`session/start` succeeds after zero-session startup. SDK Event Hub egress now
+has a process-owned connector seam and can announce an empty live-session set
+at zero-session startup. Remote host preparation also starts a registry
+membership watcher, and SDK stdio event routing refreshes membership before
+forwarding session events to the Hub.
+
+## AppServer state and request routing
+
+`AppServerHostState` currently owns:
+
+- a replaceable `TurnRunner` service;
+- keyed session activity projections;
+- one process session-manager slot;
+- bootstrap initialize metadata/startup cwd/bypass state;
+- an optional runtime-replacement context;
+- the per-session sequence allocator.
+
+It is constructed with `Default` and made usable through later `install_*`
+calls. Some startup installs use `try_write` and panic if the lock is not
+immediately available.
+
+Every accepted remote connection gets an `AppServerHostHandler` clone with a
+new connection-profile slot. Interactive request targeting is resolved through
+AppServer validation and produces a `SessionRequestContext` containing matching
+session id and runtime handle.
+
+Request handling is split across several layers:
+
+```text
+request_scope in coco-types
+  -> AppServer adapter routing
+  -> AppServerHostHandler special lifecycle/data cases
+  -> request_targeting
+  -> request_dispatch exhaustive match
+  -> topical request handler
+  -> root session operation
+  -> registry/surface lifecycle helper
+```
+
+The target selection is sound for tested operations, but lifecycle behavior is
+distributed and duplicated across these layers.
+
+## Live-session ownership
+
+`LiveSessionRegistry<AppSessionHandle>` remains the process map from
+`SessionId` to a live capability. Slots transition through Loading, Live, and
+Closing. Load/replace/close/shutdown work runs in spawned owner tasks, so a
+request waiter does not own progress.
+
+`AppSessionHandle` stores an immutable registry id snapshot plus a
+`SessionHandle`. Registry close compares the snapshot before closing the runtime
+to avoid a stale handle closing a replacement runtime.
+
+## Session runtime
+
+`SessionRuntime` owns per-session resources grouped into roughly twenty
+resource structs, including:
+
+- tools, model runtimes, and engine config;
+- history, transcript store, usage, and `ToolAppState`;
+- cwd/project/config/reloader state;
 - hooks, commands, skills, agents, permissions, sandbox, tasks, memory, MCP,
-  LSP, file history, and shutdown state.
+  LSP, and file history;
+- command/attachment queues and shutdown state;
+- `SessionTurnCoordinator`.
 
-The object is shared behind `Arc`. Independent fields use `Mutex`, `RwLock`,
-atomics, watch channels, cancellation tokens, or immutable `Arc` snapshots as
-appropriate. It is not driven by one actor mailbox.
+`SessionTurnCoordinator` owns turn ids, one active turn record, and aggregate
+accounting using short `std::sync::Mutex` critical sections plus an atomic turn
+counter. A whole-runtime actor is not used.
 
-`SessionHandle` adds an immutable session-id snapshot and focused capability
-methods. Its `Arc<SessionRuntime>` is private: there is no `Deref` or public
-`runtime()` escape hatch.
+`SessionHandle` keeps `Arc<SessionRuntime>` private, but exposes a very broad
+forwarding API. Several methods return raw locks or internal manager/registry
+handles. Session identity is duplicated between the immutable handle and
+mutable `QueryEngineConfig`; mutation is guarded by a runtime assertion.
+Callback requirements are installed after construction through `OnceLock` and
+default to empty when read before installation.
 
-## State ownership
+## Start, resume, and replace
 
-There is no useful process-global `AppState`.
+Remote start/resume use the AppServer lifecycle owner tasks and construct the
+runtime from the calling connection profile.
 
-| State | Current owner | Scope |
-|---|---|---|
-| TUI rendering/input state | `coco_tui::state::AppState` | one TUI surface |
-| tool/permission/reminder/task-panel state | `ToolAppState` inside `SessionRuntime` | one root session |
-| transcript and engine resources | `SessionRuntime` | one root session |
-| live slot lifecycle | `LiveSessionRegistry` | process registry, keyed by `SessionId` |
-| connection/surface/replay routing | `RoutingState` | AppServer process |
-| turn ids, aggregate accounting, active-turn tasks/cancellation | `SessionTurnCoordinator` inside `SessionRuntime` | one root session |
-| AppServer bootstrap, factory, activity and durable-sequence projections | `AppServerHostState` | process services, keyed projections only |
-| immutable initialize inputs | per-connection `ConnectionProfile` | one accepted connection |
-| transport writer and outbound queues | connection runner / adapter | one accepted connection |
-| pending callback correlation | AppServer + connection adapter, keyed by request/session/surface/connection | one originating request |
-| MCP manager and registration reports | `SessionRuntime` integration resources | one root session |
+TUI and production headless startup now enter through the local AppServer
+lifecycle facade: fresh startup uses `session/start`, while startup resume uses
+`session/resume`. The lifecycle-owned runtime construction receives
+surface-specific integration policy through `RuntimeReplacementContext`.
+In-session TUI `/resume` and `/branch` now replace the live interactive surface
+through the local typed `session/replace` resume facade instead of directly
+registering or hydrating the destination runtime from the TUI layer. `/clear`
+now uses a typed `session/replace` clear destination; the handler owns snapshot
+capture, destination runtime construction, clear SessionStart hooks, and
+`ExitReason::Clear` source shutdown. Main TUI shortcut/control paths now
+activate an already-live AppServer session by `SessionId` before sending typed
+requests; they no longer pass `SessionHandle` back into a bridge bind/register
+entrypoint.
+Prompt-mode bash still executes the shell command off the driver loop, but any
+model response turn is handed back to the main driver and starts through the
+same local bridge. Test/embedding headless callers that already hold typed
+messages pass them as `session/start.initial_messages`; the AppServer-owned
+start builder hydrates that initial history before the first turn.
 
-`AppServerHostState` retains process services and cheap activity/durable-sequence
-projections, but it owns no selectable runtime, history, turn counter,
-accounting, active turn, MCP manager, file history, reload slot, connection
-writer, or pending callback map.
+The resulting runtimes are similar, but the ordering and ownership are not one
+fully shared lifecycle until shared conformance coverage proves the same
+boundary across all connection styles and the remaining process-service stop
+policy is explicit.
 
-## AppServer registry and lifecycle
+## Close and delete behavior
 
-`LiveSessionRegistry<H>` stores:
+The Rust protocol and typed clients now expose separate lifecycle and durable
+storage operations:
 
-```text
-Loading(completion)
-Live(H)
-Closing(H, completion)
-```
+1. `session/close`:
+   - validates interactive or orphan close authority through AppServer;
+   - runs through the AppServer registry close owner callback;
+   - persists the sequence watermark;
+   - asks `SessionHandle` to drain any still-registered active turn;
+   - stops reload supervision;
+   - fires SessionEnd hooks;
+   - cancels runtime shutdown;
+   - emits the aggregate `SessionResult`;
+   - preserves the persisted transcript.
+2. `session/delete`:
+   - takes a `SessionTarget`;
+   - rejects any Loading/Live/Closing registry slot with `SessionStillLive`;
+   - calls `SessionManager::delete` only after the live-slot check passes.
 
-Load, close, replace, and shutdown work runs in spawned owner tasks. Completion
-signals are observations of that work, so caller cancellation does not wedge a
-slot. Loading, live, and closing entries count against `max_sessions`; replace
-temporarily reserves one additional destination slot.
+Remaining defects: terminal turn/accounting ordering is still not proven by an
+authoritative `TurnEnded` contract. Phase A now has compiled regressions for
+timeout abort/join, successful-close no-late outbound events, byte-for-byte
+close preservation, and close-during-turn accounting, but those regressions
+still need to be run in the next batched test pass. Generated Python/TypeScript
+clients still need lifecycle conformance coverage beyond codegen and unit
+tests.
 
-The combined AppServer commit path holds registry then routing locks, performs
-no await while locked, validates before mutation, and atomically updates live
-slots plus surface routing. This is an appropriate use of synchronous locks:
-critical sections are short and contain no asynchronous work.
+## Event and Hub flow
 
-When resume observes `Closing`, the host waits for its completion with a
-bounded timeout and retries the load. Orphan archive proves that no interactive
-owner exists while resolving the request runtime, before the archive handler
-can cancel a turn or mutate activity. The subsequent orphan close revalidates
-routing and moves the registry slot to `Closing` under the canonical
-registry-then-routing lock order.
+AppServer session events are stamped with session/turn/agent identity and
+routed through bounded per-connection channels and per-session replay rings.
+That model remains appropriate.
 
-## Connections and surfaces
+`ProcessEventHub` is now the connector owner. It can be created by the process
+host with an explicit live-session snapshot, including an empty snapshot during
+SDK zero-session startup, and the connector worker announces immediately on
+startup. SDK remote, TUI, and headless startup paths attach the process-owned
+egress to AppServer event routing and run a membership watcher that reads
+`AppServer::list_live_sessions()` after AppServer activity revisions. Local
+sidecar and SDK stdio writers also refresh membership immediately before
+forwarding a session event to the Hub. The remaining gaps are validation and
+protocol edge coverage: close, replace, reconnect cursor behavior, and event
+identity/ack isolation still need dedicated regressions. SDK remote startup
+and A/B start membership are covered by focused regressions.
 
-A connection is a transport relationship identified by private
-`ConnectionKey`. A surface is a public attachment identified by `SurfaceId`
-and points to one `SessionId`.
+## Module and dependency shape
 
-AppServer supports:
+Current `coco-agent-host` characteristics:
 
-- multiple surfaces per connection;
-- surfaces for different sessions on one connection;
-- at most one interactive owner per session;
-- bounded passive observers;
-- per-surface notification preferences and capabilities;
-- replace/archive lifecycle effects;
-- per-connection outbound channels carrying per-surface-addressed event and
-  server-request deliveries.
+- 69 public modules from `lib.rs`;
+- 71 non-test, non-`lib.rs` Rust files at the source root;
+- 18 top-level `session_*` files plus another 16 `app_server_host/session_*`
+  files;
+- both flat `session_*` files and fragmented `app_server_host` lifecycle step
+  files;
+- direct dependencies on most application domains plus `coco-tui`;
+- large modules including `session_handle.rs`, `headless.rs`, `local_client.rs`,
+  and session runtime state;
+- a public output module with no production callers.
 
-Interactive request DTOs carry both `session_id` and `surface_id`. AppServer
-validates session, surface, role, and connection ownership before returning a
-live handle. Persisted-only requests carry `SessionTarget`; archive uses the
-typed interactive-or-orphan `ArchiveTarget`.
+Current `coco-cli` characteristics:
 
-Every accepted transport calls the JSON handler factory and receives a fresh
-handler with an empty initialize cell. Exactly one `initialize` freezes its
-`ConnectionProfile`; local in-process clients use an explicitly preinitialized
-handler. Writers and synchronous reply correlation remain connection-owned.
+- clap schema and tracing/process helpers;
+- a large TUI application driver;
+- mode-specific startup and shutdown policy;
+- many direct dependencies on application/core crates;
+- placeholder or no-op flags/subcommands.
 
-## Request dispatch today
+## Test coverage and gaps
 
-`request_scope` exhaustively classifies every `ClientRequest`. The handler
-adapter resolves explicit targets before dispatch and constructs a
-`SessionRequestContext` whose id and `SessionHandle` came from the same
-AppServer validation. Interactive handlers cannot fall back to a sole surface,
-process runtime, or sole handoff.
+Existing production tests cover explicit authority, two-session runtime and
+integration isolation, callbacks, replay, reload ownership, slow consumers,
+orphan authority, and concurrent registry shutdown.
 
-`SessionTurnExecutor` receives that selected handle on every call. Shortcuts,
-MCP, rewind, approvals, sandbox changes, hooks, config, reload, active-turn
-interrupt, and shutdown use focused capabilities on the same handle.
+They do not currently prove:
 
-## Event flow
-
-```text
-QueryEngine CoreEvent
-  -> OutboundMessage(session_id, event)
-  -> SessionEnvelope::stamp
-  -> per-session SessionSeqAllocator
-  -> AppServer routing + retention ring
-  +-> attached surfaces
-  `-> optional Event Hub connector
-```
-
-Durable event classes receive a per-session sequence and enter the replay
-ring. Ephemeral stream/TUI deltas stay live-only. Slow consumers are isolated
-by bounded connection channels and disconnected rather than blocking engine
-producers. Outbound channels are per connection, so overflow disconnects the
-whole connection and detaches all of its surfaces; recovery is reconnect plus
-replay.
-
-Event production takes identity from the selected handle and active turn.
-Server-initiated requests carry the originating session id; typed replies are
-accepted only from their owning connection, surface, session, and request id.
-
-## Test coverage today
-
-Package tests cover target classification, connection isolation, registry
-lifecycle, replacement, closing retry, orphan archive, callback correlation,
-slow-consumer disconnect, replay, client authority injection, session-owned
-capabilities, and multi-session shutdown. The release-blocking host integration
-suite uses public clients and production handlers for multi-session authority,
-cross-connection rejection, orphan lifecycle, and event/replay identity.
-
-The integration suite contains sixteen production-handler scenarios using real
-`SessionRuntime`s. It covers concurrent A/B turns and targeted interruption,
-cwd plus project/local config isolation, independent initialized profiles,
-per-session tool catalogs and real SDK-hosted MCP handshakes, independent
-history/read/turn-list/rewind/control state, connection/surface/session/request
-callback correlation, compatible and incompatible orphan resume, orphan
-fail-closed behavior, close/replacement reload-supervisor lifetime, replay
-session/turn identity, slow-consumer recovery, orphan archive, and concurrent
-multi-runtime shutdown. Each package-H scenario has an explicit deadline;
-focused AppServer tests additionally cover lifecycle races and surface rebind.
-
-The final 2026-07-11 release-validation snapshot was:
-
-- all seam checks and workspace clippy passed with every feature and test
-  target enabled;
-- all 13,611 executed workspace tests passed under nextest, with four tests
-  skipped by existing configuration;
-- all 88 TUI runner tests passed;
-- focused totals were 309 agent-host, 89 app-server, 34 app-server-client, and
-  300 types tests, all passing;
-- all schema and Python protocol generation checks passed, and the Python SDK
-  suite passed 107 tests with ten environment-gated skips;
-- the sixteen production-handler integration tests passed after every
-  concurrent and lifecycle scenario received an overall bounded timeout.
+- close preserves JSONL;
+- delete is a separate explicit operation;
+- timed-out close leaves no detached work or late events;
+- terminal accounting includes the drained turn;
+- CLI flags select the documented modes;
+- SDK startup begins with an empty registry;
+- Event Hub announces all current live sessions;
+- agent-host has no TUI dependency;
+- session public APIs do not expose raw locks.

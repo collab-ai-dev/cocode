@@ -23,8 +23,8 @@ use crate::session_runtime::SessionInitializeCommand;
 ///   populated from the live [`SessionHandle`] when installed, so initialize
 ///   reflects the active runtime after replacements. Before a runtime exists,
 ///   these fall back to the optional
-///   [`crate::app_server_host::InitializeBootstrap`] snapshot installed via
-///   `AppServerHostState::install_initialize_bootstrap_for_startup()`.
+///   [`crate::app_server_host::InitializeBootstrap`] snapshot provided through
+///   [`crate::app_server_host::HostInputs`].
 /// - `fast_mode_state`: populated from the live [`SessionHandle`] when
 ///   installed, falling back to the optional bootstrap provider before runtime
 ///   construction.

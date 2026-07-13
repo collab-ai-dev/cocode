@@ -163,13 +163,26 @@ fn dropped_marker_flushes_after_older_ready_envelopes() {
     let dropped = Arc::new(std::sync::Mutex::new(DroppedEventRanges::default()));
     let config = worker_config("ws://127.0.0.1:1/v1/connect".to_string());
     let session_id = session_id();
-    tx.try_send(durable_envelope(session_id.clone(), 1))
-        .expect("queue older event");
+    tx.try_send(HubConnectorCommand::Envelope(Box::new(durable_envelope(
+        session_id.clone(),
+        1,
+    ))))
+    .expect("queue older event");
     record_dropped_envelope(&dropped, &durable_envelope(session_id, 2));
 
     let mut pending = VecDeque::new();
     let mut stats = HubConnectorWorkerStats::default();
-    drain_ready(&config, &mut rx, &mut pending, &mut stats, &dropped).expect("drain older event");
+    let mut config = config;
+    let mut client = None;
+    drain_ready(
+        &mut config,
+        &mut client,
+        &mut rx,
+        &mut pending,
+        &mut stats,
+        &dropped,
+    )
+    .expect("drain older event");
     push_all_dropped_markers(&config, &dropped, &mut pending, &mut stats);
 
     assert_eq!(stats.dropped_durable_events, 1);
@@ -227,6 +240,50 @@ async fn spawn_collecting_hub_server() -> (String, tokio_mpsc::Receiver<BatchFra
     (format!("ws://{addr}/v1/connect"), rx)
 }
 
+async fn spawn_collecting_announce_server() -> (String, tokio_mpsc::Receiver<AnnounceFrame>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (tx, rx) = tokio_mpsc::channel(4);
+    tokio::spawn(async move {
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = accept_hub_socket(stream).await;
+            while let Some(message) = socket.next().await {
+                let Ok(message) = message else {
+                    break;
+                };
+                let WsMessage::Text(text) = message else {
+                    continue;
+                };
+                match serde_json::from_str::<HubFrame>(&text).unwrap() {
+                    HubFrame::Announce(announce) => {
+                        if tx.send(announce).await.is_err() {
+                            return;
+                        }
+                        if socket
+                            .send(WsMessage::Text(
+                                serde_json::to_string(&HubFrame::AnnounceAck(AnnounceAckFrame {
+                                    first_seen: false,
+                                    hub_version: "test".to_string(),
+                                    resume_from: HashMap::new(),
+                                }))
+                                .unwrap()
+                                .into(),
+                            ))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    _ => panic!("unexpected hub frame before announce"),
+                }
+            }
+        }
+    });
+    (format!("ws://{addr}/v1/connect"), rx)
+}
+
 async fn accept_hub_socket(
     stream: tokio::net::TcpStream,
 ) -> tokio_tungstenite::WebSocketStream<tokio::net::TcpStream> {
@@ -261,6 +318,52 @@ fn ack_for_batch(batch: &BatchFrame) -> BatchAckFrame {
         up_to_seq,
         ..Default::default()
     }
+}
+
+#[tokio::test]
+async fn worker_announces_on_start_with_empty_backlog() {
+    let (url, mut announces) = spawn_collecting_announce_server().await;
+    let mut config = worker_config(url);
+    config.announce.live_sessions = Vec::new();
+    let worker = HubConnectorWorker::spawn(config).unwrap();
+
+    let announce = timeout(Duration::from_secs(1), announces.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let stats = worker.shutdown_and_flush().await.unwrap();
+
+    assert!(announce.live_sessions.is_empty());
+    assert_eq!(stats.shipped_events, 0);
+}
+
+#[tokio::test]
+async fn worker_reannounces_after_membership_update() {
+    let (url, mut announces) = spawn_collecting_announce_server().await;
+    let mut config = worker_config(url);
+    config.announce.live_sessions = Vec::new();
+    let worker = HubConnectorWorker::spawn(config).unwrap();
+    let sender = worker.sender();
+    let session = session_id();
+
+    let first = timeout(Duration::from_secs(1), announces.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(first.live_sessions.is_empty());
+
+    let mut next_announce = first.clone();
+    next_announce.live_sessions = vec![session.clone()];
+    sender.update_announce(next_announce).await.unwrap();
+
+    let second = timeout(Duration::from_secs(1), announces.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let stats = worker.shutdown_and_flush().await.unwrap();
+
+    assert_eq!(second.live_sessions, vec![session]);
+    assert_eq!(stats.shipped_events, 0);
 }
 
 #[tokio::test]

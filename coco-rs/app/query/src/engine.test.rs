@@ -1210,6 +1210,9 @@ async fn test_max_turns_limit() {
     assert_eq!(p.total_turns, 1);
     assert_eq!(p.stop_reason, "max_turns");
     assert_eq!(p.errors, ["Reached maximum number of turns (1)"]);
+    assert_turn_result_matches_session_result(&events, |outcome| {
+        matches!(outcome, coco_types::TurnOutcome::MaxTurnsReached(_))
+    });
 }
 
 #[tokio::test]
@@ -3625,6 +3628,39 @@ async fn test_session_result_ordering_after_idle() {
 }
 
 #[tokio::test]
+async fn no_tool_turn_ended_carries_session_result() {
+    let model = Arc::new(TextMock { text: "ok".into() });
+    let tools = Arc::new(ToolRegistry::new());
+    let config = QueryEngineConfig::default();
+    let (_result, events) = collect_events_from_run(model, tools, config, None, "hi").await;
+
+    let turn_result = events
+        .iter()
+        .find_map(|event| match event {
+            CoreEvent::Protocol(ServerNotification::TurnEnded(params)) => {
+                params.session_result.as_deref()
+            }
+            _ => None,
+        })
+        .expect("TurnEnded should carry session_result");
+    let final_result = events
+        .iter()
+        .find_map(|event| match event {
+            CoreEvent::Protocol(ServerNotification::SessionResult(params)) => Some(params.as_ref()),
+            _ => None,
+        })
+        .expect("SessionResult should be emitted");
+
+    assert_eq!(turn_result.session_id, final_result.session_id);
+    assert_eq!(turn_result.total_turns, final_result.total_turns);
+    assert_eq!(turn_result.result, final_result.result);
+    assert_eq!(
+        turn_result.structured_output,
+        final_result.structured_output
+    );
+}
+
+#[tokio::test]
 async fn test_session_events_fire_in_strict_order() {
     // The complete envelope: SessionStarted → Running → ... → Idle → SessionResult
     let model = Arc::new(TextMock { text: "ok".into() });
@@ -5160,6 +5196,41 @@ fn count_protocol<F: Fn(&ServerNotification) -> bool>(events: &[CoreEvent], pred
         .count()
 }
 
+fn assert_turn_result_matches_session_result<F>(events: &[CoreEvent], outcome_matches: F)
+where
+    F: Fn(&coco_types::TurnOutcome) -> bool,
+{
+    let turn_result = events
+        .iter()
+        .find_map(|event| match event {
+            CoreEvent::Protocol(ServerNotification::TurnEnded(params))
+                if outcome_matches(&params.outcome) =>
+            {
+                params.session_result.as_deref()
+            }
+            _ => None,
+        })
+        .expect("matching TurnEnded should carry session_result");
+    let final_result = events
+        .iter()
+        .find_map(|event| match event {
+            CoreEvent::Protocol(ServerNotification::SessionResult(params)) => Some(params.as_ref()),
+            _ => None,
+        })
+        .expect("SessionResult should be emitted");
+
+    assert_eq!(turn_result.session_id, final_result.session_id);
+    assert_eq!(turn_result.total_turns, final_result.total_turns);
+    assert_eq!(turn_result.is_error, final_result.is_error);
+    assert_eq!(turn_result.stop_reason, final_result.stop_reason);
+    assert_eq!(turn_result.result, final_result.result);
+    assert_eq!(turn_result.errors, final_result.errors);
+    assert_eq!(
+        turn_result.structured_output,
+        final_result.structured_output
+    );
+}
+
 async fn collect_run_events(
     engine: QueryEngine,
     prompt: &str,
@@ -5256,6 +5327,25 @@ async fn turn_completed_fires_once_per_user_prompt_cycle() {
         started_ids, ended_ids,
         "TurnStarted/TurnEnded turn_ids must match (C2 pairing contract)"
     );
+    let turn_result = events
+        .iter()
+        .find_map(|event| match event {
+            CoreEvent::Protocol(ServerNotification::TurnEnded(params)) => {
+                params.session_result.as_deref()
+            }
+            _ => None,
+        })
+        .expect("tool-call success TurnEnded should carry session_result");
+    let final_result = events
+        .iter()
+        .find_map(|event| match event {
+            CoreEvent::Protocol(ServerNotification::SessionResult(params)) => Some(params.as_ref()),
+            _ => None,
+        })
+        .expect("SessionResult should be emitted");
+    assert_eq!(turn_result.session_id, final_result.session_id);
+    assert_eq!(turn_result.total_turns, final_result.total_turns);
+    assert_eq!(turn_result.result, final_result.result);
 }
 
 #[tokio::test]
@@ -5392,6 +5482,9 @@ async fn stream_error_emits_turn_failed_for_sdk_iterator() {
         failed, 1,
         "stream error must emit exactly one TurnEnded(Failed) before propagating"
     );
+    assert_turn_result_matches_session_result(&events, |outcome| {
+        matches!(outcome, coco_types::TurnOutcome::Failed(_))
+    });
 }
 
 #[test]

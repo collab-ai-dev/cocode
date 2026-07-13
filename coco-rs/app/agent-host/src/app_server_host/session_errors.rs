@@ -179,7 +179,7 @@ pub(crate) fn attach_lifecycle_error_parts(
     lifecycle_error(kind, message, Some(data))
 }
 
-fn registry_lifecycle_error_parts(
+pub(crate) fn registry_lifecycle_error_parts(
     operation: &'static str,
     error: coco_app_server::RegistryError,
 ) -> LifecycleError {
@@ -214,6 +214,11 @@ fn registry_lifecycle_error_parts(
         RegistryError::LoadFailed { .. } | RegistryError::SignalDropped { .. } => (
             LifecycleErrorKind::Internal,
             serde_json::json!({ "kind": "session_operation_internal" }),
+        ),
+        RegistryError::CloseFailed { data, .. } => (
+            LifecycleErrorKind::Internal,
+            data.clone()
+                .unwrap_or_else(|| serde_json::json!({ "kind": "session_close_failed" })),
         ),
     };
     lifecycle_error(kind, message, Some(data))

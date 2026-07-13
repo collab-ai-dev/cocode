@@ -10,8 +10,8 @@
 use std::sync::Arc;
 
 use coco_agent_host::app_server_host::route_app_server_session_event;
+use coco_agent_host::event_hub::ProcessEventHubEgress;
 use coco_app_server::{AppServer, SessionSeqAllocator};
-use coco_hub_connector::HubConnectorSender;
 use coco_types::CoreEvent;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -106,7 +106,7 @@ impl SdkServer {
 ///
 /// Every outbound notification, reply, and server request is enqueued into one
 /// channel so wire order matches enqueue order. This is critical for
-/// `session/archive`, where the aggregated `SessionResult` event must land
+/// `session/close`, where the aggregated `SessionResult` event must land
 /// before the archive JSON-RPC reply, and for SDK MCP/hook callbacks that share
 /// the same stdout/WebSocket stream with turn events.
 pub(crate) fn spawn_sdk_outbound_writer<H>(
@@ -114,7 +114,7 @@ pub(crate) fn spawn_sdk_outbound_writer<H>(
     mut outbound_rx: mpsc::Receiver<RemoteOutboundMessage>,
     app_server: Arc<AppServer<H>>,
     session_seq: Arc<SessionSeqAllocator>,
-    hub_connector: Option<HubConnectorSender>,
+    hub_connector: Option<ProcessEventHubEgress>,
 ) -> tokio::task::JoinHandle<()>
 where
     H: Clone + Send + Sync + 'static,
@@ -126,6 +126,7 @@ where
     tokio::spawn(tracing::Instrument::instrument(
         async move {
             let mut renderer = SdkEventRenderer::default();
+            let mut last_hub_membership = Vec::new();
             while let Some(outbound) = outbound_rx.recv().await {
                 match outbound {
                     RemoteOutboundMessage::SessionEvent {
@@ -133,6 +134,14 @@ where
                         event,
                         routed,
                     } => {
+                        if let Some(hub_connector) = &hub_connector {
+                            hub_connector
+                                .sync_app_server_membership_if_changed(
+                                    &app_server,
+                                    &mut last_hub_membership,
+                                )
+                                .await;
+                        }
                         route_app_server_session_event(
                             &app_server,
                             hub_connector.as_ref(),

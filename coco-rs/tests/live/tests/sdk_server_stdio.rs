@@ -39,7 +39,8 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use coco_agent_host::app_server_host::{
-    AppServerHostState, CliInitializeBootstrap, RuntimeReplacementContext, SessionTurnExecutor,
+    AppServerHostState, CliInitializeBootstrap, HostInputs, RuntimeReplacementContext,
+    SessionTurnExecutor,
 };
 use coco_agent_host::headless;
 use coco_agent_host::remote_host::RemoteAppServer;
@@ -208,27 +209,27 @@ async fn serve(args: Args) -> Result<()> {
     let bootstrap = Arc::new(
         CliInitializeBootstrap::new("default".to_string()).with_command_registry(command_registry),
     );
-
-    let transport = StdioTransport::new();
-    let state = Arc::new(AppServerHostState::default());
-    state.install_session_manager_for_startup(Arc::clone(&session_manager));
-    state.install_initialize_bootstrap_for_startup(bootstrap);
-    state.install_startup_cwd(cwd.clone());
-
     let runner = Arc::new(SessionTurnExecutor::new(
         runtime_factory_cli.max_turns.or(Some(8)),
         Some(system_prompt),
     ));
-    state.install_turn_runner(runner).await;
-    state
-        .install_runtime_replacement(RuntimeReplacementContext {
-            startup_session_id: coco_types::SessionId::generate(),
+
+    let transport = StdioTransport::new();
+    let state = Arc::new(AppServerHostState::new(HostInputs {
+        startup_cwd: Some(cwd.clone()),
+        initialize_bootstrap: Some(bootstrap),
+        session_manager: Some(Arc::clone(&session_manager)),
+        bypass_permissions_available: false,
+        runtime_replacement: Some(RuntimeReplacementContext {
             runtime_factory,
             process_runtime,
             cwd: cwd.clone(),
             requires_structured_output: false,
-        })
-        .await;
+            integration_options:
+                coco_agent_host::session_bootstrap::SessionIntegrationOptions::default(),
+        }),
+        turn_runner: Some(runner),
+    }));
     let bridge_host =
         coco_agent_host::remote_host::RemoteAppServerBridgeHost::new(Arc::clone(&state));
     let server = SdkServer::new(transport, bridge_host);

@@ -417,7 +417,7 @@ fn run_turn_with_session(
                 // the failure into the AppServer session stats accumulator. Without
                 // this, true engine-bail paths (compaction failure,
                 // transport crash, etc.) don't surface in the final
-                // aggregated `SessionResult` emitted by `session/archive`.
+                // aggregated `SessionResult` emitted by `session/close`.
                 //
                 // Fields are minimal — we don't have usage/cost
                 // because the engine didn't reach `make_result`. The

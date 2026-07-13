@@ -550,9 +550,9 @@ async fn test_sdk_set_model_mid_session_deepseek_openai() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_sdk_session_archive_emits_aggregate_deepseek_openai() -> Result<()> {
+async fn test_sdk_session_close_emits_aggregate_deepseek_openai() -> Result<()> {
     let target = require_live!("deepseek-openai", "text");
-    sdk_server::suite::session_archive_emits_aggregate::run("deepseek-openai", &target.model).await
+    sdk_server::suite::session_close_emits_aggregate::run("deepseek-openai", &target.model).await
 }
 
 #[tokio::test]

@@ -5,10 +5,13 @@ import {
   type ApprovalDecision,
   type ClientRequest,
   type HookCallbackParams,
+  type HookCallbackOutput,
   type InitializeParams,
+  type InteractiveTarget,
   type McpRouteMessageParams,
   type PermissionMode,
-  type SdkHookOutput,
+  type SessionCloseTarget,
+  type SessionStartResult,
   type ServerNotification,
   type ThinkingLevel,
   type TurnEndedParams,
@@ -23,7 +26,7 @@ export type HookHandler = (
   callbackId: string,
   eventType: string,
   input: unknown,
-) => Promise<SdkHookOutput | Record<string, unknown> | null | undefined>;
+) => Promise<HookCallbackOutput | Record<string, unknown> | null | undefined>;
 export type McpMessageHandler = (serverName: string, message: unknown) => Promise<unknown>;
 
 export type TurnOptions = {
@@ -69,6 +72,8 @@ export class CocoClient {
   private readonly mcpMessageHandlers = new Map<string, McpMessageHandler>();
   private router: MessageRouter | null = null;
   private started = false;
+  private sessionId: string | null = null;
+  private surfaceId: string | null = null;
 
   constructor(options: CocoClientOptions) {
     this.initialPrompt = options.prompt;
@@ -125,7 +130,7 @@ export class CocoClient {
     await this.startTurnWithRetry(
       {
         method: ClientRequestMethod.TURN_START,
-        params: { prompt: text },
+        params: { target: this.interactiveTarget(), prompt: text },
       },
       options.signal,
     );
@@ -161,20 +166,45 @@ export class CocoClient {
   }
 
   async interrupt(): Promise<void> {
-    await this.notify({ method: ClientRequestMethod.TURN_INTERRUPT });
+    await this.notify({
+      method: ClientRequestMethod.TURN_INTERRUPT,
+      params: this.interactiveTarget(),
+    });
   }
 
   async setPermissionMode(mode: PermissionMode): Promise<void> {
     await this.notify({
       method: ClientRequestMethod.CONTROL_SET_PERMISSION_MODE,
-      params: { mode },
+      params: { target: this.interactiveTarget(), mode },
     });
   }
 
   async setThinking(level: ThinkingLevel | null): Promise<void> {
     await this.notify({
       method: ClientRequestMethod.CONTROL_SET_THINKING,
-      params: { thinking_level: level },
+      params: { target: this.interactiveTarget(), thinking_level: level },
+    });
+  }
+
+  async closeSession(sessionId: string | null = null): Promise<void> {
+    const targetSessionId = sessionId ?? this.sessionId;
+    if (!targetSessionId) {
+      throw new Error("no session id to close");
+    }
+    await this.request({
+      method: ClientRequestMethod.SESSION_CLOSE,
+      params: { target: this.closeTarget(targetSessionId) },
+    });
+    if (targetSessionId === this.sessionId) {
+      this.sessionId = null;
+      this.surfaceId = null;
+    }
+  }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    await this.request({
+      method: ClientRequestMethod.SESSION_DELETE,
+      params: { target: { session_id: sessionId } },
     });
   }
 
@@ -194,6 +224,8 @@ export class CocoClient {
       await this.transport.close();
     }
     this.started = false;
+    this.sessionId = null;
+    this.surfaceId = null;
   }
 
   private async sendInitialize(): Promise<void> {
@@ -202,18 +234,18 @@ export class CocoClient {
       params: {
         agents: this.options.agents ?? null,
         hooks: this.options.hooks ?? null,
-        sdk_mcp_servers: this.options.sdkMcpServers ?? null,
+        client_mcp_servers: this.options.sdkMcpServers ?? null,
         system_prompt: this.options.systemPrompt ?? null,
         append_system_prompt: this.options.appendSystemPrompt ?? null,
         json_schema: this.options.jsonSchema ?? null,
-        agent_progress_summaries: this.options.agentProgressSummaries ?? null,
+        agentProgressSummaries: this.options.agentProgressSummaries ?? null,
         prompt_suggestions: this.options.promptSuggestions ?? null,
       },
     });
   }
 
   private async sendSessionStart(): Promise<void> {
-    await this.request({
+    const result = (await this.request({
       method: ClientRequestMethod.SESSION_START,
       params: {
         model: this.modelsMain ?? null,
@@ -224,14 +256,30 @@ export class CocoClient {
         system_prompt: this.options.systemPrompt ?? null,
         append_system_prompt: this.options.appendSystemPrompt ?? null,
       },
-    });
+    })) as unknown as SessionStartResult;
+    this.sessionId = result.session_id;
+    this.surfaceId = result.surface_id ?? null;
   }
 
   private async sendTurnStart(prompt: string): Promise<void> {
     await this.request({
       method: ClientRequestMethod.TURN_START,
-      params: { prompt },
+      params: { target: this.interactiveTarget(), prompt },
     });
+  }
+
+  private interactiveTarget(): InteractiveTarget {
+    if (!this.sessionId || !this.surfaceId) {
+      throw new Error("no active interactive session target");
+    }
+    return { session_id: this.sessionId, surface_id: this.surfaceId };
+  }
+
+  private closeTarget(sessionId: string): SessionCloseTarget {
+    if (sessionId === this.sessionId && this.surfaceId) {
+      return { kind: "interactive", target: this.interactiveTarget() };
+    }
+    return { kind: "orphaned", target: { session_id: sessionId } };
   }
 
   private async startTurnWithRetry(request: ClientRequest, signal?: AbortSignal): Promise<void> {
@@ -323,7 +371,7 @@ export class CocoClient {
   }
 }
 
-function normalizeHookOutput(output: SdkHookOutput | Record<string, unknown> | null | undefined): Record<string, unknown> {
+function normalizeHookOutput(output: HookCallbackOutput | Record<string, unknown> | null | undefined): Record<string, unknown> {
   if (!output || typeof output !== "object" || Array.isArray(output)) return {};
   return output as Record<string, unknown>;
 }

@@ -32,7 +32,7 @@ use super::session_request_mapping::{
 };
 use super::session_resume_operation::resume_app_server_session_with_runtime_replacement;
 use super::session_start_operation::start_app_server_session_with_runtime_replacement;
-use super::session_surfaces::{inject_surface_id, subscribe_local_app_server_session};
+use super::session_surfaces::subscribe_local_app_server_session;
 use super::{AppServerHostState, HandlerContext};
 
 /// Runtime-backed request handler for AppServer adapters.
@@ -138,16 +138,26 @@ impl AppServerHostHandler {
                     })
             });
         }
-        let session_operation = local_app_server.as_ref().and_then(|_| {
-            if let ClientRequest::SessionArchive(params) = &request {
-                Some(LocalSessionOperation::Archive {
-                    connection,
-                    target: params.target.clone(),
-                })
-            } else {
-                None
-            }
-        });
+        if let (Some(app_server), ClientRequest::SessionClose(params)) =
+            (local_app_server.clone(), &request)
+        {
+            let state = Arc::clone(&self.state);
+            let notif_tx = self.notif_tx.clone();
+            let turn_drain_timeout = self.turn_drain_timeout;
+            let target = params.target.clone();
+            return Box::pin(async move {
+                apply_local_session_operation(
+                    app_server,
+                    state,
+                    LocalSessionOperation::Close { connection, target },
+                    turn_drain_timeout,
+                    notif_tx,
+                )
+                .await
+                .map_err(session_operation_error)?;
+                encode_app_server_result(())
+            });
+        }
         let session_data_request = local_app_server
             .as_ref()
             .and_then(|_| LocalSessionDataRequest::from_client_request(&request));
@@ -166,7 +176,6 @@ impl AppServerHostHandler {
         {
             let input = session_start_input_from_params(params);
             let state = Arc::clone(&self.state);
-            let turn_drain_timeout = self.turn_drain_timeout;
             return Box::pin(async move {
                 let replacement =
                     require_runtime_replacement(&state, "session/start", true).await?;
@@ -177,7 +186,6 @@ impl AppServerHostHandler {
                     input,
                     connection_profile,
                     replacement,
-                    turn_drain_timeout,
                 )
                 .await
                 .map_err(session_operation_error)
@@ -239,30 +247,11 @@ impl AppServerHostHandler {
             notif_tx: self.notif_tx.clone(),
             state: Arc::clone(&self.state),
             connection_profile,
-            app_server: local_app_server.clone(),
+            app_server: local_app_server,
             target_session_id,
             session,
         };
-        let state = Arc::clone(&self.state);
-        let turn_drain_timeout = self.turn_drain_timeout;
-        Box::pin(async move {
-            let dispatch_result = dispatch_app_server_client_request(request, ctx).await;
-            let mut result = dispatch_result?;
-            if let (Some(app_server), Some(session_operation)) =
-                (local_app_server, session_operation)
-                && let Some(surface_id) = apply_local_session_operation(
-                    app_server,
-                    Arc::clone(&state),
-                    session_operation,
-                    turn_drain_timeout,
-                )
-                .await
-                .map_err(session_operation_error)?
-            {
-                inject_surface_id(&mut result, surface_id)?;
-            }
-            Ok(result)
-        })
+        Box::pin(async move { dispatch_app_server_client_request(request, ctx).await })
     }
 }
 

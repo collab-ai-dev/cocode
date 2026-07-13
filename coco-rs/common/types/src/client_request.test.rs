@@ -31,13 +31,17 @@ fn canonical_targets_round_trip() {
 }
 
 #[test]
-fn archive_target_round_trips_both_authority_cases() {
+fn close_target_round_trips_both_authority_cases() {
     for target in [
-        ArchiveTarget::Interactive(interactive_target()),
-        ArchiveTarget::Orphaned(session_target()),
+        SessionCloseTarget::Interactive {
+            target: interactive_target(),
+        },
+        SessionCloseTarget::Orphaned {
+            target: session_target(),
+        },
     ] {
         let value = serde_json::to_value(&target).unwrap();
-        let decoded: ArchiveTarget = serde_json::from_value(value).unwrap();
+        let decoded: SessionCloseTarget = serde_json::from_value(value).unwrap();
         assert_eq!(decoded.session_id(), target.session_id());
     }
 }
@@ -71,7 +75,8 @@ fn missing_targets_fail_deserialization() {
         serde_json::json!({"method":"turn/interrupt"}),
         serde_json::json!({"method":"mcp/status"}),
         serde_json::json!({"method":"session/read","params":{"limit":1}}),
-        serde_json::json!({"method":"session/archive","params":{}}),
+        serde_json::json!({"method":"session/close","params":{}}),
+        serde_json::json!({"method":"session/delete","params":{}}),
         serde_json::json!({"method":"config/read","params":{}}),
     ] {
         assert!(serde_json::from_value::<ClientRequest>(request).is_err());
@@ -100,6 +105,14 @@ fn request_scope_classifies_representative_methods() {
     );
     assert_eq!(
         request_scope(ClientRequestMethod::SessionReplace),
+        RequestScope::Lifecycle
+    );
+    assert_eq!(
+        request_scope(ClientRequestMethod::SessionClose),
+        RequestScope::Lifecycle
+    );
+    assert_eq!(
+        request_scope(ClientRequestMethod::SessionDelete),
         RequestScope::Lifecycle
     );
     assert_eq!(

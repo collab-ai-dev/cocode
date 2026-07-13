@@ -1431,6 +1431,11 @@ pub struct TurnEndedParams {
     /// is a real "zero usage" signal — distinct from "unknown".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<TokenUsage>,
+    /// Complete per-turn result when the emitter owns the final accounting
+    /// snapshot. AppServer surfaces use this to complete a turn without
+    /// polling session-level projections or waiting for `session/close`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_result: Option<Box<SessionResultParams>>,
     pub outcome: TurnOutcome,
 }
 
@@ -1525,6 +1530,7 @@ impl TurnEndedParams {
         Self {
             turn_id,
             usage,
+            session_result: None,
             outcome: TurnOutcome::Completed(CompletedOutcome { stop_reason }),
         }
     }
@@ -1533,6 +1539,7 @@ impl TurnEndedParams {
         Self {
             turn_id,
             usage,
+            session_result: None,
             outcome: TurnOutcome::Failed(FailedOutcome { error }),
         }
     }
@@ -1545,6 +1552,7 @@ impl TurnEndedParams {
         Self {
             turn_id,
             usage,
+            session_result: None,
             outcome: TurnOutcome::Interrupted(InterruptedOutcome { abort_reason }),
         }
     }
@@ -1557,6 +1565,7 @@ impl TurnEndedParams {
         Self {
             turn_id,
             usage,
+            session_result: None,
             outcome: TurnOutcome::MaxTurnsReached(MaxTurnsReachedOutcome { max_turns }),
         }
     }
@@ -1570,11 +1579,17 @@ impl TurnEndedParams {
         Self {
             turn_id,
             usage,
+            session_result: None,
             outcome: TurnOutcome::BudgetExhausted(BudgetExhaustedOutcome {
                 used_tokens,
                 budget_tokens,
             }),
         }
+    }
+
+    pub fn with_session_result(mut self, result: SessionResultParams) -> Self {
+        self.session_result = Some(Box::new(result));
+        self
     }
 }
 

@@ -442,7 +442,7 @@ impl QueryEngine {
         // `Later`-priority items (background task-completion notifications)
         // drain only after a Sleep; else the boundary drain caps at `Next`.
         sleep_ran: bool,
-    ) {
+    ) -> Option<coco_types::TurnEndedParams> {
         // Periodic terminal-task eviction. Fires every turn regardless
         // of success / failure / cancellation outcome. Without a periodic
         // sweep `TaskManager`'s in-memory map grows monotonically over a
@@ -867,7 +867,7 @@ impl QueryEngine {
             cycle_turn_id,
             stop_reason,
         )
-        .await;
+        .await
     }
 }
 

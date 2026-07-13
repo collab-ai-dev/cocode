@@ -1,9 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
 use coco_app_server::{AppServer, JsonRpcAdapter};
-use coco_hub_connector::HubConnectorSender;
 use coco_types::CoreEvent;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -17,7 +15,7 @@ use super::{
     spawn_app_server_local_outbound_forwarder,
 };
 use crate::app_session::AppSessionHandle;
-use crate::event_hub::RuntimeEventHubConnector;
+use crate::event_hub::ProcessEventHubEgress;
 
 const REMOTE_APP_SERVER_MAX_SESSIONS: usize = 32;
 const REMOTE_APP_SERVER_RETENTION_PER_SESSION: usize = 1024;
@@ -50,7 +48,7 @@ pub struct RemoteAppServerConnectionBinding {
 #[derive(Clone)]
 pub struct RemoteAppServerBridgeHost {
     state: Arc<AppServerHostState>,
-    hub_connector: Option<HubConnectorSender>,
+    hub_connector: Option<ProcessEventHubEgress>,
     turn_drain_timeout: Duration,
 }
 
@@ -67,8 +65,8 @@ impl RemoteAppServerBridgeHost {
         Self::new(Arc::new(AppServerHostState::default()))
     }
 
-    pub fn with_hub_connector_sender(mut self, sender: Option<HubConnectorSender>) -> Self {
-        self.hub_connector = sender;
+    pub fn with_hub_connector_egress(mut self, egress: Option<ProcessEventHubEgress>) -> Self {
+        self.hub_connector = egress;
         self
     }
 
@@ -81,7 +79,7 @@ impl RemoteAppServerBridgeHost {
         Arc::clone(self.state.session_seq_allocator())
     }
 
-    pub fn hub_sender(&self) -> Option<HubConnectorSender> {
+    pub fn hub_connector(&self) -> Option<ProcessEventHubEgress> {
         self.hub_connector.clone()
     }
 
@@ -140,7 +138,7 @@ pub(crate) fn build_remote_app_server_runtime_binding(
 pub fn open_remote_sidecar_binding(
     state: Arc<AppServerHostState>,
     app_server: Arc<RemoteAppServer>,
-    hub_sender: Option<HubConnectorSender>,
+    hub_connector: Option<ProcessEventHubEgress>,
     turn_drain_timeout: Duration,
     channel_capacity: usize,
 ) -> RemoteSidecarHostBinding {
@@ -157,7 +155,7 @@ pub fn open_remote_sidecar_binding(
         app_server,
         state,
         outbound_rx,
-        Arc::new(std::sync::RwLock::new(hub_sender)),
+        Arc::new(std::sync::RwLock::new(hub_connector)),
     );
     RemoteSidecarHostBinding {
         handler,
@@ -168,10 +166,9 @@ pub fn open_remote_sidecar_binding(
 pub async fn shutdown_remote_app_server_host(
     app_server: Arc<RemoteAppServer>,
     state: Arc<AppServerHostState>,
-    event_hub_connector: Option<RuntimeEventHubConnector>,
     turn_drain_timeout: Duration,
     shutdown_timeout: Duration,
-) -> Result<()> {
+) -> crate::shutdown::ShutdownDrainOutcome {
     let shutdown_runtimes = app_server
         .list_live_sessions()
         .into_iter()
@@ -188,51 +185,13 @@ pub async fn shutdown_remote_app_server_host(
         crate::shutdown::os_interrupt_signal(),
     )
     .await;
-    match &app_server_shutdown {
-        crate::shutdown::ShutdownDrainOutcome::Clean => {}
-        crate::shutdown::ShutdownDrainOutcome::Failed { message } => tracing::warn!(
-            target: "coco_agent_host::remote",
-            message = %message,
-            "remote AppServer shutdown drain failed"
-        ),
-        crate::shutdown::ShutdownDrainOutcome::TimedOut { timeout_secs } => {
-            tracing::warn!(
-                target: "coco_agent_host::remote",
-                timeout_secs,
-                "remote AppServer shutdown drain timed out"
-            )
-        }
-        crate::shutdown::ShutdownDrainOutcome::Interrupted => tracing::warn!(
-            target: "coco_agent_host::remote",
-            "remote AppServer shutdown drain interrupted by signal"
-        ),
-    }
 
     for session_runtime in &shutdown_runtimes {
         crate::shutdown::persist_session_resume_mode(session_runtime).await;
         crate::shutdown::drain_session_memory(session_runtime).await;
     }
 
-    let event_hub_shutdown = if let Some(connector) = event_hub_connector {
-        connector
-            .shutdown_and_flush_with_timeout(shutdown_timeout)
-            .await
-    } else {
-        crate::shutdown::ShutdownDrainOutcome::Clean
-    };
-
-    shutdown_drain_result("remote AppServer", &app_server_shutdown)?;
-    shutdown_drain_result("remote Event Hub", &event_hub_shutdown)
-}
-
-fn shutdown_drain_result(
-    component: &str,
-    outcome: &crate::shutdown::ShutdownDrainOutcome,
-) -> Result<()> {
-    if outcome.is_clean() {
-        return Ok(());
-    }
-    Err(anyhow::anyhow!("{component} shutdown drain {outcome}"))
+    app_server_shutdown
 }
 
 fn open_remote_app_server_connection_binding(

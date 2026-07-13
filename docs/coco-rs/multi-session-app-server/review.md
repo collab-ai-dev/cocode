@@ -1,285 +1,452 @@
-# Verified Architecture Review
+# Adversarial Architecture Review
 
-Resolution status: all confirmed R1-R11 gaps were addressed by the breaking
-refactor. The evidence below is retained as the review of the pre-refactor
-baseline; the production ownership model is documented in
-[current-architecture.md](current-architecture.md).
+Audit date: 2026-07-13.
 
-## Post-refactor delivery audit
+Scope: `coco-rs/app/{agent-host,cli,sdk-server,server,server-client,runtime}`,
+the session store, Hub connector, production multi-session tests, and the
+previous documents in this directory.
 
-Three follow-up delivery findings were also confirmed and resolved on
-2026-07-11:
-
-- orphan archive authorization had occurred after handler side effects; it now
-  proves orphan authority before dispatch and is protected by a regression test
-  in which an owned session's active turn remains live after rejection;
-- the earlier integration-test count did not by itself prove all package-H
-  scenarios; the suite now contains semantic coverage for every one of the
-  eleven requirements, with overall bounded timeouts for all concurrent and
-  lifecycle cases;
-- the SDK `pending_map` module was unused outside its own tests after callback
-  ownership moved to AppServer; the module, tests, and public export were
-  removed.
-
-These are closed findings, not amendments to the pre-refactor R1-R11 analysis
-below. The evidence mapping is recorded in
-[remediation-plan.md](remediation-plan.md#package-h-evidence-matrix).
-
-This review re-derived each reported issue from production call paths and then
-looked for code or tests that would refute it. The purpose is to distinguish
-real correctness gaps from differences between an aspirational document and a
-valid Rust implementation.
+The review treats code and tests as evidence, not as proof that the documented
+architecture is correct. Each finding below records the observed path, a
+counter-hypothesis, and the resulting decision.
 
 ## Method
 
-The review followed these paths:
+The audit followed these paths:
 
-1. canonical `ClientRequest` DTO -> remote/local client helper;
-2. JSON-RPC/local adapter -> `AppServerHostHandler` request context;
-3. handler target resolution -> `TurnRunner` and runtime-control handlers;
-4. registry slot transition -> host lifecycle wrapper;
-5. per-session runtime construction -> project config and integration setup;
-6. existing unit/integration tests -> claimed acceptance criteria.
+1. CLI schema -> mode selection -> tracing mode -> selected runner;
+2. process startup -> host construction -> first live session;
+3. local/remote request -> target validation -> selected `SessionHandle`;
+4. start/resume/replace/close -> registry owner task -> runtime teardown;
+5. turn start -> active-turn ownership -> terminal result/event ordering;
+6. session close/delete -> `SessionManager` -> JSONL behavior;
+7. AppServer event -> Hub connector announce/reconnect/batch path;
+8. crate manifests, `lib.rs` exports, module layout, and public capability APIs;
+9. existing tests -> claimed completion properties.
 
-The findings below are about production behavior. A missing actor or a type
-that differs from a design sketch is not classified as a bug unless it breaks
-an invariant.
+## Retained v1 findings
 
-## R1: requests cannot target one of several interactive surfaces
+The previous refactor did fix important issues. These results are still
+supported by code and production-path tests:
 
-**Verdict: confirmed, critical.**
+- interactive mutations carry explicit `(session_id, surface_id)` authority;
+- AppServer validates connection, surface role, session identity, and live
+  registry state before returning a runtime handle;
+- accepted remote connections get independent initialize/profile state;
+- turn execution receives the validated `SessionHandle` instead of selecting a
+  process-global current runtime;
+- active turn, MCP, file history, reload state, and callback requirements are
+  session-keyed for the tested paths;
+- registry loading/closing/replacement owner tasks prevent caller cancellation
+  from owning lifecycle progress;
+- remote client and server implementation dependencies remain separated.
 
-Evidence:
+No evidence supports reverting those decisions.
 
-- `TurnStartParams`, `TurnInterrupt`, session status/cost, task controls,
-  runtime controls, MCP controls, and several other session operations do not
-  carry `session_id` or `surface_id`.
-- `RemoteSessionClient` stores both identifiers, but `query()` delegates to
-  connection-level `turn_start(params)` and `interrupt()` delegates to
-  connection-level `turn_interrupt()` without injecting either identifier.
-- `AppServerHostHandler` derives scope with
-  `sole_interactive_session_for_connection`. Routing intentionally returns
-  `None` when that connection owns two interactive surfaces for two different
-  sessions.
-- The fallback after `None` is the process-installed runtime or a sole SDK
-  handoff, neither of which identifies the caller's `RemoteSessionClient`.
+## V2 findings
 
-Counter-hypothesis: the client handle might implicitly bind requests to a
-surface through its transport. Refuted: all handles clone the same
-`RemoteJsonRpcClient`, and JSON-RPC request context contains a connection key,
-not a surface key.
+### V2-R1: `session/archive` mixes runtime close and durable deletion
 
-Consequence: the routing data model permits one connection to own several
-sessions, but its command protocol cannot select one. The typed handle is
-currently an identity display/event-demux facade, not a command capability.
+Verdict: confirmed, critical; production code now remediated in Phase A.
 
-## R2: production turns may run with the wrong SessionRuntime
+Original evidence:
 
-**Verdict: confirmed, critical.**
+- `target-architecture.md` previously said archive was runtime close and JSONL
+  remained resumable.
+- the former `session_archive::archive_live_session` path called
+  `delete_persisted_session_record`;
+- that helper called `SessionManager::delete`;
+- `SessionManager::delete` explicitly removes the transcript JSONL.
 
-Evidence:
+Primary paths:
 
-- Handler turn setup correctly derives a session id and retrieves that
-  session's keyed `SessionHandoffState`.
-- The production `StateQueryEngineRunner` ignores that identity when selecting
-  the runtime. At execution time it calls
-  `SdkServerState::session_runtime_snapshot()`, a single `Option<SessionHandle>`
-  replaced by every successful start/resume.
-- `run_turn_with_session` obtains cwd, runtime config, tools, model runtime,
-  hooks, and other engine inputs from that selected handle, while history and
-  `ToolAppState` arrive separately through the keyed handoff.
+- removed Phase A path:
+  `app/agent-host/src/session_archive.rs` and
+  `app/agent-host/src/app_server_host/request_handlers/session/archive.rs`;
+- replacement paths:
+  `app/agent-host/src/session_close.rs`,
+  `app/agent-host/src/app_server_host/session_close.rs`, and
+  `app/agent-host/src/app_server_host/request_handlers/session/delete.rs`;
+- `app/session/src/lib.rs:542-547`
 
-Counter-hypothesis: the handler's `scoped_runtime` might reach the runner.
-Refuted: it is used by runtime-control handlers through
-`HandlerContext::resolve_runtime`, but it is not part of the `TurnRunner`
-signature and is not passed to `StateQueryEngineRunner`.
+Counter-hypothesis: "archive" may intentionally mean permanent deletion.
 
-Consequence: after session B becomes the installed runtime, a turn targeted at
-session A can combine A's history/app state with B's cwd/config/tools. This is
-cross-session state mixing, not merely a stale status display.
+Result: even if that product meaning were intended, one request still combines
+two independently important operations and contradicts resume-oriented
+protocol text. It also makes orphan cleanup destructive. The API must separate
+live close from durable delete.
 
-## R3: session-owned integration state remains process-singleton
+Decision: remove `session/archive`; add `session/close` and `session/delete`.
+Current status: landed. Close preserves the transcript; delete is explicit,
+storage-only, and rejects live/loading/closing slots.
 
-**Verdict: confirmed, high.**
+### V2-R2: close timeout can leave detached work after close
 
-The following slots live once on `SdkServerState` and are overwritten or
-aborted when a different runtime is installed:
-
-- `SessionRuntimeState`;
-- `McpManagerState`;
-- `FileHistoryStateSlot`;
-- `RuntimeReloadState`.
-
-Examples:
-
-- MCP handlers read `state.mcp_manager_snapshot()` and several tool
-  registration paths read `state.session_runtime_snapshot()` instead of the
-  routed runtime.
-- replacement runtime setup passes the currently installed MCP manager into
-  `bootstrap_session_mcp`, allowing sessions with different project MCP
-  definitions to share one mutable manager accidentally;
-- rewind selects a scoped session id, but reads file-history storage from the
-  process singleton;
-- installing a new runtime aborts the previous runtime reload subscription.
-
-Counter-hypothesis: these are intentionally process-shared services. Refuted:
-their inputs and side effects depend on session cwd, project configuration,
-tool registry, file snapshots, or sandbox state. Sharing them requires an
-explicit definition-site key and lifetime contract, neither of which these
-slots have.
-
-Remediation does not mean deleting their functionality. Immediate deletion
-would break turns, controls, MCP operations, rewind, approvals, and reload.
-Each capability must first move behind the registry-selected `SessionHandle`;
-only the redundant process slot is then removed. MCP and file history already
-have partial runtime ownership. Reload still needs an explicit
-session-lifetime supervisor before its process slot can be retired.
-
-## R4: resume during Closing does not wait and reopen
-
-**Verdict: confirmed, medium.**
-
-The registry exposes a close completion when `begin_load` observes a
-`Closing` slot. The host wrapper converts `AppLoadStart::Closing` directly to
-an internal error rather than awaiting completion and retrying the load. This
-contradicts the former plan's wait-and-reopen contract.
-
-The target behavior is still reasonable: never return a draining handle;
-await close outside locks; retry normal disk load afterward. The behavior must
-also be bounded by request cancellation/timeout without cancelling the owner
-close task.
-
-## R5: SessionRuntime is not actor-owned
-
-**Verdict: factual, but not itself a defect.**
-
-`SessionRuntime` is an `Arc`-shared resource owner composed from focused
-resource groups. `SessionHandle` wraps `Arc<SessionRuntime>`, exposes
-`runtime()`, and implements `Deref`. There is no general `SessionCommand`
-driver owning all mutable state.
-
-The former document treated a whole-runtime actor as both a locked decision
-and a future evolution. That is a documentation contradiction. It is not
-evidence that the current lock-based Rust structure is invalid.
-
-Review decision:
-
-- do not require a whole-runtime actor for multi-session correctness;
-- remove `Deref` and raw runtime escape APIs after callers have explicit
-  capability methods;
-- serialize only turn lifecycle and other genuinely coupled state through a
-  small `TurnCoordinator` boundary;
-- keep independent service handles independent rather than routing every read
-  through one mailbox.
-
-This follows Rust's ownership model more directly and avoids a god actor,
-mailbox backpressure for ordinary reads, and unnecessary oneshot plumbing.
-
-## R6: ProjectServices differs from the former target
-
-**Verdict: confirmed, but the former target should not be implemented as
-written.**
-
-Current `ProjectServices` owns a configuration snapshot and project/plugin
-catalog. `ProjectRegistry` provides publication deduplication, freshness
-replacement, identity reuse, and idle eviction.
-
-It does not own LSP, retrieval, ignore/context discovery, or project-shared
-MCP instances. Concurrent cold loads may both perform I/O, after which one
-published `Arc` wins. Therefore "true single-flight" is not an accurate name
-for the current algorithm.
-
-The proposed name `ProjectHeavyServices` is rejected. "Heavy" describes an
-implementation cost, not a responsibility or invariant. Future shared
-capabilities should use functional names such as `ProjectMcpRegistry` or
-`ProjectLanguageServices`, and should be introduced only when their keys,
-sharing semantics, and teardown behavior are proven.
-
-## R7: crate dependency concerns
-
-**Verdict: refuted as a current issue.**
-
-The desired split is present:
-
-- `coco-app-server-client` depends on transport and canonical types, not on
-  `coco-app-server`;
-- `coco-agent-host` owns in-process client composition and application runtime
-  integration;
-- `coco-app-runtime` owns project/workspace/bootstrap contracts;
-- engine/core crates are protected from server dependencies by the checked-in
-  seam guard.
-
-The boundary should be retained. The remaining defects come from duplicate
-runtime ownership above the boundary, not from the crate graph.
-
-## R8: surface and event infrastructure
-
-**Verdict: largely landed.**
-
-Existing tests cover passive plus interactive attachments, second-owner
-conflicts, connection surface limits, capability-gated server requests,
-replace/archive routing, replay boundaries, slow consumers, owner-task
-progress, and multi-slot shutdown.
-
-What is missing is an end-to-end production test that creates two real runtime
-handles and runs turns through the public remote client. Routing unit tests do
-not refute R1 or R2 because they stop before request target selection and
-engine construction.
-
-## R9: accepted connections do not have isolated handler state
-
-**Verdict: confirmed, critical for multi-connection SDK operation.**
+Verdict: confirmed, critical; partially remediated in Phase A.
 
 Evidence:
 
-- listener connections reuse one `AppServerHostHandler` backed by one
-  `AppServerHostState`;
-- `InitializeState` is one shared set of `RwLock`s containing SDK agents,
-  plan-mode instructions, and hook callbacks; related initialize-derived
-  preferences also live on shared `BootstrapState`, so a later connection can
-  replace inputs used by another connection's session;
-- `ConnectionState` contains one transport and ordered outbound writer slot;
-- `McpRegistrationState` indexes status reports only by server name rather
-  than by owning session;
-- callback waiter/request maps are shared and do not uniformly prove
-  connection, surface, session, and request-id ownership on reply.
+- the former archive path removed `ActiveTurnHandles` from
+  `SessionTurnCoordinator` before
+  draining;
+- each task is awaited through `tokio::time::timeout` by value;
+- on timeout the `JoinHandle` is dropped without `abort`, detaching the task;
+- the warning explicitly allows late events;
+- the later registry close saw no active-turn handles because archive already
+  took them.
 
-Counter-hypothesis: AppServer's `ConnectionKey` already provides isolation.
-Refuted: routing knows the connection key, but these host fields live outside
-the routing entry and are not keyed by it.
+Primary paths:
 
-Remediation: keep the registry, routing, catalogs, and runtime factory shared,
-but create one connection handler with an immutable-after-initialize
-`ConnectionProfile`, writer, and JSON-RPC correlation state per accepted
-connection. Domain server requests remain owned and validated by AppServer.
+- removed Phase A path: `app/agent-host/src/session_archive.rs:52-98`
+- `app/agent-host/src/session_runtime/session_handle.rs:1075-1093`
+- `app/agent-host/src/app_server_host/session_close.rs:120-142`
 
-## R10: configuration requests do not have one natural process scope
+Counter-hypothesis: cancellation always makes the tasks finish before timeout.
 
-**Verdict: confirmed, high.**
+Refuted: the timeout branch is reachable by construction and its own warning
+documents the late-task behavior. Cancellation is cooperative and cannot prove
+termination.
 
-`config/read` derives an effective fold using the handler workspace cwd.
-Project and local `config/value/write` also resolve their target path from
-cwd. Treating all configuration operations as process-scoped would preserve
-the same implicit-current-workspace bug under a different name.
+Decision: registry close is the sole owner of active task handles. It cancels,
+awaits, aborts on timeout, and awaits the abort before reporting close complete.
+Current status: the destructive archive path is gone and registry close now
+drains through `SessionHandle::drain_active_turn`, which aborts and awaits
+timed-out turn/forwarder tasks. Close completion now returns structured
+`session_close_timeout` data for drain timeouts. Forced turn-task and
+forwarder-task timeout regressions have been added and compiled for the next
+batched test run. A successful-close no-late-session-event regression has also
+been added and compiled; it verifies that close drains the active turn, emits
+the final `SessionResult`, and has no further same-session outbound events
+after the close response completes.
 
-The protocol must distinguish process/user configuration from session-derived
-effective reads and project/local writes. The latter require an explicit
-session, and writes require an interactive target because they mutate the
-selected workspace.
+### V2-R3: terminal accounting is captured before active-turn drain
+
+Verdict: confirmed, high.
+
+Evidence:
+
+- `build_session_result` runs before active turn cancellation/drain;
+- the former archive handler documented that the in-flight turn was excluded;
+- the handler then emits that incomplete aggregate as the terminal
+  `SessionResult`;
+- the former archive path used a hard-coded five-second drain rather than the host's configured
+  turn-drain timeout.
+
+Primary paths:
+
+- removed Phase A paths:
+  `app/agent-host/src/session_archive.rs:47-64` and
+  `app/agent-host/src/app_server_host/request_handlers/session/archive.rs:18-22,59-72`;
+- replacement path:
+  `app/agent-host/src/app_server_host/session_close.rs`
+
+Decision: terminal result creation happens after all turn event forwarding has
+stopped. One configured close deadline is threaded through the lifecycle owner.
+Current status: close emits the final `SessionResult` from the close owner
+after the runtime close cascade. An in-flight close accounting/order regression
+has been added and compiled for the next batched test run; it forces a turn to
+emit per-turn accounting during close and verifies the final close
+`SessionResult` includes that accounting.
+
+### V2-R4: declared CLI modes do not select the documented runners
+
+Verdict: confirmed, critical for CLI correctness.
+
+Current status: partially remediated. `coco-cli` now has a shared
+`ExecutionPlan`/`IoCapabilities` seam used by both `main.rs` and
+`tracing_init.rs`; `--non-interactive` selects headless, `resume` is classified
+as interactive, and the unsupported global `--no-tui` and `--json` flags are
+rejected by clap. Mode-dependent validation for `--no-session-persistence` and
+`--plan-mode-instructions` moved into fallible pure plan construction.
+Placeholder subcommands that only printed success/not-implemented messages are
+deleted from clap. Headless stdin behavior is now explicit: piped stdin becomes
+the raw prompt when no `--prompt` is provided. Confirmed CLI-only flags with no
+runner consumer are rejected by clap. The retained top-level clap schema is
+guarded by an accepted-field consumption audit test.
+
+Original evidence:
+
+- clap declares `--no-tui`, `--json` (described as SDK mode), and
+  `--non-interactive`/`--print`;
+- production mode selection ignores all three flags;
+- default selection checks only prompt presence or non-terminal stdout;
+- stdin is not part of the decision;
+- `tracing_init::detect_mode` duplicates the same partial logic;
+- several other accepted flags are parsed but never mapped into
+  `AgentHostOptions` or consumed by a runner.
+
+Primary paths:
+
+- `app/cli/src/execution_plan.rs`
+- `app/cli/src/lib.rs`
+- `app/cli/src/main.rs`
+- `app/cli/src/tracing_init.rs`
+
+Counter-hypothesis: clap aliases or `AgentHostOptions` perform the conversion.
+
+Refuted: repository-wide production-use searches find no such conversion for
+the mode flags. Tests only verify parsing for several scripting flags.
+
+Decision: one pure execution-plan seam validates and selects the mode.
+Unsupported flags and placeholder commands are deleted rather than retained as
+no-ops.
+
+### V2-R5: SDK startup creates a hidden placeholder session
+
+Verdict: confirmed, high; production placeholder path remediated in Phase D.
+
+Evidence:
+
+- the protocol says initialize does not create a hidden startup session;
+- `prepare_remote_host` generates `startup_session_id`, builds a full runtime,
+  creates MCP and Event Hub integrations, fires session hooks, and registers the
+  runtime before accepting the first client lifecycle request;
+- the first start/resume has special logic to replace the detached placeholder.
+
+Original primary paths:
+
+- `app/agent-host/src/remote_host.rs:162-239`
+- `app/agent-host/src/app_server_host/session_start_operation.rs:73-119`
+- `app/agent-host/src/app_server_host/session_resume_operation.rs:111-132`
+
+Counter-hypothesis: initialize metadata requires a live runtime.
+
+Refuted: initialize already has a bootstrap metadata provider and its unscoped
+request context cannot select a live session. The placeholder is not necessary
+for request authority.
+
+Decision: SDK prepares process services, AppServer, factory, listeners, and
+metadata snapshots only. The first `session/start` or `session/resume` builds
+the first runtime.
+
+Current status: landed for the placeholder behavior. `HostBuilder::prepare` no
+longer builds a startup runtime, fires session hooks, creates MCP integrations,
+or registers a surfaceless session. `RuntimeReplacementContext` no longer
+carries `startup_session_id`, and `session/start`/`session/resume` no longer
+replace a detached placeholder slot. A regression verifies that prepared remote
+hosts have an empty AppServer registry and that `initialize` succeeds without
+creating a session. A second regression sets `COCO_SERVER_MAX_SESSIONS=1` and
+verifies the first real `session/start` succeeds, preventing the old hidden-slot
+failure mode from returning.
+
+### V2-R6: Event Hub membership is not registry-owned process state
+
+Verdict: confirmed architecture defect; event loss not proven.
+
+Evidence:
+
+- `RuntimeEventHubConnector::spawn_for_session` creates one immutable
+  `AnnounceFrame`;
+- live membership is not derived from the AppServer registry;
+- later AppServer start/resume/replace/close operations do not update a
+  process-owned announce live set;
+- reconnect reuses the same announce and Hub resume cursors are returned only
+  for announced live sessions.
+
+Primary paths:
+
+- `app/agent-host/src/event_hub.rs:43-59,108-120`
+- `app/agent-host/src/remote_host.rs`
+- `hub/connector/src/worker.rs:491-492,553-572`
+
+Counter-hypothesis: Hub accepts batches for sessions not listed in announce.
+
+Not refuted: current connector code can still send those batches, so this
+review does not claim proven event loss. What is proven is incorrect live
+membership and incomplete reconnect cursor negotiation.
+
+Decision: Event Hub is process-host egress. Its announce is generated from the
+AppServer live registry and is refreshed on lifecycle changes/reconnect.
+
+Current status: partially remediated. The connector owner is now
+`ProcessEventHub`, and process hosts start it with an explicit live-session
+snapshot instead of requiring a placeholder runtime. The connector worker
+announces on startup, so an empty host can announce `live_sessions: []`.
+SDK remote, TUI, and headless startup paths attach process-owned Event Hub
+egress to the AppServer outbound path and run a membership watcher over
+AppServer activity revisions. Local sidecar and SDK stdio writers also refresh
+membership immediately before routing a session event to the Hub, so the event
+cannot intentionally outrun the live-set announce after a session transition.
+Registry-derived dynamic membership is still not fully proven: close, replace,
+reconnect-cursor, and identity/ack isolation regressions remain open. SDK
+remote startup and A/B start membership are covered by a focused remote-host
+regression.
+
+### V2-R7: the three surfaces do not share one session lifecycle
+
+Verdict: confirmed, high drift risk.
+
+Evidence:
+
+- TUI startup previously constructed a runtime for the resume id and directly
+  hydrated and bound it when the ids matched;
+- headless previously constructed a runtime with an id override and directly
+  seeded resume state;
+- SDK uses the AppServer resume lifecycle operation;
+- headless previously waited for session aggregation with a short polling loop
+  and fabricated a fallback result if the projection had not updated. That
+  specific polling/fallback path has been removed in Phase B startup work.
+
+Primary paths:
+
+- `app/cli/src/tui_runner/bootstrap.rs:168-240,309-339`
+- `app/cli/src/tui_runner/session_switching.rs:278-365`
+- `app/agent-host/src/headless.rs:867-955,1181-1207`
+
+Counter-hypothesis: all paths eventually install the same runtime shape.
+
+Result: shared construction shape does not guarantee shared lifecycle ordering,
+callback binding, close semantics, or result delivery. The earlier refactor
+removed engine drift but not surface orchestration drift.
+
+Decision: every surface opens a typed client connection and uses the same
+start/resume/replace/close operations. Surface code never directly registers or
+hydrates a runtime.
+
+Current status: partially remediated. TUI startup now uses local
+`session/start` for fresh sessions and local `session/resume` when the binary
+resolved a resume/fork plan; it no longer creates a placeholder fresh runtime
+before startup resume. Production headless resume now carries an explicit
+`resume_target` and enters through local `session/resume`; fresh headless uses
+local `session/start` with an explicit session id. Runtime integration policy
+is supplied through `RuntimeReplacementContext`, so lifecycle-owned runtime
+construction installs the TUI/headless-specific integrations instead of surface
+startup doing it after registration. In-session TUI `/resume` and `/branch`
+now switch through a local typed `session/replace` resume facade, and `/clear`
+now switches through a typed `session/replace` clear destination. Main TUI shortcut,
+observability, and driver control paths now activate an already-live
+interactive session through a `SessionId` facade instead of registering
+`SessionHandle`s from the TUI layer. Prompt-mode bash response turns now return
+to the main driver and start through that same bridge instead of a short-lived
+binding bridge. Test/embedding headless callers that provide in-memory prior
+messages now send them through typed `session/start.initial_messages`; the
+AppServer-owned runtime builder hydrates history before the first turn instead
+of the headless surface mutating history after startup. AppServer drain and
+Event Hub membership-watcher stop/flush now use a shared
+`ShutdownCoordinator` across headless, TUI, and SDK remote-host shutdown.
+Remaining gap: shared lifecycle conformance coverage does not yet span all
+connection styles.
+
+### V2-R8: `coco-agent-host` is not protocol-neutral
+
+Verdict: confirmed architecture defect.
+
+Evidence:
+
+- `coco-agent-host` directly depends on `coco-tui`;
+- production host modules use `coco_tui::ImageData`, `SystemPushKind`,
+  `UserCommand`, `App`, and TUI permission rendering;
+- the target dependency graph omits this edge.
+
+Primary paths:
+
+- `app/agent-host/Cargo.toml:20-68`
+- `app/agent-host/src/app_server_host/session_turn_executor.rs:43-71`
+- `app/agent-host/src/session_messages.rs:88-128`
+- `app/agent-host/src/{tui_permission_bridge,voice_bootstrap,teammate_inbox_pump}.rs`
+
+Decision: generic image/message DTOs move to lower crates. TUI bridges and the
+TUI driver move to a surface composition crate above agent-host.
+
+### V2-R9: module and public API organization do not express ownership
+
+Verdict: confirmed maintainability defect.
+
+Evidence:
+
+- `agent-host/src/lib.rs` exports 69 implementation modules;
+- the source root contains 71 non-test non-`lib.rs` Rust files, including 18
+  top-level `session_*` files;
+- `app_server_host` contains another 16 `session_*` modules with step-oriented
+  names;
+- many modules use `session_*`
+  prefixes as a substitute for a module hierarchy;
+- `app_server_host` has the opposite problem: one lifecycle request is spread
+  across many small step-named files;
+- `SessionHandle` is about 1,489 lines with roughly 186 public methods;
+- it returns raw `Arc<Mutex<_>>`, `Arc<RwLock<_>>`, registries, managers, and
+  mutable service handles;
+- several modules exceed the repository's 800-line target.
+
+Counter-hypothesis: explicit forwarding preserves an opaque runtime.
+
+Result: it hides the `SessionRuntime` type but still exports its mutable
+implementation capabilities. This is not a data race by itself, but it defeats
+the claimed focused-capability boundary and makes surface coupling easy.
+
+Decision: organize by lifecycle/operation/integration ownership, default
+modules to private, and expose small operation/snapshot capabilities rather
+than locks.
+
+### V2-R10: construction-time invariants remain temporally optional
+
+Verdict: confirmed architecture defect.
+
+Evidence:
+
+- `AppServerHostState::default` is followed by a sequence of `install_*`
+  mutations before the host is valid;
+- startup-only installation uses `try_write` plus `panic` on lock contention;
+- `SessionCallbackRequirements` is a late `OnceLock`; a second set error is
+  ignored and reads before installation return default requirements;
+- session identity exists both as an immutable handle snapshot and inside
+  mutable `QueryEngineConfig`; an arbitrary update closure is constrained by a
+  runtime `assert_eq!`.
+
+Primary paths:
+
+- `app/agent-host/src/app_server_host/state.rs:13-30,59-130`
+- `app/agent-host/src/app_server_host/bootstrap_state.rs:13-38`
+- `app/agent-host/src/session_runtime/session_handle.rs:1384-1414`
+- `app/agent-host/src/session_runtime/state.rs:1085-1109`
+
+Decision: builders produce fully valid immutable host/session inputs. Identity
+and callback requirements are constructor fields. Mutable engine settings do
+not contain session identity.
+
+### V2-R11: obsolete public output code and accepted no-op commands remain
+
+Verdict: confirmed cleanup defect.
+
+Evidence:
+
+- `agent-host::output` has no production callers in the workspace;
+- legacy CLI output-format flags are rejected rather than wired to it;
+- it performs `&text[..500]`, which can panic on a non-ASCII UTF-8 boundary and
+  violates repository string-slicing policy;
+- multiple CLI subcommands only print placeholder messages and return success.
+
+Decision: delete dead output code and unsupported commands/flags. Implemented
+headless rendering belongs in the headless surface crate and uses UTF-8-safe
+utilities.
+
+## Test-gap verification
+
+The sixteen production multi-session scenarios remain useful, but they do not
+cover all v2 findings above. Phase A has since added and compiled targeted
+regressions for close/delete byte preservation, close timeout cleanup, no-late
+session events after successful close, and close-during-turn accounting; those
+regressions still need to be run in the next batched test pass.
+
+- CLI tests cover the pure execution-plan matrix, but not full terminal
+  integration behavior under a real TTY;
+- SDK zero-session startup now has a focused regression;
+- the production multi-session suite has no Event Hub scenario;
+- no seam check forbids `coco-agent-host -> coco-tui`;
+- no API gate prevents public raw session locks.
+
+Therefore the previous test counts cannot support the claim that the overall
+architecture was complete.
 
 ## Overall assessment
 
-The multi-session goal is reasonable and valuable:
+The v1 registry, authority, and selected-runtime work should remain. The next
+refactor should not introduce a whole-runtime actor or speculative shared
+services. The shortest path to a clear architecture is:
 
-- long-lived local IDE/desktop processes need several independent sessions;
-- sharing process-level catalogs and provider infrastructure can reduce
-  startup cost;
-- passive surfaces and reconnect/replay enable observers without duplicating
-  engines;
-- explicit session ownership improves correctness even for single-session TUI
-  and headless modes.
-
-The goal becomes unreasonable if it is defined as maximizing shared mutable
-state or forcing all session resources through one actor. Correct isolation
-and explicit targeting are the value; a large actor and speculative shared
-services are not.
+1. make close/delete and task ownership correct;
+2. make mode selection and startup explicit;
+3. make all surfaces use one lifecycle;
+4. repair dependency direction;
+5. narrow capabilities and reorganize modules;
+6. delete obsolete code and rewrite current-state documentation.

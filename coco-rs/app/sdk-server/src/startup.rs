@@ -1,4 +1,4 @@
-use coco_agent_host::remote_host::PreparedRemoteHost;
+use coco_agent_host::remote_host::PreparedHost;
 use coco_error::{ErrorExt, Location, StatusCode, stack_trace_debug};
 use snafu::{ResultExt, Snafu};
 
@@ -55,7 +55,7 @@ impl ErrorExt for SdkStartupError {
 
 /// Run in SDK mode: NDJSON-over-stdio JSON-RPC control protocol.
 pub async fn run_sdk_mode(
-    mut host: PreparedRemoteHost,
+    mut host: PreparedHost,
     sidecar_config: SdkSidecarConfig,
 ) -> Result<(), SdkStartupError> {
     let transport = StdioTransport::new();

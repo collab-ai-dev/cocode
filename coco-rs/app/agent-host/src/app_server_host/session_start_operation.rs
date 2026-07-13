@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use coco_app_server::{AppServer, ConnectionKey};
 use coco_types::SessionStartResult;
@@ -15,8 +15,7 @@ use crate::session_start::SessionStartInput;
 use super::request_handlers::DEFAULT_APP_SERVER_MODEL;
 use super::session_loading::load_local_app_server_session_with_factory_parts;
 use super::session_operation_error::SessionOperationError;
-use super::session_registry::replace_detached_local_app_server_session_with_factory_parts;
-use super::session_surfaces::{attach_local_app_server_surface, registered_detached_session};
+use super::session_surfaces::attach_local_app_server_surface;
 
 pub(crate) async fn prepare_app_server_session_start(
     input: SessionStartInput,
@@ -66,11 +65,9 @@ pub(crate) async fn start_app_server_session_with_runtime_replacement(
     input: SessionStartInput,
     connection_profile: Arc<coco_types::ConnectionProfile>,
     replacement: RuntimeReplacementContext,
-    turn_drain_timeout: Duration,
 ) -> Result<SessionStartResult, SessionOperationError> {
     let prepared = prepare_app_server_session_start(input, &state, &connection_profile).await?;
     let started_session_id = prepared.session_id.clone();
-    let startup_session_id = replacement.startup_session_id.clone();
 
     let factory = {
         let state = Arc::clone(&state);
@@ -94,29 +91,12 @@ pub(crate) async fn start_app_server_session_with_runtime_replacement(
         }
     };
 
-    // The bootstrap runtime is an implementation placeholder, not a client
-    // session. Replace that one explicit surfaceless slot on the first start;
-    // after it is gone, every later start creates a new slot and never closes
-    // another user's session.
-    let handle =
-        if registered_detached_session(&app_server, &startup_session_id, &started_session_id) {
-            replace_detached_local_app_server_session_with_factory_parts(
-                Arc::clone(&app_server),
-                Arc::clone(&state),
-                startup_session_id,
-                started_session_id.clone(),
-                factory,
-                turn_drain_timeout,
-            )
-            .await?
-        } else {
-            load_local_app_server_session_with_factory_parts(
-                &app_server,
-                started_session_id.clone(),
-                factory,
-            )
-            .await?
-        };
+    let handle = load_local_app_server_session_with_factory_parts(
+        &app_server,
+        started_session_id.clone(),
+        factory,
+    )
+    .await?;
     let runtime = handle.into_session();
 
     install_app_server_session_runtime_state(

@@ -7,7 +7,7 @@ use tracing::warn;
 use crate::app_session::AppSessionHandle;
 use crate::app_session_runtime::{
     AppSessionRuntimeBinding, AppSessionRuntimeProfile, build_app_session_runtime_for_resume,
-    build_app_session_runtime_for_start, hydrate_app_session_for_resume,
+    build_app_session_runtime_for_start, hydrate_app_session_history,
     install_app_session_integrations,
 };
 
@@ -53,6 +53,7 @@ pub(crate) async fn build_connection_runtime_for_start(
     let session = build_app_session_runtime_for_start(&binding, &profile, &prepared).await?;
     install_connection_runtime_callbacks(&connection_profile, &session, app_server);
     install_app_session_integrations(&binding, session.clone()).await?;
+    hydrate_app_session_history(&session, &prepared.session_id, &prepared.initial_messages).await;
     session
         .fire_session_start_hooks(coco_hooks::orchestration::SessionStartSource::Startup)
         .await;
@@ -77,9 +78,36 @@ pub(crate) async fn build_connection_runtime_for_resume(
         build_app_session_runtime_for_resume(&binding, &profile, session_id.clone(), cwd).await?;
     install_connection_runtime_callbacks(&connection_profile, &session, app_server);
     install_app_session_integrations(&binding, session.clone()).await?;
-    hydrate_app_session_for_resume(&session, &session_id, &prior_messages).await;
+    hydrate_app_session_history(&session, &session_id, &prior_messages).await;
     session
         .fire_session_start_hooks(coco_hooks::orchestration::SessionStartSource::Resume)
+        .await;
+    Ok(session)
+}
+
+pub(crate) async fn build_connection_runtime_for_clear(
+    replacement: RuntimeReplacementContext,
+    _state: Arc<AppServerHostState>,
+    connection_profile: Arc<coco_types::ConnectionProfile>,
+    session_id: SessionId,
+    snapshot: crate::session_runtime::ClearReplacementSnapshot,
+    app_server: Arc<AppServer<AppSessionHandle>>,
+) -> anyhow::Result<crate::session_runtime::SessionHandle> {
+    let binding = runtime_binding_from_replacement(&replacement);
+    let profile = runtime_profile_from_connection(
+        &connection_profile,
+        replacement.requires_structured_output,
+    );
+    let session = binding
+        .runtime_factory
+        .build_with_session_id_and_cwd(session_id, binding.cwd.clone())
+        .await?;
+    crate::app_session_runtime::apply_app_session_runtime_profile(&profile, &session).await;
+    install_connection_runtime_callbacks(&connection_profile, &session, app_server);
+    session.apply_clear_replacement_snapshot(snapshot).await;
+    install_app_session_integrations(&binding, session.clone()).await?;
+    session
+        .fire_session_start_hooks(coco_hooks::orchestration::SessionStartSource::Clear)
         .await;
     Ok(session)
 }
@@ -91,6 +119,7 @@ fn runtime_binding_from_replacement(
         runtime_factory: replacement.runtime_factory.clone(),
         process_runtime: Arc::clone(&replacement.process_runtime),
         cwd: replacement.cwd.clone(),
+        integration_options: replacement.integration_options.clone(),
     }
 }
 

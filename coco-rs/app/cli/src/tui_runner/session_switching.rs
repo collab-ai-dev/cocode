@@ -145,8 +145,8 @@ pub(super) async fn dispatch_resume(
     current_session: &SharedSessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
-    runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
-    process_runtime: &Arc<ProcessRuntime>,
+    _runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
+    _process_runtime: &Arc<ProcessRuntime>,
     runtime_reload_subscriptions: &Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
 ) -> SlashOutcome {
     let runtime = session;
@@ -188,12 +188,9 @@ pub(super) async fn dispatch_resume(
                 &plan,
                 "resume",
                 args,
-                session,
                 current_session,
                 event_tx,
                 local_app_server_bridge,
-                runtime_factory,
-                process_runtime,
                 runtime_reload_subscriptions,
             )
             .await
@@ -228,22 +225,16 @@ pub(super) async fn switch_to_resume_plan_through_app_server(
     plan: &ResumePlan,
     command_name: &str,
     args: &str,
-    session: &crate::session_runtime::SessionHandle,
     current_session: &SharedSessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
-    runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
-    process_runtime: &Arc<ProcessRuntime>,
     runtime_reload_subscriptions: &Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
 ) -> bool {
     match apply_resume_plan_through_app_server(
         plan,
-        session,
         current_session,
         event_tx,
         local_app_server_bridge,
-        runtime_factory,
-        process_runtime,
         runtime_reload_subscriptions,
     )
     .await
@@ -262,92 +253,24 @@ pub(super) async fn switch_to_resume_plan_through_app_server(
     }
 }
 
-async fn restore_resume_seq_watermark(
-    plan: &ResumePlan,
-    local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
-) {
-    if let Some(watermark) =
-        coco_agent_host::runtime_resume::resume_plan_session_seq_watermark(plan).await
-    {
-        local_app_server_bridge
-            .restore_session_seq_from_watermark(plan.session_id.clone(), watermark);
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn apply_resume_plan_through_app_server(
     plan: &ResumePlan,
-    session: &crate::session_runtime::SessionHandle,
     current_session: &SharedSessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
-    runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
-    process_runtime: &Arc<ProcessRuntime>,
     runtime_reload_subscriptions: &Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
 ) -> anyhow::Result<()> {
-    // skip the resumed session's durable-seq epoch above its prior
-    // watermark before any new envelope is emitted, covering startup resume,
-    // `/resume`, and `/branch` (all three funnel through here).
-    restore_resume_seq_watermark(plan, local_app_server_bridge).await;
-
-    let old_session_id = session.session_id().clone();
-    if old_session_id == plan.session_id {
-        coco_agent_host::runtime_resume::hydrate_runtime_for_resume(
-            session,
-            &plan.session_id,
-            &plan.prior_messages,
-        )
-        .await;
-        local_app_server_bridge
-            .bind_interactive_session(session.clone(), Some(event_tx.clone()))
-            .await?;
-        emit_resume_plan_ui_state_for_runtime(plan, session, event_tx).await;
-        return Ok(());
-    }
-
-    local_app_server_bridge
-        .register_session_runtime(session.clone())
-        .await;
-
-    let make_runtime_factory = || {
-        let runtime_factory = runtime_factory.clone();
-        let process_runtime = Arc::clone(process_runtime);
-        let cwd = plan.cwd.clone();
-        let event_tx = event_tx.clone();
-        let session_id = plan.session_id.clone();
-        let prior_messages = plan.prior_messages.clone();
-        async move {
-            coco_agent_host::session_replacement::build_resume_replacement_runtime(
-                runtime_factory,
-                session_id,
-                prior_messages,
-                process_runtime,
-                cwd,
-                Some(event_tx),
-            )
-            .await
-        }
-    };
-
-    let replacement = local_app_server_bridge
-        .replace_session_runtime(
-            old_session_id.clone(),
-            plan.session_id.clone(),
-            make_runtime_factory(),
+    let binding = local_app_server_bridge
+        .replace_interactive_session_with_resume(
+            coco_types::SessionResumeParams {
+                target: coco_types::SessionTarget {
+                    session_id: plan.session_id.clone(),
+                },
+            },
+            Some(event_tx.clone()),
         )
         .await?;
-    let new_session = match replacement {
-        Some((session, _surface_id)) => session,
-        None => {
-            local_app_server_bridge
-                .replace_detached_session_runtime(
-                    old_session_id,
-                    plan.session_id.clone(),
-                    make_runtime_factory(),
-                )
-                .await?
-        }
-    };
+    let new_session = binding.session;
 
     {
         let mut current = current_session.write().await;
@@ -358,9 +281,6 @@ pub(super) async fn apply_resume_plan_through_app_server(
         .await
         .install_for_session(&new_session)
         .await;
-    local_app_server_bridge
-        .bind_interactive_session(new_session.clone(), Some(event_tx.clone()))
-        .await?;
     emit_resume_plan_ui_state_for_runtime(plan, &new_session, event_tx).await;
     Ok(())
 }
@@ -377,8 +297,8 @@ pub(super) async fn dispatch_branch(
     current_session: &SharedSessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
-    runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
-    process_runtime: &Arc<ProcessRuntime>,
+    _runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
+    _process_runtime: &Arc<ProcessRuntime>,
     runtime_reload_subscriptions: &Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
 ) -> SlashOutcome {
     let runtime = session;
@@ -399,12 +319,9 @@ pub(super) async fn dispatch_branch(
                 &plan,
                 "branch",
                 args,
-                session,
                 current_session,
                 event_tx,
                 local_app_server_bridge,
-                runtime_factory,
-                process_runtime,
                 runtime_reload_subscriptions,
             )
             .await

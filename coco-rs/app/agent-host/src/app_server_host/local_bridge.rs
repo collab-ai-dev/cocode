@@ -8,12 +8,12 @@ use std::{future::Future, path::PathBuf, sync::Arc, time::Duration};
 use crate::local_client::{LocalServerClient, LocalSessionClient};
 use coco_app_server::{AppServer, LocalClientAdapter, SurfaceLimits};
 use coco_app_server_client::ClientError;
-use coco_hub_connector::HubConnectorSender;
 use coco_types::{SessionId, SurfaceId};
 use tokio::{sync::mpsc, task::JoinHandle};
 use tracing::warn;
 
 use crate::app_session::AppSessionHandle;
+use crate::event_hub::ProcessEventHubEgress;
 
 mod local_interactive_session;
 
@@ -34,21 +34,20 @@ use super::session_loading::{
 };
 use super::session_registry::{
     register_local_app_server_session, replace_detached_local_app_server_session_with_factory,
-    replace_local_app_server_session_with_factory,
-    replace_local_app_server_session_with_factory_and_close_reason,
-    restore_session_seq_from_watermark,
+    replace_local_app_server_session_with_factory, restore_session_seq_from_watermark,
 };
-use crate::event_hub::RuntimeEventHubConnector;
 
 #[derive(Debug, Clone)]
 pub struct AppServerLocalTurnCompletion {
     pub started: coco_types::TurnStartResult,
     pub ended: coco_types::TurnEndedParams,
+    pub session_result: coco_types::SessionResultParams,
 }
 
-pub struct LocalSessionRuntimeBinding {
+#[derive(Clone)]
+pub struct AppServerLocalSessionBinding {
     pub session: crate::session_runtime::SessionHandle,
-    pub event_hub_connector: Option<RuntimeEventHubConnector>,
+    pub surface: LocalSessionClient,
 }
 
 pub struct AppServerLocalBridge {
@@ -56,7 +55,7 @@ pub struct AppServerLocalBridge {
     client: LocalServerClient<AppSessionHandle>,
     handler: AppServerHostHandler,
     outbound_forwarder: JoinHandle<()>,
-    hub_connector: Arc<std::sync::RwLock<Option<HubConnectorSender>>>,
+    hub_connector: Arc<std::sync::RwLock<Option<ProcessEventHubEgress>>>,
     event_pump: Option<JoinHandle<()>>,
     event_pump_session_id: Option<SessionId>,
     interactive_surface: Option<LocalSessionClient>,
@@ -90,25 +89,20 @@ impl AppServerLocalBridge {
         )
     }
 
-    pub fn with_hub_connector_sender(
-        state: Arc<AppServerHostState>,
-        hub_connector: HubConnectorSender,
+    pub fn with_host_inputs_and_server_config(
+        inputs: super::HostInputs,
+        server_config: &coco_config::ServerConfig,
     ) -> Self {
-        Self::with_channel_capacity_and_hub_connector(
-            state,
-            APP_SERVER_LOCAL_CHANNEL_CAPACITY,
-            Some(hub_connector),
-        )
+        Self::with_server_config(Arc::new(AppServerHostState::new(inputs)), server_config)
     }
 
     pub fn with_channel_capacity(state: Arc<AppServerHostState>, channel_capacity: usize) -> Self {
-        Self::with_capacity_retention_and_hub_connector(
+        Self::with_capacity_and_retention(
             state,
             channel_capacity,
             channel_capacity,
             SurfaceLimits::default(),
             APP_SERVER_TURN_DRAIN_TIMEOUT,
-            None,
         )
     }
 
@@ -118,39 +112,6 @@ impl AppServerLocalBridge {
         event_retention_per_session: usize,
         surface_limits: SurfaceLimits,
         turn_drain_timeout: Duration,
-    ) -> Self {
-        Self::with_capacity_retention_and_hub_connector(
-            state,
-            channel_capacity,
-            event_retention_per_session,
-            surface_limits,
-            turn_drain_timeout,
-            None,
-        )
-    }
-
-    fn with_channel_capacity_and_hub_connector(
-        state: Arc<AppServerHostState>,
-        channel_capacity: usize,
-        hub_connector: Option<HubConnectorSender>,
-    ) -> Self {
-        Self::with_capacity_retention_and_hub_connector(
-            state,
-            channel_capacity,
-            channel_capacity,
-            SurfaceLimits::default(),
-            APP_SERVER_TURN_DRAIN_TIMEOUT,
-            hub_connector,
-        )
-    }
-
-    fn with_capacity_retention_and_hub_connector(
-        state: Arc<AppServerHostState>,
-        channel_capacity: usize,
-        event_retention_per_session: usize,
-        surface_limits: SurfaceLimits,
-        turn_drain_timeout: Duration,
-        hub_connector: Option<HubConnectorSender>,
     ) -> Self {
         assert!(
             channel_capacity > 0,
@@ -176,7 +137,7 @@ impl AppServerLocalBridge {
             Arc::clone(&app_server),
             turn_drain_timeout,
         );
-        let hub_connector = Arc::new(std::sync::RwLock::new(hub_connector));
+        let hub_connector = Arc::new(std::sync::RwLock::new(None));
         let outbound_forwarder = spawn_app_server_local_outbound_forwarder(
             Arc::clone(&app_server),
             state,
@@ -215,10 +176,10 @@ impl AppServerLocalBridge {
         &self.client
     }
 
-    pub fn set_hub_connector_sender(&self, sender: HubConnectorSender) {
+    pub fn set_hub_connector_egress(&self, egress: ProcessEventHubEgress) {
         match self.hub_connector.write() {
-            Ok(mut guard) => *guard = Some(sender),
-            Err(poisoned) => *poisoned.into_inner() = Some(sender),
+            Ok(mut guard) => *guard = Some(egress),
+            Err(poisoned) => *poisoned.into_inner() = Some(egress),
         }
     }
 
@@ -321,23 +282,6 @@ impl AppServerLocalBridge {
         Ok(handle.into_session())
     }
 
-    pub async fn load_session_runtime_binding_from_factory(
-        &self,
-        session_id: SessionId,
-        runtime_factory: crate::session_runtime::SessionRuntimeFactory,
-        cwd: PathBuf,
-    ) -> anyhow::Result<LocalSessionRuntimeBinding> {
-        let session = self
-            .load_session_runtime_from_factory_with_cwd(session_id, runtime_factory, cwd.clone())
-            .await?;
-        let event_hub_connector =
-            RuntimeEventHubConnector::spawn_and_attach_for_session(self, &session, &cwd);
-        Ok(LocalSessionRuntimeBinding {
-            session,
-            event_hub_connector,
-        })
-    }
-
     pub async fn replace_session_runtime<F>(
         &self,
         old_session_id: SessionId,
@@ -392,41 +336,6 @@ impl AppServerLocalBridge {
         .await
         .map(AppSessionHandle::into_session)
         .map_err(|error| anyhow::anyhow!("{}", error.message))
-    }
-
-    pub async fn replace_session_runtime_for_clear<F>(
-        &self,
-        old_session_id: SessionId,
-        new_session_id: SessionId,
-        factory: F,
-    ) -> anyhow::Result<Option<(crate::session_runtime::SessionHandle, SurfaceId)>>
-    where
-        F: Future<Output = anyhow::Result<crate::session_runtime::SessionHandle>> + Send + 'static,
-    {
-        let replacement = replace_local_app_server_session_with_factory_and_close_reason(
-            Arc::clone(&self.app_server),
-            Arc::clone(&self.handler.state),
-            old_session_id,
-            new_session_id,
-            async move {
-                let runtime = factory.await.map_err(|error| {
-                    coco_app_server::RegistryError::load_failed(error.to_string())
-                })?;
-                Ok(AppSessionHandle::from_runtime(runtime))
-            },
-            coco_hooks::orchestration::ExitReason::Clear,
-            self.handler.turn_drain_timeout,
-        )
-        .await
-        .map_err(|error| anyhow::anyhow!("{}", error.message))?;
-
-        match replacement {
-            Some((handle, surface_id)) => {
-                let runtime = handle.into_session();
-                Ok(Some((runtime, surface_id)))
-            }
-            None => Ok(None),
-        }
     }
 
     pub async fn register_session_runtime(&self, session: crate::session_runtime::SessionHandle) {

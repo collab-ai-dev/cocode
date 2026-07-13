@@ -13,7 +13,7 @@ use coco_types::{
 use snafu::{ResultExt, Snafu};
 
 use crate::{
-    ArchiveSessionOutcome, AttachError, AttachSurfaceOptions, CloseCompletion, CloseStart,
+    AttachError, AttachSurfaceOptions, CloseCompletion, CloseSessionSurfacesOutcome, CloseStart,
     CompleteServerRequestError, ConnectionKey, DetachSurfaceOutcome, DisconnectOutcome,
     LifecycleRouteOutcome, LiveSessionRegistry, LoadCompletion, LoadStart, OutboundSender,
     PendingServerRequest, PendingServerRequestReplay, ReplaceStart, ReplaceSurfaceOutcome,
@@ -144,7 +144,7 @@ impl<H: Clone> AppServer<H> {
         })
     }
 
-    pub fn validate_orphan_archive_target(
+    pub fn validate_orphan_close_target(
         &self,
         session_id: &SessionId,
     ) -> Result<H, AppServerError> {
@@ -360,10 +360,11 @@ impl<H: Clone> AppServer<H> {
         })
     }
 
-    pub fn complete_close_and_archive_surfaces(
+    pub fn complete_session_close(
         &self,
         session_id: &SessionId,
-    ) -> Result<AppArchiveCommit, AppServerError> {
+        close_result: Result<(), RegistryError>,
+    ) -> Result<AppCloseCommit, AppServerError> {
         let mut sessions = self
             .registry
             .sessions
@@ -385,14 +386,14 @@ impl<H: Clone> AppServer<H> {
             .routing
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let routing_outcome = routing.archive_session(session_id);
+        let routing_outcome = routing.close_session_surfaces(session_id);
         self.cancel_server_request_waiters(&routing_outcome.cancelled_requests);
-        let lifecycle_effects = archive_lifecycle_effects(session_id, &routing_outcome);
-        let _ = close_sender.send(true);
+        let lifecycle_effects = close_lifecycle_effects(session_id, &routing_outcome);
+        let _ = close_sender.send(Some(close_result));
         sessions.remove(session_id);
         self.activity.forget(session_id);
 
-        Ok(AppArchiveCommit {
+        Ok(AppCloseCommit {
             routing_outcome,
             lifecycle_effects,
         })
@@ -453,10 +454,10 @@ impl<H: Clone> AppServer<H> {
                 close: old_close,
             }),
         );
-        let archive_outcome = routing.archive_session(old_session_id);
-        self.cancel_server_request_waiters(&archive_outcome.cancelled_requests);
+        let close_outcome = routing.close_session_surfaces(old_session_id);
+        self.cancel_server_request_waiters(&close_outcome.cancelled_requests);
         let lifecycle_effects =
-            replaced_lifecycle_effects(old_session_id, new_session_id, &archive_outcome);
+            replaced_lifecycle_effects(old_session_id, new_session_id, &close_outcome);
         self.activity.touch(new_session_id.clone());
 
         Ok(AppReplaceDetachedCommit {
@@ -685,6 +686,14 @@ impl<H: Clone> AppServer<H> {
         summaries
     }
 
+    pub fn has_session_slot(&self, session_id: &SessionId) -> bool {
+        self.registry
+            .sessions
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(session_id)
+    }
+
     pub fn route_server_request(
         &self,
         session_id: SessionId,
@@ -823,7 +832,7 @@ where
     ) -> Result<AppCloseStart, AppServerError>
     where
         C: FnOnce(H) -> Fut + Send + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
+        Fut: Future<Output = Result<(), RegistryError>> + Send + 'static,
     {
         match self
             .registry
@@ -837,8 +846,8 @@ where
                         Arc::clone(&server),
                         OwnerGuardAction::Close(session_id.clone()),
                     );
-                    close(handle).await;
-                    if let Ok(commit) = server.complete_close_and_archive_surfaces(&session_id) {
+                    let close_result = close(handle).await;
+                    if let Ok(commit) = server.complete_session_close(&session_id, close_result) {
                         server.route_lifecycle_effects(commit.lifecycle_effects);
                     }
                     guard.disarm();
@@ -862,9 +871,9 @@ where
                                 Arc::clone(&server),
                                 OwnerGuardAction::Close(close_session_id.clone()),
                             );
-                            close(handle).await;
+                            let close_result = close(handle).await;
                             if let Ok(commit) =
-                                server.complete_close_and_archive_surfaces(&close_session_id)
+                                server.complete_session_close(&close_session_id, close_result)
                             {
                                 server.route_lifecycle_effects(commit.lifecycle_effects);
                             }
@@ -885,7 +894,7 @@ where
     ) -> Result<AppCloseStart, AppServerError>
     where
         C: FnOnce(H) -> Fut + Send + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
+        Fut: Future<Output = Result<(), RegistryError>> + Send + 'static,
     {
         let (handle, completion) = {
             let mut sessions = self
@@ -936,8 +945,8 @@ where
                 Arc::clone(&server),
                 OwnerGuardAction::Close(session_id.clone()),
             );
-            close(handle).await;
-            if let Ok(commit) = server.complete_close_and_archive_surfaces(&session_id) {
+            let close_result = close(handle).await;
+            if let Ok(commit) = server.complete_session_close(&session_id, close_result) {
                 server.route_lifecycle_effects(commit.lifecycle_effects);
             }
             guard.disarm();
@@ -956,7 +965,7 @@ where
     where
         F: Future<Output = Result<H, RegistryError>> + Send + 'static,
         Close: FnOnce(H) -> CloseFut + Send + 'static,
-        CloseFut: Future<Output = ()> + Send + 'static,
+        CloseFut: Future<Output = Result<(), RegistryError>> + Send + 'static,
     {
         let ReplaceStart::Reserved { new_completion, .. } = self
             .registry
@@ -981,11 +990,11 @@ where
                             // now is a panic in the old close cascade wedging old.
                             guard.arm_close(old_session_id.clone());
                             server.route_lifecycle_effects(commit.lifecycle_effects);
-                            close_old(commit.old_handle).await;
-                            if let Ok(archive_commit) =
-                                server.complete_close_and_archive_surfaces(&old_session_id)
+                            let close_result = close_old(commit.old_handle).await;
+                            if let Ok(close_commit) =
+                                server.complete_session_close(&old_session_id, close_result)
                             {
-                                server.route_lifecycle_effects(archive_commit.lifecycle_effects);
+                                server.route_lifecycle_effects(close_commit.lifecycle_effects);
                             }
                             guard.disarm();
                         }
@@ -1025,7 +1034,7 @@ where
     where
         F: Future<Output = Result<H, RegistryError>> + Send + 'static,
         Close: FnOnce(H) -> CloseFut + Send + 'static,
-        CloseFut: Future<Output = ()> + Send + 'static,
+        CloseFut: Future<Output = Result<(), RegistryError>> + Send + 'static,
     {
         let ReplaceStart::Reserved { new_completion, .. } = self
             .registry
@@ -1049,11 +1058,11 @@ where
                         Ok(commit) => {
                             guard.arm_close(old_session_id.clone());
                             server.route_lifecycle_effects(commit.lifecycle_effects);
-                            close_old(commit.old_handle).await;
-                            if let Ok(archive_commit) =
-                                server.complete_close_and_archive_surfaces(&old_session_id)
+                            let close_result = close_old(commit.old_handle).await;
+                            if let Ok(close_commit) =
+                                server.complete_session_close(&old_session_id, close_result)
                             {
-                                server.route_lifecycle_effects(archive_commit.lifecycle_effects);
+                                server.route_lifecycle_effects(close_commit.lifecycle_effects);
                             }
                             guard.disarm();
                         }
@@ -1086,7 +1095,7 @@ where
     pub fn spawn_shutdown<C, Fut>(self: &Arc<Self>, close: C) -> AppShutdownStart
     where
         C: Fn(H) -> Fut + Clone + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
+        Fut: Future<Output = Result<(), RegistryError>> + Send + 'static,
     {
         let mut sessions = Vec::new();
         let mut errors = Vec::new();
@@ -1150,7 +1159,12 @@ impl<H: Clone + Send + Sync + 'static> Drop for OwnerGuard<H> {
                 );
             }
             Some(OwnerGuardAction::Close(session_id)) => {
-                let _ = self.server.complete_close_and_archive_surfaces(&session_id);
+                let _ = self.server.complete_session_close(
+                    &session_id,
+                    Err(crate::registry::RegistryError::close_failed(
+                        "owner task aborted before completion",
+                    )),
+                );
             }
             None => {}
         }
@@ -1180,7 +1194,7 @@ fn replace_lifecycle_effects(outcome: &ReplaceSurfaceOutcome) -> Vec<SurfaceLife
 fn replaced_lifecycle_effects(
     old_session_id: &SessionId,
     new_session_id: &SessionId,
-    outcome: &ArchiveSessionOutcome,
+    outcome: &CloseSessionSurfacesOutcome,
 ) -> Vec<SurfaceLifecycleEffect> {
     outcome
         .closed_surfaces
@@ -1196,9 +1210,9 @@ fn replaced_lifecycle_effects(
         .collect()
 }
 
-fn archive_lifecycle_effects(
+fn close_lifecycle_effects(
     session_id: &SessionId,
-    outcome: &ArchiveSessionOutcome,
+    outcome: &CloseSessionSurfacesOutcome,
 ) -> Vec<SurfaceLifecycleEffect> {
     outcome
         .closed_surfaces
@@ -1222,8 +1236,8 @@ pub struct AppReplaceCommit<H> {
 }
 
 #[derive(Debug, Clone)]
-pub struct AppArchiveCommit {
-    pub routing_outcome: ArchiveSessionOutcome,
+pub struct AppCloseCommit {
+    pub routing_outcome: CloseSessionSurfacesOutcome,
     pub lifecycle_effects: Vec<SurfaceLifecycleEffect>,
 }
 

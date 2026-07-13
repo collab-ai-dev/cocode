@@ -10,45 +10,6 @@ use crate::app_session::AppSessionHandle;
 
 use super::session_errors::{LifecycleError, attach_lifecycle_error_parts, local_lifecycle_error};
 
-pub(crate) fn registered_detached_session(
-    app_server: &AppServer<AppSessionHandle>,
-    candidate: &SessionId,
-    target_session_id: &SessionId,
-) -> bool {
-    candidate != target_session_id
-        && app_server.list_live_sessions().iter().any(|summary| {
-            summary.session_id == *candidate
-                && app_server
-                    .routing()
-                    .read()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .interactive_owner(&summary.session_id)
-                    .is_none()
-        })
-}
-
-pub(crate) fn inject_surface_id(
-    result: &mut serde_json::Value,
-    surface_id: SurfaceId,
-) -> Result<(), JsonRpcDispatchError> {
-    let Some(object) = result.as_object_mut() else {
-        return Err(JsonRpcDispatchError {
-            code: coco_types::error_codes::INTERNAL_ERROR,
-            message: "local AppServer lifecycle result was not an object".to_string(),
-            data: None,
-        });
-    };
-    object.insert(
-        "surface_id".to_string(),
-        serde_json::to_value(surface_id).map_err(|error| JsonRpcDispatchError {
-            code: coco_types::error_codes::INTERNAL_ERROR,
-            message: format!("local AppServer surface id encode failed: {error}"),
-            data: None,
-        })?,
-    );
-    Ok(())
-}
-
 pub(crate) fn attach_local_app_server_surface(
     app_server: &Arc<AppServer<AppSessionHandle>>,
     connection: ConnectionKey,

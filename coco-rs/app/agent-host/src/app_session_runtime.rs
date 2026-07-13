@@ -12,6 +12,7 @@ pub(crate) struct AppSessionRuntimeBinding {
     pub(crate) runtime_factory: SessionRuntimeFactory,
     pub(crate) process_runtime: Arc<ProcessRuntime>,
     pub(crate) cwd: PathBuf,
+    pub(crate) integration_options: crate::session_bootstrap::SessionIntegrationOptions,
 }
 
 #[derive(Clone)]
@@ -94,15 +95,15 @@ pub(crate) async fn install_app_session_integrations(
         session,
         &session_cwd,
         Arc::clone(&binding.process_runtime),
-        crate::session_bootstrap::SessionIntegrationOptions::default(),
+        binding.integration_options.clone(),
     )
     .await
 }
 
-pub(crate) async fn hydrate_app_session_for_resume(
+pub(crate) async fn hydrate_app_session_history(
     session: &SessionHandle,
     session_id: &SessionId,
-    prior_messages: &[Message],
+    messages: &[Message],
 ) {
-    crate::runtime_resume::hydrate_runtime_for_resume(session, session_id, prior_messages).await;
+    crate::runtime_resume::hydrate_runtime_for_resume(session, session_id, messages).await;
 }

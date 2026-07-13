@@ -45,7 +45,8 @@ gap additions.",
         "session/read" => SessionRead(SessionReadParams),
         "session/turns/list" => SessionTurnsList(SessionTurnsListParams),
         "session/subscribe" => SessionSubscribe(SessionSubscribeParams),
-        "session/archive" => SessionArchive(SessionArchiveParams),
+        "session/close" => SessionClose(SessionCloseParams),
+        "session/delete" => SessionDelete(SessionDeleteParams),
         "session/rename" => SessionRename(SessionRenameParams),
         "session/toggleTag" => SessionToggleTag(SessionToggleTagParams),
         "session/cost" => SessionCost(SessionTarget),
@@ -127,17 +128,17 @@ pub struct InteractiveTarget {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ArchiveTarget {
-    Interactive(InteractiveTarget),
-    Orphaned(SessionTarget),
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SessionCloseTarget {
+    Interactive { target: InteractiveTarget },
+    Orphaned { target: SessionTarget },
 }
 
-impl ArchiveTarget {
+impl SessionCloseTarget {
     pub fn session_id(&self) -> &SessionId {
         match self {
-            Self::Interactive(target) => &target.session_id,
-            Self::Orphaned(target) => &target.session_id,
+            Self::Interactive { target } => &target.session_id,
+            Self::Orphaned { target } => &target.session_id,
         }
     }
 }
@@ -164,7 +165,8 @@ pub const fn request_scope(method: ClientRequestMethod) -> RequestScope {
         | ClientRequestMethod::SessionResume
         | ClientRequestMethod::SessionReplace
         | ClientRequestMethod::SessionSubscribe
-        | ClientRequestMethod::SessionArchive => RequestScope::Lifecycle,
+        | ClientRequestMethod::SessionClose
+        | ClientRequestMethod::SessionDelete => RequestScope::Lifecycle,
         ClientRequestMethod::SessionList => RequestScope::Process,
         ClientRequestMethod::SessionRead
         | ClientRequestMethod::SessionTurnsList
@@ -207,7 +209,7 @@ pub const fn request_scope(method: ClientRequestMethod) -> RequestScope {
 
 impl ClientRequest {
     /// Interactive authority carried by this request, if its scope requires
-    /// one. Lifecycle replacement and archive validate their typed targets in
+    /// one. Lifecycle replacement and close validate their typed targets in
     /// their dedicated lifecycle paths.
     pub fn interactive_target(&self) -> Option<&InteractiveTarget> {
         match self {
@@ -246,7 +248,8 @@ impl ClientRequest {
             | Self::SessionRead(_)
             | Self::SessionTurnsList(_)
             | Self::SessionSubscribe(_)
-            | Self::SessionArchive(_)
+            | Self::SessionClose(_)
+            | Self::SessionDelete(_)
             | Self::SessionRename(_)
             | Self::SessionToggleTag(_)
             | Self::SessionCost(_)
@@ -271,6 +274,7 @@ impl ClientRequest {
             Self::SessionRead(params) => Some(&params.target),
             Self::SessionTurnsList(params) => Some(&params.target),
             Self::SessionSubscribe(params) => Some(&params.target),
+            Self::SessionDelete(params) => Some(&params.target),
             Self::SessionRename(params) => Some(&params.target),
             Self::SessionToggleTag(params) => Some(&params.target),
             Self::SessionCost(target)
@@ -286,7 +290,7 @@ impl ClientRequest {
             | Self::SessionStart(_)
             | Self::SessionReplace(_)
             | Self::SessionList
-            | Self::SessionArchive(_)
+            | Self::SessionClose(_)
             | Self::TurnStart(_)
             | Self::TurnInterrupt(_)
             | Self::ApprovalResolve(_)
@@ -540,6 +544,8 @@ pub struct ClientAgentDefinition {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<SessionId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -556,6 +562,12 @@ pub struct SessionStartParams {
     /// Optional initial user prompt to run immediately after start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_prompt: Option<String>,
+    /// Optional initial history installed before the first turn.
+    ///
+    /// Used by process-local embeddings/tests that already hold typed
+    /// messages. Production resume should use `session/resume`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub initial_messages: Vec<crate::messages::Message>,
 }
 
 /// Params for `session/resume`.
@@ -572,6 +584,7 @@ pub struct SessionResumeParams {
 pub enum SessionReplacement {
     Fresh(SessionStartParams),
     Resume(SessionTarget),
+    Clear,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -615,11 +628,18 @@ pub struct SessionSubscribeParams {
     pub after_seq: Option<i64>,
 }
 
-/// Params for `session/archive`.
+/// Params for `session/close`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionArchiveParams {
-    pub target: ArchiveTarget,
+pub struct SessionCloseParams {
+    pub target: SessionCloseTarget,
+}
+
+/// Params for `session/delete`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionDeleteParams {
+    pub target: SessionTarget,
 }
 
 /// Params for `session/rename`.

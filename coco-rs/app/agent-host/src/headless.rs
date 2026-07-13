@@ -36,7 +36,10 @@ use coco_tool_runtime::ToolRegistry;
 use coco_types::TokenUsage;
 use tokio_util::sync::CancellationToken;
 
-use crate::{AgentHostOptions, shutdown::ShutdownDrainOutcome};
+use crate::{
+    AgentHostOptions,
+    shutdown::{ShutdownCoordinator, ShutdownDrainOutcome},
+};
 use coco_app_runtime::ProcessRuntime;
 pub(crate) use support::resolve_additional_dirs;
 pub use support::resolve_additional_dirs_display;
@@ -635,7 +638,7 @@ pub struct RunChatOutcome {
     /// any tool calls + results, and the final assistant reply. Tests
     /// or embedding callers can feed this into the next [`run_chat_with_options`]
     /// call (`opts.prior_messages = previous.final_messages`) to
-    /// continue the conversation in-process.
+    /// continue the conversation through typed `session/start.initial_messages`.
     pub final_messages: Vec<std::sync::Arc<coco_messages::Message>>,
     /// Working directory the engine actually used. Reflects the
     /// effective resolution: `--cwd <flag>` then `RunChatOptions::cwd`.
@@ -675,8 +678,8 @@ pub struct RunChatOptions {
     pub cancel: Option<CancellationToken>,
     /// Pre-built message history to seed the conversation. Empty =
     /// start a fresh conversation.
-    /// Non-empty = continue from the prior turns; the local AppServer
-    /// turn is seeded with the prior history before `turn/start`.
+    /// Non-empty fresh runs enter through `session/start.initial_messages`;
+    /// production resume enters through `session/resume`.
     pub prior_messages: Vec<std::sync::Arc<coco_messages::Message>>,
     /// Override the engine's session id. Used by `--resume` /
     /// `--continue` / `--fork-session` so the resumed run writes
@@ -684,6 +687,10 @@ pub struct RunChatOptions {
     /// instead of a freshly generated `SessionId`. `None` lets
     /// print mode use `--session-id` or mint a fresh id.
     pub session_id_override: Option<coco_types::SessionId>,
+    /// Production CLI resume target. When present, startup enters through the
+    /// local AppServer `session/resume` lifecycle instead of constructing and
+    /// hydrating a runtime directly.
+    pub resume_target: Option<coco_types::SessionTarget>,
     /// Stored coordinator/normal mode of the resumed session, used to
     /// reconcile coordinator mode. `None` = no
     /// resume / no stored mode.
@@ -700,9 +707,9 @@ pub struct RunChatOptions {
 /// - `opts.cwd` — explicit cwd used when `--cwd` is not set.
 /// - `opts.cancel` — thread an external [`CancellationToken`] for
 /// mid-run cancellation.
-/// - `opts.prior_messages` — seed the conversation with a previous
-/// `RunChatOutcome.final_messages`, simulating `--continue` /
-/// `--resume` in-process.
+/// - `opts.prior_messages` — seed fresh process-local runs through
+/// `session/start.initial_messages`; production resume uses
+/// `session/resume`.
 /// Honors these `AgentHostOptions` flags end-to-end:
 /// `--models.main`, `--fallback-model`, `--permission-mode`,
 /// `--dangerously-skip-permissions` / `--allow-…`, `--max-turns`,
@@ -864,15 +871,16 @@ pub async fn run_chat_with_options(
     // file_read_state, transcript/usage). Print mode forks subagents from a
     // single context, not a second session container.
     let config_home = coco_config::global_config::config_home();
+    let session_manager = Arc::new(coco_session::SessionManager::with_backend(
+        runtime_config.settings.merged.session.backend,
+        config_home.clone(),
+    ));
     let runtime_factory = crate::session_runtime::SessionRuntimeFactory::from_host_config(
         crate::session_runtime::SessionRuntimeFactoryHostConfig {
             cli: Arc::new(cli.clone()),
             cwd: cwd.clone(),
             model_runtimes: Some(model_runtimes),
-            session_manager: Arc::new(coco_session::SessionManager::with_backend(
-                runtime_config.settings.merged.session.backend,
-                config_home.clone(),
-            )),
+            session_manager: Arc::clone(&session_manager),
             fast_model_spec: None,
             permission_bridge: None,
             process_runtime: process_runtime.clone(),
@@ -882,18 +890,66 @@ pub async fn run_chat_with_options(
         },
     );
     let mut local_app_server_bridge =
-        crate::app_server_host::AppServerLocalBridge::with_server_config(
-            Arc::new(crate::app_server_host::AppServerHostState::default()),
+        crate::app_server_host::AppServerLocalBridge::with_host_inputs_and_server_config(
+            crate::app_server_host::HostInputs {
+                startup_cwd: Some(cwd.clone()),
+                session_manager: Some(Arc::clone(&session_manager)),
+                bypass_permissions_available,
+                runtime_replacement: Some(crate::app_server_host::RuntimeReplacementContext {
+                    runtime_factory,
+                    process_runtime: process_runtime.clone(),
+                    cwd: cwd.clone(),
+                    requires_structured_output: cli.json_schema.is_some(),
+                    integration_options: crate::session_bootstrap::SessionIntegrationOptions {
+                        lsp: crate::session_bootstrap::SessionLspIntegration::Disabled,
+                        mcp_connect: crate::session_bootstrap::SessionMcpConnectMode::Await,
+                        late_binds_failure:
+                            crate::session_bootstrap::SessionLateBindFailure::WarnAndContinue,
+                        ..Default::default()
+                    },
+                }),
+                turn_runner: Some(Arc::new(crate::app_server_host::SessionTurnExecutor::new(
+                    None, None,
+                ))),
+                ..Default::default()
+            },
             &runtime_config.server,
         );
-    // Resume / continue / fork: key every runtime subsystem off the resumed id,
-    // else task dirs + agent transcripts orphan. Resolved above (override or
-    // freshly minted) and shared with the registry's header-template vars.
-    let runtime_binding = local_app_server_bridge
-        .load_session_runtime_binding_from_factory(session_id.clone(), runtime_factory, cwd.clone())
-        .await?;
-    let session_handle = runtime_binding.session;
-    let event_hub_connector = runtime_binding.event_hub_connector;
+    let event_hub_connector =
+        crate::event_hub::ProcessEventHub::spawn(&runtime_config, &cwd, Vec::new());
+    let event_hub_membership_watcher = event_hub_connector.as_ref().map(|connector| {
+        local_app_server_bridge.set_hub_connector_egress(connector.egress());
+        crate::event_hub::spawn_app_server_membership_watcher(
+            Arc::clone(local_app_server_bridge.app_server()),
+            connector.updater(),
+        )
+    });
+    let startup_binding = if let Some(target) = opts.resume_target.clone() {
+        local_app_server_bridge
+            .resume_interactive_session(coco_types::SessionResumeParams { target }, None)
+            .await
+            .map_err(|err| anyhow::anyhow!("headless session/resume failed: {err}"))?
+    } else {
+        local_app_server_bridge
+            .start_interactive_session(
+                coco_types::SessionStartParams {
+                    session_id: Some(session_id.clone()),
+                    cwd: Some(cwd.to_string_lossy().into_owned()),
+                    model: Some(model_id.clone()),
+                    permission_mode: Some(permission_mode),
+                    initial_messages: opts
+                        .prior_messages
+                        .iter()
+                        .map(|message| (**message).clone())
+                        .collect(),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .map_err(|err| anyhow::anyhow!("headless session/start failed: {err}"))?
+    };
+    let session_handle = startup_binding.session;
     let session = session_handle.clone();
 
     // Sandbox hot-reload: re-flow settings.json `sandbox.*` edits into the live
@@ -907,25 +963,6 @@ pub async fn run_chat_with_options(
         .install_structured_output_tool_if_requested(cli.json_schema.as_deref())
         .await?;
 
-    // Shared session integrations. Headless keeps its product-specific policy:
-    // no LSP prewarm, wait for MCP registration before the single turn, and
-    // tolerate agent/task bootstrap failure because many print runs never spawn.
-    crate::session_bootstrap::install_session_integrations(
-        session_handle.clone(),
-        &cwd,
-        Arc::clone(&process_runtime),
-        crate::session_bootstrap::SessionIntegrationOptions {
-            lsp: crate::session_bootstrap::SessionLspIntegration::Disabled,
-            mcp_connect: crate::session_bootstrap::SessionMcpConnectMode::Await,
-            late_binds_failure: crate::session_bootstrap::SessionLateBindFailure::WarnAndContinue,
-            ..Default::default()
-        },
-    )
-    .await?;
-
-    local_app_server_bridge
-        .bind_interactive_session(session_handle.clone(), None)
-        .await?;
     let interactive_target = local_app_server_bridge
         .interactive_session()
         .map(crate::local_client::LocalSessionClient::interactive_target)
@@ -936,27 +973,6 @@ pub async fn run_chat_with_options(
         .await?;
 
     let session_id = session.session_id().clone();
-    let session_start_source = if opts.session_id_override.is_some() {
-        coco_hooks::orchestration::SessionStartSource::Resume
-    } else {
-        coco_hooks::orchestration::SessionStartSource::Startup
-    };
-    session.fire_session_start_hooks(session_start_source).await;
-
-    // Resume hydration: seed transcript dedup + tool-result replacement onto
-    // the runtime so `wire_engine` installs them on the engine and the resumed
-    // prior messages are not re-written to the JSONL. Session usage for the
-    // resumed id is loaded by `SessionRuntime::build` and flushed by the
-    // engine's per-turn finalize — no manual flush needed.
-    if opts.session_id_override.is_some() {
-        let prior: Vec<coco_messages::Message> =
-            opts.prior_messages.iter().map(|m| (**m).clone()).collect();
-        crate::runtime_resume::seed_resume_transcript_state(&session, &session_id, &prior).await;
-    }
-    if !opts.prior_messages.is_empty() {
-        crate::runtime_resume::restore_goal_metadata_from_messages(&session, &opts.prior_messages)
-            .await;
-    }
 
     // Bootstrap the per-source permission rule maps; see
     // `crate::permission_rule_loader` for the conversion path. Headless runs
@@ -1132,15 +1148,17 @@ pub async fn run_chat_with_options(
         }
     }
 
-    session
-        .replace_history_with_arc_messages(
-            prior_messages
-                .iter()
-                .chain(prefix_messages.iter())
-                .cloned()
-                .collect(),
-        )
-        .await;
+    if !prefix_messages.is_empty() {
+        session
+            .replace_history_with_arc_messages(
+                prior_messages
+                    .iter()
+                    .chain(prefix_messages.iter())
+                    .cloned()
+                    .collect(),
+            )
+            .await;
+    }
 
     // Interrupt the print-mode turn on caller cancellation OR an OS signal
     // (SIGINT/SIGTERM). Without the signal arm, `kill <pid>` during a print
@@ -1178,33 +1196,7 @@ pub async fn run_chat_with_options(
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     cancel_monitor.abort();
 
-    let session_result = {
-        let mut result = local_app_server_bridge.current_session_result().await;
-        for _ in 0..20 {
-            if result.as_ref().is_some_and(|params| params.total_turns > 0) {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-            result = local_app_server_bridge.current_session_result().await;
-        }
-        result.unwrap_or_else(|| coco_types::SessionResultParams {
-            session_id: session_id.clone(),
-            total_turns: 1,
-            duration_ms: 0,
-            duration_api_ms: 0,
-            is_error: false,
-            stop_reason: "end_turn".to_string(),
-            total_cost_usd: 0.0,
-            usage: completion.ended.usage.unwrap_or_default(),
-            model_usage: std::collections::HashMap::new(),
-            permission_denials: Vec::new(),
-            result: None,
-            errors: Vec::new(),
-            structured_output: None,
-            fast_mode_state: None,
-            num_api_calls: None,
-        })
-    };
+    let session_result = completion.session_result;
 
     // Wait for scheduled turn-end extraction/session-memory work before
     // returning so partial writes aren't dropped on process exit. Auto-dream
@@ -1246,40 +1238,21 @@ pub async fn run_chat_with_options(
         completion.ended.outcome,
         coco_types::TurnOutcome::Interrupted(_)
     );
-    let app_server_shutdown_timeout =
-        Duration::from_secs(runtime_config.server.shutdown_timeout_secs as u64);
-    let app_server_shutdown = crate::shutdown::drain_with_timeout_or_signal(
-        app_server_shutdown_timeout,
-        local_app_server_bridge.shutdown_registered_sessions(),
-        crate::shutdown::os_interrupt_signal(),
-    )
-    .await;
-    match &app_server_shutdown {
-        ShutdownDrainOutcome::Clean => {}
-        ShutdownDrainOutcome::Failed { message } => {
-            tracing::warn!(error = %message, "headless AppServer shutdown drain failed");
-        }
-        ShutdownDrainOutcome::TimedOut { timeout_secs } => {
-            tracing::warn!(timeout_secs, "headless AppServer shutdown drain timed out");
-        }
-        ShutdownDrainOutcome::Interrupted => {
-            tracing::warn!("headless AppServer shutdown drain interrupted by signal");
-        }
-    }
-    let event_hub_shutdown = if let Some(connector) = event_hub_connector {
-        connector
-            .shutdown_and_flush_with_timeout(app_server_shutdown_timeout)
-            .await
-    } else {
-        ShutdownDrainOutcome::Clean
-    };
+    let shutdown_timeout = Duration::from_secs(runtime_config.server.shutdown_timeout_secs as u64);
+    let shutdown = ShutdownCoordinator::new("headless", shutdown_timeout)
+        .drain_app_server_and_event_hub(
+            local_app_server_bridge.shutdown_registered_sessions(),
+            event_hub_connector,
+            event_hub_membership_watcher,
+        )
+        .await;
 
     Ok(RunChatOutcome {
         effective_cwd: cwd.clone(),
         additional_dirs,
         tool_filter_summary,
-        app_server_shutdown,
-        event_hub_shutdown,
+        app_server_shutdown: shutdown.app_server,
+        event_hub_shutdown: shutdown.event_hub,
         response_text,
         turns: session_result.total_turns,
         total_usage: session_result.usage,

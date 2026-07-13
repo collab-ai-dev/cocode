@@ -79,7 +79,7 @@ where
             move |handle| async move {
                 close_app_server_session_state(&close_state, handle.session_id()).await;
                 close_local_session_handle_with_reason(handle, close_reason, turn_drain_timeout)
-                    .await;
+                    .await
             },
         )
         .map_err(|error| app_server_lifecycle_error("replace session", error))?
@@ -135,7 +135,7 @@ where
             factory,
             move |handle| async move {
                 close_app_server_session_state(&close_state, handle.session_id()).await;
-                close_local_session_handle(handle, turn_drain_timeout).await;
+                close_local_session_handle(handle, turn_drain_timeout).await
             },
         )
         .map_err(|error| app_server_lifecycle_error_parts("replace detached session", error))?

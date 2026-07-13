@@ -4,9 +4,11 @@ pub(crate) fn session_start_input_from_params(
     params: &coco_types::SessionStartParams,
 ) -> crate::session_start::SessionStartInput {
     crate::session_start::SessionStartInput {
+        session_id: params.session_id.clone(),
         cwd: params.cwd.clone(),
         model: params.model.clone(),
         permission_mode: params.permission_mode,
+        initial_messages: params.initial_messages.clone(),
     }
 }
 
@@ -30,6 +32,7 @@ pub(crate) fn session_replace_input_from_params(
             coco_types::SessionReplacement::Resume(target) => {
                 SessionReplaceDestination::Resume(target.clone())
             }
+            coco_types::SessionReplacement::Clear => SessionReplaceDestination::Clear,
         },
     }
 }

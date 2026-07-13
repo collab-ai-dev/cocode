@@ -1,17 +1,18 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use coco_hub_connector::HubConnectorQueueError;
 use coco_hub_connector::HubConnectorSender;
 use coco_hub_connector::HubConnectorWorker;
 use coco_hub_connector::HubConnectorWorkerConfig;
 use coco_hub_connector::protocol::AnnounceFrame;
-use coco_types::SessionId;
+use coco_types::{SessionEnvelope, SessionId};
 use uuid::Uuid;
 
 use crate::BUILD_PACKAGE_VERSION;
-use crate::app_server_host::AppServerLocalBridge;
-use crate::session_runtime::SessionHandle;
+use crate::app_session::AppSessionHandle;
 use crate::shutdown::ShutdownDrainOutcome;
 
 const CHANNEL_CAPACITY: usize = 1024;
@@ -22,33 +23,33 @@ const FLUSH_INTERVAL: Duration = Duration::from_millis(500);
 const RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
 const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(30);
 
-pub struct RuntimeEventHubConnector {
+pub struct ProcessEventHub {
     worker: HubConnectorWorker,
+    updater: ProcessEventHubUpdater,
 }
 
-impl RuntimeEventHubConnector {
-    pub fn spawn_and_attach_for_session(
-        bridge: &AppServerLocalBridge,
-        session: &SessionHandle,
-        cwd: &Path,
-    ) -> Option<Self> {
-        let connector =
-            Self::spawn_for_session(session.runtime_config(), session.session_id().clone(), cwd);
-        if let Some(connector) = &connector {
-            bridge.set_hub_connector_sender(connector.sender());
-        }
-        connector
-    }
+#[derive(Clone)]
+pub struct ProcessEventHubEgress {
+    sender: HubConnectorSender,
+    updater: ProcessEventHubUpdater,
+}
 
-    pub fn spawn_for_session(
+#[derive(Clone)]
+pub struct ProcessEventHubUpdater {
+    sender: HubConnectorSender,
+    cwd: PathBuf,
+}
+
+impl ProcessEventHub {
+    pub fn spawn(
         runtime_config: &coco_config::RuntimeConfig,
-        session_id: SessionId,
         cwd: &Path,
+        live_sessions: Vec<SessionId>,
     ) -> Option<Self> {
         let url = runtime_config.event_hub.url.clone()?;
         match HubConnectorWorker::spawn(HubConnectorWorkerConfig {
             url,
-            announce: announce_frame(session_id, cwd),
+            announce: announce_frame(live_sessions, cwd),
             channel_capacity: CHANNEL_CAPACITY,
             pending_capacity: RING_CAPACITY,
             batch_max_events: BATCH_MAX_EVENTS,
@@ -57,7 +58,13 @@ impl RuntimeEventHubConnector {
             reconnect_initial_delay: RECONNECT_INITIAL_DELAY,
             reconnect_max_delay: RECONNECT_MAX_DELAY,
         }) {
-            Ok(worker) => Some(Self { worker }),
+            Ok(worker) => {
+                let updater = ProcessEventHubUpdater {
+                    sender: worker.sender(),
+                    cwd: cwd.to_path_buf(),
+                };
+                Some(Self { worker, updater })
+            }
             Err(error) => {
                 tracing::warn!(%error, "event hub connector worker failed to start");
                 None
@@ -65,8 +72,15 @@ impl RuntimeEventHubConnector {
         }
     }
 
-    pub fn sender(&self) -> HubConnectorSender {
-        self.worker.sender()
+    pub fn egress(&self) -> ProcessEventHubEgress {
+        ProcessEventHubEgress {
+            sender: self.worker.sender(),
+            updater: self.updater.clone(),
+        }
+    }
+
+    pub fn updater(&self) -> ProcessEventHubUpdater {
+        self.updater.clone()
     }
 
     pub async fn shutdown_and_flush_with_timeout(self, timeout: Duration) -> ShutdownDrainOutcome {
@@ -105,10 +119,85 @@ impl RuntimeEventHubConnector {
     }
 }
 
-fn announce_frame(session_id: SessionId, cwd: &Path) -> AnnounceFrame {
+pub fn spawn_app_server_membership_watcher(
+    app_server: Arc<coco_app_server::AppServer<AppSessionHandle>>,
+    updater: ProcessEventHubUpdater,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut revisions = app_server.subscribe_session_activity();
+        let mut last_live_sessions = app_server_live_session_ids(&app_server);
+        if !last_live_sessions.is_empty() {
+            updater
+                .update_live_sessions(last_live_sessions.clone())
+                .await;
+        }
+        while revisions.changed().await.is_ok() {
+            let next_live_sessions = app_server_live_session_ids(&app_server);
+            if next_live_sessions == last_live_sessions {
+                continue;
+            }
+            updater
+                .update_live_sessions(next_live_sessions.clone())
+                .await;
+            last_live_sessions = next_live_sessions;
+        }
+    })
+}
+
+impl ProcessEventHubUpdater {
+    pub async fn update_live_sessions(&self, live_sessions: Vec<SessionId>) {
+        if let Err(error) = self
+            .sender
+            .update_announce(announce_frame(live_sessions, &self.cwd))
+            .await
+        {
+            tracing::warn!(%error, "failed to update event hub live-session membership");
+        }
+    }
+}
+
+impl ProcessEventHubEgress {
+    pub async fn update_live_sessions(&self, live_sessions: Vec<SessionId>) {
+        self.updater.update_live_sessions(live_sessions).await;
+    }
+
+    pub async fn sync_app_server_membership_if_changed<H>(
+        &self,
+        app_server: &coco_app_server::AppServer<H>,
+        last_live_sessions: &mut Vec<SessionId>,
+    ) where
+        H: Clone + Send + Sync + 'static,
+    {
+        let live_sessions = app_server_live_session_ids(app_server);
+        if live_sessions == *last_live_sessions {
+            return;
+        }
+        self.update_live_sessions(live_sessions.clone()).await;
+        *last_live_sessions = live_sessions;
+    }
+
+    pub fn try_enqueue(&self, envelope: SessionEnvelope) -> Result<(), HubConnectorQueueError> {
+        self.sender.try_enqueue(envelope)
+    }
+}
+
+pub fn app_server_live_session_ids<H>(
+    app_server: &coco_app_server::AppServer<H>,
+) -> Vec<coco_types::SessionId>
+where
+    H: Clone + Send + Sync + 'static,
+{
+    app_server
+        .list_live_sessions()
+        .into_iter()
+        .map(|summary| summary.session_id)
+        .collect()
+}
+
+fn announce_frame(live_sessions: Vec<SessionId>, cwd: &Path) -> AnnounceFrame {
     AnnounceFrame {
         instance_id: persisted_instance_id(),
-        live_sessions: vec![session_id],
+        live_sessions,
         host: std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_string()),
         cwd: cwd.display().to_string(),
         pid: i64::from(std::process::id()),
@@ -143,3 +232,7 @@ fn persisted_instance_id() -> Uuid {
     }
     id
 }
+
+#[cfg(test)]
+#[path = "event_hub.test.rs"]
+mod tests;

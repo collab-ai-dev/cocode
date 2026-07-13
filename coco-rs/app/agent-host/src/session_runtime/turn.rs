@@ -11,6 +11,52 @@ pub(crate) struct ActiveTurnHandles {
     pub forwarder_task: tokio::task::JoinHandle<()>,
 }
 
+pub(crate) enum ActiveTurnDrainState {
+    Running(ActiveTurnHandles),
+    Finishing(ActiveTurnHandles),
+}
+
+impl ActiveTurnDrainState {
+    pub(crate) fn into_parts(self) -> (ActiveTurnHandles, bool) {
+        match self {
+            Self::Running(active) => (active, true),
+            Self::Finishing(active) => (active, false),
+        }
+    }
+}
+
+#[derive(Default)]
+enum TurnLifecycleState {
+    #[default]
+    Idle,
+    Running(ActiveTurnHandles),
+    Finishing(ActiveTurnHandles),
+}
+
+impl TurnLifecycleState {
+    fn is_busy(&self) -> bool {
+        match self {
+            Self::Idle => false,
+            Self::Running(_) | Self::Finishing(_) => true,
+        }
+    }
+
+    fn cancel_token(&self) -> Option<CancellationToken> {
+        match self {
+            Self::Idle => None,
+            Self::Running(active) | Self::Finishing(active) => Some(active.cancel_token.clone()),
+        }
+    }
+
+    fn into_drain_state(self) -> Option<ActiveTurnDrainState> {
+        match self {
+            Self::Idle => None,
+            Self::Running(active) => Some(ActiveTurnDrainState::Running(active)),
+            Self::Finishing(active) => Some(ActiveTurnDrainState::Finishing(active)),
+        }
+    }
+}
+
 /// Aggregate protocol accounting owned by one live session runtime.
 #[derive(Debug, Clone)]
 pub(crate) struct SessionAccounting {
@@ -88,7 +134,7 @@ impl SessionStats {
 
 pub(crate) struct SessionTurnCoordinator {
     next_turn: AtomicU64,
-    active: Mutex<Option<ActiveTurnHandles>>,
+    lifecycle: Mutex<TurnLifecycleState>,
     accounting: Mutex<SessionAccounting>,
 }
 
@@ -96,7 +142,7 @@ impl Default for SessionTurnCoordinator {
     fn default() -> Self {
         Self {
             next_turn: AtomicU64::new(0),
-            active: Mutex::new(None),
+            lifecycle: Mutex::new(TurnLifecycleState::Idle),
             accounting: Mutex::new(SessionAccounting::default()),
         }
     }
@@ -113,40 +159,72 @@ impl SessionTurnCoordinator {
         session_id: &coco_types::SessionId,
         build: impl FnOnce(coco_types::TurnId, CancellationToken) -> ActiveTurnHandles,
     ) -> Result<coco_types::TurnId, ()> {
-        let mut active = self
-            .active
+        let mut lifecycle = self
+            .lifecycle
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if active.is_some() {
+        if lifecycle.is_busy() {
             return Err(());
         }
         let turn_id = self.next_turn_id(session_id);
         let cancel = CancellationToken::new();
-        *active = Some(build(turn_id.clone(), cancel));
+        *lifecycle = TurnLifecycleState::Running(build(turn_id.clone(), cancel));
         Ok(turn_id)
     }
 
     pub(crate) fn cancel_token(&self) -> Option<CancellationToken> {
-        self.active
+        self.lifecycle
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .map(|active| active.cancel_token.clone())
+            .cancel_token()
     }
 
-    pub(crate) fn clear(&self) -> bool {
-        self.active
+    pub(crate) fn mark_finishing(&self) -> bool {
+        let mut lifecycle = self
+            .lifecycle
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-            .is_some()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = std::mem::take(&mut *lifecycle);
+        match previous {
+            TurnLifecycleState::Running(active) => {
+                *lifecycle = TurnLifecycleState::Finishing(active);
+                true
+            }
+            TurnLifecycleState::Finishing(active) => {
+                *lifecycle = TurnLifecycleState::Finishing(active);
+                true
+            }
+            TurnLifecycleState::Idle => {
+                *lifecycle = TurnLifecycleState::Idle;
+                false
+            }
+        }
     }
 
-    pub(crate) fn take(&self) -> Option<ActiveTurnHandles> {
-        self.active
+    pub(crate) fn complete_finishing(&self) -> bool {
+        let mut lifecycle = self
+            .lifecycle
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = std::mem::take(&mut *lifecycle);
+        match previous {
+            TurnLifecycleState::Finishing(_) => true,
+            TurnLifecycleState::Running(active) => {
+                *lifecycle = TurnLifecycleState::Running(active);
+                false
+            }
+            TurnLifecycleState::Idle => false,
+        }
+    }
+
+    pub(crate) fn take_for_drain(&self) -> Option<ActiveTurnDrainState> {
+        std::mem::take(
+            &mut *self
+                .lifecycle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+        .into_drain_state()
     }
 
     pub(crate) fn reset_accounting(&self) {

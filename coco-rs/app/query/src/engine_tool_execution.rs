@@ -6,6 +6,7 @@ use coco_llm_types::ToolCallPart;
 use coco_messages::MessageHistory;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::TokenUsage;
+use coco_types::TurnEndedParams;
 
 use crate::ContinueReason;
 use crate::QueryResult;
@@ -22,7 +23,10 @@ use crate::tool_call_runner::ToolCallRunner;
 
 pub(crate) enum ToolExecutionBranch {
     ContinueLoop,
-    Return(Box<QueryResult>),
+    Return {
+        result: Box<QueryResult>,
+        terminal: Option<TurnEndedParams>,
+    },
 }
 
 #[cfg(test)]
@@ -115,77 +119,86 @@ impl QueryEngine {
                 } else {
                     TurnContinuation::Continuing
                 };
-            self.finalize_turn_post_tools(
-                &mut *history,
-                event_tx,
-                usage,
-                continuation,
-                cycle_turn_id.clone(),
-                parsed_stop_reason,
-                tool_batch_ran_sleep(tool_calls),
-            )
-            .await;
+            let terminal = self
+                .finalize_turn_post_tools(
+                    &mut *history,
+                    event_tx,
+                    usage,
+                    continuation,
+                    cycle_turn_id.clone(),
+                    parsed_stop_reason,
+                    tool_batch_ran_sleep(tool_calls),
+                )
+                .await;
             if let Some(ref c) = streaming_ctx {
                 self.drain_dynamic_skill_triggers(c, &mut *history, event_tx)
                     .await;
             }
             if self.cancel.is_cancelled() {
-                return ToolExecutionBranch::Return(Box::new(make_query_result(
-                    consts,
-                    &*acc,
-                    &*turn_state,
-                    response_text,
-                    /*cancelled*/ true,
-                    /*budget_exhausted*/ false,
-                    Some("cancelled".into()),
-                    history.to_vec(),
-                    history.snapshot(),
-                )));
+                return ToolExecutionBranch::Return {
+                    result: Box::new(make_query_result(
+                        consts,
+                        &*acc,
+                        &*turn_state,
+                        response_text,
+                        /*cancelled*/ true,
+                        /*budget_exhausted*/ false,
+                        Some("cancelled".into()),
+                        history.to_vec(),
+                        history.snapshot(),
+                    )),
+                    terminal: None,
+                };
             }
             if structured_output_failure_limit_reached {
-                self.emit_structured_output_retry_cap_failed(
-                    event_tx,
-                    cycle_turn_id.clone(),
-                    usage,
-                )
-                .await;
-                return ToolExecutionBranch::Return(Box::new(make_query_result(
-                    consts,
-                    &*acc,
-                    &*turn_state,
-                    response_text,
-                    /*cancelled*/ false,
-                    /*budget_exhausted*/ false,
-                    Some("error_max_structured_output_retries".into()),
-                    history.to_vec(),
-                    history.snapshot(),
-                )));
+                let terminal =
+                    self.build_structured_output_retry_cap_failed(cycle_turn_id.clone(), usage);
+                return ToolExecutionBranch::Return {
+                    result: Box::new(make_query_result(
+                        consts,
+                        &*acc,
+                        &*turn_state,
+                        response_text,
+                        /*cancelled*/ false,
+                        /*budget_exhausted*/ false,
+                        Some("error_max_structured_output_retries".into()),
+                        history.to_vec(),
+                        history.snapshot(),
+                    )),
+                    terminal,
+                };
             }
             if structured_output_recall_limit_reached {
-                return ToolExecutionBranch::Return(Box::new(make_query_result(
-                    consts,
-                    &*acc,
-                    &*turn_state,
-                    response_text,
-                    /*cancelled*/ false,
-                    /*budget_exhausted*/ false,
-                    None,
-                    history.to_vec(),
-                    history.snapshot(),
-                )));
+                return ToolExecutionBranch::Return {
+                    result: Box::new(make_query_result(
+                        consts,
+                        &*acc,
+                        &*turn_state,
+                        response_text,
+                        /*cancelled*/ false,
+                        /*budget_exhausted*/ false,
+                        None,
+                        history.to_vec(),
+                        history.snapshot(),
+                    )),
+                    terminal,
+                };
             }
             if let Some(stop_reason) = streaming_control_prevent {
-                return ToolExecutionBranch::Return(Box::new(make_query_result(
-                    consts,
-                    &*acc,
-                    &*turn_state,
-                    response_text,
-                    /*cancelled*/ false,
-                    /*budget_exhausted*/ false,
-                    Some(stop_reason),
-                    history.to_vec(),
-                    history.snapshot(),
-                )));
+                return ToolExecutionBranch::Return {
+                    result: Box::new(make_query_result(
+                        consts,
+                        &*acc,
+                        &*turn_state,
+                        response_text,
+                        /*cancelled*/ false,
+                        /*budget_exhausted*/ false,
+                        Some(stop_reason),
+                        history.to_vec(),
+                        history.snapshot(),
+                    )),
+                    terminal,
+                };
             }
             turn_state.transition = Some(ContinueReason::NextTurn);
             return ToolExecutionBranch::ContinueLoop;
@@ -307,89 +320,105 @@ impl QueryEngine {
         } else {
             TurnContinuation::Terminal
         };
-        self.finalize_turn_post_tools(
-            &mut *history,
-            event_tx,
-            usage,
-            continuation,
-            cycle_turn_id.clone(),
-            parsed_stop_reason,
-            tool_batch_ran_sleep(tool_calls),
-        )
-        .await;
+        let terminal = self
+            .finalize_turn_post_tools(
+                &mut *history,
+                event_tx,
+                usage,
+                continuation,
+                cycle_turn_id.clone(),
+                parsed_stop_reason,
+                tool_batch_ran_sleep(tool_calls),
+            )
+            .await;
         self.drain_dynamic_skill_triggers(&ctx, &mut *history, event_tx)
             .await;
         if tool_run_outcome.permission_aborted {
-            return ToolExecutionBranch::Return(Box::new(make_query_result(
-                consts,
-                &*acc,
-                &*turn_state,
-                response_text,
-                /*cancelled*/ true,
-                /*budget_exhausted*/ false,
-                Some("permission_abort".into()),
-                history.to_vec(),
-                history.snapshot(),
-            )));
+            return ToolExecutionBranch::Return {
+                result: Box::new(make_query_result(
+                    consts,
+                    &*acc,
+                    &*turn_state,
+                    response_text,
+                    /*cancelled*/ true,
+                    /*budget_exhausted*/ false,
+                    Some("permission_abort".into()),
+                    history.to_vec(),
+                    history.snapshot(),
+                )),
+                terminal: None,
+            };
         }
         if self.cancel.is_cancelled() {
-            return ToolExecutionBranch::Return(Box::new(make_query_result(
-                consts,
-                &*acc,
-                &*turn_state,
-                response_text,
-                /*cancelled*/ true,
-                /*budget_exhausted*/ false,
-                Some("cancelled".into()),
-                history.to_vec(),
-                history.snapshot(),
-            )));
+            return ToolExecutionBranch::Return {
+                result: Box::new(make_query_result(
+                    consts,
+                    &*acc,
+                    &*turn_state,
+                    response_text,
+                    /*cancelled*/ true,
+                    /*budget_exhausted*/ false,
+                    Some("cancelled".into()),
+                    history.to_vec(),
+                    history.snapshot(),
+                )),
+                terminal: None,
+            };
         }
         if structured_output_failure_limit_reached {
-            self.emit_structured_output_retry_cap_failed(event_tx, cycle_turn_id.clone(), usage)
-                .await;
-            return ToolExecutionBranch::Return(Box::new(make_query_result(
-                consts,
-                &*acc,
-                &*turn_state,
-                response_text,
-                /*cancelled*/ false,
-                /*budget_exhausted*/ false,
-                Some("error_max_structured_output_retries".into()),
-                history.to_vec(),
-                history.snapshot(),
-            )));
+            let terminal =
+                self.build_structured_output_retry_cap_failed(cycle_turn_id.clone(), usage);
+            return ToolExecutionBranch::Return {
+                result: Box::new(make_query_result(
+                    consts,
+                    &*acc,
+                    &*turn_state,
+                    response_text,
+                    /*cancelled*/ false,
+                    /*budget_exhausted*/ false,
+                    Some("error_max_structured_output_retries".into()),
+                    history.to_vec(),
+                    history.snapshot(),
+                )),
+                terminal,
+            };
         }
         if structured_output_recall_limit_reached {
-            return ToolExecutionBranch::Return(Box::new(make_query_result(
-                consts,
-                &*acc,
-                &*turn_state,
-                response_text,
-                /*cancelled*/ false,
-                /*budget_exhausted*/ false,
-                None,
-                history.to_vec(),
-                history.snapshot(),
-            )));
+            return ToolExecutionBranch::Return {
+                result: Box::new(make_query_result(
+                    consts,
+                    &*acc,
+                    &*turn_state,
+                    response_text,
+                    /*cancelled*/ false,
+                    /*budget_exhausted*/ false,
+                    None,
+                    history.to_vec(),
+                    history.snapshot(),
+                )),
+                terminal,
+            };
         }
         if !tool_run_outcome.continue_after_tools {
             let cancelled = self.cancel.is_cancelled();
-            return ToolExecutionBranch::Return(Box::new(make_query_result(
-                consts,
-                &*acc,
-                &*turn_state,
-                response_text,
-                cancelled,
-                /*budget_exhausted*/ false,
-                if cancelled {
-                    Some("cancelled".into())
-                } else {
-                    tool_run_outcome.stop_reason_override
-                },
-                history.to_vec(),
-                history.snapshot(),
-            )));
+            return ToolExecutionBranch::Return {
+                result: Box::new(make_query_result(
+                    consts,
+                    &*acc,
+                    &*turn_state,
+                    response_text,
+                    cancelled,
+                    /*budget_exhausted*/ false,
+                    if cancelled {
+                        Some("cancelled".into())
+                    } else {
+                        tool_run_outcome.stop_reason_override
+                    },
+                    history.to_vec(),
+                    history.snapshot(),
+                )),
+                terminal: (!cancelled).then_some(terminal).flatten(),
+            };
         }
         turn_state.transition = Some(ContinueReason::NextTurn);
         ToolExecutionBranch::ContinueLoop

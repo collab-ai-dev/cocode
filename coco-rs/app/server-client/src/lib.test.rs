@@ -1514,18 +1514,25 @@ async fn remote_session_handle_forwards_query_interrupt_and_close() {
     else {
         panic!("expected close request");
     };
-    assert_eq!(close_request.method, "session/archive");
+    assert_eq!(close_request.method, "session/close");
     assert_eq!(
         close_request
             .params
             .as_ref()
-            .and_then(|params| params.pointer("/target/interactive/session_id")),
+            .and_then(|params| params.pointer("/target/kind")),
+        Some(&serde_json::json!("interactive"))
+    );
+    assert_eq!(
+        close_request
+            .params
+            .as_ref()
+            .and_then(|params| params.pointer("/target/target/session_id")),
         Some(&serde_json::json!(session_id))
     );
     incoming
         .handle_frame(JsonRpcFrame::Error(JsonRpcErrorResponse::new(
             close_request.id,
-            JsonRpcErrorObject::new(-32603, "archive failed", None),
+            JsonRpcErrorObject::new(-32603, "close failed", None),
         )))
         .await
         .expect("handle close error");
@@ -1535,7 +1542,7 @@ async fn remote_session_handle_forwards_query_interrupt_and_close() {
         panic!("expected close failure to return handle");
     };
     assert_eq!(returned.session_id(), &test_session_id("sess-remote-query"));
-    assert_eq!(message, "archive failed");
+    assert_eq!(message, "close failed");
 }
 
 #[tokio::test]

@@ -7,10 +7,24 @@ use super::runtime_replacement::{RuntimeReplacementContext, RuntimeReplacementSt
 use super::session_store::SessionStore;
 use super::turn_runner::{TurnRunner, TurnRunnerState};
 
+/// Construction-time process host inputs.
+///
+/// Runtime/session-owned state must not be mirrored here. These inputs provide
+/// immutable startup capabilities and optional local/test seams before the
+/// first lifecycle request creates a session runtime.
+#[derive(Default)]
+pub struct HostInputs {
+    pub startup_cwd: Option<PathBuf>,
+    pub initialize_bootstrap: Option<Arc<dyn InitializeBootstrap>>,
+    pub session_manager: Option<Arc<coco_session::SessionManager>>,
+    pub bypass_permissions_available: bool,
+    pub runtime_replacement: Option<RuntimeReplacementContext>,
+    pub turn_runner: Option<Arc<dyn TurnRunner>>,
+}
+
 /// Process-level AppServer host services shared across remote and local
 /// connections. Live mutable session state belongs to the selected
 /// `SessionRuntime`, never this owner.
-#[derive(Default)]
 pub struct AppServerHostState {
     /// Installed turn runner. Defaults to a fail-closed runner until startup
     /// injects the QueryEngine-backed production runner.
@@ -29,7 +43,28 @@ pub struct AppServerHostState {
     session_seq: Arc<coco_app_server::SessionSeqAllocator>,
 }
 
+impl Default for AppServerHostState {
+    fn default() -> Self {
+        Self::new(HostInputs::default())
+    }
+}
+
 impl AppServerHostState {
+    pub fn new(inputs: HostInputs) -> Self {
+        Self {
+            turn_runner: TurnRunnerState::new(inputs.turn_runner),
+            session_activity: coco_app_server::SessionActivityTracker::default(),
+            session_store: SessionStore::new(inputs.session_manager),
+            bootstrap_state: BootstrapState::new(
+                inputs.initialize_bootstrap,
+                inputs.startup_cwd,
+                inputs.bypass_permissions_available,
+            ),
+            runtime_replacement: RuntimeReplacementState::new(inputs.runtime_replacement),
+            session_seq: Arc::new(coco_app_server::SessionSeqAllocator::default()),
+        }
+    }
+
     pub(crate) async fn process_cwd(&self) -> Result<PathBuf, HandlerResult> {
         self.bootstrap_state
             .bootstrap_or_startup_cwd()
@@ -64,10 +99,6 @@ impl AppServerHostState {
         self.turn_runner.snapshot().await
     }
 
-    pub async fn install_runtime_replacement(&self, context: RuntimeReplacementContext) {
-        self.runtime_replacement.install(context).await;
-    }
-
     pub(crate) async fn runtime_replacement_snapshot(&self) -> Option<RuntimeReplacementContext> {
         self.runtime_replacement.snapshot().await
     }
@@ -78,18 +109,6 @@ impl AppServerHostState {
 
     pub(crate) fn touch_session_activity(&self, session_id: coco_types::SessionId) {
         self.session_activity.touch(session_id);
-    }
-
-    pub fn install_initialize_bootstrap_for_startup(
-        &self,
-        bootstrap: Arc<dyn InitializeBootstrap>,
-    ) {
-        self.bootstrap_state
-            .install_initialize_bootstrap_for_startup(bootstrap);
-    }
-
-    pub fn install_startup_cwd(&self, cwd: PathBuf) {
-        self.bootstrap_state.install_startup_cwd(cwd);
     }
 
     pub(crate) async fn initialize_bootstrap_snapshot(
@@ -118,10 +137,6 @@ impl AppServerHostState {
         })
     }
 
-    pub fn install_session_manager_for_startup(&self, manager: Arc<coco_session::SessionManager>) {
-        self.session_store.install_for_startup(manager);
-    }
-
     pub async fn install_session_manager(&self, manager: Arc<coco_session::SessionManager>) {
         self.session_store.install(manager).await;
     }
@@ -141,3 +156,7 @@ impl std::fmt::Debug for AppServerHostState {
             .finish()
     }
 }
+
+#[cfg(test)]
+#[path = "state.test.rs"]
+mod tests;

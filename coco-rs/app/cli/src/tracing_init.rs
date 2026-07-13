@@ -19,7 +19,6 @@
 //! `--log-location`, `COCO_LOG_LOCATION`, or `settings.log.location`
 //! values still win.
 
-use std::io::IsTerminal;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -40,20 +39,27 @@ use coco_otel::subscriber::filter_enables_coco_debug;
 use coco_otel::subscriber::init_subscriber;
 
 use crate::Cli;
-use crate::Commands;
+use crate::execution_plan::ExecutionMode;
+use crate::execution_plan::ExecutionPlan;
+use crate::execution_plan::IoCapabilities;
+use crate::execution_plan::classify_execution_plan;
 
 /// Install the global tracing subscriber. Returns `Ok(None)` for short
 /// subcommands that exit before any heavy work — they get
 /// [`Mode::Skip`] so their stdout stays clean.
-pub fn install(cli: &Cli, cwd: &Path) -> Result<Option<SubscriberHandle>> {
-    let mode = detect_mode(cli);
+pub fn install(cli: &Cli, cwd: &Path, plan: &ExecutionPlan) -> Result<Option<SubscriberHandle>> {
+    let mode = tracing_mode_for_execution(plan.mode);
     let settings = if matches!(mode, Mode::Skip) {
         None
     } else {
         Some(load_settings_for_logging(cli, cwd)?)
     };
-    let opts =
-        subscriber_opts_from_cli_with_sources(cli, settings.as_ref(), &LogEnv::from_process());
+    let opts = subscriber_opts_from_cli_with_sources_and_plan(
+        cli,
+        settings.as_ref(),
+        &LogEnv::from_process(),
+        *plan,
+    );
     let mode = opts.mode;
     let location = opts.location;
     let handle = init_subscriber(opts).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -132,11 +138,21 @@ fn subscriber_opts_from_cli_with_sources(
     settings: Option<&Settings>,
     log_env: &LogEnv,
 ) -> SubscriberOpts {
+    let plan = classify_execution_plan(cli, IoCapabilities::detect());
+    subscriber_opts_from_cli_with_sources_and_plan(cli, settings, log_env, plan)
+}
+
+fn subscriber_opts_from_cli_with_sources_and_plan(
+    cli: &Cli,
+    settings: Option<&Settings>,
+    log_env: &LogEnv,
+    plan: ExecutionPlan,
+) -> SubscriberOpts {
     let level = resolve_level(cli, settings, log_env);
     let auto_verbose = filter_enables_coco_debug(level.as_deref().unwrap_or(DEFAULT_FILTER));
     let location = resolve_location(cli, settings, log_env, auto_verbose);
     SubscriberOpts {
-        mode: detect_mode(cli),
+        mode: tracing_mode_for_execution(plan.mode),
         level,
         format: resolve_format(cli, settings, log_env),
         file: resolve_file(cli, settings, log_env),
@@ -183,23 +199,22 @@ impl LogEnv {
     }
 }
 
-/// Pick the run mode by inspecting the subcommand and stdin/stdout
-/// terminal state. Same branching as `main()` so subscriber sinks
-/// match the eventual run path.
+/// Pick the tracing mode from the shared execution plan. Kept for tests and
+/// call sites that do not yet need the full plan object.
 pub fn detect_mode(cli: &Cli) -> Mode {
-    if let Some(cmd) = &cli.command {
-        return match cmd {
-            Commands::Chat { .. } | Commands::Review { .. } => Mode::Headless,
-            Commands::Sdk => Mode::Sdk,
-            _ => Mode::Skip,
-        };
-    }
+    detect_mode_for_io(cli, IoCapabilities::detect())
+}
 
-    let is_piped = !std::io::stdout().is_terminal();
-    if cli.prompt.is_some() || is_piped {
-        Mode::Headless
-    } else {
-        Mode::Tui
+pub fn detect_mode_for_io(cli: &Cli, io: IoCapabilities) -> Mode {
+    tracing_mode_for_execution(classify_execution_plan(cli, io).mode)
+}
+
+pub fn tracing_mode_for_execution(mode: ExecutionMode) -> Mode {
+    match mode {
+        ExecutionMode::Skip => Mode::Skip,
+        ExecutionMode::Tui => Mode::Tui,
+        ExecutionMode::Headless => Mode::Headless,
+        ExecutionMode::Sdk => Mode::Sdk,
     }
 }
 

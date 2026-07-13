@@ -4,8 +4,7 @@ pub(super) async fn background_all_tasks_through_app_server(
     local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> Result<Vec<String>, coco_app_server_client::ClientError> {
     local_app_server_bridge
-        .bind_interactive_session(session.clone(), None)
-        .await?;
+        .activate_existing_interactive_session(session.session_id().clone(), None)?;
     local_app_server_bridge
         .client()
         .background_all_tasks(
@@ -19,6 +18,7 @@ pub(super) async fn background_all_tasks_through_app_server(
 pub(super) async fn spawn_command_queue_turn(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
+    local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
 ) {
@@ -42,7 +42,15 @@ pub(super) async fn spawn_command_queue_turn(
         }))
         .await;
 
-    spawn_history_turn(batch.messages, session, event_tx, active_turn, turn_done_tx).await;
+    spawn_history_turn_through_app_server(
+        batch.messages,
+        session,
+        event_tx,
+        local_app_server_bridge,
+        active_turn,
+        turn_done_tx,
+    )
+    .await;
 }
 
 /// bounded retries when local `turn/start` transiently reports
@@ -99,10 +107,11 @@ pub(super) async fn start_turn_with_busy_retry(
     Err(StartTurnBusyError::StillBusy(Box::new(params)))
 }
 
-pub(super) async fn spawn_history_turn(
+pub(super) async fn spawn_history_turn_through_app_server(
     messages: Vec<std::sync::Arc<coco_messages::Message>>,
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
+    local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
 ) {
@@ -119,18 +128,13 @@ pub(super) async fn spawn_history_turn(
         }
     };
 
-    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
-    );
     if let Err(error) = local_app_server_bridge
-        .bind_interactive_session(session.clone(), Some(event_tx.clone()))
-        .await
+        .activate_existing_interactive_session(session_id.clone(), Some(event_tx.clone()))
     {
-        tracing::warn!(%error, "history turn could not bind local AppServer session");
+        tracing::warn!(%error, "history turn could not activate local AppServer session");
         return;
     }
     let mut monitor_client = local_app_server_bridge.connect_local_client();
-    // live-only tail attach with no replay cursor (see SubmitInput site).
     let passive_surface = match monitor_client.attach_passive_session(session_id.clone()) {
         Ok(surface) => surface,
         Err(error) => {
@@ -139,7 +143,7 @@ pub(super) async fn spawn_history_turn(
         }
     };
     let params = coco_types::TurnStartParams {
-        target: interactive_target(&local_app_server_bridge),
+        target: interactive_target(local_app_server_bridge),
         prompt: String::new(),
         history_override,
         images: Vec::new(),
@@ -164,9 +168,8 @@ pub(super) async fn spawn_history_turn(
     let protocol_turn_id = started.turn_id.clone();
     let interrupt_client = local_app_server_bridge.connect_local_client();
     let handler = local_app_server_bridge.handler().clone();
-    let interrupt_target = interactive_target(&local_app_server_bridge);
+    let interrupt_target = interactive_target(local_app_server_bridge);
     let task = tokio::spawn(async move {
-        let _bridge = local_app_server_bridge;
         let _done = TurnDoneGuard {
             turn_id,
             tx: turn_done_tx_t,
@@ -216,10 +219,9 @@ pub(super) async fn spawn_slash_run_engine_turn(
         model_runtime_source,
     } = prompt;
     if let Err(error) = local_app_server_bridge
-        .bind_interactive_session(session.clone(), Some(event_tx.clone()))
-        .await
+        .activate_existing_interactive_session(session_id.clone(), Some(event_tx.clone()))
     {
-        tracing::warn!(%error, "slash RunEngine could not bind local AppServer session");
+        tracing::warn!(%error, "slash RunEngine could not activate local AppServer session");
         return;
     }
     let mut monitor_client = local_app_server_bridge.connect_local_client();

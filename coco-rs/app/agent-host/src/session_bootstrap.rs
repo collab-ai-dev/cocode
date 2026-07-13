@@ -161,7 +161,7 @@ pub enum SessionLateBindFailure {
     WarnAndContinue,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct SessionIntegrationOptions {
     pub existing_mcp_manager: Option<Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>>,
     pub event_sink: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,

@@ -24,7 +24,7 @@ it expose typed errors and adapters translate failures to protocol results.
 | `app_server_host::AppServerHostState` | Shared AppServer host projection state: turn runner, startup/bootstrap data, session-manager projection, activity, runtime replacement, and durable sequence allocation. |
 | `app_server_host::SessionTurnExecutor` | Executes a turn against the already-selected `SessionHandle`; shared by remote AppServer, TUI, headless, and harness paths. |
 | `app_server_host::CliInitializeBootstrap` | CLI startup data source for AppServer `initialize` responses |
-| `remote_host::prepare_remote_host` | Remote AppServer host bootstrap: builds shared runtime/AppServer state and host-handler bindings for transport adapters without owning SDK transport. |
+| `remote_host::HostBuilder` / `PreparedHost` | Remote AppServer host bootstrap: builds shared runtime/AppServer state and host-handler bindings for transport adapters without owning SDK transport. |
 | `remote_host::RemoteAppServerBridgeHost` | Narrow remote transport-facing capability handle for opening JSON-RPC/AppServer bindings without exposing raw host state. |
 | `coco_types::*` protocol schemas | Shared AppServer request/result and notification DTOs used by adapters. |
 | `model_factory::*` | Builds `Arc<dyn LanguageModelV4>` from provider/model config |
@@ -156,7 +156,7 @@ TUI orchestration remains in `coco-cli` and is split by UI ownership rather
 than hidden behind a generic runner. The host exposes application operations;
 the CLI driver retains terminal lifecycle and command-loop policy.
 SDK JSON-RPC mode also uses `AppSessionHandle` in the AppServer registry.
-`session/start`, `session/resume`, and `session/archive` dispatched through
+`session/start`, `session/resume`, and `session/close` dispatched through
 `SdkServer::run_app_server_connection` apply the same lifecycle registration
 and close path as local requests after the shared AppServer handler succeeds.
 Successful JSON-RPC start/resume also attaches an interactive surface to the
@@ -201,7 +201,7 @@ live-handle snapshot conversion. The AppServer data-source adapter lives under
 `coco-agent-host` without being owned by the SDK protocol layer.
 The local AppServer bridge exposes `shutdown_registered_sessions`, which
 drains all registered AppServer slots through the same concrete close cascade
-used by `session/archive`: host active-turn state is cancelled and
+used by `session/close`: host active-turn state is cancelled and
 boundedly drained using `RuntimeConfig.server.turn_drain_timeout_secs`
 (`server.turn_drain_timeout_secs`, env
 `COCO_SERVER_TURN_DRAIN_TIMEOUT_SECS`; default 10) before AppServer close
@@ -304,7 +304,7 @@ the AppServer slot/surface switch, and only then swaps
 the AppServer registry only after construction and hydration succeed;
 construction failure leaves the prior slot untouched. Runtime-backed controls
 read and mutate only the validated handle. Turn ids, active tasks,
-cancellation, and aggregate archive accounting are owned together by the
+cancellation, and aggregate close accounting are owned together by the
 runtime's `SessionTurnCoordinator`. Server requests and callback waiters are
 owned and correlated by AppServer, including the originating surface.
 TUI, headless, and SDK runtime construction uses
@@ -412,7 +412,7 @@ extraction points (`AppSessionHandle`) or tests.
 Local `session/start` and `session/resume` register the session in the local
 `AppServer` registry; TUI resume replaces its explicitly selected live slot so
 the resumed session can load without leaking registry state. Local
-`session/archive` drives the AppServer close path so attached
+`session/close` drives the AppServer close path so attached
 surfaces receive `SessionEnded` lifecycle notifications.
 `turn/start` lifecycle events must use the same `TurnId` returned by the
 synchronous `TurnStartResult`; `AppServerLocalBridge::start_turn_and_wait_for_end`

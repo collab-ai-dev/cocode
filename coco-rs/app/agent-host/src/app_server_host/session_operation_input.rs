@@ -4,9 +4,9 @@ use crate::session_start::SessionStartInput;
 
 #[derive(Debug, Clone)]
 pub(crate) enum LocalSessionOperation {
-    Archive {
+    Close {
         connection: ConnectionKey,
-        target: coco_types::ArchiveTarget,
+        target: coco_types::SessionCloseTarget,
     },
 }
 
@@ -18,4 +18,5 @@ pub(crate) struct SessionReplaceInput {
 pub(crate) enum SessionReplaceDestination {
     Fresh(SessionStartInput),
     Resume(coco_types::SessionTarget),
+    Clear,
 }

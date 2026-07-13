@@ -13,7 +13,7 @@ use crate::app_session::AppSessionHandle;
 
 use super::session_close::close_local_app_server_session;
 
-/// Spawn the optional event-driven idle-session auto-archive supervisor.
+/// Spawn the optional event-driven idle-session auto-close supervisor.
 ///
 /// A session is eligible only when it has no attached surface, no active turn,
 /// and no queued cross-turn command. AppServer lifecycle/event activity, host
@@ -35,7 +35,7 @@ pub fn spawn_idle_session_sweep(
             let live = app_server.list_live_sessions();
             let mut queue_changes = Vec::new();
             let mut earliest_deadline = None;
-            let mut to_archive = Vec::new();
+            let mut to_close = Vec::new();
 
             for summary in &live {
                 let session_id = &summary.session_id;
@@ -71,13 +71,13 @@ pub fn spawn_idle_session_sweep(
                 }
                 let deadline = last_activity + idle_timeout;
                 if deadline <= now {
-                    to_archive.push(session_id.clone());
+                    to_close.push(session_id.clone());
                 } else if earliest_deadline.is_none_or(|current| deadline < current) {
                     earliest_deadline = Some(deadline);
                 }
             }
 
-            if to_archive.is_empty() {
+            if to_close.is_empty() {
                 wait_for_idle_activity(
                     earliest_deadline,
                     &mut app_activity,
@@ -88,14 +88,14 @@ pub fn spawn_idle_session_sweep(
                 continue;
             }
 
-            for session_id in to_archive {
+            for session_id in to_close {
                 if !idle_session_is_due(&app_server, &state, &session_id, idle_timeout).await {
                     continue;
                 }
                 tracing::info!(
                     session_id = %session_id,
                     idle_timeout_secs = idle_timeout.as_secs(),
-                    "auto-archiving idle session with no surfaces, active turn, or queued command"
+                    "auto-closing idle session with no surfaces, active turn, or queued command"
                 );
                 if let Err(error) = close_local_app_server_session(
                     Arc::clone(&app_server),
@@ -108,7 +108,7 @@ pub fn spawn_idle_session_sweep(
                     tracing::warn!(
                         session_id = %session_id,
                         ?error,
-                        "idle-session auto-archive failed"
+                        "idle-session auto-close failed"
                     );
                 }
             }

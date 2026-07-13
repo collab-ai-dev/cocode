@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
 use coco_app_server::AppServer;
-use coco_hub_connector::HubConnectorSender;
 use coco_types::{AgentId, CoreEvent, ServerNotification, SessionEnvelope, SessionId};
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinHandle,
 };
 use tracing::warn;
+
+use crate::event_hub::ProcessEventHubEgress;
 
 use super::AppServerHostState;
 
@@ -84,13 +85,14 @@ pub fn spawn_app_server_local_outbound_forwarder<H>(
     server: Arc<AppServer<H>>,
     state: Arc<AppServerHostState>,
     mut outbound_rx: mpsc::Receiver<OutboundMessage>,
-    hub_connector: Arc<std::sync::RwLock<Option<HubConnectorSender>>>,
+    hub_connector: Arc<std::sync::RwLock<Option<ProcessEventHubEgress>>>,
 ) -> JoinHandle<()>
 where
     H: Clone + Send + Sync + 'static,
 {
     tokio::spawn(async move {
         let session_seq = Arc::clone(state.session_seq_allocator());
+        let mut last_hub_membership = Vec::<SessionId>::new();
         while let Some(outbound) = outbound_rx.recv().await {
             match outbound {
                 OutboundMessage::SessionEvent {
@@ -98,7 +100,15 @@ where
                     event,
                     routed,
                 } => {
-                    let hub_connector = clone_hub_connector_sender(&hub_connector);
+                    let hub_connector = clone_hub_connector(&hub_connector);
+                    if let Some(hub_connector) = &hub_connector {
+                        hub_connector
+                            .sync_app_server_membership_if_changed(
+                                &server,
+                                &mut last_hub_membership,
+                            )
+                            .await;
+                    }
                     route_app_server_session_event(
                         &server,
                         hub_connector.as_ref(),
@@ -154,9 +164,9 @@ pub fn install_session_seq_durability(state: &Arc<AppServerHostState>, event_ret
     }));
 }
 
-fn clone_hub_connector_sender(
-    hub_connector: &Arc<std::sync::RwLock<Option<HubConnectorSender>>>,
-) -> Option<HubConnectorSender> {
+fn clone_hub_connector(
+    hub_connector: &Arc<std::sync::RwLock<Option<ProcessEventHubEgress>>>,
+) -> Option<ProcessEventHubEgress> {
     match hub_connector.read() {
         Ok(guard) => guard.clone(),
         Err(poisoned) => poisoned.into_inner().clone(),
@@ -165,7 +175,7 @@ fn clone_hub_connector_sender(
 
 pub fn route_app_server_session_event<H>(
     server: &AppServer<H>,
-    hub_connector: Option<&HubConnectorSender>,
+    hub_connector: Option<&ProcessEventHubEgress>,
     session_seq: &coco_app_server::SessionSeqAllocator,
     session_id: SessionId,
     event: CoreEvent,

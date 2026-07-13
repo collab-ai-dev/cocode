@@ -39,7 +39,7 @@ impl SessionRuntime {
         // Clone the client-supplied agents Vec into the worker. After
         // `set_client_supplied_agents` populates the slot, every reload
         // picks up the same set as additional FlagSettings entries.
-        // The Vec lives across `session/start` → `session/archive`
+        // The Vec lives across `session/start` -> `session/close`
         // cycles so a single remote client connection's `initialize` payload
         // survives the whole connection lifetime.
         let client_agents = self

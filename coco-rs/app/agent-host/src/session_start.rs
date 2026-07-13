@@ -4,9 +4,11 @@ use crate::session_runtime::{SessionHandle, SessionStartRuntimeConfig};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SessionStartInput {
+    pub(crate) session_id: Option<coco_types::SessionId>,
     pub(crate) cwd: Option<String>,
     pub(crate) model: Option<String>,
     pub(crate) permission_mode: Option<coco_types::PermissionMode>,
+    pub(crate) initial_messages: Vec<coco_messages::Message>,
 }
 
 #[derive(Debug, Clone)]
@@ -17,6 +19,7 @@ pub(crate) struct PreparedStartSession {
     pub(crate) permission_mode: Option<coco_types::PermissionMode>,
     pub(crate) agent_progress_summaries_enabled: bool,
     pub(crate) plan_mode_custom_instructions: Option<String>,
+    pub(crate) initial_messages: Vec<coco_messages::Message>,
 }
 
 #[derive(Debug)]
@@ -40,7 +43,10 @@ pub(crate) fn prepare_session_start(
     default_model: &str,
     connection_profile: &coco_types::ConnectionProfile,
 ) -> Result<PreparedStartSession, PrepareSessionStartError> {
-    let session_id = coco_types::SessionId::generate();
+    let session_id = input
+        .session_id
+        .clone()
+        .unwrap_or_else(coco_types::SessionId::generate);
     let cwd = match input.cwd.clone() {
         Some(cwd) => cwd,
         None => workspace_cwd
@@ -60,6 +66,7 @@ pub(crate) fn prepare_session_start(
         permission_mode: input.permission_mode,
         agent_progress_summaries_enabled: initialize.agent_progress_summaries.unwrap_or(false),
         plan_mode_custom_instructions: initialize.plan_mode_instructions.clone(),
+        initial_messages: input.initial_messages,
     })
 }
 

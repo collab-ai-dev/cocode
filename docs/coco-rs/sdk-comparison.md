@@ -232,7 +232,7 @@ cocode-rs does not need this pattern because:
 **ClientRequest (22 variants)**:
 | Category | Variants |
 |----------|----------|
-| Session | `session/start`, `session/resume`, `session/list`, `session/read`, `session/archive` |
+| Session | `session/start`, `session/resume`, `session/list`, `session/read`, `session/close`, `session/delete` |
 | Turn | `turn/start`, `turn/interrupt` |
 | Approval | `approval/resolve` |
 | Input | `input/resolveUserInput` |
@@ -419,7 +419,7 @@ CocodeClient (client.py, 21KB)
   ├─ set_thinking(mode, max_tokens)
   ├─ rewind_files(turn_id)
   ├─ cancel_request(request_id)
-  ├─ list_sessions() / read_session() / archive_session()
+  ├─ list_sessions() / read_session() / close_session() / delete_session()
   └─ close()
 ```
 
@@ -487,7 +487,7 @@ query() → subprocess spawn → NDJSON stdout
 | **Type safety** | Pydantic (runtime validation + IDE completion) | TypeScript types (compile-time) | Both have advantages |
 | **Type source** | JSON Schema → generated protocol.py | Zod → generated types | cocode-rs is more standard |
 | **Multi-turn** | `client.send("...")` + `client.events()` | `unstable_v2_prompt(session, "...")` | cocode-rs is more stable (non-unstable) |
-| **Session management** | `list_sessions`, `read_session`, `archive_session` | `listSessions`, `getSessionInfo`, `forkSession` | TS is richer (fork) |
+| **Session management** | `list_sessions`, `read_session`, `close_session`, `delete_session` | `listSessions`, `getSessionInfo`, `forkSession` | TS is richer (fork) |
 | **Approval handling** | `can_use_tool` callback (auto-handle) | Must handle manually (or permissionMode) | **cocode-rs wins**: more user-friendly |
 | **Hook handling** | `hook_handlers` dict (auto-dispatch) | Must handle manually | **cocode-rs wins** |
 | **MCP tool routing** | `@tool()` decorator → auto mcp/routeMessage | `tool()` → SdkMcpToolDefinition | Equivalent |
@@ -586,7 +586,7 @@ for await (const msg of query({ prompt: "..." })) {
 | **MCP runtime mgmt** | Missing 4 requests | Available | TS (need to port) |
 | **SDK Client** | Python (mature, typed) | TypeScript (partially unstable) | cocode-rs (more stable API) |
 | **Auto-handling** | approval + hook + mcp routing | manual handling | cocode-rs (better DX) |
-| **Session management** | list + read + archive | list + info + rename + tag + fork | TS (more features) |
+| **Session management** | list + read + close + delete | list + info + rename + tag + fork | TS (more features) |
 | **Error handling** | JsonRpcError + safe_parse fallback | string error + no fallback | cocode-rs (more robust) |
 
 ### TS Capabilities to Backfill (cocode-rs → implementation)

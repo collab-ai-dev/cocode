@@ -5,7 +5,7 @@ use coco_app_server_client::ClientError;
 use coco_types::{CoreEvent, ServerNotification, SessionId, SurfaceId};
 use tokio::sync::mpsc;
 
-use super::{AppServerLocalBridge, AppServerLocalTurnCompletion, AppSessionHandle};
+use super::{AppServerLocalBridge, AppServerLocalSessionBinding, AppServerLocalTurnCompletion};
 
 impl AppServerLocalBridge {
     pub fn interactive_session(&self) -> Option<&crate::local_client::LocalSessionClient> {
@@ -108,6 +108,97 @@ impl AppServerLocalBridge {
         Ok(())
     }
 
+    pub fn activate_existing_interactive_session(
+        &mut self,
+        session_id: SessionId,
+        event_tx: Option<mpsc::Sender<CoreEvent>>,
+    ) -> Result<(), ClientError> {
+        self.ensure_interactive_surface(session_id.clone())?;
+        if let Some(event_tx) = event_tx {
+            self.start_passive_event_pump(session_id, event_tx)?;
+        }
+        Ok(())
+    }
+
+    pub async fn start_interactive_session(
+        &mut self,
+        params: coco_types::SessionStartParams,
+        event_tx: Option<mpsc::Sender<CoreEvent>>,
+    ) -> Result<AppServerLocalSessionBinding, ClientError> {
+        let surface = self
+            .client
+            .session_start_handle(&self.handler, params)
+            .await?;
+        self.bind_lifecycle_surface(surface, event_tx)
+    }
+
+    pub async fn resume_interactive_session(
+        &mut self,
+        params: coco_types::SessionResumeParams,
+        event_tx: Option<mpsc::Sender<CoreEvent>>,
+    ) -> Result<AppServerLocalSessionBinding, ClientError> {
+        let surface = self
+            .client
+            .session_resume_handle(&self.handler, params)
+            .await?;
+        self.bind_lifecycle_surface(surface, event_tx)
+    }
+
+    pub async fn replace_interactive_session_with_resume(
+        &mut self,
+        params: coco_types::SessionResumeParams,
+        event_tx: Option<mpsc::Sender<CoreEvent>>,
+    ) -> Result<AppServerLocalSessionBinding, ClientError> {
+        let current = self
+            .interactive_surface
+            .clone()
+            .ok_or_else(|| ClientError::InvalidArgument("interactive surface missing".into()))?;
+        if current.session_id() == &params.target.session_id {
+            return self.resume_interactive_session(params, event_tx).await;
+        }
+        let surface = self
+            .client
+            .replace_session_with_resume(&self.handler, current, params)
+            .await
+            .map_err(|(_session, error)| error)?;
+        self.bind_lifecycle_surface(surface, event_tx)
+    }
+
+    pub async fn replace_interactive_session_with_clear(
+        &mut self,
+        event_tx: Option<mpsc::Sender<CoreEvent>>,
+    ) -> Result<AppServerLocalSessionBinding, ClientError> {
+        let current = self
+            .interactive_surface
+            .clone()
+            .ok_or_else(|| ClientError::InvalidArgument("interactive surface missing".into()))?;
+        let surface = self
+            .client
+            .replace_session_with_clear(&self.handler, current)
+            .await
+            .map_err(|(_session, error)| error)?;
+        self.bind_lifecycle_surface(surface, event_tx)
+    }
+
+    fn bind_lifecycle_surface(
+        &mut self,
+        surface: crate::local_client::LocalSessionClient,
+        event_tx: Option<mpsc::Sender<CoreEvent>>,
+    ) -> Result<AppServerLocalSessionBinding, ClientError> {
+        let session_id = surface.session_id().clone();
+        let handle = self.app_server.registry().get(&session_id).ok_or_else(|| {
+            ClientError::InvalidArgument(format!(
+                "local lifecycle returned unregistered session {session_id}"
+            ))
+        })?;
+        let session = handle.into_session();
+        self.interactive_surface = Some(surface.clone());
+        if let Some(event_tx) = event_tx {
+            self.start_passive_event_pump(session_id, event_tx)?;
+        }
+        Ok(AppServerLocalSessionBinding { session, surface })
+    }
+
     pub async fn drain_interactive_events_to(&mut self, event_tx: &mpsc::Sender<CoreEvent>) {
         let Some(surface) = self.interactive_surface.clone() else {
             return;
@@ -144,7 +235,17 @@ impl AppServerLocalBridge {
             if let CoreEvent::Protocol(ServerNotification::TurnEnded(ended)) = envelope.event
                 && ended.turn_id == started.turn_id
             {
-                return Ok(AppServerLocalTurnCompletion { started, ended });
+                let session_result = ended.session_result.as_deref().cloned().ok_or_else(|| {
+                    ClientError::InvalidArgument(format!(
+                        "turn {} ended without per-turn session_result",
+                        started.turn_id
+                    ))
+                })?;
+                return Ok(AppServerLocalTurnCompletion {
+                    started,
+                    ended,
+                    session_result,
+                });
             }
         }
     }
@@ -161,23 +262,5 @@ impl AppServerLocalBridge {
             .ok_or_else(|| ClientError::InvalidArgument("interactive surface missing".into()))?;
         params.target = surface.interactive_target();
         self.client.turn_start(&self.handler, params).await
-    }
-
-    pub async fn current_session_result(&self) -> Option<coco_types::SessionResultParams> {
-        let session_id = if let Some(surface) = self.interactive_surface.as_ref()
-            && let Some(session_id) = self.surface_session_id(surface.surface_id())
-        {
-            session_id
-        } else {
-            return None;
-        };
-        let runtime = self
-            .app_server
-            .registry()
-            .get(&session_id)
-            .map(AppSessionHandle::into_session)?;
-        Some(crate::session_archive::build_session_result(
-            &runtime, "end_turn",
-        ))
     }
 }

@@ -6,48 +6,44 @@ use std::{
     },
 };
 
-use tokio::sync::RwLock;
-
 use super::InitializeBootstrap;
 
-#[derive(Default)]
 pub(crate) struct BootstrapState {
-    initialize_bootstrap: RwLock<Option<Arc<dyn InitializeBootstrap>>>,
-    startup_cwd: RwLock<Option<PathBuf>>,
+    initialize_bootstrap: Option<Arc<dyn InitializeBootstrap>>,
+    startup_cwd: Option<PathBuf>,
     bypass_permissions_available: AtomicBool,
 }
 
-impl BootstrapState {
-    pub(crate) fn install_initialize_bootstrap_for_startup(
-        &self,
-        bootstrap: Arc<dyn InitializeBootstrap>,
-    ) {
-        let Ok(mut slot) = self.initialize_bootstrap.try_write() else {
-            panic!(
-                "install_initialize_bootstrap_for_startup: state was already locked at construction time"
-            );
-        };
-        *slot = Some(bootstrap);
+impl Default for BootstrapState {
+    fn default() -> Self {
+        Self::new(None, None, false)
     }
+}
 
-    pub(crate) fn install_startup_cwd(&self, cwd: PathBuf) {
-        let Ok(mut slot) = self.startup_cwd.try_write() else {
-            panic!("install_startup_cwd: state was already locked at construction time");
-        };
-        *slot = Some(cwd);
+impl BootstrapState {
+    pub(crate) fn new(
+        initialize_bootstrap: Option<Arc<dyn InitializeBootstrap>>,
+        startup_cwd: Option<PathBuf>,
+        bypass_permissions_available: bool,
+    ) -> Self {
+        Self {
+            initialize_bootstrap,
+            startup_cwd,
+            bypass_permissions_available: AtomicBool::new(bypass_permissions_available),
+        }
     }
 
     pub(crate) async fn initialize_bootstrap_snapshot(
         &self,
     ) -> Option<Arc<dyn InitializeBootstrap>> {
-        self.initialize_bootstrap.read().await.clone()
+        self.initialize_bootstrap.clone()
     }
 
     pub(crate) async fn bootstrap_or_startup_cwd(&self) -> Option<PathBuf> {
-        if let Some(bootstrap) = self.initialize_bootstrap.read().await.as_ref() {
+        if let Some(bootstrap) = self.initialize_bootstrap.as_ref() {
             return Some(bootstrap.cwd().await);
         }
-        self.startup_cwd.read().await.clone()
+        self.startup_cwd.clone()
     }
 
     pub(crate) fn set_bypass_permissions_available(&self, available: bool) {

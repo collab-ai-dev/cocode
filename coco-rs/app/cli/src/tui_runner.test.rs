@@ -158,6 +158,7 @@ use super::process_idle_command_queue;
 use super::run_clear_conversation;
 use super::run_dream_consolidation;
 use super::run_manual_compact;
+use super::run_prompt_mode_bash;
 use super::run_session_memory_force;
 use super::run_session_rename;
 use super::run_session_tag;
@@ -607,6 +608,38 @@ async fn test_resume_context(
     )
 }
 
+fn local_bridge_for_resume_test(
+    runtime: &crate::session_runtime::SessionHandle,
+    runtime_factory: crate::session_runtime::SessionRuntimeFactory,
+    process_runtime: Arc<coco_app_runtime::ProcessRuntime>,
+    event_sink: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+) -> coco_agent_host::app_server_host::AppServerLocalBridge {
+    coco_agent_host::app_server_host::AppServerLocalBridge::with_host_inputs_and_server_config(
+        coco_agent_host::app_server_host::HostInputs {
+            startup_cwd: Some(runtime.original_cwd().clone()),
+            session_manager: Some(runtime.session_manager_handle()),
+            runtime_replacement: Some(
+                coco_agent_host::app_server_host::RuntimeReplacementContext {
+                    runtime_factory,
+                    process_runtime,
+                    cwd: runtime.original_cwd().clone(),
+                    requires_structured_output: false,
+                    integration_options:
+                        coco_agent_host::session_bootstrap::SessionIntegrationOptions {
+                            event_sink,
+                            ..Default::default()
+                        },
+                },
+            ),
+            turn_runner: Some(Arc::new(
+                coco_agent_host::app_server_host::SessionTurnExecutor::new(None, None),
+            )),
+            ..Default::default()
+        },
+        &runtime.runtime_config().server,
+    )
+}
+
 async fn install_test_session_runtime(
     bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
     runtime: &crate::session_runtime::SessionHandle,
@@ -713,6 +746,55 @@ async fn prompt_mode_bash_responds_by_default() {
 }
 
 #[tokio::test]
+async fn prompt_mode_bash_returns_response_turn_to_driver_channel() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry(&home, registry).await;
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(4);
+    let (response_tx, mut response_rx) = tokio::sync::mpsc::channel(1);
+
+    run_prompt_mode_bash(
+        home.path(),
+        "bash-message-id".to_string(),
+        "printf prompt-bash".to_string(),
+        runtime,
+        event_tx,
+        response_tx,
+    )
+    .await;
+
+    let mut saw_completion = false;
+    for _ in 0..4 {
+        let event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+            .await
+            .expect("bash completion event should be sent")
+            .expect("event channel should stay open");
+        if let coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::BashCommandCompleted {
+            user_message_id,
+            output,
+            exit_code,
+        }) = event
+        {
+            assert_eq!(user_message_id, "bash-message-id");
+            assert_eq!(exit_code, 0);
+            assert!(output.contains("prompt-bash"));
+            saw_completion = true;
+            break;
+        }
+    }
+    assert!(saw_completion, "expected BashCommandCompleted event");
+
+    let response_messages = tokio::time::timeout(Duration::from_secs(1), response_rx.recv())
+        .await
+        .expect("bash response turn should be returned")
+        .expect("response channel should stay open");
+    assert!(
+        !response_messages.is_empty(),
+        "bash response turn should include history override messages"
+    );
+}
+
+#[tokio::test]
 async fn prompt_mode_bash_respects_respond_setting_false() {
     let home = TempDir::new().unwrap();
     let registry = coco_commands::CommandRegistry::new();
@@ -751,7 +833,7 @@ async fn idle_queue_processor_starts_pending_prompt_turn() {
         Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
-    let (current_session, runtime_factory, process_runtime, cwd) =
+    let (current_session, runtime_factory, process_runtime, _cwd) =
         test_resume_context(&runtime).await;
     let reload_subscriptions = test_runtime_reload_subscriptions(&current_session, &event_tx);
 
@@ -767,7 +849,6 @@ async fn idle_queue_processor_starts_pending_prompt_turn() {
         &reload_subscriptions,
         &runtime_factory,
         &process_runtime,
-        &cwd,
     )
     .await;
 
@@ -849,6 +930,15 @@ async fn local_app_server_turn_writes_back_runtime_history() {
         .expect("local AppServer turn completes");
 
     assert_eq!(completion.ended.turn_id, completion.started.turn_id);
+    assert!(
+        completion.ended.session_result.is_some(),
+        "TurnEnded should carry the per-turn result on AppServer local completions"
+    );
+    assert_eq!(completion.session_result.total_turns, 1);
+    assert_eq!(
+        completion.session_result.result.as_deref(),
+        Some("queued turn complete")
+    );
     let history = runtime.history().lock().await;
     assert_eq!(
         history.last_assistant_text().as_deref(),
@@ -1127,26 +1217,26 @@ async fn startup_resume_plan_uses_local_app_server_session_resume() {
     .await
     .expect("load resume plan");
 
+    let (current_session, runtime_factory, process_runtime, _cwd) =
+        test_resume_context(&runtime).await;
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
+    let mut local_app_server_bridge = local_bridge_for_resume_test(
+        &runtime,
+        runtime_factory.clone(),
+        Arc::clone(&process_runtime),
+        Some(tx.clone()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
     local_app_server_bridge
         .ensure_interactive_surface(old_session_id)
         .expect("attach old surface");
-    let (current_session, runtime_factory, process_runtime, _cwd) =
-        test_resume_context(&runtime).await;
     let reload_subscriptions = test_runtime_reload_subscriptions(&current_session, &tx);
 
     apply_resume_plan_through_app_server(
         &plan,
-        &runtime,
         &current_session,
         &tx,
         &mut local_app_server_bridge,
-        &runtime_factory,
-        &process_runtime,
         &reload_subscriptions,
     )
     .await
@@ -1208,16 +1298,19 @@ async fn resume_slash_uses_local_app_server_session_resume() {
     ));
     append_seed_transcript(&project_store, rt.original_cwd(), &target_session_id);
 
+    let (current_session, runtime_factory, process_runtime, _cwd) =
+        test_resume_context(&runtime).await;
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
+    let mut local_app_server_bridge = local_bridge_for_resume_test(
+        &runtime,
+        runtime_factory.clone(),
+        Arc::clone(&process_runtime),
+        Some(tx.clone()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
     local_app_server_bridge
         .ensure_interactive_surface(old_session_id)
         .expect("attach old surface");
-    let (current_session, runtime_factory, process_runtime, _cwd) =
-        test_resume_context(&runtime).await;
     let reload_subscriptions = test_runtime_reload_subscriptions(&current_session, &tx);
 
     let outcome = dispatch_slash_command(
@@ -1285,15 +1378,18 @@ async fn branch_slash_switches_to_fork_through_local_app_server() {
     seed_runtime_session_transcript(&runtime).await;
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(16);
-    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
+    let (current_session, runtime_factory, process_runtime, _cwd) =
+        test_resume_context(&runtime).await;
+    let mut local_app_server_bridge = local_bridge_for_resume_test(
+        &runtime,
+        runtime_factory.clone(),
+        Arc::clone(&process_runtime),
+        Some(tx.clone()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
     local_app_server_bridge
         .ensure_interactive_surface(old_session_id.clone())
         .expect("attach old surface");
-    let (current_session, runtime_factory, process_runtime, _cwd) =
-        test_resume_context(&runtime).await;
     let reload_subscriptions = test_runtime_reload_subscriptions(&current_session, &tx);
 
     let outcome = dispatch_slash_command(
@@ -1359,13 +1455,16 @@ async fn clear_slash_refreshes_local_app_server_session() {
     let registry = coco_commands::CommandRegistry::new();
     let runtime = build_runtime_with_registry(&home, registry).await;
     let old_session_id = runtime.current_typed_session_id().await;
-    let (current_session, runtime_factory, process_runtime, cwd) =
+    let (current_session, runtime_factory, process_runtime, _cwd) =
         test_resume_context(&runtime).await;
     let (tx, mut rx) = tokio::sync::mpsc::channel(16);
     let reload_subscriptions = test_runtime_reload_subscriptions(&current_session, &tx);
     let active_turn = Arc::new(Mutex::new(None));
-    let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
-        Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
+    let mut local_app_server_bridge = local_bridge_for_resume_test(
+        &runtime,
+        runtime_factory.clone(),
+        Arc::clone(&process_runtime),
+        Some(tx.clone()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
     local_app_server_bridge
@@ -1376,9 +1475,6 @@ async fn clear_slash_refreshes_local_app_server_session() {
     let clear_context = LocalRuntimeControlContext {
         current_session: &current_session,
         runtime_reload_subscriptions: &reload_subscriptions,
-        runtime_factory: &runtime_factory,
-        process_runtime: &process_runtime,
-        cwd: &cwd,
         turn_done_tx: &turn_done_tx,
     };
     run_clear_conversation(
@@ -1695,6 +1791,7 @@ async fn toggle_fast_mode_uses_local_app_server_apply_flags() {
     let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
         Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
+    install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
 
     toggle_fast_mode_through_app_server(&runtime, &tx, &mut local_app_server_bridge).await;
 
@@ -1730,6 +1827,7 @@ async fn set_thinking_level_uses_local_app_server_set_thinking() {
     let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
         Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
+    install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
 
     set_thinking_level_through_app_server(
         &runtime,
@@ -1787,6 +1885,7 @@ async fn explicit_file_rewind_restores_files_through_local_app_server() {
     let mut local_app_server_bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(
         Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
+    install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
 
     handle_rewind(
         &coco_tui::state::RestoreType::CodeOnly,

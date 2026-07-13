@@ -1,161 +1,131 @@
 # Migration History
 
-This is a concise record of how the current architecture arrived here. It is
-not normative; `target-architecture.md` owns future decisions.
+This document is historical. It records how the design evolved and which
+decisions remain valid. It is not normative; see `target-architecture.md` and
+`protocol-scope.md`.
 
-## Superseded designs
+## Superseded early designs
 
-### Concurrent AppServer plan
+### Thread plus session identity
 
-The earliest plan copied a Codex-style `ThreadId` plus `SessionId` hierarchy
-and proposed a new thread manager. That model was rejected for coco-rs:
+The earliest concurrent-server proposal copied a separate root `ThreadId` and
+`SessionId` hierarchy. It was rejected because coco-rs already uses
+`SessionId` as the durable root conversation and transcript identity.
+Subagents live below that root through `AgentId`; a second root id added
+conversion and ownership ambiguity without solving a product requirement.
 
-- `SessionId` already is the durable root conversation and JSONL identity;
-- subagents are represented below the root by `AgentId` and coordinator state;
-- a second interchangeable root id adds conversions and ambiguous ownership
-  without solving a coco-rs requirement;
-- `/clear`, fork, and resume can be expressed with immutable SessionIds and
-  explicit lifecycle operations.
-
-The old `concurrent-app-server-plan.md` is removed rather than archived as an
-active plan because its identity and crate model conflict with the shipped
-architecture.
+This rejection remains valid.
 
 ### Monolithic multi-session plan
 
-The later `multi-session-app-server-plan.md` corrected the identity model and
-guided substantial implementation, but grew into a mixture of:
+The later plan mixed requirements, speculative types, reference-product
+research, migration status, adversarial findings, and future features in one
+document. As code changed, its "current" sections contradicted its later
+landing notes. It was replaced by the review/current/target/protocol/plan split
+in this directory.
 
-- requirements and reference-product research;
-- speculative type definitions;
-- adversarial findings and refutations;
-- five landing-status passes;
-- future actor and project-service proposals;
-- acceptance tests for both v1 and deferred adapters;
-- a decision log that did not distinguish landed from proposed decisions.
+The 2026-07-13 audit found that the replacement documents again mixed landed
+status with stale future text. V2 keeps the document split but reopens the
+architecture and removes claims that test counts alone prove completion.
 
-As code changed, its "Current State" and crate sections contradicted later
-landing notes. It is replaced by the evidence/design/plan split in this
-directory.
+## V1 work retained
 
-## Work retained
+The following implementation work remains part of V2:
 
-The following implementation waves remain part of the architecture:
-
-1. `SessionId` stays the only root conversation identity.
-2. `SessionEnvelope` provides session/agent/turn attribution and durable
-   per-session sequence allocation.
+1. `SessionId` is the only root conversation identity.
+2. `SessionEnvelope` carries session/agent/turn attribution and per-session
+   durable sequencing.
 3. AppServer owns bounded replay and per-surface fan-out.
-4. `LiveSessionRegistry` uses Loading/Live/Closing slots and spawned owner
-   tasks so caller cancellation cannot wedge lifecycle progress.
-5. replace commits validate registry plus routing state under fixed no-await
-   lock order.
-6. interactive and passive surfaces are distinct; only one interactive owner
-   exists per session.
-7. `coco-app-server-client` is remote-only and does not depend on the server.
-8. in-process typed client composition lives in `coco-agent-host`.
-9. `coco-state` was removed; live backend, tool state, and TUI projection have
-   distinct owners.
-10. `background-review` was renamed `coco-maintenance`.
-11. `coco-app-runtime` owns process/project/workspace/bootstrap contracts;
-    fused application session composition lives in `coco-agent-host`.
-12. TUI/headless use an AppServer bridge capped at one session; SDK uses a
-    configured multi-slot AppServer.
+4. `LiveSessionRegistry` uses Loading/Live/Closing slots and spawned owner tasks
+   so caller cancellation does not own lifecycle progress.
+5. registry/routing commits use a fixed no-await lock order.
+6. interactive and passive surfaces are distinct, with at most one interactive
+   owner per session.
+7. `coco-app-server-client` does not depend on the server implementation.
+8. in-process local client composition lives above the generic server.
+9. live backend/tool/TUI state have separate owners; there is no useful global
+   `AppState`.
+10. process/project bootstrap contracts remain separate from fused application
+    session construction.
+11. every interactive request carries explicit target authority.
+12. accepted remote connections own independent initialize profiles and writer
+    correlation.
+13. turn execution receives the AppServer-selected session capability.
+14. turn/MCP/file-history/reload/callback state is session-keyed in the tested
+    production paths.
+15. closing resume, explicit replacement, orphan authority, slow-consumer
+    recovery, and multi-runtime shutdown tests remain valuable.
 
-## Work reclassified
+## V1 decisions still rejected
 
-The following former "decisions" are now classified differently:
+The following remain rejected:
 
-| Former idea | New classification |
+| Idea | Reason |
 |---|---|
-| whole `SessionRuntime` actor and universal `SessionCommand` mailbox | Rejected as a v1 prerequisite; optional turn-coordinator evolution only |
-| `SessionHandle` as mailbox/watch-only value | Replaced by an opaque `Arc` capability without `Deref` |
-| `ProjectHeavyServices` | Rejected name and aggregate; capability-named services only |
-| strict ProjectServices single-flight | Optional optimization; current publication dedup is valid |
-| implicit replace through start/resume | Rejected; add explicit `session/replace` |
-| current-session fallback for request dispatch | Rejected; every mutation has an explicit target |
-| process-installed SDK runtime/MCP/file-history/reload | Relocate each capability without behavior loss, then remove only the duplicate process slot |
-| external Web/Desktop/IM adapters | Deferred until core isolation passes |
+| Whole `SessionRuntime` actor and universal mailbox | Creates a god actor and unnecessary request/reply plumbing for independent reads/services |
+| Mutable process current-session slot | Makes multi-session selection implicit and unsafe |
+| `ProjectHeavyServices` aggregate | Cost is not a responsibility or lifecycle contract |
+| Sharing mutable services merely to reduce object count | Sharing requires an explicit key, isolation model, refresh, and teardown contract |
+| Optional/missing request target meaning current session | Makes authority depend on runtime context |
+| Product UI logic inside generic AppServer | Reverses dependency direction |
 
-## Review baseline
+## V1 breaking refactor (2026-07-11)
 
-The replacement documents were written after re-reading the production DTO,
-client, adapter, handler, runner, registry, runtime, project-service, and test
-paths on 2026-07-11. The most important correction is that multi-slot storage
-and surface routing do not by themselves prove multi-session execution.
+The July 11 refactor:
 
-## Breaking refactor landed (2026-07-11)
+- added typed targets and exhaustive request scopes;
+- isolated connection initialize/profile/callback state;
+- made AppServer validation the ordinary interactive runtime selector;
+- moved active turns and integrations behind session handles;
+- added explicit replacement, closing retry, orphan authority, and concurrent
+  shutdown;
+- removed earlier singleton runtime/capability slots;
+- added production A/B authority and isolation tests;
+- enabled `clippy::await_holding_lock` workspace-wide.
 
-- added exhaustive request scopes and required typed targets;
-- isolated initialize state, writers, and callback correlation per connection;
-- made AppServer validation the only interactive runtime selector;
-- moved active turns, MCP, file history, reload, hooks, sandbox, and approvals
-  behind `SessionHandle`;
-- added explicit replacement, closing-resume retry, atomic orphan close, and
-  multi-runtime shutdown;
-- removed singleton runtime/capability state and the implicit sole-session
-  fallback APIs;
-- hardened `SessionHandle` into an opaque focused capability and enabled
-  `clippy::await_holding_lock` workspace-wide.
+Those changes addressed real cross-session mixing risks and should not be
+rolled back.
 
-## Release validation completed (2026-07-11)
+## Why V1 completion was reopened (2026-07-13)
 
-The final workspace validation exposed four related local AppServer call paths
-that installed a runtime but could construct an `InteractiveTarget` before the
-local bridge had attached its interactive surface: queued history turns,
-fast-mode changes, thinking-level changes, and explicit file rewind. Each path
-now explicitly attaches the selected session before dispatch.
+An adversarial review cross-validated the architecture documents against the
+current production tree and tests. It found:
 
-After that correction, all seam checks and workspace clippy passed, all 88 TUI
-runner tests passed, and nextest passed all 13,606 executed workspace tests
-(four tests remained skipped by their existing configuration). The focused
-agent-host, app-server, app-server-client, and types suites also passed in full.
+1. `session/archive` deletes JSONL despite documentation that close preserves
+   it.
+2. archive snapshots accounting before turn drain and can detach timed-out
+   turn/forwarder tasks, allowing late work after close.
+3. CLI mode flags are accepted but do not select their documented runners.
+4. SDK startup constructs a hidden session before initialize/start/resume.
+5. Event Hub announces that hidden identity as a static one-session live set.
+6. TUI/headless startup resume bypasses the formal lifecycle used by SDK.
+7. agent-host depends on TUI and exports most implementation modules.
+8. `SessionHandle` hides the runtime type but exposes raw mutable resources
+   through a very broad forwarding API.
+9. session identity and callback requirements are not fully enforced by
+   construction.
+10. existing integration tests do not cover these properties.
 
-## Ownership hardening follow-up (2026-07-11)
+The audit therefore changed the status from "complete" to "v2 remediation
+required". It did not invalidate the v1 explicit-target or registry work.
 
-A final production-path audit removed the remaining duplicate SDK session
-owners. `AppSessionHandle` now always contains a live `SessionHandle`;
-start/resume without a runtime factory fail closed. `SessionTurnExecutor` is
-the only turn executor across SDK, TUI, headless, and live harnesses. Turn ids,
-active tasks, cancellation, and aggregate accounting moved from process-keyed
-SDK maps into each runtime's `SessionTurnCoordinator`.
+## V2 breaking decisions
 
-The audit also made callback reply correlation include the originating surface,
-applied `session/start` model and permission inputs to the constructed runtime,
-and expanded the release-blocking host suite from six shallow handle scenarios
-to sixteen production-handler scenarios backed by real runtimes.
+V2 adopts these new decisions:
 
-The follow-up validation passed affected all-features clippy, all 13,611
-workspace tests (four existing skips), schema/Python generation checks, and
-107 Python SDK tests (ten environment-gated skips).
+1. remove `session/archive`;
+2. add runtime-only `session/close` and storage-only `session/delete`;
+3. make the registry close owner responsible for all task teardown and terminal
+   result ordering;
+4. introduce one typed CLI `ExecutionPlan` and delete unsupported flags/commands;
+5. make process host startup create zero sessions;
+6. derive Event Hub live membership from the AppServer registry;
+7. require all surfaces to use the same typed lifecycle client;
+8. add `coco-agent-runtime`, `coco-tui-runner`, and `coco-headless` boundaries;
+9. remove TUI dependencies from agent runtime/host;
+10. make session identity and callback requirements construction-time data;
+11. expose operations/snapshots rather than raw locks and managers;
+12. organize modules by lifecycle, operation, and integration ownership.
 
-The release suite was then tightened against every package-H sentence rather
-than its test count: the same A/B flows now cover controls, live reads,
-turn-list projection, file rewind, initialized-connection config/history,
-real SDK-hosted MCP handshakes with isolated tool catalogs, the complete
-callback authority matrix, replacement cleanup, turn identity, and explicit
-per-scenario deadlines.
-
-## Delivery-blocker closure (2026-07-11)
-
-The last audit found that `ArchiveTarget::Orphaned` selected a registry runtime
-before proving the session was actually orphaned. Because the handler cancelled
-and drained the active turn before the lifecycle close performed its own
-authorization, an owned session could suffer destructive side effects and only
-then return `InteractiveOwnerConflict`. Authorization now occurs in request
-resolution before handler dispatch, and a real-runtime barrier test proves a
-rejected orphan archive leaves the active turn and registry entry intact.
-
-The audit also rejected test-count equivalence as completion evidence. The
-host suite now maps all eleven package-H requirements to concrete assertions,
-including both project and local config writes, real SDK-hosted MCP isolation,
-the full callback authority tuple, compatible/incompatible orphan resume,
-targeted reload close/replacement, orphan turn continuation, lossless
-slow-consumer recovery, and non-serial shutdown. All concurrent and lifecycle
-tests have overall deadlines.
-
-Finally, the obsolete SDK `pending_map` module and its self-only tests were
-deleted after confirming that production callback ownership had moved to
-AppServer. The final post-fix gate passed all 13,611 workspace Rust tests,
-affected all-features clippy, schema/Python code-generation checks, and 107
-Python SDK tests.
+Implementation status is tracked only in `remediation-plan.md` until these
+decisions land.

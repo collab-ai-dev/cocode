@@ -7,21 +7,21 @@ use coco_app_server::{
 };
 use coco_types::{
     AgentInterruptCurrentWorkParams, ApplyPermissionUpdateParams, ApprovalResolveParams,
-    ArchiveTarget, BackgroundAllTasksResult, CancelRequestParams, ClientRequest,
-    ConfigApplyFlagsParams, ConfigReadParams, ConfigReadResult, ConfigWriteParams,
-    ContextUsageResult, ElicitationResolveParams, HookReloadResult, InitializeParams,
-    InitializeResult, InteractiveTarget, McpReconnectParams, McpSetServersParams,
-    McpSetServersResult, McpStatusResult, McpToggleParams, PluginReloadResult,
-    ResetSessionPermissionRulesResult, RewindFilesParams, RewindFilesResult, ServerRequestDelivery,
-    SessionArchiveParams, SessionCostResult, SessionEnvelope, SessionId, SessionListResult,
-    SessionReadParams, SessionReadResult, SessionRenameParams, SessionRenameResult,
-    SessionResumeParams, SessionResumeResult, SessionStartParams, SessionStartResult,
-    SessionStatusResult, SessionSubscribeParams, SessionSubscribeResult, SessionTarget,
-    SessionToggleTagParams, SessionToggleTagResult, SessionTurnsListParams, SessionTurnsListResult,
-    SetAgentColorParams, SetModelParams, SetModelRoleParams, SetModelRoleResult,
-    SetPermissionModeParams, SetThinkingParams, StopTaskParams, SurfaceDelivery, SurfaceId,
-    SurfaceLifecycleEffect, TaskDetailParams, TaskDetailResult, TaskListResult, TurnStartParams,
-    TurnStartResult, UpdateEnvParams, UserInputResolveParams,
+    BackgroundAllTasksResult, CancelRequestParams, ClientRequest, ConfigApplyFlagsParams,
+    ConfigReadParams, ConfigReadResult, ConfigWriteParams, ContextUsageResult,
+    ElicitationResolveParams, HookReloadResult, InitializeParams, InitializeResult,
+    InteractiveTarget, McpReconnectParams, McpSetServersParams, McpSetServersResult,
+    McpStatusResult, McpToggleParams, PluginReloadResult, ResetSessionPermissionRulesResult,
+    RewindFilesParams, RewindFilesResult, ServerRequestDelivery, SessionCloseParams,
+    SessionCloseTarget, SessionCostResult, SessionDeleteParams, SessionEnvelope, SessionId,
+    SessionListResult, SessionReadParams, SessionReadResult, SessionRenameParams,
+    SessionRenameResult, SessionResumeParams, SessionResumeResult, SessionStartParams,
+    SessionStartResult, SessionStatusResult, SessionSubscribeParams, SessionSubscribeResult,
+    SessionTarget, SessionToggleTagParams, SessionToggleTagResult, SessionTurnsListParams,
+    SessionTurnsListResult, SetAgentColorParams, SetModelParams, SetModelRoleParams,
+    SetModelRoleResult, SetPermissionModeParams, SetThinkingParams, StopTaskParams,
+    SurfaceDelivery, SurfaceId, SurfaceLifecycleEffect, TaskDetailParams, TaskDetailResult,
+    TaskListResult, TurnStartParams, TurnStartResult, UpdateEnvParams, UserInputResolveParams,
 };
 
 use coco_app_server_client::ClientError;
@@ -211,15 +211,27 @@ impl<H: Clone> LocalServerClient<H> {
             .await
     }
 
-    pub async fn session_archive<Handler>(
+    pub async fn session_close<Handler>(
         &self,
         handler: &Handler,
-        params: SessionArchiveParams,
+        params: SessionCloseParams,
     ) -> Result<(), ClientError>
     where
         Handler: LocalClientRequestHandler,
     {
-        self.send_typed_client_request(handler, ClientRequest::SessionArchive(params))
+        self.send_typed_client_request(handler, ClientRequest::SessionClose(params))
+            .await
+    }
+
+    pub async fn session_delete<Handler>(
+        &self,
+        handler: &Handler,
+        params: SessionDeleteParams,
+    ) -> Result<(), ClientError>
+    where
+        Handler: LocalClientRequestHandler,
+    {
+        self.send_typed_client_request(handler, ClientRequest::SessionDelete(params))
             .await
     }
 
@@ -340,10 +352,12 @@ impl<H: Clone> LocalServerClient<H> {
     where
         Handler: LocalClientRequestHandler,
     {
-        let params = SessionArchiveParams {
-            target: ArchiveTarget::Interactive(session.interactive_target()),
+        let params = SessionCloseParams {
+            target: SessionCloseTarget::Interactive {
+                target: session.interactive_target(),
+            },
         };
-        match self.session_archive(handler, params).await {
+        match self.session_close(handler, params).await {
             Ok(()) => {
                 self.purge_surface_buffers(&session.surface_id);
                 Ok(())
@@ -394,6 +408,32 @@ impl<H: Clone> LocalServerClient<H> {
                 coco_types::SessionReplaceParams {
                     source: session.interactive_target(),
                     destination: coco_types::SessionReplacement::Resume(params.target),
+                },
+            )
+            .await
+        {
+            Ok(replaced) => Ok(LocalSessionClient {
+                session_id: replaced.session_id,
+                surface_id: replaced.surface_id,
+            }),
+            Err(error) => Err((session, error)),
+        }
+    }
+
+    pub async fn replace_session_with_clear<Handler>(
+        &self,
+        handler: &Handler,
+        session: LocalSessionClient,
+    ) -> Result<LocalSessionClient, (LocalSessionClient, ClientError)>
+    where
+        Handler: LocalClientRequestHandler,
+    {
+        match self
+            .session_replace(
+                handler,
+                coco_types::SessionReplaceParams {
+                    source: session.interactive_target(),
+                    destination: coco_types::SessionReplacement::Clear,
                 },
             )
             .await
@@ -955,7 +995,7 @@ impl<H: Clone> LocalServerClient<H> {
     }
 
     /// Drop this surface's buffered events/requests/lifecycle after it is
-    /// detached or its session archived.
+    /// detached or its session closed.
     fn purge_surface_buffers(&mut self, surface_id: &SurfaceId) {
         self.event_buffers.remove(surface_id);
         self.request_buffers.remove(surface_id);

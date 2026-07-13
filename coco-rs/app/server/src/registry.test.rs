@@ -136,6 +136,37 @@ fn begin_close_moves_live_slot_to_closing_until_completion() {
 }
 
 #[test]
+fn complete_close_with_result_propagates_close_error() {
+    let registry = LiveSessionRegistry::new(4);
+    let session_id = test_session_id("sess-1");
+    registry
+        .begin_load(session_id.clone())
+        .expect("reserve load");
+    registry
+        .complete_load_success(&session_id, TestHandle("h1"))
+        .expect("complete load");
+    let CloseStart::Started { completion, .. } =
+        registry.begin_close(&session_id).expect("begin close")
+    else {
+        panic!("expected started close");
+    };
+    let error = RegistryError::close_failed_with_data(
+        "close timed out",
+        Some(serde_json::json!({ "kind": "session_close_timeout" })),
+    );
+
+    registry
+        .complete_close_with_result(&session_id, Err(error))
+        .expect("complete close");
+
+    let Err(ready_error) = completion.ready().expect("close ready") else {
+        panic!("expected close error");
+    };
+    assert!(matches!(ready_error, RegistryError::CloseFailed { .. }));
+    assert_eq!(registry.slot_count(), 0);
+}
+
+#[test]
 fn close_on_loading_reuses_close_signal_and_transitions_to_closing_after_load() {
     let registry = LiveSessionRegistry::new(4);
     let session_id = test_session_id("sess-1");

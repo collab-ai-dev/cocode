@@ -46,11 +46,11 @@ impl SessionRuntime {
         request: coco_query::ManualCompactRequest,
         event_tx: Option<mpsc::Sender<CoreEvent>>,
         cancel: CancellationToken,
-    ) {
+    ) -> coco_compact::CompactOutcome {
         let engine = self.build_engine(cancel).await;
         let mut history = self.history_resources.history().lock().await.snapshot();
 
-        engine
+        let outcome = engine
             .run_manual_compact(&mut history, &event_tx, request)
             .await;
 
@@ -64,6 +64,8 @@ impl SessionRuntime {
         let _ =
             tokio::task::spawn_blocking(move || manager.re_append_session_metadata(&session_id))
                 .await;
+
+        outcome
     }
 
     pub async fn build_engine_with_turn_abort(&self, turn_abort: TurnAbortSignal) -> QueryEngine {

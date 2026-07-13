@@ -226,7 +226,7 @@ impl QueryEngine {
             self.config.session_id.clone(),
             self.config.agent_id_string(),
         );
-        let (result, accumulated_usage) = self
+        let (result, accumulated_usage, pending_success_terminal) = self
             .run_session_loop(
                 turn_messages,
                 event_tx.clone(),
@@ -275,35 +275,13 @@ impl QueryEngine {
             coco_inference::ModelRuntime::cleanup_active_agent(runtime, agent_id).await;
         }
 
-        // TurnEnded(Failed) — wire-protocol terminator on the error path
-        // so SDK iterators / TUI state machines don't block on `events()`
-        // waiting for a `TurnEnded` notification. Fires before
-        // `SessionResult` so turn-level consumers see the turn-end signal
-        // first. Maps `coco_error::StatusCategory` → typed `ErrorCode`
-        // via the central seam in `crate::error_code` so Hub/SDK consumers
-        // can filter without parsing the message string. The accumulated
-        // usage up to the failure point flows through here — `None` only
-        // when the caller provided no event_tx, never as a sentinel for
-        // "zero".
-        // Cancel-aware: when `self.cancel.is_cancelled()`, the Err is the
-        // bubbled cancellation, not a real failure. Skip the Failed emit
-        // and let the runner emit Interrupted with the correct
-        // `TurnAbortReason` (it owns the turn abort signal). Without
-        // this gate the wire stream becomes `… → Failed → Interrupted`
-        // for the same cycle — the Failed lights up the TUI error modal
-        // milliseconds before Interrupted overrides it.
+        // Stage TurnEnded(Failed) on the error path so the same outer
+        // lifecycle seam can attach SessionResult before emission. Cancelled
+        // errors are excluded; the runner owns the later Interrupted outcome.
+        let mut pending_failure_terminal = None;
         if let (Err(e), Some(id)) = (&result, cycle_turn_id.as_ref())
             && !self.cancel.is_cancelled()
         {
-            // Inline transcript error row (`SystemAPIErrorMessage` parity):
-            // a display-only `SystemMessage::ApiError` appended to history so
-            // the failure renders as a `⚠ <error>` row in turn order instead
-            // of an ephemeral toast / blocking modal. Dropped from the API
-            // request by `normalize_messages_for_api` (every `SystemMessage`
-            // except `LocalCommand` maps to `None`), so it never re-enters the
-            // model context. Skipped when the engine already pushed an
-            // api-error signal (abnormal-stop / context-overflow paths) so a
-            // single failure surfaces exactly one row.
             let already_reported = history
                 .last()
                 .is_some_and(|m| coco_messages::predicates::is_api_error_message(m.as_ref()));
@@ -318,32 +296,25 @@ impl QueryEngine {
                 )
                 .await;
             }
-            let _ = emit_protocol(
-                &event_tx,
-                ServerNotification::TurnEnded(coco_types::TurnEndedParams::failed(
-                    id.clone(),
-                    Some(accumulated_usage),
-                    coco_types::ErrorPayload {
-                        message: e.to_string(),
-                        code: error_code_from_boxed_error(e),
-                    },
-                )),
-            )
-            .await;
+            pending_failure_terminal = Some(coco_types::TurnEndedParams::failed(
+                id.clone(),
+                Some(accumulated_usage),
+                coco_types::ErrorPayload {
+                    message: e.to_string(),
+                    code: error_code_from_boxed_error(e),
+                },
+            ));
         }
 
         // StopFailure — fire-and-forget hooks when the turn ended in an
         // API / runtime error rather than a clean stop. Output and exit
         // codes are intentionally ignored — this is observability only,
-        // not a recovery path. We swallow registry-level failures so a
-        // misconfigured hook can't suppress the user-visible error.
+        // not a recovery path.
         if let (Err(e), Some(hooks)) = (&result, &self.hooks) {
             let err_msg = e.to_string();
             let hook_ctx = self.orchestration_ctx();
             let last_text = extract_last_assistant_text(&history);
             let last_assistant_message = (!last_text.is_empty()).then_some(last_text);
-            // Without error-classification infrastructure here we pass a single
-            // bucket; users match on `error_details` for the raw text.
             if let Err(hook_err) = coco_hooks::orchestration::execute_stop_failure(
                 hooks,
                 &hook_ctx,
@@ -357,12 +328,19 @@ impl QueryEngine {
             }
         }
 
-        // SessionResult — always emitted. On Err, we synthesize a minimal
-        // QueryResult-like view so SDK consumers see a terminal `result` event.
+        // SessionResult — always emitted. Terminal turn events are emitted
+        // immediately before it, with the same final params embedded.
         let params = match &result {
             Ok(qr) => self.build_session_result_params(qr, /*error_messages*/ Vec::new()),
             Err(e) => self.build_session_error_params(e.to_string()),
         };
+        if let Some(terminal) = pending_failure_terminal.or(pending_success_terminal) {
+            let _delivered = emit_protocol(
+                &event_tx,
+                ServerNotification::TurnEnded(terminal.with_session_result(params.clone())),
+            )
+            .await;
+        }
         match &result {
             Ok(qr) => info!(
                 turns = qr.turns,

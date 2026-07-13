@@ -212,10 +212,9 @@ pub(super) async fn run_local_app_server_shortcut_turn(
 ) {
     let session_id = session.session_id().clone();
     if let Err(error) = local_app_server_bridge
-        .bind_interactive_session(session.clone(), Some(event_tx.clone()))
-        .await
+        .activate_existing_interactive_session(session_id.clone(), Some(event_tx.clone()))
     {
-        tracing::warn!(%error, "{log_label} could not bind local AppServer session");
+        tracing::warn!(%error, "{log_label} could not activate local AppServer session");
         return;
     }
     let mut monitor_client = local_app_server_bridge.connect_local_client();
@@ -318,7 +317,9 @@ pub(super) async fn run_clear_conversation(
     let runtime = session;
     drain_active_turn(active_turn, ActiveTurnDrain::Wait).await;
     let old_session_id = runtime.session_id().clone();
-    if let Err(error) = local_app_server_bridge.ensure_interactive_surface(old_session_id.clone()) {
+    if let Err(error) =
+        local_app_server_bridge.activate_existing_interactive_session(old_session_id.clone(), None)
+    {
         warn!(
             %error,
             session_id = %old_session_id,
@@ -326,51 +327,18 @@ pub(super) async fn run_clear_conversation(
         );
         return;
     }
-    let clear_snapshot = runtime.clear_replacement_snapshot().await;
-    let new_session_id = coco_types::SessionId::generate();
-    let make_runtime_factory = {
-        let runtime_factory = control_context.runtime_factory.clone();
-        let process_runtime = Arc::clone(control_context.process_runtime);
-        let cwd = control_context.cwd.to_path_buf();
-        let event_tx = event_tx.clone();
-        let new_session_id = new_session_id.clone();
-        let clear_snapshot = clear_snapshot.clone();
-        async move {
-            coco_agent_host::session_replacement::build_clear_replacement_runtime(
-                runtime_factory,
-                new_session_id,
-                clear_snapshot,
-                process_runtime,
-                cwd,
-                Some(event_tx),
-            )
-            .await
-        }
-    };
-    let new_session = match local_app_server_bridge
-        .replace_session_runtime_for_clear(
-            old_session_id.clone(),
-            new_session_id.clone(),
-            make_runtime_factory,
-        )
+    let binding = match local_app_server_bridge
+        .replace_interactive_session_with_clear(Some(event_tx.clone()))
         .await
     {
-        Ok(Some((session, _surface_id))) => session,
-        Ok(None) => {
-            warn!(
-                session_id = %old_session_id,
-                "/clear could not find local AppServer calling surface"
-            );
-            return;
-        }
+        Ok(binding) => binding,
         Err(error) => {
-            warn!(%error, "/clear failed to build replacement runtime");
+            warn!(%error, "/clear failed to replace local AppServer session");
             return;
         }
     };
-    new_session
-        .fire_session_start_hooks(coco_hooks::orchestration::SessionStartSource::Clear)
-        .await;
+    let new_session = binding.session;
+    let new_session_id = new_session.session_id().clone();
     {
         let mut current = control_context.current_session.write().await;
         *current = new_session.clone();
@@ -381,16 +349,6 @@ pub(super) async fn run_clear_conversation(
         .await
         .install_for_session(&new_session)
         .await;
-    if let Err(error) = local_app_server_bridge
-        .bind_interactive_session(new_session.clone(), Some(event_tx.clone()))
-        .await
-    {
-        warn!(
-            %error,
-            session_id = %new_session_id,
-            "/clear could not bind local AppServer session"
-        );
-    }
     let notif = ServerNotification::SessionResetForResume {
         identity: coco_types::ServerNotificationIdentity::new(Some(new_session_id), None),
     };

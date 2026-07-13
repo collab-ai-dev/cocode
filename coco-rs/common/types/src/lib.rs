@@ -136,19 +136,19 @@ pub use surface::{
 // Client request types (Phase 2 — SDK control protocol, SDK → agent)
 pub use client_request::{
     AgentInterruptCurrentWorkParams, ApplyPermissionUpdateParams, ApprovalDecision,
-    ApprovalResolveParams, ArchiveTarget, BackgroundAllTasksResult, CancelRequestParams,
-    ClientAgentDefinition, ClientRequest, ClientRequestMethod, ConfigApplyFlagsParams,
-    ConfigReadParams, ConfigReadTarget, ConfigWriteParams, ConfigWriteTarget, ConnectionProfile,
-    ConnectionProfileError, ElicitationResolveParams, HookCallbackMatcher, InitializeParams,
-    InteractiveTarget, McpReconnectParams, McpSetServersParams, McpToggleParams, RequestScope,
-    ResetSessionPermissionRulesResult, RewindFilesParams, SessionArchiveParams,
-    SessionCallbackRequirements, SessionCostResult, SessionReadParams, SessionRenameParams,
-    SessionRenameResult, SessionReplaceParams, SessionReplacement, SessionResumeParams,
-    SessionStartParams, SessionStatusResult, SessionSubscribeParams, SessionTarget,
-    SessionToggleTagParams, SessionToggleTagResult, SessionTurnsListParams, SetAgentColorParams,
-    SetModelParams, SetModelRoleParams, SetPermissionModeParams, SetThinkingParams, StopTaskParams,
-    TaskDetailParams, TaskDetailResult, TaskListResult, TurnStartParams, UpdateEnvParams,
-    UserInputResolveParams, request_scope,
+    ApprovalResolveParams, BackgroundAllTasksResult, CancelRequestParams, ClientAgentDefinition,
+    ClientRequest, ClientRequestMethod, ConfigApplyFlagsParams, ConfigReadParams, ConfigReadTarget,
+    ConfigWriteParams, ConfigWriteTarget, ConnectionProfile, ConnectionProfileError,
+    ElicitationResolveParams, HookCallbackMatcher, InitializeParams, InteractiveTarget,
+    McpReconnectParams, McpSetServersParams, McpToggleParams, RequestScope,
+    ResetSessionPermissionRulesResult, RewindFilesParams, SessionCallbackRequirements,
+    SessionCloseParams, SessionCloseTarget, SessionCostResult, SessionDeleteParams,
+    SessionReadParams, SessionRenameParams, SessionRenameResult, SessionReplaceParams,
+    SessionReplacement, SessionResumeParams, SessionStartParams, SessionStatusResult,
+    SessionSubscribeParams, SessionTarget, SessionToggleTagParams, SessionToggleTagResult,
+    SessionTurnsListParams, SetAgentColorParams, SetModelParams, SetModelRoleParams,
+    SetPermissionModeParams, SetThinkingParams, StopTaskParams, TaskDetailParams, TaskDetailResult,
+    TaskListResult, TurnStartParams, UpdateEnvParams, UserInputResolveParams, request_scope,
 };
 
 // Hook callback output (stable wire format; mirrors

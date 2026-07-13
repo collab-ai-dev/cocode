@@ -57,6 +57,14 @@ impl Default for TurnRunnerState {
 }
 
 impl TurnRunnerState {
+    pub(crate) fn new(runner: Option<Arc<dyn TurnRunner>>) -> Self {
+        Self {
+            runner: RwLock::new(
+                runner.unwrap_or_else(|| Arc::new(NotImplementedRunner) as Arc<dyn TurnRunner>),
+            ),
+        }
+    }
+
     pub(crate) async fn install(&self, runner: Arc<dyn TurnRunner>) {
         let mut slot = self.runner.write().await;
         *slot = runner;

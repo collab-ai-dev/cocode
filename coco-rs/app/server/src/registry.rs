@@ -9,6 +9,7 @@ use coco_types::SessionId;
 use snafu::Snafu;
 
 type LoadResult<H> = Option<Result<H, RegistryError>>;
+type CloseResult = Option<Result<(), RegistryError>>;
 
 /// Registry for root session lifecycle slots.
 ///
@@ -163,7 +164,7 @@ impl<H: Clone> LiveSessionRegistry<H> {
         };
         let _ = load.sender.send(Some(Err(error)));
         if let Some(close) = load.close_after_load {
-            let _ = close.sender.send(true);
+            let _ = close.sender.send(Some(Ok(())));
         }
         Ok(())
     }
@@ -301,6 +302,14 @@ impl<H: Clone> LiveSessionRegistry<H> {
     }
 
     pub fn complete_close(&self, session_id: &SessionId) -> Result<(), RegistryError> {
+        self.complete_close_with_result(session_id, Ok(()))
+    }
+
+    pub(crate) fn complete_close_with_result(
+        &self,
+        session_id: &SessionId,
+        close_result: Result<(), RegistryError>,
+    ) -> Result<(), RegistryError> {
         let mut sessions = self
             .sessions
             .write()
@@ -312,7 +321,7 @@ impl<H: Clone> LiveSessionRegistry<H> {
             }
             .fail();
         };
-        let _ = closing.close.sender.send(true);
+        let _ = closing.close.sender.send(Some(close_result));
         sessions.remove(session_id);
         Ok(())
     }
@@ -366,13 +375,13 @@ impl<H: Clone> LoadState<H> {
 }
 
 pub(crate) struct CloseState {
-    pub(crate) sender: tokio::sync::watch::Sender<bool>,
-    receiver: tokio::sync::watch::Receiver<bool>,
+    pub(crate) sender: tokio::sync::watch::Sender<CloseResult>,
+    receiver: tokio::sync::watch::Receiver<CloseResult>,
 }
 
 impl CloseState {
     pub(crate) fn new() -> Self {
-        let (sender, receiver) = tokio::sync::watch::channel(false);
+        let (sender, receiver) = tokio::sync::watch::channel(None);
         Self { sender, receiver }
     }
 
@@ -447,18 +456,22 @@ impl<H: Clone> LoadCompletion<H> {
 
 #[derive(Debug, Clone)]
 pub struct CloseCompletion {
-    receiver: tokio::sync::watch::Receiver<bool>,
+    receiver: tokio::sync::watch::Receiver<CloseResult>,
 }
 
 impl CloseCompletion {
     pub fn is_complete(&self) -> bool {
-        *self.receiver.borrow()
+        self.receiver.borrow().is_some()
+    }
+
+    pub fn ready(&self) -> Option<Result<(), RegistryError>> {
+        self.receiver.borrow().clone()
     }
 
     pub async fn wait(&mut self) -> Result<(), RegistryError> {
         loop {
-            if self.is_complete() {
-                return Ok(());
+            if let Some(result) = self.ready() {
+                return result;
             }
             self.receiver
                 .changed()
@@ -508,6 +521,13 @@ pub enum RegistryError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("session close failed: {message}"))]
+    CloseFailed {
+        message: String,
+        data: Option<serde_json::Value>,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("registry completion signal dropped"))]
     SignalDropped {
         #[snafu(implicit)]
@@ -522,6 +542,25 @@ impl RegistryError {
         }
         .build()
     }
+
+    pub fn close_failed(message: impl Into<String>) -> Self {
+        CloseFailedSnafu {
+            message: message.into(),
+            data: None,
+        }
+        .build()
+    }
+
+    pub fn close_failed_with_data(
+        message: impl Into<String>,
+        data: Option<serde_json::Value>,
+    ) -> Self {
+        CloseFailedSnafu {
+            message: message.into(),
+            data,
+        }
+        .build()
+    }
 }
 
 impl ErrorExt for RegistryError {
@@ -533,6 +572,7 @@ impl ErrorExt for RegistryError {
             Self::NewSlotOccupied { .. } => StatusCode::InvalidArguments,
             Self::SlotConflict { .. } => StatusCode::InvalidArguments,
             Self::LoadFailed { .. } => StatusCode::Internal,
+            Self::CloseFailed { .. } => StatusCode::Internal,
             Self::SignalDropped { .. } => StatusCode::Internal,
         }
     }

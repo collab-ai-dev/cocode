@@ -3,9 +3,10 @@ use super::*;
 impl QueryEngine {
     /// Shared successful-turn tail. Persistence (cache snapshot, transcript
     /// flush) and reasoning-metadata side-cache update always run; the
-    /// `TurnEnded(Completed)` protocol event fires only on
-    /// [`TurnContinuation::Terminal`]. See [`Self::finalize_turn_post_tools`]
-    /// for the wire-protocol rationale.
+    /// terminal `TurnEnded(Completed)` params are returned only on
+    /// [`TurnContinuation::Terminal`]. The session lifecycle wrapper attaches
+    /// the final `SessionResultParams` before sending the terminal event.
+    /// See [`Self::finalize_turn_post_tools`] for the wire-protocol rationale.
     ///
     /// `cycle_turn_id` is the wire id supplied by the runner; `None`
     /// suppresses the wire emit when the caller had no event channel.
@@ -20,19 +21,24 @@ impl QueryEngine {
         continuation: TurnContinuation,
         cycle_turn_id: Option<coco_types::TurnId>,
         stop_reason: Option<coco_messages::StopReason>,
-    ) {
+    ) -> Option<coco_types::TurnEndedParams> {
         self.flush_successful_turn_state(history).await;
         self.emit_reasoning_metadata_for_last_assistant(event_tx, history, &usage, None)
             .await;
         if continuation.is_terminal()
             && let Some(id) = cycle_turn_id
         {
-            self.emit_turn_ended_completed(event_tx, id, usage, history.len(), stop_reason)
-                .await;
+            return Some(Self::build_turn_ended_completed(
+                id,
+                usage,
+                history.len(),
+                stop_reason,
+            ));
         }
+        None
     }
 
-    /// Emit the protocol completion events for a successful model turn.
+    /// Build the protocol completion event for a successful model turn.
     ///
     /// Kept distinct from [`Self::finalize_successful_turn_tail`] because
     /// no-tool terminal paths in `run_session_loop` flush + invoke
@@ -42,20 +48,25 @@ impl QueryEngine {
     /// metadata, when reported by the provider, must be anchored by
     /// message UUID before `TurnEnded(Completed)` lets the TUI render
     /// the completed turn.
-    pub(crate) async fn emit_successful_turn_completed(
+    pub(crate) async fn finish_successful_turn_completed(
         &self,
         event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
         history: &MessageHistory,
         usage: TokenUsage,
         cycle_turn_id: Option<coco_types::TurnId>,
         stop_reason: Option<coco_messages::StopReason>,
-    ) {
+    ) -> Option<coco_types::TurnEndedParams> {
         self.emit_reasoning_metadata_for_last_assistant(event_tx, history, &usage, None)
             .await;
         if let Some(id) = cycle_turn_id {
-            self.emit_turn_ended_completed(event_tx, id, usage, history.len(), stop_reason)
-                .await;
+            return Some(Self::build_turn_ended_completed(
+                id,
+                usage,
+                history.len(),
+                stop_reason,
+            ));
         }
+        None
     }
 
     /// Persist successful-turn state that must be current before any
@@ -76,7 +87,7 @@ impl QueryEngine {
         self.record_transcript_tail(history).await;
     }
 
-    /// Emit `TurnEnded(Completed)` on the wire.
+    /// Build `TurnEnded(Completed)`.
     ///
     /// - `cycle_turn_id` is the wire-level cycle id (shared with the
     ///   runner's `TurnStarted`).
@@ -90,14 +101,12 @@ impl QueryEngine {
     /// `turn_id` on its per-round info log line. Threading it through
     /// the emit fn just to drop it into one more log line obscured the
     /// wire-vs-log id distinction.
-    pub(crate) async fn emit_turn_ended_completed(
-        &self,
-        event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
+    pub(crate) fn build_turn_ended_completed(
         cycle_turn_id: coco_types::TurnId,
         usage: TokenUsage,
         history_len: usize,
         stop_reason: Option<coco_messages::StopReason>,
-    ) {
+    ) -> coco_types::TurnEndedParams {
         info!(
             cycle_turn_id = %cycle_turn_id,
             tokens_in = usage.input_tokens.total,
@@ -106,15 +115,7 @@ impl QueryEngine {
             ?stop_reason,
             "turn ended (completed)"
         );
-        let _ = emit_protocol(
-            event_tx,
-            ServerNotification::TurnEnded(coco_types::TurnEndedParams::completed(
-                cycle_turn_id,
-                Some(usage),
-                stop_reason,
-            )),
-        )
-        .await;
+        coco_types::TurnEndedParams::completed(cycle_turn_id, Some(usage), stop_reason)
     }
 
     /// Emit `ReasoningMetadataAttached` so the TUI side-cache can anchor

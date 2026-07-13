@@ -37,7 +37,7 @@ pub async fn run_app_server_connection_over_sdk_transport_with_external_notifica
         binding.outbound_rx,
         Arc::clone(&app_server),
         bridge_host.session_seq_allocator(),
-        bridge_host.hub_sender(),
+        bridge_host.hub_connector(),
     );
     let result = drive_app_server_connection_over_sdk_transport(
         connection,

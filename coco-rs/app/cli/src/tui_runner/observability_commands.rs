@@ -113,14 +113,13 @@ pub(super) async fn run_tasks_command(
     match parts.next() {
         Some("list") => {
             if let Err(error) = local_app_server_bridge
-                .bind_interactive_session(session.clone(), None)
-                .await
+                .activate_existing_interactive_session(session.session_id().clone(), None)
             {
                 emit_slash_text(
                     event_tx,
                     name,
                     args,
-                    &format!("Failed to bind AppServer session: {error}"),
+                    &format!("Failed to activate AppServer session: {error}"),
                 )
                 .await;
                 return;
@@ -154,14 +153,13 @@ pub(super) async fn run_tasks_command(
                 return;
             };
             if let Err(error) = local_app_server_bridge
-                .bind_interactive_session(session.clone(), None)
-                .await
+                .activate_existing_interactive_session(session.session_id().clone(), None)
             {
                 emit_slash_text(
                     event_tx,
                     name,
                     args,
-                    &format!("Failed to bind AppServer session: {error}"),
+                    &format!("Failed to activate AppServer session: {error}"),
                 )
                 .await;
                 return;
@@ -193,14 +191,13 @@ pub(super) async fn run_tasks_command(
                 return;
             };
             if let Err(error) = local_app_server_bridge
-                .bind_interactive_session(session.clone(), None)
-                .await
+                .activate_existing_interactive_session(session.session_id().clone(), None)
             {
                 emit_slash_text(
                     event_tx,
                     name,
                     args,
-                    &format!("Failed to bind AppServer session: {error}"),
+                    &format!("Failed to activate AppServer session: {error}"),
                 )
                 .await;
                 return;
@@ -256,10 +253,9 @@ pub(super) async fn toggle_fast_mode_through_app_server(
         }
     };
     if let Err(error) = local_app_server_bridge
-        .bind_interactive_session(session.clone(), Some(event_tx.clone()))
-        .await
+        .activate_existing_interactive_session(session.session_id().clone(), Some(event_tx.clone()))
     {
-        warn!(%error, "TUI ToggleFastMode could not bind local AppServer session");
+        warn!(%error, "TUI ToggleFastMode could not activate local AppServer session");
         return;
     }
 
@@ -294,10 +290,9 @@ pub(super) async fn set_thinking_level_through_app_server(
         }
     };
     if let Err(error) = local_app_server_bridge
-        .bind_interactive_session(session.clone(), Some(event_tx.clone()))
-        .await
+        .activate_existing_interactive_session(session.session_id().clone(), Some(event_tx.clone()))
     {
-        warn!(%error, "TUI SetThinkingLevel could not bind local AppServer session");
+        warn!(%error, "TUI SetThinkingLevel could not activate local AppServer session");
         return;
     }
 

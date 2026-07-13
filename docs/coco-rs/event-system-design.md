@@ -452,7 +452,8 @@ TS UI-facing events are either already covered in `TuiEvent` or covered via `Ser
 | `session/resume` | `SessionResume` | Resume saved session |
 | `session/list` | `SessionList` | List saved sessions |
 | `session/read` | `SessionRead` | Read session items |
-| `session/archive` | `SessionArchive` | Archive session |
+| `session/close` | `SessionClose` | Close live session |
+| `session/delete` | `SessionDelete` | Delete durable session |
 | `turn/start` | `TurnStart` | New turn with user input |
 | `turn/interrupt` | `TurnInterrupt` | Interrupt current turn |
 | `approval/resolve` | `ApprovalResolve` | Resolve permission prompt |

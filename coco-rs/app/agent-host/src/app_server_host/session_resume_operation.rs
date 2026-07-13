@@ -13,11 +13,8 @@ use crate::session_resume::SessionResumeInput;
 
 use super::session_loading::load_local_app_server_session_with_retrying_factory_parts;
 use super::session_operation_error::SessionOperationError;
-use super::session_registry::{
-    replace_detached_local_app_server_session_with_factory_parts,
-    restore_session_seq_from_watermark,
-};
-use super::session_surfaces::{attach_local_app_server_surface, registered_detached_session};
+use super::session_registry::restore_session_seq_from_watermark;
+use super::session_surfaces::attach_local_app_server_surface;
 
 pub(crate) async fn load_app_server_resume_session(
     input: SessionResumeInput,
@@ -108,29 +105,13 @@ pub(crate) async fn resume_app_server_session_with_runtime_replacement(
         }
     };
 
-    let handle = if registered_detached_session(
+    let handle = load_local_app_server_session_with_retrying_factory_parts(
         &app_server,
-        &replacement.startup_session_id,
-        &resumed_session_id,
-    ) {
-        replace_detached_local_app_server_session_with_factory_parts(
-            Arc::clone(&app_server),
-            Arc::clone(&state),
-            replacement.startup_session_id.clone(),
-            resumed_session_id.clone(),
-            make_factory(),
-            turn_drain_timeout,
-        )
-        .await?
-    } else {
-        load_local_app_server_session_with_retrying_factory_parts(
-            &app_server,
-            resumed_session_id.clone(),
-            make_factory,
-            turn_drain_timeout,
-        )
-        .await?
-    };
+        resumed_session_id.clone(),
+        make_factory,
+        turn_drain_timeout,
+    )
+    .await?;
     let runtime = handle.into_session();
     install_app_server_session_runtime_state(
         Arc::clone(&state),

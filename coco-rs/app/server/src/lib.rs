@@ -28,7 +28,7 @@ use snafu::Snafu;
 
 pub use activity::SessionActivityTracker;
 pub use app_server::{
-    AppArchiveCommit, AppCloseStart, AppLiveSessionSummary, AppLoadStart, AppReplaceCommit,
+    AppCloseCommit, AppCloseStart, AppLiveSessionSummary, AppLoadStart, AppReplaceCommit,
     AppReplaceStart, AppServer, AppServerError, AppShutdownSession, AppShutdownStart,
     ResolvedServerRequest, ServerRequestErrorReply, ServerRequestReply,
     ValidatedInteractiveSession,
@@ -276,7 +276,7 @@ pub struct ReplaceSurfaceOutcome {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ArchiveSessionOutcome {
+pub struct CloseSessionSurfacesOutcome {
     pub closed_surfaces: Vec<SurfaceId>,
     pub cancelled_requests: Vec<RequestId>,
 }
@@ -906,7 +906,10 @@ impl RoutingState {
     }
 
     /// Mark every surface on a session as closed and remove them from fan-out.
-    pub fn archive_session(&mut self, session_id: &SessionId) -> ArchiveSessionOutcome {
+    pub fn close_session_surfaces(
+        &mut self,
+        session_id: &SessionId,
+    ) -> CloseSessionSurfacesOutcome {
         let surfaces: Vec<SurfaceId> = self
             .session_to_surfaces
             .get(session_id)
@@ -920,7 +923,7 @@ impl RoutingState {
         // The session is closing: its retention ring is dead history now, so
         // drop it rather than leaking it for the process lifetime.
         self.rings.remove(session_id);
-        ArchiveSessionOutcome {
+        CloseSessionSurfacesOutcome {
             closed_surfaces: surfaces,
             cancelled_requests,
         }

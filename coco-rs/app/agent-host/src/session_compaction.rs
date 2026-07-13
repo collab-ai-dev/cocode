@@ -58,6 +58,7 @@ pub async fn run_manual_compact_turn(
     event_tx: mpsc::Sender<coco_types::CoreEvent>,
     cancel: CancellationToken,
 ) {
+    let started_at = std::time::Instant::now();
     let _ = event_tx
         .send(coco_types::CoreEvent::Protocol(
             coco_types::ServerNotification::TurnStarted(coco_types::TurnStartedParams {
@@ -66,18 +67,77 @@ pub async fn run_manual_compact_turn(
         ))
         .await;
     let request = manual_compact_request(request);
-    session
+    let outcome = session
         .run_manual_compact(request, Some(event_tx.clone()), cancel)
+        .await;
+    let result = manual_compact_session_result(&session, outcome, started_at.elapsed());
+    let terminal = manual_compact_turn_ended(turn_id, outcome).with_session_result(result.clone());
+    let _ = event_tx
+        .send(coco_types::CoreEvent::Protocol(
+            coco_types::ServerNotification::SessionResult(Box::new(result)),
+        ))
         .await;
     let _ = event_tx
         .send(coco_types::CoreEvent::Protocol(
-            coco_types::ServerNotification::TurnEnded(coco_types::TurnEndedParams::completed(
-                turn_id,
-                Some(coco_types::TokenUsage::default()),
-                Some(coco_messages::StopReason::EndTurn),
-            )),
+            coco_types::ServerNotification::TurnEnded(terminal),
         ))
         .await;
+}
+
+fn manual_compact_session_result(
+    session: &SessionHandle,
+    outcome: coco_compact::CompactOutcome,
+    elapsed: std::time::Duration,
+) -> coco_types::SessionResultParams {
+    let (is_error, stop_reason, errors) = match outcome {
+        coco_compact::CompactOutcome::Applied => (false, "manual_compact_applied", Vec::new()),
+        coco_compact::CompactOutcome::Skipped => (false, "manual_compact_skipped", Vec::new()),
+        coco_compact::CompactOutcome::Failed => (
+            true,
+            "manual_compact_failed",
+            vec!["manual compaction failed".to_string()],
+        ),
+    };
+    coco_types::SessionResultParams {
+        session_id: session.session_id().clone(),
+        total_turns: 1,
+        duration_ms: elapsed.as_millis() as i64,
+        duration_api_ms: 0,
+        is_error,
+        stop_reason: stop_reason.to_string(),
+        total_cost_usd: 0.0,
+        usage: coco_types::TokenUsage::default(),
+        model_usage: std::collections::HashMap::new(),
+        permission_denials: Vec::new(),
+        result: None,
+        errors,
+        structured_output: None,
+        fast_mode_state: None,
+        num_api_calls: None,
+    }
+}
+
+fn manual_compact_turn_ended(
+    turn_id: coco_types::TurnId,
+    outcome: coco_compact::CompactOutcome,
+) -> coco_types::TurnEndedParams {
+    match outcome {
+        coco_compact::CompactOutcome::Applied | coco_compact::CompactOutcome::Skipped => {
+            coco_types::TurnEndedParams::completed(
+                turn_id,
+                Some(coco_types::TokenUsage::default()),
+                None,
+            )
+        }
+        coco_compact::CompactOutcome::Failed => coco_types::TurnEndedParams::failed(
+            turn_id,
+            Some(coco_types::TokenUsage::default()),
+            coco_types::ErrorPayload {
+                message: "manual compaction failed".to_string(),
+                code: coco_types::ErrorCode::Unknown,
+            },
+        ),
+    }
 }
 
 fn manual_compact_request(

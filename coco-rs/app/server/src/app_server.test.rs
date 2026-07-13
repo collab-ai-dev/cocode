@@ -145,7 +145,7 @@ async fn spawn_load_failure_removes_loading_slot() {
 }
 
 #[tokio::test]
-async fn spawn_close_owner_task_archives_after_cascade_without_origin_waiter() {
+async fn spawn_close_owner_task_closes_surfaces_after_cascade_without_origin_waiter() {
     let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
     let session_id = test_session_id("sess-1");
     server
@@ -177,6 +177,7 @@ async fn spawn_close_owner_task_archives_after_cascade_without_origin_waiter() {
             assert_eq!(handle, TestHandle("handle"));
             close_runs_1.fetch_add(1, Ordering::SeqCst);
             release_rx.await.expect("release close");
+            Ok(())
         })
         .expect("start close")
     else {
@@ -188,6 +189,7 @@ async fn spawn_close_owner_task_archives_after_cascade_without_origin_waiter() {
     let AppCloseStart::Closing(mut waiter) = server
         .spawn_close(session_id.clone(), move |_| async move {
             close_runs_2.fetch_add(10, Ordering::SeqCst);
+            Ok(())
         })
         .expect("observe closing")
     else {
@@ -218,7 +220,7 @@ async fn spawn_close_owner_task_archives_after_cascade_without_origin_waiter() {
 }
 
 #[tokio::test]
-async fn spawn_close_on_loading_waits_for_load_then_archives_once() {
+async fn spawn_close_on_loading_waits_for_load_then_closes_surfaces_once() {
     let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
     let session_id = test_session_id("sess-1");
     let (release_load_tx, release_load_rx) = tokio::sync::oneshot::channel();
@@ -250,6 +252,7 @@ async fn spawn_close_on_loading_waits_for_load_then_archives_once() {
         .spawn_close(session_id.clone(), move |handle| async move {
             assert_eq!(handle, TestHandle("loaded"));
             close_runs_1.fetch_add(1, Ordering::SeqCst);
+            Ok(())
         })
         .expect("close loading")
     else {
@@ -260,6 +263,7 @@ async fn spawn_close_on_loading_waits_for_load_then_archives_once() {
     let AppCloseStart::Loading(repeated_completion) = server
         .spawn_close(session_id.clone(), move |_| async move {
             close_runs_2.fetch_add(10, Ordering::SeqCst);
+            Ok(())
         })
         .expect("repeat close loading")
     else {
@@ -288,6 +292,42 @@ async fn spawn_close_on_loading_waits_for_load_then_archives_once() {
         routing.surface_attachment(&surface_id).map(|a| a.state),
         None
     );
+}
+
+#[tokio::test]
+async fn spawn_close_propagates_close_callback_failure() {
+    let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
+    let session_id = test_session_id("sess-1");
+    server
+        .registry()
+        .begin_load(session_id.clone())
+        .expect("reserve session");
+    server
+        .registry()
+        .complete_load_success(&session_id, TestHandle("handle"))
+        .expect("session live");
+
+    let AppCloseStart::Started { mut completion } = server
+        .spawn_close(session_id.clone(), move |_| async move {
+            Err(crate::registry::RegistryError::close_failed_with_data(
+                "close timed out",
+                Some(serde_json::json!({
+                    "kind": "session_close_timeout",
+                    "task": "turn_task",
+                })),
+            ))
+        })
+        .expect("start close")
+    else {
+        panic!("expected started close");
+    };
+
+    let error = completion.wait().await.expect_err("close should fail");
+    assert!(matches!(
+        error,
+        crate::registry::RegistryError::CloseFailed { .. }
+    ));
+    assert_eq!(server.registry().slot_count(), 0);
 }
 
 #[tokio::test]
@@ -323,6 +363,7 @@ async fn spawn_shutdown_closes_live_sessions_concurrently() {
                 }
                 other => panic!("unexpected handle: {other:?}"),
             }
+            Ok(())
         }
     });
 
@@ -373,6 +414,7 @@ async fn spawn_shutdown_includes_loading_and_observes_closing_sessions() {
     let AppCloseStart::Started { completion, .. } = server
         .spawn_close(closing_session_id.clone(), move |_| async move {
             release_close_rx.await.expect("release close");
+            Ok(())
         })
         .expect("start close")
     else {
@@ -391,6 +433,7 @@ async fn spawn_shutdown_includes_loading_and_observes_closing_sessions() {
                 }
                 other => panic!("unexpected shutdown close handle: {other:?}"),
             }
+            Ok(())
         }
     });
 
@@ -471,6 +514,7 @@ async fn spawn_replace_commits_then_closes_old_without_origin_waiter() {
                 assert_eq!(old_handle, TestHandle("old"));
                 close_started_tx.send(()).expect("signal close started");
                 release_close_rx.await.expect("release close");
+                Ok(())
             },
         )
         .expect("start replace");
@@ -559,6 +603,7 @@ async fn spawn_replace_detached_commits_then_closes_old_without_origin_waiter() 
                 assert_eq!(old_handle, TestHandle("old"));
                 close_started_tx.send(()).expect("signal close started");
                 release_close_rx.await.expect("release close");
+                Ok(())
             },
         )
         .expect("start detached replace");
@@ -621,7 +666,7 @@ async fn spawn_replace_construct_failure_removes_new_and_keeps_old_live() {
                 }
                 .build())
             },
-            |_| async {},
+            |_| async { Ok(()) },
         )
         .expect("start replace");
 
@@ -844,7 +889,7 @@ fn commit_replace_rejects_calling_surface_on_wrong_session() {
 }
 
 #[test]
-fn complete_close_archives_surfaces_and_removes_registry_slot() {
+fn complete_session_close_closes_surfaces_and_removes_registry_slot() {
     let server = AppServer::new(1, 8);
     let session_id = test_session_id("sess-1");
     server
@@ -890,7 +935,7 @@ fn complete_close_archives_surfaces_and_removes_registry_slot() {
     }
 
     let commit = server
-        .complete_close_and_archive_surfaces(&session_id)
+        .complete_session_close(&session_id, Ok(()))
         .expect("complete close");
 
     assert!(completion.is_complete());
@@ -964,7 +1009,7 @@ fn complete_close_archives_surfaces_and_removes_registry_slot() {
 }
 
 #[test]
-fn complete_close_rejects_non_closing_session_before_routing_mutation() {
+fn complete_session_close_rejects_non_closing_session_before_routing_mutation() {
     let server = AppServer::new(1, 8);
     let session_id = test_session_id("sess-1");
     server
@@ -988,7 +1033,7 @@ fn complete_close_rejects_non_closing_session_before_routing_mutation() {
     }
 
     let err = server
-        .complete_close_and_archive_surfaces(&session_id)
+        .complete_session_close(&session_id, Ok(()))
         .expect_err("session is not closing");
 
     assert!(matches!(err, AppServerError::Registry { .. }));

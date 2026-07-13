@@ -13,24 +13,24 @@ pub(crate) fn resolve_request_runtime(
     connection: coco_app_server::ConnectionKey,
     request: &ClientRequest,
 ) -> Result<(Option<SessionId>, Option<SessionRequestContext>), JsonRpcDispatchError> {
-    if let ClientRequest::SessionArchive(params) = request {
+    if let ClientRequest::SessionClose(params) = request {
         let session_id = params.target.session_id().clone();
         let app_server = app_server.ok_or_else(|| JsonRpcDispatchError {
             code: coco_types::error_codes::INVALID_REQUEST,
-            message: "session/archive requires AppServer routing".to_string(),
+            message: "session/close requires AppServer routing".to_string(),
             data: None,
         })?;
         let handle = match &params.target {
-            coco_types::ArchiveTarget::Interactive(target) => {
+            coco_types::SessionCloseTarget::Interactive { target } => {
                 app_server
                     .validate_interactive_target(connection, target)
-                    .map_err(|error| app_server_lifecycle_error("resolve archive target", error))?
+                    .map_err(|error| app_server_lifecycle_error("resolve close target", error))?
                     .handle
             }
-            coco_types::ArchiveTarget::Orphaned(_) => app_server
-                .validate_orphan_archive_target(&session_id)
+            coco_types::SessionCloseTarget::Orphaned { .. } => app_server
+                .validate_orphan_close_target(&session_id)
                 .map_err(|error| {
-                    app_server_lifecycle_error("validate orphan archive target", error)
+                    app_server_lifecycle_error("validate orphan close target", error)
                 })?,
         };
         return Ok((

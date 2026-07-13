@@ -45,7 +45,10 @@ from coco_sdk.generated.protocol import (
     ServerNotification,
     ServerNotificationTurnEnded,
     ServerRequestMethod,
-    SessionArchiveRequest,
+    SessionCloseRequest,
+    SessionCloseTargetInteractive,
+    SessionCloseTargetOrphaned,
+    SessionDeleteRequest,
     SessionListRequest,
     SessionListResult,
     SessionReadRequest,
@@ -633,14 +636,29 @@ class CocoClient:
         raw = await self._send_and_await_response(request)
         return SessionReadResult.model_validate(raw)
 
-    async def archive_session(self, session_id: str) -> None:
-        """Archive a session."""
-        request = SessionArchiveRequest(
-            params=SessionArchiveRequest.SessionArchiveRequestParams(
-                target=self._archive_target(session_id)
+    async def close_session(self, session_id: str | None = None) -> None:
+        """Close a live session while preserving its persisted transcript."""
+        target_session_id = session_id or self._session_id
+        if target_session_id is None:
+            raise RuntimeError("no session id to close")
+        request = SessionCloseRequest(
+            params=SessionCloseRequest.SessionCloseRequestParams(
+                target=self._close_target(target_session_id)
             )
         )
-        await self._notify(request)
+        await self._send_and_await_response(request)
+        if target_session_id == self._session_id:
+            self._session_id = None
+            self._surface_id = None
+
+    async def delete_session(self, session_id: str) -> None:
+        """Delete durable session storage. The session must not be live."""
+        request = SessionDeleteRequest(
+            params=SessionDeleteRequest.SessionDeleteRequestParams(
+                target=SessionTarget(session_id=session_id)
+            )
+        )
+        await self._send_and_await_response(request)
 
     async def resume(self, session_id: str) -> AsyncIterator[ServerNotification]:
         """Resume an existing session by ID and yield events."""
@@ -854,10 +872,12 @@ class CocoClient:
             surface_id=self._surface_id,
         )
 
-    def _archive_target(self, session_id: str) -> dict[str, Any]:
+    def _close_target(
+        self, session_id: str
+    ) -> SessionCloseTargetInteractive | SessionCloseTargetOrphaned:
         if session_id == self._session_id and self._surface_id is not None:
-            return {"interactive": self._interactive_target()}
-        return {"orphaned": SessionTarget(session_id=session_id)}
+            return SessionCloseTargetInteractive(target=self._interactive_target())
+        return SessionCloseTargetOrphaned(target=SessionTarget(session_id=session_id))
 
     def _config_write_target(self, scope: str | None) -> Any:
         if scope is None or scope == "user":

@@ -12,6 +12,8 @@ use coco_types::SessionId;
 use coco_types::ThinkingLevel;
 use tempfile::TempDir;
 
+use super::ActiveTurnHandles;
+use super::SessionCloseDrainError;
 use super::SessionHandle;
 use super::SessionRuntimeBootstrap;
 use super::SessionRuntimeBootstrapSource;
@@ -20,6 +22,16 @@ use super::SessionRuntimeFactoryOpts;
 use super::resolve_model_selection_from_runtime_config;
 use super::thinking_level_for_effort_from;
 use crate::AgentHostOptions;
+
+struct DropSignal(Option<tokio::sync::oneshot::Sender<()>>);
+
+impl Drop for DropSignal {
+    fn drop(&mut self) {
+        if let Some(sender) = self.0.take() {
+            let _ = sender.send(());
+        }
+    }
+}
 
 async fn build_runtime(home: &TempDir) -> SessionHandle {
     build_runtime_with_main(home, "anthropic", "claude-opus-4-7").await
@@ -128,6 +140,109 @@ async fn factory_fresh_builds_create_distinct_runtime_identities() {
         first.current_typed_session_id().await,
         second.current_typed_session_id().await
     );
+}
+
+#[tokio::test]
+async fn close_times_out_and_aborts_forwarder_task() {
+    let home = TempDir::new().expect("home tempdir");
+    let runtime = build_runtime(&home).await;
+    let session_id = runtime.session_id().clone();
+    let (forwarder_drop_tx, forwarder_drop_rx) = tokio::sync::oneshot::channel();
+    runtime
+        .start_active_turn(|_, cancel_token| ActiveTurnHandles {
+            cancel_token,
+            turn_task: tokio::spawn(async {}),
+            forwarder_task: tokio::spawn(async move {
+                let _drop_signal = DropSignal(Some(forwarder_drop_tx));
+                std::future::pending::<()>().await;
+            }),
+        })
+        .expect("start synthetic active turn");
+
+    let error = runtime
+        .close_if_current_session(
+            &session_id,
+            coco_hooks::orchestration::ExitReason::Other,
+            std::time::Duration::from_millis(20),
+        )
+        .await
+        .expect_err("forwarder timeout should fail close");
+
+    assert!(matches!(
+        error,
+        SessionCloseDrainError::ForwarderTaskTimeout { .. }
+    ));
+    forwarder_drop_rx
+        .await
+        .expect("timed-out forwarder task aborted");
+    assert!(!runtime.has_active_turn());
+}
+
+#[tokio::test]
+async fn finishing_active_turn_still_blocks_new_turn_until_cleared() {
+    let home = TempDir::new().expect("home tempdir");
+    let runtime = build_runtime(&home).await;
+    runtime
+        .start_active_turn(|_, cancel_token| ActiveTurnHandles {
+            cancel_token,
+            turn_task: tokio::spawn(async {}),
+            forwarder_task: tokio::spawn(async {}),
+        })
+        .expect("start synthetic active turn");
+
+    assert!(!runtime.complete_finishing_active_turn());
+    assert!(runtime.has_active_turn());
+    assert!(runtime.mark_active_turn_finishing());
+    assert!(runtime.has_active_turn());
+    assert!(
+        runtime
+            .start_active_turn(|_, cancel_token| ActiveTurnHandles {
+                cancel_token,
+                turn_task: tokio::spawn(async {}),
+                forwarder_task: tokio::spawn(async {}),
+            })
+            .is_err(),
+        "Finishing must still reserve the turn slot"
+    );
+
+    assert!(runtime.complete_finishing_active_turn());
+    assert!(!runtime.has_active_turn());
+}
+
+#[tokio::test]
+async fn close_drain_waits_finishing_turn_without_new_cancel() {
+    let home = TempDir::new().expect("home tempdir");
+    let runtime = build_runtime(&home).await;
+    let session_id = runtime.session_id().clone();
+    let mut cancel_snapshot = None;
+    runtime
+        .start_active_turn(|_, cancel_token| {
+            cancel_snapshot = Some(cancel_token.clone());
+            ActiveTurnHandles {
+                cancel_token,
+                turn_task: tokio::spawn(async {}),
+                forwarder_task: tokio::spawn(async {}),
+            }
+        })
+        .expect("start synthetic active turn");
+    assert!(runtime.mark_active_turn_finishing());
+
+    runtime
+        .close_if_current_session(
+            &session_id,
+            coco_hooks::orchestration::ExitReason::Other,
+            std::time::Duration::from_secs(1),
+        )
+        .await
+        .expect("finishing turn drains");
+
+    assert!(
+        !cancel_snapshot
+            .expect("cancel token captured")
+            .is_cancelled(),
+        "close during Finishing should wait for terminal delivery instead of issuing a new cancel"
+    );
+    assert!(!runtime.has_active_turn());
 }
 
 #[tokio::test]
