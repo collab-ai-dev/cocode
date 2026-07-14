@@ -144,7 +144,14 @@ async fn capture_assistant_content(content: Vec<AssistantContentPart>) -> Vec<As
         max_turns: Some(2),
         ..Default::default()
     };
-    let engine = QueryEngine::new(config, client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
     let result = engine.run("hello").await.unwrap();
 
     // Find the first persisted assistant message in history.

@@ -1,7 +1,9 @@
 import {
   ClientRequestMethod,
   NotificationMethod,
+  type InteractiveTarget,
   type PermissionMode,
+  type SessionStartResult,
   type ServerNotification,
 } from "./generated/protocol.js";
 import { MessageRouter } from "./messageRouter.js";
@@ -41,7 +43,7 @@ export async function* query(prompt: string, options: QueryOptions = {}): AsyncG
     router = new MessageRouter(transport);
     router.start();
     await router.request({ method: ClientRequestMethod.INITIALIZE, params: {} });
-    await router.request({
+    const startResult = (await router.request({
       method: ClientRequestMethod.SESSION_START,
       params: {
         model: modelsMain ?? null,
@@ -52,8 +54,9 @@ export async function* query(prompt: string, options: QueryOptions = {}): AsyncG
         permission_mode: options.permissionMode ?? null,
         max_budget_usd: options.maxBudgetUsd ?? null,
       },
-    });
-    await router.request({ method: ClientRequestMethod.TURN_START, params: { prompt } });
+    })) as unknown as SessionStartResult;
+    const target = interactiveTarget(startResult);
+    await router.request({ method: ClientRequestMethod.TURN_START, params: { target, prompt } });
 
     while (true) {
       const event = (await router.nextEvent(options.signal)) as unknown as ServerNotification;
@@ -65,6 +68,13 @@ export async function* query(prompt: string, options: QueryOptions = {}): AsyncG
     if (router) await router.close();
     else await transport.close();
   }
+}
+
+function interactiveTarget(startResult: SessionStartResult): InteractiveTarget {
+  if (!startResult.surface_id) {
+    throw new Error("session/start did not attach an interactive surface");
+  }
+  return { session_id: startResult.session_id, surface_id: startResult.surface_id };
 }
 
 function throwIfAborted(signal?: AbortSignal): void {

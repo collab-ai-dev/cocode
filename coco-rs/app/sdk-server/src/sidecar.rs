@@ -3,7 +3,7 @@ use std::time::Duration;
 #[cfg(unix)]
 use std::path::PathBuf;
 
-use coco_agent_host::remote_host::PreparedRemoteHost;
+use coco_agent_host::remote_host::PreparedHost;
 use coco_app_server_transport::TransportFrameError;
 use coco_error::StackError;
 use tokio::task::JoinHandle;
@@ -72,7 +72,7 @@ impl SdkSidecarConfig {
 impl SdkSidecarListeners {
     pub async fn start_from_config(
         config: SdkSidecarConfig,
-        host: &PreparedRemoteHost,
+        host: &PreparedHost,
     ) -> Result<Self, SdkSidecarError> {
         #[cfg(unix)]
         let unix = start_sdk_unix_listener(config.unix_socket_path, host)?;
@@ -155,7 +155,7 @@ struct SdkNamedPipeListenerTask {
 #[cfg(unix)]
 fn start_sdk_unix_listener(
     socket_path: Option<PathBuf>,
-    host: &PreparedRemoteHost,
+    host: &PreparedHost,
 ) -> Result<Option<SdkUnixListenerTask>, SdkSidecarError> {
     let Some(socket_path) = socket_path else {
         return Ok(None);
@@ -202,7 +202,7 @@ fn start_sdk_unix_listener(
 
 async fn start_sdk_websocket_listener(
     bind_addr: Option<String>,
-    host: &PreparedRemoteHost,
+    host: &PreparedHost,
 ) -> Result<Option<SdkWebSocketListenerTask>, SdkSidecarError> {
     let Some(bind_addr) = bind_addr else {
         return Ok(None);
@@ -253,7 +253,7 @@ async fn start_sdk_websocket_listener(
 #[cfg(windows)]
 fn start_sdk_named_pipe_listener(
     pipe_name: Option<String>,
-    host: &PreparedRemoteHost,
+    host: &PreparedHost,
 ) -> Result<Option<SdkNamedPipeListenerTask>, SdkSidecarError> {
     let Some(pipe_name) = pipe_name else {
         return Ok(None);

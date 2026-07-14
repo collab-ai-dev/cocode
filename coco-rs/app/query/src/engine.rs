@@ -19,6 +19,7 @@ use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::TurnAbortSignal;
 use coco_types::TokenUsage;
 use coco_types::ToolAppState;
+use coco_types::TurnEndedParams;
 
 use crate::helpers::convert_to_assistant_content;
 use crate::helpers::extract_last_assistant_text;
@@ -67,6 +68,11 @@ pub(crate) struct LastCompactState {
 /// only the methods exposed by these impls, never the fields directly.
 pub struct QueryEngine {
     pub(crate) config: QueryEngineConfig,
+    /// Immutable session identity for this engine. Moved out of the mutable
+    /// `QueryEngineConfig` so per-turn config edits can never rotate the id
+    /// (which would split-brain the `SessionHandle` snapshot, the seq
+    /// allocator's per-session domain, and the persisted transcript).
+    pub(crate) session_id: coco_types::SessionId,
     pub(crate) tools: Arc<ToolRegistry>,
     pub(crate) cancel: CancellationToken,
     pub(crate) turn_abort: TurnAbortSignal,
@@ -466,10 +472,14 @@ impl QueryEngine {
     /// makes (Completed / Interrupted / MaxTurnsReached /
     /// BudgetExhausted). `None` only when the caller didn't pass an
     /// `event_tx` — in that case no wire emit happens.
-    /// Returns `(Result<QueryResult>, TokenUsage)`. The second tuple
+    /// Returns `(Result<QueryResult>, TokenUsage, pending_success_terminal)`.
+    /// The second tuple
     /// element is the accumulated token usage at the moment the
     /// loop exited — populated even on `Err` so the caller can
     /// surface partial usage on the `TurnEnded(Failed)` wire emit.
+    /// The pending terminal is populated only for success paths whose
+    /// `TurnEnded(Completed)` must be enriched by the outer lifecycle
+    /// `SessionResultParams` before it is emitted.
     pub(crate) async fn run_session_loop(
         &self,
         turn_messages: Vec<std::sync::Arc<Message>>,
@@ -478,9 +488,13 @@ impl QueryEngine {
         hook_tx_opt: Option<tokio::sync::mpsc::Sender<coco_hooks::HookExecutionEvent>>,
         history: &mut MessageHistory,
         cycle_turn_id: Option<coco_types::TurnId>,
-    ) -> (Result<QueryResult, coco_error::BoxedError>, TokenUsage) {
+    ) -> (
+        Result<QueryResult, coco_error::BoxedError>,
+        TokenUsage,
+        Option<TurnEndedParams>,
+    ) {
         let mut total_usage = TokenUsage::default();
-        let result = self
+        let (result, terminal) = self
             .run_session_loop_inner(
                 turn_messages,
                 event_tx,
@@ -491,7 +505,7 @@ impl QueryEngine {
                 &mut total_usage,
             )
             .await;
-        (result, total_usage)
+        (result, total_usage, terminal)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -509,7 +523,10 @@ impl QueryEngine {
         history: &mut MessageHistory,
         cycle_turn_id: Option<coco_types::TurnId>,
         total_usage: &mut TokenUsage,
-    ) -> Result<QueryResult, coco_error::BoxedError> {
+    ) -> (
+        Result<QueryResult, coco_error::BoxedError>,
+        Option<TurnEndedParams>,
+    ) {
         // ── Loop state, grouped by lifecycle — see `engine_loop_state.rs`
         // for the field-by-field rationale and `init_loop_state` for
         // the bundled construction site.
@@ -548,17 +565,20 @@ impl QueryEngine {
                 // force a hardcoded reason and defeat the architecture.
                 // The runner reads `result.cancelled` and emits a single
                 // `TurnEnded(Interrupted)` with the correct reason.
-                return Ok(make_query_result(
-                    &consts,
-                    &acc,
-                    &turn_state,
-                    String::new(),
-                    /*cancelled*/ true,
-                    /*budget_exhausted*/ false,
-                    Some("cancelled".into()),
-                    history.to_vec(),
-                    history.snapshot(),
-                ));
+                return (
+                    Ok(make_query_result(
+                        &consts,
+                        &acc,
+                        &turn_state,
+                        String::new(),
+                        /*cancelled*/ true,
+                        /*budget_exhausted*/ false,
+                        Some("cancelled".into()),
+                        history.to_vec(),
+                        history.snapshot(),
+                    )),
+                    None,
+                );
             }
 
             // Drain the prior turn's tool-use-summary side-fork. 2s
@@ -601,16 +621,10 @@ impl QueryEngine {
                         )
                         .await;
                     }
-                    // Wire-protocol terminator. Two outcomes: `MaxTurnsReached`
-                    // when the turn budget is exhausted, `BudgetExhausted` for
-                    // the generic 90%/diminishing-returns token-budget stop.
-                    // Uses the runner-supplied cycle id so this pairs with
-                    // the runner's TurnStarted. `budget_tokens` is the
-                    // configured ceiling — `None` when no explicit max
-                    // was set (the 90%-of-window heuristic still drove
-                    // the stop; emitting 0 would be a lie).
-                    if let Some(id) = cycle_turn_id.as_ref() {
-                        let outcome_params = if hit_max_turns {
+                    // Return the typed turn terminator to the outer session
+                    // lifecycle so it can attach the final SessionResult.
+                    let terminal = cycle_turn_id.as_ref().map(|id| {
+                        if hit_max_turns {
                             coco_types::TurnEndedParams::max_turns_reached(
                                 id.clone(),
                                 Some(*total_usage),
@@ -623,32 +637,30 @@ impl QueryEngine {
                                 total_usage.input_tokens.total + total_usage.output_tokens.total,
                                 self.config.total_token_budget,
                             )
-                        };
-                        let _ = emit_protocol(
-                            &event_tx,
-                            crate::ServerNotification::TurnEnded(outcome_params),
-                        )
-                        .await;
-                    }
+                        }
+                    });
                     let last_text = extract_last_assistant_text(history);
-                    return Ok(make_query_result(
-                        &consts,
-                        &acc,
-                        &turn_state,
-                        last_text,
-                        /*cancelled*/ false,
-                        /*budget_exhausted*/ true,
-                        Some(
-                            if hit_max_turns {
-                                "max_turns"
-                            } else {
-                                "budget_exhausted"
-                            }
-                            .into(),
-                        ),
-                        history.to_vec(),
-                        history.snapshot(),
-                    ));
+                    return (
+                        Ok(make_query_result(
+                            &consts,
+                            &acc,
+                            &turn_state,
+                            last_text,
+                            /*cancelled*/ false,
+                            /*budget_exhausted*/ true,
+                            Some(
+                                if hit_max_turns {
+                                    "max_turns"
+                                } else {
+                                    "budget_exhausted"
+                                }
+                                .into(),
+                            ),
+                            history.to_vec(),
+                            history.snapshot(),
+                        )),
+                        terminal,
+                    );
                 }
                 BudgetDecision::Nudge { message } => {
                     info!(%message, "budget nudge");
@@ -717,7 +729,7 @@ impl QueryEngine {
                     estimated_tokens,
                     context_window,
                 } => {
-                    return Ok(self
+                    let terminal_result = self
                         .handle_blocking_limit_terminal(
                             &consts,
                             &acc,
@@ -730,7 +742,8 @@ impl QueryEngine {
                             cycle_turn_id.clone(),
                             &*total_usage,
                         )
-                        .await);
+                        .await;
+                    return (Ok(terminal_result.result), terminal_result.terminal);
                 }
                 crate::engine_recovery::BlockingLimitDecision::Proceed => {}
             }
@@ -743,7 +756,7 @@ impl QueryEngine {
                 &params.prompt,
                 coco_config::constants::API_IMAGE_MAX_BASE64_SIZE as usize,
             ) {
-                return Ok(self
+                let terminal_result = self
                     .handle_image_too_large_terminal(
                         &consts,
                         &acc,
@@ -754,7 +767,8 @@ impl QueryEngine {
                         cycle_turn_id.clone(),
                         &*total_usage,
                     )
-                    .await);
+                    .await;
+                return (Ok(terminal_result.result), terminal_result.terminal);
             }
 
             let api_start = std::time::Instant::now();
@@ -776,7 +790,9 @@ impl QueryEngine {
             {
                 Ok(opened) => opened,
                 Err(crate::engine_recovery::StreamErrorOutcome::Continue) => continue,
-                Err(crate::engine_recovery::StreamErrorOutcome::Bail(err)) => return Err(err),
+                Err(crate::engine_recovery::StreamErrorOutcome::Bail(err)) => {
+                    return (Err(err), None);
+                }
             };
             let crate::engine_recovery::OpenedTurnStream {
                 mut rx,
@@ -852,7 +868,9 @@ impl QueryEngine {
                         .await
                     {
                         crate::engine_recovery::StreamErrorOutcome::Continue => continue,
-                        crate::engine_recovery::StreamErrorOutcome::Bail(err) => return Err(err),
+                        crate::engine_recovery::StreamErrorOutcome::Bail(err) => {
+                            return (Err(err), None);
+                        }
                     }
                 }
                 crate::engine_stream_consume::StreamOutcome::Finished {
@@ -881,7 +899,9 @@ impl QueryEngine {
                     .await
                 {
                     crate::engine_recovery::StreamErrorOutcome::Continue => continue,
-                    crate::engine_recovery::StreamErrorOutcome::Bail(err) => return Err(err),
+                    crate::engine_recovery::StreamErrorOutcome::Bail(err) => {
+                        return (Err(err), None);
+                    }
                 },
             };
 
@@ -1022,7 +1042,7 @@ impl QueryEngine {
                         )
                         .await;
                     }
-                    return Ok(self
+                    let terminal_result = self
                         .handle_usd_budget_terminal(
                             &consts,
                             &acc,
@@ -1036,7 +1056,8 @@ impl QueryEngine {
                             total_cost_usd,
                             max_budget_usd,
                         )
-                        .await);
+                        .await;
+                    return (Ok(terminal_result.result), terminal_result.terminal);
                 }
             }
 
@@ -1076,8 +1097,8 @@ impl QueryEngine {
                     crate::engine_terminal::NoToolCallsTerminal::ContinueLoop => {
                         continue;
                     }
-                    crate::engine_terminal::NoToolCallsTerminal::Return(result) => {
-                        return Ok(*result);
+                    crate::engine_terminal::NoToolCallsTerminal::Return { result, terminal } => {
+                        return (Ok(*result), terminal);
                     }
                 }
             }
@@ -1109,8 +1130,8 @@ impl QueryEngine {
                 crate::engine_tool_execution::ToolExecutionBranch::ContinueLoop => {
                     continue;
                 }
-                crate::engine_tool_execution::ToolExecutionBranch::Return(result) => {
-                    return Ok(*result);
+                crate::engine_tool_execution::ToolExecutionBranch::Return { result, terminal } => {
+                    return (Ok(*result), terminal);
                 }
             }
         }

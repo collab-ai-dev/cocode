@@ -15,13 +15,12 @@
 //! asserted — the resume path documents that it restores metadata
 //! only (id/model/cwd); transcript replay is a follow-up.
 //!
-//! Note on `session/archive`: archive deletes the persisted record,
-//! so `archive` → `resume` is unsupported by design. We only test
-//! the resume side here.
+//! Note on `session/delete`: delete removes the persisted record, so
+//! `delete` -> `resume` is unsupported by design. We only test the
+//! resume side here.
 
 use anyhow::Result;
 use anyhow::anyhow;
-use coco_sdk_server::SdkTransport;
 
 use crate::sdk_server::harness::build_live_server;
 use crate::sdk_server::harness::drive_until_response;
@@ -84,7 +83,7 @@ pub async fn run(provider: &str, model: &str) -> Result<()> {
         })?;
     assert_eq!(
         resumed_id, session_id,
-        "resumed session_id must match archived id"
+        "resumed session_id must match started id"
     );
 
     // Drain any stale notifs (e.g. session/started for the resumed slot)

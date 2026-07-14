@@ -45,6 +45,10 @@ class MockTransport {
 const response = (id, result = {}) => ({ jsonrpc: "2.0", id, result });
 const notification = (method, params = {}) => ({ jsonrpc: "2.0", method, params });
 const serverRequest = (id, method, params = {}) => ({ jsonrpc: "2.0", id, method, params });
+const sessionStartResult = (session_id = "session-1", surface_id = "surface-1") => ({
+  session_id,
+  surface_id,
+});
 
 test("router replies with JSON-RPC error for unhandled server requests", async () => {
   const transport = new MockTransport([
@@ -66,7 +70,7 @@ test("router replies with JSON-RPC error for unhandled server requests", async (
 test("client handles hook callbacks without leaking them as notifications", async () => {
   const transport = new MockTransport([
     response(1),
-    response(2),
+    response(2, sessionStartResult()),
     response(3),
     serverRequest("hook1", ServerRequestMethod.HOOK_CALLBACK, {
       callback_id: "cb1",
@@ -102,7 +106,7 @@ test("client handles hook callbacks without leaking them as notifications", asyn
 test("client returns nested JSON-RPC error for unregistered SDK MCP server", async () => {
   const transport = new MockTransport([
     response(1),
-    response(2),
+    response(2, sessionStartResult()),
     response(3),
     serverRequest("mcp1", ServerRequestMethod.MCP_ROUTE_MESSAGE, {
       server_name: "missing",
@@ -147,7 +151,7 @@ test("send interrupts an in-flight turn when its signal aborts", async () => {
   const transport = new MockTransport(
     [
       response(1),
-      response(2),
+      response(2, sessionStartResult()),
       response(3),
       response(4),
     ],
@@ -163,12 +167,64 @@ test("send interrupts an in-flight turn when its signal aborts", async () => {
     }
   })();
 
-  await eventually(() => transport.sentLines.some((line) => JSON.parse(line).method === ClientRequestMethod.TURN_START && JSON.parse(line).id === 4));
+  await eventually(() =>
+    transport.sentLines.some((line) => JSON.parse(line).method === ClientRequestMethod.TURN_START && JSON.parse(line).id === 4),
+  );
   controller.abort(new Error("stop"));
 
   await assert.rejects(sendPromise, /stop/);
   const methods = transport.sentLines.map((line) => JSON.parse(line).method);
   assert.equal(methods.at(-1), ClientRequestMethod.TURN_INTERRUPT);
+
+  await client.close();
+});
+
+test("client sends target-aware close for active session and clears target", async () => {
+  const transport = new MockTransport([
+    response(1),
+    response(2, sessionStartResult("session-close", "surface-close")),
+    response(3),
+    response(4),
+  ]);
+  const client = new CocoClient({ prompt: "hello", transport });
+
+  await client.start();
+  await client.closeSession();
+
+  const requests = transport.sentLines.map((line) => JSON.parse(line));
+  const closeRequest = requests.find((line) => line.method === ClientRequestMethod.SESSION_CLOSE);
+  assert.deepEqual(closeRequest.params, {
+    target: {
+      kind: "interactive",
+      target: {
+        session_id: "session-close",
+        surface_id: "surface-close",
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => client.send("after close").next(),
+    /no active interactive session target/,
+  );
+  await client.close();
+});
+
+test("client sends storage-only delete request", async () => {
+  const transport = new MockTransport([
+    response(1),
+    response(2, sessionStartResult()),
+    response(3),
+    response(4),
+  ]);
+  const client = new CocoClient({ prompt: "hello", transport });
+
+  await client.start();
+  await client.deleteSession("session-delete");
+
+  const requests = transport.sentLines.map((line) => JSON.parse(line));
+  const deleteRequest = requests.find((line) => line.method === ClientRequestMethod.SESSION_DELETE);
+  assert.deepEqual(deleteRequest.params, { target: { session_id: "session-delete" } });
 
   await client.close();
 });

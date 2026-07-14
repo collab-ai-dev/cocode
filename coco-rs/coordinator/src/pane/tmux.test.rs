@@ -7,7 +7,16 @@ use super::*;
 /// unconditionally `#[ignore]`d.
 #[cfg(unix)]
 async fn tmux_e2e_supported() -> bool {
-    crate::pane::is_tmux_available().await
+    if !crate::pane::is_tmux_available().await {
+        return false;
+    }
+    let socket = format!("coco-tmux-probe-{}", std::process::id());
+    let _ = run_tmux_with_socket(&socket, &["kill-server"]).await;
+    let supported = run_tmux_with_socket(&socket, &["new-session", "-d", "-s", "probe"])
+        .await
+        .is_ok();
+    let _ = run_tmux_with_socket(&socket, &["kill-server"]).await;
+    supported
 }
 
 #[cfg(not(unix))]

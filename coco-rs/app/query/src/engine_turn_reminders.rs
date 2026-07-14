@@ -218,7 +218,7 @@ impl QueryEngine {
         // Plan file path / existence — same resolver the deprecated
         // emission path uses, so both paths agree on the filesystem state.
         let (reminder_plan_path, reminder_plan_exists) =
-            match (self.config_home.as_deref(), &self.config.session_id) {
+            match (self.config_home.as_deref(), &self.session_id) {
                 (Some(ch), sid) if !sid.as_str().is_empty() => {
                     let plans_dir = coco_context::resolve_plans_directory(
                         ch,

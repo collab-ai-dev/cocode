@@ -132,10 +132,26 @@
       "properties": {
         "method": {
           "type": "string",
-          "const": "session/archive"
+          "const": "session/close"
         },
         "params": {
-          "$ref": "#/$defs/SessionArchiveParams"
+          "$ref": "#/$defs/SessionCloseParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "session/delete"
+        },
+        "params": {
+          "$ref": "#/$defs/SessionDeleteParams"
         }
       },
       "required": [
@@ -828,34 +844,6 @@
         "decision"
       ]
     },
-    "ArchiveTarget": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "interactive": {
-              "$ref": "#/$defs/InteractiveTarget"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "interactive"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "orphaned": {
-              "$ref": "#/$defs/SessionTarget"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "orphaned"
-          ]
-        }
-      ]
-    },
     "CancelRequestParams": {
       "description": "Params for `control/cancelRequest`.",
       "type": "object",
@@ -1185,13 +1173,6 @@
             "$ref": "#/$defs/ClientAgentDefinition"
           }
         },
-        "append_system_prompt": {
-          "description": "Text appended to the default system prompt.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "client_mcp_servers": {
           "description": "Client-provided MCP server names (to skip env-configured ones).",
           "type": [
@@ -1374,31 +1355,15 @@
           },
           "additionalProperties": false
         },
-        "json_schema": {
-          "description": "JSON schema for structured output."
-        },
-        "planModeInstructions": {
-          "description": "Custom workflow body for the plan-mode system reminder.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "prompt_suggestions": {
           "description": "Enable prompt suggestions in the output stream.",
           "type": [
             "boolean",
             "null"
           ]
-        },
-        "system_prompt": {
-          "description": "Full system prompt override.",
-          "type": [
-            "string",
-            "null"
-          ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "InteractiveTarget": {
       "description": "Selects one live interactive surface and its immutable session identity.",
@@ -1836,12 +1801,60 @@
         "user_message_id"
       ]
     },
-    "SessionArchiveParams": {
-      "description": "Params for `session/archive`.",
+    "SessionCloseParams": {
+      "description": "Params for `session/close`.",
       "type": "object",
       "properties": {
         "target": {
-          "$ref": "#/$defs/ArchiveTarget"
+          "$ref": "#/$defs/SessionCloseTarget"
+        }
+      },
+      "required": [
+        "target"
+      ]
+    },
+    "SessionCloseTarget": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "interactive"
+            },
+            "target": {
+              "$ref": "#/$defs/InteractiveTarget"
+            }
+          },
+          "required": [
+            "kind",
+            "target"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "orphaned"
+            },
+            "target": {
+              "$ref": "#/$defs/SessionTarget"
+            }
+          },
+          "required": [
+            "kind",
+            "target"
+          ]
+        }
+      ]
+    },
+    "SessionDeleteParams": {
+      "description": "Params for `session/delete`.",
+      "type": "object",
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
@@ -1913,6 +1926,12 @@
       "description": "Destination selected by explicit `session/replace`.",
       "oneOf": [
         {
+          "type": "string",
+          "enum": [
+            "clear"
+          ]
+        },
+        {
           "type": "object",
           "properties": {
             "fresh": {
@@ -1942,6 +1961,13 @@
       "description": "Params for `session/resume`.",
       "type": "object",
       "properties": {
+        "planModeInstructions": {
+          "description": "Custom workflow body for the plan-mode system reminder, re-supplied for\nthe resumed session. Per-session execution policy carried on resume for\nthe same reason it moved to `session/start` (off `initialize`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "target": {
           "$ref": "#/$defs/SessionTarget"
         }
@@ -1951,7 +1977,7 @@
       ]
     },
     "SessionStartParams": {
-      "description": "Params for `session/start`.",
+      "description": "Params for `session/start`.\n\nThe serialized wire form carries only per-session execution policy — never a\nsession identity or history. A remote caller therefore cannot name or resume\nan existing session through start; the server mints the identity. Unknown\nfields (including legacy `session_id`/`initial_messages`/`initial_prompt`)\nare rejected as invalid params, not silently ignored.",
       "type": "object",
       "properties": {
         "append_system_prompt": {
@@ -1966,12 +1992,8 @@
             "null"
           ]
         },
-        "initial_prompt": {
-          "description": "Optional initial user prompt to run immediately after start.",
-          "type": [
-            "string",
-            "null"
-          ]
+        "json_schema": {
+          "description": "JSON schema for structured output. When present, the session registers\nthe StructuredOutput tool and requires a structured final result. This is\nthe per-session home for structured output (it is not an `initialize`\ncapability)."
         },
         "max_budget_usd": {
           "type": [
@@ -2003,13 +2025,21 @@
             }
           ]
         },
+        "planModeInstructions": {
+          "description": "Custom workflow body for the plan-mode system reminder. Per-session\nexecution policy: it lives here on `session/start`, not on `initialize`\n(which carries connection capabilities only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "system_prompt": {
           "type": [
             "string",
             "null"
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "SessionSubscribeParams": {
       "description": "Params for passive `session/subscribe`.",

@@ -5,6 +5,6 @@
 
 pub mod cancel_during_tool;
 pub mod reminders;
-pub mod session_archive_emits_aggregate;
+pub mod session_close_emits_aggregate;
 pub mod session_resume_roundtrip;
 pub mod set_model_mid_session;

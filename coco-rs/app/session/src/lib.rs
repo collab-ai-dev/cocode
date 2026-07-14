@@ -289,15 +289,6 @@ impl SessionManager {
         Ok((session, added))
     }
 
-    /// Backwards-compatibility shim. The JSONL-canonical model has
-    /// no separate "save" step — title/tag mutations are persisted
-    /// inline via [`set_title`] / [`toggle_tag`], and the JSONL
-    /// owns every other field. This method now no-ops so existing
-    /// callers don't need rewriting.
-    pub fn save(&self, _session: &Session) -> crate::Result<()> {
-        Ok(())
-    }
-
     /// Append a durable `session_seq` high-water mark to the transcript.
     /// Called at bounded intervals from the seq
     /// allocator's persist hook and once at session close, so a restarted

@@ -70,7 +70,7 @@ verified, cancellable) and bridges progress onto `VoiceEvent::Download`.
 
 ## Wiring
 
-Bootstrap: `app/cli/src/voice_bootstrap.rs` (gated on `Feature::Voice`).
+Bootstrap: `app/cli/src/tui/voice_bootstrap.rs` (gated on `Feature::Voice`).
 TUI: `App::with_voice` + the `voice_rx` select arm + `App::toggle_voice`
 (intercepts `TuiCommand::VoiceToggle` — the session lives on `App`, not
 `AppState`). Keybinding: `voice:pushToTalk` (default `f3`). Commands:

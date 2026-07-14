@@ -153,10 +153,6 @@ fn minimal_config(model_id: &str) -> QueryEngineConfig {
         total_token_budget: Some(16_384),
         streaming_tool_execution: false,
         system_prompt: Some("you are a test assistant".into()),
-        session_id: match coco_types::SessionId::try_new("s-fallback-test") {
-            Ok(id) => id,
-            Err(_) => unreachable!("test session id must be valid"),
-        },
         ..Default::default()
     }
 }
@@ -174,6 +170,7 @@ async fn test_engine_advances_to_fallback_after_capacity_failure() {
     let model_runtimes = registry_with_main_slots(primary_slot, fallback_slot);
     let engine = QueryEngine::new(
         minimal_config("primary-model"),
+        coco_types::SessionId::try_new("s-fallback-test").unwrap(),
         model_runtimes,
         Arc::new(ToolRegistry::new()),
         CancellationToken::new(),
@@ -210,6 +207,7 @@ async fn test_engine_surfaces_error_when_chain_exhausted() {
     let model_runtimes = registry_with_main_slots(primary_slot, fallback_slot);
     let engine = QueryEngine::new(
         minimal_config("primary"),
+        coco_types::SessionId::try_new("s-fallback-test").unwrap(),
         model_runtimes,
         Arc::new(ToolRegistry::new()),
         CancellationToken::new(),

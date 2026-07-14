@@ -38,6 +38,7 @@ impl QueryEngine {
 
     pub fn new(
         config: QueryEngineConfig,
+        session_id: coco_types::SessionId,
         model_runtimes: Arc<ModelRuntimeRegistry>,
         tools: Arc<ToolRegistry>,
         cancel: CancellationToken,
@@ -45,6 +46,7 @@ impl QueryEngine {
     ) -> Self {
         Self::new_with_turn_abort(
             config,
+            session_id,
             model_runtimes,
             tools,
             TurnAbortSignal::from_token(cancel),
@@ -54,6 +56,7 @@ impl QueryEngine {
 
     pub fn new_with_turn_abort(
         config: QueryEngineConfig,
+        session_id: coco_types::SessionId,
         model_runtimes: Arc<ModelRuntimeRegistry>,
         tools: Arc<ToolRegistry>,
         turn_abort: TurnAbortSignal,
@@ -75,6 +78,7 @@ impl QueryEngine {
         );
         Self {
             config,
+            session_id,
             tools,
             cancel,
             turn_abort,

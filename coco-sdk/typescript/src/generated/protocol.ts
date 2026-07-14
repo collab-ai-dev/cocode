@@ -12,20 +12,35 @@ export const ClientRequestMethod = {
   INITIALIZE: "initialize",
   SESSION_START: "session/start",
   SESSION_RESUME: "session/resume",
+  SESSION_REPLACE: "session/replace",
   SESSION_LIST: "session/list",
   SESSION_READ: "session/read",
-  SESSION_ARCHIVE: "session/archive",
+  SESSION_TURNS_LIST: "session/turns/list",
+  SESSION_SUBSCRIBE: "session/subscribe",
+  SESSION_CLOSE: "session/close",
+  SESSION_DELETE: "session/delete",
+  SESSION_RENAME: "session/rename",
+  SESSION_TOGGLE_TAG: "session/toggleTag",
+  SESSION_COST: "session/cost",
+  SESSION_STATUS: "session/status",
   TURN_START: "turn/start",
   TURN_INTERRUPT: "turn/interrupt",
+  TASK_LIST: "task/list",
+  TASK_DETAIL: "task/detail",
   APPROVAL_RESOLVE: "approval/resolve",
   INPUT_RESOLVE_USER_INPUT: "input/resolveUserInput",
   ELICITATION_RESOLVE: "elicitation/resolve",
   CONTROL_SET_MODEL: "control/setModel",
+  CONTROL_SET_MODEL_ROLE: "control/setModelRole",
   CONTROL_SET_PERMISSION_MODE: "control/setPermissionMode",
   CONTROL_SET_THINKING: "control/setThinking",
+  CONTROL_SET_AGENT_COLOR: "control/setAgentColor",
+  CONTROL_APPLY_PERMISSION_UPDATE: "control/applyPermissionUpdate",
+  CONTROL_RESET_SESSION_PERMISSION_RULES: "control/resetSessionPermissionRules",
   CONTROL_STOP_TASK: "control/stopTask",
   CONTROL_REWIND_FILES: "control/rewindFiles",
   CONTROL_UPDATE_ENV: "control/updateEnv",
+  CONTROL_BACKGROUND_ALL_TASKS: "control/backgroundAllTasks",
   CONTROL_KEEP_ALIVE: "control/keepAlive",
   CONTROL_CANCEL_REQUEST: "control/cancelRequest",
   AGENT_INTERRUPT_CURRENT_WORK: "agent/interruptCurrentWork",
@@ -37,6 +52,7 @@ export const ClientRequestMethod = {
   MCP_RECONNECT: "mcp/reconnect",
   MCP_TOGGLE: "mcp/toggle",
   PLUGIN_RELOAD: "plugin/reload",
+  HOOK_RELOAD: "hook/reload",
   CONFIG_APPLY_FLAGS: "config/applyFlags",
 } as const;
 export type ClientRequestMethod = (typeof ClientRequestMethod)[keyof typeof ClientRequestMethod];
@@ -78,6 +94,9 @@ export const NotificationMethod = {
   MODEL_FALLBACK_COMPLETED: "model/fallbackCompleted",
   MODEL_FAST_MODE_CHANGED: "model/fastModeChanged",
   MODEL_ROLE_CHANGED: "model/roleChanged",
+  MODEL_MOA_REFERENCE_STARTED: "model/moaReferenceStarted",
+  MODEL_MOA_REFERENCE_COMPLETED: "model/moaReferenceCompleted",
+  MODEL_MOA_AGGREGATING: "model/moaAggregating",
   PERMISSION_MODE_CHANGED: "permission/modeChanged",
   PROMPT_SUGGESTION: "prompt/suggestion",
   ERROR: "error",
@@ -165,6 +184,7 @@ export interface AgentInfo {
  */
 export interface AgentInterruptCurrentWorkParams {
   agent_id: string;
+  target: InteractiveTarget;
 }
 
 /**
@@ -196,11 +216,11 @@ export type AgentSource = "built-in" | "plugin" | "userSettings" | "projectSetti
  */
 export type AgentStreamEvent = {
   delta: string;
-  turn_id: string;
+  turn_id: TurnId;
   type: "text_delta";
 } | {
   delta: string;
-  turn_id: string;
+  turn_id: TurnId;
   type: "thinking_delta";
 } | {
   call_id: string;
@@ -289,11 +309,6 @@ export interface ApiError {
 }
 
 /**
- * Active API backend.
- */
-export type ApiProvider = "firstParty" | "bedrock" | "vertex" | "foundry";
-
-/**
  * Bounded, structured preview of an `apply_patch` body for UI rendering.
  */
 export interface ApplyPatchPreview {
@@ -329,6 +344,14 @@ export type ApplyPatchPreviewSign = "added" | "removed" | "context";
 export type ApplyPatchToolType = "freeform";
 
 /**
+ * Params for `control/applyPermissionUpdate`.
+ */
+export interface ApplyPermissionUpdateParams {
+  target: InteractiveTarget;
+  update: PermissionUpdate;
+}
+
+/**
  * Permission approval decision.
  */
 export type ApprovalDecision = "allow" | "deny";
@@ -342,6 +365,7 @@ export interface ApprovalResolveParams {
   feedback?: string | null;
   permission_update?: PermissionUpdate | null;
   request_id: string;
+  target: InteractiveTarget;
   updated_input?: unknown;
 }
 
@@ -463,6 +487,30 @@ export interface CancelRequestParams {
 export type Capability = "text_generation" | "streaming" | "vision" | "audio" | "tool_calling" | "embedding" | "extended_thinking" | "structured_output" | "reasoning_summaries" | "parallel_tool_calls" | "fast_mode" | "prompt_cache" | "context_1m" | "interleaved_thinking" | "context_management" | "adaptive_thinking" | "token_efficient_tools" | "anthropic_tool_reference" | "client_side_tool_search_promotion" | "open_ai_native_tool_search";
 
 /**
+ * Client-supplied custom subagent spec carried on `InitializeParams.agents`.
+ *
+ * Wire-level DTO. **Distinct** from the internal [`crate::AgentDefinition`]
+ * which is the resolved post-load representation merged from markdown /
+ * plugin / client sources.
+ */
+export interface ClientAgentDefinition {
+  background?: boolean | null;
+  criticalSystemReminder_EXPERIMENTAL?: string | null;
+  description: string;
+  disallowed_tools?: Array<string> | null;
+  effort?: ReasoningEffort | null;
+  initial_prompt?: string | null;
+  max_turns?: number | null;
+  mcp_servers?: Array<AgentMcpServerSpec> | null;
+  memory?: MemoryScope | null;
+  model?: string | null;
+  permission_mode?: PermissionMode | null;
+  prompt: string;
+  skills?: Array<string> | null;
+  tools?: Array<string> | null;
+}
+
+/**
  * Typed command argument shape used by UI completion and submit semantics.
  */
 export type CommandArgumentKind = "none" | "free_text" | "file_path" | "directory_path" | "session_id";
@@ -566,6 +614,7 @@ export interface CompletedOutcome {
  */
 export interface ConfigApplyFlagsParams {
   settings: { [key: string]: unknown; };
+  target: InteractiveTarget;
 }
 
 /**
@@ -577,7 +626,7 @@ export interface ConfigChangeInput {
   cwd: string;
   file_path?: string | null;
   permission_mode?: string | null;
-  session_id: string;
+  session_id: SessionId;
   source: ConfigChangeSource;
   transcript_path?: string;
   hook_event_name: "ConfigChange";
@@ -588,6 +637,10 @@ export interface ConfigChangeInput {
  */
 export type ConfigChangeSource = "user_settings" | "project_settings" | "local_settings" | "policy_settings" | "skills";
 
+export interface ConfigReadParams {
+  target: ConfigReadTarget;
+}
+
 /**
  * Aggregate response to `ClientRequest::ConfigRead`.
  */
@@ -596,19 +649,29 @@ export interface ConfigReadResult {
   sources?: { [key: string]: unknown; };
 }
 
+export type ConfigReadTarget = "process" | {
+  session: SessionTarget;
+};
+
 /**
  * Params for `config/value/write`.
  */
 export interface ConfigWriteParams {
   key: string;
-  scope?: string | null;
+  target: ConfigWriteTarget;
   value: unknown;
 }
+
+export type ConfigWriteTarget = "user" | {
+  project: InteractiveTarget;
+} | {
+  local: InteractiveTarget;
+};
 
 export interface ContentDeltaParams {
   delta: string;
   item_id?: string | null;
-  turn_id?: string | null;
+  turn_id?: TurnId | null;
 }
 
 export interface ContextAgent {
@@ -724,7 +787,7 @@ export interface CwdChangedInput {
   new_cwd: string;
   old_cwd: string;
   permission_mode?: string | null;
-  session_id: string;
+  session_id: SessionId;
   transcript_path?: string;
   hook_event_name: "CwdChanged";
 }
@@ -780,7 +843,7 @@ export interface ElicitationInput {
   mode?: ElicitationMode | null;
   permission_mode?: string | null;
   requested_schema?: unknown;
-  session_id: string;
+  session_id: SessionId;
   transcript_path?: string;
   url?: string | null;
   hook_event_name: "Elicitation";
@@ -804,6 +867,7 @@ export interface ElicitationResolveParams {
   approved: boolean;
   mcp_server_name: string;
   request_id: string;
+  target: InteractiveTarget;
   values?: { [key: string]: unknown; };
 }
 
@@ -822,7 +886,7 @@ export interface ElicitationResultInput {
   mcp_server_name: string;
   mode?: ElicitationMode | null;
   permission_mode?: string | null;
-  session_id: string;
+  session_id: SessionId;
   transcript_path?: string;
   hook_event_name: "ElicitationResult";
 }
@@ -931,7 +995,7 @@ export interface FileChangedInput {
   event: FileChangeEvent;
   file_path: string;
   permission_mode?: string | null;
-  session_id: string;
+  session_id: SessionId;
   transcript_path?: string;
   hook_event_name: "FileChanged";
 }
@@ -1005,6 +1069,22 @@ export interface HookCallbackMatcher {
 }
 
 /**
+ * Hook callback output — a flat object whose `async` field
+ * discriminates async-mode.
+ */
+export interface HookCallbackOutput {
+  "async"?: boolean | null;
+  asyncTimeout?: number | null;
+  "continue"?: boolean | null;
+  decision?: HookDecision | null;
+  hookSpecificOutput?: HookSpecificOutput | null;
+  reason?: string | null;
+  stopReason?: string | null;
+  suppressOutput?: boolean | null;
+  systemMessage?: string | null;
+}
+
+/**
  * Invoke an SDK-registered hook callback.
  * Correlation is via the **outer** JSON-RPC `request_id` on the
  * envelope — there is no inner `request_id` field. The SDK replies
@@ -1023,10 +1103,10 @@ export interface HookCallbackParams {
  * Correlation is via the outer JSON-RPC `request_id` on the response
  * envelope — there is no inner correlation field. The whole body is
  * the hook output in shape; downstream parsers consume
- * `SdkHookOutput` directly via [`HookCallbackResult::output`].
+ * `HookCallbackOutput` directly via [`HookCallbackResult::output`].
  */
 export interface HookCallbackResult {
-  output: SdkHookOutput;
+  output: HookCallbackOutput;
 }
 
 export interface HookCancelledPayload {
@@ -1220,14 +1300,58 @@ export interface IdeSelectionChangedParams {
 }
 
 /**
+ * Account + auth info for the logged-in user. All fields optional
+ * — clients that don't sign in get an empty struct.
+ */
+export interface InitializeAccountInfo {
+  apiKeySource?: string | null;
+  apiProvider?: InitializeApiProvider | null;
+  email?: string | null;
+  organization?: string | null;
+  subscriptionType?: string | null;
+  tokenSource?: string | null;
+}
+
+/**
+ * Available subagent descriptor for `InitializeResult.agents`.
+ * Kept distinct from `event::AgentInfo`, the payload for the
+ * `agents/registered` notification, which has a different schema.
+ */
+export interface InitializeAgentInfo {
+  description: string;
+  model?: string | null;
+  name: string;
+}
+
+/**
+ * Active API backend.
+ */
+export type InitializeApiProvider = "firstParty" | "bedrock" | "vertex" | "foundry";
+
+/**
+ * Model capability descriptor for `InitializeResult.models`. The wire uses
+ * `value` + camelCase capability keys.
+ */
+export interface InitializeModelInfo {
+  description: string;
+  displayName: string;
+  supportedEffortLevels?: Array<EffortLevel>;
+  supportsAdaptiveThinking?: boolean | null;
+  supportsAutoMode?: boolean | null;
+  supportsEffort?: boolean | null;
+  supportsFastMode?: boolean | null;
+  value: string;
+}
+
+/**
  * Sent once at session start for capability negotiation. Carries hooks,
- * SDK MCP servers, output format, system prompt, and agent definitions
+ * client MCP servers, output format, system prompt, and agent definitions
  * so the agent can construct its registries before the first turn.
  */
 export interface InitializeParams {
-  agent_progress_summaries?: boolean | null;
-  agents?: { [key: string]: SdkAgentDefinition; } | null;
-  append_system_prompt?: string | null;
+  agentProgressSummaries?: boolean | null;
+  agents?: { [key: string]: ClientAgentDefinition; } | null;
+  client_mcp_servers?: Array<string> | null;
   hooks?: {
   ConfigChange?: Array<HookCallbackMatcher>;
   CwdChanged?: Array<HookCallbackMatcher>;
@@ -1257,11 +1381,7 @@ export interface InitializeParams {
   WorktreeCreate?: Array<HookCallbackMatcher>;
   WorktreeRemove?: Array<HookCallbackMatcher>;
 } | null;
-  json_schema?: unknown;
-  planModeInstructions?: string | null;
   prompt_suggestions?: boolean | null;
-  sdk_mcp_servers?: Array<string> | null;
-  system_prompt?: string | null;
 }
 
 /**
@@ -1272,14 +1392,25 @@ export interface InitializeParams {
 export interface InitializeResult {
   _cocoRsProtocolVersion?: string;
   _cocoRsVersion?: string;
-  account?: SdkAccountInfo;
-  agents?: Array<SdkAgentInfo>;
+  account?: InitializeAccountInfo;
+  agents?: Array<InitializeAgentInfo>;
   available_output_styles?: Array<string>;
-  commands?: Array<SdkSlashCommand>;
+  commands?: Array<InitializeSlashCommand>;
   fast_mode_state?: FastModeState | null;
-  models?: Array<SdkModelInfo>;
+  models?: Array<InitializeModelInfo>;
   output_style: string;
   pid?: number | null;
+}
+
+/**
+ * Slash command descriptor for `InitializeResult.commands`.
+ * Kept distinct from the richer coco-rs `commands` crate slash-command
+ * model; initialize only advertises the fields clients need.
+ */
+export interface InitializeSlashCommand {
+  argumentHint: string;
+  description: string;
+  name: string;
 }
 
 /**
@@ -1323,10 +1454,18 @@ export interface InstructionsLoadedInput {
   memory_type: MemoryType;
   parent_file_path?: string | null;
   permission_mode?: string | null;
-  session_id: string;
+  session_id: SessionId;
   transcript_path?: string;
   trigger_file_path?: string | null;
   hook_event_name: "InstructionsLoaded";
+}
+
+/**
+ * Selects one live interactive surface and its immutable session identity.
+ */
+export interface InteractiveTarget {
+  session_id: SessionId;
+  surface_id: SurfaceId;
 }
 
 /**
@@ -1483,10 +1622,11 @@ export type McpConnectionStatus = "connected" | "pending" | "failed" | "needs-au
  */
 export interface McpReconnectParams {
   server_name: string;
+  target: InteractiveTarget;
 }
 
 /**
- * Route an MCP JSON-RPC message to an SDK-hosted server.
+ * Route an MCP JSON-RPC message to a client-hosted server.
  * Correlation is via the outer JSON-RPC `request_id` on the envelope —
  * no inner `request_id`. The SDK replies with a `McpRouteMessageResult`
  * payload carrying the forwarded MCP server's JSON-RPC response.
@@ -1499,7 +1639,7 @@ export interface McpRouteMessageParams {
 /**
  * Result body for the synchronous JSON-RPC reply to a
  * `mcp/routeMessage` server request.
- * Carries the forwarded JSON-RPC response from the SDK-hosted MCP
+ * Carries the forwarded JSON-RPC response from the client-hosted MCP
  * server verbatim. Correlation is via the outer JSON-RPC
  * `request_id` on the response envelope.
  */
@@ -1529,6 +1669,7 @@ export interface McpServerStatus {
  */
 export interface McpSetServersParams {
   servers: { [key: string]: unknown; };
+  target: InteractiveTarget;
 }
 
 /**
@@ -1573,6 +1714,7 @@ export interface McpStatusResult {
 export interface McpToggleParams {
   enabled: boolean;
   server_name: string;
+  target: InteractiveTarget;
 }
 
 /**
@@ -1674,6 +1816,31 @@ export type MessageKind = "user" | "assistant" | "system" | "attachment" | "tool
 export type MessageOrigin = "user_input" | "system_injected" | "tool_result" | "compact_summary" | "subagent_reply" | "slash_command" | "plan_implementation" | "queued_steering";
 
 /**
+ * Payload for the MoA aggregation marker.
+ */
+export interface MoaAggregatingParams {
+  count: number;
+  preset: string;
+  role: ModelRole;
+  turn_id: TurnId;
+}
+
+/**
+ * Payload for MoA reference lifecycle events.
+ */
+export interface MoaReferenceParams {
+  count: number;
+  failed?: boolean;
+  index: number;
+  model_id: string;
+  preset: string;
+  provider: string;
+  role: ModelRole;
+  text?: string;
+  turn_id: TurnId;
+}
+
+/**
  * Wire payload for one model row in the picker catalog. Ships on
  * [`crate::TuiOnlyEvent::ModelCatalogRefreshed`] so a post-login `/models`
  * discovery can augment the TUI's session-frozen `model_catalog` without a
@@ -1742,7 +1909,7 @@ export interface NotificationInput {
   message: string;
   notification_type: string;
   permission_mode?: string | null;
-  session_id: string;
+  session_id: SessionId;
   title?: string | null;
   transcript_path?: string;
   hook_event_name: "Notification";
@@ -1799,7 +1966,7 @@ export interface PermissionDeniedInput {
   cwd: string;
   permission_mode?: string | null;
   reason: string;
-  session_id: string;
+  session_id: SessionId;
   tool_input: unknown;
   tool_name: string;
   tool_use_id: string;
@@ -1885,7 +2052,7 @@ export interface PermissionRequestInput {
   cwd: string;
   permission_mode?: string | null;
   permission_suggestions?: unknown;
-  session_id: string;
+  session_id: SessionId;
   tool_input: unknown;
   tool_name: string;
   transcript_path?: string;
@@ -2129,7 +2296,7 @@ export interface PostCompactInput {
   compact_summary: string;
   cwd: string;
   permission_mode?: string | null;
-  session_id: string;
+  session_id: SessionId;
   transcript_path?: string;
   trigger: CompactTrigger;
   hook_event_name: "PostCompact";
@@ -2147,7 +2314,7 @@ export interface PostToolUseFailureInput {
   error: string;
   is_interrupt?: boolean | null;
   permission_mode?: string | null;
-  session_id: string;
+  session_id: SessionId;
   tool_input: unknown;
   tool_name: string;
   tool_use_id: string;
@@ -2163,7 +2330,7 @@ export interface PostToolUseInput {
   agent_type?: string | null;
   cwd: string;
   permission_mode?: string | null;
-  session_id: string;
+  session_id: SessionId;
   tool_input: unknown;
   tool_name: string;
   tool_response: unknown;
@@ -2185,7 +2352,7 @@ export interface PreCompactInput {
   custom_instructions?: string | null;
   cwd: string;
   permission_mode?: string | null;
-  session_id: string;
+  session_id: SessionId;
   transcript_path?: string;
   trigger: CompactTrigger;
   hook_event_name: "PreCompact";
@@ -2199,7 +2366,7 @@ export interface PreToolUseInput {
   agent_type?: string | null;
   cwd: string;
   permission_mode?: string | null;
-  session_id: string;
+  session_id: SessionId;
   tool_input: unknown;
   tool_name: string;
   tool_use_id: string;
@@ -2420,6 +2587,7 @@ export interface RewindDiffStatsPayload {
  */
 export interface RewindFilesParams {
   dry_run?: boolean;
+  target: InteractiveTarget;
   user_message_id: string;
 }
 
@@ -2456,115 +2624,6 @@ export interface SandboxStateChangedParams {
 }
 
 /**
- * Account + auth info for the logged-in user. All fields optional
- * — clients that don't sign in get an empty struct.
- */
-export interface SdkAccountInfo {
-  apiKeySource?: string | null;
-  apiProvider?: ApiProvider | null;
-  email?: string | null;
-  organization?: string | null;
-  subscriptionType?: string | null;
-  tokenSource?: string | null;
-}
-
-/**
- * SDK-supplied custom subagent spec carried on `InitializeParams.agents`.
- *
- * Wire-level DTO. **Distinct** from the internal [`crate::AgentDefinition`]
- * which is the resolved post-load representation merged from markdown /
- * plugin / SDK sources.
- */
-export interface SdkAgentDefinition {
-  background?: boolean | null;
-  criticalSystemReminder_EXPERIMENTAL?: string | null;
-  description: string;
-  disallowed_tools?: Array<string> | null;
-  effort?: ReasoningEffort | null;
-  initial_prompt?: string | null;
-  max_turns?: number | null;
-  mcp_servers?: Array<AgentMcpServerSpec> | null;
-  memory?: MemoryScope | null;
-  model?: string | null;
-  permission_mode?: PermissionMode | null;
-  prompt: string;
-  skills?: Array<string> | null;
-  tools?: Array<string> | null;
-}
-
-/**
- * Available subagent descriptor for `InitializeResult.agents`.
- * Named `SdkAgentInfo` to avoid colliding with `event::AgentInfo`
- * (the payload for the `agents/registered` notification, which has a
- * different schema — `description: Option<String>` without `model`).
- */
-export interface SdkAgentInfo {
-  description: string;
-  model?: string | null;
-  name: string;
-}
-
-/**
- * SDK hook callback output — a flat object whose `async` field
- * discriminates async-mode.
- */
-export interface SdkHookOutput {
-  "async"?: boolean | null;
-  asyncTimeout?: number | null;
-  "continue"?: boolean | null;
-  decision?: HookDecision | null;
-  hookSpecificOutput?: HookSpecificOutput | null;
-  reason?: string | null;
-  stopReason?: string | null;
-  suppressOutput?: boolean | null;
-  systemMessage?: string | null;
-}
-
-/**
- * Model capability descriptor for `InitializeResult.models`. The wire uses
- * `value` + camelCase capability keys.
- * Named `SdkModelInfo` to match the existing re-export name at the
- * crate root and to leave breathing room for other model-info shapes
- * (e.g. per-provider config models) elsewhere in the codebase.
- */
-export interface SdkModelInfo {
-  description: string;
-  displayName: string;
-  supportedEffortLevels?: Array<EffortLevel>;
-  supportsAdaptiveThinking?: boolean | null;
-  supportsAutoMode?: boolean | null;
-  supportsEffort?: boolean | null;
-  supportsFastMode?: boolean | null;
-  value: string;
-}
-
-/**
- * Minimal session metadata returned by `session/list` and `session/read`.
- */
-export interface SdkSessionSummary {
-  created_at: string;
-  cwd: string;
-  message_count?: number;
-  model: string;
-  session_id: string;
-  title?: string | null;
-  total_tokens?: number;
-  updated_at?: string | null;
-}
-
-/**
- * Slash command descriptor for `InitializeResult.commands`.
- * Named `SdkSlashCommand` to avoid colliding with the existing coco-rs
- * `commands` crate notion of a slash command (which has richer
- * internal fields not on the SDK wire).
- */
-export interface SdkSlashCommand {
-  argumentHint: string;
-  description: string;
-  name: string;
-}
-
-/**
  * Cancel a previously-sent ServerRequest.
  */
 export interface ServerCancelRequestParams {
@@ -2573,10 +2632,25 @@ export interface ServerCancelRequestParams {
 }
 
 /**
- * Params for `session/archive`.
+ * Params for `session/close`.
  */
-export interface SessionArchiveParams {
-  session_id: string;
+export interface SessionCloseParams {
+  target: SessionCloseTarget;
+}
+
+export type SessionCloseTarget = {
+  kind: "interactive";
+  target: InteractiveTarget;
+} | {
+  kind: "orphaned";
+  target: SessionTarget;
+};
+
+/**
+ * Params for `session/delete`.
+ */
+export interface SessionDeleteParams {
+  target: SessionTarget;
 }
 
 /**
@@ -2588,7 +2662,7 @@ export interface SessionEndInput {
   cwd: string;
   permission_mode?: string | null;
   reason: ExitReason;
-  session_id: string;
+  session_id: SessionId;
   transcript_path?: string;
   hook_event_name: "SessionEnd";
 }
@@ -2598,10 +2672,15 @@ export interface SessionEndedParams {
 }
 
 /**
+ * Branded session identifier.
+ */
+export type SessionId = string;
+
+/**
  * Response to `ClientRequest::SessionList`.
  */
 export interface SessionListResult {
-  sessions: Array<SdkSessionSummary>;
+  sessions: Array<SessionSummary>;
 }
 
 /**
@@ -2647,22 +2726,42 @@ export interface SessionModelUsageEntry {
 export interface SessionReadParams {
   cursor?: string | null;
   limit?: number | null;
-  session_id: string;
+  target: SessionTarget;
 }
 
 /**
  * Response to `ClientRequest::SessionRead`.
- * Phase 2.C.11 returns session metadata only. Message-history
- * retrieval (via the JSONL transcript) is a future enhancement — the
- * `messages` / `next_cursor` / `has_more` fields are reserved for
- * when the transcript reader is wired.
+ * Returns session metadata plus transcript-message JSON values paginated by
+ * the original request's numeric offset cursor.
  */
 export interface SessionReadResult {
   has_more?: boolean;
   messages?: Array<unknown>;
   next_cursor?: string | null;
-  session: SdkSessionSummary;
+  session: SessionSummary;
 }
+
+/**
+ * Params for `session/rename`.
+ */
+export interface SessionRenameParams {
+  name: string;
+  target: SessionTarget;
+}
+
+export interface SessionReplaceParams {
+  destination: SessionReplacement;
+  source: InteractiveTarget;
+}
+
+/**
+ * Destination selected by explicit `session/replace`.
+ */
+export type SessionReplacement = "clear" | {
+  fresh: SessionStartParams;
+} | {
+  resume: SessionTarget;
+};
 
 /**
  * Matches TS `SDKResultMessageSchema` (coreSchemas.ts:1407-1451).
@@ -2678,7 +2777,7 @@ export interface SessionResultParams {
   num_api_calls?: number | null;
   permission_denials?: Array<PermissionDenialInfo>;
   result?: string | null;
-  session_id: string;
+  session_id: SessionId;
   stop_reason: string;
   structured_output?: unknown;
   total_cost_usd: number;
@@ -2690,7 +2789,8 @@ export interface SessionResultParams {
  * Params for `session/resume`.
  */
 export interface SessionResumeParams {
-  session_id: string;
+  planModeInstructions?: string | null;
+  target: SessionTarget;
 }
 
 /**
@@ -2700,7 +2800,8 @@ export interface SessionResumeParams {
  * can then issue `turn/start` to continue the conversation.
  */
 export interface SessionResumeResult {
-  session: SdkSessionSummary;
+  session: SessionSummary;
+  surface_id: SurfaceId;
 }
 
 /**
@@ -2712,7 +2813,7 @@ export interface SessionStartInput {
   cwd: string;
   model?: string | null;
   permission_mode?: string | null;
-  session_id: string;
+  session_id: SessionId;
   source: SessionStartSource;
   transcript_path?: string;
   hook_event_name: "SessionStart";
@@ -2720,15 +2821,22 @@ export interface SessionStartInput {
 
 /**
  * Params for `session/start`.
+ *
+ * The serialized wire form carries only per-session execution policy — never a
+ * session identity or history. A remote caller therefore cannot name or resume
+ * an existing session through start; the server mints the identity. Unknown
+ * fields (including legacy `session_id`/`initial_messages`/`initial_prompt`)
+ * are rejected as invalid params, not silently ignored.
  */
 export interface SessionStartParams {
   append_system_prompt?: string | null;
   cwd?: string | null;
-  initial_prompt?: string | null;
+  json_schema?: unknown;
   max_budget_usd?: number | null;
   max_turns?: number | null;
   model?: string | null;
   permission_mode?: PermissionMode | null;
+  planModeInstructions?: string | null;
   system_prompt?: string | null;
 }
 
@@ -2739,7 +2847,8 @@ export interface SessionStartParams {
  * (turn/start, approval/resolve, etc.) operate on this session.
  */
 export interface SessionStartResult {
-  session_id: string;
+  session_id: SessionId;
+  surface_id: SurfaceId;
 }
 
 /**
@@ -2766,7 +2875,7 @@ export interface SessionStartedParams {
   plugins?: Array<PluginInit>;
   protocol_version: string;
   provider?: string;
-  session_id: string;
+  session_id: SessionId;
   skills?: Array<string>;
   slash_commands?: Array<string>;
   tools?: Array<string>;
@@ -2776,16 +2885,91 @@ export interface SessionStartedParams {
 export type SessionState = "idle" | "running" | "requires_action";
 
 /**
+ * Params for passive `session/subscribe`.
+ */
+export interface SessionSubscribeParams {
+  after_seq?: number | null;
+  target: SessionTarget;
+}
+
+/**
+ * Minimal session metadata returned by `session/list` and `session/read`.
+ */
+export interface SessionSummary {
+  created_at: string;
+  cwd: string;
+  message_count?: number;
+  model: string;
+  session_id: SessionId;
+  title?: string | null;
+  total_tokens?: number;
+  updated_at?: string | null;
+}
+
+/**
+ * Selects persisted or live state without proving interactive ownership.
+ */
+export interface SessionTarget {
+  session_id: SessionId;
+}
+
+/**
+ * Params for `session/toggleTag`.
+ */
+export interface SessionToggleTagParams {
+  tag: string;
+  target: SessionTarget;
+}
+
+/**
+ * Params for `session/turns/list`.
+ */
+export interface SessionTurnsListParams {
+  cursor?: string | null;
+  limit?: number | null;
+  target: SessionTarget;
+}
+
+/**
  * Persisted and protocol-visible cumulative usage for one session.
  */
 export interface SessionUsageSnapshot {
   auto_compact_threshold?: number | null;
   models?: Array<SessionModelUsageEntry>;
-  session_id: string;
+  session_id: SessionId;
+  source_records?: Array<SessionUsageSourceEntry>;
   totals: SessionUsageTotals;
   unpriced_models?: Array<ProviderModelSelection>;
   updated_at_ms: number;
   version: number;
+}
+
+/**
+ * Cumulative usage for a single `(provider, model_id, source,
+ * agent_task_id)` bucket.
+ */
+export interface SessionUsageSourceEntry {
+  agent_task_id?: string | null;
+  cache_creation_cost_usd: number;
+  cache_creation_input_tokens: number;
+  cache_read_cost_usd: number;
+  cache_read_input_tokens: number;
+  duration_ms?: number;
+  group?: UsageSourceGroup;
+  input_cost_usd: number;
+  input_tokens: number;
+  model_id: string;
+  output_cost_usd: number;
+  output_tokens: number;
+  priced: boolean;
+  provider: string;
+  request_count: number;
+  source?: UsageSource;
+  total_cost_usd: number;
+  unpriced_input_tokens?: number;
+  unpriced_output_tokens?: number;
+  unpriced_request_count?: number;
+  web_search_requests?: number;
 }
 
 /**
@@ -2809,10 +2993,30 @@ export interface SessionUsageTotals {
 }
 
 /**
+ * Params for `control/setAgentColor`.
+ */
+export interface SetAgentColorParams {
+  color?: AgentColorName | null;
+  target: InteractiveTarget;
+}
+
+/**
  * Params for `control/setModel`.
  */
 export interface SetModelParams {
   model?: string | null;
+  target: InteractiveTarget;
+}
+
+/**
+ * Params for `control/setModelRole`.
+ */
+export interface SetModelRoleParams {
+  effort?: ReasoningEffort | null;
+  model_id: string;
+  provider: string;
+  role: ModelRole;
+  target: InteractiveTarget;
 }
 
 /**
@@ -2823,6 +3027,7 @@ export interface SetModelParams {
  */
 export interface SetPermissionModeParams {
   mode: PermissionMode;
+  target: InteractiveTarget;
 }
 
 /**
@@ -2830,6 +3035,7 @@ export interface SetPermissionModeParams {
  * Uses `ThinkingLevel` which includes effort level and per-provider options.
  */
 export interface SetThinkingParams {
+  target: InteractiveTarget;
   thinking_level?: ThinkingLevel | null;
 }
 
@@ -2841,7 +3047,7 @@ export interface SetupInput {
   agent_type?: string | null;
   cwd: string;
   permission_mode?: string | null;
-  session_id: string;
+  session_id: SessionId;
   transcript_path?: string;
   trigger: SetupTrigger;
   hook_event_name: "Setup";
@@ -3078,7 +3284,7 @@ export interface StopFailureInput {
   error_details?: string | null;
   last_assistant_message?: string | null;
   permission_mode?: string | null;
-  session_id: string;
+  session_id: SessionId;
   transcript_path?: string;
   hook_event_name: "StopFailure";
 }
@@ -3094,7 +3300,7 @@ export interface StopInput {
   cwd: string;
   last_assistant_message?: string | null;
   permission_mode?: string | null;
-  session_id: string;
+  session_id: SessionId;
   stop_hook_active: boolean;
   transcript_path?: string;
   hook_event_name: "Stop";
@@ -3104,6 +3310,7 @@ export interface StopInput {
  * Params for `control/stopTask`.
  */
 export interface StopTaskParams {
+  target: InteractiveTarget;
   task_id: string;
 }
 
@@ -3122,7 +3329,7 @@ export interface SubagentStartInput {
   agent_type: string;
   cwd: string;
   permission_mode?: string | null;
-  session_id: string;
+  session_id: SessionId;
   transcript_path?: string;
   hook_event_name: "SubagentStart";
 }
@@ -3139,7 +3346,7 @@ export interface SubagentStopInput {
   cwd: string;
   last_assistant_message?: string | null;
   permission_mode?: string | null;
-  session_id: string;
+  session_id: SessionId;
   stop_hook_active: boolean;
   transcript_path?: string;
   hook_event_name: "SubagentStop";
@@ -3154,6 +3361,15 @@ export interface SummarizeCompletedParams {
   from_turn: number;
   summary_tokens: number;
 }
+
+/**
+ * Branded surface attachment identifier.
+ *
+ * A surface is a client-visible attachment to a live session. It is
+ * generated by the server, used for routing/capability checks, and is
+ * never persisted as transcript identity.
+ */
+export type SurfaceId = string;
 
 export interface SystemAgentsKilledMessage {
   count: number;
@@ -3319,7 +3535,7 @@ export interface TaskCompletedInput {
   agent_type?: string | null;
   cwd: string;
   permission_mode?: string | null;
-  session_id: string;
+  session_id: SessionId;
   task_description?: string | null;
   task_id: string;
   task_subject: string;
@@ -3358,7 +3574,7 @@ export interface TaskCreatedInput {
   agent_type?: string | null;
   cwd: string;
   permission_mode?: string | null;
-  session_id: string;
+  session_id: SessionId;
   task_description?: string | null;
   task_id: string;
   task_subject: string;
@@ -3366,6 +3582,14 @@ export interface TaskCreatedInput {
   teammate_name?: string | null;
   transcript_path?: string;
   hook_event_name: "TaskCreated";
+}
+
+/**
+ * Params for `task/detail`.
+ */
+export interface TaskDetailParams {
+  target: SessionTarget;
+  task_id: string;
 }
 
 /**
@@ -3493,7 +3717,7 @@ export interface TeammateIdleInput {
   agent_type?: string | null;
   cwd: string;
   permission_mode?: string | null;
-  session_id: string;
+  session_id: SessionId;
   team_name: string;
   teammate_name: string;
   transcript_path?: string;
@@ -3540,7 +3764,7 @@ export interface ThinkingLevel {
 export interface ThreadItem {
   details: ThreadItemDetails;
   item_id: string;
-  turn_id: string;
+  turn_id: TurnId;
 }
 
 /**
@@ -3580,7 +3804,7 @@ export type ThreadItemDetails = {
   tool: string;
   type: "mcp_tool_call";
 } | {
-  agent_id: string;
+  agent_id?: string | null;
   agent_type: string;
   description: string;
   is_background?: boolean;
@@ -3935,7 +4159,7 @@ export type TuiOnlyEvent = {
   reason: string;
   type: "queued_command_edit_unavailable";
 } | {
-  sessions: Array<SdkSessionSummary>;
+  sessions: Array<SessionSummary>;
   type: "open_session_browser";
 } | {
   rows: Array<RewindRowMetadata>;
@@ -4072,6 +4296,8 @@ export type TuiOnlyEvent = {
 } | {
   type: "open_theme_picker";
 } | {
+  type: "open_background_tasks";
+} | {
   payload: SkillsDialogPayload;
   type: "open_skills_dialog";
 } | {
@@ -4117,6 +4343,7 @@ export type TurnAbortReason = "user_cancel" | "submit_interrupt" | "system_preem
  */
 export interface TurnEndedParams {
   outcome: TurnOutcome;
+  session_result?: SessionResultParams | null;
   turn_id: TurnId;
   usage?: TokenUsage | null;
 }
@@ -4164,8 +4391,13 @@ export type TurnOutcome = {
  * Params for `turn/start`.
  */
 export interface TurnStartParams {
+  history_override?: Array<unknown>;
+  images?: Array<QueuedCommandEditImage>;
+  model_selection?: ProviderModelSelection | null;
   permission_mode?: PermissionMode | null;
   prompt: string;
+  slash_metadata?: string | null;
+  target: InteractiveTarget;
   thinking_level?: ThinkingLevel | null;
 }
 
@@ -4177,7 +4409,7 @@ export interface TurnStartParams {
  * deltas, and the terminal `turn/ended` notification.
  */
 export interface TurnStartResult {
-  turn_id: string;
+  turn_id: TurnId;
 }
 
 export interface TurnStartedParams {
@@ -4198,7 +4430,18 @@ export type UnifiedFinishReason = "end_turn" | "stop_sequence" | "tool_use" | "m
  */
 export interface UpdateEnvParams {
   env: { [key: string]: string; };
+  target: InteractiveTarget;
 }
+
+/**
+ * Fine-grained source of a recorded LLM call.
+ */
+export type UsageSource = "main" | "compact" | "side_query" | "memory_side_query" | "hook_prompt" | "hook_agent" | "moa_reference";
+
+/**
+ * Top-level ownership bucket for a recorded LLM call.
+ */
+export type UsageSourceGroup = "session" | "agent_tool_subagent";
 
 /**
  * User message content parts.
@@ -4211,6 +4454,7 @@ export type UserContentPart = TextPart | FilePart;
 export interface UserInputResolveParams {
   answer: string;
   request_id: string;
+  target: InteractiveTarget;
 }
 
 export interface UserMessage {
@@ -4234,7 +4478,7 @@ export interface UserPromptSubmitInput {
   cwd: string;
   permission_mode?: string | null;
   prompt: string;
-  session_id: string;
+  session_id: SessionId;
   transcript_path?: string;
   hook_event_name: "UserPromptSubmit";
 }
@@ -4326,7 +4570,7 @@ export interface WorktreeCreateInput {
   cwd: string;
   name: string;
   permission_mode?: string | null;
-  session_id: string;
+  session_id: SessionId;
   transcript_path?: string;
   hook_event_name: "WorktreeCreate";
 }
@@ -4349,7 +4593,7 @@ export interface WorktreeRemoveInput {
   agent_type?: string | null;
   cwd: string;
   permission_mode?: string | null;
-  session_id: string;
+  session_id: SessionId;
   transcript_path?: string;
   worktree_path: string;
   hook_event_name: "WorktreeRemove";
@@ -4370,6 +4614,11 @@ export type SessionResumeRequest = {
   params: SessionResumeParams;
 };
 
+export type SessionReplaceRequest = {
+  method: "session/replace";
+  params: SessionReplaceParams;
+};
+
 export type SessionListRequest = {
   method: "session/list";
 };
@@ -4379,9 +4628,44 @@ export type SessionReadRequest = {
   params: SessionReadParams;
 };
 
-export type SessionArchiveRequest = {
-  method: "session/archive";
-  params: SessionArchiveParams;
+export type SessionTurnsListRequest = {
+  method: "session/turns/list";
+  params: SessionTurnsListParams;
+};
+
+export type SessionSubscribeRequest = {
+  method: "session/subscribe";
+  params: SessionSubscribeParams;
+};
+
+export type SessionCloseRequest = {
+  method: "session/close";
+  params: SessionCloseParams;
+};
+
+export type SessionDeleteRequest = {
+  method: "session/delete";
+  params: SessionDeleteParams;
+};
+
+export type SessionRenameRequest = {
+  method: "session/rename";
+  params: SessionRenameParams;
+};
+
+export type SessionToggleTagRequest = {
+  method: "session/toggleTag";
+  params: SessionToggleTagParams;
+};
+
+export type SessionCostRequest = {
+  method: "session/cost";
+  params: SessionTarget;
+};
+
+export type SessionStatusRequest = {
+  method: "session/status";
+  params: SessionTarget;
 };
 
 export type TurnStartRequest = {
@@ -4391,6 +4675,17 @@ export type TurnStartRequest = {
 
 export type TurnInterruptRequest = {
   method: "turn/interrupt";
+  params: InteractiveTarget;
+};
+
+export type TaskListRequest = {
+  method: "task/list";
+  params: SessionTarget;
+};
+
+export type TaskDetailRequest = {
+  method: "task/detail";
+  params: TaskDetailParams;
 };
 
 export type ApprovalResolveRequest = {
@@ -4419,6 +4714,11 @@ export type ControlSetModelRequest = {
   params: SetModelParams;
 };
 
+export type ControlSetModelRoleRequest = {
+  method: "control/setModelRole";
+  params: SetModelRoleParams;
+};
+
 export type ControlSetPermissionModeRequest = {
   method: "control/setPermissionMode";
   params: SetPermissionModeParams;
@@ -4427,6 +4727,21 @@ export type ControlSetPermissionModeRequest = {
 export type ControlSetThinkingRequest = {
   method: "control/setThinking";
   params: SetThinkingParams;
+};
+
+export type ControlSetAgentColorRequest = {
+  method: "control/setAgentColor";
+  params: SetAgentColorParams;
+};
+
+export type ControlApplyPermissionUpdateRequest = {
+  method: "control/applyPermissionUpdate";
+  params: ApplyPermissionUpdateParams;
+};
+
+export type ControlResetSessionPermissionRulesRequest = {
+  method: "control/resetSessionPermissionRules";
+  params: InteractiveTarget;
 };
 
 export type ControlStopTaskRequest = {
@@ -4442,6 +4757,11 @@ export type ControlRewindFilesRequest = {
 export type ControlUpdateEnvRequest = {
   method: "control/updateEnv";
   params: UpdateEnvParams;
+};
+
+export type ControlBackgroundAllTasksRequest = {
+  method: "control/backgroundAllTasks";
+  params: InteractiveTarget;
 };
 
 export type ControlKeepAliveRequest = {
@@ -4464,6 +4784,7 @@ export type AgentInterruptCurrentWorkRequest = {
 
 export type ConfigReadRequest = {
   method: "config/read";
+  params: ConfigReadParams;
 };
 
 export type ConfigValueWriteRequest = {
@@ -4476,6 +4797,7 @@ export type ConfigValueWriteRequest = {
  */
 export type McpStatusRequest = {
   method: "mcp/status";
+  params: SessionTarget;
 };
 
 /**
@@ -4483,6 +4805,7 @@ export type McpStatusRequest = {
  */
 export type ContextUsageRequest = {
   method: "context/usage";
+  params: SessionTarget;
 };
 
 /**
@@ -4514,6 +4837,15 @@ export type McpToggleRequest = {
  */
 export type PluginReloadRequest = {
   method: "plugin/reload";
+  params: InteractiveTarget;
+};
+
+/**
+ * Reload hooks from current settings.
+ */
+export type HookReloadRequest = {
+  method: "hook/reload";
+  params: InteractiveTarget;
 };
 
 /**
@@ -4524,7 +4856,7 @@ export type ConfigApplyFlagsRequest = {
   params: ConfigApplyFlagsParams;
 };
 
-export type ClientRequest = InitializeRequest | SessionStartRequest | SessionResumeRequest | SessionListRequest | SessionReadRequest | SessionArchiveRequest | TurnStartRequest | TurnInterruptRequest | ApprovalResolveRequest | InputResolveUserInputRequest | ElicitationResolveRequest | ControlSetModelRequest | ControlSetPermissionModeRequest | ControlSetThinkingRequest | ControlStopTaskRequest | ControlRewindFilesRequest | ControlUpdateEnvRequest | ControlKeepAliveRequest | ControlCancelRequestRequest | AgentInterruptCurrentWorkRequest | ConfigReadRequest | ConfigValueWriteRequest | McpStatusRequest | ContextUsageRequest | McpSetServersRequest | McpReconnectRequest | McpToggleRequest | PluginReloadRequest | ConfigApplyFlagsRequest;
+export type ClientRequest = InitializeRequest | SessionStartRequest | SessionResumeRequest | SessionReplaceRequest | SessionListRequest | SessionReadRequest | SessionTurnsListRequest | SessionSubscribeRequest | SessionCloseRequest | SessionDeleteRequest | SessionRenameRequest | SessionToggleTagRequest | SessionCostRequest | SessionStatusRequest | TurnStartRequest | TurnInterruptRequest | TaskListRequest | TaskDetailRequest | ApprovalResolveRequest | InputResolveUserInputRequest | ElicitationResolveRequest | ControlSetModelRequest | ControlSetModelRoleRequest | ControlSetPermissionModeRequest | ControlSetThinkingRequest | ControlSetAgentColorRequest | ControlApplyPermissionUpdateRequest | ControlResetSessionPermissionRulesRequest | ControlStopTaskRequest | ControlRewindFilesRequest | ControlUpdateEnvRequest | ControlBackgroundAllTasksRequest | ControlKeepAliveRequest | ControlCancelRequestRequest | AgentInterruptCurrentWorkRequest | ConfigReadRequest | ConfigValueWriteRequest | McpStatusRequest | ContextUsageRequest | McpSetServersRequest | McpReconnectRequest | McpToggleRequest | PluginReloadRequest | HookReloadRequest | ConfigApplyFlagsRequest;
 
 /**
  * New session started.
@@ -4561,7 +4893,7 @@ export type SessionUsageUpdatedNotification = {
 /**
  * One Message appended to engine MessageHistory.
  *
- * `session_id` + `agent_id` envelope (plan §11 F9): merged-timeline
+ * `session_id` + `agent_id` envelope: merged-timeline
  * consumers (AgentTeams) demux per session/agent off the same event
  * stream. `agent_id` is `None` for the main agent; `Some` for
  * teammates / subagents. Single-session SDK consumers may ignore
@@ -4572,7 +4904,7 @@ export type HistoryMessageAppendedNotification = {
   params: {
   agent_id?: string | null;
   message: Message;
-  session_id?: string;
+  session_id?: SessionId | null;
 };
 };
 
@@ -4587,7 +4919,7 @@ export type HistoryMessageTruncatedNotification = {
   params: {
   agent_id?: string | null;
   keep_count: number;
-  session_id?: string;
+  session_id?: SessionId | null;
 };
 };
 
@@ -4600,7 +4932,7 @@ export type HistoryResetForResumeNotification = {
   method: "history/resetForResume";
   params: {
   agent_id?: string | null;
-  session_id: string;
+  session_id?: SessionId | null;
 };
 };
 
@@ -4620,7 +4952,7 @@ export type HistoryReplacedNotification = {
   agent_id?: string | null;
   messages: Array<Message>;
   reason?: HistoryReplaceReason;
-  session_id?: string;
+  session_id?: SessionId | null;
 };
 };
 
@@ -4887,6 +5219,30 @@ export type ModelRoleChangedNotification = {
 };
 
 /**
+ * A MoA reference model call started.
+ */
+export type ModelMoaReferenceStartedNotification = {
+  method: "model/moaReferenceStarted";
+  params: MoaReferenceParams;
+};
+
+/**
+ * A MoA reference model call completed. Carries advisory text or failure.
+ */
+export type ModelMoaReferenceCompletedNotification = {
+  method: "model/moaReferenceCompleted";
+  params: MoaReferenceParams;
+};
+
+/**
+ * MoA reference fan-out finished and the aggregator is about to run.
+ */
+export type ModelMoaAggregatingNotification = {
+  method: "model/moaAggregating";
+  params: MoaAggregatingParams;
+};
+
+/**
  * Permission mode changed.
  */
 export type PermissionModeChangedNotification = {
@@ -5096,7 +5452,7 @@ export type SummarizeFailedNotification = {
 export type StreamStallDetectedNotification = {
   method: "stream/stallDetected";
   params: {
-  turn_id?: string | null;
+  turn_id?: TurnId | null;
 };
 };
 
@@ -5191,7 +5547,7 @@ export type PluginsChangedNotification = {
 };
 };
 
-export type ServerNotification = SessionStartedNotification | SessionResultNotification | SessionEndedNotification | SessionUsageUpdatedNotification | HistoryMessageAppendedNotification | HistoryMessageTruncatedNotification | HistoryResetForResumeNotification | HistoryReplacedNotification | HistoryReasoningMetadataAttachedNotification | GoalActiveChangedNotification | TurnStartedNotification | TurnEndedNotification | ItemStartedNotification | ItemUpdatedNotification | ItemCompletedNotification | AgentMessageDeltaNotification | ReasoningDeltaNotification | McpStartupStatusNotification | McpStartupCompleteNotification | LspPrewarmCompleteNotification | ContextCompactedNotification | ContextUsageWarningNotification | ContextCompactionStartedNotification | ContextCompactionPhaseNotification | ContextCompactionFailedNotification | ContextClearedNotification | TaskStartedNotification | TaskCompletedNotification | TaskProgressNotification | TaskPanelChangedNotification | PlanApprovalRequestedNotification | AgentsKilledNotification | ModelFallbackStartedNotification | ModelFallbackCompletedNotification | ModelFastModeChangedNotification | ModelRoleChangedNotification | PermissionModeChangedNotification | PromptSuggestionNotification | ErrorNotification | RateLimitNotification | KeepAliveNotification | IdeSelectionChangedNotification | IdeDiagnosticsUpdatedNotification | QueueStateChangedNotification | QueueCommandQueuedNotification | QueueCommandDequeuedNotification | RewindCompletedNotification | RewindFailedNotification | CostWarningNotification | SandboxStateChangedNotification | SandboxViolationsDetectedNotification | AgentsRegisteredNotification | HookStartedNotification | HookProgressNotification | HookResponseNotification | WorktreeEnteredNotification | WorktreeExitedNotification | SummarizeCompletedNotification | SummarizeFailedNotification | StreamStallDetectedNotification | StreamWatchdogWarningNotification | StreamRequestEndNotification | SessionStateChangedNotification | LocalCommandOutputNotification | FilesPersistedNotification | ElicitationCompleteNotification | ToolUseSummaryNotification | ToolProgressNotification | PluginsChangedNotification;
+export type ServerNotification = SessionStartedNotification | SessionResultNotification | SessionEndedNotification | SessionUsageUpdatedNotification | HistoryMessageAppendedNotification | HistoryMessageTruncatedNotification | HistoryResetForResumeNotification | HistoryReplacedNotification | HistoryReasoningMetadataAttachedNotification | GoalActiveChangedNotification | TurnStartedNotification | TurnEndedNotification | ItemStartedNotification | ItemUpdatedNotification | ItemCompletedNotification | AgentMessageDeltaNotification | ReasoningDeltaNotification | McpStartupStatusNotification | McpStartupCompleteNotification | LspPrewarmCompleteNotification | ContextCompactedNotification | ContextUsageWarningNotification | ContextCompactionStartedNotification | ContextCompactionPhaseNotification | ContextCompactionFailedNotification | ContextClearedNotification | TaskStartedNotification | TaskCompletedNotification | TaskProgressNotification | TaskPanelChangedNotification | PlanApprovalRequestedNotification | AgentsKilledNotification | ModelFallbackStartedNotification | ModelFallbackCompletedNotification | ModelFastModeChangedNotification | ModelRoleChangedNotification | ModelMoaReferenceStartedNotification | ModelMoaReferenceCompletedNotification | ModelMoaAggregatingNotification | PermissionModeChangedNotification | PromptSuggestionNotification | ErrorNotification | RateLimitNotification | KeepAliveNotification | IdeSelectionChangedNotification | IdeDiagnosticsUpdatedNotification | QueueStateChangedNotification | QueueCommandQueuedNotification | QueueCommandDequeuedNotification | RewindCompletedNotification | RewindFailedNotification | CostWarningNotification | SandboxStateChangedNotification | SandboxViolationsDetectedNotification | AgentsRegisteredNotification | HookStartedNotification | HookProgressNotification | HookResponseNotification | WorktreeEnteredNotification | WorktreeExitedNotification | SummarizeCompletedNotification | SummarizeFailedNotification | StreamStallDetectedNotification | StreamWatchdogWarningNotification | StreamRequestEndNotification | SessionStateChangedNotification | LocalCommandOutputNotification | FilesPersistedNotification | ElicitationCompleteNotification | ToolUseSummaryNotification | ToolProgressNotification | PluginsChangedNotification;
 
 /**
  * Ask the SDK client to approve or deny a tool use.
@@ -5212,7 +5568,7 @@ export type InputRequestUserInputServerRequest = {
 };
 
 /**
- * Route an MCP JSON-RPC message to the SDK-hosted MCP server.
+ * Route an MCP JSON-RPC message to the client-hosted MCP server.
  * Expected response: `ClientRequest::McpRouteMessageResponse`.
  */
 export type McpRouteMessageServerRequest = {

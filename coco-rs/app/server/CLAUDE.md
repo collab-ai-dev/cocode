@@ -17,7 +17,7 @@ the production routing/facade/adapter files below the workspace line limit.
 | `AppCloseStart` | Result of starting/observing a close owner task. |
 | `AppReplaceStart` | Result of starting a replace owner task. |
 | `AppShutdownStart` / `AppShutdownSession` | Process-shutdown close orchestration result plus per-session close completion. |
-| `AppArchiveCommit` | Result of completing close and archiving surfaces in one commit section. |
+| `AppCloseCommit` | Result of completing close and closing routed surfaces in one commit section. |
 | `AppLiveSessionSummary` | Live registry session id plus current routing surface counts. |
 | `SurfaceLifecycleEffect` | `coco-types` lifecycle delivery targeted to a surface after commit; the lifecycle channel carries it directly. |
 | `ServerRequestRouteOutcome` | Result of routing one server-initiated request through the AppServer request bridge. |
@@ -48,7 +48,7 @@ the production routing/facade/adapter files below the workspace line limit.
 | `PendingServerRequest` | Server->client request ownership metadata keyed by monotonic request id. |
 | `PendingServerRequestReplay` | Retained pending metadata plus actionable request payload for replay to a surface. |
 | `ReplaceSurfaceOutcome` | Result of re-pointing one caller surface during session replace. |
-| `ArchiveSessionOutcome` | Surfaces closed by session archive routing. |
+| `CloseSessionSurfacesOutcome` | Surfaces closed by session-close routing. |
 
 ## Invariants
 
@@ -61,7 +61,7 @@ the production routing/facade/adapter files below the workspace line limit.
   observe the same completion signal and their factories are dropped unpolled.
 - `AppServer::spawn_close` is the live-session close owner-task entry point. It
   marks `Live -> Closing`, runs the supplied close cascade future in a spawned
-  task, then completes archive routing and removes the slot.
+  task, then closes routed surfaces and removes the slot.
 - `spawn_close` on a `Loading` slot records a close-after-load request in the
   slot. Load failure completes the close signal immediately; load success moves
   directly into `Closing` and the single close owner task runs the supplied
@@ -69,7 +69,7 @@ the production routing/facade/adapter files below the workspace line limit.
 - `AppServer::spawn_replace` is the surface-aware replace owner-task entry
   point. It reserves the replacement as `Loading`, runs the construction
   future, commits the registry+routing swap on success, then runs the supplied
-  old-session close cascade and archive completion. Construction failure
+  old-session close cascade and close completion. Construction failure
   removes only the replacement slot and leaves old live.
 - `AppServer::spawn_replace_detached` is the same owner-task lifecycle without
   caller-surface routing. Use it only when the caller will attach a fresh
@@ -84,7 +84,7 @@ the production routing/facade/adapter files below the workspace line limit.
   runtime config must use `AppServer::new_with_surface_limits`.
 - Owner tasks route lifecycle effects through `route_lifecycle_effects` after
   commit locks are released: replace emits started/replaced before the old close
-  cascade, and close/archive emits ended after archive commit.
+  cascade, and close emits ended after the close commit.
 - `SessionActivityTracker` is the lost-wakeup-safe activity clock used by
   lifecycle supervisors. Successful load/replace, surface attach/detach or
   disconnect, and routed session events update it; close completion forgets
@@ -109,10 +109,10 @@ the production routing/facade/adapter files below the workspace line limit.
   routing lock and performs the combined replace commit in one synchronous
   section: registry new `Loading -> Live`, old `Live -> Closing`, then routing
   caller old -> new and peer closure.
-- `AppServer::complete_close_and_archive_surfaces` is the supervisor-completion
+- `AppServer::complete_session_close` is the supervisor-completion
   commit: it requires a `Closing` slot, takes registry then routing locks,
-  archives the session's surfaces, completes the close signal, and removes the
-  registry slot.
+  closes the session's routed surfaces, completes the close signal, and removes
+  the registry slot.
 - Commit methods return `SurfaceLifecycleEffect`s describing the post-commit
   lifecycle messages to send (`SessionStarted`, `SessionReplaced`,
   `SessionEnded`). Transport/wire emission happens after locks are released.
@@ -164,7 +164,7 @@ the production routing/facade/adapter files below the workspace line limit.
   a surface id when the replay cursor cannot attach. Clients must read a
   snapshot and subscribe again; they must not receive a fake surface handle.
 - `LocalClientConnection::detach_surface` removes only a surface owned by that
-  connection. It does not close the connection, archive the session, or detach
+  connection. It does not close the connection, close the session, or detach
   other surfaces on the same connection.
 - `JsonRpcAdapter` registers the same event, server-request, and lifecycle
   channels as the local adapter, but keeps wire framing and response
@@ -233,12 +233,12 @@ the production routing/facade/adapter files below the workspace line limit.
   `derive_session_turn_summaries` remain pure projection helpers for
   `session/read` / `session/turns/list`.
 - Keep pending-request indexes in sync by request, session, surface, and turn.
-  Surface detach, connection close, turn transition, replace, and archive must
-  cancel the precise affected request ids.
+  Surface detach, connection close, turn transition, replace, and session close
+  must cancel the precise affected request ids.
 - `replace_calling_surface` re-points only the caller to the new session and
   moves old peers to `SessionClosed`; it does not auto-attach peers to the new
   session.
-- `archive_session` moves every live surface on that session to
+- `close_session_surfaces` moves every live surface on that session to
   `SessionClosed` and removes them from fan-out while keeping connection-side
   cleanup possible.
 - Outbound queues are bounded by their transport owner. `RoutingState` uses

@@ -14,7 +14,6 @@ host module.
 
 | Type | Purpose |
 |------|---------|
-| `run_sdk_mode` | SDK surface adapter startup over an already prepared `coco-agent-host::remote_host::PreparedRemoteHost` plus `SdkSidecarConfig`; owns stdio, sidecars, dispatch, and shutdown sequencing. |
 | `SdkServer` | SDK connection adapter over an injected `SdkTransport` and `RemoteAppServerBridgeHost` capability handle. |
 | `SdkServer::run_app_server_connection` | Runs the SDK transport through the AppServer JSON-RPC adapter and shared host handler. |
 | `SdkTransport` | Frame-level transport trait for SDK JSON-RPC traffic. |
@@ -31,10 +30,10 @@ host module.
 - Keep runtime construction, session selection, history, MCP ownership, reload,
   file history, permissions, and turn accounting in `coco-agent-host`.
 - SDK startup must not rebuild `SessionRuntimeFactory` or direct MCP/history
-  owners; `coco-cli` prepares `coco_agent_host::remote_host::PreparedRemoteHost`, and
+  owners; `coco-cli` prepares `coco_agent_host::remote_host::PreparedHost`, and
   this crate wraps it with SDK transports.
 - Sidecar listeners bind Unix/WebSocket/named-pipe transports here, but host
-  handler and outbound-forwarder bindings come from `PreparedRemoteHost`; do not
+  handler and outbound-forwarder bindings come from `PreparedHost`; do not
   reconstruct `AppServerHostHandler` wiring in this crate.
 - The stdio/AppServer bridge also obtains its handler/outbound binding from
   `coco_agent_host::remote_host`; this crate may render and write outbound frames,
@@ -42,5 +41,7 @@ host module.
 - Use remote host aliases from `coco_agent_host::remote_host` for AppServer
   connection types; do not import `app_session::AppSessionHandle` here.
 - `coco-cli` chooses startup mode and maps Clap into
-  `coco_agent_host::remote_host::RemoteHostOptions` plus `SdkSidecarConfig`; SDK
-  surface startup and request handling stay in this crate.
+  `coco_agent_host::remote_host::RemoteHostOptions` plus `SdkSidecarConfig`. The
+  SDK process entrypoint `run_sdk_mode` (stdio/sidecar composition, dispatch-loop
+  + OS-signal shutdown sequencing) lives in `coco-cli` (`app/cli/src/sdk.rs`);
+  this crate owns only the wire/transport machinery it composes.

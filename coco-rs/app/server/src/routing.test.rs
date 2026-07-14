@@ -1070,7 +1070,7 @@ fn replace_cancels_old_session_pending_requests() {
 }
 
 #[test]
-fn archive_session_closes_surfaces_and_removes_fanout() {
+fn close_session_surfaces_closes_surfaces_and_removes_fanout() {
     let mut routing = RoutingState::new(8);
     let session_id = test_session_id("sess-1");
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
@@ -1093,7 +1093,7 @@ fn archive_session_closes_surfaces_and_removes_fanout() {
         .attach_surface(connection, passive.clone(), session_id.clone())
         .expect("attach passive");
 
-    let outcome = routing.archive_session(&session_id);
+    let outcome = routing.close_session_surfaces(&session_id);
 
     assert_eq!(outcome.closed_surfaces.len(), 2);
     assert!(outcome.cancelled_requests.is_empty());
@@ -1117,7 +1117,7 @@ fn archive_session_closes_surfaces_and_removes_fanout() {
 }
 
 #[test]
-fn archive_session_cancels_pending_requests() {
+fn close_session_surfaces_cancels_pending_requests() {
     let mut routing = RoutingState::new(8);
     let session_id = test_session_id("sess-1");
     let (tx, _rx) = tokio::sync::mpsc::channel(8);
@@ -1143,7 +1143,7 @@ fn archive_session_cancels_pending_requests() {
         .open_server_request(session_id.clone(), SurfaceCapability::Notifications, None)
         .expect("open request");
 
-    let outcome = routing.archive_session(&session_id);
+    let outcome = routing.close_session_surfaces(&session_id);
 
     assert_eq!(outcome.cancelled_requests, vec![pending.request_id.clone()]);
     assert!(
@@ -1181,7 +1181,7 @@ fn closed_surfaces_do_not_count_against_connection_limit() {
     routing
         .attach_surface(connection, first.clone(), first_session_id.clone())
         .expect("attach first");
-    routing.archive_session(&first_session_id);
+    routing.close_session_surfaces(&first_session_id);
 
     routing
         .attach_surface(connection, second.clone(), test_session_id("sess-2"))

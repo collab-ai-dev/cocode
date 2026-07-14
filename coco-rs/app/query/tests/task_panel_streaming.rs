@@ -133,9 +133,16 @@ async fn probe_task_panel_events(streaming: bool) {
     };
 
     let app_state = Arc::new(tokio::sync::RwLock::new(coco_types::ToolAppState::default()));
-    let engine = QueryEngine::new(config, client, task_tools(), cancel, None)
-        .with_app_state(app_state.clone())
-        .with_task_list(Arc::new(InMemoryTaskListHandle::new()));
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        task_tools(),
+        cancel,
+        None,
+    )
+    .with_app_state(app_state.clone())
+    .with_task_list(Arc::new(InMemoryTaskListHandle::new()));
 
     let (event_tx, mut event_rx) = mpsc::channel::<CoreEvent>(64);
     let event_collector = tokio::spawn(async move {

@@ -24,4 +24,13 @@ tokio = { workspace = true, features = ["full"] }
 tracing.workspace = true
 
 [dev-dependencies]
+coco-app-runtime.workspace = true
+coco-commands.workspace = true
+coco-config.workspace = true
+coco-messages.workspace = true
+coco-session.workspace = true
+coco-skills.workspace = true
+coco-subagent.workspace = true
+coco-tool-runtime.workspace = true
 pretty_assertions.workspace = true
+tempfile.workspace = true

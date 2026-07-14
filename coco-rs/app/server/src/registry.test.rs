@@ -136,6 +136,37 @@ fn begin_close_moves_live_slot_to_closing_until_completion() {
 }
 
 #[test]
+fn complete_close_with_result_propagates_close_error() {
+    let registry = LiveSessionRegistry::new(4);
+    let session_id = test_session_id("sess-1");
+    registry
+        .begin_load(session_id.clone())
+        .expect("reserve load");
+    registry
+        .complete_load_success(&session_id, TestHandle("h1"))
+        .expect("complete load");
+    let CloseStart::Started { completion, .. } =
+        registry.begin_close(&session_id).expect("begin close")
+    else {
+        panic!("expected started close");
+    };
+    let error = RegistryError::close_failed_with_data(
+        "close timed out",
+        Some(serde_json::json!({ "kind": "session_close_timeout" })),
+    );
+
+    registry
+        .complete_close_with_result(&session_id, Err(error))
+        .expect("complete close");
+
+    let Err(ready_error) = completion.ready().expect("close ready") else {
+        panic!("expected close error");
+    };
+    assert!(matches!(ready_error, RegistryError::CloseFailed { .. }));
+    assert_eq!(registry.slot_count(), 0);
+}
+
+#[test]
 fn close_on_loading_reuses_close_signal_and_transitions_to_closing_after_load() {
     let registry = LiveSessionRegistry::new(4);
     let session_id = test_session_id("sess-1");
@@ -413,4 +444,39 @@ fn replace_requires_live_old_and_unused_new_slot() {
         .begin_replace(&old_session_id, new_session_id)
         .expect_err("new slot must be unused");
     assert!(matches!(err, RegistryError::NewSlotOccupied { .. }));
+}
+
+#[test]
+fn announced_membership_retains_closing_slots_while_live_only_excludes_them() {
+    // CS-4 / R17: a Closing session must stay in `list_announced` (the set the
+    // Event Hub announces to process egress) until the close cascade removes
+    // its slot, so a reconnect during the Closing window still negotiates a
+    // resume cursor for it via the announce ack. The live-only projection drops
+    // it at the same instant.
+    let registry = LiveSessionRegistry::new(4);
+    let live = test_session_id("sess-live");
+    let closing = test_session_id("sess-closing");
+    for id in [&live, &closing] {
+        registry.begin_load(id.clone()).expect("reserve load");
+        registry
+            .complete_load_success(id, TestHandle("h"))
+            .expect("promote to live");
+    }
+
+    let sorted = |mut ids: Vec<SessionId>| {
+        ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        ids
+    };
+    let both = sorted(vec![closing.clone(), live.clone()]);
+    assert_eq!(sorted(registry.list_announced()), both);
+    assert_eq!(sorted(registry.list_live()), both);
+
+    // One session enters its Closing window.
+    registry.begin_close(&closing).expect("begin close");
+
+    // Announced membership still covers BOTH — the closing one is retiring, so
+    // reconnect cursor negotiation includes it — while the live-only projection
+    // drops it immediately.
+    assert_eq!(sorted(registry.list_announced()), both);
+    assert_eq!(registry.list_live(), vec![live]);
 }

@@ -355,6 +355,7 @@ impl RealTuiHarness {
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
             session_id_override: None,
             is_non_interactive: false,
+            callback_requirements: Default::default(),
         })
         .await
         .with_context(|| "SessionRuntime::build")?;
@@ -366,9 +367,7 @@ impl RealTuiHarness {
         // tempdir. Pin cwd_override so tools (Read/Write/Bash) and the
         // nested-memory pipeline (`drain_nested_memory_triggers` reads
         // `ctx.cwd_override` first) all see the test workdir.
-        runtime
-            .update_engine_config(|c| c.cwd_override = Some(cwd.clone()))
-            .await;
+        runtime.set_cwd_override(Some(cwd.clone())).await;
 
         // Stage 4: late-binds shared with TUI/SDK runners (task runtime,
         // transcript store, fork dispatcher, agent-team).
@@ -754,8 +753,7 @@ impl RealTuiHarness {
     /// not surfaced via the wire-protocol notification stream.
     pub async fn history_snapshot(&self) -> Vec<coco_messages::Message> {
         self.runtime
-            .history()
-            .lock()
+            .history_messages()
             .await
             .iter()
             .map(|a| (**a).clone())
@@ -882,11 +880,8 @@ async fn run_real_agent_driver(
                     // `process_submit_turn`.
                     let new_msgs = build_user_turn_messages(user_uuid, &content);
                     let messages: Vec<std::sync::Arc<coco_messages::Message>> = {
-                        let mut h = runtime_t.history().lock().await;
-                        for m in new_msgs.iter().cloned() {
-                            h.push(m);
-                        }
-                        h.to_vec()
+                        runtime_t.append_messages_to_history(new_msgs).await;
+                        runtime_t.history_messages().await
                     };
 
                     let engine = runtime_t.build_engine(turn_cancel.clone()).await;
@@ -906,11 +901,9 @@ async fn run_real_agent_driver(
                         .await
                     {
                         Ok(result) => {
-                            let mut h = runtime_t.history().lock().await;
-                            h.clear();
-                            for arc in result.final_messages {
-                                h.push_arc(arc);
-                            }
+                            runtime_t
+                                .replace_history_with_arc_messages(result.final_messages)
+                                .await;
                         }
                         Err(e) => {
                             // No harness-side `TurnEnded(Failed)` emit:

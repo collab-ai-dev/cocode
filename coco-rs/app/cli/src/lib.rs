@@ -5,6 +5,7 @@
 //! process startup, clap dispatch, terminal presentation, and surface wiring.
 
 pub mod embedded_hub;
+pub mod execution_plan;
 pub mod startup_profile;
 pub mod tracing_init;
 
@@ -89,14 +90,6 @@ pub struct Cli {
     #[arg(long = "models.main")]
     pub models_main: Option<String>,
 
-    /// Run without TUI (REPL mode).
-    #[arg(long)]
-    pub no_tui: bool,
-
-    /// Output as NDJSON (SDK mode).
-    #[arg(long)]
-    pub json: bool,
-
     /// Settings file override.
     #[arg(long)]
     pub settings: Option<String>,
@@ -133,25 +126,9 @@ pub struct Cli {
     #[arg(long, short = 'C')]
     pub cwd: Option<String>,
 
-    /// Debug mode.
-    #[arg(long)]
-    pub debug: bool,
-
-    /// Verbose mode.
-    #[arg(long, short)]
-    pub verbose: bool,
-
-    /// Run the conversation in the background.
-    #[arg(long, visible_alias = "background")]
-    pub bg: bool,
-
     /// Resume a specific session by ID (shorthand for `resume <id>`).
     #[arg(long, short = 'r')]
     pub resume: Option<String>,
-
-    /// Thinking budget for extended thinking mode.
-    #[arg(long)]
-    pub thinking_budget: Option<i64>,
 
     /// System prompt override (appended to default).
     #[arg(long)]
@@ -161,21 +138,9 @@ pub struct Cli {
     #[arg(long)]
     pub append_system_prompt: Option<String>,
 
-    /// MCP config JSON (inline server definitions).
-    #[arg(long)]
-    pub mcp_config: Option<String>,
-
     /// Continue the most recent conversation.
     #[arg(long, short = 'c', alias = "continue")]
     pub continue_session: bool,
-
-    /// Output format: text, json, stream-json.
-    #[arg(long, default_value = "text")]
-    pub output_format: String,
-
-    /// Reasoning effort level: low, medium, high, max.
-    #[arg(long)]
-    pub effort: Option<coco_types::ReasoningEffort>,
 
     /// Allow specific tools (repeatable).
     #[arg(long, num_args = 1..)]
@@ -188,14 +153,6 @@ pub struct Cli {
     /// Additional directories to allow access to (repeatable).
     #[arg(long, num_args = 1..)]
     pub add_dir: Vec<String>,
-
-    /// Create a git worktree for isolated work.
-    #[arg(long, short = 'w')]
-    pub worktree: Option<Option<String>>,
-
-    /// Set display name for the session.
-    #[arg(long, short = 'n')]
-    pub name: Option<String>,
 
     /// Bypass all permission checks (dangerous).
     ///
@@ -226,18 +183,6 @@ pub struct Cli {
     #[arg(long, value_name = "PROVIDER/MODEL_ID")]
     pub fallback_model: Vec<String>,
 
-    /// Custom agent for the session.
-    #[arg(long)]
-    pub agent: Option<String>,
-
-    /// Maximum spending limit in USD.
-    #[arg(long)]
-    pub max_budget_usd: Option<f64>,
-
-    /// Run setup hooks and exit.
-    #[arg(long)]
-    pub init_only: bool,
-
     /// Disable session persistence.
     #[arg(long)]
     pub no_session_persistence: bool,
@@ -248,13 +193,6 @@ pub struct Cli {
     #[arg(long)]
     pub bare: bool,
 
-    // ── SDK/scripting flags ──
-    /// Structured input format for non-interactive mode.
-    ///
-    /// Pairs with `--output-format` to drive scripted pipelines over stdio.
-    #[arg(long)]
-    pub input_format: Option<String>,
-
     /// Inline JSON Schema (NOT a file path) that validates the
     /// structured output of the run. Only honored in non-interactive
     /// sessions (`-p` print mode / SDK NDJSON); ignored in TUI.
@@ -263,33 +201,11 @@ pub struct Cli {
     #[arg(long)]
     pub json_schema: Option<String>,
 
-    /// Replay user messages on resume (includes them in the transcript replay).
-    #[arg(long)]
-    pub replay_user_messages: bool,
-
     /// Emit hook lifecycle events in the stream-json output.
     ///
     /// Gates `HookStarted/Progress/Response` in the wire stream.
     #[arg(long)]
     pub include_hook_events: bool,
-
-    /// Emit partial (incomplete) assistant messages in the stream-json output.
-    ///
-    /// Exposes in-flight streaming content for clients that render mid-turn.
-    #[arg(long)]
-    pub include_partial_messages: bool,
-
-    /// Thinking mode: enabled, adaptive, or disabled.
-    ///
-    /// Orthogonal to `--thinking-budget` (which sets the token ceiling when enabled).
-    #[arg(long)]
-    pub thinking: Option<String>,
-
-    /// Max tokens for extended thinking.
-    ///
-    /// Cap on reasoning tokens per turn.
-    #[arg(long)]
-    pub max_thinking_tokens: Option<i64>,
 
     /// File containing instructions to append to the system prompt.
     ///
@@ -304,12 +220,6 @@ pub struct Cli {
     #[arg(long, hide = true)]
     pub plan_mode_instructions: Option<String>,
 
-    /// Fail fast on invalid MCP config rather than best-effort loading.
-    ///
-    /// If set, any malformed server entry aborts startup.
-    #[arg(long)]
-    pub strict_mcp_config: bool,
-
     /// Comma-separated list of setting sources to load (user, project, local).
     ///
     /// Restricts which config layers participate.
@@ -322,24 +232,12 @@ pub struct Cli {
     #[arg(long)]
     pub fork_session: bool,
 
-    /// Comma-separated list of provider beta headers to opt into.
-    ///
-    /// Example: `prompt-caching-2024-07-31`.
-    #[arg(long)]
-    pub betas: Option<String>,
-
     /// Explicit session ID to use for this run.
     ///
     /// For deterministic session IDs in automation. Distinct from `--resume`
     /// (continue existing) and `--fork-session` (copy existing).
     #[arg(long)]
     pub session_id: Option<String>,
-
-    /// MCP tool name to delegate permission prompts to.
-    ///
-    /// Routes `Ask` decisions to the named tool instead of the built-in TUI / SDK bridge.
-    #[arg(long)]
-    pub permission_prompt_tool: Option<String>,
 
     // ── Tracing / log dev knobs ──
     /// Tracing-filter directive applied to all logs. Highest-priority
@@ -469,9 +367,6 @@ pub enum Commands {
         listen: String,
     },
 
-    /// Run a long-running background supervisor (daemon mode).
-    Daemon,
-
     /// List running background sessions.
     Ps {
         /// Emit a JSON array (for scripting; no TTY required).
@@ -482,40 +377,9 @@ pub enum Commands {
         all: bool,
     },
 
-    /// Show logs from a background session.
-    Logs {
-        /// Session ID.
-        session_id: String,
-    },
-
-    /// Attach to a running background session.
-    Attach {
-        /// Session ID.
-        session_id: String,
-    },
-
-    /// Kill a running background session.
-    Kill {
-        /// Session ID.
-        session_id: String,
-    },
-
-    /// Start remote control / bridge mode.
-    #[command(alias = "rc", alias = "bridge")]
-    RemoteControl,
-
-    /// Sync with a remote session.
-    Sync,
-
     /// Show release notes for the current version.
     #[command(name = "release-notes")]
     ReleaseNotes,
-
-    /// Upgrade to the latest version.
-    Upgrade,
-
-    /// Show cost and usage information.
-    Usage,
 
     /// Run in SDK mode — NDJSON over stdio with the JSON-RPC control
     /// protocol. Intended to be spawned as a subprocess by the

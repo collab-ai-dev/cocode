@@ -45,7 +45,8 @@ gap additions.",
         "session/read" => SessionRead(SessionReadParams),
         "session/turns/list" => SessionTurnsList(SessionTurnsListParams),
         "session/subscribe" => SessionSubscribe(SessionSubscribeParams),
-        "session/archive" => SessionArchive(SessionArchiveParams),
+        "session/close" => SessionClose(SessionCloseParams),
+        "session/delete" => SessionDelete(SessionDeleteParams),
         "session/rename" => SessionRename(SessionRenameParams),
         "session/toggleTag" => SessionToggleTag(SessionToggleTagParams),
         "session/cost" => SessionCost(SessionTarget),
@@ -127,17 +128,17 @@ pub struct InteractiveTarget {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ArchiveTarget {
-    Interactive(InteractiveTarget),
-    Orphaned(SessionTarget),
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SessionCloseTarget {
+    Interactive { target: InteractiveTarget },
+    Orphaned { target: SessionTarget },
 }
 
-impl ArchiveTarget {
+impl SessionCloseTarget {
     pub fn session_id(&self) -> &SessionId {
         match self {
-            Self::Interactive(target) => &target.session_id,
-            Self::Orphaned(target) => &target.session_id,
+            Self::Interactive { target } => &target.session_id,
+            Self::Orphaned { target } => &target.session_id,
         }
     }
 }
@@ -164,7 +165,8 @@ pub const fn request_scope(method: ClientRequestMethod) -> RequestScope {
         | ClientRequestMethod::SessionResume
         | ClientRequestMethod::SessionReplace
         | ClientRequestMethod::SessionSubscribe
-        | ClientRequestMethod::SessionArchive => RequestScope::Lifecycle,
+        | ClientRequestMethod::SessionClose
+        | ClientRequestMethod::SessionDelete => RequestScope::Lifecycle,
         ClientRequestMethod::SessionList => RequestScope::Process,
         ClientRequestMethod::SessionRead
         | ClientRequestMethod::SessionTurnsList
@@ -207,7 +209,7 @@ pub const fn request_scope(method: ClientRequestMethod) -> RequestScope {
 
 impl ClientRequest {
     /// Interactive authority carried by this request, if its scope requires
-    /// one. Lifecycle replacement and archive validate their typed targets in
+    /// one. Lifecycle replacement and close validate their typed targets in
     /// their dedicated lifecycle paths.
     pub fn interactive_target(&self) -> Option<&InteractiveTarget> {
         match self {
@@ -246,7 +248,8 @@ impl ClientRequest {
             | Self::SessionRead(_)
             | Self::SessionTurnsList(_)
             | Self::SessionSubscribe(_)
-            | Self::SessionArchive(_)
+            | Self::SessionClose(_)
+            | Self::SessionDelete(_)
             | Self::SessionRename(_)
             | Self::SessionToggleTag(_)
             | Self::SessionCost(_)
@@ -271,6 +274,7 @@ impl ClientRequest {
             Self::SessionRead(params) => Some(&params.target),
             Self::SessionTurnsList(params) => Some(&params.target),
             Self::SessionSubscribe(params) => Some(&params.target),
+            Self::SessionDelete(params) => Some(&params.target),
             Self::SessionRename(params) => Some(&params.target),
             Self::SessionToggleTag(params) => Some(&params.target),
             Self::SessionCost(target)
@@ -286,7 +290,7 @@ impl ClientRequest {
             | Self::SessionStart(_)
             | Self::SessionReplace(_)
             | Self::SessionList
-            | Self::SessionArchive(_)
+            | Self::SessionClose(_)
             | Self::TurnStart(_)
             | Self::TurnInterrupt(_)
             | Self::ApprovalResolve(_)
@@ -329,6 +333,7 @@ impl ClientRequest {
 /// so the agent can construct its registries before the first turn.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InitializeParams {
     /// Hook callbacks keyed by event type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -336,23 +341,6 @@ pub struct InitializeParams {
     /// Client-provided MCP server names (to skip env-configured ones).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_mcp_servers: Option<Vec<String>>,
-    /// JSON schema for structured output.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub json_schema: Option<serde_json::Value>,
-    /// Full system prompt override.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub system_prompt: Option<String>,
-    /// Text appended to the default system prompt.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub append_system_prompt: Option<String>,
-    /// Custom workflow body for the plan-mode system reminder.
-    #[serde(
-        default,
-        rename = "planModeInstructions",
-        alias = "plan_mode_instructions",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub plan_mode_instructions: Option<String>,
     /// Custom agent definitions keyed by name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agents: Option<HashMap<String, ClientAgentDefinition>>,
@@ -536,9 +524,23 @@ pub struct ClientAgentDefinition {
 }
 
 /// Params for `session/start`.
+///
+/// The serialized wire form carries only per-session execution policy — never a
+/// session identity or history. A remote caller therefore cannot name or resume
+/// an existing session through start; the server mints the identity. Unknown
+/// fields (including legacy `session_id`/`initial_messages`/`initial_prompt`)
+/// are rejected as invalid params, not silently ignored.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SessionStartParams {
+    /// Local-only start seed: a chosen fresh identity for in-process
+    /// embeddings/tests. `#[serde(skip)]` keeps it off the wire, schema, and
+    /// generated SDKs, so it is settable only by local Rust construction on the
+    /// non-serializing local dispatch. The new-only start owner still requires a
+    /// Missing slot for it; production identity selection uses `session/resume`.
+    #[serde(skip)]
+    pub session_id: Option<SessionId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -553,9 +555,26 @@ pub struct SessionStartParams {
     pub system_prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub append_system_prompt: Option<String>,
-    /// Optional initial user prompt to run immediately after start.
+    /// JSON schema for structured output. When present, the session registers
+    /// the StructuredOutput tool and requires a structured final result. This is
+    /// the per-session home for structured output (it is not an `initialize`
+    /// capability).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub initial_prompt: Option<String>,
+    pub json_schema: Option<serde_json::Value>,
+    /// Custom workflow body for the plan-mode system reminder. Per-session
+    /// execution policy: it lives here on `session/start`, not on `initialize`
+    /// (which carries connection capabilities only).
+    #[serde(
+        default,
+        rename = "planModeInstructions",
+        alias = "plan_mode_instructions",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub plan_mode_instructions: Option<String>,
+    /// Local-only initial history seed, paired with `session_id`. Non-serialized
+    /// (see `session_id`); production history restoration uses `session/resume`.
+    #[serde(skip)]
+    pub initial_messages: Vec<crate::messages::Message>,
 }
 
 /// Params for `session/resume`.
@@ -563,15 +582,30 @@ pub struct SessionStartParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionResumeParams {
     pub target: SessionTarget,
+    /// Custom workflow body for the plan-mode system reminder, re-supplied for
+    /// the resumed session. Per-session execution policy carried on resume for
+    /// the same reason it moved to `session/start` (off `initialize`).
+    #[serde(
+        default,
+        rename = "planModeInstructions",
+        alias = "plan_mode_instructions",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub plan_mode_instructions: Option<String>,
 }
 
 /// Destination selected by explicit `session/replace`.
+// `Fresh` inherently carries full `SessionStartParams`; the size disparity is
+// the protocol, and boxing a serialized wire variant only to satisfy the lint
+// is not worth the construction-site churn.
+#[allow(clippy::large_enum_variant)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionReplacement {
     Fresh(SessionStartParams),
     Resume(SessionTarget),
+    Clear,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -615,11 +649,18 @@ pub struct SessionSubscribeParams {
     pub after_seq: Option<i64>,
 }
 
-/// Params for `session/archive`.
+/// Params for `session/close`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionArchiveParams {
-    pub target: ArchiveTarget,
+pub struct SessionCloseParams {
+    pub target: SessionCloseTarget,
+}
+
+/// Params for `session/delete`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionDeleteParams {
+    pub target: SessionTarget,
 }
 
 /// Params for `session/rename`.

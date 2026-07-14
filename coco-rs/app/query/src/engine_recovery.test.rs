@@ -176,7 +176,14 @@ fn slot_snapshot(slot: &PrebuiltLanguageModelSlot) -> coco_inference::ModelRunti
 fn test_engine(config: QueryEngineConfig, slot: PrebuiltLanguageModelSlot) -> QueryEngine {
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
-    QueryEngine::new(config, registry_from_slot(slot), tools, cancel, None)
+    QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        registry_from_slot(slot),
+        tools,
+        cancel,
+        None,
+    )
 }
 
 fn loop_turn_state() -> LoopTurnState {
@@ -727,8 +734,15 @@ fn engine_with_app_state(
 ) -> QueryEngine {
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
-    QueryEngine::new(config, registry_from_slot(slot), tools, cancel, None)
-        .with_app_state(app_state)
+    QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        registry_from_slot(slot),
+        tools,
+        cancel,
+        None,
+    )
+    .with_app_state(app_state)
 }
 
 /// A1 finding (stream-open path): a typed `Overloaded` error on a

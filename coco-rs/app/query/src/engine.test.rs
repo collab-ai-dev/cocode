@@ -790,7 +790,14 @@ async fn test_single_turn_text_only() {
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
 
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
     let result = engine.run("hi").await.expect("should succeed");
 
     assert_eq!(result.response_text, "Hello!");
@@ -808,7 +815,14 @@ async fn text_only_end_turn_emits_reasoning_metadata() {
     let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
     let collector = tokio::spawn(async move {
         let mut events = Vec::new();
@@ -842,7 +856,14 @@ async fn test_cache_safe_params_unset_before_first_turn() {
     let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
 
     assert!(
         engine.last_cache_safe_params().await.is_none(),
@@ -869,7 +890,14 @@ async fn test_cache_safe_params_fallback_builds_before_first_turn() {
         }),
         ..QueryEngineConfig::default()
     };
-    let engine = QueryEngine::new(config, client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
     let mut history = coco_messages::MessageHistory::new();
     history.push(coco_messages::create_user_message("parent context"));
 
@@ -911,7 +939,14 @@ async fn test_cache_safe_params_populated_after_turn() {
         system_prompt: Some("You are helpful.".into()),
         ..QueryEngineConfig::default()
     };
-    let engine = QueryEngine::new(config, client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
 
     engine.run("hi").await.expect("turn must complete");
 
@@ -938,7 +973,14 @@ async fn test_cache_safe_params_handle_observes_writer_side() {
     let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
 
     let handle = engine.cache_safe_params_handle();
     assert!(handle.read().await.is_none());
@@ -970,6 +1012,7 @@ async fn test_with_fallback_client_does_not_break_primary_path() {
 
     let engine = QueryEngine::new(
         QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
         model_runtimes,
         tools,
         cancel,
@@ -997,7 +1040,14 @@ async fn test_fallback_retry_does_not_consume_max_turns() {
         ..Default::default()
     };
 
-    let engine = QueryEngine::new(config, model_runtimes, tools, cancel, None);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        model_runtimes,
+        tools,
+        cancel,
+        None,
+    );
     let result = engine.run("hi").await.expect("fallback should succeed");
 
     assert_eq!(result.response_text, "fallback-answer");
@@ -1019,7 +1069,14 @@ async fn test_multi_turn_tool_call_then_text() {
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
 
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
     let result = engine
         .run("read /tmp/nonexistent.txt")
         .await
@@ -1069,7 +1126,15 @@ async fn test_subagent_command_queue_drain_keeps_main_commands_queued() {
         agent_id: Some(coco_types::AgentId::try_new("agent-1").unwrap()),
         ..Default::default()
     };
-    let engine = QueryEngine::new(config, client, tools, cancel, None).with_command_queue(queue);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    )
+    .with_command_queue(queue);
     let queue = engine.command_queue().clone();
 
     let result = engine
@@ -1102,7 +1167,14 @@ async fn test_multi_tool_calls_in_one_response() {
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
 
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
     let result = engine.run("read both files").await.expect("should succeed");
 
     assert_eq!(result.turns, 2);
@@ -1122,7 +1194,14 @@ async fn test_cancellation() {
     let cancel = CancellationToken::new();
     cancel.cancel();
 
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
     let result = engine.run("hi").await.expect("should succeed");
 
     assert!(result.cancelled);
@@ -1142,7 +1221,14 @@ async fn test_system_prompt_included() {
         system_prompt: Some("You are a helpful assistant.".into()),
         ..Default::default()
     };
-    let engine = QueryEngine::new(config, client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
     let result = engine.run("hello").await.expect("should succeed");
 
     assert_eq!(result.response_text, "I am helpful.");
@@ -1159,7 +1245,14 @@ async fn build_prompt_returns_prompt_context_metadata() {
         system_prompt: Some("system from config".into()),
         ..Default::default()
     };
-    let engine = QueryEngine::new(config, client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
     let history = coco_messages::MessageHistory::new();
 
     let built = engine.build_prompt(&history).await;
@@ -1188,7 +1281,15 @@ async fn test_max_turns_limit() {
         max_turns: Some(1),
         ..Default::default()
     };
-    let (result, events) = collect_events_from_run(model, tools, config, None, "read file").await;
+    let (result, events) = collect_events_from_run(
+        model,
+        tools,
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        None,
+        "read file",
+    )
+    .await;
 
     // Only 1 turn allowed, should stop even though tool call would trigger another
     assert_eq!(result.turns, 1);
@@ -1210,6 +1311,9 @@ async fn test_max_turns_limit() {
     assert_eq!(p.total_turns, 1);
     assert_eq!(p.stop_reason, "max_turns");
     assert_eq!(p.errors, ["Reached maximum number of turns (1)"]);
+    assert_turn_result_matches_session_result(&events, |outcome| {
+        matches!(outcome, coco_types::TurnOutcome::MaxTurnsReached(_))
+    });
 }
 
 #[tokio::test]
@@ -1224,7 +1328,14 @@ async fn test_max_budget_usd_stops_after_recording_usage() {
         max_budget_usd: Some(0.0),
         ..Default::default()
     };
-    let engine = QueryEngine::new(config, client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
 
     let result = engine.run("hi").await.expect("budget stop is a result");
 
@@ -1254,7 +1365,14 @@ async fn test_max_budget_usd_tool_call_preserves_pairing_without_execution() {
         max_budget_usd: Some(0.0),
         ..Default::default()
     };
-    let engine = QueryEngine::new(config, client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
 
     let result = engine.run("hi").await.expect("budget stop is a result");
 
@@ -1276,7 +1394,14 @@ async fn test_premature_stream_close_without_cancel_fails() {
     let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
 
     let err = engine
         .run("hi")
@@ -1301,7 +1426,14 @@ async fn test_permission_mode_passed_to_context() {
         permission_mode: PermissionMode::Default,
         ..Default::default()
     };
-    let engine = QueryEngine::new(config, client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
     let result = engine.run("hello").await.expect("should succeed");
 
     assert_eq!(result.response_text, "ok");
@@ -1393,7 +1525,14 @@ async fn test_tool_execution_with_real_tools() {
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
 
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
     let result = engine.run("read the file").await.expect("should succeed");
 
     assert_eq!(result.turns, 2);
@@ -1491,7 +1630,14 @@ async fn test_read_tool_emits_full_tool_lifecycle() {
     let cancel = CancellationToken::new();
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
 
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
 
     let result = engine
         .run_with_events("please read it", event_tx, coco_types::TurnId::generate())
@@ -1613,7 +1759,14 @@ async fn test_budget_exhausted_in_engine() {
         total_token_budget: Some(15),
         ..Default::default()
     };
-    let engine = QueryEngine::new(config, client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
     let result = engine.run("read file").await.expect("should succeed");
 
     // First turn executes (usage 20+15=35 > 15), then budget check before turn 2 stops
@@ -1628,12 +1781,13 @@ async fn collect_events_from_run(
     model: Arc<dyn LanguageModel>,
     tools: Arc<ToolRegistry>,
     config: QueryEngineConfig,
+    session_id: coco_types::SessionId,
     bootstrap: Option<SessionBootstrap>,
     prompt: &str,
 ) -> (QueryResult, Vec<CoreEvent>) {
     let client = crate::test_support::model_runtime_registry(model);
     let cancel = CancellationToken::new();
-    let mut engine = QueryEngine::new(config, client, tools, cancel, None);
+    let mut engine = QueryEngine::new(config, session_id, client, tools, cancel, None);
     if let Some(b) = bootstrap {
         engine = engine.with_session_bootstrap(b);
     }
@@ -1995,7 +2149,15 @@ async fn unknown_tool_call_gets_error_result_and_completed_event() {
     });
     let tools = Arc::new(ToolRegistry::new());
     let config = QueryEngineConfig::default();
-    let (result, events) = collect_events_from_run(model, tools, config, None, "run it").await;
+    let (result, events) = collect_events_from_run(
+        model,
+        tools,
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        None,
+        "run it",
+    )
+    .await;
 
     assert_eq!(result.response_text, "done");
     assert_eq!(result.turns, 2);
@@ -2033,7 +2195,15 @@ async fn successful_tool_result_emits_message_appended() {
     registry.register(Arc::new(ReadTool));
     let tools = Arc::new(registry);
     let config = QueryEngineConfig::default();
-    let (result, events) = collect_events_from_run(model, tools, config, None, "read it").await;
+    let (result, events) = collect_events_from_run(
+        model,
+        tools,
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        None,
+        "read it",
+    )
+    .await;
 
     assert_eq!(result.response_text, "done");
     assert_eq!(appended_tool_result_count(&events, "append_read_1"), 1);
@@ -2052,7 +2222,15 @@ async fn invalid_tool_input_gets_error_result_and_completed_event() {
     registry.register(Arc::new(ReadTool));
     let tools = Arc::new(registry);
     let config = QueryEngineConfig::default();
-    let (result, events) = collect_events_from_run(model, tools, config, None, "read it").await;
+    let (result, events) = collect_events_from_run(
+        model,
+        tools,
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        None,
+        "read it",
+    )
+    .await;
 
     assert_eq!(result.response_text, "done");
     assert_eq!(result.turns, 2);
@@ -2109,8 +2287,15 @@ async fn valid_ask_user_question_reaches_permission_bridge() {
     let client = crate::test_support::model_runtime_registry(model);
     let cancel = CancellationToken::new();
     let bridge = Arc::new(RecordingBridge::new(ToolPermissionDecision::Approved));
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None)
-        .with_permission_bridge(bridge.clone() as Arc<dyn ToolPermissionBridge>);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    )
+    .with_permission_bridge(bridge.clone() as Arc<dyn ToolPermissionBridge>);
 
     let result = engine.run("ask me").await.expect("should succeed");
 
@@ -2146,8 +2331,15 @@ async fn rejected_ask_user_question_streaming_completion_is_non_error() {
     let client = crate::test_support::model_runtime_registry(model);
     let cancel = CancellationToken::new();
     let bridge = Arc::new(RecordingBridge::new(ToolPermissionDecision::Rejected));
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None)
-        .with_permission_bridge(bridge.clone() as Arc<dyn ToolPermissionBridge>);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    )
+    .with_permission_bridge(bridge.clone() as Arc<dyn ToolPermissionBridge>);
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
     let collector = tokio::spawn(async move {
@@ -2211,8 +2403,15 @@ async fn rejected_enter_plan_mode_streaming_completion_is_non_error() {
     let client = crate::test_support::model_runtime_registry(model);
     let cancel = CancellationToken::new();
     let bridge = Arc::new(RecordingBridge::new(ToolPermissionDecision::Rejected));
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None)
-        .with_permission_bridge(bridge.clone() as Arc<dyn ToolPermissionBridge>);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    )
+    .with_permission_bridge(bridge.clone() as Arc<dyn ToolPermissionBridge>);
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
     let collector = tokio::spawn(async move {
@@ -2268,7 +2467,6 @@ async fn rejected_exit_plan_mode_streaming_completion_is_plan_rejection_not_perm
     let client = crate::test_support::model_runtime_registry(model);
     let cancel = CancellationToken::new();
     let config = QueryEngineConfig {
-        session_id: coco_types::SessionId::try_new(session_id).unwrap(),
         permission_mode: PermissionMode::Plan,
         ..Default::default()
     };
@@ -2281,10 +2479,17 @@ async fn rejected_exit_plan_mode_streaming_completion_is_plan_rejection_not_perm
         plan_mode_entry_ms: Some(1),
         ..Default::default()
     }));
-    let engine = QueryEngine::new(config, client, tools, cancel, None)
-        .with_config_home(tmp.path().to_path_buf())
-        .with_app_state(app_state)
-        .with_permission_bridge(bridge.clone() as Arc<dyn ToolPermissionBridge>);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new(session_id).unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    )
+    .with_config_home(tmp.path().to_path_buf())
+    .with_app_state(app_state)
+    .with_permission_bridge(bridge.clone() as Arc<dyn ToolPermissionBridge>);
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
     let collector = tokio::spawn(async move {
@@ -2339,7 +2544,6 @@ async fn exit_plan_mode_observable_input_excludes_disk_plan() {
     registry.register(Arc::new(ExitPlanModeTool));
     let tools = Arc::new(registry);
     let config = QueryEngineConfig {
-        session_id: coco_types::SessionId::try_new(session_id).unwrap(),
         permission_mode: PermissionMode::Plan,
         ..Default::default()
     };
@@ -2350,9 +2554,16 @@ async fn exit_plan_mode_observable_input_excludes_disk_plan() {
         plan_mode_entry_ms: Some(1),
         ..Default::default()
     }));
-    let engine = QueryEngine::new(config, client, tools, cancel, None)
-        .with_config_home(tmp.path().to_path_buf())
-        .with_app_state(app_state);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new(session_id).unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    )
+    .with_config_home(tmp.path().to_path_buf())
+    .with_app_state(app_state);
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
     let collector = tokio::spawn(async move {
         let mut events = Vec::new();
@@ -2770,7 +2981,15 @@ async fn permission_allow_updated_input_reaches_execution() {
     registry.register(Arc::new(PermissionRewriteTool));
     let tools = Arc::new(registry);
     let config = QueryEngineConfig::default();
-    let (result, events) = collect_events_from_run(model, tools, config, None, "rewrite it").await;
+    let (result, events) = collect_events_from_run(
+        model,
+        tools,
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        None,
+        "rewrite it",
+    )
+    .await;
 
     assert_eq!(result.response_text, "done");
     let output = tool_result_text(&result.final_messages, "rewrite_1")
@@ -2822,6 +3041,7 @@ async fn pre_tool_use_updated_input_reaches_execution() {
 
     let engine = QueryEngine::new(
         QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
         client,
         tools,
         cancel,
@@ -2892,6 +3112,7 @@ async fn post_tool_use_receives_effective_input() {
 
     let engine = QueryEngine::new(
         QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
         client,
         tools,
         cancel,
@@ -2944,6 +3165,7 @@ async fn post_tool_use_updated_mcp_output_rewrites_mcp_result() {
 
     let engine = QueryEngine::new(
         QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
         client,
         tools,
         cancel,
@@ -3021,6 +3243,7 @@ async fn post_tool_use_updated_mcp_output_is_ignored_for_non_mcp_tool() {
 
     let engine = QueryEngine::new(
         QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
         client,
         tools,
         cancel,
@@ -3073,6 +3296,7 @@ async fn post_tool_use_additional_context_is_injected() {
 
     let engine = QueryEngine::new(
         QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
         client,
         tools,
         cancel,
@@ -3129,6 +3353,7 @@ async fn post_tool_use_prevent_continuation_stops_next_turn() {
 
     let engine = QueryEngine::new(
         QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
         client,
         tools,
         cancel,
@@ -3183,6 +3408,7 @@ async fn non_mcp_success_path_orders_post_hook_messages_before_new_messages() {
 
     let engine = QueryEngine::new(
         QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
         client,
         tools,
         cancel,
@@ -3248,6 +3474,7 @@ async fn mcp_success_path_defers_post_hook_messages_until_after_prevent() {
 
     let engine = QueryEngine::new(
         QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
         client,
         tools,
         cancel,
@@ -3313,6 +3540,7 @@ async fn failure_path_orders_error_result_before_post_tool_use_failure_context()
 
     let engine = QueryEngine::new(
         QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
         client,
         tools,
         cancel,
@@ -3358,7 +3586,14 @@ async fn failure_path_completed_event_matches_error_tool_result_text() {
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
 
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
     let collector = tokio::spawn(async move {
         let mut events = Vec::new();
@@ -3422,6 +3657,7 @@ async fn pre_tool_use_permission_deny_records_denial() {
 
     let engine = QueryEngine::new(
         QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
         client,
         tools,
         cancel,
@@ -3446,7 +3682,6 @@ async fn test_session_started_emitted_with_bootstrap() {
     let tools = Arc::new(ToolRegistry::new());
     let config = QueryEngineConfig {
         model_id: "test-model".into(),
-        session_id: coco_types::SessionId::try_new("session-1").unwrap(),
         permission_mode: PermissionMode::AcceptEdits,
         ..Default::default()
     };
@@ -3458,8 +3693,15 @@ async fn test_session_started_emitted_with_bootstrap() {
         agents: vec!["explorer".into()],
         ..Default::default()
     };
-    let (_result, events) =
-        collect_events_from_run(model, tools, config, Some(bootstrap), "hi").await;
+    let (_result, events) = collect_events_from_run(
+        model,
+        tools,
+        config,
+        coco_types::SessionId::try_new("session-1").unwrap(),
+        Some(bootstrap),
+        "hi",
+    )
+    .await;
 
     let started = events.iter().find_map(|e| match e {
         CoreEvent::Protocol(ServerNotification::SessionStarted(p)) => Some(p),
@@ -3481,7 +3723,15 @@ async fn test_session_started_not_emitted_without_bootstrap() {
     let model = Arc::new(TextMock { text: "ok".into() });
     let tools = Arc::new(ToolRegistry::new());
     let config = QueryEngineConfig::default();
-    let (_result, events) = collect_events_from_run(model, tools, config, None, "hi").await;
+    let (_result, events) = collect_events_from_run(
+        model,
+        tools,
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        None,
+        "hi",
+    )
+    .await;
 
     let found = events.iter().any(|e| {
         matches!(
@@ -3497,7 +3747,15 @@ async fn test_session_state_transitions_running_then_idle() {
     let model = Arc::new(TextMock { text: "ok".into() });
     let tools = Arc::new(ToolRegistry::new());
     let config = QueryEngineConfig::default();
-    let (_result, events) = collect_events_from_run(model, tools, config, None, "hi").await;
+    let (_result, events) = collect_events_from_run(
+        model,
+        tools,
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        None,
+        "hi",
+    )
+    .await;
 
     let states: Vec<_> = events
         .iter()
@@ -3520,10 +3778,17 @@ async fn test_session_result_emitted_with_full_metadata() {
     let tools = Arc::new(ToolRegistry::new());
     let config = QueryEngineConfig {
         model_id: "test-model".into(),
-        session_id: coco_types::SessionId::try_new("s1").unwrap(),
         ..Default::default()
     };
-    let (result, events) = collect_events_from_run(model, tools, config, None, "hi").await;
+    let (result, events) = collect_events_from_run(
+        model,
+        tools,
+        config,
+        coco_types::SessionId::try_new("s1").unwrap(),
+        None,
+        "hi",
+    )
+    .await;
 
     let sr_params = events.iter().find_map(|e| match e {
         CoreEvent::Protocol(ServerNotification::SessionResult(p)) => Some(p.as_ref()),
@@ -3549,19 +3814,25 @@ async fn test_session_usage_updated_emits_cumulative_snapshot() {
     let session_id = coco_types::SessionId::try_new("s-usage").unwrap();
     let config = QueryEngineConfig {
         model_id: "test-model".into(),
-        session_id: session_id.clone(),
         ..Default::default()
     };
     let client = crate::test_support::model_runtime_registry(model);
     let tracker = Arc::new(tokio::sync::Mutex::new(coco_messages::CostTracker::new()));
     let usage_accounting = crate::usage_accounting::UsageAccounting::for_static_session(
-        config.session_id.clone(),
+        session_id.clone(),
         tracker.clone(),
         Arc::new(tokio::sync::Mutex::new(())),
         coco_types::UsageAttribution::session(coco_types::UsageSource::Main),
     );
-    let engine = QueryEngine::new(config, client, tools, CancellationToken::new(), None)
-        .with_usage_accounting(usage_accounting);
+    let engine = QueryEngine::new(
+        config,
+        session_id.clone(),
+        client,
+        tools,
+        CancellationToken::new(),
+        None,
+    )
+    .with_usage_accounting(usage_accounting);
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
     let collector = tokio::spawn(async move {
@@ -3606,7 +3877,15 @@ async fn test_session_result_ordering_after_idle() {
     let model = Arc::new(TextMock { text: "ok".into() });
     let tools = Arc::new(ToolRegistry::new());
     let config = QueryEngineConfig::default();
-    let (_result, events) = collect_events_from_run(model, tools, config, None, "hi").await;
+    let (_result, events) = collect_events_from_run(
+        model,
+        tools,
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        None,
+        "hi",
+    )
+    .await;
 
     let idle_idx = events.iter().position(|e| {
         matches!(
@@ -3625,6 +3904,47 @@ async fn test_session_result_ordering_after_idle() {
 }
 
 #[tokio::test]
+async fn no_tool_turn_ended_carries_session_result() {
+    let model = Arc::new(TextMock { text: "ok".into() });
+    let tools = Arc::new(ToolRegistry::new());
+    let config = QueryEngineConfig::default();
+    let (_result, events) = collect_events_from_run(
+        model,
+        tools,
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        None,
+        "hi",
+    )
+    .await;
+
+    let turn_result = events
+        .iter()
+        .find_map(|event| match event {
+            CoreEvent::Protocol(ServerNotification::TurnEnded(params)) => {
+                params.session_result.as_deref()
+            }
+            _ => None,
+        })
+        .expect("TurnEnded should carry session_result");
+    let final_result = events
+        .iter()
+        .find_map(|event| match event {
+            CoreEvent::Protocol(ServerNotification::SessionResult(params)) => Some(params.as_ref()),
+            _ => None,
+        })
+        .expect("SessionResult should be emitted");
+
+    assert_eq!(turn_result.session_id, final_result.session_id);
+    assert_eq!(turn_result.total_turns, final_result.total_turns);
+    assert_eq!(turn_result.result, final_result.result);
+    assert_eq!(
+        turn_result.structured_output,
+        final_result.structured_output
+    );
+}
+
+#[tokio::test]
 async fn test_session_events_fire_in_strict_order() {
     // The complete envelope: SessionStarted → Running → ... → Idle → SessionResult
     let model = Arc::new(TextMock { text: "ok".into() });
@@ -3636,8 +3956,15 @@ async fn test_session_events_fire_in_strict_order() {
         version: "0.0.1".into(),
         ..Default::default()
     };
-    let (_result, events) =
-        collect_events_from_run(model, tools, config, Some(bootstrap), "hi").await;
+    let (_result, events) = collect_events_from_run(
+        model,
+        tools,
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        Some(bootstrap),
+        "hi",
+    )
+    .await;
 
     let started_idx = events.iter().position(|e| {
         matches!(
@@ -3685,7 +4012,15 @@ async fn test_session_result_num_api_calls_populated() {
     let model = Arc::new(TextMock { text: "ok".into() });
     let tools = Arc::new(ToolRegistry::new());
     let config = QueryEngineConfig::default();
-    let (_result, events) = collect_events_from_run(model, tools, config, None, "hi").await;
+    let (_result, events) = collect_events_from_run(
+        model,
+        tools,
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        None,
+        "hi",
+    )
+    .await;
 
     let sr = events.iter().find_map(|e| match e {
         CoreEvent::Protocol(ServerNotification::SessionResult(p)) => Some(p.as_ref()),
@@ -3835,7 +4170,15 @@ async fn test_requires_action_emitted_on_permission_ask() {
     registry.register(Arc::new(AskingTool));
     let tools = Arc::new(registry);
     let config = QueryEngineConfig::default();
-    let (result, events) = collect_events_from_run(model, tools, config, None, "hi").await;
+    let (result, events) = collect_events_from_run(
+        model,
+        tools,
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        None,
+        "hi",
+    )
+    .await;
 
     // Collect state transitions in order
     let states: Vec<coco_types::SessionState> = events
@@ -3890,7 +4233,15 @@ async fn test_query_result_has_permission_denials_field() {
     let model = Arc::new(TextMock { text: "ok".into() });
     let tools = Arc::new(ToolRegistry::new());
     let config = QueryEngineConfig::default();
-    let (result, events) = collect_events_from_run(model, tools, config, None, "hi").await;
+    let (result, events) = collect_events_from_run(
+        model,
+        tools,
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        None,
+        "hi",
+    )
+    .await;
 
     assert!(result.permission_denials.is_empty());
     // Verify the SessionResult also reflects this.
@@ -3913,6 +4264,7 @@ async fn test_session_result_cancelled_marks_is_error() {
 
     let engine = QueryEngine::new(
         QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
         client,
         tools,
         cancel,
@@ -4144,8 +4496,15 @@ async fn ask_branch_consults_bridge_and_executes_on_approved() {
     let cancel = CancellationToken::new();
 
     let bridge = Arc::new(RecordingBridge::new(ToolPermissionDecision::Approved));
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None)
-        .with_permission_bridge(bridge.clone() as Arc<dyn ToolPermissionBridge>);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    )
+    .with_permission_bridge(bridge.clone() as Arc<dyn ToolPermissionBridge>);
 
     let result = engine
         .run("please run asking_mock")
@@ -4186,8 +4545,15 @@ async fn approved_permission_content_blocks_are_appended_after_tool_result() {
             }),
         ]),
     );
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None)
-        .with_permission_bridge(bridge as Arc<dyn ToolPermissionBridge>);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    )
+    .with_permission_bridge(bridge as Arc<dyn ToolPermissionBridge>);
 
     let result = engine
         .run("please run asking_mock")
@@ -4215,8 +4581,15 @@ async fn ask_branch_consults_bridge_and_records_denial_on_rejected() {
     let cancel = CancellationToken::new();
 
     let bridge = Arc::new(RecordingBridge::new(ToolPermissionDecision::Rejected));
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None)
-        .with_permission_bridge(bridge.clone() as Arc<dyn ToolPermissionBridge>);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    )
+    .with_permission_bridge(bridge.clone() as Arc<dyn ToolPermissionBridge>);
 
     let result = engine
         .run("please run asking_mock")
@@ -4257,8 +4630,15 @@ async fn rejected_permission_content_blocks_are_appended_after_tool_result() {
             }),
         ]),
     );
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None)
-        .with_permission_bridge(bridge as Arc<dyn ToolPermissionBridge>);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    )
+    .with_permission_bridge(bridge as Arc<dyn ToolPermissionBridge>);
 
     let result = engine
         .run("please run asking_mock")
@@ -4307,6 +4687,7 @@ async fn pre_tool_use_block_runs_before_permission_ask() {
 
     let engine = QueryEngine::new(
         QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
         client,
         tools,
         cancel,
@@ -4345,7 +4726,14 @@ async fn ask_branch_without_bridge_falls_back_to_auto_allow() {
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
 
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
     let result = engine.run("run it").await.expect("should succeed");
 
     assert_eq!(result.permission_denials.len(), 0);
@@ -4367,7 +4755,14 @@ async fn query_result_final_messages_contains_full_roundtrip() {
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
 
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
     let result = engine.run("read /tmp/nonexistent.txt").await.unwrap();
 
     // Expected shape (roughly):
@@ -4412,16 +4807,22 @@ async fn transcript_records_final_assistant_after_tool_roundtrip() {
     let store = Arc::new(coco_session::TranscriptStore::new(paths));
     let seen = Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
     let config = QueryEngineConfig {
-        session_id: coco_types::SessionId::try_new(session_id).unwrap(),
         ..Default::default()
     };
 
-    let engine = QueryEngine::new(config, client, tools, cancel, None)
-        .with_transcript_store(
-            store.clone(),
-            coco_types::SessionId::try_new(session_id).unwrap(),
-        )
-        .with_transcript_dedup(seen);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new(session_id).unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    )
+    .with_transcript_store(
+        store.clone(),
+        coco_types::SessionId::try_new(session_id).unwrap(),
+    )
+    .with_transcript_dedup(seen);
     let result = engine.run("read /tmp/nonexistent.txt").await.unwrap();
 
     assert_eq!(
@@ -4476,6 +4877,7 @@ async fn stop_hook_prevent_continuation_matches_ts_terminal_reason() {
     let cancel = CancellationToken::new();
     let engine = QueryEngine::new(
         QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
         client,
         tools,
         cancel,
@@ -4543,17 +4945,23 @@ async fn stop_hook_blocking_flushes_transcript_before_retry() {
     let store = Arc::new(coco_session::TranscriptStore::new(paths));
     let seen = Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
     let config = QueryEngineConfig {
-        session_id: coco_types::SessionId::try_new(session_id).unwrap(),
         ..Default::default()
     };
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
-    let engine = QueryEngine::new(config, client, tools, cancel, Some(Arc::new(hooks)))
-        .with_transcript_store(
-            store.clone(),
-            coco_types::SessionId::try_new(session_id).unwrap(),
-        )
-        .with_transcript_dedup(seen);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new(session_id).unwrap(),
+        client,
+        tools,
+        cancel,
+        Some(Arc::new(hooks)),
+    )
+    .with_transcript_store(
+        store.clone(),
+        coco_types::SessionId::try_new(session_id).unwrap(),
+    )
+    .with_transcript_dedup(seen);
 
     let err = engine
         .run("finish then block")
@@ -4595,7 +5003,14 @@ async fn query_result_final_messages_populated_on_cancel() {
     let cancel = CancellationToken::new();
     cancel.cancel();
 
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
     let result = engine.run("hi").await.unwrap();
 
     assert!(result.cancelled);
@@ -4624,7 +5039,14 @@ async fn run_with_messages_uses_last_user_message_for_history_key() {
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
 
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
 
     let prior = coco_messages::create_user_message("previous turn");
     let new = coco_messages::create_user_message("current turn");
@@ -4650,7 +5072,14 @@ async fn run_with_messages_no_events_accepts_prebuilt_messages() {
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
 
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
 
     let messages = vec![
         Arc::new(coco_messages::create_user_message("parent turn")),
@@ -4726,6 +5155,7 @@ async fn ask_branch_aborts_bridge_await_on_cancel() {
     });
     let engine = QueryEngine::new(
         QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
         client,
         tools,
         cancel.clone(),
@@ -5160,6 +5590,41 @@ fn count_protocol<F: Fn(&ServerNotification) -> bool>(events: &[CoreEvent], pred
         .count()
 }
 
+fn assert_turn_result_matches_session_result<F>(events: &[CoreEvent], outcome_matches: F)
+where
+    F: Fn(&coco_types::TurnOutcome) -> bool,
+{
+    let turn_result = events
+        .iter()
+        .find_map(|event| match event {
+            CoreEvent::Protocol(ServerNotification::TurnEnded(params))
+                if outcome_matches(&params.outcome) =>
+            {
+                params.session_result.as_deref()
+            }
+            _ => None,
+        })
+        .expect("matching TurnEnded should carry session_result");
+    let final_result = events
+        .iter()
+        .find_map(|event| match event {
+            CoreEvent::Protocol(ServerNotification::SessionResult(params)) => Some(params.as_ref()),
+            _ => None,
+        })
+        .expect("SessionResult should be emitted");
+
+    assert_eq!(turn_result.session_id, final_result.session_id);
+    assert_eq!(turn_result.total_turns, final_result.total_turns);
+    assert_eq!(turn_result.is_error, final_result.is_error);
+    assert_eq!(turn_result.stop_reason, final_result.stop_reason);
+    assert_eq!(turn_result.result, final_result.result);
+    assert_eq!(turn_result.errors, final_result.errors);
+    assert_eq!(
+        turn_result.structured_output,
+        final_result.structured_output
+    );
+}
+
 async fn collect_run_events(
     engine: QueryEngine,
     prompt: &str,
@@ -5196,7 +5661,14 @@ async fn turn_completed_fires_once_per_user_prompt_cycle() {
     registry.register(Arc::new(ReadTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
 
     let (result, events) = collect_run_events(engine, "read /tmp/whatever").await;
     let qr = result.expect("multi-round run should succeed");
@@ -5256,6 +5728,25 @@ async fn turn_completed_fires_once_per_user_prompt_cycle() {
         started_ids, ended_ids,
         "TurnStarted/TurnEnded turn_ids must match (C2 pairing contract)"
     );
+    let turn_result = events
+        .iter()
+        .find_map(|event| match event {
+            CoreEvent::Protocol(ServerNotification::TurnEnded(params)) => {
+                params.session_result.as_deref()
+            }
+            _ => None,
+        })
+        .expect("tool-call success TurnEnded should carry session_result");
+    let final_result = events
+        .iter()
+        .find_map(|event| match event {
+            CoreEvent::Protocol(ServerNotification::SessionResult(params)) => Some(params.as_ref()),
+            _ => None,
+        })
+        .expect("SessionResult should be emitted");
+    assert_eq!(turn_result.session_id, final_result.session_id);
+    assert_eq!(turn_result.total_turns, final_result.total_turns);
+    assert_eq!(turn_result.result, final_result.result);
 }
 
 #[tokio::test]
@@ -5277,7 +5768,14 @@ async fn cancellation_returns_cancelled_without_engine_turn_ended() {
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
     cancel.cancel();
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
 
     let (result, events) = collect_run_events(engine, "hi").await;
     let qr = result.expect("cancel path returns Ok with cancelled=true");
@@ -5317,7 +5815,14 @@ async fn turn_budget_stop_emits_completed_or_max_turns_reached() {
     // test we set max_turns=1 and rely on the model running once then
     // hitting the cap on turn 2. The simpler "max_turns reached"
     // emission is exercised in run_session_loop's L799 branch.
-    let engine = QueryEngine::new(config, client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
 
     let (result, events) = collect_run_events(engine, "hi").await;
     let _ = result;
@@ -5377,7 +5882,14 @@ async fn stream_error_emits_turn_failed_for_sdk_iterator() {
     let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
 
     let (result, events) = collect_run_events(engine, "hi").await;
     assert!(result.is_err(), "provider failure must propagate as Err");
@@ -5392,6 +5904,9 @@ async fn stream_error_emits_turn_failed_for_sdk_iterator() {
         failed, 1,
         "stream error must emit exactly one TurnEnded(Failed) before propagating"
     );
+    assert_turn_result_matches_session_result(&events, |outcome| {
+        matches!(outcome, coco_types::TurnOutcome::Failed(_))
+    });
 }
 
 #[test]

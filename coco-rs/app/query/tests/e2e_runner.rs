@@ -418,7 +418,14 @@ async fn run_with_events(
         total_token_budget: config_overrides.max_tokens,
         ..Default::default()
     };
-    let engine = QueryEngine::new(config, client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
     let events_handle = tokio::spawn(async move {

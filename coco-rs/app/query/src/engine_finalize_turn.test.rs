@@ -521,6 +521,7 @@ async fn maybe_spawn_prompt_suggestion_emits_protocol_event() {
     let app_state = Arc::new(RwLock::new(ToolAppState::default()));
     let engine = QueryEngine::new(
         QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
         model_runtimes,
         tools,
         CancellationToken::new(),
@@ -587,6 +588,7 @@ async fn maybe_spawn_prompt_suggestion_skips_when_main_queue_pending() {
         .await;
     let engine = QueryEngine::new(
         QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
         model_runtimes,
         tools,
         CancellationToken::new(),

@@ -46,3 +46,25 @@ async fn process_runtime_reload_replaces_project_services() {
 
     assert!(!Arc::ptr_eq(&first, &second));
 }
+
+#[tokio::test]
+async fn process_runtime_shutdown_stops_project_registry_background_task() {
+    let registry = Box::leak(Box::new(ProjectRegistry::new()));
+    let runtime = ProcessRuntime::start(registry, Duration::ZERO, Duration::from_secs(60));
+
+    assert!(!runtime.project_registry_idle_eviction_task_finished());
+
+    runtime.shutdown_background_tasks();
+    for _ in 0..10 {
+        if runtime.project_registry_idle_eviction_task_finished() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+
+    assert!(runtime.project_registry_idle_eviction_task_finished());
+
+    // Shutdown is a process-boundary policy and must be safe to call from
+    // multiple surface guards.
+    runtime.shutdown_background_tasks();
+}

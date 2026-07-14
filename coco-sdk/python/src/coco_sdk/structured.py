@@ -2,7 +2,7 @@
 
 Provides ``TypedClient`` — a generic wrapper that takes a Pydantic model,
 passes its JSON schema through the ``initialize.json_schema`` field,
-and deserializes the ``structured_output`` from ``session/result`` back
+and deserializes the ``structured_output`` from the turn result metadata back
 into the model::
 
     from pydantic import BaseModel
@@ -28,7 +28,12 @@ from typing import Any, Generic, TypeVar
 from pydantic import BaseModel
 
 from coco_sdk.client import CocoClient
-from coco_sdk.generated.protocol import SessionResultParams
+from coco_sdk.generated.protocol import (
+    ServerNotification,
+    ServerNotificationSessionResult,
+    ServerNotificationTurnEnded,
+    SessionResultParams,
+)
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -62,9 +67,7 @@ class TypedClient(CocoClient, Generic[T]):
         """Return both typed output and the raw session-result metadata."""
         session_result: SessionResultParams | None = None
         async for event in self.events():
-            sr = event.as_session_result()
-            if sr:
-                session_result = sr
+            session_result = _session_result_from_event(event) or session_result
 
         if session_result is None or session_result.structured_output is None:
             raise ValueError("No structured output returned from session")
@@ -77,3 +80,11 @@ class TypedClient(CocoClient, Generic[T]):
             ) from exc
 
         return typed, session_result
+
+
+def _session_result_from_event(event: ServerNotification) -> SessionResultParams | None:
+    if isinstance(event, ServerNotificationTurnEnded):
+        return event.params.session_result
+    if isinstance(event, ServerNotificationSessionResult):
+        return event.params
+    return None

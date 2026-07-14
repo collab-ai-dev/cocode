@@ -203,14 +203,14 @@ pub async fn run_plan_mode_turn_with_events(
     params: PlanModeTurnParams,
 ) -> (QueryResult, Vec<coco_types::CoreEvent>) {
     let cancel = CancellationToken::new();
+    let session_id = match coco_types::SessionId::try_new(params.session_id.clone()) {
+        Ok(id) => id,
+        Err(_) => unreachable!("test session id must be valid"),
+    };
     let config = QueryEngineConfig {
         model_id: "scripted-mock".into(),
         permission_mode: params.permission_mode,
         max_turns: params.max_turns,
-        session_id: match coco_types::SessionId::try_new(params.session_id.clone()) {
-            Ok(id) => id,
-            Err(_) => unreachable!("test session id must be valid"),
-        },
         ..Default::default()
     };
     let main_slot = PrebuiltLanguageModelSlot::new(model, coco_inference::RetryConfig::default())
@@ -235,17 +235,24 @@ pub async fn run_plan_mode_turn_with_events(
         coco_subagent::AgentSearchPaths::empty(),
     );
     agent_store.load();
-    let engine = QueryEngine::new(config, model_runtimes, params.tools, cancel, None)
-        .with_app_state(params.app_state)
-        .with_config_home(params.config_home)
-        .with_agent_catalog(agent_store.snapshot())
-        // Keep a (default) bootstrap so any `session_bootstrap.is_some()`
-        // behavior the harness ran under is preserved; its `agents` field is
-        // dead now that `current_agent_types` reads the catalog above.
-        .with_session_bootstrap(SessionBootstrap::default())
-        // Auto-approve any `Ask` decision (ExitPlanMode, etc.) — tests
-        // script the model flow, not user interaction.
-        .with_permission_bridge(allow_all_bridge());
+    let engine = QueryEngine::new(
+        config,
+        session_id,
+        model_runtimes,
+        params.tools,
+        cancel,
+        None,
+    )
+    .with_app_state(params.app_state)
+    .with_config_home(params.config_home)
+    .with_agent_catalog(agent_store.snapshot())
+    // Keep a (default) bootstrap so any `session_bootstrap.is_some()`
+    // behavior the harness ran under is preserved; its `agents` field is
+    // dead now that `current_agent_types` reads the catalog above.
+    .with_session_bootstrap(SessionBootstrap::default())
+    // Auto-approve any `Ask` decision (ExitPlanMode, etc.) — tests
+    // script the model flow, not user interaction.
+    .with_permission_bridge(allow_all_bridge());
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
     let collector = tokio::spawn(async move {
@@ -290,7 +297,14 @@ pub async fn run_with_mock(
         max_turns: Some(10),
         ..Default::default()
     };
-    let engine = QueryEngine::new(config, client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
     match engine.run(prompt).await {
         Ok(result) => result,
         Err(err) => panic!("mock engine should not fail: {err}"),
