@@ -182,7 +182,6 @@ pub async fn run_tui(
     // catalog mid-session).
     let coco_agent_host::local_host::PreparedLocalHost {
         bridge: mut local_app_server_bridge,
-        runtime_factory,
         event_hub_connector,
         event_hub_membership_watcher,
         plugin_watcher_guard: _plugin_watcher_guard,
@@ -565,8 +564,6 @@ pub async fn run_tui(
         local_app_server_bridge,
         pending_approvals,
         runtime_reload_subscriptions,
-        runtime_factory,
-        process_runtime.clone(),
         cwd.clone(),
         flag_settings_path,
         app_server_shutdown_timeout,

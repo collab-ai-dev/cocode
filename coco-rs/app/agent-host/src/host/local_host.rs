@@ -70,11 +70,6 @@ pub struct LocalHostInputs {
 /// guard the surface must keep alive for the session's lifetime.
 pub struct PreparedLocalHost {
     pub bridge: AppServerLocalBridge,
-    /// A clone of the factory installed on the bridge. The interactive TUI
-    /// driver keeps it to construct fresh runtimes for `/clear`, `/resume`, and
-    /// `/branch`; headless ignores it. Cheap to hold — the factory is an `Arc`
-    /// over its opts.
-    pub runtime_factory: SessionRuntimeFactory,
     pub event_hub_connector: Option<ProcessEventHub>,
     pub event_hub_membership_watcher: Option<JoinHandle<()>>,
     /// Held by the surface so the plugin watcher's notify thread + throttle
@@ -109,7 +104,7 @@ pub fn build_local_host(
             session_manager: Some(Arc::clone(&inputs.session_manager)),
             bypass_permissions_available: inputs.bypass_permissions_available,
             runtime_replacement: Some(RuntimeReplacementContext {
-                runtime_factory: runtime_factory.clone(),
+                runtime_factory,
                 process_runtime: Arc::clone(&inputs.process_runtime),
                 cwd: inputs.cwd.clone(),
                 requires_structured_output: inputs.requires_structured_output,
@@ -134,7 +129,6 @@ pub fn build_local_host(
     };
     PreparedLocalHost {
         bridge,
-        runtime_factory,
         event_hub_connector,
         event_hub_membership_watcher,
         plugin_watcher_guard,

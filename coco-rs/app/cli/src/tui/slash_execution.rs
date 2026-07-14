@@ -309,8 +309,6 @@ pub(super) async fn dispatch_slash_command(
     current_session: &SharedSessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
-    runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
-    process_runtime: &Arc<ProcessRuntime>,
     runtime_reload_subscriptions: &Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
 ) -> SlashOutcome {
     let runtime = session;
@@ -409,8 +407,6 @@ pub(super) async fn dispatch_slash_command(
             current_session,
             event_tx,
             local_app_server_bridge,
-            runtime_factory,
-            process_runtime,
             runtime_reload_subscriptions,
         )
         .await;
@@ -422,8 +418,6 @@ pub(super) async fn dispatch_slash_command(
             current_session,
             event_tx,
             local_app_server_bridge,
-            runtime_factory,
-            process_runtime,
             runtime_reload_subscriptions,
         )
         .await;

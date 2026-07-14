@@ -88,9 +88,10 @@ TUI startup is implemented in `app/cli/src/tui/bootstrap.rs`. It:
 The TUI surface directory contains application operations as well as
 presentation policy. The TUI-specific adapters (voice bootstrap, teammate
 inbox pump) live in `app/cli/src/tui`; agent-host retains only
-protocol-neutral bridges. TUI and headless each hand-assemble the local
-bridge/factory/Event-Hub wiring — there is no `LocalHostBuilder` counterpart
-to the remote `HostBuilder` (T4).
+protocol-neutral bridges. TUI and headless share the local bridge/factory/
+Event-Hub assembly through `agent_host::local_host::build_local_host`, the
+local counterpart to the remote `HostBuilder`; the two surfaces differ only in
+the `LocalHostInputs` policy they pass in (T4 resolved).
 
 ### Headless
 
@@ -214,10 +215,10 @@ counter. A whole-runtime actor is not used.
 `SessionHandle` keeps `Arc<SessionRuntime>` private and exposes a forwarding
 API split across responsibility submodules (`session_handle/{capabilities,
 history,controls,engine,late_bind,tasks,mcp,hooks}`). No public method returns a
-raw `Mutex`/`RwLock` (the lock accessors are `pub(crate)` or replaced by narrow
-snapshot ops), with one verified exception:
-`live_permission_rules()` still returns `Arc<RwLock<Vec<PermissionRule>>>` to
-the TUI teammate inbox pump (T1). Session identity lives only on the immutable handle /
+raw `Mutex`/`RwLock`: the lock accessors are `pub(crate)` or replaced by narrow
+snapshot ops, `live_permission_rules()` returns the append-only
+`LivePermissionRulesHandle` capability (T1 resolved), and the dead
+`mcp_manager()` raw-lock accessor was removed. Session identity lives only on the immutable handle /
 `SessionEngineConfigResources` — it was removed from the mutable
 `QueryEngineConfig` entirely, so a config edit cannot rotate it. Callback
 requirements are a mandatory construction input (no `OnceLock` late install).
@@ -376,6 +377,8 @@ Still not proven by tests (tracked in follow-up-todo.md):
 - every session-owned background task is joined under the close deadline
   (T7 — supervisor exists; per-site adoption incomplete);
 - Hub close/replace/reconnect includes final-event cursor state for the
-  retiring set (T9);
-- no mechanical API gate rejects a public lock accessor — the one known
-  violation is `live_permission_rules()` (T1).
+  retiring set (T9).
+
+The public-lock-accessor residual is closed: `live_permission_rules()` now
+returns the narrow `LivePermissionRulesHandle` (T1) and the dead `mcp_manager()`
+raw-lock accessor was removed; no `SessionHandle` method returns a raw lock.

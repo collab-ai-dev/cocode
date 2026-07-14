@@ -145,8 +145,6 @@ pub(super) async fn dispatch_resume(
     current_session: &SharedSessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
-    _runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
-    _process_runtime: &Arc<ProcessRuntime>,
     runtime_reload_subscriptions: &Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
 ) -> SlashOutcome {
     let runtime = session;
@@ -298,8 +296,6 @@ pub(super) async fn dispatch_branch(
     current_session: &SharedSessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
-    _runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
-    _process_runtime: &Arc<ProcessRuntime>,
     runtime_reload_subscriptions: &Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
 ) -> SlashOutcome {
     let runtime = session;
@@ -408,7 +404,6 @@ pub(super) fn runtime_session_plan_file_path(
 use std::{collections::HashMap, sync::Arc};
 
 use coco_agent_host::{goal_command, resume_resolver::ResumePlan};
-use coco_app_runtime::ProcessRuntime;
 use coco_messages::{AssistantContent, LlmMessage, Message};
 use coco_query::CoreEvent;
 use coco_types::TuiOnlyEvent;

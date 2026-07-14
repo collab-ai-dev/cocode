@@ -9,8 +9,6 @@ pub(super) async fn run_agent_driver(
     mut local_app_server_bridge: coco_agent_host::app_server_host::AppServerLocalBridge,
     pending_approvals: coco_agent_host::tui_permission_bridge::PendingApprovals,
     runtime_reload_subscriptions: Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
-    runtime_factory: crate::session_runtime::SessionRuntimeFactory,
-    process_runtime: Arc<ProcessRuntime>,
     cwd: std::path::PathBuf,
     flag_settings: Option<std::path::PathBuf>,
     app_server_shutdown_timeout: Duration,
@@ -93,8 +91,6 @@ pub(super) async fn run_agent_driver(
                         &title_gen_attempted,
                         &turn_done_tx,
                         &runtime_reload_subscriptions,
-                        &runtime_factory,
-                        &process_runtime,
                     )
                     .await;
                 }
@@ -130,8 +126,6 @@ pub(super) async fn run_agent_driver(
                     &title_gen_attempted,
                     &turn_done_tx,
                     &runtime_reload_subscriptions,
-                    &runtime_factory,
-                    &process_runtime,
                 )
                 .await;
                 continue;
@@ -167,8 +161,6 @@ pub(super) async fn run_agent_driver(
                         &current_session,
                         &event_tx,
                         &mut local_app_server_bridge,
-                        &runtime_factory,
-                        &process_runtime,
                         &runtime_reload_subscriptions,
                     )
                     .await;
@@ -522,8 +514,6 @@ pub(super) async fn run_agent_driver(
                     &current_session,
                     &event_tx,
                     &mut local_app_server_bridge,
-                    &runtime_factory,
-                    &process_runtime,
                     &runtime_reload_subscriptions,
                 )
                 .await;
@@ -583,8 +573,6 @@ pub(super) async fn run_agent_driver(
                     &current_session,
                     &event_tx,
                     &mut local_app_server_bridge,
-                    &runtime_factory,
-                    &process_runtime,
                     &runtime_reload_subscriptions,
                 )
                 .await;

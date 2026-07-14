@@ -38,13 +38,8 @@ pub(super) fn is_synthetic_first_prompt_candidate(text: &str) -> bool {
         || trimmed.starts_with("[Request interrupted by user")
 }
 
-/// Truncate a prompt string for display (200-char limit).
+/// Truncate a prompt string for display (200-byte budget).
 pub(super) fn truncate_prompt(text: &str) -> String {
     let flat = text.replace('\n', " ");
-    let trimmed = flat.trim();
-    if trimmed.len() > 200 {
-        format!("{}...", &trimmed[..200].trim())
-    } else {
-        trimmed.to_string()
-    }
+    coco_utils_string::truncate_str(flat.trim(), 200)
 }

@@ -440,8 +440,6 @@ pub(super) async fn process_idle_command_queue(
     title_gen_attempted: &Arc<RwLock<std::collections::HashSet<String>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
     runtime_reload_subscriptions: &Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
-    runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
-    process_runtime: &Arc<ProcessRuntime>,
 ) {
     if active_turn.lock().await.is_some() {
         return;
@@ -457,8 +455,6 @@ pub(super) async fn process_idle_command_queue(
         title_gen_attempted,
         turn_done_tx,
         runtime_reload_subscriptions,
-        runtime_factory,
-        process_runtime,
     )
     .await;
 
@@ -485,8 +481,6 @@ pub(super) async fn drain_queued_slash_commands(
     title_gen_attempted: &Arc<RwLock<std::collections::HashSet<String>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
     runtime_reload_subscriptions: &Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
-    runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
-    process_runtime: &Arc<ProcessRuntime>,
 ) {
     while let Some(cmd) = coco_agent_host::session_queue::dequeue_next_slash_command(session).await
     {
@@ -511,8 +505,6 @@ pub(super) async fn drain_queued_slash_commands(
             current_session,
             event_tx,
             local_app_server_bridge,
-            runtime_factory,
-            process_runtime,
             runtime_reload_subscriptions,
         )
         .await;

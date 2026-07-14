@@ -656,7 +656,7 @@ async fn dispatch_slash_command_for_test(
     event_tx: &tokio::sync::mpsc::Sender<coco_types::CoreEvent>,
     local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> super::SlashOutcome {
-    let (current_session, runtime_factory, process_runtime, _cwd) =
+    let (current_session, _runtime_factory, _process_runtime, _cwd) =
         test_resume_context(runtime).await;
     let reload_subscriptions = test_runtime_reload_subscriptions(&current_session, event_tx);
     super::dispatch_slash_command(
@@ -666,8 +666,6 @@ async fn dispatch_slash_command_for_test(
         &current_session,
         event_tx,
         local_app_server_bridge,
-        &runtime_factory,
-        &process_runtime,
         &reload_subscriptions,
     )
     .await
@@ -832,7 +830,7 @@ async fn idle_queue_processor_starts_pending_prompt_turn() {
         Arc::new(coco_agent_host::app_server_host::AppServerHostState::default()),
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
-    let (current_session, runtime_factory, process_runtime, _cwd) =
+    let (current_session, _runtime_factory, _process_runtime, _cwd) =
         test_resume_context(&runtime).await;
     let reload_subscriptions = test_runtime_reload_subscriptions(&current_session, &event_tx);
 
@@ -846,8 +844,6 @@ async fn idle_queue_processor_starts_pending_prompt_turn() {
         &title_gen_attempted,
         &turn_done_tx,
         &reload_subscriptions,
-        &runtime_factory,
-        &process_runtime,
     )
     .await;
 
@@ -1315,8 +1311,6 @@ async fn resume_slash_uses_local_app_server_session_resume() {
         &current_session,
         &tx,
         &mut local_app_server_bridge,
-        &runtime_factory,
-        &process_runtime,
         &reload_subscriptions,
     )
     .await;
@@ -1394,8 +1388,6 @@ async fn branch_slash_switches_to_fork_through_local_app_server() {
         &current_session,
         &tx,
         &mut local_app_server_bridge,
-        &runtime_factory,
-        &process_runtime,
         &reload_subscriptions,
     )
     .await;

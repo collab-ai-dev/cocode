@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Enforce that coco-agent-host stays protocol-neutral: no dependency on the TUI
 # surface (coco-tui) or the SDK transport crate (coco-sdk-server). TUI/SDK/
-# headless composition lives in coco-cli (app/cli/src/{tui_runner,...}) and the
+# headless composition lives in coco-cli (app/cli/src/{tui,headless,sdk}) and the
 # SDK transport in coco-sdk-server; agent-host exposes protocol-neutral host
 # operations only. See Phase G of
 # docs/coco-rs/multi-session-app-server/remediation-plan.md.

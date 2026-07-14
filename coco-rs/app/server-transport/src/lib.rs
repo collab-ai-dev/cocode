@@ -357,13 +357,6 @@ pub fn ndjson_named_pipe_client_connection_with_max_frame_bytes(
 }
 
 #[cfg(windows)]
-pub fn ndjson_named_pipe_server_connection(
-    stream: tokio::net::windows::named_pipe::NamedPipeServer,
-) -> NdjsonNamedPipeServerConnection {
-    ndjson_named_pipe_server_connection_with_max_frame_bytes(stream, DEFAULT_MAX_NDJSON_FRAME_BYTES)
-}
-
-#[cfg(windows)]
 pub fn ndjson_named_pipe_server_connection_with_max_frame_bytes(
     stream: tokio::net::windows::named_pipe::NamedPipeServer,
     max_frame_bytes: usize,
@@ -539,27 +532,11 @@ pub fn bind_ndjson_unix_listener(
     NdjsonUnixListener::bind(path)
 }
 
-#[cfg(unix)]
-pub fn bind_ndjson_unix_listener_with_max_frame_bytes(
-    path: impl AsRef<std::path::Path>,
-    max_frame_bytes: usize,
-) -> Result<NdjsonUnixListener, TransportFrameError> {
-    NdjsonUnixListener::bind_with_max_frame_bytes(path, max_frame_bytes)
-}
-
 #[cfg(windows)]
 pub fn bind_ndjson_named_pipe_listener(
     pipe_name: impl AsRef<str>,
 ) -> Result<NdjsonNamedPipeListener, TransportFrameError> {
     NdjsonNamedPipeListener::bind(pipe_name)
-}
-
-#[cfg(windows)]
-pub fn bind_ndjson_named_pipe_listener_with_max_frame_bytes(
-    pipe_name: impl AsRef<str>,
-    max_frame_bytes: usize,
-) -> Result<NdjsonNamedPipeListener, TransportFrameError> {
-    NdjsonNamedPipeListener::bind_with_max_frame_bytes(pipe_name, max_frame_bytes)
 }
 
 impl JsonRpcRequest {

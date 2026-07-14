@@ -9,12 +9,6 @@ impl SessionHandle {
         self.runtime.mcp_reconnect_key()
     }
 
-    pub async fn mcp_manager(
-        &self,
-    ) -> Option<Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>> {
-        self.runtime.current_mcp_manager().await
-    }
-
     pub async fn mcp_status_result(&self) -> Option<coco_types::McpStatusResult> {
         let manager = {
             let manager = self.runtime.current_mcp_manager().await?;

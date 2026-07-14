@@ -278,7 +278,6 @@ pub async fn run_chat_with_options(
     // one-shot print run exits before any hot-reload could fire).
     let crate::local_host::PreparedLocalHost {
         bridge: mut local_app_server_bridge,
-        runtime_factory: _,
         event_hub_connector,
         event_hub_membership_watcher,
         plugin_watcher_guard: _plugin_watcher_guard,
