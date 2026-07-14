@@ -13,6 +13,7 @@ pub(crate) fn session_start_input_from_params(
         system_prompt: params.system_prompt.clone(),
         append_system_prompt: params.append_system_prompt.clone(),
         json_schema: params.json_schema.clone(),
+        plan_mode_instructions: params.plan_mode_instructions.clone(),
         initial_messages: params.initial_messages.clone(),
     }
 }
@@ -22,6 +23,7 @@ pub(crate) fn session_resume_input_from_params(
 ) -> crate::session_resume::SessionResumeInput {
     crate::session_resume::SessionResumeInput {
         target: params.target.clone(),
+        plan_mode_instructions: params.plan_mode_instructions.clone(),
     }
 }
 
@@ -32,7 +34,7 @@ pub(crate) fn session_replace_input_from_params(
         source: params.source.clone(),
         destination: match &params.destination {
             coco_types::SessionReplacement::Fresh(params) => {
-                SessionReplaceDestination::Fresh(session_start_input_from_params(params))
+                SessionReplaceDestination::Fresh(Box::new(session_start_input_from_params(params)))
             }
             coco_types::SessionReplacement::Resume(target) => {
                 SessionReplaceDestination::Resume(target.clone())

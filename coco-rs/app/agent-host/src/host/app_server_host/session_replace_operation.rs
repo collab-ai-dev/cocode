@@ -41,7 +41,7 @@ pub(crate) async fn replace_app_server_session_with_runtime(
     let (destination_id, destination_handle, needs_live_repoint) = match input.destination {
         SessionReplaceDestination::Fresh(start_input) => {
             let prepared =
-                prepare_app_server_session_start(start_input, &state, &connection_profile).await?;
+                prepare_app_server_session_start(*start_input, &state, &connection_profile).await?;
             let destination_id = prepared.session_id.clone();
             let factory = {
                 let state = Arc::clone(&state);
@@ -94,6 +94,7 @@ pub(crate) async fn replace_app_server_session_with_runtime(
             let loaded = load_app_server_resume_session(
                 SessionResumeInput {
                     target: target.clone(),
+                    plan_mode_instructions: None,
                 },
                 &state,
             )
@@ -141,6 +142,9 @@ pub(crate) async fn replace_app_server_session_with_runtime(
                             session_id.clone(),
                             cwd,
                             prior_messages,
+                            // Replace-to-resume carries only a target; plan-mode
+                            // policy is re-supplied via `session/resume`.
+                            None,
                             Arc::clone(&app_server),
                         )
                         .await

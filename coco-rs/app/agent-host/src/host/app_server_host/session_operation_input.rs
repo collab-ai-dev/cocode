@@ -16,7 +16,8 @@ pub(crate) struct SessionReplaceInput {
 }
 
 pub(crate) enum SessionReplaceDestination {
-    Fresh(SessionStartInput),
+    // Boxed: `SessionStartInput` is much larger than the other variants.
+    Fresh(Box<SessionStartInput>),
     Resume(coco_types::SessionTarget),
     Clear,
 }

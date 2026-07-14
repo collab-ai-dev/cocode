@@ -428,7 +428,7 @@ pub(crate) fn resolve_skill_load_gates_with_add_dirs(
             .enabled(coco_types::Feature::SkillLearning),
         user_enabled,
         project_enabled,
-        legacy_enabled: project_enabled,
+        legacy_commands_enabled: project_enabled,
         additional_dirs_enabled: project_enabled,
         additional_dirs,
         skills_locked,
@@ -662,6 +662,11 @@ pub async fn bootstrap_session_mcp(
         manager.lock().await.set_reconnect_notifier(reconnect_tx);
         let listener_manager = manager.clone();
         let listener_registry = session.tools().clone();
+        // Detached by design (NOT `spawn_session_task`): this loop blocks on
+        // `reconnect_rx.recv()` and exits cooperatively only when the session's
+        // MCP manager drops `reconnect_tx` at teardown. Tracking it for
+        // close-time joining would make close wait the full drain deadline
+        // before aborting an otherwise-idle receiver.
         tokio::spawn(async move {
             while let Some(server) = reconnect_rx.recv().await {
                 let snapshot = listener_manager.lock().await.clone();
@@ -697,6 +702,9 @@ pub async fn bootstrap_session_mcp(
     if await_connect {
         connect_task.await;
     } else {
+        // Detached: a bounded, time-boxed background connect. It completes on
+        // its own within the per-server MCP connect timeout, so it is not a
+        // close-deadline concern.
         tokio::spawn(connect_task);
     }
 }

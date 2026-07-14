@@ -12,7 +12,6 @@
 //! `resolve_startup_permission_state`) live here as well, so a test
 //! can drive any of them in isolation.
 
-#[path = "../headless_support.rs"]
 mod support;
 
 use std::{

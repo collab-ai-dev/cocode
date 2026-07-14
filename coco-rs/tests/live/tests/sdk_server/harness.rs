@@ -265,7 +265,7 @@ pub async fn build_live_server_with_options(
 
     let runtime_config = Arc::new(runtime_config);
     let bootstrap_source =
-        SessionRuntimeBootstrapSource::startup_snapshot(SessionRuntimeBootstrap {
+        SessionRuntimeBootstrapSource::from_prebuilt_bootstrap(SessionRuntimeBootstrap {
             runtime_config: Arc::clone(&runtime_config),
             tools,
             model_id: model_id.clone(),

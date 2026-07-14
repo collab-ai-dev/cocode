@@ -24,7 +24,7 @@ pub use options::AgentHostOptions;
 // into responsibility subdirectories.
 pub use client::{local_client, tui_permission_bridge};
 pub(crate) use host::app_session_runtime;
-pub use host::{app_server_host, app_session, remote_host};
+pub use host::{app_server_host, app_session, local_host, remote_host};
 pub(crate) use integrations::{
     agent_handle_factory, agent_transcript_persistence, bash_tool_handle, command_queue_sink,
     coordinator_mode_resume, elicitation_hooks, file_changed_watcher, fork_dispatcher,

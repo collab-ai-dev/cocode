@@ -1,11 +1,11 @@
 # Current Architecture
 
-Audit baseline: production tree on 2026-07-13.
+Audit baseline: landed post-remediation tree on 2026-07-14.
 
-This document is descriptive. It includes defects and transitional behavior;
-it is not the target design. Listing a defect here does not automatically make
-it a blocker for the active workstream; admission and ordering follow the
-convergence gates in `remediation-plan.md`.
+This document is descriptive; it is not the target design. The v2 remediation
+recorded in `remediation-plan.md` is complete. Residual defects that survive in
+this description are cross-referenced to the verified follow-up items in
+[follow-up-todo.md](follow-up-todo.md) (T-numbers).
 
 ## Crate topology
 
@@ -17,13 +17,10 @@ coco-types
    +---------------- coco-app-server-transport
    |                          ^
    |                          |
-coco-app-server       coco-app-server-client
-   ^                          ^
-   |                          |
-   +-------- coco-agent-host--+
-                 ^
-                 |
-          coco-app-runtime
+coco-app-server       coco-app-server-client      coco-app-runtime
+   ^                          ^                          ^
+   |                          |                          |
+   +-------- coco-agent-host--+--------------------------+
 ```
 
 Useful properties:
@@ -75,7 +72,7 @@ execution-plan policy.
 
 ### TUI
 
-TUI startup is implemented in `coco-cli/src/tui_runner/bootstrap.rs`. It:
+TUI startup is implemented in `app/cli/src/tui/bootstrap.rs`. It:
 
 1. consumes teammate identity environment;
 2. folds startup config and builds engine resources;
@@ -88,9 +85,12 @@ TUI startup is implemented in `coco-cli/src/tui_runner/bootstrap.rs`. It:
 8. routes the migrated control paths through typed local bridge calls;
 9. drains AppServer and Event Hub through `ShutdownCoordinator` during exit.
 
-The TUI runner contains application operations as well as presentation policy.
-Agent-host still supplies several TUI-specific permission, voice, teammate,
-image, and command adapters, so dependency direction remains inverted.
+The TUI surface directory contains application operations as well as
+presentation policy. The TUI-specific adapters (voice bootstrap, teammate
+inbox pump) live in `app/cli/src/tui`; agent-host retains only
+protocol-neutral bridges. TUI and headless each hand-assemble the local
+bridge/factory/Event-Hub wiring — there is no `LocalHostBuilder` counterpart
+to the remote `HostBuilder` (T4).
 
 ### Headless
 
@@ -102,7 +102,9 @@ Headless execution is implemented in `coco-agent-host::headless`. It:
 4. calls local `session/start` or `session/resume` so AppServer owns runtime
    registration and history hydration;
 5. still applies some live turn configuration directly through
-   `SessionHandle`;
+   `SessionHandle` after `session/start` (structured output, live
+   permissions, turn runtime config), diverging from the factory-fold
+   timing used by TUI/SDK (T5);
 6. starts a turn through local AppServer;
 7. waits for `TurnEnded` through local AppServer and uses the completion's
    embedded per-turn session result directly;
@@ -213,7 +215,9 @@ counter. A whole-runtime actor is not used.
 API split across responsibility submodules (`session_handle/{capabilities,
 history,controls,engine,late_bind,tasks,mcp,hooks}`). No public method returns a
 raw `Mutex`/`RwLock` (the lock accessors are `pub(crate)` or replaced by narrow
-snapshot ops). Session identity lives only on the immutable handle /
+snapshot ops), with one verified exception:
+`live_permission_rules()` still returns `Arc<RwLock<Vec<PermissionRule>>>` to
+the TUI teammate inbox pump (T1). Session identity lives only on the immutable handle /
 `SessionEngineConfigResources` — it was removed from the mutable
 `QueryEngineConfig` entirely, so a config edit cannot rotate it. Callback
 requirements are a mandatory construction input (no `OnceLock` late install).
@@ -242,25 +246,24 @@ same local bridge. Test/embedding headless callers that already hold typed
 messages pass them as `session/start.initial_messages`; the AppServer-owned
 start builder hydrates that initial history before the first turn.
 
-That transitional start DTO is not authority-safe. Because serialized start
-also accepts `session_id` and the generic load path returns an existing Live
-handle, a second connection can reach and mutate runtime state before surface
-attachment rejects the ownership conflict. The start mapping also ignores
-declared `max_turns`, `max_budget_usd`, system-prompt variants, and
-`initial_prompt`. Initialize duplicates several session-policy fields, while
-start/resume response surface ids are optional. These are current defects, not
-v2 compatibility requirements.
+The start DTO is authority-safe. Serialized `SessionStartParams` carries no
+`session_id`, `initial_messages`, or `initial_prompt`;
+`#[serde(deny_unknown_fields)]` rejects legacy fields as invalid params. Remote
+start mints its identity and loads through a new-only reservation that accepts
+only a fresh `Started` slot. The local seed is realized as `#[serde(skip)]`
+fields settable only by in-process construction. `max_turns`,
+`max_budget_usd`, system-prompt variants, and `json_schema` are consumed by
+the session fold; initialize carries only connection capabilities (residual:
+`plan_mode_instructions` still rides on initialize, T8); start/resume results
+require `surface_id`.
 
-Replace ownership is also inconsistent. The already-live destination path
-commits routing and launches old-session close with a bare `tokio::spawn`, then
-returns success without a retained owner/completion. Other replacement paths
-use `spawn_replace`, but destination promotion can resolve the waiter before a
-source-close failure is known. Post-commit close failure therefore has no
-uniform typed result today.
+Replace ownership is uniform. Every replace branch runs in an AppServer-owned
+task with a retained join handle (`spawn_tracked` + `owner_tasks`;
+`abort_and_join_owner_tasks` on shutdown), and a post-commit source-close
+failure surfaces as a structured `committed_close_failed` error rather than
+silent success.
 
-The resulting runtimes are similar, but the ordering and ownership remain
-transitional until production-surface startup adapters are covered end to end.
-The shared lifecycle conformance coverage now verifies start/read/close and
+The shared lifecycle conformance coverage verifies start/read/close and
 durable resume/read/close against the local typed surface, the JSON-RPC
 AppServer bridge, and the concrete Unix NDJSON sidecar binding on Unix. SDK
 stdio is covered in `coco-sdk-server` through `SdkServer::run_app_server_connection`
@@ -290,13 +293,15 @@ storage operations:
    - rejects any Loading/Live/Closing registry slot with `SessionStillLive`;
    - calls `SessionManager::delete` only after the live-slot check passes.
 
-Remaining defects: the event forwarder clears turn admission before
-`SessionTurnExecutor` commits the engine's final history, so an immediate next
-turn can read stale history. Active turn and forwarder drains each receive the
-full configured timeout rather than sharing one deadline, and close has no
-single registry of all session-owned background tasks. Generated
-Python/TypeScript clients still need lifecycle conformance coverage beyond
-codegen and unit tests.
+Turn/close ordering is authoritative: the event forwarder holds the terminal
+`TurnEnded` until `commit_engine_turn_history` completes, so an immediate next
+turn observes committed history (named regression still to add, T6). Close
+drains the turn task then the forwarder under one absolute
+`timeout_at(deadline, …)` budget, and `join_session_tasks(deadline)` joins the
+session task supervisor. Residuals: supervisor adoption is one site deep —
+most session-owned spawns still use raw `tokio::spawn` and need per-site
+triage (T7); generated Python/TypeScript clients still need lifecycle
+conformance coverage beyond codegen and unit tests.
 
 ## Event and Hub flow
 
@@ -309,19 +314,20 @@ host with an explicit live-session snapshot, including an empty snapshot during
 SDK zero-session startup, and the connector worker announces immediately on
 startup. SDK remote, TUI, and headless startup paths attach the process-owned
 egress to AppServer event routing and run a membership watcher that reads
-`AppServer::list_live_sessions()` after AppServer activity revisions. Local
+`AppServer::announced_session_ids()` (Live plus retiring Closing slots) after
+AppServer activity revisions. Local
 sidecar and SDK stdio writers also refresh membership immediately before
 forwarding a session event to the Hub. The remaining gaps are validation and
 protocol edge coverage: close, replace, reconnect cursor behavior, and event
 identity/ack isolation still need dedicated regressions. SDK remote startup
 and A/B start membership are covered by focused regressions.
 
-There is also a semantic gap before those tests: the watcher subscribes to a
-general activity revision and derives membership from
-`list_live_sessions()`, which excludes Closing slots. The close owner emits its
-final `SessionResult` while the slot is Closing. Membership can therefore be
-re-announced without that identity before final egress is enqueued, and a
-reconnect cursor negotiation may omit the final event.
+The R17 membership hole is closed: a Closing session stays announced until the
+completed close cascade removes its slot, so re-announce cannot drop the
+identity before final egress is enqueued. Two protocol-level residuals remain
+(T9): the watcher still wakes on the general activity revision and diffs
+snapshots rather than subscribing to a dedicated lifecycle revision, and
+reconnect cursor requests are not yet scoped to the retiring set.
 
 ## Module and dependency shape
 
@@ -335,18 +341,18 @@ Current `coco-agent-host` characteristics:
 - protocol-neutral: no dependency on `coco-tui` or `coco-sdk-server` (seam-guarded);
 - the dead `output` module (no production callers) and the superseded
   `session_replacement` module were removed;
-- top-level module grouping under `session`/`integrations`/`host`/`protocol`/
-  `lifecycle`/`client` (Phase H #7) is not yet applied — modules remain flat at
-  the source root.
+- top-level modules are grouped under `session`/`integrations`/`host`/
+  `client`/`lifecycle` (Phase H #7; the plan's `protocol` group had no
+  agent-host members), with `event_hub`, `headless`, `options`, and `paths`
+  at the root and companion `*.test.rs` files alongside every implementation.
 
 Current `coco-cli` characteristics:
 
-- clap schema and tracing/process helpers;
-- a large TUI application driver;
-- mode-specific startup and shutdown policy;
-- many direct dependencies on application/core crates;
-- direct `main.rs` dependency on `coco-sdk-server::run_sdk_mode` startup
-  orchestration.
+- clap schema, `ExecutionPlan`, and tracing/process helpers;
+- three surface directories: `app/cli/src/{tui,headless,sdk}` — the TUI
+  application driver, the headless one-shot runner, and the SDK process
+  entrypoint `run_sdk_mode` (moved here from `coco-sdk-server` in Phase G4);
+- many direct dependencies on application/core crates (composition root).
 
 ## Test coverage and gaps
 
@@ -354,15 +360,22 @@ Existing production tests cover explicit authority, two-session runtime and
 integration isolation, callbacks, replay, reload ownership, slow consumers,
 orphan authority, and concurrent registry shutdown.
 
-The focused `coco-app-server` suite (92 tests) and `coco-agent-host` suites (331
-unit, 26 multi-session integration, and one WebSocket test) passed during this
-audit. They do not currently prove:
+The full workspace `pre-commit` suite (fmt, seam guards, error policy,
+full-workspace clippy, complete nextest run, SDK Python suite) passed on
+2026-07-14. Now proven since the 2026-07-13 audit: remote start cannot
+name/mutate another live or orphaned session
+(`session_start_rejects_existing_live_id_without_mutation`); legacy/unknown
+start fields are rejected (`deny_unknown_fields` + consumption tests);
+agent-host has no TUI or SDK-transport dependency (seam script in
+`pre-commit`); close preserves/delete removes, timeout abort+join, and
+in-flight-turn close accounting.
 
-- remote start cannot name/mutate another live or orphaned session;
-- every accepted initialize/start field is consumed or rejected;
-- an immediate next turn sees the just-completed engine history;
-- replace waits for and reports source close failure on every branch;
-- every session/background/lifecycle owner task is joined under one deadline;
-- Hub close/replace/reconnect includes final-event cursor state;
-- agent-host has no TUI dependency;
-- session public APIs do not expose raw locks.
+Still not proven by tests (tracked in follow-up-todo.md):
+
+- an immediate next turn sees the just-completed engine history (T6);
+- every session-owned background task is joined under the close deadline
+  (T7 — supervisor exists; per-site adoption incomplete);
+- Hub close/replace/reconnect includes final-event cursor state for the
+  retiring set (T9);
+- no mechanical API gate rejects a public lock accessor — the one known
+  violation is `live_permission_rules()` (T1).

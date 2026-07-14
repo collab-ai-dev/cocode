@@ -21,7 +21,6 @@
 
 use anyhow::Result;
 use anyhow::anyhow;
-use coco_sdk_server::SdkTransport;
 
 use crate::sdk_server::harness::build_live_server;
 use crate::sdk_server::harness::drive_until_response;

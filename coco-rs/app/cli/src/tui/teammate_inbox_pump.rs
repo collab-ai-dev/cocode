@@ -62,11 +62,8 @@
 //!   `ShutdownApproved` round-trip.
 //! - Teammate→leader idle/result reporting after each turn.
 
-use std::sync::Arc;
 use std::time::Duration;
 
-use coco_types::PermissionRule;
-use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -77,7 +74,7 @@ use coco_coordinator::teammate::format_as_teammate_message;
 use coco_coordinator::types::TeammateIdentity;
 use coco_tui::UserCommand;
 
-use coco_agent_host::session_runtime::SessionHandle;
+use coco_agent_host::session_runtime::{LivePermissionRulesHandle, SessionHandle};
 
 /// Mailbox poll cadence (500 ms) — this pump is the cross-process analog of
 /// the in-process runner loop.
@@ -101,11 +98,10 @@ pub async fn spawn_for_current_teammate(
     let identity = coco_coordinator::identity::resolve_teammate_identity()?;
     let live_rules = session.live_permission_rules();
     live_rules
-        .write()
-        .await
         .extend(coco_coordinator::runner_loop::load_team_allowed_path_rules(
             &identity.team_name,
-        ));
+        ))
+        .await;
     let (turn_done_tx, turn_done_rx) = mpsc::channel::<String>(16);
     spawn(identity, command_tx, turn_done_rx, cancel, live_rules);
     Some(turn_done_tx)
@@ -120,15 +116,16 @@ pub async fn spawn_for_current_teammate(
 ///   top-level turn (fired by `run_agent_driver`).
 /// - `cancel`: fired by the runner after `app.run()` returns so the pump drops
 ///   `command_tx` and the driver can shut down.
-/// - `live_permission_rules`: the same `Arc` installed on the teammate's
-///   engine config at boot (seeded from `team_allowed_paths`); the pump
-///   extends it when a leader `TeamPermissionUpdate` arrives.
+/// - `live_permission_rules`: the append-only handle over the same overlay
+///   installed on the teammate's engine config at boot (seeded from
+///   `team_allowed_paths`); the pump extends it when a leader
+///   `TeamPermissionUpdate` arrives.
 pub fn spawn(
     identity: TeammateIdentity,
     command_tx: mpsc::Sender<UserCommand>,
     turn_done_rx: mpsc::Receiver<String>,
     cancel: CancellationToken,
-    live_permission_rules: Arc<RwLock<Vec<PermissionRule>>>,
+    live_permission_rules: LivePermissionRulesHandle,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         run(
@@ -147,7 +144,7 @@ async fn run(
     command_tx: mpsc::Sender<UserCommand>,
     mut turn_done_rx: mpsc::Receiver<String>,
     cancel: CancellationToken,
-    live_permission_rules: Arc<RwLock<Vec<PermissionRule>>>,
+    live_permission_rules: LivePermissionRulesHandle,
 ) {
     loop {
         // Apply any pending leader control messages (mode / permission rules)
@@ -227,7 +224,7 @@ async fn scan_tick(identity: &TeammateIdentity) -> Option<String> {
 async fn drain_control_tick(
     identity: &TeammateIdentity,
     command_tx: &mpsc::Sender<UserCommand>,
-    live_rules: &Arc<RwLock<Vec<PermissionRule>>>,
+    live_rules: &LivePermissionRulesHandle,
 ) {
     let messages =
         mailbox::read_mailbox(&identity.agent_name, &identity.team_name).unwrap_or_default();
@@ -247,10 +244,9 @@ async fn drain_control_tick(
             permission_update, ..
         } = &parsed
         {
-            let rules = permission_update.clone().into_permission_rules();
-            if !rules.is_empty() {
-                live_rules.write().await.extend(rules);
-            }
+            live_rules
+                .extend(permission_update.clone().into_permission_rules())
+                .await;
             true
         } else {
             false

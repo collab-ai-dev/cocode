@@ -12,6 +12,31 @@ pub struct PermissionModeChange {
     pub changed: bool,
 }
 
+/// Narrow append-only capability over a session's shared live permission-rule
+/// overlay. Handed out instead of the raw lock so the teammate inbox pump can
+/// push leader `team_permission_update` rules into the same overlay the engine
+/// reads each tool batch, without a public [`SessionHandle`] method returning
+/// an `Arc<RwLock<_>>`. Append-only by design: the overlay is only ever
+/// extended (boot seed + leader pushes), never read or replaced from outside.
+#[derive(Clone)]
+pub struct LivePermissionRulesHandle {
+    inner: Arc<RwLock<Vec<coco_types::PermissionRule>>>,
+}
+
+impl LivePermissionRulesHandle {
+    pub fn new(inner: Arc<RwLock<Vec<coco_types::PermissionRule>>>) -> Self {
+        Self { inner }
+    }
+
+    /// Append rules to the shared overlay. A no-op for an empty batch.
+    pub async fn extend(&self, rules: Vec<coco_types::PermissionRule>) {
+        if rules.is_empty() {
+            return;
+        }
+        self.inner.write().await.extend(rules);
+    }
+}
+
 /// Build the live permission base (S1) for the main session's `ToolAppState`
 /// from the loaded rule maps + mode + dirs + source roots. This is the single
 /// seeding shape used at bootstrap, `/clear` re-seed, and the headless/AppServer
@@ -126,11 +151,11 @@ impl SessionRuntime {
         refresh_live_permissions_for_turn(&mut guard, refresh);
     }
 
-    /// The shared live permission-rule overlay (see field docs). Callers push
-    /// mid-cycle approvals / team-rule updates here; every main-session engine
-    /// reads it each tool batch.
-    pub fn live_permission_rules(&self) -> Arc<RwLock<Vec<coco_types::PermissionRule>>> {
-        self.permission_resources.live_permission_rules.clone()
+    /// Narrow append-only handle over the shared live permission-rule overlay
+    /// (see field docs). Callers push mid-cycle team-rule updates through it;
+    /// every main-session engine reads the same overlay each tool batch.
+    pub fn live_permission_rules_handle(&self) -> LivePermissionRulesHandle {
+        LivePermissionRulesHandle::new(self.permission_resources.live_permission_rules.clone())
     }
 
     /// Inject the live permission-rule overlay onto a main-session engine

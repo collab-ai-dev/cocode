@@ -49,6 +49,7 @@ pub(crate) async fn build_connection_runtime_for_start(
     let profile = runtime_profile_from_connection(
         &connection_profile,
         replacement.requires_structured_output,
+        prepared.plan_mode_custom_instructions.clone(),
     );
     let session = build_app_session_runtime_for_start(&binding, &profile, &prepared).await?;
     install_connection_runtime_callbacks(&connection_profile, &session, app_server);
@@ -74,6 +75,7 @@ pub(crate) async fn build_connection_runtime_for_start(
     Ok(session)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn build_connection_runtime_for_resume(
     replacement: RuntimeReplacementContext,
     _state: Arc<AppServerHostState>,
@@ -81,12 +83,14 @@ pub(crate) async fn build_connection_runtime_for_resume(
     session_id: SessionId,
     cwd: std::path::PathBuf,
     prior_messages: Vec<coco_messages::Message>,
+    plan_mode_instructions: Option<String>,
     app_server: Arc<AppServer<AppSessionHandle>>,
 ) -> anyhow::Result<crate::session_runtime::SessionHandle> {
     let binding = runtime_binding_from_replacement(&replacement);
     let profile = runtime_profile_from_connection(
         &connection_profile,
         replacement.requires_structured_output,
+        plan_mode_instructions,
     );
     let session =
         build_app_session_runtime_for_resume(&binding, &profile, session_id.clone(), cwd).await?;
@@ -108,9 +112,12 @@ pub(crate) async fn build_connection_runtime_for_clear(
     app_server: Arc<AppServer<AppSessionHandle>>,
 ) -> anyhow::Result<crate::session_runtime::SessionHandle> {
     let binding = runtime_binding_from_replacement(&replacement);
+    // Clear/branch is local-only; plan-mode instructions are re-applied by the
+    // surface, so the rebuilt clear destination carries none from the profile.
     let profile = runtime_profile_from_connection(
         &connection_profile,
         replacement.requires_structured_output,
+        None,
     );
     let session = binding
         .runtime_factory
@@ -144,6 +151,7 @@ fn runtime_binding_from_replacement(
 fn runtime_profile_from_connection(
     connection_profile: &coco_types::ConnectionProfile,
     requires_structured_output: bool,
+    plan_mode_custom_instructions: Option<String>,
 ) -> AppSessionRuntimeProfile {
     let supplied_agents = connection_profile
         .initialize()
@@ -153,12 +161,12 @@ fn runtime_profile_from_connection(
         .map(|(accepted, _)| accepted)
         .unwrap_or_default();
 
+    // Plan-mode instructions are per-session execution policy: they arrive on
+    // `session/start` / `session/resume` (threaded in by the caller), not on the
+    // connection's `initialize`.
     AppSessionRuntimeProfile {
         callback_requirements: connection_profile.callback_requirements(),
-        plan_mode_custom_instructions: connection_profile
-            .initialize()
-            .plan_mode_instructions
-            .clone(),
+        plan_mode_custom_instructions,
         supplied_agents,
         requires_structured_output,
     }

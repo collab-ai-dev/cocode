@@ -124,7 +124,7 @@ impl SessionRuntime {
         self.catalog_resources.command_registry()
     }
     /// Session-scoped command queue handle. Producers outside the
-    /// per-turn engine - the TUI bridge in `tui_runner` (user typing
+    /// per-turn engine - the TUI bridge in the TUI driver (user typing
     /// while busy), future task-completion / coordinator / hook
     /// forwarders - call `enqueue` on this handle to inject mid-turn
     /// steering messages. Returned by reference; callers `.clone()` if

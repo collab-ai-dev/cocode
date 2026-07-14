@@ -55,20 +55,14 @@ async fn connection_factory_owns_independent_initialize_state() {
     let handler_a = factory.open(connection_a);
     let handler_b = factory.open(connection_b);
 
-    for (handler, connection, prompt) in [
-        (&handler_a, connection_a, "prompt-a"),
-        (&handler_b, connection_b, "prompt-b"),
-    ] {
+    for (handler, connection) in [(&handler_a, connection_a), (&handler_b, connection_b)] {
         handler
             .handle_json_rpc_request(
                 JsonRpcRequestContext {
                     connection,
                     scope: RequestScope::Connection,
                 },
-                ClientRequest::Initialize(InitializeParams {
-                    plan_mode_instructions: Some(prompt.to_string()),
-                    ..Default::default()
-                }),
+                ClientRequest::Initialize(InitializeParams::default()),
             )
             .await
             .expect("first initialize succeeds");
@@ -217,7 +211,7 @@ async fn build_local_bridge_test_runtime(
         crate::session_runtime::SessionRuntimeFactoryOpts {
             cli: Arc::new(crate::AgentHostOptions::default()),
             bootstrap_source:
-                crate::session_runtime::SessionRuntimeBootstrapSource::startup_snapshot(
+                crate::session_runtime::SessionRuntimeBootstrapSource::from_prebuilt_bootstrap(
                     crate::session_runtime::SessionRuntimeBootstrap {
                         runtime_config: Arc::new(runtime_config),
                         tools: Arc::new(coco_tool_runtime::ToolRegistry::new()),

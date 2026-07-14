@@ -18,7 +18,6 @@ mod common;
 mod sdk_server;
 
 use anyhow::Result;
-use coco_sdk_server::SdkTransport;
 use coco_types::ClientRequestMethod;
 use coco_types::NotificationMethod;
 

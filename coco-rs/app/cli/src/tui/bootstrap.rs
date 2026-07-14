@@ -68,7 +68,6 @@ pub async fn run_tui(
         runtime_config.settings.merged.session.backend,
         coco_config::global_config::config_home(),
     ));
-    let _ = session_manager.create(&model_id, &cwd);
     {
         // Background housekeeping: prune session files older than the
         // default retention period (30 days). Fire-and-forget.
@@ -175,56 +174,43 @@ pub async fn run_tui(
         .map(|plan| plan.cwd.clone())
         .unwrap_or_else(|| cwd.clone());
     let runtime_factory_cli = Arc::new(cli);
-    let runtime_factory = crate::session_runtime::SessionRuntimeFactory::from_host_config(
-        crate::session_runtime::SessionRuntimeFactoryHostConfig {
+    // Shared local-host assembly (factory + local bridge + Event Hub egress +
+    // plugin watcher), identical to the headless path — see `crate::local_host`.
+    // TUI-specific policy: the interactive permission bridge, a TUI event sink
+    // and leader-permission bridge on integrations, interactive file-history
+    // checkpointing, and an enabled plugin watcher (edits hot-reload the
+    // catalog mid-session).
+    let coco_agent_host::local_host::PreparedLocalHost {
+        bridge: mut local_app_server_bridge,
+        runtime_factory,
+        event_hub_connector,
+        event_hub_membership_watcher,
+        plugin_watcher_guard: _plugin_watcher_guard,
+    } = coco_agent_host::local_host::build_local_host(
+        coco_agent_host::local_host::LocalHostInputs {
             cli: Arc::clone(&runtime_factory_cli),
             cwd: cwd.clone(),
-            model_runtimes: None,
             session_manager: Arc::clone(&session_manager),
+            process_runtime: process_runtime.clone(),
+            model_runtimes: None,
             fast_model_spec,
             permission_bridge: Some(session_permission_bridge),
-            process_runtime: process_runtime.clone(),
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
             // Interactive TUI: file-history checkpointing defaults ON.
             is_non_interactive: false,
-        },
-    );
-    let mut local_app_server_bridge =
-        coco_agent_host::app_server_host::AppServerLocalBridge::with_host_inputs_and_server_config(
-            coco_agent_host::app_server_host::HostInputs {
-                startup_cwd: Some(cwd.clone()),
-                session_manager: Some(Arc::clone(&session_manager)),
-                bypass_permissions_available,
-                runtime_replacement: Some(
-                    coco_agent_host::app_server_host::RuntimeReplacementContext {
-                        runtime_factory: runtime_factory.clone(),
-                        process_runtime: process_runtime.clone(),
-                        cwd: cwd.clone(),
-                        requires_structured_output: runtime_factory_cli.json_schema.is_some(),
-                        integration_options:
-                            coco_agent_host::session_bootstrap::SessionIntegrationOptions {
-                                event_sink: Some(notification_tx.clone()),
-                                leader_permission_bridge: Some(tui_permission_bridge.clone()),
-                                ..Default::default()
-                            },
-                    },
-                ),
-                turn_runner: Some(Arc::new(
-                    coco_agent_host::app_server_host::SessionTurnExecutor::new(None, None),
-                )),
+            integration_options: coco_agent_host::session_bootstrap::SessionIntegrationOptions {
+                event_sink: Some(notification_tx.clone()),
+                leader_permission_bridge: Some(tui_permission_bridge.clone()),
                 ..Default::default()
             },
-            &runtime_config.server,
-        );
-    let event_hub_connector =
-        coco_agent_host::event_hub::ProcessEventHub::spawn(&runtime_config, &cwd, Vec::new());
-    let event_hub_membership_watcher = event_hub_connector.as_ref().map(|connector| {
-        local_app_server_bridge.set_hub_connector_egress(connector.egress());
-        coco_agent_host::event_hub::spawn_app_server_membership_watcher(
-            Arc::clone(local_app_server_bridge.app_server()),
-            connector.updater(),
-        )
-    });
+            bypass_permissions_available,
+            requires_structured_output: runtime_factory_cli.json_schema.is_some(),
+            plugin_watch: coco_agent_host::local_host::LocalPluginWatch::Enabled(
+                notification_tx.clone(),
+            ),
+        },
+        &runtime_config,
+    );
     let startup_binding = match &resume_plan {
         Some(plan) => {
             tracing::info!(
@@ -241,6 +227,7 @@ pub async fn run_tui(
                         target: coco_types::SessionTarget {
                             session_id: plan.session_id.clone(),
                         },
+                        plan_mode_instructions: None,
                     },
                     Some(notification_tx.clone()),
                 )
@@ -286,16 +273,8 @@ pub async fn run_tui(
     // The permission bridge resolves the active runtime through
     // `current_session`, so `Notification` hooks fire when the user is asked
     // to approve a tool, including after `/resume`, `/branch`, or `/clear`.
-
-    // Plugin change detector. Lifecycle: held by `_plugin_watcher_guard`
-    // so the `Arc` lives until this function returns (TUI shutdown). The
-    // wrapped `FileWatcher` drops with the Arc, shutting its notify
-    // thread + throttle task down cleanly.
-    let _plugin_watcher_guard = coco_agent_host::plugin_watch::spawn(
-        notification_tx.clone(),
-        &cwd,
-        &coco_config::global_config::config_home(),
-    );
+    // The plugin change detector is owned by the shared local-host builder
+    // above (`LocalPluginWatch::Enabled`) and held in `_plugin_watcher_guard`.
 
     // Skill change detector. Reloads the skill catalog (reminder +
     // SkillTool) and rebuilds the slash-command registry on `.md` edits

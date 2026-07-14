@@ -1467,6 +1467,7 @@ async fn lifecycle_conformance_resume(surface: LifecycleConformanceSurface) {
                 target: SessionTarget {
                     session_id: started.session_id.clone(),
                 },
+                plan_mode_instructions: None,
             },
         )
         .await;
@@ -3321,6 +3322,7 @@ async fn orphan_resume_callback_requirements_scenario() {
                 target: coco_types::SessionTarget {
                     session_id: started.session_id.clone(),
                 },
+                plan_mode_instructions: None,
             },
         )
         .await
@@ -3351,6 +3353,7 @@ async fn orphan_resume_callback_requirements_scenario() {
                 target: coco_types::SessionTarget {
                     session_id: started.session_id.clone(),
                 },
+                plan_mode_instructions: None,
             },
         )
         .await

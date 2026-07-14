@@ -1381,7 +1381,6 @@ export interface InitializeParams {
   WorktreeCreate?: Array<HookCallbackMatcher>;
   WorktreeRemove?: Array<HookCallbackMatcher>;
 } | null;
-  planModeInstructions?: string | null;
   prompt_suggestions?: boolean | null;
 }
 
@@ -2790,6 +2789,7 @@ export interface SessionResultParams {
  * Params for `session/resume`.
  */
 export interface SessionResumeParams {
+  planModeInstructions?: string | null;
   target: SessionTarget;
 }
 
@@ -2836,6 +2836,7 @@ export interface SessionStartParams {
   max_turns?: number | null;
   model?: string | null;
   permission_mode?: PermissionMode | null;
+  planModeInstructions?: string | null;
   system_prompt?: string | null;
 }
 

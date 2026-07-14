@@ -1355,13 +1355,6 @@
           },
           "additionalProperties": false
         },
-        "planModeInstructions": {
-          "description": "Custom workflow body for the plan-mode system reminder.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "prompt_suggestions": {
           "description": "Enable prompt suggestions in the output stream.",
           "type": [
@@ -1968,6 +1961,13 @@
       "description": "Params for `session/resume`.",
       "type": "object",
       "properties": {
+        "planModeInstructions": {
+          "description": "Custom workflow body for the plan-mode system reminder, re-supplied for\nthe resumed session. Per-session execution policy carried on resume for\nthe same reason it moved to `session/start` (off `initialize`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "target": {
           "$ref": "#/$defs/SessionTarget"
         }
@@ -2023,6 +2023,13 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "planModeInstructions": {
+          "description": "Custom workflow body for the plan-mode system reminder. Per-session\nexecution policy: it lives here on `session/start`, not on `initialize`\n(which carries connection capabilities only).",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "system_prompt": {

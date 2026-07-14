@@ -47,6 +47,7 @@ pub(crate) async fn resume_app_server_session_with_runtime_replacement(
     replacement: RuntimeReplacementContext,
     turn_drain_timeout: Duration,
 ) -> Result<SessionResumeResult, SessionOperationError> {
+    let plan_mode_instructions = input.plan_mode_instructions.clone();
     let loaded = load_app_server_resume_session(input, &state).await?;
     let resumed_session_id = loaded.session_id.clone();
     let resumed_cwd = loaded.session.working_dir.clone();
@@ -87,6 +88,7 @@ pub(crate) async fn resume_app_server_session_with_runtime_replacement(
         let prior_messages = prior_messages.clone();
         let connection_profile = Arc::clone(&connection_profile);
         let app_server = Arc::clone(&app_server);
+        let plan_mode_instructions = plan_mode_instructions.clone();
         async move {
             let runtime = build_connection_runtime_for_resume(
                 replacement,
@@ -95,6 +97,7 @@ pub(crate) async fn resume_app_server_session_with_runtime_replacement(
                 session_id.clone(),
                 cwd,
                 prior_messages,
+                plan_mode_instructions,
                 app_server,
             )
             .await

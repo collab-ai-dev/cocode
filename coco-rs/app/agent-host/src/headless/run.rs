@@ -222,18 +222,6 @@ pub async fn run_chat_with_options(
     let main_model = resolve_main_model(&runtime_config);
     let provider_api = main_model.provider_api;
     let model_id = main_model.model_id.clone();
-    // Use the early-resolved session id so header-template vars
-    // (`${SESSION_ID}`), no-model-turn local persistence, and the
-    // `SessionRuntime` share one id.
-    let model_runtimes = Arc::new(coco_inference::ModelRuntimeRegistry::new(
-        Arc::new(runtime_config.clone()),
-        Some(crate::provider_login::shared_resolver()),
-        Arc::new(coco_inference::HeaderVars {
-            session_id: Some(session_id.clone()),
-            cwd: cwd.display().to_string(),
-            app_version: env!("CARGO_PKG_VERSION").to_string(),
-        }),
-    )?);
     let installed_fallback_count = runtime_config
         .model_roles
         .fallbacks(coco_types::ModelRole::Main)
@@ -282,58 +270,52 @@ pub async fn run_chat_with_options(
         runtime_config.settings.merged.session.backend,
         config_home.clone(),
     ));
-    let runtime_factory = crate::session_runtime::SessionRuntimeFactory::from_host_config(
-        crate::session_runtime::SessionRuntimeFactoryHostConfig {
+    // Shared local-host assembly (factory + local bridge + Event Hub egress),
+    // identical to the TUI path — see `crate::local_host`. Headless-specific
+    // policy: no model-runtime prebuild (the fold builds one with the session's
+    // header vars), no permission bridge, non-interactive, MCP awaited, LSP off,
+    // late-bind failures downgraded to warnings, and no plugin watcher (a
+    // one-shot print run exits before any hot-reload could fire).
+    let crate::local_host::PreparedLocalHost {
+        bridge: mut local_app_server_bridge,
+        runtime_factory: _,
+        event_hub_connector,
+        event_hub_membership_watcher,
+        plugin_watcher_guard: _plugin_watcher_guard,
+    } = crate::local_host::build_local_host(
+        crate::local_host::LocalHostInputs {
             cli: Arc::new(cli.clone()),
             cwd: cwd.clone(),
-            model_runtimes: Some(model_runtimes),
             session_manager: Arc::clone(&session_manager),
+            process_runtime: process_runtime.clone(),
+            model_runtimes: None,
             fast_model_spec: None,
             permission_bridge: None,
-            process_runtime: process_runtime.clone(),
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
             // Headless / print: file-history checkpointing defaults OFF.
             is_non_interactive: true,
-        },
-    );
-    let mut local_app_server_bridge =
-        crate::app_server_host::AppServerLocalBridge::with_host_inputs_and_server_config(
-            crate::app_server_host::HostInputs {
-                startup_cwd: Some(cwd.clone()),
-                session_manager: Some(Arc::clone(&session_manager)),
-                bypass_permissions_available,
-                runtime_replacement: Some(crate::app_server_host::RuntimeReplacementContext {
-                    runtime_factory,
-                    process_runtime: process_runtime.clone(),
-                    cwd: cwd.clone(),
-                    requires_structured_output: cli.json_schema.is_some(),
-                    integration_options: crate::session_bootstrap::SessionIntegrationOptions {
-                        lsp: crate::session_bootstrap::SessionLspIntegration::Disabled,
-                        mcp_connect: crate::session_bootstrap::SessionMcpConnectMode::Await,
-                        late_binds_failure:
-                            crate::session_bootstrap::SessionLateBindFailure::WarnAndContinue,
-                        ..Default::default()
-                    },
-                }),
-                turn_runner: Some(Arc::new(crate::app_server_host::SessionTurnExecutor::new(
-                    None, None,
-                ))),
+            integration_options: crate::session_bootstrap::SessionIntegrationOptions {
+                lsp: crate::session_bootstrap::SessionLspIntegration::Disabled,
+                mcp_connect: crate::session_bootstrap::SessionMcpConnectMode::Await,
+                late_binds_failure:
+                    crate::session_bootstrap::SessionLateBindFailure::WarnAndContinue,
                 ..Default::default()
             },
-            &runtime_config.server,
-        );
-    let event_hub_connector =
-        crate::event_hub::ProcessEventHub::spawn(&runtime_config, &cwd, Vec::new());
-    let event_hub_membership_watcher = event_hub_connector.as_ref().map(|connector| {
-        local_app_server_bridge.set_hub_connector_egress(connector.egress());
-        crate::event_hub::spawn_app_server_membership_watcher(
-            Arc::clone(local_app_server_bridge.app_server()),
-            connector.updater(),
-        )
-    });
+            bypass_permissions_available,
+            requires_structured_output: cli.json_schema.is_some(),
+            plugin_watch: crate::local_host::LocalPluginWatch::Disabled,
+        },
+        &runtime_config,
+    );
     let startup_binding = if let Some(target) = opts.resume_target.clone() {
         local_app_server_bridge
-            .resume_interactive_session(coco_types::SessionResumeParams { target }, None)
+            .resume_interactive_session(
+                coco_types::SessionResumeParams {
+                    target,
+                    plan_mode_instructions: None,
+                },
+                None,
+            )
             .await
             .map_err(|err| anyhow::anyhow!("headless session/resume failed: {err}"))?
     } else {

@@ -1,6 +1,6 @@
 //! Per-session runtime container shared by TUI, headless, and AppServer runners.
 //!
-//! The TUI runner (`tui_runner::run_tui` / `run_agent_driver`), headless
+//! The TUI runner (`tui::run_tui` / `run_agent_driver`), headless
 //! runner, and AppServer executor (`app_server_host::SessionTurnExecutor`)
 //! all need to:
 //!
@@ -56,8 +56,8 @@ pub use factory::{
     SessionRuntimeFactoryOpts,
 };
 pub use hooks::spawn_current_session_config_change_watcher;
-pub use permissions::PermissionModeChange;
 pub(crate) use permissions::live_permissions;
+pub use permissions::{LivePermissionRulesHandle, PermissionModeChange};
 pub(crate) use resources::SessionRuntime;
 use resources::*;
 pub(crate) use roles::resolve_model_selection_from_runtime_config;

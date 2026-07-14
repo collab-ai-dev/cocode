@@ -6,7 +6,8 @@
 # below both. A dependency the other way lets the wire view leak into the
 # engine (the codex counter-lesson). This mirrors check-tui-ui-seam.sh.
 #
-# Checked crates: app/query, core/*, services/* (the engine + core layers).
+# Checked crates: app/query, app/session, app/tui, core/*, services/* (the
+# engine, persistence, surface, and core layers — everything below the host).
 # Forbidden deps: coco-app-server, coco-app-server-transport,
 # coco-app-server-client, coco-app-runtime.
 #
@@ -25,7 +26,7 @@ cd "$(dirname "$0")/.."
 
 forbidden_re='^(coco-app-server|coco-app-server-transport|coco-app-server-client|coco-app-runtime)$'
 
-manifests=(app/query/Cargo.toml)
+manifests=(app/query/Cargo.toml app/session/Cargo.toml app/tui/Cargo.toml)
 for dir in core services; do
     while IFS= read -r m; do
         manifests+=("$m")

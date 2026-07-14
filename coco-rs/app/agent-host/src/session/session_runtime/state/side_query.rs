@@ -27,7 +27,7 @@ impl SessionRuntime {
     /// `permission_explainer_enabled` (default-on) and bounded by a timeout.
     /// Graceful-degrades to `None` when the setting is off, the side query
     /// errors, or the timeout elapses. The single home for the explainer call
-    /// - `TuiPermissionBridge::explain_risk` and the tui_runner Ctrl+E path
+    /// - `TuiPermissionBridge::explain_risk` and the the TUI driver Ctrl+E path
     /// both delegate here.
     pub async fn explain_permission_risk(
         &self,

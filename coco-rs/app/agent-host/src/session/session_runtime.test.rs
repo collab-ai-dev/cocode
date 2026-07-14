@@ -76,7 +76,7 @@ async fn try_build_runtime_with_main(
 
     let factory = SessionRuntimeFactory::new(SessionRuntimeFactoryOpts {
         cli: Arc::new(cli),
-        bootstrap_source: SessionRuntimeBootstrapSource::startup_snapshot(
+        bootstrap_source: SessionRuntimeBootstrapSource::from_prebuilt_bootstrap(
             SessionRuntimeBootstrap {
                 runtime_config: Arc::new(runtime_config),
                 tools: Arc::new(coco_tool_runtime::ToolRegistry::new()),
@@ -385,7 +385,7 @@ async fn model_role_selection_keeps_moa_display_binding_for_main() {
     let cli = AgentHostOptions::default();
     let factory = SessionRuntimeFactory::new(SessionRuntimeFactoryOpts {
         cli: Arc::new(cli),
-        bootstrap_source: SessionRuntimeBootstrapSource::startup_snapshot(
+        bootstrap_source: SessionRuntimeBootstrapSource::from_prebuilt_bootstrap(
             SessionRuntimeBootstrap {
                 model_id: crate::headless::resolve_main_model(&runtime_config).model_id,
                 runtime_config: Arc::new(runtime_config),

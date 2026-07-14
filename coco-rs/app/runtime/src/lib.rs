@@ -11,9 +11,9 @@ mod workspace;
 
 pub use bootstrap::BootstrapError;
 pub use bootstrap::BootstrapSource;
+pub use bootstrap::PrebuiltBootstrapSource;
 pub use bootstrap::SessionRuntimeBootstrap;
 pub use bootstrap::SessionRuntimeBootstrapBuild;
-pub use bootstrap::StartupSnapshotSource;
 pub use process_runtime::ProcessRuntime;
 pub use project_services::ProjectConfigSnapshot;
 pub use project_services::ProjectRegistry;

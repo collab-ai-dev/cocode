@@ -11,7 +11,7 @@
 //!
 //! It deliberately shares the SAME [`PendingApprovals`] map as the
 //! [`crate::tui_permission_bridge::TuiPermissionBridge`], so the existing
-//! `tui_runner` `UserCommand::ApprovalResponse` arm resolves a sandbox prompt
+//! the TUI driver `UserCommand::ApprovalResponse` arm resolves a sandbox prompt
 //! with no extra wiring. Request ids are fresh `Uuid`s, so they never collide
 //! with the engine's tool-permission request ids in the shared map.
 //!
@@ -45,7 +45,7 @@ pub struct TuiSandboxApprovalBridge {
 impl TuiSandboxApprovalBridge {
     /// Construct the bridge. Pass the SAME `pending` map handed to
     /// [`crate::tui_permission_bridge::TuiPermissionBridge::new`] and the
-    /// tui_runner's `ApprovalResponse` arm, plus a clone of the TUI's
+    /// the TUI driver's `ApprovalResponse` arm, plus a clone of the TUI's
     /// `CoreEvent` notification sender.
     pub fn new(notification_tx: mpsc::Sender<CoreEvent>, pending: PendingApprovals) -> Self {
         Self {

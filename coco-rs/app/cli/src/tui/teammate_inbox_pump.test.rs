@@ -216,7 +216,8 @@ async fn drain_applies_mode_set_against_real_mailbox() {
     .unwrap();
 
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
-    let live_rules = Arc::new(RwLock::new(Vec::new()));
+    let live_rules =
+        LivePermissionRulesHandle::new(std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())));
     drain_control_tick(&id, &tx, &live_rules).await;
 
     match rx.try_recv() {

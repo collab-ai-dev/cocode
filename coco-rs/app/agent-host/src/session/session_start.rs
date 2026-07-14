@@ -13,6 +13,7 @@ pub(crate) struct SessionStartInput {
     pub(crate) system_prompt: Option<String>,
     pub(crate) append_system_prompt: Option<String>,
     pub(crate) json_schema: Option<serde_json::Value>,
+    pub(crate) plan_mode_instructions: Option<String>,
     pub(crate) initial_messages: Vec<coco_messages::Message>,
 }
 
@@ -80,7 +81,7 @@ pub(crate) fn prepare_session_start(
         append_system_prompt: input.append_system_prompt,
         json_schema: input.json_schema,
         agent_progress_summaries_enabled: initialize.agent_progress_summaries.unwrap_or(false),
-        plan_mode_custom_instructions: initialize.plan_mode_instructions.clone(),
+        plan_mode_custom_instructions: input.plan_mode_instructions,
         initial_messages: input.initial_messages,
     })
 }

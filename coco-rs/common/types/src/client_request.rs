@@ -341,14 +341,6 @@ pub struct InitializeParams {
     /// Client-provided MCP server names (to skip env-configured ones).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_mcp_servers: Option<Vec<String>>,
-    /// Custom workflow body for the plan-mode system reminder.
-    #[serde(
-        default,
-        rename = "planModeInstructions",
-        alias = "plan_mode_instructions",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub plan_mode_instructions: Option<String>,
     /// Custom agent definitions keyed by name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agents: Option<HashMap<String, ClientAgentDefinition>>,
@@ -569,6 +561,16 @@ pub struct SessionStartParams {
     /// capability).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub json_schema: Option<serde_json::Value>,
+    /// Custom workflow body for the plan-mode system reminder. Per-session
+    /// execution policy: it lives here on `session/start`, not on `initialize`
+    /// (which carries connection capabilities only).
+    #[serde(
+        default,
+        rename = "planModeInstructions",
+        alias = "plan_mode_instructions",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub plan_mode_instructions: Option<String>,
     /// Local-only initial history seed, paired with `session_id`. Non-serialized
     /// (see `session_id`); production history restoration uses `session/resume`.
     #[serde(skip)]
@@ -580,9 +582,23 @@ pub struct SessionStartParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionResumeParams {
     pub target: SessionTarget,
+    /// Custom workflow body for the plan-mode system reminder, re-supplied for
+    /// the resumed session. Per-session execution policy carried on resume for
+    /// the same reason it moved to `session/start` (off `initialize`).
+    #[serde(
+        default,
+        rename = "planModeInstructions",
+        alias = "plan_mode_instructions",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub plan_mode_instructions: Option<String>,
 }
 
 /// Destination selected by explicit `session/replace`.
+// `Fresh` inherently carries full `SessionStartParams`; the size disparity is
+// the protocol, and boxing a serialized wire variant only to satisfy the lint
+// is not worth the construction-site churn.
+#[allow(clippy::large_enum_variant)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

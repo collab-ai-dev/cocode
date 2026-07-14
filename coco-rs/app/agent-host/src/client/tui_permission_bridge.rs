@@ -21,20 +21,20 @@
 //!    │                              │ UserCommand::Approval
 //!    │                              │      Response ──┐    │
 //!    │                              │                 ▼    │
-//!    │             tui_runner: pop pending oneshot, send   │
+//!    │             the TUI driver: pop pending oneshot, send   │
 //!    │ <─ Approved / Rejected ──────┘                      │
 //! ```
 //!
 //! ## Pieces
 //!
 //! - [`PendingApprovals`]: shared `Arc<RwLock<HashMap<request_id,
-//!   oneshot::Sender>>>` between the bridge (writer) and tui_runner
+//!   oneshot::Sender>>>` between the bridge (writer) and the TUI driver
 //!   (reader). Constructed once at TUI startup.
 //! - [`TuiPermissionBridge`]: implements `ToolPermissionBridge`. Each
 //!   `request_permission` allocates a oneshot, stores the sender in
 //!   the pending map, emits `ApprovalRequired` onto the TUI event
 //!   channel, and awaits the receiver.
-//! - [`resolve_pending`]: tui_runner calls this when
+//! - [`resolve_pending`]: the TUI driver calls this when
 //!   `UserCommand::ApprovalResponse` arrives.
 //!
 //! ## Cross-mode contract
@@ -78,7 +78,7 @@ pub struct PendingApprovalEntry {
 pub type PendingApprovals = Arc<RwLock<HashMap<String, PendingApprovalEntry>>>;
 
 /// Build a fresh empty pending map. Hand the same `Arc` to
-/// [`TuiPermissionBridge::new`] AND the tui_runner's
+/// [`TuiPermissionBridge::new`] AND the the TUI driver's
 /// `UserCommand::ApprovalResponse` arm.
 pub fn new_pending_map() -> PendingApprovals {
     Arc::new(RwLock::new(HashMap::new()))
@@ -95,7 +95,7 @@ pub struct TuiPermissionBridge {
     /// Late-bound weak ref to the TUI's swappable current-session owner. Used
     /// to fire the `Notification` hook when an `Ask` permission lands in front
     /// of the user. Set by
-    /// [`Self::set_notification_session`] from `tui_runner` after the initial
+    /// [`Self::set_notification_session`] from the TUI driver after the initial
     /// runtime is installed. Weak avoids a reference cycle:
     /// runtime -> bridge -> current-session owner -> runtime.
     notification_session: RwLock<Option<Weak<RwLock<SessionHandle>>>>,
@@ -153,7 +153,7 @@ impl TuiPermissionBridge {
     /// [`SessionRuntime::explain_permission_risk`] (the single home for the
     /// explainer call) via the late-bound current-session Weak; returns `None`
     /// when the session owner isn't bound (tests / early bootstrap). The
-    /// interactive Ctrl+E path in `tui_runner` calls through `SessionHandle`
+    /// interactive Ctrl+E path in the TUI driver calls through `SessionHandle`
     /// directly.
     pub async fn explain_risk(
         &self,
@@ -294,7 +294,7 @@ impl ToolPermissionBridge for TuiPermissionBridge {
     }
 }
 
-/// Called by tui_runner when `UserCommand::ApprovalResponse` arrives.
+/// Called by the TUI driver when `UserCommand::ApprovalResponse` arrives.
 /// Pops the matching oneshot and sends the resolution. Returns `true`
 /// when the request_id matched a pending entry, `false` otherwise
 /// (stale response after the bridge dropped the sender).
@@ -303,7 +303,7 @@ impl ToolPermissionBridge for TuiPermissionBridge {
 /// [`ToolPermissionResolution::applied_updates`] so audit/logging
 /// downstream of the bridge sees what the user authorized. Persistence
 /// (settings.json writes) and live engine_config mutation are
-/// performed by the consumer (`tui_runner::ApprovalResponse` arm)
+/// performed by the consumer (`tui::ApprovalResponse` arm)
 /// before this fn is called — by the time the resolution lands on
 /// the bridge the rules are already effective.
 ///

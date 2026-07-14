@@ -266,6 +266,7 @@ pub(super) async fn apply_resume_plan_through_app_server(
                 target: coco_types::SessionTarget {
                     session_id: plan.session_id.clone(),
                 },
+                plan_mode_instructions: None,
             },
             Some(event_tx.clone()),
         )

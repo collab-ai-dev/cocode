@@ -1307,6 +1307,7 @@ async fn remote_session_resume_handle_uses_result_surface_id() {
                 &mut demux,
                 SessionResumeParams {
                     target: test_session_target("sess-remote-resume-handle"),
+                    plan_mode_instructions: None,
                 },
             )
             .await
@@ -1362,6 +1363,7 @@ async fn remote_session_replace_resume_uses_lifecycle_fallback() {
                 &mut demux,
                 SessionResumeParams {
                     target: test_session_target("sess-remote-replace-new"),
+                    plan_mode_instructions: None,
                 },
             )
             .await

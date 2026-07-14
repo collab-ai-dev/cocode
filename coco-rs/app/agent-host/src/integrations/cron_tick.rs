@@ -5,7 +5,7 @@
 //! [`coco_cron::CronTickState`] which tasks crossed a fire boundary, and for
 //! each fire enqueues the task's prompt through the session queue with cron
 //! origin. The enqueue wakes the idle agent driver
-//! (`tui_runner::run_agent_driver` selects on `command_queue().wait_for_change`),
+//! (`tui::run_agent_driver` selects on `command_queue().wait_for_change`),
 //! so the scheduled prompt runs as a turn; if a turn is already in flight it
 //! drains at the next turn boundary. Recurring tasks are rescheduled (and their
 //! `last_fired_at` persisted); one-shot / aged tasks are removed.

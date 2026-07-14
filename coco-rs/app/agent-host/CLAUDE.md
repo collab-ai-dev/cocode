@@ -28,7 +28,8 @@ it expose typed errors and adapters translate failures to protocol results.
 | `remote_host::RemoteAppServerBridgeHost` | Narrow remote transport-facing capability handle for opening JSON-RPC/AppServer bindings without exposing raw host state. |
 | `coco_types::*` protocol schemas | Shared AppServer request/result and notification DTOs used by adapters. |
 | `model_factory::*` | Builds `Arc<dyn LanguageModelV4>` from provider/model config |
-| `headless` / `headless_support` | Print-mode orchestration plus goal/slash, transcript, tool-filter, and additional-directory helpers |
+| `headless` (`headless/run`, `headless/support`) | Print-mode orchestration plus goal/slash, transcript, tool-filter, and additional-directory helpers |
+| `local_host` | Shared local AppServer host assembly (`build_local_host`) for TUI + headless; local counterpart to `remote_host::HostBuilder` |
 | `project_services::ProjectServices` | Project-rooted plugin catalog plus command, skill, hook, MCP, and LSP discovery shared by sessions with the same project root |
 | `session_runtime::SessionRuntimeFactory` | Owned construction seam for building `SessionHandle`s from cloneable startup inputs and a target session id. |
 | `session_controls::*` | Protocol-neutral runtime controls for task operations, session status/cost, and context usage; remote/local adapters map these results to their own surfaces. |

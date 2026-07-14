@@ -33,6 +33,15 @@ suite, and the SDK Python suite):
 The per-phase sections below are retained as the historical implementation
 record; each phase's status block states what landed.
 
+A post-completion adversarial re-review (2026-07-14) cross-validated the
+landed tree against the README completion rule: 10 of 13 items fully
+demonstrated, 3 with bounded residuals. The verified residuals — including
+the "still open" notes scattered through the phase status blocks below
+(CS-2 regression test, CS-3 spawn migration, CS-4 lifecycle revision,
+`plan_mode_instructions` on `initialize`) — are consolidated with priorities
+in [follow-up-todo.md](follow-up-todo.md). Do not work items from the phase
+notes below directly; the follow-up document is the single open TODO list.
+
 ## Execution principles
 
 - Fix lifecycle correctness before moving files.

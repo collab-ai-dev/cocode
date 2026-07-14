@@ -3,6 +3,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub(crate) struct SessionResumeInput {
     pub(crate) target: coco_types::SessionTarget,
+    pub(crate) plan_mode_instructions: Option<String>,
 }
 
 #[derive(Debug)]

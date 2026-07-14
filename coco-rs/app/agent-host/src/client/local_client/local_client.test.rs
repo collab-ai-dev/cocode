@@ -444,6 +444,7 @@ async fn local_replace_session_helpers_return_new_handle_or_original_on_failure(
                 target: coco_types::SessionTarget {
                     session_id: test_session_id("sess-replace-resumed"),
                 },
+                plan_mode_instructions: None,
             },
         )
         .await
@@ -468,6 +469,7 @@ async fn local_replace_session_helpers_return_new_handle_or_original_on_failure(
                 target: coco_types::SessionTarget {
                     session_id: test_session_id("sess-replace-fail"),
                 },
+                plan_mode_instructions: None,
             },
         )
         .await

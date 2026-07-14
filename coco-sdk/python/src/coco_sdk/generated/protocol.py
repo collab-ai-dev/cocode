@@ -4259,9 +4259,6 @@ class InitializeParams(BaseModel):
     agents: dict[str, ClientAgentDefinition] | None = None
     client_mcp_servers: list[str] | None = None
     hooks: dict[str, list[HookCallbackMatcher]] | None = None
-    plan_mode_instructions: str | None = Field(
-        default=None, alias="planModeInstructions"
-    )
     prompt_suggestions: bool | None = None
 
 
@@ -4318,6 +4315,9 @@ class SessionReplaceParams(BaseModel):
 
 class SessionResumeParams(BaseModel):
     target: SessionTarget
+    plan_mode_instructions: str | None = Field(
+        default=None, alias="planModeInstructions"
+    )
 
 
 class SessionStartParams(BaseModel):
@@ -4328,6 +4328,9 @@ class SessionStartParams(BaseModel):
     max_turns: int | None = None
     model: str | None = None
     permission_mode: PermissionMode | None = None
+    plan_mode_instructions: str | None = Field(
+        default=None, alias="planModeInstructions"
+    )
     system_prompt: str | None = None
 
 

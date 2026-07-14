@@ -233,7 +233,7 @@ impl SessionRuntime {
     /// - Per-agent `agent_scoped` hook layer is **preserved** — those are
     /// owned by the coordinator's spawn lifecycle, not by settings.
     /// - Slash commands run only at turn boundaries (the dispatch loop
-    /// in `tui_runner` `drain_active_turn`s before invoking them),
+    /// in the TUI driver `drain_active_turn`s before invoking them),
     /// so PreToolUse/PostToolUse for an in-flight call cannot see
     /// different hook sets.
     /// Returns the count of hooks now registered.

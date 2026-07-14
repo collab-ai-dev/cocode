@@ -570,7 +570,7 @@ async fn test_resume_context(
         crate::session_runtime::SessionRuntimeFactoryOpts {
             cli: Arc::new(cli),
             bootstrap_source:
-                crate::session_runtime::SessionRuntimeBootstrapSource::startup_snapshot(
+                crate::session_runtime::SessionRuntimeBootstrapSource::from_prebuilt_bootstrap(
                     crate::session_runtime::SessionRuntimeBootstrap {
                         runtime_config: Arc::clone(rt.runtime_config()),
                         tools: Arc::new(coco_tool_runtime::ToolRegistry::new()),

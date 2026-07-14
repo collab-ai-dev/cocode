@@ -267,10 +267,11 @@ impl SessionHandle {
         self.runtime.resolve_model_selection(value)
     }
 
-    pub fn live_permission_rules(
-        &self,
-    ) -> Arc<tokio::sync::RwLock<Vec<coco_types::PermissionRule>>> {
-        self.runtime.live_permission_rules()
+    /// Narrow append-only handle over this session's live permission-rule
+    /// overlay. Returns a capability, not the raw lock, so the public API
+    /// exposes an operation instead of leaking `Arc<RwLock<_>>`.
+    pub fn live_permission_rules(&self) -> super::super::LivePermissionRulesHandle {
+        self.runtime.live_permission_rules_handle()
     }
 
     pub fn attachment_emitter(&self) -> coco_messages::AttachmentEmitter {

@@ -252,6 +252,7 @@ async fn sdk_stdio_shares_start_read_close_lifecycle_contract() {
                     target: SessionTarget {
                         session_id: started.session_id.clone(),
                     },
+                    plan_mode_instructions: None,
                 },
                 "sdk stdio session/resume",
             )

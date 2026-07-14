@@ -16,10 +16,10 @@ use crate::headless::build_runtime_config_with_reloader_roots;
 use crate::session_bootstrap::build_engine_resources;
 use coco_app_runtime::BootstrapError;
 use coco_app_runtime::BootstrapSource;
+use coco_app_runtime::PrebuiltBootstrapSource;
 use coco_app_runtime::ProcessRuntime;
 use coco_app_runtime::SessionRuntimeBootstrap;
 use coco_app_runtime::SessionRuntimeBootstrapBuild;
-use coco_app_runtime::StartupSnapshotSource;
 
 /// Owned construction inputs for one family of session runtimes.
 ///
@@ -94,10 +94,12 @@ impl SessionRuntimeBootstrapSource {
         Self { source }
     }
 
-    /// Source backed by a pre-built bundle (tests / legacy startup snapshot).
-    pub fn startup_snapshot(bootstrap: SessionRuntimeBootstrap) -> Self {
+    /// Source backed by an already-resolved bundle, bypassing the per-session
+    /// config fold. Used by tests and embedders that build a runtime from
+    /// explicit inputs instead of resolving config from disk.
+    pub fn from_prebuilt_bootstrap(bootstrap: SessionRuntimeBootstrap) -> Self {
         Self {
-            source: Arc::new(StartupSnapshotSource::new(bootstrap)),
+            source: Arc::new(PrebuiltBootstrapSource::new(bootstrap)),
         }
     }
 

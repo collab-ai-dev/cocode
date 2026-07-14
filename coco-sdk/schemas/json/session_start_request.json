@@ -49,6 +49,13 @@
         }
       ]
     },
+    "planModeInstructions": {
+      "description": "Custom workflow body for the plan-mode system reminder. Per-session\nexecution policy: it lives here on `session/start`, not on `initialize`\n(which carries connection capabilities only).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "system_prompt": {
       "type": [
         "string",
