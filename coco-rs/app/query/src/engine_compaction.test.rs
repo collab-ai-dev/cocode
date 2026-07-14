@@ -216,6 +216,7 @@ fn new_engine(
     let tools = Arc::new(coco_tool_runtime::ToolRegistry::new());
     let mut engine = QueryEngine::new(
         QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
         model_runtimes,
         tools,
         CancellationToken::new(),
@@ -255,6 +256,7 @@ fn new_engine_with_context_window(
     let tools = Arc::new(coco_tool_runtime::ToolRegistry::new());
     let mut engine = QueryEngine::new(
         QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
         model_runtimes,
         tools,
         CancellationToken::new(),
@@ -271,6 +273,7 @@ fn new_engine_for_model(model: Arc<dyn coco_inference::LanguageModel>) -> QueryE
     let tools = Arc::new(coco_tool_runtime::ToolRegistry::new());
     QueryEngine::new(
         QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
         model_runtimes,
         tools,
         CancellationToken::new(),
@@ -305,6 +308,7 @@ fn new_engine_with_tools(
     );
     QueryEngine::new(
         QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
         model_runtimes,
         tools,
         CancellationToken::new(),
@@ -322,6 +326,7 @@ fn new_engine_with_hooks(
     let tools = Arc::new(coco_tool_runtime::ToolRegistry::new());
     let mut engine = QueryEngine::new(
         QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
         model_runtimes,
         tools,
         CancellationToken::new(),
@@ -395,7 +400,7 @@ fn current_plan_attachment_uses_agent_scoped_plan_file() {
     let model = Arc::new(CapturingModel::default());
     let config_home = tempfile::tempdir().expect("temp config home");
     let mut engine = new_engine(model, None).with_config_home(config_home.path().to_path_buf());
-    engine.config.session_id = coco_types::SessionId::try_new("agent-plan-compact").unwrap();
+    engine.session_id = coco_types::SessionId::try_new("agent-plan-compact").unwrap();
     engine.config.agent_id = Some(coco_types::AgentId::try_new("agent-a").unwrap());
 
     let plans_dir = coco_context::resolve_plans_directory(
@@ -404,14 +409,14 @@ fn current_plan_attachment_uses_agent_scoped_plan_file() {
         engine.config.plans_directory.as_deref(),
     );
     coco_context::write_plan(
-        engine.config.session_id.as_str(),
+        engine.session_id.as_str(),
         &plans_dir,
         "# Main Plan\n\n- wrong scope",
         /*agent_id*/ None,
     )
     .expect("main plan write succeeds");
     coco_context::write_plan(
-        engine.config.session_id.as_str(),
+        engine.session_id.as_str(),
         &plans_dir,
         "# Agent Plan\n\n- correct scope",
         engine.config.agent_id_str(),
@@ -947,7 +952,7 @@ async fn session_memory_compact_reinjects_plan_mode_full_attachment() {
         .with_config_home(config_home.path().to_path_buf())
         .with_app_state(app_state)
         .with_session_memory_text("## Session Memory\n\n- Important prior context".to_string());
-    engine.config.session_id = coco_types::SessionId::try_new("sm-plan-mode-compact").unwrap();
+    engine.session_id = coco_types::SessionId::try_new("sm-plan-mode-compact").unwrap();
     engine.config.compact.session_memory.enabled = true;
     engine.config.compact.session_memory.min_tokens = 0;
     engine.config.compact.session_memory.min_text_block_messages = 0;
@@ -961,7 +966,7 @@ async fn session_memory_compact_reinjects_plan_mode_full_attachment() {
         engine.config.plans_directory.as_deref(),
     );
     coco_context::write_plan(
-        engine.config.session_id.as_str(),
+        engine.session_id.as_str(),
         &plans_dir,
         "# Active Plan\n\n- Keep planning",
         /*agent_id*/ None,

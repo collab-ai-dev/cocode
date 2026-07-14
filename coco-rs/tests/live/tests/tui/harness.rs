@@ -365,8 +365,15 @@ impl TuiHarness {
                 pending_approvals.clone(),
             ),
         );
-        let mut engine = QueryEngine::new(engine_cfg, model_runtimes, tools, cancel.clone(), hooks)
-            .with_permission_bridge(bridge);
+        let mut engine = QueryEngine::new(
+            engine_cfg,
+            coco_types::SessionId::try_new("test-session").unwrap(),
+            model_runtimes,
+            tools,
+            cancel.clone(),
+            hooks,
+        )
+        .with_permission_bridge(bridge);
         if let Some(handle) = task_handle {
             engine = engine.with_task_handle(handle);
         }

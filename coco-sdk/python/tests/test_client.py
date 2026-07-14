@@ -733,15 +733,31 @@ async def test_client_read_session_returns_typed_response() -> None:
 
 
 @pytest.mark.asyncio
-async def test_client_archive_session() -> None:
-    transport = MockTransport()
+async def test_client_close_session() -> None:
+    transport = MockTransport(responses=[_response(1, {})])
     client = CocoClient(prompt="test", transport=transport)
     _mark_started(client)
-    await client.archive_session("s1")
+    await client.close_session("s1")
 
     sent = json.loads(transport.sent_lines[0])
-    assert sent["method"] == ClientRequestMethod.SESSION_ARCHIVE
-    assert sent["params"]["target"]["interactive"]["session_id"] == "s1"
+    assert sent["method"] == ClientRequestMethod.SESSION_CLOSE
+    assert sent["params"]["target"]["kind"] == "interactive"
+    assert sent["params"]["target"]["target"]["session_id"] == "s1"
+    assert sent["params"]["target"]["target"]["surface_id"] == "surface-1"
+    assert client._session_id is None
+    assert client._surface_id is None
+
+
+@pytest.mark.asyncio
+async def test_client_delete_session() -> None:
+    transport = MockTransport(responses=[_response(1, {})])
+    client = CocoClient(prompt="test", transport=transport)
+    _mark_started(client)
+    await client.delete_session("s1")
+
+    sent = json.loads(transport.sent_lines[0])
+    assert sent["method"] == ClientRequestMethod.SESSION_DELETE
+    assert sent["params"]["target"]["session_id"] == "s1"
 
 
 @pytest.mark.asyncio

@@ -244,7 +244,14 @@ async fn http_seam_tool_round_trip_pairs_tool_use_and_result() -> Result<()> {
         ..QueryEngineConfig::default()
     };
 
-    let engine = QueryEngine::new(cfg, model_runtimes, tools, CancellationToken::new(), None);
+    let engine = QueryEngine::new(
+        cfg,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        model_runtimes,
+        tools,
+        CancellationToken::new(),
+        None,
+    );
 
     // Drain events so the engine never backpressures on a full channel.
     let (tx, mut rx) = mpsc::channel::<CoreEvent>(512);

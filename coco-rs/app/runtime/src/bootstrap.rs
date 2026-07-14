@@ -94,8 +94,9 @@ impl ErrorExt for BootstrapError {
 ///
 /// This is the seam that lets the config-fold implementation vary while the
 /// session runtime factory stays fixed. The production per-session fold is
-/// Cli-coupled and lives in `coco-cli`; [`StartupSnapshotSource`] (a pre-built
-/// bundle, used by tests and legacy startup) is source-independent.
+/// Cli-coupled and lives in `coco-agent-host`; [`PrebuiltBootstrapSource`]
+/// (an already-resolved bundle injected by tests and embedders) is
+/// source-independent.
 pub trait BootstrapSource: Send + Sync {
     fn bootstrap_for_session(
         &self,
@@ -104,13 +105,14 @@ pub trait BootstrapSource: Send + Sync {
     ) -> Result<SessionRuntimeBootstrapBuild, BootstrapError>;
 }
 
-/// A pre-built bundle (no per-session fold). Used by tests and the legacy
-/// startup-snapshot path.
-pub struct StartupSnapshotSource {
+/// A `BootstrapSource` backed by an already-resolved bundle, bypassing the
+/// per-session config fold. Used by tests and embedders that construct a
+/// runtime from explicit inputs rather than resolving config from disk.
+pub struct PrebuiltBootstrapSource {
     bootstrap: Arc<SessionRuntimeBootstrap>,
 }
 
-impl StartupSnapshotSource {
+impl PrebuiltBootstrapSource {
     pub fn new(bootstrap: SessionRuntimeBootstrap) -> Self {
         Self {
             bootstrap: Arc::new(bootstrap),
@@ -118,7 +120,7 @@ impl StartupSnapshotSource {
     }
 }
 
-impl BootstrapSource for StartupSnapshotSource {
+impl BootstrapSource for PrebuiltBootstrapSource {
     fn bootstrap_for_session(
         &self,
         _cwd: &Path,

@@ -7894,6 +7894,17 @@
         "outcome": {
           "$ref": "#/$defs/TurnOutcome"
         },
+        "session_result": {
+          "description": "Complete per-turn result when the emitter owns the final accounting\nsnapshot. AppServer surfaces use this to complete a turn without\npolling session-level projections or waiting for `session/close`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionResultParams"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "turn_id": {
           "$ref": "#/$defs/TurnId"
         },

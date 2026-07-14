@@ -69,11 +69,20 @@ impl ProjectRegistryManager {
     pub fn registry(&self) -> &ProjectRegistry {
         self.registry
     }
+
+    pub fn shutdown_background_tasks(&self) {
+        self.idle_eviction_task.abort();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn idle_eviction_task_finished(&self) -> bool {
+        self.idle_eviction_task.is_finished()
+    }
 }
 
 impl Drop for ProjectRegistryManager {
     fn drop(&mut self) {
-        self.idle_eviction_task.abort();
+        self.shutdown_background_tasks();
     }
 }
 

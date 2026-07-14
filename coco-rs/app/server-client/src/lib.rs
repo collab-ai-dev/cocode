@@ -37,21 +37,22 @@ use coco_app_server_transport::{
 };
 use coco_types::{
     AgentInterruptCurrentWorkParams, ApplyPermissionUpdateParams, ApprovalResolveParams,
-    ArchiveTarget, BackgroundAllTasksResult, CancelRequestParams, ClientRequest,
-    ConfigApplyFlagsParams, ConfigReadParams, ConfigReadResult, ConfigReadTarget,
-    ConfigWriteParams, ContextUsageResult, ElicitationResolveParams, HookReloadResult,
-    InitializeParams, InitializeResult, InteractiveTarget, McpReconnectParams, McpSetServersParams,
-    McpSetServersResult, McpStatusResult, McpToggleParams, PluginReloadResult,
-    ResetSessionPermissionRulesResult, RewindFilesParams, RewindFilesResult, SessionArchiveParams,
-    SessionCostResult, SessionEnvelope, SessionId, SessionListResult, SessionReadParams,
-    SessionReadResult, SessionRenameParams, SessionRenameResult, SessionReplaceParams,
-    SessionReplaceResult, SessionReplacement, SessionResumeParams, SessionResumeResult,
-    SessionStartParams, SessionStartResult, SessionStatusResult, SessionSubscribeParams,
-    SessionSubscribeResult, SessionTarget, SessionToggleTagParams, SessionToggleTagResult,
-    SessionTurnsListParams, SessionTurnsListResult, SetAgentColorParams, SetModelParams,
-    SetModelRoleParams, SetModelRoleResult, SetPermissionModeParams, SetThinkingParams,
-    StopTaskParams, SurfaceId, SurfaceLifecycleEffect, TaskDetailParams, TaskDetailResult,
-    TaskListResult, TurnStartParams, TurnStartResult, UpdateEnvParams, UserInputResolveParams,
+    BackgroundAllTasksResult, CancelRequestParams, ClientRequest, ConfigApplyFlagsParams,
+    ConfigReadParams, ConfigReadResult, ConfigReadTarget, ConfigWriteParams, ContextUsageResult,
+    ElicitationResolveParams, HookReloadResult, InitializeParams, InitializeResult,
+    InteractiveTarget, McpReconnectParams, McpSetServersParams, McpSetServersResult,
+    McpStatusResult, McpToggleParams, PluginReloadResult, ResetSessionPermissionRulesResult,
+    RewindFilesParams, RewindFilesResult, SessionCloseParams, SessionCloseTarget,
+    SessionCostResult, SessionDeleteParams, SessionEnvelope, SessionId, SessionListResult,
+    SessionReadParams, SessionReadResult, SessionRenameParams, SessionRenameResult,
+    SessionReplaceParams, SessionReplaceResult, SessionReplacement, SessionResumeParams,
+    SessionResumeResult, SessionStartParams, SessionStartResult, SessionStatusResult,
+    SessionSubscribeParams, SessionSubscribeResult, SessionTarget, SessionToggleTagParams,
+    SessionToggleTagResult, SessionTurnsListParams, SessionTurnsListResult, SetAgentColorParams,
+    SetModelParams, SetModelRoleParams, SetModelRoleResult, SetPermissionModeParams,
+    SetThinkingParams, StopTaskParams, SurfaceId, SurfaceLifecycleEffect, TaskDetailParams,
+    TaskDetailResult, TaskListResult, TurnStartParams, TurnStartResult, UpdateEnvParams,
+    UserInputResolveParams,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::connect_async;
@@ -488,21 +489,11 @@ impl RemoteJsonRpcClient {
 
     pub async fn session_start_handle(
         &self,
-        demux: &mut RemoteEventDemux,
+        _demux: &mut RemoteEventDemux,
         params: SessionStartParams,
     ) -> Result<RemoteSessionClient, ClientError> {
         let started = self.session_start(params).await?;
-        let surface_id = match started.surface_id {
-            Some(surface_id) => surface_id,
-            None => {
-                demux
-                    .next_session_activation(&started.session_id)
-                    .await
-                    .ok_or(ClientError::Disconnected)?
-                    .surface_id
-            }
-        };
-        Ok(self.session_handle(started.session_id, surface_id))
+        Ok(self.session_handle(started.session_id, started.surface_id))
     }
 
     pub async fn session_resume(
@@ -523,22 +514,11 @@ impl RemoteJsonRpcClient {
 
     pub async fn session_resume_handle(
         &self,
-        demux: &mut RemoteEventDemux,
+        _demux: &mut RemoteEventDemux,
         params: SessionResumeParams,
     ) -> Result<RemoteSessionClient, ClientError> {
         let resumed = self.session_resume(params).await?;
-        let session_id = resumed.session.session_id;
-        let surface_id = match resumed.surface_id {
-            Some(surface_id) => surface_id,
-            None => {
-                demux
-                    .next_session_activation(&session_id)
-                    .await
-                    .ok_or(ClientError::Disconnected)?
-                    .surface_id
-            }
-        };
-        Ok(self.session_handle(session_id, surface_id))
+        Ok(self.session_handle(resumed.session.session_id, resumed.surface_id))
     }
 
     pub async fn session_list(&self) -> Result<SessionListResult, ClientError> {
@@ -594,8 +574,13 @@ impl RemoteJsonRpcClient {
         })
     }
 
-    pub async fn session_archive(&self, params: SessionArchiveParams) -> Result<(), ClientError> {
-        self.send_typed_client_request(ClientRequest::SessionArchive(params))
+    pub async fn session_close(&self, params: SessionCloseParams) -> Result<(), ClientError> {
+        self.send_typed_client_request(ClientRequest::SessionClose(params))
+            .await
+    }
+
+    pub async fn session_delete(&self, params: SessionDeleteParams) -> Result<(), ClientError> {
+        self.send_typed_client_request(ClientRequest::SessionDelete(params))
             .await
     }
 
@@ -1186,11 +1171,35 @@ impl RemoteSessionClient {
         }
     }
 
+    pub async fn replace_with_clear(
+        self,
+        demux: &mut RemoteEventDemux,
+    ) -> Result<Self, (Self, ClientError)> {
+        match self
+            .client
+            .session_replace(SessionReplaceParams {
+                source: self.interactive_target(),
+                destination: SessionReplacement::Clear,
+            })
+            .await
+        {
+            Ok(replaced) => {
+                demux.purge_surface(&self.surface_id);
+                Ok(self
+                    .client
+                    .session_handle(replaced.session_id, replaced.surface_id))
+            }
+            Err(error) => Err((self, error)),
+        }
+    }
+
     pub async fn close(self) -> Result<(), (Self, ClientError)> {
-        let params = SessionArchiveParams {
-            target: ArchiveTarget::Interactive(self.interactive_target()),
+        let params = SessionCloseParams {
+            target: SessionCloseTarget::Interactive {
+                target: self.interactive_target(),
+            },
         };
-        match self.client.session_archive(params).await {
+        match self.client.session_close(params).await {
             Ok(()) => Ok(()),
             Err(error) => Err((self, error)),
         }

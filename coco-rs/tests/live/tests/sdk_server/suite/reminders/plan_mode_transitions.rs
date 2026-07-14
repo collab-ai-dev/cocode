@@ -13,7 +13,6 @@
 //! Plan→Default transition in history.
 
 use anyhow::Result;
-use coco_sdk_server::SdkTransport;
 use coco_types::AttachmentKind;
 use coco_types::ClientRequestMethod;
 

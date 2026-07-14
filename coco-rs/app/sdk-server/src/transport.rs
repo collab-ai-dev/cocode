@@ -8,11 +8,12 @@
 //! - [`InMemoryTransport`]: in-memory duplex pipes using tokio channels,
 //!   used for unit tests and integration harnesses.
 //!
-//! The compatibility transport still exposes legacy `JsonRpcMessage` methods
-//! for existing tests and cold compatibility paths, and exposes
-//! `JsonRpcFrame` methods for the AppServer bridge. Stdio decodes/encodes
-//! AppServer frames directly; in-memory tests can rely on the default
-//! conversion helpers.
+//! The transport trait is frame-first: `recv_frame` / `send_frame` carry the
+//! canonical `coco-app-server-transport::JsonRpcFrame`, which stdio and
+//! WebSocket transports decode/encode directly. [`InMemoryTransport`] keeps a
+//! raw `JsonRpcMessage` channel internally and exposes inherent `recv` / `send`
+//! helpers so test harnesses can drive it with `JsonRpcMessage` values while
+//! still satisfying the frame-based trait through the conversion helpers.
 //!
 //! See `event-system-design.md` §5 and §12.
 
@@ -76,49 +77,26 @@ pub enum SdkJsonRpcFrameError {
 
 /// Async-trait for SDK transports.
 ///
-/// Implementations frame `JsonRpcMessage` values onto and off of a byte
-/// stream. Framing is **NDJSON**: one compact JSON value per line
+/// Implementations frame canonical `JsonRpcFrame` values onto and off of a
+/// byte stream. Framing is **NDJSON**: one compact JSON value per line
 /// terminated by `\n`.
 ///
-/// Concurrency model: `recv()` and `send()` may be called from the same
-/// task or different tasks. Implementations must be `Send + Sync` so they
+/// Concurrency model: `recv_frame()` and `send_frame()` may be called from the
+/// same task or different tasks. Implementations must be `Send + Sync` so they
 /// can be shared via `Arc`.
 #[async_trait::async_trait]
 pub trait SdkTransport: Send + Sync {
-    /// Read the next message. Returns `Ok(None)` on clean EOF.
-    async fn recv(&self) -> Result<Option<JsonRpcMessage>, TransportError>;
-
-    /// Write a message to the peer.
-    async fn send(&self, msg: JsonRpcMessage) -> Result<(), TransportError>;
-
-    /// Read the next AppServer JSON-RPC frame.
-    ///
-    /// Legacy transports can use the default conversion from `JsonRpcMessage`;
-    /// byte-based transports should override this to decode the canonical
-    /// AppServer transport frame directly.
-    async fn recv_frame(&self) -> Result<Option<JsonRpcFrame>, TransportError> {
-        self.recv()
-            .await?
-            .map(json_rpc_message_to_frame)
-            .transpose()
-            .map_err(TransportError::from)
-    }
+    /// Read the next AppServer JSON-RPC frame. Returns `Ok(None)` on clean EOF.
+    async fn recv_frame(&self) -> Result<Option<JsonRpcFrame>, TransportError>;
 
     /// Write an AppServer JSON-RPC frame to the peer.
-    ///
-    /// Legacy transports can use the default conversion to `JsonRpcMessage`;
-    /// byte-based transports should override this to encode the canonical
-    /// AppServer transport frame directly.
-    async fn send_frame(&self, frame: JsonRpcFrame) -> Result<(), TransportError> {
-        self.send(json_rpc_frame_to_message(frame)?).await
-    }
+    async fn send_frame(&self, frame: JsonRpcFrame) -> Result<(), TransportError>;
 
     /// Send a `ServerNotification` on the fast path.
     ///
-    /// The default implementation round-trips through `serde_json::Value`
-    /// to extract `params` and construct a `JsonRpcNotification`, then
-    /// delegates to `send`. This is fine for in-memory transports and for
-    /// the cold path.
+    /// The default implementation extracts `method`/`params` in one
+    /// serialization pass and writes a notification frame through
+    /// `send_frame`.
     ///
     /// Byte-based transports (stdio, WebSocket) override this to serialize
     /// `ServerNotification` directly onto the wire with a flattened JSON-RPC
@@ -143,16 +121,14 @@ pub trait SdkTransport: Send + Sync {
             // crash — fall back to the typed accessor + null params.
             _ => (notif.method().as_str().to_string(), serde_json::Value::Null),
         };
-        self.send(JsonRpcMessage::Notification(JsonRpcNotification {
-            jsonrpc: JSONRPC_VERSION.into(),
-            method,
-            params,
-        }))
+        self.send_frame(JsonRpcFrame::Notification(
+            TransportJsonRpcNotification::new(method, Some(params)),
+        ))
         .await
     }
 
-    /// Close the transport. Subsequent `send()` calls return
-    /// `TransportError::Closed`. Pending `recv()` may still return messages
+    /// Close the transport. Subsequent `send_frame()` calls return
+    /// `TransportError::Closed`. Pending `recv_frame()` may still return frames
     /// that were buffered before close.
     async fn close(&self) -> Result<(), TransportError>;
 
@@ -206,38 +182,6 @@ impl Default for StdioTransport {
 
 #[async_trait::async_trait]
 impl SdkTransport for StdioTransport {
-    async fn recv(&self) -> Result<Option<JsonRpcMessage>, TransportError> {
-        if !self.is_open() {
-            return Err(TransportError::Closed);
-        }
-        let mut reader = self.reader.lock().await;
-        let mut line = String::new();
-        loop {
-            line.clear();
-            match reader.read_line(&mut line).await {
-                Ok(0) => {
-                    // Clean EOF — peer closed stdin.
-                    debug!("stdio transport: EOF on stdin");
-                    return Ok(None);
-                }
-                Ok(_) => {
-                    let trimmed = line.trim();
-                    if trimmed.is_empty() {
-                        // Skip blank lines (common with pretty-printed input).
-                        continue;
-                    }
-                    trace!(line = %trimmed, "stdio transport: recv");
-                    let msg = serde_json::from_str::<JsonRpcMessage>(trimmed)?;
-                    return Ok(Some(msg));
-                }
-                Err(e) => {
-                    warn!(error = %e, "stdio transport: read error");
-                    return Err(TransportError::Io(e));
-                }
-            }
-        }
-    }
-
     async fn recv_frame(&self) -> Result<Option<JsonRpcFrame>, TransportError> {
         if !self.is_open() {
             return Err(TransportError::Closed);
@@ -266,20 +210,6 @@ impl SdkTransport for StdioTransport {
                 }
             }
         }
-    }
-
-    async fn send(&self, msg: JsonRpcMessage) -> Result<(), TransportError> {
-        if !self.is_open() {
-            return Err(TransportError::Closed);
-        }
-        // Serialize compactly (no pretty indentation) — one line per message.
-        let json = serde_json::to_string(&msg)?;
-        let mut writer = self.writer.lock().await;
-        writer.write_all(json.as_bytes()).await?;
-        writer.write_all(b"\n").await?;
-        writer.flush().await?;
-        trace!("stdio transport: sent {} bytes", json.len() + 1);
-        Ok(())
     }
 
     async fn send_frame(&self, frame: JsonRpcFrame) -> Result<(), TransportError> {
@@ -386,11 +316,12 @@ impl InMemoryTransport {
         });
         (server, client)
     }
-}
 
-#[async_trait::async_trait]
-impl SdkTransport for InMemoryTransport {
-    async fn recv(&self) -> Result<Option<JsonRpcMessage>, TransportError> {
+    /// Test/harness convenience: read the next raw `JsonRpcMessage` directly,
+    /// bypassing frame conversion. The frame-based [`SdkTransport::recv_frame`]
+    /// is what the server driver uses; harnesses drive the peer end in terms of
+    /// `JsonRpcMessage` for readability.
+    pub async fn recv(&self) -> Result<Option<JsonRpcMessage>, TransportError> {
         if !self.is_open() {
             return Err(TransportError::Closed);
         }
@@ -398,7 +329,9 @@ impl SdkTransport for InMemoryTransport {
         Ok(rx.recv().await)
     }
 
-    async fn send(&self, msg: JsonRpcMessage) -> Result<(), TransportError> {
+    /// Test/harness convenience: write a raw `JsonRpcMessage` directly. See
+    /// [`Self::recv`].
+    pub async fn send(&self, msg: JsonRpcMessage) -> Result<(), TransportError> {
         if !self.is_open() {
             return Err(TransportError::Closed);
         }
@@ -406,6 +339,20 @@ impl SdkTransport for InMemoryTransport {
             .send(msg)
             .await
             .map_err(|_| TransportError::PeerDropped)
+    }
+}
+
+#[async_trait::async_trait]
+impl SdkTransport for InMemoryTransport {
+    async fn recv_frame(&self) -> Result<Option<JsonRpcFrame>, TransportError> {
+        match self.recv().await? {
+            Some(msg) => Ok(Some(json_rpc_message_to_frame(msg)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn send_frame(&self, frame: JsonRpcFrame) -> Result<(), TransportError> {
+        self.send(json_rpc_frame_to_message(frame)?).await
     }
 
     async fn close(&self) -> Result<(), TransportError> {

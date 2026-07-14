@@ -1422,7 +1422,7 @@ pub struct SkillLoadGates {
     pub project_enabled: bool,
     /// Load legacy `project config dir/commands` dirs (managed → user → project up-to-home).
     /// Gated like project (`!skillsLocked`).
-    pub legacy_enabled: bool,
+    pub legacy_commands_enabled: bool,
     /// Load `project config dir/skills` under each `--add-dir` path. Requires project scope
     /// enabled (and not locked).
     pub additional_dirs_enabled: bool,
@@ -1446,7 +1446,7 @@ impl SkillLoadGates {
             agent_skills_enabled: false,
             user_enabled: true,
             project_enabled: true,
-            legacy_enabled: true,
+            legacy_commands_enabled: true,
             additional_dirs_enabled: true,
             additional_dirs: Vec::new(),
             skills_locked: false,
@@ -1516,7 +1516,7 @@ pub fn build_session_skill_manager(
         // (managed → user → project up-to-home), both `SKILL.md` dirs and
         // flat `.md`. Dedup by canonical realpath inside `insert_disk`
         // (first-wins → the `skills/` copy loaded above).
-        if gates.legacy_enabled {
+        if gates.legacy_commands_enabled {
             manager.load_legacy_command_scope(SettingScope::Managed, &get_managed_commands_path());
             manager.load_legacy_command_scope(SettingScope::User, &config_home.join("commands"));
             for project_commands in project_command_dirs_up_to_home(cwd) {

@@ -102,7 +102,14 @@ pub async fn run_multimodal_scenario(
         ..QueryEngineConfig::default()
     };
 
-    let engine = QueryEngine::new(cfg, model_runtimes, tools, cancel, /*hooks*/ None);
+    let engine = QueryEngine::new(
+        cfg,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        model_runtimes,
+        tools,
+        cancel,
+        /*hooks*/ None,
+    );
 
     let (event_tx, mut event_rx) = mpsc::channel::<CoreEvent>(512);
     let drainer = tokio::spawn(async move {

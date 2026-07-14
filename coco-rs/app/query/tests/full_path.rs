@@ -179,7 +179,14 @@ async fn test_full_path_write_then_read() {
         ..Default::default()
     };
 
-    let engine = QueryEngine::new(config, client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
     let result = engine
         .run("Create a test file and read it back")
         .await
@@ -224,7 +231,14 @@ async fn test_full_path_with_hooks() {
         ..Default::default()
     };
 
-    let engine = QueryEngine::new(config, client, tools, cancel, Some(hooks));
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        Some(hooks),
+    );
     let result = engine.run("test with hooks").await.unwrap();
 
     assert_eq!(result.turns, 3);
@@ -253,7 +267,14 @@ async fn test_full_path_budget_exhaustion() {
         ..Default::default()
     };
 
-    let engine = QueryEngine::new(config, client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
     let result = engine.run("test budget").await.unwrap();
 
     assert!(result.budget_exhausted);
@@ -348,7 +369,14 @@ async fn test_full_path_with_bash_safety() {
         ..Default::default()
     };
 
-    let engine = QueryEngine::new(config, client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
     let result = engine.run("delete everything").await.unwrap();
 
     // The model should acknowledge the denial
@@ -530,7 +558,14 @@ async fn test_full_path_glob_and_grep() {
         ..Default::default()
     };
 
-    let engine = QueryEngine::new(config, client, tools, cancel, None);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    );
     let result = engine.run("find rust files with hello").await.unwrap();
 
     assert_eq!(result.turns, 3);

@@ -7,16 +7,6 @@ license.workspace = true
 [lints]
 workspace = true
 
-[features]
-# Compile the real cpal microphone backend for voice input. Off by default so
-# `cargo build` / CI stay light (no ALSA/CoreAudio system deps); enabled in the
-# shipped coco binary. Without it, voice is present but reports "no microphone".
-voice = ["coco-voice/capture"]
-# Also compile the on-device Whisper backend (whisper.cpp). Off by default: it
-# needs a C++ toolchain (cmake + libclang) at build time. On macOS this pulls
-# the Metal GPU backend automatically (target-specific dep in coco-voice).
-voice-local = ["voice", "coco-voice/local-voice"]
-
 [dependencies]
 coco-types.workspace = true
 coco-llm-types.workspace = true
@@ -61,9 +51,6 @@ coco-exec-server.workspace = true
 coco-git.workspace = true
 coco-paths.workspace = true
 coco-subagent.workspace = true
-coco-tui.workspace = true
-coco-voice.workspace = true
-coco-utils-audio.workspace = true
 coco-utils-string.workspace = true
 coco-keybindings = { workspace = true, features = ["loader"] }
 coco-otel.workspace = true

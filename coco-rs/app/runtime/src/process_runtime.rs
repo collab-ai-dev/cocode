@@ -84,6 +84,20 @@ impl ProcessRuntime {
             .registry()
             .reload(config_home, project_root)
     }
+
+    /// Stop process-owned background work without clearing project caches.
+    ///
+    /// `ProcessRuntime::global()` intentionally keeps the registry itself alive
+    /// for the process lifetime; shutdown boundaries should still stop runtime
+    /// tasks explicitly instead of depending on process exit or static drop.
+    pub fn shutdown_background_tasks(&self) {
+        self.project_registry.shutdown_background_tasks();
+    }
+
+    #[cfg(test)]
+    fn project_registry_idle_eviction_task_finished(&self) -> bool {
+        self.project_registry.idle_eviction_task_finished()
+    }
 }
 
 #[cfg(test)]

@@ -164,10 +164,6 @@ fn minimal_config() -> QueryEngineConfig {
         total_token_budget: Some(16_384),
         streaming_tool_execution: false,
         system_prompt: Some("you are a test assistant".into()),
-        session_id: match coco_types::SessionId::try_new("s-midstream-retry-test") {
-            Ok(id) => id,
-            Err(_) => unreachable!("test session id must be valid"),
-        },
         ..Default::default()
     }
 }
@@ -175,6 +171,7 @@ fn minimal_config() -> QueryEngineConfig {
 fn engine_for(model: Arc<MidStreamMock>) -> QueryEngine {
     QueryEngine::new(
         minimal_config(),
+        coco_types::SessionId::try_new("s-midstream-retry-test").unwrap(),
         single_model_registry(model),
         Arc::new(ToolRegistry::new()),
         CancellationToken::new(),

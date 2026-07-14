@@ -16,34 +16,33 @@
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-use std::{path::PathBuf, sync::Arc};
+use std::{io::Read, path::PathBuf, sync::Arc};
 
 use anyhow::Result;
 use clap::Parser;
 
 use coco_agent_host::{
     headless::{build_runtime_config_for_cli, resolve_main_model},
-    remote_host::{RemoteHostOptions, prepare_remote_host},
+    remote_host::{HostBuilder, RemoteHostOptions},
     resume_resolver,
     resume_resolver::ResumePlan,
 };
-use coco_cli::{Cli, Commands, McpAction, tracing_init};
+use coco_app_runtime::ProcessRuntime;
+use coco_cli::{
+    Cli, Commands, McpAction,
+    execution_plan::{ExecutionMode, ExecutionPlan, IoCapabilities, build_execution_plan},
+    tracing_init,
+};
 use coco_config::global_config;
-use coco_sdk_server::{SdkSidecarConfig, run_sdk_mode};
+use coco_sdk_server::SdkSidecarConfig;
 
 mod bin_handlers;
-mod tui_runner;
+mod headless;
+mod sdk;
+mod tui;
 use coco_agent_host::session_runtime;
 
-/// Stack size for tokio worker + blocking threads (default: 2 MiB).
-///
-/// Workspace crates compile at opt-level 0 in dev builds, so the
-/// engine's nested `async fn` poll chains carry very large stack
-/// frames — the tokio default has overflowed in practice (`/compact`
-/// fork pipeline on a `tokio-rt-worker`). 8 MiB costs virtual address
-/// space only; pages commit on touch.
-const TOKIO_THREAD_STACK_BYTES: usize = 8 * 1024 * 1024;
-
+/// Convert a component shutdown-drain outcome into a process result.
 fn shutdown_drain_result(
     component: &str,
     outcome: &coco_agent_host::shutdown::ShutdownDrainOutcome,
@@ -53,6 +52,15 @@ fn shutdown_drain_result(
     }
     Err(anyhow::anyhow!("{component} shutdown drain {outcome}"))
 }
+
+/// Stack size for tokio worker + blocking threads (default: 2 MiB).
+///
+/// Workspace crates compile at opt-level 0 in dev builds, so the
+/// engine's nested `async fn` poll chains carry very large stack
+/// frames — the tokio default has overflowed in practice (`/compact`
+/// fork pipeline on a `tokio-rt-worker`). 8 MiB costs virtual address
+/// space only; pages commit on touch.
+const TOKIO_THREAD_STACK_BYTES: usize = 8 * 1024 * 1024;
 
 fn sdk_sidecar_config_from_runtime_config(
     runtime_config: &coco_config::RuntimeConfig,
@@ -90,6 +98,22 @@ fn sdk_sidecar_config_from_runtime_config(
     config
 }
 
+struct ProcessRuntimeShutdownGuard {
+    runtime: Arc<ProcessRuntime>,
+}
+
+impl ProcessRuntimeShutdownGuard {
+    fn new(runtime: Arc<ProcessRuntime>) -> Self {
+        Self { runtime }
+    }
+}
+
+impl Drop for ProcessRuntimeShutdownGuard {
+    fn drop(&mut self) {
+        self.runtime.shutdown_background_tasks();
+    }
+}
+
 fn main() -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -124,13 +148,15 @@ async fn async_main() -> Result<()> {
     // every session threads its own cwd thereafter.
     #[allow(clippy::disallowed_methods)]
     let startup_cwd = std::env::current_dir()?;
+    let execution_plan = build_execution_plan(&cli, IoCapabilities::detect())?;
 
     // Bind the handle for the lifetime of `main` so the non-blocking
     // file appender flushes on drop. `Mode::Skip` (status/doctor/etc.)
     // returns `None` and never installs a global subscriber.
-    let _tracing_handle = tracing_init::install(&cli, &startup_cwd)?;
+    let _tracing_handle = tracing_init::install(&cli, &startup_cwd, &execution_plan)?;
     coco_cli::startup_profile::mark("subscriber_installed");
-    let process_runtime = coco_app_runtime::ProcessRuntime::global();
+    let process_runtime = ProcessRuntime::global();
+    let _process_runtime_shutdown = ProcessRuntimeShutdownGuard::new(process_runtime.clone());
 
     tracing::info!(
         target: "coco_agent_host::startup",
@@ -140,29 +166,6 @@ async fn async_main() -> Result<()> {
         "coco entry"
     );
 
-    // `--no-session-persistence` is print-mode-only: it suppresses session
-    // transcript/usage writes for a one-shot run, but an interactive TUI
-    // session relies on persistence to stay resumable.
-    if cli.no_session_persistence
-        && !(cli.non_interactive
-            || cli.prompt.is_some()
-            || !std::io::IsTerminal::is_terminal(&std::io::stdout())
-            || matches!(
-                cli.command,
-                Some(Commands::Sdk | Commands::Chat { .. } | Commands::Review { .. })
-            ))
-    {
-        anyhow::bail!(
-            "--no-session-persistence can only be used in print mode (-p / --print) or SDK mode"
-        );
-    }
-    if cli.plan_mode_instructions.is_some()
-        && !(cli.non_interactive
-            || cli.prompt.is_some()
-            || !std::io::IsTerminal::is_terminal(&std::io::stdout()))
-    {
-        anyhow::bail!("--plan-mode-instructions can only be used in print mode (-p / --print)");
-    }
     let _embedded_hub_guard = coco_cli::embedded_hub::start_if_requested(&mut cli).await?;
 
     if let Some(cmd) = &cli.command {
@@ -204,7 +207,7 @@ async fn async_main() -> Result<()> {
                     println!("No sessions to resume.");
                     return Ok(());
                 }
-                return tui_runner::run_tui(
+                return tui::run_tui(
                     cli_for_resume.agent_host_options(),
                     plan,
                     cwd,
@@ -218,7 +221,7 @@ async fn async_main() -> Result<()> {
             }
             Commands::Chat { prompt } => {
                 let prompt = prompt.as_deref().unwrap_or("Hello!");
-                return run_chat(
+                return headless::run_chat(
                     &cli,
                     Some(prompt),
                     startup_cwd.clone(),
@@ -274,7 +277,7 @@ async fn async_main() -> Result<()> {
             Commands::Review { target } => {
                 let t = target.as_deref().unwrap_or("HEAD");
                 println!("Reviewing: {t}");
-                return run_chat(
+                return headless::run_chat(
                     &cli,
                     Some(&format!("Review the code changes in {t}")),
                     startup_cwd.clone(),
@@ -334,11 +337,6 @@ async fn async_main() -> Result<()> {
                     .map_err(|error| anyhow::anyhow!(error))?;
                 return Ok(());
             }
-            Commands::Daemon => {
-                println!("Starting daemon supervisor...");
-                println!("Daemon mode is not yet fully implemented.");
-                return Ok(());
-            }
             Commands::Ps { json, all } => {
                 let config_home = global_config::config_home();
                 // Live PID sweep (fixes the historic `sessions/` vs
@@ -374,26 +372,6 @@ async fn async_main() -> Result<()> {
                 }
                 return Ok(());
             }
-            Commands::Logs { session_id } => {
-                println!("Showing logs for session: {session_id}");
-                return Ok(());
-            }
-            Commands::Attach { session_id } => {
-                println!("Attaching to session: {session_id}");
-                return Ok(());
-            }
-            Commands::Kill { session_id } => {
-                println!("Killing session: {session_id}");
-                return Ok(());
-            }
-            Commands::RemoteControl => {
-                println!("Starting remote control / bridge mode...");
-                return Ok(());
-            }
-            Commands::Sync => {
-                println!("Syncing with remote session...");
-                return Ok(());
-            }
             Commands::ReleaseNotes => {
                 let version = env!("CARGO_PKG_VERSION");
                 println!("Release Notes — v{version}");
@@ -402,21 +380,8 @@ async fn async_main() -> Result<()> {
                 println!("https://github.com/anthropics/claude-code/releases");
                 return Ok(());
             }
-            Commands::Upgrade => {
-                let version = env!("CARGO_PKG_VERSION");
-                println!("Current version: {version}");
-                println!("Checking for updates...");
-                println!("You are on the latest version.");
-                return Ok(());
-            }
-            Commands::Usage => {
-                println!("Usage information:");
-                println!("  Plan: (not available without subscription)");
-                println!("  Session tokens: check /cost in interactive mode");
-                return Ok(());
-            }
             Commands::Sdk => {
-                let host = prepare_remote_host(
+                let host = HostBuilder::new(
                     RemoteHostOptions {
                         agent_host_options: cli.agent_host_options(),
                         max_turns: cli.max_turns,
@@ -424,120 +389,70 @@ async fn async_main() -> Result<()> {
                     startup_cwd.clone(),
                     process_runtime.clone(),
                 )
+                .prepare()
                 .await?;
                 let sidecar_config = sdk_sidecar_config_from_runtime_config(host.runtime_config());
-                run_sdk_mode(host, sidecar_config).await?;
+                sdk::run_sdk_mode(host, sidecar_config).await?;
                 return Ok(());
             }
         }
     }
 
-    // Mode selection: --print / piped → headless; default → interactive TUI
-    let is_piped = !std::io::IsTerminal::is_terminal(&std::io::stdout());
-    if cli.prompt.is_some() || is_piped {
-        let prompt = cli.prompt.as_deref().unwrap_or("Hello!");
-        tracing::info!(
-            target: "coco_agent_host::startup",
-            mode = "headless",
-            piped = is_piped,
-            prompt_len = prompt.len(),
-            "running headless chat"
-        );
-        run_chat(
-            &cli,
-            Some(prompt),
-            startup_cwd.clone(),
-            process_runtime.clone(),
-        )
-        .await
-    } else {
-        // Resolve `--resume` / `--continue` / `--fork-session` once
-        // and hand off to the TUI runner. `None` keeps the default
-        // fresh-session bootstrap.
-        let cwd = startup_cwd.clone();
-        let runtime_paths = coco_agent_host::paths::runtime_paths();
-        let plan: Option<ResumePlan> =
-            resume_resolver::resolve(&cli.agent_host_options(), runtime_paths.memory_base(), &cwd)?;
-        coco_cli::startup_profile::mark("resume_resolved");
-        tracing::info!(
-            target: "coco_agent_host::startup",
-            mode = "tui",
-            resuming = plan.is_some(),
-            "launching interactive TUI"
-        );
-        tui_runner::run_tui(cli.agent_host_options(), plan, cwd, process_runtime.clone()).await
+    match execution_plan.mode {
+        ExecutionMode::Headless => {
+            let prompt = resolve_headless_prompt(&cli, execution_plan)?;
+            tracing::info!(
+                target: "coco_agent_host::startup",
+                mode = "headless",
+                stdout_is_terminal = execution_plan.io.stdout_is_terminal,
+                stdin_is_terminal = execution_plan.io.stdin_is_terminal,
+                prompt_len = prompt.len(),
+                "running headless chat"
+            );
+            headless::run_chat(
+                &cli,
+                Some(&prompt),
+                startup_cwd.clone(),
+                process_runtime.clone(),
+            )
+            .await
+        }
+        ExecutionMode::Tui => {
+            // Resolve `--resume` / `--continue` / `--fork-session` once
+            // and hand off to the TUI runner. `None` keeps the default
+            // fresh-session bootstrap.
+            let cwd = startup_cwd.clone();
+            let runtime_paths = coco_agent_host::paths::runtime_paths();
+            let plan: Option<ResumePlan> = resume_resolver::resolve(
+                &cli.agent_host_options(),
+                runtime_paths.memory_base(),
+                &cwd,
+            )?;
+            coco_cli::startup_profile::mark("resume_resolved");
+            tracing::info!(
+                target: "coco_agent_host::startup",
+                mode = "tui",
+                resuming = plan.is_some(),
+                "launching interactive TUI"
+            );
+            tui::run_tui(cli.agent_host_options(), plan, cwd, process_runtime.clone()).await
+        }
+        ExecutionMode::Skip | ExecutionMode::Sdk => {
+            unreachable!("non-command execution plan cannot be skip or sdk")
+        }
     }
 }
 
-/// Run a single-turn print mode (--print / piped stdout).
-async fn run_chat(
-    cli: &Cli,
-    prompt: Option<&str>,
-    cwd: PathBuf,
-    process_runtime: Arc<coco_app_runtime::ProcessRuntime>,
-) -> Result<()> {
-    let agent_host_options = cli.agent_host_options();
-    // Resolve `--resume` / `--continue` / `--fork-session` once at
-    // the boot edge so headless and TUI share identical semantics.
-    // `None` means no resume flag was set; fall through to a fresh
-    // session.
-    let runtime_paths = coco_agent_host::paths::runtime_paths();
-    let plan = resume_resolver::resolve(&agent_host_options, runtime_paths.memory_base(), &cwd)?;
-    if let Some(p) = &plan {
-        eprintln!(
-            "{} session {} ({} prior message(s))",
-            if p.is_fork { "Forked" } else { "Resumed" },
-            p.source_session_id,
-            p.prior_messages.len(),
-        );
+fn resolve_headless_prompt(cli: &Cli, plan: ExecutionPlan) -> Result<String> {
+    if let Some(prompt) = &cli.prompt {
+        return Ok(prompt.clone());
     }
-    let opts = match plan {
-        Some(p) => coco_agent_host::headless::RunChatOptions {
-            cwd: Some(cwd.clone()),
-            prior_messages: p
-                .prior_messages
-                .into_iter()
-                .map(std::sync::Arc::new)
-                .collect(),
-            session_id_override: Some(p.session_id),
-            stored_mode: p.conversation.mode,
-            process_runtime: Some(process_runtime.clone()),
-            ..Default::default()
-        },
-        None => coco_agent_host::headless::RunChatOptions {
-            cwd: Some(cwd.clone()),
-            process_runtime: Some(process_runtime.clone()),
-            ..Default::default()
-        },
-    };
-    let outcome =
-        coco_agent_host::headless::run_chat_with_options(&agent_host_options, prompt, opts).await?;
-    if let Some(msg) = &outcome.permission_notification {
-        tracing::warn!(target: "coco_agent_host::headless", notice = %msg, "headless permission notice");
-        eprintln!("warning: {msg}");
+    if !plan.io.stdin_is_terminal {
+        let mut prompt = String::new();
+        std::io::stdin().read_to_string(&mut prompt)?;
+        return Ok(prompt);
     }
-    let mode = outcome
-        .provider_api
-        .map_or("mock", coco_types::ProviderApi::as_str);
-    tracing::info!(
-        target: "coco_agent_host::headless",
-        provider_mode = mode,
-        model_id = %outcome.model_id,
-        turns = outcome.turns,
-        tokens_in = outcome.total_usage.input_tokens.total,
-        tokens_out = outcome.total_usage.output_tokens.total,
-        "headless chat complete"
-    );
-    eprintln!("coco-rs ({mode} mode) — model: {}\n", outcome.model_id);
-    println!("{}", outcome.response_text);
-    eprintln!(
-        "\n─── {} turn(s) | {} in / {} out tokens ───",
-        outcome.turns,
-        outcome.total_usage.input_tokens.total,
-        outcome.total_usage.output_tokens.total
-    );
-    shutdown_drain_result("headless AppServer", &outcome.app_server_shutdown)?;
-    shutdown_drain_result("headless Event Hub", &outcome.event_hub_shutdown)
+    Ok("Hello!".to_string())
 }
 
 #[cfg(test)]

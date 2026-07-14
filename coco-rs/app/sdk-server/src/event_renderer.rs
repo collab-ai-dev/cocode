@@ -3,13 +3,13 @@ use std::collections::HashMap;
 use coco_app_server_transport::{
     JsonRpcFrame, JsonRpcNotification as TransportJsonRpcNotification,
 };
-#[cfg(test)]
-use coco_types::CoreEvent;
 use coco_types::{
-    AgentId, AgentStreamEvent, JSONRPC_VERSION, JsonRpcNotification as LegacyJsonRpcNotification,
-    ServerNotification, SessionId, StreamAccumulator, SurfaceId, TurnId,
+    AgentId, AgentStreamEvent, ServerNotification, SessionId, StreamAccumulator, SurfaceId, TurnId,
 };
+#[cfg(test)]
+use coco_types::{CoreEvent, JSONRPC_VERSION, JsonRpcNotification as LegacyJsonRpcNotification};
 use serde::Deserialize;
+#[cfg(test)]
 use serde_json::Value;
 use tracing::warn;
 
@@ -220,12 +220,11 @@ pub(crate) fn core_event_to_notification(event: CoreEvent) -> Option<LegacyJsonR
     }
 }
 
-/// Serialize a `ServerNotification` as a `JsonRpcNotification` directly.
-/// Exposed for focused serialization tests and synthetic protocol
-/// notifications.
-pub fn server_notification_to_jsonrpc(
-    notif: ServerNotification,
-) -> Option<LegacyJsonRpcNotification> {
+/// Serialize a `ServerNotification` as a legacy direct `JsonRpcNotification`.
+/// Production emits canonical `session/event` frames; this remains only for
+/// focused serialization tests.
+#[cfg(test)]
+fn server_notification_to_jsonrpc(notif: ServerNotification) -> Option<LegacyJsonRpcNotification> {
     match serde_json::to_value(notif).ok()? {
         Value::Object(mut map) => {
             let method = match map.remove("method")? {

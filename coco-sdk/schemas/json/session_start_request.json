@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "SessionStartParams",
-  "description": "Params for `session/start`.",
+  "description": "Params for `session/start`.\n\nThe serialized wire form carries only per-session execution policy — never a\nsession identity or history. A remote caller therefore cannot name or resume\nan existing session through start; the server mints the identity. Unknown\nfields (including legacy `session_id`/`initial_messages`/`initial_prompt`)\nare rejected as invalid params, not silently ignored.",
   "type": "object",
   "properties": {
     "append_system_prompt": {
@@ -16,12 +16,8 @@
         "null"
       ]
     },
-    "initial_prompt": {
-      "description": "Optional initial user prompt to run immediately after start.",
-      "type": [
-        "string",
-        "null"
-      ]
+    "json_schema": {
+      "description": "JSON schema for structured output. When present, the session registers\nthe StructuredOutput tool and requires a structured final result. This is\nthe per-session home for structured output (it is not an `initialize`\ncapability)."
     },
     "max_budget_usd": {
       "type": [
@@ -53,6 +49,13 @@
         }
       ]
     },
+    "planModeInstructions": {
+      "description": "Custom workflow body for the plan-mode system reminder. Per-session\nexecution policy: it lives here on `session/start`, not on `initialize`\n(which carries connection capabilities only).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "system_prompt": {
       "type": [
         "string",
@@ -60,6 +63,7 @@
       ]
     }
   },
+  "additionalProperties": false,
   "$defs": {
     "PermissionMode": {
       "description": "Permission mode (top-level because it's used by both message and permission modules).\nWire format is camelCase. The serde aliases on the drifting variants accept\nlegacy snake_case input so old session transcripts deserialize cleanly.",

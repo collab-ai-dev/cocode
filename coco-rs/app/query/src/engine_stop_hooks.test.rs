@@ -129,7 +129,14 @@ fn engine_with_hooks(hooks: Option<Arc<HookRegistry>>) -> QueryEngine {
     let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
-    QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, hooks)
+    QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        hooks,
+    )
 }
 
 struct StaticTaskHandle {

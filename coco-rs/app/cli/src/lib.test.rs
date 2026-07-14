@@ -1,62 +1,115 @@
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+
 use clap::CommandFactory;
 use clap::Parser;
 
 use super::Cli;
 
-/// PR-E3 flags should parse without colliding with pre-existing flags.
-/// Verifies every new flag round-trips through clap parsing.
 #[test]
-fn parses_all_pr_e3_flags() {
+fn parses_supported_pr_e3_flags() {
     let args = [
         "coco",
-        "--input-format",
-        "stream-json",
         "--json-schema",
         "/tmp/schema.json",
-        "--replay-user-messages",
         "--include-hook-events",
-        "--include-partial-messages",
-        "--thinking",
-        "adaptive",
-        "--max-thinking-tokens",
-        "8192",
         "--append-system-prompt-file",
         "/tmp/extra.md",
-        "--strict-mcp-config",
         "--setting-sources",
         "user,project",
         "--fork-session",
-        "--betas",
-        "prompt-caching-2024-07-31",
         "--session-id",
         "11111111-2222-3333-4444-555555555555",
-        "--permission-prompt-tool",
-        "mcp__approval__prompt",
     ];
     let cli = Cli::try_parse_from(args).expect("parse pr-e3 flags");
 
-    assert_eq!(cli.input_format.as_deref(), Some("stream-json"));
     assert_eq!(cli.json_schema.as_deref(), Some("/tmp/schema.json"));
-    assert!(cli.replay_user_messages);
     assert!(cli.include_hook_events);
-    assert!(cli.include_partial_messages);
-    assert_eq!(cli.thinking.as_deref(), Some("adaptive"));
-    assert_eq!(cli.max_thinking_tokens, Some(8192));
     assert_eq!(
         cli.append_system_prompt_file.as_deref(),
         Some("/tmp/extra.md")
     );
-    assert!(cli.strict_mcp_config);
     assert_eq!(cli.setting_sources.as_deref(), Some("user,project"));
     assert!(cli.fork_session);
-    assert_eq!(cli.betas.as_deref(), Some("prompt-caching-2024-07-31"));
     assert_eq!(
         cli.session_id.as_deref(),
         Some("11111111-2222-3333-4444-555555555555")
     );
+}
+
+#[test]
+fn top_level_flags_have_documented_consumers() {
+    let documented_consumers = BTreeMap::from([
+        ("add-dir", "AgentHostOptions -> runtime allowed roots"),
+        (
+            "allow-dangerously-skip-permissions",
+            "AgentHostOptions -> runtime permission policy",
+        ),
+        ("allowed-tools", "AgentHostOptions -> tool filter"),
+        (
+            "append-system-prompt",
+            "AgentHostOptions -> runtime prompt config",
+        ),
+        (
+            "append-system-prompt-file",
+            "AgentHostOptions -> runtime prompt config",
+        ),
+        ("bare", "main startup env policy"),
+        ("continue-session", "AgentHostOptions -> resume resolver"),
+        ("cwd", "AgentHostOptions -> runtime cwd"),
+        (
+            "dangerously-skip-permissions",
+            "AgentHostOptions -> runtime permission policy",
+        ),
+        ("disallowed-tools", "AgentHostOptions -> tool filter"),
+        ("event-hub-url", "AgentHostOptions -> Event Hub connector"),
+        ("fallback-model", "AgentHostOptions -> model fallback chain"),
+        ("fork-session", "AgentHostOptions -> resume resolver"),
+        ("hub-port", "embedded_hub startup policy"),
+        (
+            "include-hook-events",
+            "AgentHostOptions -> query event stream",
+        ),
+        ("json-schema", "AgentHostOptions -> structured output tool"),
+        ("log-file", "tracing_init"),
+        ("log-format", "tracing_init"),
+        ("log-level", "tracing_init"),
+        ("log-location", "tracing_init"),
+        ("log-stderr", "tracing_init"),
+        ("log-timezone", "tracing_init"),
+        ("max-tokens", "AgentHostOptions -> query config"),
+        ("max-turns", "AgentHostOptions -> query config / SDK host"),
+        ("models.main", "AgentHostOptions -> model resolver"),
+        (
+            "no-session-persistence",
+            "ExecutionPlan validation + AgentHostOptions",
+        ),
+        ("non-interactive", "ExecutionPlan mode selection"),
+        ("permission-mode", "AgentHostOptions -> permission policy"),
+        (
+            "plan-mode-instructions",
+            "ExecutionPlan validation + AgentHostOptions",
+        ),
+        ("prompt", "ExecutionPlan/headless prompt + AgentHostOptions"),
+        ("resume", "AgentHostOptions -> resume resolver"),
+        ("serve-hub", "embedded_hub startup policy"),
+        ("session-id", "AgentHostOptions -> session id override"),
+        ("setting-sources", "AgentHostOptions -> settings loader"),
+        ("settings", "AgentHostOptions/tracing settings loader"),
+        ("system-prompt", "AgentHostOptions -> runtime prompt config"),
+    ]);
+    let actual_flags: BTreeSet<String> = Cli::command()
+        .get_arguments()
+        .filter_map(|arg| arg.get_long().map(ToOwned::to_owned))
+        .collect();
+    let expected_flags: BTreeSet<String> = documented_consumers
+        .keys()
+        .map(|flag| (*flag).to_string())
+        .collect();
+
     assert_eq!(
-        cli.permission_prompt_tool.as_deref(),
-        Some("mcp__approval__prompt")
+        actual_flags, expected_flags,
+        "every accepted top-level flag must have an explicit consumer or plan policy"
     );
 }
 
@@ -85,6 +138,63 @@ fn event_hub_url_conflicts_with_serve_hub() {
 }
 
 #[test]
+fn removed_global_noop_flags_are_rejected() {
+    for flag in [
+        "--no-tui",
+        "--json",
+        "--debug",
+        "--verbose",
+        "--bg",
+        "--background",
+        "--thinking-budget",
+        "--mcp-config",
+        "--output-format",
+        "--effort",
+        "--worktree",
+        "--name",
+        "--agent",
+        "--max-budget-usd",
+        "--init-only",
+        "--input-format",
+        "--replay-user-messages",
+        "--include-partial-messages",
+        "--thinking",
+        "--max-thinking-tokens",
+        "--strict-mcp-config",
+        "--betas",
+        "--permission-prompt-tool",
+    ] {
+        let Err(err) = Cli::try_parse_from(["coco", flag]) else {
+            panic!("{flag} should not be accepted as a global no-op flag");
+        };
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+}
+
+#[test]
+fn removed_placeholder_subcommands_are_rejected() {
+    for args in [
+        &["coco", "daemon"][..],
+        &["coco", "logs", "session-id"][..],
+        &["coco", "attach", "session-id"][..],
+        &["coco", "kill", "session-id"][..],
+        &["coco", "remote-control"][..],
+        &["coco", "rc"][..],
+        &["coco", "bridge"][..],
+        &["coco", "sync"][..],
+        &["coco", "upgrade"][..],
+        &["coco", "usage"][..],
+    ] {
+        let Err(err) = Cli::try_parse_from(args) else {
+            panic!("{args:?} should not be accepted as a placeholder subcommand");
+        };
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidSubcommand);
+    }
+}
+
+#[test]
 fn hub_port_requires_serve_hub() {
     let Err(err) = Cli::try_parse_from(["coco", "--hub-port", "0"]) else {
         panic!("hub-port should only apply to serve-hub");
@@ -98,34 +208,15 @@ fn hub_port_requires_serve_hub() {
 #[test]
 fn pr_e3_defaults_leave_existing_flags_untouched() {
     let cli = Cli::try_parse_from(["coco"]).expect("parse no-arg");
-    assert!(cli.input_format.is_none());
     assert!(cli.json_schema.is_none());
-    assert!(!cli.replay_user_messages);
     assert!(!cli.include_hook_events);
-    assert!(!cli.include_partial_messages);
-    assert!(cli.thinking.is_none());
-    assert!(cli.max_thinking_tokens.is_none());
     assert!(cli.append_system_prompt_file.is_none());
-    assert!(!cli.strict_mcp_config);
     assert!(cli.setting_sources.is_none());
     assert!(!cli.fork_session);
-    assert!(cli.betas.is_none());
     assert!(cli.session_id.is_none());
     assert!(
         cli.fallback_model.is_empty(),
         "no-arg invocation must leave fallback_model empty"
-    );
-}
-
-#[test]
-fn help_lists_background_flag_alias() {
-    let mut command = Cli::command();
-    let help = command.render_long_help().to_string();
-
-    assert!(help.contains("--bg"), "help must list --bg");
-    assert!(
-        help.contains("--background"),
-        "help must list visible --background alias"
     );
 }
 
@@ -159,7 +250,6 @@ fn parses_single_fallback_model_flag_as_one_tier_chain() {
     let cli = Cli::try_parse_from(["coco", "--fallback-model", "anthropic/claude-sonnet-4-6"])
         .expect("parse single fallback flag");
     assert_eq!(cli.fallback_model, vec!["anthropic/claude-sonnet-4-6"]);
-    assert!(cli.permission_prompt_tool.is_none());
 }
 
 #[test]

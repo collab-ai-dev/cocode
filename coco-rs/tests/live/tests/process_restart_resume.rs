@@ -60,8 +60,6 @@ async fn run_coco(
         .env("COCO_CONFIG_DIR", config_dir)
         .env("ANTHROPIC_API_KEY", "test-key")
         .arg("--non-interactive")
-        .arg("--output-format")
-        .arg("text")
         .arg("--models.main")
         .arg(MODEL)
         // `prompt` is a `-p`/`--prompt` flag, not a positional (a bare arg

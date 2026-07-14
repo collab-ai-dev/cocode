@@ -410,6 +410,37 @@ fn partial_json_string_field(buf: &str, key: &str) -> Option<String> {
     Some(out)
 }
 
+const PERMISSION_DISPLAY_MAX_CHARS: usize = 1_200;
+
+fn is_shell_tool(tool_name: &str) -> bool {
+    matches!(
+        normalized_builtin_tool(tool_name),
+        Some(ToolName::Bash | ToolName::PowerShell)
+    )
+}
+
+/// Build the permission-prompt display input for a tool call. Pure and UI-free
+/// (returns a [`crate::PermissionDisplayInput`]) so both the TUI and the
+/// AppServer permission bridge share one formatter rather than the bridge
+/// depending on `coco-tui` (Phase G).
+pub fn permission_display_input(tool_name: &str, input: &Value) -> crate::PermissionDisplayInput {
+    if is_shell_tool(tool_name)
+        && let Some(command) = input.get("command").and_then(Value::as_str)
+    {
+        return crate::PermissionDisplayInput::Command(cap_single_line(
+            command,
+            PERMISSION_DISPLAY_MAX_CHARS,
+        ));
+    }
+
+    let display = tool_input_multiline(tool_name, input, PERMISSION_DISPLAY_MAX_CHARS);
+    if display.is_empty() {
+        crate::PermissionDisplayInput::Empty
+    } else {
+        crate::PermissionDisplayInput::Text(display)
+    }
+}
+
 #[cfg(test)]
 #[path = "tool_summary.test.rs"]
 mod tests;

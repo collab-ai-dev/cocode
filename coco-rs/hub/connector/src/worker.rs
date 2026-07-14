@@ -69,27 +69,48 @@ pub enum HubConnectorQueueError {
 
 #[derive(Debug, Clone)]
 pub struct HubConnectorSender {
-    tx: mpsc::Sender<SessionEnvelope>,
+    tx: mpsc::Sender<HubConnectorCommand>,
     dropped: Arc<Mutex<DroppedEventRanges>>,
 }
 
 impl HubConnectorSender {
     pub async fn enqueue(&self, envelope: SessionEnvelope) -> Result<(), HubConnectorQueueError> {
         self.tx
-            .send(envelope)
+            .send(HubConnectorCommand::Envelope(Box::new(envelope)))
+            .await
+            .map_err(|_| HubConnectorQueueError::Closed)
+    }
+
+    pub async fn update_announce(
+        &self,
+        announce: AnnounceFrame,
+    ) -> Result<(), HubConnectorQueueError> {
+        self.tx
+            .send(HubConnectorCommand::UpdateAnnounce(announce))
             .await
             .map_err(|_| HubConnectorQueueError::Closed)
     }
 
     pub fn try_enqueue(&self, envelope: SessionEnvelope) -> Result<(), HubConnectorQueueError> {
-        self.tx.try_send(envelope).map_err(|err| match err {
-            mpsc::error::TrySendError::Full(envelope) => {
-                record_dropped_envelope(&self.dropped, &envelope);
-                HubConnectorQueueError::Full
-            }
-            mpsc::error::TrySendError::Closed(_) => HubConnectorQueueError::Closed,
-        })
+        self.tx
+            .try_send(HubConnectorCommand::Envelope(Box::new(envelope)))
+            .map_err(|err| match err {
+                mpsc::error::TrySendError::Full(HubConnectorCommand::Envelope(envelope)) => {
+                    record_dropped_envelope(&self.dropped, &envelope);
+                    HubConnectorQueueError::Full
+                }
+                mpsc::error::TrySendError::Full(HubConnectorCommand::UpdateAnnounce(_)) => {
+                    HubConnectorQueueError::Full
+                }
+                mpsc::error::TrySendError::Closed(_) => HubConnectorQueueError::Closed,
+            })
     }
+}
+
+#[derive(Debug)]
+enum HubConnectorCommand {
+    Envelope(Box<SessionEnvelope>),
+    UpdateAnnounce(AnnounceFrame),
 }
 
 pub struct HubConnectorWorker {
@@ -169,8 +190,8 @@ fn validate_config(config: &HubConnectorWorkerConfig) -> Result<(), HubConnector
 }
 
 async fn run_worker(
-    config: HubConnectorWorkerConfig,
-    mut rx: mpsc::Receiver<SessionEnvelope>,
+    mut config: HubConnectorWorkerConfig,
+    mut rx: mpsc::Receiver<HubConnectorCommand>,
     mut shutdown_rx: oneshot::Receiver<()>,
     dropped: Arc<Mutex<DroppedEventRanges>>,
 ) -> Result<HubConnectorWorkerStats, HubConnectorWorkerError> {
@@ -183,11 +204,40 @@ async fn run_worker(
     let mut shutting_down = false;
 
     loop {
+        if !shutting_down && client.is_none() {
+            drain_ready(
+                &mut config,
+                &mut client,
+                &mut rx,
+                &mut pending,
+                &mut stats,
+                &dropped,
+            )?;
+            if pending.is_empty() && rx.is_empty() {
+                push_all_dropped_markers(&config, &dropped, &mut pending, &mut stats);
+            }
+            deliver_or_backoff(
+                &config,
+                &mut client,
+                &mut pending,
+                &mut retry_delay,
+                &mut stats,
+            )
+            .await;
+            continue;
+        }
         if pending.is_empty() && rx.is_empty() {
             push_all_dropped_markers(&config, &dropped, &mut pending, &mut stats);
         }
         if shutting_down {
-            drain_ready(&config, &mut rx, &mut pending, &mut stats, &dropped)?;
+            drain_ready(
+                &mut config,
+                &mut client,
+                &mut rx,
+                &mut pending,
+                &mut stats,
+                &dropped,
+            )?;
             push_all_dropped_markers(&config, &dropped, &mut pending, &mut stats);
             if pending.is_empty() {
                 return Ok(stats);
@@ -220,11 +270,11 @@ async fn run_worker(
                 shutting_down = true;
             }
             maybe_envelope = rx.recv(), if pending.len() < config.pending_capacity => {
-                let Some(envelope) = maybe_envelope else {
+                let Some(command) = maybe_envelope else {
                     shutting_down = true;
                     continue;
                 };
-                push_envelope(&config, &mut pending, &mut stats, &dropped, envelope)?;
+                handle_command(&mut config, &mut client, &mut pending, &mut stats, &dropped, command)?;
             }
             _ = flush_tick.tick(), if !pending.is_empty() => {
                 deliver_or_backoff(
@@ -241,21 +291,42 @@ async fn run_worker(
 }
 
 fn drain_ready(
-    config: &HubConnectorWorkerConfig,
-    rx: &mut mpsc::Receiver<SessionEnvelope>,
+    config: &mut HubConnectorWorkerConfig,
+    client: &mut Option<HubConnectorClient>,
+    rx: &mut mpsc::Receiver<HubConnectorCommand>,
     pending: &mut VecDeque<EventEnvelope>,
     stats: &mut HubConnectorWorkerStats,
     dropped: &Arc<Mutex<DroppedEventRanges>>,
 ) -> Result<(), HubConnectorWorkerError> {
     while pending.len() < config.pending_capacity {
         match rx.try_recv() {
-            Ok(envelope) => push_envelope(config, pending, stats, dropped, envelope)?,
+            Ok(command) => handle_command(config, client, pending, stats, dropped, command)?,
             Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => {
                 break;
             }
         }
     }
     Ok(())
+}
+
+fn handle_command(
+    config: &mut HubConnectorWorkerConfig,
+    client: &mut Option<HubConnectorClient>,
+    pending: &mut VecDeque<EventEnvelope>,
+    stats: &mut HubConnectorWorkerStats,
+    dropped: &Arc<Mutex<DroppedEventRanges>>,
+    command: HubConnectorCommand,
+) -> Result<(), HubConnectorWorkerError> {
+    match command {
+        HubConnectorCommand::Envelope(envelope) => {
+            push_envelope(config, pending, stats, dropped, *envelope)
+        }
+        HubConnectorCommand::UpdateAnnounce(announce) => {
+            config.announce = announce;
+            *client = None;
+            Ok(())
+        }
+    }
 }
 
 fn push_envelope(

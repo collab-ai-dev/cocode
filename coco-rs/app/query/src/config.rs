@@ -188,8 +188,6 @@ pub struct QueryEngineConfig {
     /// asks the inference runtime to skip fallback slots whose known
     /// context window is smaller than this value.
     pub fallback_min_context_window: Option<i64>,
-    /// Session identifier for hook orchestration context.
-    pub session_id: coco_types::SessionId,
     /// Project root directory for hook orchestration context.
     pub project_dir: Option<std::path::PathBuf>,
     /// Optional live permission rules read on every tool-context build.
@@ -431,10 +429,6 @@ impl Default for QueryEngineConfig {
             thinking_level: None,
             fast_mode: false,
             fallback_min_context_window: None,
-            session_id: match coco_types::SessionId::try_new("test-session") {
-                Ok(id) => id,
-                Err(_) => unreachable!("default session id must be valid"),
-            },
             project_dir: None,
             live_permission_rules: None,
             live_permission_mode: None,

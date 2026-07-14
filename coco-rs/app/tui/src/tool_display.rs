@@ -7,11 +7,9 @@
 
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::style::UiStyles;
-use coco_types::PermissionDisplayInput;
 use coco_types::ToolName;
 use coco_types::tool_summary::cap_single_line;
 use coco_types::tool_summary::normalized_builtin_tool;
-use coco_types::tool_summary::tool_input_multiline;
 use coco_types::tool_summary::tool_input_summary;
 use ratatui::style::Stylize;
 use ratatui::text::Span;
@@ -20,7 +18,6 @@ use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
 pub(crate) const TOOL_INPUT_PREVIEW_MAX_CHARS: usize = 512;
-const PERMISSION_DISPLAY_MAX_CHARS: usize = 1_200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolNameTone {
@@ -49,23 +46,7 @@ impl ToolInputPreview {
     }
 }
 
-pub fn permission_display_input(tool_name: &str, input: &Value) -> PermissionDisplayInput {
-    if is_shell_tool(tool_name)
-        && let Some(command) = input.get("command").and_then(Value::as_str)
-    {
-        return PermissionDisplayInput::Command(cap_single_line(
-            command,
-            PERMISSION_DISPLAY_MAX_CHARS,
-        ));
-    }
-
-    let display = tool_input_multiline(tool_name, input, PERMISSION_DISPLAY_MAX_CHARS);
-    if display.is_empty() {
-        PermissionDisplayInput::Empty
-    } else {
-        PermissionDisplayInput::Text(display)
-    }
-}
+pub use coco_types::tool_summary::permission_display_input;
 
 pub fn tool_input_preview(tool_name: &str, input: &Value) -> String {
     cap_single_line(
@@ -169,13 +150,6 @@ pub fn tool_name_tone(tool_name: &str) -> ToolNameTone {
         | ToolName::Sleep
         | ToolName::StructuredOutput => ToolNameTone::Utility,
     }
-}
-
-fn is_shell_tool(tool_name: &str) -> bool {
-    matches!(
-        normalized_builtin_tool(tool_name),
-        Some(ToolName::Bash | ToolName::PowerShell)
-    )
 }
 
 fn truncate_spans_to_width(spans: Vec<Span<'static>>, max_width: usize) -> Vec<Span<'static>> {

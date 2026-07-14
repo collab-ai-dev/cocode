@@ -20,7 +20,7 @@ impl QueryEngine {
         name = "compaction",
         fields(
             trigger = ?trigger,
-            session_id = %self.config.session_id,
+            session_id = %self.session_id,
             history_len = history.len(),
             has_custom_instructions = custom_instructions.is_some(),
         ),
@@ -132,7 +132,7 @@ impl QueryEngine {
         // attachment, plan-mode attachment, async-agent attachments,
         // and in-band skill re-injection.
         let cwd = self.config.workspace_cwd();
-        let session_id = self.config.session_id.clone();
+        let session_id = self.session_id.clone();
         let config_home = self.config_home.clone();
         let project_dir = self.config.project_dir.clone();
         let plans_directory_setting = self.config.plans_directory.clone();

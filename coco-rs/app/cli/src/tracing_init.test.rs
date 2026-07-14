@@ -6,6 +6,7 @@ use pretty_assertions::assert_eq;
 
 use super::LogEnv;
 use super::detect_mode;
+use super::detect_mode_for_io;
 use super::expand_bare_level;
 use super::parse_timezone;
 use super::resolve_location;
@@ -13,6 +14,7 @@ use super::subscriber_opts_from_cli;
 use super::subscriber_opts_from_cli_with_sources;
 use super::sweep_stale_logs;
 use crate::Cli;
+use crate::execution_plan::IoCapabilities;
 use coco_config::PartialLogSettings;
 use coco_config::Settings;
 use coco_otel::subscriber::Format;
@@ -51,6 +53,12 @@ fn detect_mode_sdk_subcommand_is_sdk() {
 }
 
 #[test]
+fn detect_mode_resume_subcommand_is_tui() {
+    let cli = parse(&["resume", "abc"]);
+    assert_eq!(detect_mode(&cli), Mode::Tui);
+}
+
+#[test]
 fn detect_mode_short_subcommands_are_skip() {
     for sub in [
         "status",
@@ -73,6 +81,42 @@ fn detect_mode_short_subcommands_are_skip() {
 fn detect_mode_with_prompt_no_subcommand_is_headless() {
     let cli = parse(&["--prompt", "hi"]);
     assert_eq!(detect_mode(&cli), Mode::Headless);
+}
+
+#[test]
+fn detect_mode_non_interactive_no_prompt_is_headless() {
+    let cli = parse(&["--non-interactive"]);
+    assert_eq!(detect_mode(&cli), Mode::Headless);
+}
+
+#[test]
+fn detect_mode_non_terminal_stdin_is_headless() {
+    let cli = parse(&[]);
+    assert_eq!(
+        detect_mode_for_io(
+            &cli,
+            IoCapabilities {
+                stdin_is_terminal: false,
+                stdout_is_terminal: true,
+            },
+        ),
+        Mode::Headless
+    );
+}
+
+#[test]
+fn detect_mode_no_command_tty_is_tui() {
+    let cli = parse(&[]);
+    assert_eq!(
+        detect_mode_for_io(
+            &cli,
+            IoCapabilities {
+                stdin_is_terminal: true,
+                stdout_is_terminal: true,
+            },
+        ),
+        Mode::Tui
+    );
 }
 
 #[test]

@@ -143,7 +143,7 @@ impl QueryEngine {
         name = "compaction",
         fields(
             trigger = "reactive",
-            session_id = %self.config.session_id,
+            session_id = %self.session_id,
             history_len = history.len(),
         ),
     )]
@@ -442,7 +442,7 @@ impl QueryEngine {
         // `Later`-priority items (background task-completion notifications)
         // drain only after a Sleep; else the boundary drain caps at `Next`.
         sleep_ran: bool,
-    ) {
+    ) -> Option<coco_types::TurnEndedParams> {
         // Periodic terminal-task eviction. Fires every turn regardless
         // of success / failure / cancellation outcome. Without a periodic
         // sweep `TaskManager`'s in-memory map grows monotonically over a
@@ -676,7 +676,7 @@ impl QueryEngine {
                 tracing::info!(
                     target: "coco_query::kairos_rollover",
                     yesterday = %yesterday.format("%Y-%m-%d"),
-                    session_id = %self.config.session_id,
+                    session_id = %self.session_id,
                     "KAIROS daily-log rollover detected",
                 );
             }
@@ -867,7 +867,7 @@ impl QueryEngine {
             cycle_turn_id,
             stop_reason,
         )
-        .await;
+        .await
     }
 }
 

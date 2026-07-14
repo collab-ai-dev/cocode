@@ -301,7 +301,7 @@ impl QueryEngine {
                         self.config.plans_directory.as_deref(),
                     );
                     coco_context::get_plan_file_path(
-                        self.config.session_id.as_str(),
+                        self.session_id.as_str(),
                         &plans_dir,
                         self.config.agent_id_str(),
                     )
@@ -1099,12 +1099,12 @@ impl QueryEngine {
             self.config.plans_directory.as_deref(),
         );
         let plan_path = coco_context::get_plan_file_path(
-            self.config.session_id.as_str(),
+            self.session_id.as_str(),
             &plans_dir,
             self.config.agent_id_str(),
         );
         let plan_content = coco_context::get_plan(
-            self.config.session_id.as_str(),
+            self.session_id.as_str(),
             &plans_dir,
             self.config.agent_id_str(),
         );
@@ -1156,7 +1156,7 @@ impl QueryEngine {
             coco_config::PlanPhase4Variant::Cap => coco_context::Phase4Variant::Cap,
         };
         let (plan_file_path, plan_exists) =
-            match (self.config_home.as_deref(), self.config.session_id.as_str()) {
+            match (self.config_home.as_deref(), self.session_id.as_str()) {
                 (Some(ch), sid) if !sid.is_empty() => {
                     let plans_dir = coco_context::resolve_plans_directory(
                         ch,

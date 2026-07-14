@@ -96,15 +96,18 @@ async fn cancelled_permission_synthesizes_error_tool_result() {
         // the bridge wait we want to cancel.
         permission_mode: PermissionMode::Default,
         max_turns: Some(4),
-        session_id: match coco_types::SessionId::try_new("cancel-during-permission") {
-            Ok(id) => id,
-            Err(_) => unreachable!("test session id must be valid"),
-        },
         ..Default::default()
     };
     let (bridge, bridge_entered) = hanging_bridge();
-    let engine = QueryEngine::new(config, client, core_tools(), cancel.clone(), None)
-        .with_permission_bridge(bridge);
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("cancel-during-permission").unwrap(),
+        client,
+        core_tools(),
+        cancel.clone(),
+        None,
+    )
+    .with_permission_bridge(bridge);
 
     // Spawn the engine on a background task so we can fire cancel
     // mid-flight. The hanging bridge means the run never returns

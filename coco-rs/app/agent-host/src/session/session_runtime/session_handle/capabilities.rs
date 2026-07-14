@@ -1,0 +1,378 @@
+use super::*;
+
+impl SessionHandle {
+    // Focused capability forwarding. Keeping these as explicit inherent
+    // methods preserves the opaque runtime boundary while allowing callers to
+    // request only the session service they need.
+    pub fn runtime_config(&self) -> &Arc<coco_config::RuntimeConfig> {
+        self.runtime.runtime_config()
+    }
+
+    pub fn tools(&self) -> &Arc<coco_tool_runtime::ToolRegistry> {
+        self.runtime.tools()
+    }
+
+    pub(crate) fn app_state(&self) -> &Arc<tokio::sync::RwLock<coco_types::ToolAppState>> {
+        self.runtime.app_state()
+    }
+
+    pub fn original_cwd(&self) -> &std::path::PathBuf {
+        self.runtime.original_cwd()
+    }
+
+    pub fn project_root(&self) -> &std::path::PathBuf {
+        self.runtime.project_root()
+    }
+
+    pub(crate) fn current_cwd(&self) -> &Arc<tokio::sync::RwLock<std::path::PathBuf>> {
+        self.runtime.current_cwd()
+    }
+
+    pub fn config_home(&self) -> &std::path::PathBuf {
+        self.runtime.config_home()
+    }
+
+    pub async fn prompt_history_texts(&self, project: String) -> Vec<String> {
+        self.runtime.prompt_history_texts(project).await
+    }
+
+    pub async fn persist_prompt_history_entry(
+        &self,
+        project: String,
+        display: String,
+    ) -> anyhow::Result<()> {
+        self.runtime
+            .persist_prompt_history_entry(project, display)
+            .await
+    }
+
+    pub fn session_manager_handle(&self) -> Arc<coco_session::SessionManager> {
+        Arc::clone(self.runtime.session_manager())
+    }
+
+    pub fn project_services(&self) -> &Arc<coco_app_runtime::ProjectServices> {
+        self.runtime.project_services()
+    }
+
+    pub fn process_runtime(&self) -> &Arc<coco_app_runtime::ProcessRuntime> {
+        self.runtime.process_runtime()
+    }
+
+    pub(crate) fn file_read_state(&self) -> &Arc<tokio::sync::RwLock<coco_context::FileReadState>> {
+        self.runtime.file_read_state()
+    }
+
+    pub fn file_history_enabled(&self) -> bool {
+        self.runtime.file_history().is_some()
+    }
+
+    pub fn hook_registry(&self) -> Arc<coco_hooks::HookRegistry> {
+        self.runtime.hook_registry()
+    }
+
+    pub fn skill_manager(&self) -> Arc<coco_skills::SkillManager> {
+        self.runtime.skill_manager()
+    }
+
+    pub fn model_runtimes(&self) -> Arc<coco_inference::ModelRuntimeRegistry> {
+        self.runtime.model_runtimes()
+    }
+
+    pub fn sandbox_state(&self) -> Option<Arc<coco_sandbox::SandboxState>> {
+        self.runtime.sandbox_state()
+    }
+
+    pub fn memory_runtime(&self) -> Option<&Arc<coco_memory::MemoryRuntime>> {
+        self.runtime.memory_runtime()
+    }
+
+    pub fn command_queue(&self) -> &coco_query::CommandQueue {
+        self.runtime.command_queue()
+    }
+
+    pub async fn queued_command_status(&self) -> QueuedCommandStatus {
+        let queue = self.runtime.command_queue();
+        QueuedCommandStatus {
+            is_empty: queue.is_empty().await,
+            last_changed_at: queue.last_changed_at(),
+        }
+    }
+
+    pub fn subscribe_command_queue_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.runtime.command_queue().subscribe_changes()
+    }
+
+    pub fn schedule_store(&self) -> coco_tool_runtime::ScheduleStoreRef {
+        self.runtime.schedule_store()
+    }
+
+    pub fn side_query(&self) -> coco_tool_runtime::SideQueryHandle {
+        self.runtime.side_query()
+    }
+
+    pub fn persist_session(&self) -> bool {
+        self.runtime.persist_session()
+    }
+
+    pub fn runtime_publisher(&self) -> Option<Arc<coco_config::RuntimePublisher>> {
+        self.runtime.runtime_publisher()
+    }
+
+    pub fn shutdown_child_token(&self) -> tokio_util::sync::CancellationToken {
+        self.runtime.shutdown_child_token()
+    }
+
+    pub(crate) fn loop_sentinel_state(
+        &self,
+    ) -> &Arc<tokio::sync::Mutex<coco_skills::bundled::loop_skill::LoopSentinelState>> {
+        self.runtime.loop_sentinel_state()
+    }
+
+    pub fn usage_accounting(&self) -> coco_query::usage_accounting::UsageAccounting {
+        self.runtime.usage_accounting()
+    }
+
+    pub(crate) fn skill_bash_cell(
+        &self,
+    ) -> Arc<std::sync::RwLock<Option<Arc<dyn coco_skills::shell_exec::BashToolHandle>>>> {
+        self.runtime.skill_bash_cell()
+    }
+
+    pub(crate) fn agent_catalog_handle(
+        &self,
+    ) -> Arc<tokio::sync::RwLock<Arc<coco_subagent::AgentCatalogSnapshot>>> {
+        self.runtime.agent_catalog_handle()
+    }
+
+    pub fn registered_tools(&self) -> Vec<Arc<dyn coco_tool_runtime::DynTool>> {
+        self.runtime.registered_tools()
+    }
+
+    pub async fn current_typed_session_id(&self) -> SessionId {
+        self.runtime.current_typed_session_id().await
+    }
+
+    pub async fn current_engine_config(&self) -> coco_query::QueryEngineConfig {
+        self.runtime.current_engine_config().await
+    }
+
+    pub async fn current_agent_handle(&self) -> Option<coco_tool_runtime::AgentHandleRef> {
+        self.runtime.current_agent_handle().await
+    }
+
+    pub async fn current_agent_transcript_store(
+        &self,
+    ) -> Option<coco_tool_runtime::AgentTranscriptStoreRef> {
+        self.runtime.current_agent_transcript_store().await
+    }
+
+    pub async fn current_fork_dispatcher(
+        &self,
+    ) -> Option<coco_query::forked_agent::ForkDispatcherRef> {
+        self.runtime.current_fork_dispatcher().await
+    }
+
+    pub async fn current_mcp_handle(&self) -> Option<coco_tool_runtime::McpHandleRef> {
+        self.runtime.current_mcp_handle().await
+    }
+
+    pub async fn current_command_registry(&self) -> Arc<coco_commands::CommandRegistry> {
+        self.runtime.current_command_registry().await
+    }
+
+    pub async fn current_agent_catalog(&self) -> Arc<coco_subagent::AgentCatalogSnapshot> {
+        self.runtime.current_agent_catalog().await
+    }
+
+    pub async fn agent_catalog_snapshot(&self) -> Arc<coco_subagent::AgentCatalogSnapshot> {
+        self.runtime.agent_catalog_snapshot().await
+    }
+
+    pub async fn session_usage_snapshot(&self) -> coco_types::SessionUsageSnapshot {
+        self.runtime.session_usage_snapshot().await
+    }
+
+    pub async fn live_session_summary_and_history(
+        &self,
+    ) -> (coco_types::SessionSummary, Vec<Arc<coco_messages::Message>>) {
+        let config = self.current_engine_config().await;
+        let history = self.history_messages().await;
+        let usage = self.session_usage_snapshot().await;
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        (
+            coco_types::SessionSummary {
+                session_id: self.session_id().clone(),
+                model: config.model_id,
+                cwd: self.original_cwd().to_string_lossy().into_owned(),
+                created_at: timestamp.clone(),
+                updated_at: Some(timestamp),
+                title: None,
+                message_count: history.len() as i32,
+                total_tokens: usage
+                    .totals
+                    .input_tokens
+                    .saturating_add(usage.totals.output_tokens),
+            },
+            history,
+        )
+    }
+
+    pub async fn bypass_permissions_available(&self) -> bool {
+        self.current_engine_config()
+            .await
+            .permission_mode_availability
+            .bypass_permissions
+    }
+
+    pub async fn workspace_cwd(&self) -> std::path::PathBuf {
+        self.current_engine_config().await.workspace_cwd()
+    }
+
+    pub async fn thinking_level(&self) -> Option<coco_types::ThinkingLevel> {
+        self.current_engine_config().await.thinking_level
+    }
+
+    pub async fn last_cache_safe_params(&self) -> Option<coco_types::CacheSafeParams> {
+        self.runtime.last_cache_safe_params().await
+    }
+
+    pub async fn fallback_cache_safe_params(&self) -> coco_types::CacheSafeParams {
+        self.runtime.fallback_cache_safe_params().await
+    }
+
+    pub async fn has_exited_plan_mode(&self) -> bool {
+        self.runtime.has_exited_plan_mode().await
+    }
+
+    pub fn configured_plans_dir(&self) -> std::path::PathBuf {
+        self.runtime.configured_plans_dir()
+    }
+
+    pub fn session_plan_file_path(&self) -> std::path::PathBuf {
+        self.runtime.session_plan_file_path()
+    }
+
+    pub fn unscoped_session_plan_text(&self, session_id: &coco_types::SessionId) -> Option<String> {
+        self.runtime.unscoped_session_plan_text(session_id)
+    }
+
+    pub async fn status_report(&self) -> String {
+        self.runtime.status_report().await
+    }
+
+    pub fn resolve_model_selection(
+        &self,
+        value: &str,
+    ) -> Option<coco_types::ProviderModelSelection> {
+        self.runtime.resolve_model_selection(value)
+    }
+
+    /// Narrow append-only handle over this session's live permission-rule
+    /// overlay. Returns a capability, not the raw lock, so the public API
+    /// exposes an operation instead of leaking `Arc<RwLock<_>>`.
+    pub fn live_permission_rules(&self) -> super::super::LivePermissionRulesHandle {
+        self.runtime.live_permission_rules_handle()
+    }
+
+    pub fn attachment_emitter(&self) -> coco_messages::AttachmentEmitter {
+        self.runtime.attachment_emitter()
+    }
+
+    pub fn auto_title_enabled(&self) -> bool {
+        self.runtime.auto_title_enabled()
+    }
+
+    pub fn fast_model_spec(&self) -> Option<&coco_types::ModelSpec> {
+        self.runtime.fast_model_spec()
+    }
+
+    pub async fn initialize_metadata_snapshot(&self) -> super::SessionInitializeMetadata {
+        let command_registry = self.current_command_registry().await;
+        let commands = command_registry
+            .client_visible()
+            .iter()
+            .map(|cmd| super::SessionInitializeCommand {
+                name: cmd.base.name.clone(),
+                description: cmd.base.description.clone(),
+                argument_hint: cmd.base.argument_hint.clone().unwrap_or_default(),
+            })
+            .collect();
+
+        let agent_catalog = self.agent_catalog_snapshot().await;
+        let mut agents: Vec<super::SessionInitializeAgent> = agent_catalog
+            .active()
+            .cloned()
+            .map(agent_definition_to_initialize_agent)
+            .collect();
+        agents.sort_by(|a, b| a.name.cmp(&b.name));
+
+        let engine_config = self.current_engine_config().await;
+        let cwd = engine_config.workspace_cwd();
+        let plugin_style_sources = self.project_services().output_style_sources();
+        let output_style_manager = crate::headless::build_output_style_manager(
+            self.runtime_config(),
+            &cwd,
+            &plugin_style_sources,
+        );
+        let output_style = output_style_manager.active_name_for_initialize();
+        let mut available_output_styles = output_style_manager.names();
+        if !available_output_styles
+            .iter()
+            .any(|name| name == coco_output_styles::DEFAULT_OUTPUT_STYLE_NAME)
+        {
+            available_output_styles.insert(0, coco_output_styles::DEFAULT_OUTPUT_STYLE_NAME.into());
+        }
+
+        super::SessionInitializeMetadata {
+            commands,
+            agents,
+            output_style,
+            available_output_styles,
+        }
+    }
+
+    pub async fn fast_mode_state(&self) -> coco_types::FastModeState {
+        if self.current_engine_config().await.fast_mode {
+            coco_types::FastModeState::On
+        } else {
+            coco_types::FastModeState::Off
+        }
+    }
+
+    pub fn subscribe_config_changes(
+        &self,
+    ) -> Option<tokio::sync::broadcast::Receiver<coco_config_reload::ConfigChange>> {
+        self.runtime.subscribe_config_changes()
+    }
+
+    pub fn subscribe_config_reload_errors(
+        &self,
+    ) -> Option<tokio::sync::broadcast::Receiver<coco_config_reload::ConfigReloadError>> {
+        self.runtime.subscribe_config_reload_errors()
+    }
+
+    pub async fn install_side_query_event_tx(
+        &self,
+        event_tx: tokio::sync::mpsc::Sender<coco_query::CoreEvent>,
+    ) {
+        self.runtime.install_side_query_event_tx(event_tx).await;
+    }
+
+    pub async fn flush_session_usage_snapshot(&self) {
+        self.runtime.flush_session_usage_snapshot().await;
+    }
+
+    pub fn callback_requirements(&self) -> coco_types::SessionCallbackRequirements {
+        self.callback_requirements.clone()
+    }
+}
+
+fn agent_definition_to_initialize_agent(
+    def: coco_types::AgentDefinition,
+) -> super::SessionInitializeAgent {
+    super::SessionInitializeAgent {
+        name: def.name,
+        description: def.description.unwrap_or_default(),
+        model: def.model,
+    }
+}

@@ -277,7 +277,7 @@ impl LoopConstants {
                 .agent_id
                 .as_ref()
                 .map(ToString::to_string)
-                .unwrap_or_else(|| engine.config.session_id.to_string()),
+                .unwrap_or_else(|| engine.session_id.to_string()),
             context_window,
             // Effective = 90% of window (reserve 10% for output),
             // matching the same approximation `coco-compact` uses.
@@ -376,7 +376,7 @@ impl QueryEngine {
         // Reminder emission itself moved to the orchestrator below.
         let mut pr_init = PlanModeReminder::new(
             self.config.permission_mode,
-            Some(self.config.session_id.clone()),
+            Some(self.session_id.clone()),
             self.config.agent_id_string(),
             consts.plans_dir.clone(),
             self.app_state.clone(),
@@ -469,7 +469,7 @@ impl QueryEngine {
         if let (Some(fh), Some(ch)) = (&self.file_history, &self.config_home) {
             let mut fh = fh.write().await;
             if let Err(e) = fh
-                .make_snapshot(&consts.user_uuid, ch, self.config.session_id.as_str())
+                .make_snapshot(&consts.user_uuid, ch, self.session_id.as_str())
                 .await
             {
                 warn!("file history make_snapshot failed: {e}");

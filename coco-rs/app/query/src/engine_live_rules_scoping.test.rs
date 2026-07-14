@@ -83,7 +83,14 @@ fn make_engine() -> QueryEngine {
     let client = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
-    QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None)
+    QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        client,
+        tools,
+        cancel,
+        None,
+    )
 }
 
 fn skill_cmd_rule(tool_pattern: &str) -> PermissionRule {

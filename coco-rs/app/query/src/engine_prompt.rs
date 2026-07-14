@@ -804,6 +804,7 @@ impl QueryEngine {
         });
         crate::tool_context::ToolContextFactory {
             config: self.config.clone(),
+            session_id: self.session_id.clone(),
             tools: self.tools.clone(),
             turn_abort: self.turn_abort.clone(),
             mailbox: self.mailbox.clone(),
@@ -822,7 +823,7 @@ impl QueryEngine {
             transcript_path: self
                 .transcript_store
                 .as_ref()
-                .and_then(|store| store.transcript_path(self.config.session_id.as_str())),
+                .and_then(|store| store.transcript_path(self.session_id.as_str())),
             hook_handle,
             // Real `AgentHandle` when the CLI / SDK / TUI installed
             // one via `with_agent_handle`; otherwise fall back to

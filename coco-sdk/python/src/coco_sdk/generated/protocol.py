@@ -667,8 +667,6 @@ class WorkflowAgentState(str, Enum):
 # One entry in `AgentDefinition.mcp_servers`:
 AgentMcpServerSpec = str | dict[str, Any]
 
-ArchiveTarget = Union["dict[str, InteractiveTarget]", "dict[str, SessionTarget]"]
-
 # Assistant message content parts.
 AssistantContentPart = Union[
     "TextPart",
@@ -720,7 +718,9 @@ PermissionRequestDetail = dict[str, Any]
 RequestId = int | str
 
 # Destination selected by explicit `session/replace`.
-SessionReplacement = Union["dict[str, SessionStartParams]", "dict[str, SessionTarget]"]
+SessionReplacement = Union[
+    "str", "dict[str, SessionStartParams]", "dict[str, SessionTarget]"
+]
 
 # Typed payload for silent attachment kinds.
 SilentPayload = Union[
@@ -936,12 +936,16 @@ class ClientRequestSessionSubscribe(BaseModel):
     params: SessionSubscribeParams
 
 
-class ClientRequestSessionArchive(BaseModel):
+class ClientRequestSessionClose(BaseModel):
     model_config = {"populate_by_name": True}
-    method: Literal["session/archive"] = Field(
-        default="session/archive", alias="method"
-    )
-    params: SessionArchiveParams
+    method: Literal["session/close"] = Field(default="session/close", alias="method")
+    params: SessionCloseParams
+
+
+class ClientRequestSessionDelete(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/delete"] = Field(default="session/delete", alias="method")
+    params: SessionDeleteParams
 
 
 class ClientRequestSessionRename(BaseModel):
@@ -1203,7 +1207,8 @@ ClientRequest = Annotated[
         ClientRequestSessionRead,
         ClientRequestSessionTurnsList,
         ClientRequestSessionSubscribe,
-        ClientRequestSessionArchive,
+        ClientRequestSessionClose,
+        ClientRequestSessionDelete,
         ClientRequestSessionRename,
         ClientRequestSessionToggleTag,
         ClientRequestSessionCost,
@@ -2366,6 +2371,24 @@ ServerRequest = Annotated[
         ServerRequestMcpRequestElicitation,
     ],
     Field(discriminator="method"),
+]
+
+
+class SessionCloseTargetInteractive(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal["interactive"] = Field(default="interactive", alias="kind")
+    target: InteractiveTarget
+
+
+class SessionCloseTargetOrphaned(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal["orphaned"] = Field(default="orphaned", alias="kind")
+    target: SessionTarget
+
+
+SessionCloseTarget = Annotated[
+    Union[SessionCloseTargetInteractive, SessionCloseTargetOrphaned],
+    Field(discriminator="kind"),
 ]
 
 
@@ -3839,6 +3862,7 @@ class ToolUseSummaryParams(BaseModel):
 class TurnEndedParams(BaseModel):
     outcome: TurnOutcome
     turn_id: TurnId
+    session_result: SessionResultParams | None = None
     usage: TokenUsage | None = None
 
 
@@ -4233,15 +4257,9 @@ class InitializeParams(BaseModel):
         default=None, alias="agentProgressSummaries"
     )
     agents: dict[str, ClientAgentDefinition] | None = None
-    append_system_prompt: str | None = None
     client_mcp_servers: list[str] | None = None
     hooks: dict[str, list[HookCallbackMatcher]] | None = None
-    json_schema: Any = None
-    plan_mode_instructions: str | None = Field(
-        default=None, alias="planModeInstructions"
-    )
     prompt_suggestions: bool | None = None
-    system_prompt: str | None = None
 
 
 class InteractiveTarget(BaseModel):
@@ -4271,8 +4289,12 @@ class RewindFilesParams(BaseModel):
     dry_run: bool = False
 
 
-class SessionArchiveParams(BaseModel):
-    target: ArchiveTarget
+class SessionCloseParams(BaseModel):
+    target: SessionCloseTarget
+
+
+class SessionDeleteParams(BaseModel):
+    target: SessionTarget
 
 
 class SessionReadParams(BaseModel):
@@ -4293,16 +4315,22 @@ class SessionReplaceParams(BaseModel):
 
 class SessionResumeParams(BaseModel):
     target: SessionTarget
+    plan_mode_instructions: str | None = Field(
+        default=None, alias="planModeInstructions"
+    )
 
 
 class SessionStartParams(BaseModel):
     append_system_prompt: str | None = None
     cwd: str | None = None
-    initial_prompt: str | None = None
+    json_schema: Any = None
     max_budget_usd: float | None = None
     max_turns: int | None = None
     model: str | None = None
     permission_mode: PermissionMode | None = None
+    plan_mode_instructions: str | None = Field(
+        default=None, alias="planModeInstructions"
+    )
     system_prompt: str | None = None
 
 
@@ -4402,7 +4430,8 @@ class ClientRequestMethod(str, Enum):
     SESSION_READ = "session/read"
     SESSION_TURNS_LIST = "session/turns/list"
     SESSION_SUBSCRIBE = "session/subscribe"
-    SESSION_ARCHIVE = "session/archive"
+    SESSION_CLOSE = "session/close"
+    SESSION_DELETE = "session/delete"
     SESSION_RENAME = "session/rename"
     SESSION_TOGGLE_TAG = "session/toggleTag"
     SESSION_COST = "session/cost"
@@ -4541,16 +4570,28 @@ class SessionSubscribeRequest(BaseModel):
 SessionSubscribeRequestParams = SessionSubscribeRequest.SessionSubscribeRequestParams
 
 
-class SessionArchiveRequest(BaseModel):
+class SessionCloseRequest(BaseModel):
     model_config = {"populate_by_name": True}
-    method: Literal["session/archive"] = Field(default="session/archive")
-    params: SessionArchiveRequestParams
+    method: Literal["session/close"] = Field(default="session/close")
+    params: SessionCloseRequestParams
 
-    class SessionArchiveRequestParams(SessionArchiveParams):
+    class SessionCloseRequestParams(SessionCloseParams):
         pass
 
 
-SessionArchiveRequestParams = SessionArchiveRequest.SessionArchiveRequestParams
+SessionCloseRequestParams = SessionCloseRequest.SessionCloseRequestParams
+
+
+class SessionDeleteRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/delete"] = Field(default="session/delete")
+    params: SessionDeleteRequestParams
+
+    class SessionDeleteRequestParams(SessionDeleteParams):
+        pass
+
+
+SessionDeleteRequestParams = SessionDeleteRequest.SessionDeleteRequestParams
 
 
 class SessionRenameRequest(BaseModel):
@@ -5002,7 +5043,8 @@ ClientRequest = Annotated[
         SessionReadRequest,
         SessionTurnsListRequest,
         SessionSubscribeRequest,
-        SessionArchiveRequest,
+        SessionCloseRequest,
+        SessionDeleteRequest,
         SessionRenameRequest,
         SessionToggleTagRequest,
         SessionCostRequest,
@@ -5990,7 +6032,7 @@ class SessionReadResult(BaseModel):
 
 class SessionResumeResult(BaseModel):
     session: SessionSummary
-    surface_id: SurfaceId | None = None
+    surface_id: SurfaceId
 
 
 class SessionStartInput(BaseModel):
@@ -6007,7 +6049,7 @@ class SessionStartInput(BaseModel):
 
 class SessionStartResult(BaseModel):
     session_id: SessionId
-    surface_id: SurfaceId | None = None
+    surface_id: SurfaceId
 
 
 class SessionUsageSourceEntry(BaseModel):

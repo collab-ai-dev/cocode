@@ -936,7 +936,7 @@ fn update_session_rollup(conn: &Connection, event: &EventRow) -> Result<(), Even
         row.cwd = Some(cwd);
     }
     if let Some(method) = event.inner_kind.as_deref()
-        && matches!(method, "session/ended" | "session/archived")
+        && method == "session/ended"
     {
         row.ended_at = Some(event.ts);
     }

@@ -38,12 +38,9 @@ mod app_server_transport;
 pub mod dispatcher;
 mod event_renderer;
 mod sidecar;
-mod startup;
 pub mod transport;
 
 pub use app_server_transport::RemoteAppServerBridgeError;
 pub use dispatcher::SdkServer;
-pub use event_renderer::server_notification_to_jsonrpc;
 pub use sidecar::{SdkSidecarConfig, SdkSidecarError, SdkSidecarListeners};
-pub use startup::{SdkStartupError, run_sdk_mode};
 pub use transport::{InMemoryTransport, SdkTransport, StdioTransport, TransportError};
