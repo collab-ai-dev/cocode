@@ -81,7 +81,7 @@ async fn route_hook_callback(
         .route_server_request_with_reply(
             session.session_id().clone(),
             coco_app_server::SurfaceCapability::Interactive,
-            None,
+            session.active_turn_id(),
             coco_types::ServerRequest::HookCallback(params),
         )
         .map_err(|e| coco_hooks::HooksError::generic(format!("route hook/callback: {e:?}")))?

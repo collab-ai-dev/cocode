@@ -119,6 +119,73 @@ async fn start_is_rejected_after_close_tombstone() {
 }
 
 #[tokio::test]
+async fn active_turn_id_tracks_the_running_turn() {
+    // Server-request bridges read `active_turn_id()` to tag pending requests so
+    // they can be cancelled at turn end. It must reflect the running/finishing
+    // turn and be `None` when idle.
+    let coordinator = SessionTurnCoordinator::default();
+    let sid = session_id();
+    assert_eq!(
+        coordinator.active_turn_id(),
+        None,
+        "idle has no active turn"
+    );
+    let turn_id = coordinator
+        .start(&sid, |_, cancel| dummy_handles(cancel))
+        .expect("turn admitted");
+    assert_eq!(coordinator.active_turn_id(), Some(turn_id.clone()));
+    assert!(coordinator.mark_finishing(), "Running -> Finishing");
+    assert_eq!(
+        coordinator.active_turn_id(),
+        Some(turn_id),
+        "the id survives the Finishing window"
+    );
+    assert!(coordinator.complete_finishing(), "Finishing -> Idle");
+    assert_eq!(coordinator.active_turn_id(), None, "Idle again");
+}
+
+#[tokio::test]
+async fn reserve_blocks_concurrent_start_and_releases_on_drop() {
+    // A shortcut reservation holds the slot atomically: neither a real turn nor
+    // a second shortcut can be admitted until it is released.
+    let coordinator = SessionTurnCoordinator::default();
+    let sid = session_id();
+    let (turn_id, cancel) = coordinator.reserve(&sid).expect("reservation admitted");
+    assert_eq!(coordinator.active_turn_id(), Some(turn_id));
+    assert!(!cancel.is_cancelled());
+    assert!(
+        coordinator
+            .start(&sid, |_, cancel| dummy_handles(cancel))
+            .is_err(),
+        "a real turn must not be admitted while a shortcut holds the slot"
+    );
+    assert!(
+        coordinator.reserve(&sid).is_err(),
+        "a second shortcut must not be admitted"
+    );
+    coordinator.release_reservation();
+    assert_eq!(coordinator.active_turn_id(), None);
+    coordinator
+        .start(&sid, |_, cancel| dummy_handles(cancel))
+        .expect("a turn is admitted once the reservation is released");
+}
+
+#[tokio::test]
+async fn close_cancels_a_reserved_shortcut() {
+    let coordinator = SessionTurnCoordinator::default();
+    let sid = session_id();
+    let (_turn_id, cancel) = coordinator.reserve(&sid).expect("reservation admitted");
+    coordinator
+        .close()
+        .expect("close returns the reserved shortcut's cancel token")
+        .cancel();
+    assert!(
+        cancel.is_cancelled(),
+        "close cancels a reserved shortcut so it cannot run against a closed session"
+    );
+}
+
+#[tokio::test]
 async fn close_cancels_a_running_turn_but_spares_a_finishing_one() {
     // `close` cancels a turn admitted in the drain->close race window (Running)
     // so it cannot run detached against a closed session, but leaves a Finishing

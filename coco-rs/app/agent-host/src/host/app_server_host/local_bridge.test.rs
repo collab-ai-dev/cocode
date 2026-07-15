@@ -100,7 +100,12 @@ async fn local_bridge_restore_session_seq_from_watermark_restores_replay_and_all
         coco_types::SessionId::try_new("sess-local-seq-resume").expect("valid test session id");
     let watermark = 40;
 
-    bridge.restore_session_seq_from_watermark(session_id.clone(), watermark);
+    super::super::session_registry::restore_session_seq_from_watermark(
+        bridge.app_server(),
+        &state,
+        session_id.clone(),
+        watermark,
+    );
 
     let adapter = coco_app_server::LocalClientAdapter::with_channel_capacity(
         Arc::clone(bridge.app_server()),

@@ -144,6 +144,45 @@ pub enum EventReplayPolicy {
     Ephemeral,
 }
 
+/// Wire method of a surface-event envelope notification (`session/event`).
+pub const SESSION_EVENT_METHOD: &str = "session/event";
+/// Wire method of a surface-lifecycle notification (`session/lifecycle`).
+pub const SESSION_LIFECYCLE_METHOD: &str = "session/lifecycle";
+
+/// The three-layer discriminator of a [`CoreEvent`] as it appears on the wire
+/// inside a surface-event envelope. Single source of truth for the
+/// `"protocol"`/`"stream"`/`"tui"` strings shared by the AppServer encoder and
+/// the client/SDK decoders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventLayer {
+    Protocol,
+    Stream,
+    Tui,
+}
+
+impl EventLayer {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Protocol => "protocol",
+            Self::Stream => "stream",
+            Self::Tui => "tui",
+        }
+    }
+}
+
+impl std::str::FromStr for EventLayer {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "protocol" => Ok(Self::Protocol),
+            "stream" => Ok(Self::Stream),
+            "tui" => Ok(Self::Tui),
+            _ => Err(()),
+        }
+    }
+}
+
 impl CoreEvent {
     /// Durability is a *content-class* decision, not a transport-layer one
     ///: `Protocol` notifications delegate to
@@ -156,6 +195,15 @@ impl CoreEvent {
         match self {
             Self::Protocol(notification) => notification.replay_class(),
             Self::Stream(_) | Self::Tui(_) => EventReplayPolicy::Ephemeral,
+        }
+    }
+
+    /// The wire-envelope layer discriminator for this event.
+    pub fn layer(&self) -> EventLayer {
+        match self {
+            Self::Protocol(_) => EventLayer::Protocol,
+            Self::Stream(_) => EventLayer::Stream,
+            Self::Tui(_) => EventLayer::Tui,
         }
     }
 

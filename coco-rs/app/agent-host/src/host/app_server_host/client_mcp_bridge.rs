@@ -86,11 +86,18 @@ async fn route_message(
         server_name,
         message,
     };
+    // MCP route requests may fire inside a turn (tool-driven) or outside one
+    // (connection setup); tag with the active turn if there is one so the
+    // request is cancelled when that turn ends.
+    let turn_id = app_server
+        .registry()
+        .get(&session_id)
+        .and_then(|handle| handle.into_session().active_turn_id());
     let reply = app_server
         .route_server_request_with_reply(
             session_id,
             coco_app_server::SurfaceCapability::Interactive,
-            None,
+            turn_id,
             coco_types::ServerRequest::McpRouteMessage(params),
         )
         .map_err(|error| format!("route mcp/routeMessage: {error:?}"))?

@@ -92,6 +92,7 @@ pub(crate) async fn handle_turn_start(
                 session_for_start.clone(),
                 start.session_id.clone(),
                 start.turn_id.clone(),
+                Some(Arc::clone(&app_server)),
             ));
 
             // Spawn the turn as a detached task so `turn/start` returns the

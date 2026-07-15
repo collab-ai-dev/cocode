@@ -29,30 +29,60 @@ impl ActiveTurnDrainState {
 enum TurnLifecycleState {
     #[default]
     Idle,
-    Running(ActiveTurnHandles),
-    Finishing(ActiveTurnHandles),
+    /// A synchronous-lifecycle shortcut (`/cost`, `/btw`, …) holds the slot for
+    /// its duration. It has no engine turn task or forwarder to drain — only a
+    /// cancel token — and is released to `Idle` by its RAII reservation guard.
+    Reserved {
+        turn_id: coco_types::TurnId,
+        cancel: CancellationToken,
+    },
+    Running {
+        turn_id: coco_types::TurnId,
+        handles: ActiveTurnHandles,
+    },
+    Finishing {
+        turn_id: coco_types::TurnId,
+        handles: ActiveTurnHandles,
+    },
 }
 
 impl TurnLifecycleState {
     fn is_busy(&self) -> bool {
         match self {
             Self::Idle => false,
-            Self::Running(_) | Self::Finishing(_) => true,
+            Self::Reserved { .. } | Self::Running { .. } | Self::Finishing { .. } => true,
         }
     }
 
     fn cancel_token(&self) -> Option<CancellationToken> {
         match self {
             Self::Idle => None,
-            Self::Running(active) | Self::Finishing(active) => Some(active.cancel_token.clone()),
+            Self::Reserved { cancel, .. } => Some(cancel.clone()),
+            Self::Running { handles, .. } | Self::Finishing { handles, .. } => {
+                Some(handles.cancel_token.clone())
+            }
+        }
+    }
+
+    /// The id of the turn currently owning the slot, if any. Server-request
+    /// bridges read this so pending requests are tagged with their turn and can
+    /// be cancelled when that turn ends.
+    fn turn_id(&self) -> Option<coco_types::TurnId> {
+        match self {
+            Self::Idle => None,
+            Self::Reserved { turn_id, .. }
+            | Self::Running { turn_id, .. }
+            | Self::Finishing { turn_id, .. } => Some(turn_id.clone()),
         }
     }
 
     fn into_drain_state(self) -> Option<ActiveTurnDrainState> {
         match self {
-            Self::Idle => None,
-            Self::Running(active) => Some(ActiveTurnDrainState::Running(active)),
-            Self::Finishing(active) => Some(ActiveTurnDrainState::Finishing(active)),
+            // A reservation has no engine task/forwarder to drain; close just
+            // drops it (its cancel token is returned by `close`).
+            Self::Idle | Self::Reserved { .. } => None,
+            Self::Running { handles, .. } => Some(ActiveTurnDrainState::Running(handles)),
+            Self::Finishing { handles, .. } => Some(ActiveTurnDrainState::Finishing(handles)),
         }
     }
 }
@@ -176,8 +206,57 @@ impl SessionTurnCoordinator {
         }
         let turn_id = self.next_turn_id(session_id);
         let cancel = CancellationToken::new();
-        *lifecycle = TurnLifecycleState::Running(build(turn_id.clone(), cancel));
+        *lifecycle = TurnLifecycleState::Running {
+            turn_id: turn_id.clone(),
+            handles: build(turn_id.clone(), cancel),
+        };
         Ok(turn_id)
+    }
+
+    /// Reserve the turn slot for a synchronous-lifecycle shortcut. Returns the
+    /// minted turn id plus a fresh cancel token; the caller wraps the release in
+    /// an RAII guard (see `SessionHandle::reserve_shortcut_turn`). Rejected under
+    /// the same `closed || busy` gate as `start`, so a shortcut and a real
+    /// `turn/start` cannot both be admitted.
+    pub(crate) fn reserve(
+        &self,
+        session_id: &coco_types::SessionId,
+    ) -> Result<(coco_types::TurnId, CancellationToken), ()> {
+        let mut lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.closed.load(Ordering::Acquire) || lifecycle.is_busy() {
+            return Err(());
+        }
+        let turn_id = self.next_turn_id(session_id);
+        let cancel = CancellationToken::new();
+        *lifecycle = TurnLifecycleState::Reserved {
+            turn_id: turn_id.clone(),
+            cancel: cancel.clone(),
+        };
+        Ok((turn_id, cancel))
+    }
+
+    /// Release a shortcut reservation back to `Idle`. A no-op if the slot is no
+    /// longer `Reserved` (it can only leave `Reserved` via this call, so this is
+    /// idempotent and drop-safe).
+    pub(crate) fn release_reservation(&self) {
+        let mut lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if matches!(&*lifecycle, TurnLifecycleState::Reserved { .. }) {
+            *lifecycle = TurnLifecycleState::Idle;
+        }
+    }
+
+    /// The id of the turn currently owning the slot, if any.
+    pub(crate) fn active_turn_id(&self) -> Option<coco_types::TurnId> {
+        self.lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .turn_id()
     }
 
     /// Tombstone the coordinator so no further turn can be admitted, and return
@@ -194,8 +273,11 @@ impl SessionTurnCoordinator {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.closed.store(true, Ordering::Release);
         match &*lifecycle {
-            TurnLifecycleState::Running(active) => Some(active.cancel_token.clone()),
-            TurnLifecycleState::Finishing(_) | TurnLifecycleState::Idle => None,
+            TurnLifecycleState::Running { handles, .. } => Some(handles.cancel_token.clone()),
+            // A reserved shortcut still in flight when the session closes is
+            // cancelled so it cannot run detached against a closed session.
+            TurnLifecycleState::Reserved { cancel, .. } => Some(cancel.clone()),
+            TurnLifecycleState::Finishing { .. } | TurnLifecycleState::Idle => None,
         }
     }
 
@@ -213,16 +295,14 @@ impl SessionTurnCoordinator {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let previous = std::mem::take(&mut *lifecycle);
         match previous {
-            TurnLifecycleState::Running(active) => {
-                *lifecycle = TurnLifecycleState::Finishing(active);
+            TurnLifecycleState::Running { turn_id, handles }
+            | TurnLifecycleState::Finishing { turn_id, handles } => {
+                *lifecycle = TurnLifecycleState::Finishing { turn_id, handles };
                 true
             }
-            TurnLifecycleState::Finishing(active) => {
-                *lifecycle = TurnLifecycleState::Finishing(active);
-                true
-            }
-            TurnLifecycleState::Idle => {
-                *lifecycle = TurnLifecycleState::Idle;
+            // A reservation has no engine-turn lifecycle; leave it untouched.
+            other @ (TurnLifecycleState::Reserved { .. } | TurnLifecycleState::Idle) => {
+                *lifecycle = other;
                 false
             }
         }
@@ -235,12 +315,15 @@ impl SessionTurnCoordinator {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let previous = std::mem::take(&mut *lifecycle);
         match previous {
-            TurnLifecycleState::Finishing(_) => true,
-            TurnLifecycleState::Running(active) => {
-                *lifecycle = TurnLifecycleState::Running(active);
+            TurnLifecycleState::Finishing { .. } => true,
+            TurnLifecycleState::Running { turn_id, handles } => {
+                *lifecycle = TurnLifecycleState::Running { turn_id, handles };
                 false
             }
-            TurnLifecycleState::Idle => false,
+            other @ (TurnLifecycleState::Reserved { .. } | TurnLifecycleState::Idle) => {
+                *lifecycle = other;
+                false
+            }
         }
     }
 

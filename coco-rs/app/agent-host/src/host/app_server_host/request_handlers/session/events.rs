@@ -26,6 +26,9 @@ pub(in crate::host::app_server_host::request_handlers) async fn forward_turn_eve
     session: crate::session_runtime::SessionHandle,
     owner_session_id: coco_types::SessionId,
     turn_id: coco_types::TurnId,
+    app_server: Option<
+        std::sync::Arc<coco_app_server::AppServer<crate::app_session::AppSessionHandle>>,
+    >,
 ) {
     use coco_types::ServerNotification;
     // Clear the active-turn slot on the FIRST terminal `TurnEnded` only, so a
@@ -153,7 +156,7 @@ pub(in crate::host::app_server_host::request_handlers) async fn forward_turn_eve
             &tx,
             &owner_session_id,
             coco_types::TurnEndedParams::failed(
-                turn_id,
+                turn_id.clone(),
                 /*usage*/ None,
                 coco_types::ErrorPayload {
                     message: "turn runner exited without a terminal".to_string(),
@@ -164,6 +167,13 @@ pub(in crate::host::app_server_host::request_handlers) async fn forward_turn_eve
             &mut turn_slot_cleared,
         )
         .await;
+    }
+    // The turn has ended. Cancel any server->client requests still pending for
+    // it (e.g. an approval abandoned when the turn was interrupted) so their
+    // pending entries + retained payloads are reclaimed now rather than leaking
+    // until the surface detaches or the session closes.
+    if let Some(app_server) = &app_server {
+        app_server.cancel_turn_server_requests(&turn_id);
     }
 }
 

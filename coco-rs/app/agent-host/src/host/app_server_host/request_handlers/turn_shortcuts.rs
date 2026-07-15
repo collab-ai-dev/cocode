@@ -334,6 +334,9 @@ async fn handle_turn_start_compact_shortcut(
                 runtime_for_start.clone(),
                 start.session_id.clone(),
                 start.turn_id.clone(),
+                // Shortcut turns are tool-less and open no server->client
+                // requests, so there is nothing turn-scoped to cancel.
+                None,
             ));
 
             let turn_id_for_task = start.turn_id.clone();
@@ -500,17 +503,19 @@ async fn mint_shortcut_turn(ctx: &HandlerContext) -> Result<ShortcutTurnState, H
         .await
         .ok_or(ActiveTurnStartError::NoActiveSession)
         .map_err(turn::active_turn_start_error)?;
-    if runtime.has_active_turn() {
-        return Err(turn::active_turn_start_error(
-            ActiveTurnStartError::TurnAlreadyRunning,
-        ));
-    }
+    // Atomically reserve the turn slot instead of a check-then-act probe, so a
+    // shortcut and a concurrent `turn/start` (or two shortcuts) cannot both be
+    // admitted and interleave their lifecycle events on the wire. The guard
+    // releases the slot when the returned state is dropped.
     let session_id = runtime.session_id().clone();
-    let turn_id = runtime.next_turn_id();
+    let (turn_id, reservation) = runtime
+        .reserve_shortcut_turn()
+        .ok_or_else(|| turn::active_turn_start_error(ActiveTurnStartError::TurnAlreadyRunning))?;
     Ok(ShortcutTurnState {
         session_id,
         turn_id,
         session: runtime,
+        _reservation: reservation,
     })
 }
 

@@ -575,72 +575,6 @@ async fn spawn_replace_commits_then_closes_old_without_origin_waiter() {
 }
 
 #[tokio::test]
-async fn spawn_replace_detached_commits_then_closes_old_without_origin_waiter() {
-    let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
-    let old_session_id = test_session_id("sess-old");
-    let new_session_id = test_session_id("sess-new");
-    server
-        .registry()
-        .begin_load(old_session_id.clone())
-        .expect("reserve old");
-    server
-        .registry()
-        .complete_load_success(&old_session_id, TestHandle("old"))
-        .expect("old live");
-
-    let (release_build_tx, release_build_rx) = tokio::sync::oneshot::channel();
-    let (close_started_tx, close_started_rx) = tokio::sync::oneshot::channel();
-    let (release_close_tx, release_close_rx) = tokio::sync::oneshot::channel();
-    let AppReplaceStart::Started { completion } = server
-        .spawn_replace_detached(
-            old_session_id.clone(),
-            new_session_id.clone(),
-            async move {
-                release_build_rx.await.expect("release build");
-                Ok(TestHandle("new"))
-            },
-            move |old_handle| async move {
-                assert_eq!(old_handle, TestHandle("old"));
-                close_started_tx.send(()).expect("signal close started");
-                release_close_rx.await.expect("release close");
-                Ok(())
-            },
-        )
-        .expect("start detached replace");
-    drop(completion);
-    let AppLoadStart::Loading(mut new_waiter) = server
-        .spawn_load(new_session_id.clone(), async {
-            Ok(TestHandle("duplicate"))
-        })
-        .expect("observe new loading")
-    else {
-        panic!("expected new loading");
-    };
-
-    release_build_tx.send(()).expect("release build");
-    let new_handle = new_waiter.wait().await.expect("new committed");
-    close_started_rx.await.expect("close started");
-    let AppLoadStart::Closing(mut old_close) = server
-        .spawn_load(old_session_id.clone(), async {
-            Ok(TestHandle("old-duplicate"))
-        })
-        .expect("observe old closing")
-    else {
-        panic!("expected old closing");
-    };
-
-    assert_eq!(new_handle, TestHandle("new"));
-    release_close_tx.send(()).expect("release close");
-    old_close.wait().await.expect("old close complete");
-
-    assert_eq!(
-        server.registry().get(&new_session_id),
-        Some(TestHandle("new"))
-    );
-    assert_eq!(server.registry().get(&old_session_id), None);
-}
-
-#[tokio::test]
 async fn spawn_replace_construct_failure_removes_new_and_keeps_old_live() {
     let server = Arc::new(AppServer::<TestHandle>::new(2, 8));
     let old_session_id = test_session_id("sess-old");
@@ -827,10 +761,12 @@ fn commit_replace_rejects_missing_calling_surface_before_registry_mutation() {
         .expect_err("missing surface should fail");
 
     assert!(matches!(
-        err,
+        err.error,
         AppServerError::CallingSurfaceNotAttached { .. }
     ));
-    assert_eq!(err.status_code(), StatusCode::InvalidArguments);
+    assert_eq!(err.error.status_code(), StatusCode::InvalidArguments);
+    // The un-committed handle is returned to the caller for teardown.
+    assert_eq!(err.handle, TestHandle("new"));
     assert_eq!(
         server.registry().get(&old_session_id),
         Some(TestHandle("old"))
@@ -878,12 +814,67 @@ fn commit_replace_rejects_calling_surface_on_wrong_session() {
         .expect_err("wrong session should fail");
 
     assert!(matches!(
-        err,
+        err.error,
         AppServerError::CallingSurfaceWrongSession { .. }
     ));
+    assert_eq!(err.handle, TestHandle("new"));
     assert_eq!(
         server.registry().get(&old_session_id),
         Some(TestHandle("old"))
+    );
+    assert_eq!(server.registry().get(&new_session_id), None);
+}
+
+#[tokio::test]
+async fn spawn_replace_commit_failure_tears_down_new_handle() {
+    // The factory builds a full runtime, then the commit fails because the
+    // calling surface was never attached. The constructed new handle must be
+    // handed to the close cascade (not dropped), so its SessionEnd hooks fire
+    // and its tasks are cancelled/joined.
+    let server = Arc::new(AppServer::<TestHandle>::new(2, 8));
+    let old_session_id = test_session_id("sess-old");
+    let new_session_id = test_session_id("sess-new");
+    server
+        .registry()
+        .begin_load(old_session_id.clone())
+        .expect("reserve old");
+    server
+        .registry()
+        .complete_load_success(&old_session_id, TestHandle("old"))
+        .expect("old live");
+
+    let closed: Arc<std::sync::Mutex<Option<TestHandle>>> = Arc::new(std::sync::Mutex::new(None));
+    let closed_for_close = Arc::clone(&closed);
+    let AppReplaceStart::Started { mut completion } = server
+        .spawn_replace(
+            old_session_id.clone(),
+            new_session_id.clone(),
+            SurfaceId::from("surface-never-attached"),
+            async { Ok(TestHandle("new")) },
+            move |handle| {
+                let closed = Arc::clone(&closed_for_close);
+                async move {
+                    *closed.lock().expect("closed lock") = Some(handle);
+                    Ok(())
+                }
+            },
+        )
+        .expect("start replace");
+
+    let result = completion.wait().await;
+    assert!(
+        result.is_err(),
+        "a commit failure resolves the replacement waiter with an error"
+    );
+    assert_eq!(
+        *closed.lock().expect("closed lock"),
+        Some(TestHandle("new")),
+        "the constructed new handle is torn down via the close cascade on commit failure"
+    );
+    assert_eq!(
+        server.registry().get(&old_session_id),
+        Some(TestHandle("old")),
+        "the old session stays live"
     );
     assert_eq!(server.registry().get(&new_session_id), None);
 }

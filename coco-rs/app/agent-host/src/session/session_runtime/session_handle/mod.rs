@@ -36,6 +36,18 @@ pub struct QueuedCommandStatus {
     pub last_changed_at: Instant,
 }
 
+/// RAII guard that releases a shortcut turn-slot reservation back to `Idle`
+/// when the shortcut finishes (i.e. when this guard is dropped).
+pub(crate) struct ShortcutReservationGuard {
+    handle: SessionHandle,
+}
+
+impl Drop for ShortcutReservationGuard {
+    fn drop(&mut self) {
+        self.handle.release_shortcut_reservation();
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SessionCloseDrainError {
     TurnTaskTimeout { timeout: Duration },
@@ -96,10 +108,6 @@ impl SessionHandle {
         }
     }
 
-    pub(crate) fn next_turn_id(&self) -> coco_types::TurnId {
-        self.runtime.turn_coordinator.next_turn_id(&self.session_id)
-    }
-
     pub(crate) fn reset_session_accounting(&self) {
         self.runtime.turn_coordinator.reset_accounting();
     }
@@ -114,6 +122,38 @@ impl SessionHandle {
 
     pub(crate) fn active_turn_cancel_token(&self) -> Option<tokio_util::sync::CancellationToken> {
         self.runtime.turn_coordinator.cancel_token()
+    }
+
+    /// The id of the turn currently owning the session's active-turn slot, if
+    /// any. Server-request bridges tag their pending requests with this so a
+    /// turn's outstanding approval/hook/MCP requests are cancelled when it ends.
+    pub(crate) fn active_turn_id(&self) -> Option<coco_types::TurnId> {
+        self.runtime.turn_coordinator.active_turn_id()
+    }
+
+    /// Reserve the turn slot for a synchronous-lifecycle shortcut, returning the
+    /// minted turn id and an RAII guard that releases the slot when dropped.
+    /// `None` if a turn is already running or the session is closed — this is
+    /// the atomic admission the shortcuts previously skipped with a check-then-
+    /// act probe.
+    pub(crate) fn reserve_shortcut_turn(
+        &self,
+    ) -> Option<(coco_types::TurnId, ShortcutReservationGuard)> {
+        let (turn_id, _cancel) = self
+            .runtime
+            .turn_coordinator
+            .reserve(&self.session_id)
+            .ok()?;
+        Some((
+            turn_id,
+            ShortcutReservationGuard {
+                handle: self.clone(),
+            },
+        ))
+    }
+
+    fn release_shortcut_reservation(&self) {
+        self.runtime.turn_coordinator.release_reservation();
     }
 
     pub(crate) fn has_active_turn(&self) -> bool {
@@ -189,21 +229,19 @@ impl SessionHandle {
         &self.session_id
     }
 
-    /// Fire `SessionEnd` hooks and request runtime-scoped task shutdown only
-    /// when this handle still owns the expected session id.
+    /// Drain the active turn, tombstone the coordinator, fire `SessionEnd`
+    /// hooks, cancel the runtime shutdown signal, and join session-owned tasks
+    /// under the close budget.
     ///
-    /// Returns the runtime's current session id when the handle is stale.
-    pub(crate) async fn close_if_current_session(
+    /// The caller owns this handle, whose `session_id` is an immutable snapshot
+    /// of the runtime it wraps, so there is no stale-handle case to guard
+    /// against here: the AppServer registry/owner tasks already close only the
+    /// exact slot they own.
+    pub(crate) async fn close_runtime(
         &self,
-        expected_session_id: &SessionId,
         reason: coco_hooks::orchestration::ExitReason,
         turn_drain_timeout: Duration,
-    ) -> Result<Option<SessionId>, SessionCloseDrainError> {
-        let current_session_id = self.runtime.current_typed_session_id().await;
-        if current_session_id != *expected_session_id {
-            return Ok(Some(current_session_id));
-        }
-
+    ) -> Result<(), SessionCloseDrainError> {
         let drain_result = self.drain_active_turn(turn_drain_timeout).await;
         // Tombstone the coordinator so a turn/start that resolved its target
         // before this close cannot admit a new turn against the draining session.
@@ -216,7 +254,7 @@ impl SessionHandle {
         let task_deadline = tokio::time::Instant::now() + turn_drain_timeout;
         self.runtime.join_session_tasks(task_deadline).await;
         drain_result?;
-        Ok(None)
+        Ok(())
     }
 
     /// Spawn a session-owned background task tracked for close-time joining

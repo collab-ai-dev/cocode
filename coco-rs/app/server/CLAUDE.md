@@ -37,7 +37,8 @@ the production routing/facade/adapter files below the workspace line limit.
 | `RoutingState` | Single-lock state for connection/surface indexes and per-session durable rings. |
 | `SurfaceAttachment` | Server-owned attachment metadata: role, capabilities, notification prefs, delivery cursor, state. |
 | `SurfaceRole` | `Interactive` or `Passive`; at most one interactive owner per session. |
-| `AttachError` | Snafu-backed attach failure (`InteractiveOwnerConflict`, `SurfaceLimit`, `SessionClosing`). |
+| `AttachError` | Snafu-backed attach failure (`InteractiveOwnerConflict`, `SurfaceLimit`, `SessionClosing`, `SessionNotFound`). |
+| `ReplaceCommitFailure<H>` | `commit_replace_for_surface` failure carrying the AppServerError + the un-committed new handle for teardown. |
 | `SurfaceDelivery` | `coco-types` envelope delivery targeted to one `SurfaceId`. |
 | `ServerRequestDelivery` | `coco-types` actionable server request targeted to one `SurfaceId`. |
 | `ServerRequestReply` / `ResolvedServerRequest` | Client reply payload plus resolved pending-request ownership metadata. |
@@ -69,11 +70,17 @@ the production routing/facade/adapter files below the workspace line limit.
 - `AppServer::spawn_replace` is the surface-aware replace owner-task entry
   point. It reserves the replacement as `Loading`, runs the construction
   future, commits the registry+routing swap on success, then runs the supplied
-  old-session close cascade and close completion. Construction failure
-  removes only the replacement slot and leaves old live.
-- `AppServer::spawn_replace_detached` is the same owner-task lifecycle without
-  caller-surface routing. Use it only when the caller will attach a fresh
-  surface after the replacement commits.
+  `close_handle` cascade on the old handle plus close completion. Construction
+  failure removes only the replacement slot and leaves old live. **Commit**
+  failure (surface disconnected mid-construction) returns the un-committed new
+  handle via `ReplaceCommitFailure<H>`, and the owner task runs `close_handle`
+  on it so the constructed runtime's SessionEnd hooks fire and its tasks are
+  joined — never dropped (that would leak the runtime + tasks for the process
+  lifetime).
+- `AppServer::spawn_replace_to_live` is the owner-task variant that repoints a
+  caller surface to an already-live orphan destination (no factory), moves the
+  source to `Closing`, and runs the source close cascade under an `OwnerGuard`
+  in a tracked task. Hosts must route through it, never a bare `tokio::spawn`.
 - `AppServer::spawn_shutdown` snapshots every closable registry slot and starts
   or observes `spawn_close` for each one. `Loading` slots close after load;
   already-`Closing` slots reuse their existing completion signal. Higher layers
@@ -131,6 +138,25 @@ the production routing/facade/adapter files below the workspace line limit.
   never derive a command target from a connection-level active-session default.
 - `subscribe` must read the retention ring and attach the surface in one
   `RoutingState` mutation so replay-to-live has no gap.
+- `attach_live_surface_with_options` / `subscribe_live_surface_with_options`
+  validate the target against the registry before attaching: `Live` proceeds,
+  `Closing` -> `SessionClosing`, missing/`Loading` -> `SessionNotFound`. The
+  registry read lock is held across the routing attach (registry -> routing
+  order) so a concurrent close cannot orphan the freshly attached surface. Hosts
+  route `session/subscribe` and interactive attach through the `_live_` variants;
+  a bare attach that skips the registry check silently attaches to a dead
+  session and hangs the client.
+- `RouteOutcome` / `LifecycleRouteOutcome` / `QueueUnavailable` carry
+  `cancelled_requests`: when routing disconnects a full/closed connection
+  mid-route it folds the cancelled server-request ids into the outcome, and the
+  AppServer route wrappers call `cancel_server_request_waiters` on them after
+  the routing lock is released. Lock order is registry -> routing -> waiters;
+  the routing lock is always dropped before the `server_request_waiters` mutex
+  is taken.
+- `cancel_turn_server_requests(turn_id)` is the AppServer wrapper the host calls
+  when a turn ends (from the terminal-forwarding path) to reclaim that turn's
+  pending server requests + retained payloads + waiters; bridges tag requests
+  with the active turn id via the connection's `SessionHandle`.
 - Only durable `SessionEnvelope`s enter the ring. Ephemeral envelopes are
   delivered live only.
 - Honor `NotificationPrefs` per surface before queueing delivery.

@@ -48,10 +48,7 @@ impl RemoteEventDemux {
                     if &delivery.surface_id == surface_id {
                         return Some(delivery.envelope);
                     }
-                    self.event_buffers
-                        .entry(delivery.surface_id.clone())
-                        .or_default()
-                        .push_back(delivery.envelope);
+                    self.push_surface_event(delivery.surface_id.clone(), delivery.envelope);
                 }
                 event => self.buffer_non_surface_event(event),
             }
@@ -69,10 +66,7 @@ impl RemoteEventDemux {
                     if &delivery.surface_id == surface_id {
                         return Some(delivery.envelope);
                     }
-                    self.event_buffers
-                        .entry(delivery.surface_id.clone())
-                        .or_default()
-                        .push_back(delivery.envelope);
+                    self.push_surface_event(delivery.surface_id.clone(), delivery.envelope);
                 }
                 event => self.buffer_non_surface_event(event),
             }
@@ -92,10 +86,7 @@ impl RemoteEventDemux {
                         self.purge_on_session_ended(&delivery);
                         return Some(delivery);
                     }
-                    self.lifecycle_buffers
-                        .entry(delivery.surface_id.clone())
-                        .or_default()
-                        .push_back(delivery);
+                    self.push_surface_lifecycle(delivery.surface_id.clone(), delivery);
                 }
                 event => self.buffer_non_lifecycle_event(event),
             }
@@ -118,10 +109,7 @@ impl RemoteEventDemux {
                         self.purge_on_session_ended(&delivery);
                         return Some(delivery);
                     }
-                    self.lifecycle_buffers
-                        .entry(delivery.surface_id.clone())
-                        .or_default()
-                        .push_back(delivery);
+                    self.push_surface_lifecycle(delivery.surface_id.clone(), delivery);
                 }
                 event => self.buffer_non_lifecycle_event(event),
             }
@@ -152,10 +140,7 @@ impl RemoteEventDemux {
                     if lifecycle_activates_session(&delivery, session_id) {
                         return Some(delivery);
                     }
-                    self.lifecycle_buffers
-                        .entry(delivery.surface_id.clone())
-                        .or_default()
-                        .push_back(delivery);
+                    self.push_surface_lifecycle(delivery.surface_id.clone(), delivery);
                 }
                 event => self.buffer_non_lifecycle_event(event),
             }
@@ -175,10 +160,7 @@ impl RemoteEventDemux {
                     if lifecycle_activates_session(&delivery, session_id) {
                         return Some(delivery);
                     }
-                    self.lifecycle_buffers
-                        .entry(delivery.surface_id.clone())
-                        .or_default()
-                        .push_back(delivery);
+                    self.push_surface_lifecycle(delivery.surface_id.clone(), delivery);
                 }
                 event => self.buffer_non_lifecycle_event(event),
             }
@@ -288,6 +270,44 @@ impl RemoteEventDemux {
         self.server_requests.push_back(request);
     }
 
+    /// Buffer an event for a sibling surface. If that surface's queue is at its
+    /// cap the caller is not draining a surface it subscribed to (a slow
+    /// consumer), so the demux disconnects rather than silently dropping an
+    /// ordered event or growing unbounded.
+    fn push_surface_event(&mut self, surface_id: SurfaceId, envelope: SessionEnvelope) {
+        let queue = self.event_buffers.entry(surface_id.clone()).or_default();
+        if queue.len() >= MAX_BUFFERED_SURFACE_QUEUE {
+            tracing::warn!(
+                %surface_id,
+                cap = MAX_BUFFERED_SURFACE_QUEUE,
+                "remote demux per-surface event buffer full; disconnecting slow consumer"
+            );
+            self.disconnected = true;
+            return;
+        }
+        queue.push_back(envelope);
+    }
+
+    /// Buffer a lifecycle effect for a sibling surface. Same slow-consumer
+    /// disconnect policy as [`push_surface_event`]; lifecycle is never dropped
+    /// (a dropped `SessionEnded`/`SessionStarted` would desync surface state).
+    fn push_surface_lifecycle(&mut self, surface_id: SurfaceId, effect: SurfaceLifecycleEffect) {
+        let queue = self
+            .lifecycle_buffers
+            .entry(surface_id.clone())
+            .or_default();
+        if queue.len() >= MAX_BUFFERED_SURFACE_QUEUE {
+            tracing::warn!(
+                %surface_id,
+                cap = MAX_BUFFERED_SURFACE_QUEUE,
+                "remote demux per-surface lifecycle buffer full; disconnecting slow consumer"
+            );
+            self.disconnected = true;
+            return;
+        }
+        queue.push_back(effect);
+    }
+
     /// Buffer a raw notification, dropping the oldest with a warning if the
     /// connection-scoped queue is at its cap.
     fn push_notification(&mut self, notification: JsonRpcNotification) {
@@ -365,10 +385,7 @@ impl RemoteEventDemux {
     fn buffer_non_surface_event(&mut self, event: RemoteJsonRpcEvent) {
         match event {
             RemoteJsonRpcEvent::SurfaceLifecycle(delivery) => {
-                self.lifecycle_buffers
-                    .entry(delivery.surface_id.clone())
-                    .or_default()
-                    .push_back(delivery);
+                self.push_surface_lifecycle(delivery.surface_id.clone(), delivery);
             }
             other => self.buffer_common_event(other),
         }
@@ -377,10 +394,7 @@ impl RemoteEventDemux {
     fn buffer_non_lifecycle_event(&mut self, event: RemoteJsonRpcEvent) {
         match event {
             RemoteJsonRpcEvent::SurfaceDelivery(delivery) => {
-                self.event_buffers
-                    .entry(delivery.surface_id.clone())
-                    .or_default()
-                    .push_back(delivery.envelope);
+                self.push_surface_event(delivery.surface_id.clone(), delivery.envelope);
             }
             other => self.buffer_common_event(other),
         }
@@ -389,16 +403,10 @@ impl RemoteEventDemux {
     fn buffer_non_server_request_event(&mut self, event: RemoteJsonRpcEvent) {
         match event {
             RemoteJsonRpcEvent::SurfaceDelivery(delivery) => {
-                self.event_buffers
-                    .entry(delivery.surface_id.clone())
-                    .or_default()
-                    .push_back(delivery.envelope);
+                self.push_surface_event(delivery.surface_id.clone(), delivery.envelope);
             }
             RemoteJsonRpcEvent::SurfaceLifecycle(delivery) => {
-                self.lifecycle_buffers
-                    .entry(delivery.surface_id.clone())
-                    .or_default()
-                    .push_back(delivery);
+                self.push_surface_lifecycle(delivery.surface_id.clone(), delivery);
             }
             other => self.buffer_common_event(other),
         }
@@ -407,16 +415,10 @@ impl RemoteEventDemux {
     fn buffer_non_notification_event(&mut self, event: RemoteJsonRpcEvent) {
         match event {
             RemoteJsonRpcEvent::SurfaceDelivery(delivery) => {
-                self.event_buffers
-                    .entry(delivery.surface_id.clone())
-                    .or_default()
-                    .push_back(delivery.envelope);
+                self.push_surface_event(delivery.surface_id.clone(), delivery.envelope);
             }
             RemoteJsonRpcEvent::SurfaceLifecycle(delivery) => {
-                self.lifecycle_buffers
-                    .entry(delivery.surface_id.clone())
-                    .or_default()
-                    .push_back(delivery);
+                self.push_surface_lifecycle(delivery.surface_id.clone(), delivery);
             }
             RemoteJsonRpcEvent::ServerRequest(request) => {
                 self.push_server_request(request);
@@ -503,20 +505,24 @@ pub(super) fn remote_event_from_notification(
     notification: JsonRpcNotification,
 ) -> Option<RemoteJsonRpcEvent> {
     match notification.method.as_str() {
-        "session/event" => match decode_surface_delivery_notification(notification.params) {
-            Ok(delivery) => Some(RemoteJsonRpcEvent::SurfaceDelivery(Box::new(delivery))),
-            Err(error) => {
-                tracing::warn!(%error, "dropping undecodable session/event notification");
-                None
+        coco_types::SESSION_EVENT_METHOD => {
+            match decode_surface_delivery_notification(notification.params) {
+                Ok(delivery) => Some(RemoteJsonRpcEvent::SurfaceDelivery(Box::new(delivery))),
+                Err(error) => {
+                    tracing::warn!(%error, "dropping undecodable session/event notification");
+                    None
+                }
             }
-        },
-        "session/lifecycle" => match decode_lifecycle_notification(notification.params) {
-            Ok(delivery) => Some(RemoteJsonRpcEvent::SurfaceLifecycle(delivery)),
-            Err(error) => {
-                tracing::warn!(%error, "dropping undecodable session/lifecycle notification");
-                None
+        }
+        coco_types::SESSION_LIFECYCLE_METHOD => {
+            match decode_lifecycle_notification(notification.params) {
+                Ok(delivery) => Some(RemoteJsonRpcEvent::SurfaceLifecycle(delivery)),
+                Err(error) => {
+                    tracing::warn!(%error, "dropping undecodable session/lifecycle notification");
+                    None
+                }
             }
-        },
+        }
         _ => Some(RemoteJsonRpcEvent::Notification(notification)),
     }
 }
@@ -619,23 +625,23 @@ fn decode_core_event(
     let payload = event
         .remove("payload")
         .ok_or_else(|| ClientError::InvalidArgument("missing session/event payload".to_string()))?;
-    match layer.as_str() {
-        "protocol" => serde_json::from_value::<ServerNotification>(payload)
+    let layer = layer.parse::<coco_types::EventLayer>().map_err(|()| {
+        ClientError::InvalidArgument(format!("unknown session/event layer: {layer}"))
+    })?;
+    match layer {
+        coco_types::EventLayer::Protocol => serde_json::from_value::<ServerNotification>(payload)
             .map(CoreEvent::Protocol)
             .map_err(|error| {
                 ClientError::InvalidArgument(format!("invalid protocol event: {error}"))
             }),
-        "stream" => serde_json::from_value::<AgentStreamEvent>(payload)
+        coco_types::EventLayer::Stream => serde_json::from_value::<AgentStreamEvent>(payload)
             .map(CoreEvent::Stream)
             .map_err(|error| {
                 ClientError::InvalidArgument(format!("invalid stream event: {error}"))
             }),
-        "tui" => serde_json::from_value::<TuiOnlyEvent>(payload)
+        coco_types::EventLayer::Tui => serde_json::from_value::<TuiOnlyEvent>(payload)
             .map(CoreEvent::Tui)
             .map_err(|error| ClientError::InvalidArgument(format!("invalid tui event: {error}"))),
-        other => Err(ClientError::InvalidArgument(format!(
-            "unknown session/event layer: {other}"
-        ))),
     }
 }
 
@@ -718,4 +724,4 @@ use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;
 
 use super::ClientError;
-use super::MAX_BUFFERED_CONNECTION_QUEUE;
+use super::{MAX_BUFFERED_CONNECTION_QUEUE, MAX_BUFFERED_SURFACE_QUEUE};
