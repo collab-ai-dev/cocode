@@ -104,6 +104,8 @@ impl QueryEngine {
             schedule_store: None,
             lsp_handle: None,
             agent_handle: None,
+            goal_handle: None,
+            goal_supervisor_owns_finalize: false,
             skill_handle: None,
             live_command_rules,
             permission_rule_handle,
@@ -153,7 +155,6 @@ impl QueryEngine {
             transcript_dedup: None,
             agent_transcript_dedup: tokio::sync::Mutex::new(std::collections::HashSet::new()),
             agent_transcript_seeded: std::sync::atomic::AtomicBool::new(false),
-            terminal_goal_metadata_written: None,
             live_transcript: None,
             pending_nested_memory: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             pending_edited_image_file_paths: Arc::new(tokio::sync::Mutex::new(Vec::new())),
@@ -366,14 +367,6 @@ impl QueryEngine {
         seen: Arc<tokio::sync::Mutex<std::collections::HashSet<uuid::Uuid>>>,
     ) -> Self {
         self.transcript_dedup = Some(seen);
-        self
-    }
-
-    pub fn with_terminal_goal_metadata_flag(
-        mut self,
-        flag: Arc<std::sync::atomic::AtomicBool>,
-    ) -> Self {
-        self.terminal_goal_metadata_written = Some(flag);
         self
     }
 
@@ -785,6 +778,23 @@ impl QueryEngine {
     /// bootstrap.
     pub fn with_agent_handle(mut self, handle: coco_tool_runtime::AgentHandleRef) -> Self {
         self.agent_handle = Some(handle);
+        self
+    }
+
+    /// Install the session's goal-runtime handle so goal tools reach the live
+    /// `GoalRuntimeHandle`. Sessions without a goal keep `NoOpGoalHandle`.
+    pub fn with_goal_handle(mut self, handle: coco_tool_runtime::GoalHandleRef) -> Self {
+        self.goal_handle = Some(handle);
+        self
+    }
+
+    /// Mark this engine as a `GoalSupervisor`-driven goal turn (§10.3): it runs
+    /// one logical turn and defers after-turn finalization/continuation to the
+    /// supervisor, skipping the in-engine goal-finalize hook. The goal tools stay
+    /// available through `with_goal_handle`; only the self-finalization is
+    /// suppressed, so exactly one component finalizes the turn.
+    pub fn with_goal_supervisor_owned_finalize(mut self) -> Self {
+        self.goal_supervisor_owns_finalize = true;
         self
     }
 

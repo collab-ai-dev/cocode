@@ -13,7 +13,7 @@
     "history/resetForResume",
     "history/replaced",
     "history/reasoningMetadataAttached",
-    "goal/activeChanged",
+    "goal/snapshotChanged",
     "turn/started",
     "turn/ended",
     "item/started",

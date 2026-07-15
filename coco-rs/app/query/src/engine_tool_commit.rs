@@ -37,6 +37,7 @@ pub(crate) async fn commit_streaming_tool_outcomes<F, Fut>(
     history: &mut MessageHistory,
     event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
     run_artifacts: &mut RunArtifacts,
+    goal: Option<&coco_tool_runtime::GoalHandleRef>,
 ) -> StreamingCommitResult
 where
     F: Fn(PreparedToolCall, RunOneRuntime) -> Fut + Send + Sync + 'static,
@@ -67,9 +68,22 @@ where
         }
     }
 
+    // Only pay the async snapshot cost on a live goal turn.
+    let goal = goal.filter(|handle| handle.is_available());
     for commit in commits {
         for msg in commit.ordered_messages {
             crate::history_sync::history_push_and_emit(history, msg, event_tx).await;
+        }
+        // Mint runtime-owned evidence for an accepted tool result so the worker can
+        // cite its id as completion proof (§10.2 #9). No-op off a goal turn.
+        if !commit.is_error
+            && let Some(goal) = goal
+        {
+            goal.record_tool_evidence(coco_tool_runtime::ToolEvidenceObservation {
+                tool_use_id: commit.call_id.clone(),
+                tool_name: commit.tool_name.clone(),
+            })
+            .await;
         }
         let _ = emit_stream(
             event_tx,

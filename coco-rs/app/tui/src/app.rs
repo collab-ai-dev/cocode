@@ -1150,7 +1150,7 @@ impl App {
             || ui.ctrl_c_tracker.pending().is_some()
             || ui.ctrl_d_tracker.pending().is_some()
             || ui.esc_tracker.pending().is_some()
-            || session.active_goal.is_some()
+            || session.goal.is_some()
             || (session.last_query_completion_at.is_some() && !session.idle_prompt_fired)
             // A pending plugin-install hint needs a tick to surface its modal.
             || coco_plugins::pending_hint_snapshot().is_some()

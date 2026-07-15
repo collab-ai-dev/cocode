@@ -58,7 +58,6 @@ pub fn register_initialize_hooks(
                     is_async: false,
                     async_rewake: false,
                     status_message: None,
-                    managed_by: None,
                 });
             }
         }

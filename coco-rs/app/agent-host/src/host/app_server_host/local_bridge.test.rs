@@ -172,6 +172,7 @@ async fn local_turn_completion_rejects_terminal_without_session_result() {
                 model_selection: None,
                 permission_mode: None,
                 thinking_level: None,
+                goal_continuation: false,
             },
         )
         .await

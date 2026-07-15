@@ -489,6 +489,18 @@ impl SessionRuntime {
         // Install the real swarm-backed AgentHandle so AgentTool /
         // SendMessageTool reach the swarm runtime on every engine instance.
         engine = engine.with_agent_handle(self.handle_resources.swarm_agent_handle.clone());
+        // Install the session's goal handle so the goal tools reach the live
+        // `GoalRuntimeHandle`. Hidden (NoOp-equivalent) until a goal is created.
+        engine = engine.with_goal_handle(std::sync::Arc::new(
+            crate::session::goal_tool_handle::SessionGoalHandle::new(
+                self.goal_runtime().clone(),
+                std::sync::Arc::new(crate::session::goal_plan::SessionPlanSource::new(
+                    self.session_plan_file_path(),
+                )),
+                self.goal_evidence().clone(),
+                self.goal_driver_edge().clone(),
+            ),
+        ));
         // Install the per-engine sync-hook-event buffer so the
         // `OrchestrationContext.sync_event_sink` constructed from this
         // engine's `orchestration_ctx()` writes into the same buffer
@@ -642,11 +654,6 @@ impl SessionRuntime {
             engine = engine.with_usage_accounting(self.turn_resources.usage_accounting());
             engine = engine
                 .with_transcript_dedup(self.engine_state_resources.transcript_dedup().clone());
-            engine = engine.with_terminal_goal_metadata_flag(
-                self.engine_state_resources
-                    .terminal_goal_metadata_written()
-                    .clone(),
-            );
             engine = engine.with_tool_result_replacement_state(
                 self.engine_state_resources
                     .tool_result_replacement_state()

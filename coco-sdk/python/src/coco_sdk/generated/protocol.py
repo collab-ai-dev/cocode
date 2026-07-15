@@ -288,6 +288,21 @@ class FileChangeKind(str, Enum):
     delete = "delete"
 
 
+class GoalStatusKind(str, Enum):
+    active = "active"
+    waiting = "waiting"
+    paused = "paused"
+    blocked = "blocked"
+    usage_limited = "usage_limited"
+    budget_limited = "budget_limited"
+    completed = "completed"
+
+
+class GoalStatusRequest(str, Enum):
+    pause = "pause"
+    resume = "resume"
+
+
 class HistoryReplaceReason(str, Enum):
     hydrate = "hydrate"
     compact = "compact"
@@ -974,6 +989,46 @@ class ClientRequestSessionStatus(BaseModel):
     params: SessionTarget
 
 
+class ClientRequestSessionGoalCreate(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/goal/create"] = Field(
+        default="session/goal/create", alias="method"
+    )
+    params: GoalCreateParams
+
+
+class ClientRequestSessionGoalGet(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/goal/get"] = Field(
+        default="session/goal/get", alias="method"
+    )
+    params: SessionTarget
+
+
+class ClientRequestSessionGoalEdit(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/goal/edit"] = Field(
+        default="session/goal/edit", alias="method"
+    )
+    params: GoalEditParams
+
+
+class ClientRequestSessionGoalSetStatus(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/goal/setStatus"] = Field(
+        default="session/goal/setStatus", alias="method"
+    )
+    params: GoalSetStatusParams
+
+
+class ClientRequestSessionGoalClear(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/goal/clear"] = Field(
+        default="session/goal/clear", alias="method"
+    )
+    params: SessionTarget
+
+
 class ClientRequestTurnStart(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["turn/start"] = Field(default="turn/start", alias="method")
@@ -1213,6 +1268,11 @@ ClientRequest = Annotated[
         ClientRequestSessionToggleTag,
         ClientRequestSessionCost,
         ClientRequestSessionStatus,
+        ClientRequestSessionGoalCreate,
+        ClientRequestSessionGoalGet,
+        ClientRequestSessionGoalEdit,
+        ClientRequestSessionGoalSetStatus,
+        ClientRequestSessionGoalClear,
         ClientRequestTurnStart,
         ClientRequestTurnInterrupt,
         ClientRequestTaskList,
@@ -1770,12 +1830,12 @@ class ServerNotificationHistoryReasoningMetadataAttached(BaseModel):
     params: ReasoningMetadataAttachedParams
 
 
-class ServerNotificationGoalActiveChanged(BaseModel):
+class ServerNotificationGoalSnapshotChanged(BaseModel):
     model_config = {"populate_by_name": True}
-    method: Literal["goal/activeChanged"] = Field(
-        default="goal/activeChanged", alias="method"
+    method: Literal["goal/snapshotChanged"] = Field(
+        default="goal/snapshotChanged", alias="method"
     )
-    params: ActiveGoalChangedParams
+    params: GoalSnapshotChangedParams
 
 
 class ServerNotificationTurnStarted(BaseModel):
@@ -2247,7 +2307,7 @@ ServerNotification = Annotated[
         ServerNotificationHistoryResetForResume,
         ServerNotificationHistoryReplaced,
         ServerNotificationHistoryReasoningMetadataAttached,
-        ServerNotificationGoalActiveChanged,
+        ServerNotificationGoalSnapshotChanged,
         ServerNotificationTurnStarted,
         ServerNotificationTurnEnded,
         ServerNotificationItemStarted,
@@ -3548,10 +3608,6 @@ class ThreadItem(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class ActiveGoalChangedParams(BaseModel):
-    goal: ActiveGoal | None = None
-
-
 class AgentsKilledParams(BaseModel):
     count: int
     agent_ids: list[str] = []
@@ -3612,6 +3668,10 @@ class FilesPersistedParams(BaseModel):
     files: list[PersistedFileInfo]
     processed_at: str
     failed: list[PersistedFileError] = []
+
+
+class GoalSnapshotChangedParams(BaseModel):
+    snapshot: GoalSnapshotView | None = None
 
 
 class HookProgressParams(BaseModel):
@@ -4007,7 +4067,7 @@ class NotificationMethod(str, Enum):
     HISTORY_RESET_FOR_RESUME = "history/resetForResume"
     HISTORY_REPLACED = "history/replaced"
     HISTORY_REASONING_METADATA_ATTACHED = "history/reasoningMetadataAttached"
-    GOAL_ACTIVE_CHANGED = "goal/activeChanged"
+    GOAL_SNAPSHOT_CHANGED = "goal/snapshotChanged"
     TURN_STARTED = "turn/started"
     TURN_ENDED = "turn/ended"
     ITEM_STARTED = "item/started"
@@ -4252,6 +4312,24 @@ class ElicitationResolveParams(BaseModel):
     values: dict[str, Any] = {}
 
 
+class GoalCreateParams(BaseModel):
+    objective: str
+    target: SessionTarget
+    max_autonomous_turns: int | None = None
+
+
+class GoalEditParams(BaseModel):
+    expected_spec_revision: int
+    target: SessionTarget
+    max_autonomous_turns: int | None = None
+    objective: str | None = None
+
+
+class GoalSetStatusParams(BaseModel):
+    status: GoalStatusRequest
+    target: SessionTarget
+
+
 class InitializeParams(BaseModel):
     agent_progress_summaries: bool | None = Field(
         default=None, alias="agentProgressSummaries"
@@ -4436,6 +4514,11 @@ class ClientRequestMethod(str, Enum):
     SESSION_TOGGLE_TAG = "session/toggleTag"
     SESSION_COST = "session/cost"
     SESSION_STATUS = "session/status"
+    SESSION_GOAL_CREATE = "session/goal/create"
+    SESSION_GOAL_GET = "session/goal/get"
+    SESSION_GOAL_EDIT = "session/goal/edit"
+    SESSION_GOAL_SET_STATUS = "session/goal/setStatus"
+    SESSION_GOAL_CLEAR = "session/goal/clear"
     TURN_START = "turn/start"
     TURN_INTERRUPT = "turn/interrupt"
     TASK_LIST = "task/list"
@@ -4640,6 +4723,66 @@ class SessionStatusRequest(BaseModel):
 
 
 SessionStatusRequestParams = SessionStatusRequest.SessionStatusRequestParams
+
+
+class GoalCreateRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/goal/create"] = Field(default="session/goal/create")
+    params: GoalCreateRequestParams
+
+    class GoalCreateRequestParams(GoalCreateParams):
+        pass
+
+
+GoalCreateRequestParams = GoalCreateRequest.GoalCreateRequestParams
+
+
+class SessionGoalGetRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/goal/get"] = Field(default="session/goal/get")
+    params: SessionGoalGetRequestParams
+
+    class SessionGoalGetRequestParams(SessionTarget):
+        pass
+
+
+SessionGoalGetRequestParams = SessionGoalGetRequest.SessionGoalGetRequestParams
+
+
+class GoalEditRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/goal/edit"] = Field(default="session/goal/edit")
+    params: GoalEditRequestParams
+
+    class GoalEditRequestParams(GoalEditParams):
+        pass
+
+
+GoalEditRequestParams = GoalEditRequest.GoalEditRequestParams
+
+
+class GoalSetStatusRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/goal/setStatus"] = Field(default="session/goal/setStatus")
+    params: GoalSetStatusRequestParams
+
+    class GoalSetStatusRequestParams(GoalSetStatusParams):
+        pass
+
+
+GoalSetStatusRequestParams = GoalSetStatusRequest.GoalSetStatusRequestParams
+
+
+class SessionGoalClearRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/goal/clear"] = Field(default="session/goal/clear")
+    params: SessionGoalClearRequestParams
+
+    class SessionGoalClearRequestParams(SessionTarget):
+        pass
+
+
+SessionGoalClearRequestParams = SessionGoalClearRequest.SessionGoalClearRequestParams
 
 
 class TurnStartRequest(BaseModel):
@@ -5049,6 +5192,11 @@ ClientRequest = Annotated[
         SessionToggleTagRequest,
         SessionCostRequest,
         SessionStatusRequest,
+        GoalCreateRequest,
+        SessionGoalGetRequest,
+        GoalEditRequest,
+        GoalSetStatusRequest,
+        SessionGoalClearRequest,
         TurnStartRequest,
         TurnInterruptRequest,
         TaskListRequest,
@@ -5087,14 +5235,6 @@ ClientRequest = Annotated[
 # ---------------------------------------------------------------------------
 # Additional types
 # ---------------------------------------------------------------------------
-
-
-class ActiveGoal(BaseModel):
-    condition: str
-    iterations: int
-    set_at_ms: int
-    tokens_at_start: int
-    last_reason: str | None = None
 
 
 class AgentInfo(BaseModel):
@@ -5385,6 +5525,25 @@ class FilePart(BaseModel):
     provider_metadata: ProviderMetadata | None = Field(
         default=None, alias="providerMetadata"
     )
+
+
+class GoalSnapshotView(BaseModel):
+    autonomous_turns: int
+    created_at_ms: int
+    goal_id: str
+    input_tokens: int
+    max_autonomous_turns: int
+    objective: str
+    output_tokens: int
+    spec_revision: int
+    state_version: int
+    status: GoalStatusKind
+    total_turns: int
+    updated_at_ms: int
+    last_rejection: str | None = None
+    plan_digest: str | None = None
+    progress_summary: str | None = None
+    status_detail: str | None = None
 
 
 class GoalStatusPayload(BaseModel):

@@ -1,54 +1,5 @@
 {
   "$defs": {
-    "ActiveGoal": {
-      "description": "Session-scoped goal metadata for `/goal`.",
-      "properties": {
-        "condition": {
-          "type": "string"
-        },
-        "iterations": {
-          "format": "int32",
-          "type": "integer"
-        },
-        "last_reason": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "set_at_ms": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "tokens_at_start": {
-          "format": "int64",
-          "type": "integer"
-        }
-      },
-      "required": [
-        "condition",
-        "iterations",
-        "set_at_ms",
-        "tokens_at_start"
-      ],
-      "type": "object"
-    },
-    "ActiveGoalChangedParams": {
-      "description": "Active `/goal` snapshot.\n\n`goal = None` means no active goal. Terminal goal_status attachments\nstill carry achieved / failed details; this event is only the live-state\nmirror.",
-      "properties": {
-        "goal": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ActiveGoal"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "type": "object"
-    },
     "AgentColorName": {
       "description": "`AgentColorName`. Validated set; unknown values are dropped at parse\ntime with a warning so the runtime never sees an invalid color.",
       "enum": [
@@ -1671,6 +1622,86 @@
         {
           "properties": {
             "method": {
+              "const": "session/goal/create",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/GoalCreateParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "session/goal/get",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "session/goal/edit",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/GoalEditParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "session/goal/setStatus",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/GoalSetStatusParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "session/goal/clear",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "turn/start",
               "type": "string"
             },
@@ -2190,6 +2221,11 @@
         "session/toggleTag",
         "session/cost",
         "session/status",
+        "session/goal/create",
+        "session/goal/get",
+        "session/goal/edit",
+        "session/goal/setStatus",
+        "session/goal/clear",
         "turn/start",
         "turn/interrupt",
         "task/list",
@@ -3392,6 +3428,198 @@
       ],
       "type": "object"
     },
+    "GoalCreateParams": {
+      "description": "`session/goal/create` parameters. Minimal control-plane surface; contract and\nrich budget authoring beyond the autonomous-turn cap are future extensions.",
+      "properties": {
+        "max_autonomous_turns": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "objective": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
+        }
+      },
+      "required": [
+        "target",
+        "objective"
+      ],
+      "type": "object"
+    },
+    "GoalEditParams": {
+      "description": "`session/goal/edit` parameters. `expected_spec_revision` is the optimistic\nconcurrency guard (design \u00a79.1 invariant 2): the edit is rejected when it does\nnot match the current spec revision.",
+      "properties": {
+        "expected_spec_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_autonomous_turns": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "objective": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
+        }
+      },
+      "required": [
+        "target",
+        "expected_spec_revision"
+      ],
+      "type": "object"
+    },
+    "GoalSetStatusParams": {
+      "description": "`session/goal/setStatus` parameters.",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/GoalStatusRequest"
+        },
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
+        }
+      },
+      "required": [
+        "target",
+        "status"
+      ],
+      "type": "object"
+    },
+    "GoalSnapshotChangedParams": {
+      "description": "Full-snapshot goal event payload (design \u00a78.1). Session routing rides the\n`SessionEnvelope` the emit site stamps, so there is no payload session id.",
+      "properties": {
+        "snapshot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GoalSnapshotView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The current goal projection, or `None` when no goal exists (cleared)."
+        }
+      },
+      "type": "object"
+    },
+    "GoalSnapshotView": {
+      "description": "Bounded wire projection of a durable goal snapshot for protocol and TUI\nconsumers. Never reconstructed from transcript messages (design \u00a79.1).",
+      "properties": {
+        "autonomous_turns": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "created_at_ms": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "goal_id": {
+          "type": "string"
+        },
+        "input_tokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "last_rejection": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_autonomous_turns": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "output_tokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "plan_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "progress_summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spec_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state_version": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/$defs/GoalStatusKind"
+        },
+        "status_detail": {
+          "description": "Typed reason for a stopped/waiting status (pause reason, blocker summary,\nwait condition, budget kind). `None` for a plain running goal.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total_turns": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "updated_at_ms": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "goal_id",
+        "spec_revision",
+        "state_version",
+        "status",
+        "objective",
+        "total_turns",
+        "autonomous_turns",
+        "max_autonomous_turns",
+        "input_tokens",
+        "output_tokens",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object"
+    },
+    "GoalStatusKind": {
+      "description": "Wire status of a goal, mirroring `coco_goals::GoalStatus`. A cleared goal is\nrepresented by a `None` snapshot on [`GoalSnapshotChangedParams`], so there is\nno `Cleared` variant here.",
+      "enum": [
+        "active",
+        "waiting",
+        "paused",
+        "blocked",
+        "usage_limited",
+        "budget_limited",
+        "completed"
+      ],
+      "type": "string"
+    },
     "GoalStatusPayload": {
       "description": "`/goal` status attachment (`goal_status`).\nSentinels (`sentinel: true`) are emitted by `/goal` set/clear and are\nignored by \"last achieved goal\" lookup. Non-sentinel payloads are emitted\nby the Stop-hook evaluator for achieved, failed, and still-unmet checks.",
       "properties": {
@@ -3440,6 +3668,14 @@
         "condition"
       ],
       "type": "object"
+    },
+    "GoalStatusRequest": {
+      "description": "The controlled status transition a `session/goal/setStatus` requests. Only\nuser-drivable transitions are exposed; terminal and verifier-owned statuses\nare not (design \u00a76, \u00a711.3).",
+      "enum": [
+        "pause",
+        "resume"
+      ],
+      "type": "string"
     },
     "HistoryReplaceReason": {
       "description": "Why the engine replaced the transcript wholesale\n(`ServerNotification::HistoryReplaced`).\n\nConsumers that keep session-cumulative folds over the message stream\n(e.g. the TUI's cumulative user/assistant/tool counters) need to know\nwhether the snapshot is a re-hydration of already-known content\n(`Hydrate` / `Trim` / `Rewind` \u2014 dedup by uuid suffices) or the\nproduct of a compaction, where one summarizer LLM call collapsed the\ntail into synthetic messages that must not be re-classified as\norganic conversation.",
@@ -6142,7 +6378,7 @@
         "history/resetForResume",
         "history/replaced",
         "history/reasoningMetadataAttached",
-        "goal/activeChanged",
+        "goal/snapshotChanged",
         "turn/started",
         "turn/ended",
         "item/started",
@@ -8065,14 +8301,14 @@
           "type": "object"
         },
         {
-          "description": "Active `/goal` state changed.\n\nMirrors the engine's `ToolAppState.active_goal` so consumers can\nrender live footer/status affordances without reverse-engineering\nthe silent `goal_status` transcript attachments.",
+          "description": "First-class goal snapshot changed (design \u00a78.1). Carries a bounded\nprojection of the durable `GoalSnapshot` (status, budget/usage, progress,\nblocker/wait detail), so surfaces render the real goal runtime state \u2014\ndetail view, composed footer, resume prompts.",
           "properties": {
             "method": {
-              "const": "goal/activeChanged",
+              "const": "goal/snapshotChanged",
               "type": "string"
             },
             "params": {
-              "$ref": "#/$defs/ActiveGoalChangedParams"
+              "$ref": "#/$defs/GoalSnapshotChangedParams"
             }
           },
           "required": [

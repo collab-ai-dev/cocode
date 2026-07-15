@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use coco_context::FileHistoryState;
 use coco_context::FileReadState;
@@ -147,8 +146,6 @@ pub(in crate::session::session_runtime) struct SessionEngineStateResources {
     /// Conversation snapshot captured immediately before `/clear`.
     pub(in crate::session::session_runtime) clear_rewind_messages:
         Arc<tokio::sync::Mutex<Option<Vec<Arc<Message>>>>>,
-    /// True after the engine writes a terminal `/goal` success snapshot.
-    pub(in crate::session::session_runtime) terminal_goal_metadata_written: Arc<AtomicBool>,
     /// Cross-engine tool-result replacement state.
     pub(in crate::session::session_runtime) tool_result_replacement_state:
         coco_tool_runtime::tool_result_offload::ContentReplacementStateRef,
@@ -167,7 +164,6 @@ impl SessionEngineStateResources {
         denial_tracker: Arc<tokio::sync::Mutex<coco_permissions::DenialTracker>>,
         transcript_dedup: Arc<tokio::sync::Mutex<std::collections::HashSet<uuid::Uuid>>>,
         clear_rewind_messages: Arc<tokio::sync::Mutex<Option<Vec<Arc<Message>>>>>,
-        terminal_goal_metadata_written: Arc<AtomicBool>,
         tool_result_replacement_state: coco_tool_runtime::tool_result_offload::ContentReplacementStateRef,
     ) -> Self {
         Self {
@@ -181,7 +177,6 @@ impl SessionEngineStateResources {
             denial_tracker,
             transcript_dedup,
             clear_rewind_messages,
-            terminal_goal_metadata_written,
             tool_result_replacement_state,
         }
     }
@@ -242,12 +237,6 @@ impl SessionEngineStateResources {
         &self,
     ) -> &Arc<tokio::sync::Mutex<Option<Vec<Arc<Message>>>>> {
         &self.clear_rewind_messages
-    }
-
-    pub(in crate::session::session_runtime) fn terminal_goal_metadata_written(
-        &self,
-    ) -> &Arc<AtomicBool> {
-        &self.terminal_goal_metadata_written
     }
 
     pub(in crate::session::session_runtime) fn tool_result_replacement_state(

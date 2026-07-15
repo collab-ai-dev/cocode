@@ -571,64 +571,6 @@ fn test_load_agent_transcript_entries_recurses_workflow_runs() {
 }
 
 #[test]
-fn test_goal_metadata_last_wins() {
-    let (_dir, store, _project_dir) = test_store();
-    let sid = "goal-meta-session";
-
-    let user = make_user_entry("u1", sid, "Ship the feature");
-    store.append_message(sid, &user).unwrap();
-
-    let active = GoalMetadata {
-        condition: "all tests pass".to_string(),
-        set_at: 123,
-        iterations: 1,
-        last_reason: Some("one test is still failing".to_string()),
-        met: false,
-    };
-    store
-        .append_metadata(
-            sid,
-            &MetadataEntry::Goal {
-                session_id: test_session_id(sid),
-                goal: Some(active.clone()),
-            },
-        )
-        .unwrap();
-
-    let meta = store.read_metadata(sid).unwrap();
-    assert_eq!(meta.goal, Some(active));
-
-    let achieved = GoalMetadata {
-        condition: "all tests pass".to_string(),
-        set_at: 123,
-        iterations: 2,
-        last_reason: None,
-        met: true,
-    };
-    store
-        .append_metadata(
-            sid,
-            &MetadataEntry::Goal {
-                session_id: test_session_id(sid),
-                goal: Some(achieved.clone()),
-            },
-        )
-        .unwrap();
-    assert_eq!(store.read_metadata(sid).unwrap().goal, Some(achieved));
-
-    store
-        .append_metadata(
-            sid,
-            &MetadataEntry::Goal {
-                session_id: test_session_id(sid),
-                goal: None,
-            },
-        )
-        .unwrap();
-    assert_eq!(store.read_metadata(sid).unwrap().goal, None);
-}
-
-#[test]
 fn test_content_replacement_records_round_trip() {
     let (_dir, store, _project_dir) = test_store();
     let sid = "content-replacements";
@@ -1373,4 +1315,52 @@ fn test_replay_metadata_filters_to_selected_chain_and_agent() {
     let agent_replacements = content_replacements_for_chain(&entries, "s", Some("agent-a"));
     assert_eq!(agent_replacements.len(), 1);
     assert_eq!(agent_replacements[0].replacement(), "agent");
+}
+
+fn goal_snapshot_entry(goal_id: &str, state_version: u64, marker: &str) -> Entry {
+    Entry::Metadata(MetadataEntry::GoalSnapshot {
+        session_id: test_session_id("s"),
+        goal_id: goal_id.to_string(),
+        state_version,
+        snapshot: json!({ "marker": marker }),
+    })
+}
+
+#[test]
+fn test_latest_goal_snapshot_picks_highest_version() {
+    let entries = vec![
+        goal_snapshot_entry("g1", 0, "v0"),
+        goal_snapshot_entry("g1", 3, "v3"),
+        goal_snapshot_entry("g1", 1, "v1"),
+    ];
+    let record = latest_goal_snapshot(&entries).unwrap();
+    assert_eq!(record.state_version, 3);
+    assert_eq!(record.snapshot["marker"], "v3");
+}
+
+#[test]
+fn test_latest_goal_snapshot_tombstoned_by_clear() {
+    let entries = vec![
+        goal_snapshot_entry("g1", 2, "v2"),
+        Entry::Metadata(MetadataEntry::GoalCleared {
+            session_id: test_session_id("s"),
+            goal_id: "g1".to_string(),
+        }),
+    ];
+    assert!(latest_goal_snapshot(&entries).is_none());
+}
+
+#[test]
+fn test_latest_goal_snapshot_new_goal_after_clear() {
+    let entries = vec![
+        goal_snapshot_entry("g1", 5, "old"),
+        Entry::Metadata(MetadataEntry::GoalCleared {
+            session_id: test_session_id("s"),
+            goal_id: "g1".to_string(),
+        }),
+        goal_snapshot_entry("g2", 0, "new"),
+    ];
+    let record = latest_goal_snapshot(&entries).unwrap();
+    assert_eq!(record.goal_id, "g2");
+    assert_eq!(record.snapshot["marker"], "new");
 }

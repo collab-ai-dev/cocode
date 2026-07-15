@@ -94,7 +94,6 @@ async fn client_callback_hook_routes_through_registered_runtime_callback() {
         is_async: false,
         async_rewake: false,
         status_message: None,
-        managed_by: None,
     }]);
     let called = Arc::new(AtomicBool::new(false));
     let called_for_callback = called.clone();
@@ -162,7 +161,6 @@ async fn prompt_hook_blocking_source_carries_prompt() {
         is_async: false,
         async_rewake: false,
         status_message: None,
-        managed_by: None,
     }]);
     let mut ctx = test_ctx();
     ctx.llm_handle = Some(Arc::new(BlockingPromptLlm));
@@ -485,7 +483,6 @@ async fn test_parallel_execution_multiple_hooks() {
             is_async: false,
             async_rewake: false,
             status_message: None,
-            managed_by: None,
         },
         HookDefinition {
             event: HookEventType::PreToolUse,
@@ -502,7 +499,6 @@ async fn test_parallel_execution_multiple_hooks() {
             is_async: false,
             async_rewake: false,
             status_message: None,
-            managed_by: None,
         },
     ]);
 
@@ -550,7 +546,6 @@ async fn test_parallel_execution_cancellation() {
         is_async: false,
         async_rewake: false,
         status_message: None,
-        managed_by: None,
     }]);
 
     let cancel = CancellationToken::new();
@@ -592,7 +587,6 @@ async fn test_parallel_execution_timeout() {
         is_async: false,
         async_rewake: false,
         status_message: None,
-        managed_by: None,
     }]);
 
     let cancel = CancellationToken::new();
@@ -631,7 +625,6 @@ async fn test_parallel_execution_exit_code_2_is_blocking() {
         is_async: false,
         async_rewake: false,
         status_message: None,
-        managed_by: None,
     }]);
 
     let cancel = CancellationToken::new();
@@ -675,7 +668,6 @@ async fn test_execute_pre_tool_use_with_prompt_hook() {
         is_async: false,
         async_rewake: false,
         status_message: None,
-        managed_by: None,
     }]);
 
     let ctx = test_ctx();
@@ -715,7 +707,6 @@ async fn test_execute_post_tool_use_failure_with_prompt_hook() {
         is_async: false,
         async_rewake: false,
         status_message: None,
-        managed_by: None,
     }]);
 
     let ctx = test_ctx();
@@ -754,7 +745,6 @@ async fn test_execute_session_start() {
         is_async: false,
         async_rewake: false,
         status_message: None,
-        managed_by: None,
     }]);
 
     let ctx = test_ctx();
@@ -797,7 +787,6 @@ async fn test_execute_session_start_collect_events_does_not_push_sync_buffer() {
         is_async: false,
         async_rewake: false,
         status_message: None,
-        managed_by: None,
     }]);
 
     let sync = crate::SyncHookEventBuffer::new();
@@ -955,7 +944,6 @@ async fn execute_stop_function_hook_settings_takes_precedence_over_function() {
         is_async: false,
         async_rewake: false,
         status_message: None,
-        managed_by: None,
     }]);
     registry
         .register_function_hook(
@@ -1030,7 +1018,6 @@ async fn test_execute_stop_failure() {
         is_async: false,
         async_rewake: false,
         status_message: None,
-        managed_by: None,
     }]);
 
     let ctx = test_ctx();
@@ -1073,7 +1060,6 @@ async fn test_execute_setup_routes_match_value_to_trigger() {
             is_async: false,
             async_rewake: false,
             status_message: None,
-            managed_by: None,
         },
         HookDefinition {
             event: HookEventType::Setup,
@@ -1090,7 +1076,6 @@ async fn test_execute_setup_routes_match_value_to_trigger() {
             is_async: false,
             async_rewake: false,
             status_message: None,
-            managed_by: None,
         },
     ]);
 
@@ -1131,7 +1116,6 @@ async fn test_execute_config_change_routes_match_value_to_source() {
         is_async: false,
         async_rewake: false,
         status_message: None,
-        managed_by: None,
     }]);
 
     let ctx = test_ctx();
@@ -1180,7 +1164,6 @@ async fn test_execute_file_changed_matches_basename() {
         is_async: false,
         async_rewake: false,
         status_message: None,
-        managed_by: None,
     }]);
 
     let ctx = test_ctx();
@@ -1230,7 +1213,6 @@ async fn test_execute_task_event_helpers_dispatch_to_distinct_events() {
         is_async: false,
         async_rewake: false,
         status_message: None,
-        managed_by: None,
     }]);
 
     let ctx = test_ctx();
@@ -1274,7 +1256,6 @@ async fn test_http_hooks_filtered_for_session_start() {
             is_async: false,
             async_rewake: false,
             status_message: None,
-            managed_by: None,
         },
         HookDefinition {
             event: HookEventType::SessionStart,
@@ -1291,7 +1272,6 @@ async fn test_http_hooks_filtered_for_session_start() {
             is_async: false,
             async_rewake: false,
             status_message: None,
-            managed_by: None,
         },
     ]);
 
@@ -1333,7 +1313,6 @@ async fn test_http_hooks_filtered_for_setup() {
         is_async: false,
         async_rewake: false,
         status_message: None,
-        managed_by: None,
     }]);
 
     let cancel = CancellationToken::new();
@@ -1373,7 +1352,6 @@ async fn test_http_hooks_allowed_for_other_events() {
         is_async: false,
         async_rewake: false,
         status_message: None,
-        managed_by: None,
     }]);
 
     let cancel = CancellationToken::new();

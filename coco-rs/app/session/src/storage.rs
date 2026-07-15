@@ -165,31 +165,6 @@ pub struct TranscriptEntry {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-/// Session-level `/goal` metadata. This mirrors the active-goal payload
-/// surfaced by the 2.1.193 session metadata observer: `met == false`
-/// means the goal is active, `met == true` is the terminal success snapshot,
-/// and `None` at the `MetadataEntry::Goal` layer clears the metadata.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct GoalMetadata {
-    pub condition: String,
-    pub set_at: i64,
-    pub iterations: i32,
-    pub last_reason: Option<String>,
-    pub met: bool,
-}
-
-impl GoalMetadata {
-    pub fn from_active_goal(goal: &coco_types::ActiveGoal, met: bool) -> Self {
-        Self {
-            condition: goal.condition.clone(),
-            set_at: goal.set_at_ms,
-            iterations: goal.iterations,
-            last_reason: goal.last_reason.clone(),
-            met,
-        }
-    }
-}
-
 /// Metadata entries that live alongside transcript messages in the JSONL.
 /// `type:` discriminator is kebab-case (`custom-title`, `last-prompt`,
 /// `file-history-snapshot`, …) — these drive cross-system tooling that
@@ -355,12 +330,81 @@ pub enum MetadataEntry {
         mode: String,
     },
 
-    /// Last-wins `/goal` session metadata. `goal: null` clears the live
-    /// metadata; `goal.met == true` records the terminal achieved snapshot.
-    Goal {
+    /// First-class goal-runtime snapshot (§13.1). Append-only; the highest
+    /// `state_version` for a `goal_id` is authoritative on resume. `snapshot`
+    /// is a passthrough JSON blob whose typed shape is owned by
+    /// `coco_goals::GoalSnapshot` — kept untyped here to avoid a
+    /// `coco-session -> coco-goals` dependency, matching `FileHistorySnapshot`.
+    #[serde(rename = "goal-snapshot")]
+    GoalSnapshot {
         session_id: SessionId,
-        goal: Option<GoalMetadata>,
+        goal_id: String,
+        state_version: u64,
+        snapshot: serde_json::Value,
     },
+
+    /// Tombstones the current goal so a subsequent scan returns nothing.
+    /// Appended when a goal is cleared.
+    #[serde(rename = "goal-cleared")]
+    GoalCleared {
+        session_id: SessionId,
+        goal_id: String,
+    },
+}
+
+/// The current goal snapshot recovered from a transcript scan: its passthrough
+/// blob plus the ordering keys. The caller deserializes `snapshot` into the
+/// typed `coco_goals::GoalSnapshot`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GoalSnapshotRecord {
+    pub goal_id: String,
+    pub state_version: u64,
+    pub snapshot: serde_json::Value,
+}
+
+/// The current goal snapshot: the highest-`state_version` [`MetadataEntry::GoalSnapshot`]
+/// that has not been tombstoned by a later [`MetadataEntry::GoalCleared`] for the
+/// same goal. `None` when no goal exists or the latest event is a clear.
+pub fn latest_goal_snapshot(entries: &[Entry]) -> Option<GoalSnapshotRecord> {
+    let mut current: Option<GoalSnapshotRecord> = None;
+    for entry in entries {
+        let Entry::Metadata(metadata) = entry else {
+            continue;
+        };
+        match metadata {
+            MetadataEntry::GoalSnapshot {
+                goal_id,
+                state_version,
+                snapshot,
+                ..
+            } => {
+                let replace = match &current {
+                    // A new goal id resets; otherwise the highest version wins.
+                    Some(existing) => {
+                        existing.goal_id != *goal_id || *state_version >= existing.state_version
+                    }
+                    None => true,
+                };
+                if replace {
+                    current = Some(GoalSnapshotRecord {
+                        goal_id: goal_id.clone(),
+                        state_version: *state_version,
+                        snapshot: snapshot.clone(),
+                    });
+                }
+            }
+            MetadataEntry::GoalCleared { goal_id, .. } => {
+                if current
+                    .as_ref()
+                    .is_some_and(|record| &record.goal_id == goal_id)
+                {
+                    current = None;
+                }
+            }
+            _ => {}
+        }
+    }
+    current
 }
 
 /// One content-replacement record.
@@ -505,8 +549,6 @@ pub struct TranscriptMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_link: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub goal: Option<GoalMetadata>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_prompt: Option<String>,
@@ -581,6 +623,15 @@ pub struct AgentMetadata {
 /// store, KAIROS daily log) computes paths from one source of truth.
 pub struct TranscriptStore {
     paths: Arc<ProjectPaths>,
+}
+
+impl crate::lease::SessionLeaseStore for TranscriptStore {
+    fn require_write_lease(
+        &self,
+        session_id: &str,
+    ) -> Result<crate::lease::SessionWriteLease, crate::lease::SessionLeaseError> {
+        crate::lease::acquire_file_lease(&self.paths.session_lock_path(session_id), session_id)
+    }
 }
 
 impl TranscriptStore {

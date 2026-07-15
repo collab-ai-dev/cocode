@@ -51,6 +51,21 @@ impl SessionRuntime {
     pub fn transcript_store(&self) -> &Arc<dyn coco_session::SessionStore> {
         self.persistence.transcript_store()
     }
+    /// The session's first-class goal aggregate (§10.2).
+    pub fn goal_runtime(&self) -> &Arc<coco_goal_runtime::GoalRuntimeHandle> {
+        self.persistence.goal_runtime()
+    }
+
+    /// The session-scoped runtime-owned evidence store (§10.2 #9), shared across
+    /// per-turn goal handles and the goal driver's coordinator.
+    pub fn goal_evidence(&self) -> &Arc<dyn coco_goal_runtime::EvidenceStore> {
+        self.persistence.goal_evidence()
+    }
+
+    /// The goal continuation driver's cold-edge signal (§10.3).
+    pub fn goal_driver_edge(&self) -> &Arc<tokio::sync::Notify> {
+        self.persistence.goal_driver_edge()
+    }
     pub fn fast_model_spec(&self) -> Option<&coco_types::ModelSpec> {
         self.title_resources.fast_model_spec()
     }

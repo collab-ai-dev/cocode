@@ -114,6 +114,12 @@ pub enum AttachmentType {
     /// fires unconditionally so the model always has the date.
     UserContext,
 
+    /// Per-turn goal-context reminder for a goal-owned turn (design §5.5):
+    /// re-materialized objective, budget, progress, and the `report_goal_turn`
+    /// protocol. Bypasses optional reminder toggles because it is part of the
+    /// goal execution contract; reuses the `critical_system_reminder` wire kind.
+    GoalContext,
+
     // ── Verify-plan reminder (MainAgentOnly tier) ──
     /// Deprecated legacy path. Fires every 10 human turns after ExitPlanMode
     /// while TS-shaped `pending_plan_verification` exists and has not started
@@ -270,6 +276,7 @@ impl AttachmentType {
             | Self::CompactionReminder
             | Self::DateChange
             | Self::UserContext
+            | Self::GoalContext
             // Core batch — ultrathink + companion intro + deltas + swarm.
             | Self::UltrathinkEffort
             | Self::CompanionIntro
@@ -330,6 +337,7 @@ impl AttachmentType {
             | Self::CompactionReminder
             | Self::DateChange
             | Self::UserContext
+            | Self::GoalContext
             | Self::VerifyPlanReminder
             | Self::UltrathinkEffort
             | Self::TokenUsage
@@ -388,6 +396,7 @@ impl AttachmentType {
             Self::CompactionReminder => "compaction_reminder",
             Self::DateChange => "date_change",
             Self::UserContext => "user_context",
+            Self::GoalContext => "goal_context",
             Self::VerifyPlanReminder => "verify_plan_reminder",
             Self::UltrathinkEffort => "ultrathink_effort",
             Self::TokenUsage => "token_usage",
@@ -441,6 +450,7 @@ impl AttachmentType {
             Self::CompactionReminder,
             Self::DateChange,
             Self::UserContext,
+            Self::GoalContext,
             Self::VerifyPlanReminder,
             Self::UltrathinkEffort,
             Self::TokenUsage,
@@ -489,8 +499,8 @@ impl std::fmt::Display for AttachmentType {
 /// taxonomy (60 variants).
 ///
 /// `AttachmentType` is the subset of attachment types this crate owns
-/// as reminder-producing generators (41 model-visible + 2 silent =
-/// 43 variants). The full union lives in `coco-types` so every consumer
+/// as reminder-producing generators (42 model-visible + 2 silent =
+/// 44 variants). The full union lives in `coco-types` so every consumer
 /// crate can reference a single authoritative discriminator without
 /// pulling system-reminder as a dependency.
 ///
@@ -514,6 +524,9 @@ impl From<AttachmentType> for coco_types::AttachmentKind {
             AttachmentType::CompactionReminder => K::CompactionReminder,
             AttachmentType::DateChange => K::DateChange,
             AttachmentType::UserContext => K::UserContext,
+            // Reuses the critical-reminder wire kind: goal context is a per-turn
+            // execution directive, not a new persisted attachment category.
+            AttachmentType::GoalContext => K::CriticalSystemReminder,
             AttachmentType::VerifyPlanReminder => K::VerifyPlanReminder,
             AttachmentType::UltrathinkEffort => K::UltrathinkEffort,
             AttachmentType::TokenUsage => K::TokenUsage,

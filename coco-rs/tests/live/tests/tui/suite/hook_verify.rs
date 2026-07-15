@@ -56,7 +56,6 @@ pub async fn run() -> Result<()> {
         is_async: false,
         async_rewake: false,
         status_message: Some("recording pre-tool trace".into()),
-        managed_by: None,
     };
     let post_hook = HookDefinition {
         event: HookEventType::PostToolUse,
@@ -73,7 +72,6 @@ pub async fn run() -> Result<()> {
         is_async: false,
         async_rewake: false,
         status_message: Some("recording post-tool trace".into()),
-        managed_by: None,
     };
 
     let mut harness = TuiHarness::builder()

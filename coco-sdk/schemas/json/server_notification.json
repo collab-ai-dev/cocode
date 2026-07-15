@@ -255,15 +255,15 @@
       ]
     },
     {
-      "description": "Active `/goal` state changed.\n\nMirrors the engine's `ToolAppState.active_goal` so consumers can\nrender live footer/status affordances without reverse-engineering\nthe silent `goal_status` transcript attachments.",
+      "description": "First-class goal snapshot changed (design §8.1). Carries a bounded\nprojection of the durable `GoalSnapshot` (status, budget/usage, progress,\nblocker/wait detail), so surfaces render the real goal runtime state —\ndetail view, composed footer, resume prompts.",
       "type": "object",
       "properties": {
         "method": {
           "type": "string",
-          "const": "goal/activeChanged"
+          "const": "goal/snapshotChanged"
         },
         "params": {
-          "$ref": "#/$defs/ActiveGoalChangedParams"
+          "$ref": "#/$defs/GoalSnapshotChangedParams"
         }
       },
       "required": [
@@ -1485,55 +1485,6 @@
     }
   ],
   "$defs": {
-    "ActiveGoal": {
-      "description": "Session-scoped goal metadata for `/goal`.",
-      "type": "object",
-      "properties": {
-        "condition": {
-          "type": "string"
-        },
-        "iterations": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "last_reason": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "set_at_ms": {
-          "type": "integer",
-          "format": "int64"
-        },
-        "tokens_at_start": {
-          "type": "integer",
-          "format": "int64"
-        }
-      },
-      "required": [
-        "condition",
-        "iterations",
-        "set_at_ms",
-        "tokens_at_start"
-      ]
-    },
-    "ActiveGoalChangedParams": {
-      "description": "Active `/goal` snapshot.\n\n`goal = None` means no active goal. Terminal goal_status attachments\nstill carry achieved / failed details; this event is only the live-state\nmirror.",
-      "type": "object",
-      "properties": {
-        "goal": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ActiveGoal"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      }
-    },
     "AgentInfo": {
       "type": "object",
       "properties": {
@@ -3037,6 +2988,128 @@
       "required": [
         "files",
         "processed_at"
+      ]
+    },
+    "GoalSnapshotChangedParams": {
+      "description": "Full-snapshot goal event payload (design §8.1). Session routing rides the\n`SessionEnvelope` the emit site stamps, so there is no payload session id.",
+      "type": "object",
+      "properties": {
+        "snapshot": {
+          "description": "The current goal projection, or `None` when no goal exists (cleared).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GoalSnapshotView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "GoalSnapshotView": {
+      "description": "Bounded wire projection of a durable goal snapshot for protocol and TUI\nconsumers. Never reconstructed from transcript messages (design §9.1).",
+      "type": "object",
+      "properties": {
+        "autonomous_turns": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "created_at_ms": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "goal_id": {
+          "type": "string"
+        },
+        "input_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "last_rejection": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_autonomous_turns": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "output_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "plan_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "progress_summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spec_revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "state_version": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "status": {
+          "$ref": "#/$defs/GoalStatusKind"
+        },
+        "status_detail": {
+          "description": "Typed reason for a stopped/waiting status (pause reason, blocker summary,\nwait condition, budget kind). `None` for a plain running goal.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total_turns": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "updated_at_ms": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "goal_id",
+        "spec_revision",
+        "state_version",
+        "status",
+        "objective",
+        "total_turns",
+        "autonomous_turns",
+        "max_autonomous_turns",
+        "input_tokens",
+        "output_tokens",
+        "created_at_ms",
+        "updated_at_ms"
+      ]
+    },
+    "GoalStatusKind": {
+      "description": "Wire status of a goal, mirroring `coco_goals::GoalStatus`. A cleared goal is\nrepresented by a `None` snapshot on [`GoalSnapshotChangedParams`], so there is\nno `Cleared` variant here.",
+      "type": "string",
+      "enum": [
+        "active",
+        "waiting",
+        "paused",
+        "blocked",
+        "usage_limited",
+        "budget_limited",
+        "completed"
       ]
     },
     "GoalStatusPayload": {

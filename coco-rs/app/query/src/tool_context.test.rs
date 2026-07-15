@@ -69,6 +69,7 @@ fn factory_with_live_rules(
         transcript_path: None,
         hook_handle: None,
         agent_handle: None,
+        goal_handle: None,
         skill_handle: None,
         lsp_handle: None,
         mcp_handle: None,

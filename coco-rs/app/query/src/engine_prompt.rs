@@ -829,6 +829,9 @@ impl QueryEngine {
             // one via `with_agent_handle`; otherwise fall back to
             // `NoOpAgentHandle`.
             agent_handle: self.agent_handle.clone(),
+            // Real `GoalHandle` when the session installed one via
+            // `with_goal_handle`; otherwise `NoOpGoalHandle`.
+            goal_handle: self.goal_handle.clone(),
             // `SkillHandle` same pattern — real handle when
             // installed, `NoOpSkillHandle` otherwise.
             skill_handle: self.skill_handle.clone(),

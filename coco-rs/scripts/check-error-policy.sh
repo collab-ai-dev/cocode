@@ -95,6 +95,13 @@ is_tier3_main_trunk() {
         skill-learn)                          return 1 ;;
         keybindings)                          return 1 ;;
         core/messages)                        return 1 ;;
+        # Pure goal-runtime domain reducer: no I/O, no locks, no clock. Its only
+        # fallible surface is the `GoalTransitionError` validation enum
+        # (thiserror), which the session-runtime / agent-host host converts at
+        # the boundary — the same leaf-library pattern as tier-2 crates. A pure
+        # state-machine validation error carries no cross-layer coco-error
+        # retry/StatusCode classification. Same rationale as core/messages.
+        core/goals)                           return 1 ;;
         *) return 0 ;;
     esac
 }

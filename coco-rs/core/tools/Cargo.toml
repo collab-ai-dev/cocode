@@ -14,6 +14,7 @@ coco-error.workspace = true
 coco-types = { workspace = true, features = ["schema"] }
 coco-messages.workspace = true
 coco-subagent.workspace = true
+coco-goals.workspace = true
 coco-tool-runtime.workspace = true
 coco-workflow.workspace = true
 coco-workflow-runtime.workspace = true

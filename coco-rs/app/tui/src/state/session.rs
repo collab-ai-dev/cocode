@@ -233,8 +233,9 @@ pub struct SessionState {
     /// session aggregate folds positive deltas against the last-seen
     /// mark. Bounded by the number of subagent spawns in the session.
     subagent_usage_marks: HashMap<String, SubagentUsageTotals>,
-    /// Active `/goal` snapshot, mirrored from the engine.
-    pub active_goal: Option<coco_types::ActiveGoal>,
+    /// Current goal snapshot view, mirrored from the goal runtime via
+    /// `GoalSnapshotChanged` (design §8.1).
+    pub goal: Option<coco_types::GoalSnapshotView>,
     /// Session identifier.
     pub session_id: Option<String>,
     /// OS process id, surfaced in the header so concurrent coco sessions
@@ -699,7 +700,7 @@ impl Default for SessionState {
             session_usage: None,
             subagent_usage: SubagentUsageTotals::default(),
             subagent_usage_marks: HashMap::new(),
-            active_goal: None,
+            goal: None,
             session_id: None,
             pid: 0,
             conversation_id: None,

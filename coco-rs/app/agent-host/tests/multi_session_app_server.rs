@@ -1093,6 +1093,7 @@ async fn shortcut_turns_emit_terminal_session_result_and_accounting() {
                     model_selection: None,
                     permission_mode: None,
                     thinking_level: None,
+                    goal_continuation: false,
                 },
             )
             .await
@@ -1124,6 +1125,7 @@ async fn shortcut_turns_emit_terminal_session_result_and_accounting() {
                     model_selection: None,
                     permission_mode: None,
                     thinking_level: None,
+                    goal_continuation: false,
                 },
             )
             .await
@@ -1589,6 +1591,7 @@ async fn one_connection_runtime_isolation_scenario() {
                     model_selection: None,
                     permission_mode: None,
                     thinking_level: None,
+                    goal_continuation: false,
                 },
             )
             .await
@@ -1969,6 +1972,7 @@ async fn two_initialized_connections_keep_profiles_runtimes_and_writers_isolated
                 model_selection: None,
                 permission_mode: None,
                 thinking_level: None,
+                goal_continuation: false,
             };
         let (turn_a, turn_b) = tokio::join!(
             client_a.turn_start(&fixture.handler, make_turn(&first, "profile-a")),
@@ -2338,6 +2342,7 @@ async fn disconnected_orphan_lifecycle_scenario() {
                 model_selection: None,
                 permission_mode: None,
                 thinking_level: None,
+                goal_continuation: false,
             },
         )
         .await
@@ -2433,6 +2438,7 @@ async fn close_timeout_aborts_active_turn_and_returns_structured_error() {
                     model_selection: None,
                     permission_mode: None,
                     thinking_level: None,
+                    goal_continuation: false,
                 },
             )
             .await
@@ -2504,6 +2510,7 @@ async fn successful_close_has_no_late_session_events_after_completion() {
                     model_selection: None,
                     permission_mode: None,
                     thinking_level: None,
+                    goal_continuation: false,
                 },
             )
             .await
@@ -2604,6 +2611,7 @@ async fn close_waits_for_inflight_turn_result_before_final_session_result() {
                     model_selection: None,
                     permission_mode: None,
                     thinking_level: None,
+                    goal_continuation: false,
                 },
             )
             .await
@@ -2674,6 +2682,7 @@ async fn embedded_turn_result_is_accounted_without_standalone_session_result() {
                     model_selection: None,
                     permission_mode: None,
                     thinking_level: None,
+                    goal_continuation: false,
                 },
             )
             .await
@@ -2762,6 +2771,7 @@ async fn embedded_and_standalone_turn_result_is_accounted_once() {
                     model_selection: None,
                     permission_mode: None,
                     thinking_level: None,
+                    goal_continuation: false,
                 },
             )
             .await
@@ -2969,6 +2979,7 @@ async fn orphan_close_rejects_owned_session_before_turn_or_runtime_side_effects(
                     model_selection: None,
                     permission_mode: None,
                     thinking_level: None,
+                    goal_continuation: false,
                 },
             )
             .await
@@ -3604,6 +3615,7 @@ async fn concurrent_shutdown_scenario() {
                     model_selection: None,
                     permission_mode: None,
                     thinking_level: None,
+                    goal_continuation: false,
                 },
             )
             .await

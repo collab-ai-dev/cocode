@@ -50,6 +50,18 @@ pub(in crate::session::session_runtime) struct SessionPersistenceResources {
     pub(in crate::session::session_runtime) project_paths: Arc<coco_paths::ProjectPaths>,
     pub(in crate::session::session_runtime) transcript_store: Arc<dyn coco_session::SessionStore>,
     pub(in crate::session::session_runtime) persist_session: bool,
+    /// First-class goal aggregate for this session (§10.2). The sole writer of
+    /// the live goal projection; tools/TUI/context read snapshots from it.
+    pub(in crate::session::session_runtime) goal_runtime: Arc<coco_goal_runtime::GoalRuntimeHandle>,
+    /// Session-scoped runtime-owned evidence store (§10.2 #9). Shared by every
+    /// per-turn `SessionGoalHandle` (which mints) and the goal driver's
+    /// completion coordinator (which resolves), so evidence survives across turns
+    /// and cited ids resolve — a per-turn store would lose provenance each turn.
+    pub(in crate::session::session_runtime) goal_evidence:
+        Arc<dyn coco_goal_runtime::EvidenceStore>,
+    /// Cold-edge signal for the goal continuation driver (§10.3). Nudged by
+    /// `/goal resume` and the wake driver so a resumed/woken goal starts a turn.
+    pub(in crate::session::session_runtime) goal_driver_edge: Arc<tokio::sync::Notify>,
 }
 
 impl SessionPersistenceResources {
@@ -58,13 +70,35 @@ impl SessionPersistenceResources {
         project_paths: Arc<coco_paths::ProjectPaths>,
         transcript_store: Arc<dyn coco_session::SessionStore>,
         persist_session: bool,
+        goal_runtime: Arc<coco_goal_runtime::GoalRuntimeHandle>,
     ) -> Self {
         Self {
             session_manager,
             project_paths,
             transcript_store,
             persist_session,
+            goal_runtime,
+            goal_evidence: Arc::new(coco_goal_runtime::InMemoryEvidenceStore::new()),
+            goal_driver_edge: Arc::new(tokio::sync::Notify::new()),
         }
+    }
+
+    pub(in crate::session::session_runtime) fn goal_runtime(
+        &self,
+    ) -> &Arc<coco_goal_runtime::GoalRuntimeHandle> {
+        &self.goal_runtime
+    }
+
+    pub(in crate::session::session_runtime) fn goal_evidence(
+        &self,
+    ) -> &Arc<dyn coco_goal_runtime::EvidenceStore> {
+        &self.goal_evidence
+    }
+
+    pub(in crate::session::session_runtime) fn goal_driver_edge(
+        &self,
+    ) -> &Arc<tokio::sync::Notify> {
+        &self.goal_driver_edge
     }
 
     pub(in crate::session::session_runtime) fn session_manager(&self) -> &Arc<SessionManager> {

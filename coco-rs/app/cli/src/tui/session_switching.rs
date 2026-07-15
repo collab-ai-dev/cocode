@@ -10,12 +10,9 @@ pub(super) async fn emit_resume_plan_ui_state(
         .cloned()
         .map(std::sync::Arc::new)
         .collect::<Vec<_>>();
-    let goal = coco_agent_host::runtime_resume::restore_goal_metadata_from_messages_with_trust(
-        session,
-        &prior_messages,
-        workspace_trust_rejected(),
-    )
-    .await;
+    // Goal state is recovered by the first-class goal runtime (restored from the
+    // durable `GoalSnapshot` during session build); read its current snapshot view.
+    let goal = goal_command::read_goal_snapshot_view(session).await;
 
     // Bulk resume hydration mirrors the startup `--resume` path:
     // reset UI-only state first, then replace transcript scrollback in
@@ -72,7 +69,7 @@ pub(super) async fn emit_resume_plan_ui_state(
         .await;
     let _ = event_tx
         .send(CoreEvent::Protocol(
-            goal_command::active_goal_changed_notification(goal.clone()),
+            goal_command::goal_snapshot_changed_notification(goal.clone()),
         ))
         .await;
 }
@@ -412,5 +409,5 @@ use tracing::warn;
 
 use super::{
     SharedSessionHandle, SlashOutcome, TuiRuntimeReloadSubscriptions, emit_slash_text,
-    session_target, workspace_trust_rejected,
+    session_target,
 };

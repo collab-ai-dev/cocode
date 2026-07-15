@@ -1454,6 +1454,7 @@ async fn remote_session_handle_forwards_query_interrupt_and_close() {
                 model_selection: None,
                 permission_mode: None,
                 thinking_level: None,
+                goal_continuation: false,
             })
             .await
     });

@@ -82,15 +82,6 @@ pub struct HookDefinition {
     /// Human-readable status message shown while the hook is running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_message: Option<String>,
-    /// Runtime-owned hook marker. User config should not set this.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub managed_by: Option<ManagedHookKind>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ManagedHookKind {
-    Goal,
 }
 
 /// How to handle a hook event.
@@ -1566,7 +1557,6 @@ pub fn load_hooks_from_config_with_policy(
                 is_async,
                 async_rewake,
                 status_message,
-                managed_by: None,
             });
         }
     }

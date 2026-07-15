@@ -235,6 +235,7 @@ pub(super) async fn run_local_app_server_shortcut_turn(
         model_selection: None,
         permission_mode: None,
         thinking_level: None,
+        goal_continuation: false,
     };
     let started = match local_app_server_bridge
         .start_turn(session_id.clone(), params)

@@ -26,6 +26,10 @@ coco-shell.workspace = true
 # `ToolUseContext` exposes to AgentTool. One-way dep — `coco-subagent`
 # does NOT depend on `coco-tool-runtime` (see core/subagent/Cargo.toml).
 coco-subagent.workspace = true
+# `GoalHandle` trait speaks `coco-goals` domain types (GoalSnapshot,
+# GoalTurnDisposition). One-way leaf dep — `coco-goals` does NOT depend on
+# `coco-tool-runtime`.
+coco-goals.workspace = true
 # `ReminderMailboxRef` trait — producer-side handle threaded onto
 # `ToolUseContext` so tools / subsystems can push event-driven reminder
 # snapshots without depending on the full reminder-orchestration stack.

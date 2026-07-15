@@ -92,6 +92,15 @@ pub enum ToolName {
     /// sees. Only injected in non-interactive sessions when `--json-schema`
     /// is supplied; never visible in TUI.
     StructuredOutput,
+    // Goals (3) — first-class goal runtime (§12.1). Visible only for a
+    // lease-bound goal-owned turn (get_goal / report_goal_turn) or on explicit
+    // request (create_goal).
+    #[serde(rename = "get_goal")]
+    GetGoal,
+    #[serde(rename = "report_goal_turn")]
+    ReportGoalTurn,
+    #[serde(rename = "create_goal")]
+    CreateGoal,
 }
 
 impl ToolName {
@@ -142,6 +151,9 @@ impl ToolName {
             Self::Repl => "REPL",
             Self::Sleep => "Sleep",
             Self::StructuredOutput => "StructuredOutput",
+            Self::GetGoal => "get_goal",
+            Self::ReportGoalTurn => "report_goal_turn",
+            Self::CreateGoal => "create_goal",
         }
     }
 

@@ -99,16 +99,16 @@ impl SystemReminderOrchestrator {
             AutoModeEnterGenerator, AutoModeExitGenerator, BudgetUsdGenerator,
             CompactionReminderGenerator, CompanionIntroGenerator, CriticalSystemReminderGenerator,
             DateChangeGenerator, DeferredToolsDeltaGenerator, DiagnosticsGenerator,
-            EditedImageFileGenerator, HookAdditionalContextGenerator, HookBlockingErrorGenerator,
-            HookStoppedContinuationGenerator, HookSuccessGenerator, IdeOpenedFileGenerator,
-            IdeSelectionGenerator, InvokedSkillsGenerator, McpInstructionsDeltaGenerator,
-            McpResourcesGenerator, NestedMemoryGenerator, OutputStyleGenerator,
-            OutputTokenUsageGenerator, PlanModeEnterGenerator, PlanModeExitGenerator,
-            PlanModeReentryGenerator, RelevantMemoriesGenerator, SkillDiscoveryGenerator,
-            SkillListingGenerator, TaskRemindersGenerator, TaskStatusGenerator,
-            TeamContextGenerator, TeammateMailboxGenerator, TodoRemindersGenerator,
-            TokenUsageGenerator, ToolSearchUsageReminderGenerator, UltrathinkEffortGenerator,
-            UserContextGenerator, VerifyPlanReminderGenerator,
+            EditedImageFileGenerator, GoalContextGenerator, HookAdditionalContextGenerator,
+            HookBlockingErrorGenerator, HookStoppedContinuationGenerator, HookSuccessGenerator,
+            IdeOpenedFileGenerator, IdeSelectionGenerator, InvokedSkillsGenerator,
+            McpInstructionsDeltaGenerator, McpResourcesGenerator, NestedMemoryGenerator,
+            OutputStyleGenerator, OutputTokenUsageGenerator, PlanModeEnterGenerator,
+            PlanModeExitGenerator, PlanModeReentryGenerator, RelevantMemoriesGenerator,
+            SkillDiscoveryGenerator, SkillListingGenerator, TaskRemindersGenerator,
+            TaskStatusGenerator, TeamContextGenerator, TeammateMailboxGenerator,
+            TodoRemindersGenerator, TokenUsageGenerator, ToolSearchUsageReminderGenerator,
+            UltrathinkEffortGenerator, UserContextGenerator, VerifyPlanReminderGenerator,
         };
 
         // UserInput batch.
@@ -123,6 +123,8 @@ impl SystemReminderOrchestrator {
         self.add_generator(Arc::new(DateChangeGenerator));
         // `prependUserContext` baseline (currentDate); fires every turn.
         self.add_generator(Arc::new(UserContextGenerator));
+        // Mandatory per-turn goal-context reminder on a goal-owned turn (§5.5).
+        self.add_generator(Arc::new(GoalContextGenerator));
         self.add_generator(Arc::new(UltrathinkEffortGenerator));
         self.add_generator(Arc::new(DeferredToolsDeltaGenerator));
         self.add_generator(Arc::new(ToolSearchUsageReminderGenerator));

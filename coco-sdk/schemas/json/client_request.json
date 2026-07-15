@@ -228,6 +228,86 @@
       "properties": {
         "method": {
           "type": "string",
+          "const": "session/goal/create"
+        },
+        "params": {
+          "$ref": "#/$defs/GoalCreateParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "session/goal/get"
+        },
+        "params": {
+          "$ref": "#/$defs/SessionTarget"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "session/goal/edit"
+        },
+        "params": {
+          "$ref": "#/$defs/GoalEditParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "session/goal/setStatus"
+        },
+        "params": {
+          "$ref": "#/$defs/GoalSetStatusParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "session/goal/clear"
+        },
+        "params": {
+          "$ref": "#/$defs/SessionTarget"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
           "const": "turn/start"
         },
         "params": {
@@ -1122,6 +1202,84 @@
         "request_id",
         "mcp_server_name",
         "approved"
+      ]
+    },
+    "GoalCreateParams": {
+      "description": "`session/goal/create` parameters. Minimal control-plane surface; contract and\nrich budget authoring beyond the autonomous-turn cap are future extensions.",
+      "type": "object",
+      "properties": {
+        "max_autonomous_turns": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
+        }
+      },
+      "required": [
+        "target",
+        "objective"
+      ]
+    },
+    "GoalEditParams": {
+      "description": "`session/goal/edit` parameters. `expected_spec_revision` is the optimistic\nconcurrency guard (design §9.1 invariant 2): the edit is rejected when it does\nnot match the current spec revision.",
+      "type": "object",
+      "properties": {
+        "expected_spec_revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "max_autonomous_turns": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "objective": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
+        }
+      },
+      "required": [
+        "target",
+        "expected_spec_revision"
+      ]
+    },
+    "GoalSetStatusParams": {
+      "description": "`session/goal/setStatus` parameters.",
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/GoalStatusRequest"
+        },
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
+        }
+      },
+      "required": [
+        "target",
+        "status"
+      ]
+    },
+    "GoalStatusRequest": {
+      "description": "The controlled status transition a `session/goal/setStatus` requests. Only\nuser-drivable transitions are exposed; terminal and verifier-owned statuses\nare not (design §6, §11.3).",
+      "type": "string",
+      "enum": [
+        "pause",
+        "resume"
       ]
     },
     "HookCallbackMatcher": {

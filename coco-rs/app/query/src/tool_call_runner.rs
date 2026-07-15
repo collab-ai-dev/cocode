@@ -373,6 +373,8 @@ impl<'a> ToolCallRunner<'a> {
         //    that we're outside the executor's sync on_outcome
         //    boundary. Use history_push_and_emit so the TUI and SDK
         //    see each tool result through MessageAppended.
+        // Only pay the async snapshot cost on a live goal turn.
+        let goal = self.ctx.goal.is_available().then_some(&self.ctx.goal);
         for commit in commit_log {
             let PendingToolCommit {
                 ordered_messages,
@@ -382,6 +384,17 @@ impl<'a> ToolCallRunner<'a> {
                 crate::history_sync::history_push_and_emit(self.history, msg, self.event_tx).await;
             }
             let event = completed_event;
+            // Mint runtime-owned evidence for an accepted tool result so the worker
+            // can cite its id as completion proof (§10.2 #9). No-op off a goal turn.
+            if !event.is_error
+                && let Some(goal) = goal
+            {
+                goal.record_tool_evidence(coco_tool_runtime::ToolEvidenceObservation {
+                    tool_use_id: event.call_id.clone(),
+                    tool_name: event.tool_name.clone(),
+                })
+                .await;
+            }
             let _delivered = emit_stream(
                 event_tx,
                 crate::AgentStreamEvent::ToolUseCompleted {

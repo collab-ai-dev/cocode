@@ -115,29 +115,6 @@ mod goal_tests {
         assert!(!workspace_trust_rejected_from_env(Some("1")));
         assert!(!workspace_trust_rejected_from_env(None));
     }
-
-    #[test]
-    fn active_goal_status_matches_non_interactive_goal_contract() {
-        let mut goal = coco_types::ActiveGoal {
-            condition: "finish the migration".to_string(),
-            iterations: 0,
-            set_at_ms: 100,
-            tokens_at_start: 10,
-            last_reason: None,
-        };
-
-        assert_eq!(
-            coco_agent_host::goal_command::format_active_goal_status(&goal),
-            "Goal active: finish the migration (not yet evaluated)"
-        );
-
-        goal.iterations = 2;
-        goal.last_reason = Some(" tests still failing\nrerun needed ".to_string());
-        assert_eq!(
-            coco_agent_host::goal_command::format_active_goal_status(&goal),
-            "Goal active: finish the migration (2 turns)\ntests still failing rerun needed"
-        );
-    }
 }
 
 use super::ActiveTurn;
@@ -917,6 +894,7 @@ async fn local_app_server_turn_writes_back_runtime_history() {
                 model_selection: None,
                 permission_mode: None,
                 thinking_level: None,
+                goal_continuation: false,
             },
         )
         .await

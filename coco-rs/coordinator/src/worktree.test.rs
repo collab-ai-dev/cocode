@@ -492,7 +492,6 @@ fn test_has_worktree_create_hook_returns_true_when_hook_registered() {
         is_async: false,
         async_rewake: false,
         status_message: None,
-        managed_by: None,
     });
     assert!(AgentWorktreeManager::has_worktree_create_hook(&registry));
 }

@@ -355,7 +355,6 @@ fn hook(event: HookEventType, command: &str) -> coco_hooks::HookDefinition {
         is_async: false,
         async_rewake: false,
         status_message: None,
-        managed_by: None,
     }
 }
 

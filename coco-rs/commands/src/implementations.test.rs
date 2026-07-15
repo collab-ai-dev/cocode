@@ -273,6 +273,32 @@ fn goal_handler_emits_typed_sentinels() {
 }
 
 #[test]
+fn goal_handler_round_trips_pause_and_resume() {
+    for keyword in ["pause", "Pause", "PAUSE"] {
+        assert_eq!(
+            parse_goal_command_args(keyword),
+            Ok(GoalCommandRequest::Pause),
+            "{keyword} should parse as pause"
+        );
+    }
+    for keyword in ["resume", "Resume", "RESUME"] {
+        assert_eq!(
+            parse_goal_command_args(keyword),
+            Ok(GoalCommandRequest::Resume),
+            "{keyword} should parse as resume"
+        );
+    }
+    assert_eq!(
+        parse_goal_sentinel(&goal_handler("pause")),
+        Some(GoalCommandRequest::Pause)
+    );
+    assert_eq!(
+        parse_goal_sentinel(&goal_handler("resume")),
+        Some(GoalCommandRequest::Resume)
+    );
+}
+
+#[test]
 fn goal_registration_matches_upstream_interactive_metadata() {
     let mut registry = CommandRegistry::new();
     register_extended_builtins(&mut registry);

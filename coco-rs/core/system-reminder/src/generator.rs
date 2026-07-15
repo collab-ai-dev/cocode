@@ -240,6 +240,10 @@ pub struct GeneratorContext<'a> {
     /// outside coordinator mode.
     pub coordinator_worker_context: Option<String>,
 
+    /// Pre-rendered goal-context reminder body for a goal-owned turn (design
+    /// §5.5), threaded from the engine's `GoalHandle`. `None` outside a goal turn.
+    pub goal_context: Option<String>,
+
     // ── Phase E (verify-plan reminder) ──
     /// True when the deprecated legacy verify-plan flow has recorded pending
     /// plan verification and a follow-up `VerifyPlanExecution` call is still
@@ -453,6 +457,7 @@ pub struct GeneratorContextBuilder<'a> {
     new_date: Option<String>,
     current_date: Option<String>,
     coordinator_worker_context: Option<String>,
+    goal_context: Option<String>,
     has_pending_plan_verification: bool,
     turns_since_plan_exit: i32,
     total_cost_usd: f64,
@@ -536,6 +541,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             new_date: None,
             current_date: None,
             coordinator_worker_context: None,
+            goal_context: None,
             has_pending_plan_verification: false,
             turns_since_plan_exit: 0,
             total_cost_usd: 0.0,
@@ -768,6 +774,11 @@ impl<'a> GeneratorContextBuilder<'a> {
 
     pub fn coordinator_worker_context(mut self, c: Option<String>) -> Self {
         self.coordinator_worker_context = c;
+        self
+    }
+
+    pub fn goal_context(mut self, c: Option<String>) -> Self {
+        self.goal_context = c;
         self
     }
 
@@ -1012,6 +1023,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             new_date: self.new_date,
             current_date: self.current_date,
             coordinator_worker_context: self.coordinator_worker_context,
+            goal_context: self.goal_context,
             has_pending_plan_verification: self.has_pending_plan_verification,
             turns_since_plan_exit: self.turns_since_plan_exit,
             total_cost_usd: self.total_cost_usd,

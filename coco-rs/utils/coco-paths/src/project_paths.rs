@@ -94,6 +94,19 @@ impl ProjectPaths {
         self.project_dir().join(session_id)
     }
 
+    /// `<project_dir>/.session-locks/` — home of per-session write-lease lock
+    /// files. Kept separate from the session artifact dir so the lock file
+    /// survives ordinary session deletion (avoiding inode-replacement races).
+    pub fn session_locks_dir(&self) -> PathBuf {
+        self.project_dir().join(".session-locks")
+    }
+
+    /// `<project_dir>/.session-locks/<session_id>.lock` — the OS advisory lock
+    /// file guarding writable materialization of one session.
+    pub fn session_lock_path(&self, session_id: &str) -> PathBuf {
+        self.session_locks_dir().join(format!("{session_id}.lock"))
+    }
+
     pub fn subagents_dir(&self, session_id: &str) -> PathBuf {
         self.session_dir(session_id).join("subagents")
     }

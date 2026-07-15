@@ -1,66 +1,6 @@
 use super::*;
 
 impl SessionRuntime {
-    pub async fn active_goal_snapshot(&self) -> Option<coco_types::ActiveGoal> {
-        self.engine_state_resources
-            .app_state()
-            .read()
-            .await
-            .active_goal
-            .clone()
-    }
-    pub async fn restore_goal_from_history(
-        &self,
-        messages: &[Arc<coco_messages::Message>],
-        trust_rejected: bool,
-    ) -> Option<coco_types::ActiveGoal> {
-        let cfg = self.current_engine_config().await;
-        let goal = crate::goal_command::restore_goal_from_history(
-            messages,
-            self.engine_state_resources.app_state(),
-            self.hook_resources.registry().as_ref(),
-            self.session_usage_snapshot().await.totals.output_tokens,
-            crate::goal_command::GoalGate {
-                hooks_restricted: cfg.disable_all_hooks || cfg.allow_managed_hooks_only,
-                trust_rejected,
-            },
-        )
-        .await;
-        self.persist_goal_metadata(goal.as_ref().map(|goal| {
-            coco_session::GoalMetadata::from_active_goal(goal, /*met*/ false)
-        }))
-        .await;
-        goal
-    }
-    pub async fn persist_goal_metadata(&self, goal: Option<coco_session::GoalMetadata>) {
-        if !self.persistence.persist_session() {
-            return;
-        }
-        self.engine_state_resources
-            .terminal_goal_metadata_written()
-            .store(goal.as_ref().is_some_and(|goal| goal.met), Ordering::SeqCst);
-        let session_id = self.current_typed_session_id().await;
-        let session_id_string = session_id.to_string();
-        let store = Arc::clone(self.persistence.transcript_store());
-        let entry = coco_session::MetadataEntry::Goal {
-            session_id: session_id.clone(),
-            goal,
-        };
-        let session_id_for_write = session_id_string;
-        match tokio::task::spawn_blocking(move || {
-            store.append_metadata(&session_id_for_write, &entry)
-        })
-        .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                warn!(error = %e, session_id = %session_id, "failed to persist goal metadata");
-            }
-            Err(e) => {
-                warn!(error = %e, session_id = %session_id, "goal metadata write task failed");
-            }
-        }
-    }
     pub async fn re_append_session_metadata(&self) {
         let session_id = self.current_typed_session_id().await.to_string();
         let manager = Arc::clone(self.session_manager());

@@ -1177,7 +1177,7 @@ pub(super) fn handle(
             // `HistoryReplaced` (compaction / reactive trim / rewind) must
             // keep the running cumulative usage, the active goal, the durable
             // plan + todos, and the queued-command mirror intact. On resume
-            // the trailing `SessionUsageUpdated` / `ActiveGoalChanged` events
+            // the trailing `SessionUsageUpdated` / `GoalSnapshotChanged` events
             // re-hydrate usage and goal for the target session, and the
             // `/clear` undo buffer is repopulated by the following
             // `RewindPreClearSnapshot`.
@@ -1188,7 +1188,7 @@ pub(super) fn handle(
             // keep their high-water marks and don't re-count pre-clear
             // spend into the fresh session.
             state.session.reset_subagent_usage_for_session_boundary();
-            state.session.active_goal = None;
+            state.session.goal = None;
             state.session.plan_tasks.clear();
             state.session.todos_by_agent.clear();
             // The resumed engine's `ToolAppState` restarts its panel
@@ -1230,8 +1230,8 @@ pub(super) fn handle(
             );
             true
         }
-        ServerNotification::ActiveGoalChanged(p) => {
-            state.session.active_goal = p.goal;
+        ServerNotification::GoalSnapshotChanged(p) => {
+            state.session.goal = p.snapshot;
             true
         }
         ServerNotification::HistoryReplaced {

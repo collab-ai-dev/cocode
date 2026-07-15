@@ -7,6 +7,7 @@
 use tokio_util::sync::CancellationToken;
 
 pub(crate) mod config;
+pub(crate) mod goal;
 mod initialize_metadata;
 pub(crate) mod mcp;
 pub(crate) mod rewind;

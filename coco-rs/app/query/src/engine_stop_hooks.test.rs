@@ -4,11 +4,8 @@
 //! "4 项 HIGH bug 修复并有 regression test：C3 + C15 + N1 + N2".
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 
 use coco_hooks::HookRegistry;
-use coco_hooks::orchestration;
 use coco_inference::AISdkError;
 use coco_inference::LanguageModel;
 use coco_inference::LanguageModelCallOptions;
@@ -21,21 +18,14 @@ use coco_llm_types::TextPart;
 use coco_llm_types::Usage;
 use coco_messages::MessageHistory;
 use coco_messages::create_user_message;
-use coco_session::TranscriptIo;
 use coco_tool_runtime::ToolRegistry;
-use coco_types::ActiveGoal;
-use coco_types::ToolAppState;
 use coco_types::messages::ApiError;
 use coco_types::messages::AssistantMessage;
-use coco_types::messages::AttachmentBody;
 use coco_types::messages::Message;
-use coco_types::messages::SilentPayload;
-use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::StopHookDecision;
-use super::is_goal_prompt_hook;
 use super::last_assistant_api_error_payload;
 use crate::config::ContinueReason;
 use crate::config::QueryEngineConfig;
@@ -139,330 +129,12 @@ fn engine_with_hooks(hooks: Option<Arc<HookRegistry>>) -> QueryEngine {
     )
 }
 
-struct StaticTaskHandle {
-    tasks: Vec<coco_types::TaskStateBase>,
-}
-
-#[async_trait::async_trait]
-impl coco_tool_runtime::TaskHandle for StaticTaskHandle {
-    async fn list_tasks(&self) -> Vec<coco_types::TaskStateBase> {
-        self.tasks.clone()
-    }
-}
-
-fn running_task() -> coco_types::TaskStateBase {
-    coco_types::TaskStateBase {
-        id: "task-1".to_string(),
-        status: coco_types::TaskStatus::Running,
-        notified: false,
-        description: "background check".to_string(),
-        tool_use_id: None,
-        start_time: 0,
-        end_time: None,
-        killed_by: None,
-        total_paused_ms: None,
-        output_file: None,
-        output_offset: 0,
-        extras: coco_types::TaskExtras::shell_default(),
-    }
-}
-
-fn goal_hook(condition: &str) -> coco_hooks::HookDefinition {
-    coco_hooks::HookDefinition {
-        event: coco_types::HookEventType::Stop,
-        matcher: None,
-        handler: coco_hooks::HookHandler::Prompt {
-            prompt: condition.to_string(),
-            model: None,
-            timeout_ms: None,
-        },
-        priority: 0,
-        scope: coco_types::HookScope::Session,
-        if_condition: None,
-        once: false,
-        is_async: false,
-        async_rewake: false,
-        status_message: None,
-        managed_by: Some(coco_hooks::ManagedHookKind::Goal),
-    }
-}
-
-fn active_goal(condition: &str) -> ActiveGoal {
-    ActiveGoal {
-        condition: condition.to_string(),
-        iterations: 2,
-        set_at_ms: 1,
-        tokens_at_start: 0,
-        last_reason: Some("previously blocked".to_string()),
-    }
-}
-
-fn goal_statuses(history: &MessageHistory) -> Vec<coco_types::GoalStatusPayload> {
-    history
-        .as_slice()
-        .iter()
-        .filter_map(|message| {
-            let Message::Attachment(attachment) = message.as_ref() else {
-                return None;
-            };
-            let AttachmentBody::Silent(SilentPayload::GoalStatus(payload)) = &attachment.body
-            else {
-                return None;
-            };
-            Some(payload.clone())
-        })
-        .collect()
-}
-
 fn loop_turn_state() -> LoopTurnState {
     LoopTurnState::new(
         /*max_tokens*/ None,
         /*max_turns*/ Some(100),
         /*max_continuations*/ 3,
     )
-}
-
-#[test]
-fn goal_prompt_hook_matcher_requires_managed_session_stop_prompt() {
-    let hook = goal_hook("finish migration");
-    assert!(is_goal_prompt_hook(&hook, "finish migration"));
-    assert!(!is_goal_prompt_hook(&hook, "other goal"));
-
-    let mut unmanaged = hook.clone();
-    unmanaged.managed_by = None;
-    assert!(!is_goal_prompt_hook(&unmanaged, "finish migration"));
-
-    let mut matched = hook;
-    matched.matcher = Some("*".to_string());
-    assert!(!is_goal_prompt_hook(&matched, "finish migration"));
-}
-
-#[tokio::test]
-async fn goal_terminal_success_clears_active_goal_hook_and_records_status() {
-    let hooks = Arc::new(HookRegistry::new());
-    hooks.register(goal_hook("finish migration"));
-    let mut engine = engine_with_hooks(Some(hooks.clone()));
-    let store = Arc::new(coco_session::InMemoryStore::new());
-    engine.transcript_store = Some(store.clone());
-    engine.transcript_session_id =
-        Some(coco_types::SessionId::try_new("goal-success-session").unwrap());
-    let terminal_goal_metadata_written = Arc::new(AtomicBool::new(false));
-    engine.terminal_goal_metadata_written = Some(terminal_goal_metadata_written.clone());
-    let app_state = Arc::new(RwLock::new(ToolAppState {
-        active_goal: Some(active_goal("finish migration")),
-        ..ToolAppState::default()
-    }));
-    engine.app_state = Some(app_state.clone());
-    let mut history = MessageHistory::new();
-
-    engine
-        .handle_active_goal_terminal_result(
-            &orchestration::AggregatedHookResult {
-                llm_successes: vec![orchestration::LlmHookSuccess {
-                    source: orchestration::HookBlockingSource::Prompt {
-                        prompt: "finish migration".to_string(),
-                    },
-                    reason: Some("all checks passed".to_string()),
-                }],
-                ..Default::default()
-            },
-            &mut history,
-            &None,
-        )
-        .await;
-
-    assert!(app_state.read().await.active_goal.is_none());
-    assert!(
-        hooks
-            .find_matching(coco_types::HookEventType::Stop, None)
-            .is_empty(),
-        "terminal success must remove the managed goal hook"
-    );
-    let statuses = goal_statuses(&history);
-    assert_eq!(statuses.len(), 1);
-    assert!(statuses[0].met);
-    assert!(!statuses[0].failed);
-    assert!(!statuses[0].sentinel);
-    assert_eq!(statuses[0].condition, "finish migration");
-    assert_eq!(statuses[0].reason.as_deref(), Some("all checks passed"));
-    assert_eq!(statuses[0].iterations, Some(3));
-    let metadata = store.read_metadata("goal-success-session").unwrap();
-    let goal = metadata
-        .goal
-        .expect("success stores terminal goal metadata");
-    assert!(goal.met);
-    assert_eq!(goal.condition, "finish migration");
-    assert_eq!(goal.iterations, 3);
-    assert_eq!(goal.last_reason, None);
-    assert!(terminal_goal_metadata_written.load(Ordering::SeqCst));
-
-    engine.persist_goal_metadata(None).await;
-    assert!(!terminal_goal_metadata_written.load(Ordering::SeqCst));
-}
-
-#[tokio::test]
-async fn goal_terminal_impossible_clears_goal_and_records_failed_status() {
-    let hooks = Arc::new(HookRegistry::new());
-    hooks.register(goal_hook("finish migration"));
-    let mut engine = engine_with_hooks(Some(hooks.clone()));
-    let store = Arc::new(coco_session::InMemoryStore::new());
-    engine.transcript_store = Some(store.clone());
-    engine.transcript_session_id =
-        Some(coco_types::SessionId::try_new("goal-impossible-session").unwrap());
-    let app_state = Arc::new(RwLock::new(ToolAppState {
-        active_goal: Some(active_goal("finish migration")),
-        ..ToolAppState::default()
-    }));
-    engine.app_state = Some(app_state.clone());
-    let mut history = MessageHistory::new();
-
-    engine
-        .handle_active_goal_terminal_result(
-            &orchestration::AggregatedHookResult {
-                llm_impossibles: vec![orchestration::LlmHookImpossible {
-                    source: orchestration::HookBlockingSource::Prompt {
-                        prompt: "finish migration".to_string(),
-                    },
-                    reason: "remote branch was deleted".to_string(),
-                }],
-                ..Default::default()
-            },
-            &mut history,
-            &None,
-        )
-        .await;
-
-    assert!(app_state.read().await.active_goal.is_none());
-    assert!(
-        hooks
-            .find_matching(coco_types::HookEventType::Stop, None)
-            .is_empty(),
-        "terminal impossible verdict must remove the managed goal hook"
-    );
-    let statuses = goal_statuses(&history);
-    assert_eq!(statuses.len(), 1);
-    assert!(!statuses[0].met);
-    assert!(statuses[0].failed);
-    assert!(!statuses[0].sentinel);
-    assert_eq!(statuses[0].condition, "finish migration");
-    assert_eq!(
-        statuses[0].reason.as_deref(),
-        Some("remote branch was deleted")
-    );
-    assert_eq!(statuses[0].iterations, Some(3));
-    assert_eq!(
-        store.read_metadata("goal-impossible-session").unwrap().goal,
-        None
-    );
-}
-
-#[tokio::test]
-async fn goal_blocked_updates_active_goal_and_records_unmet_status() {
-    let mut engine = engine_with_hooks(Some(Arc::new(HookRegistry::new())));
-    let store = Arc::new(coco_session::InMemoryStore::new());
-    engine.transcript_store = Some(store.clone());
-    engine.transcript_session_id =
-        Some(coco_types::SessionId::try_new("goal-blocked-session").unwrap());
-    let app_state = Arc::new(RwLock::new(ToolAppState {
-        active_goal: Some(ActiveGoal {
-            condition: "finish migration".to_string(),
-            iterations: 0,
-            set_at_ms: 1,
-            tokens_at_start: 0,
-            last_reason: None,
-        }),
-        ..ToolAppState::default()
-    }));
-    engine.app_state = Some(app_state.clone());
-    let mut history = MessageHistory::new();
-
-    engine
-        .record_active_goal_blocked(
-            &mut history,
-            &None,
-            &orchestration::HookBlockingError {
-                blocking_error: "tests are still failing".to_string(),
-                source: orchestration::HookBlockingSource::Prompt {
-                    prompt: "finish migration".to_string(),
-                },
-            },
-        )
-        .await;
-
-    let active = app_state
-        .read()
-        .await
-        .active_goal
-        .clone()
-        .expect("goal stays active");
-    assert_eq!(active.iterations, 1);
-    assert_eq!(
-        active.last_reason.as_deref(),
-        Some("tests are still failing")
-    );
-    let statuses = goal_statuses(&history);
-    assert_eq!(statuses.len(), 1);
-    assert!(!statuses[0].met);
-    assert!(!statuses[0].failed);
-    assert!(!statuses[0].sentinel);
-    assert_eq!(statuses[0].condition, "finish migration");
-    assert_eq!(
-        statuses[0].reason.as_deref(),
-        Some("tests are still failing")
-    );
-    let metadata = store.read_metadata("goal-blocked-session").unwrap();
-    let goal = metadata.goal.expect("blocked stores active goal metadata");
-    assert!(!goal.met);
-    assert_eq!(goal.condition, "finish migration");
-    assert_eq!(goal.iterations, 1);
-    assert_eq!(goal.last_reason.as_deref(), Some("tests are still failing"));
-}
-
-#[tokio::test]
-async fn goal_stop_hook_evaluation_is_deferred_while_background_tasks_run() {
-    let hooks = Arc::new(HookRegistry::new());
-    hooks.register(goal_hook("finish migration"));
-    let mut engine = engine_with_hooks(Some(hooks.clone()));
-    engine.task_handle = Some(Arc::new(StaticTaskHandle {
-        tasks: vec![running_task()],
-    }));
-    let app_state = Arc::new(RwLock::new(ToolAppState {
-        active_goal: Some(active_goal("finish migration")),
-        ..ToolAppState::default()
-    }));
-    engine.app_state = Some(app_state.clone());
-    let mut history = history_from(vec![user_message("prompt"), assistant_clean()]);
-    let mut turn_state = loop_turn_state();
-
-    let decision = engine
-        .run_stop_hooks(
-            &mut history,
-            /*event_tx*/ &None,
-            /*hook_tx_opt*/ None,
-            &mut turn_state,
-            /*response_text*/ "done for now",
-        )
-        .await;
-
-    assert!(matches!(decision, StopHookDecision::Continue));
-    let active = app_state
-        .read()
-        .await
-        .active_goal
-        .clone()
-        .expect("goal stays active while background task runs");
-    assert_eq!(active.iterations, 2);
-    assert_eq!(active.last_reason.as_deref(), Some("previously blocked"));
-    assert!(
-        !hooks
-            .find_matching(coco_types::HookEventType::Stop, None)
-            .is_empty(),
-        "deferred goal hook must be restored after this Stop pass"
-    );
-    assert!(
-        goal_statuses(&history).is_empty(),
-        "deferred goal evaluation must not record unmet/met status"
-    );
 }
 
 /// C3 finding: when the last assistant message carries an `api_error`

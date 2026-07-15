@@ -2713,7 +2713,6 @@ async fn test_subagent_start_hook_injects_additional_context() {
         is_async: false,
         async_rewake: false,
         status_message: None,
-        managed_by: None,
     };
     registry.register_deduped(hook);
 

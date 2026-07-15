@@ -2,7 +2,7 @@ use coco_types::ClientRequest;
 
 use crate::app_server_host::{HandlerContext, HandlerResult};
 
-use super::request_handlers::{config, mcp, rewind, runtime, session, turn};
+use super::request_handlers::{config, goal, mcp, rewind, runtime, session, turn};
 
 /// Route a `ClientRequest` to its handler and return the result.
 /// The dispatch is exhaustive — adding a new variant to `ClientRequest`
@@ -48,6 +48,15 @@ pub async fn dispatch_client_request(req: ClientRequest, ctx: HandlerContext) ->
         }
         ClientRequest::SessionCost(_) => runtime::handle_session_cost(&ctx).await,
         ClientRequest::SessionStatus(_) => runtime::handle_session_status(&ctx).await,
+
+        // === Goal control plane ===
+        ClientRequest::SessionGoalCreate(params) => goal::handle_goal_create(params, &ctx).await,
+        ClientRequest::SessionGoalGet(_) => goal::handle_goal_get(&ctx).await,
+        ClientRequest::SessionGoalEdit(params) => goal::handle_goal_edit(params, &ctx).await,
+        ClientRequest::SessionGoalSetStatus(params) => {
+            goal::handle_goal_set_status(params, &ctx).await
+        }
+        ClientRequest::SessionGoalClear(_) => goal::handle_goal_clear(&ctx).await,
 
         // === Turn control ===
         ClientRequest::TurnStart(params) => turn::handle_turn_start(params, &ctx).await,

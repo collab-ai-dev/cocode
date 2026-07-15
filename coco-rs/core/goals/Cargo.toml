@@ -1,0 +1,20 @@
+[package]
+name = "coco-goals"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+coco-types.workspace = true
+coco-utils-string.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+strum = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+serde_json.workspace = true

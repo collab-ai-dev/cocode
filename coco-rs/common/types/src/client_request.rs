@@ -15,9 +15,10 @@ use std::{
 };
 
 use crate::{
-    AgentColorName, HookEventType, ModelRole, PermissionMode, PermissionUpdate,
-    ProviderModelSelection, QueuedCommandEditImage, ReasoningEffort, SessionId,
-    SessionUsageSnapshot, SurfaceId, TaskStateBase, ThinkingLevel, wire_tagged::wire_tagged_enum,
+    AgentColorName, GoalCreateParams, GoalEditParams, GoalSetStatusParams, HookEventType,
+    ModelRole, PermissionMode, PermissionUpdate, ProviderModelSelection, QueuedCommandEditImage,
+    ReasoningEffort, SessionId, SessionUsageSnapshot, SurfaceId, TaskStateBase, ThinkingLevel,
+    wire_tagged::wire_tagged_enum,
 };
 
 wire_tagged_enum! {
@@ -51,6 +52,13 @@ gap additions.",
         "session/toggleTag" => SessionToggleTag(SessionToggleTagParams),
         "session/cost" => SessionCost(SessionTarget),
         "session/status" => SessionStatus(SessionTarget),
+
+        // === Goal control plane (5) — design §8.1 ===
+        "session/goal/create" => SessionGoalCreate(GoalCreateParams),
+        "session/goal/get" => SessionGoalGet(SessionTarget),
+        "session/goal/edit" => SessionGoalEdit(GoalEditParams),
+        "session/goal/setStatus" => SessionGoalSetStatus(GoalSetStatusParams),
+        "session/goal/clear" => SessionGoalClear(SessionTarget),
 
         // === Turn control (2) ===
         "turn/start" => TurnStart(TurnStartParams),
@@ -174,6 +182,11 @@ pub const fn request_scope(method: ClientRequestMethod) -> RequestScope {
         | ClientRequestMethod::SessionToggleTag
         | ClientRequestMethod::SessionCost
         | ClientRequestMethod::SessionStatus
+        | ClientRequestMethod::SessionGoalCreate
+        | ClientRequestMethod::SessionGoalGet
+        | ClientRequestMethod::SessionGoalEdit
+        | ClientRequestMethod::SessionGoalSetStatus
+        | ClientRequestMethod::SessionGoalClear
         | ClientRequestMethod::TaskList
         | ClientRequestMethod::TaskDetail
         | ClientRequestMethod::McpStatus
@@ -254,6 +267,11 @@ impl ClientRequest {
             | Self::SessionToggleTag(_)
             | Self::SessionCost(_)
             | Self::SessionStatus(_)
+            | Self::SessionGoalCreate(_)
+            | Self::SessionGoalGet(_)
+            | Self::SessionGoalEdit(_)
+            | Self::SessionGoalSetStatus(_)
+            | Self::SessionGoalClear(_)
             | Self::TaskList(_)
             | Self::TaskDetail(_)
             | Self::KeepAlive
@@ -279,9 +297,14 @@ impl ClientRequest {
             Self::SessionToggleTag(params) => Some(&params.target),
             Self::SessionCost(target)
             | Self::SessionStatus(target)
+            | Self::SessionGoalGet(target)
+            | Self::SessionGoalClear(target)
             | Self::TaskList(target)
             | Self::McpStatus(target)
             | Self::ContextUsage(target) => Some(target),
+            Self::SessionGoalCreate(params) => Some(&params.target),
+            Self::SessionGoalEdit(params) => Some(&params.target),
+            Self::SessionGoalSetStatus(params) => Some(&params.target),
             Self::TaskDetail(params) => Some(&params.target),
             Self::ConfigRead(ConfigReadParams {
                 target: ConfigReadTarget::Session(target),
@@ -773,6 +796,13 @@ pub struct TurnStartParams {
     /// Optional turn-scoped thinking override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_level: Option<ThinkingLevel>,
+    /// Host-internal marker: this is a `GoalSupervisor`-driven autonomous goal
+    /// continuation turn (§10.3), not a client-initiated turn. Runs promptless
+    /// (the materialized goal context drives it) and builds its engine so the
+    /// supervisor owns after-turn finalization. `#[serde(skip)]` keeps it off the
+    /// wire — a remote client can never initiate autonomous goal work.
+    #[serde(skip)]
+    pub goal_continuation: bool,
 }
 
 /// The SDK is *resolving* a pending approval request, sent client→server.
