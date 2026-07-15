@@ -91,6 +91,7 @@ pub(crate) async fn handle_turn_start(
                 notif_tx,
                 session_for_start.clone(),
                 start.session_id.clone(),
+                start.turn_id.clone(),
             ));
 
             // Spawn the turn as a detached task so `turn/start` returns the
@@ -101,7 +102,6 @@ pub(crate) async fn handle_turn_start(
             let turn_id_for_task = start.turn_id.clone();
             let session_for_task = session_for_start.clone();
             let app_server_for_task = Arc::clone(&app_server);
-            let inner_tx_for_error = inner_tx.clone();
             let cancel_token_for_task = start.cancel_token.clone();
             let turn_handle = tokio::spawn(async move {
                 let run_result = runner
@@ -115,26 +115,18 @@ pub(crate) async fn handle_turn_start(
                     )
                     .await;
                 if let Err(e) = run_result {
+                    // The executor (`SessionTurnExecutor`) owns the single
+                    // terminal `TurnEnded` on every exit path, including this
+                    // error path. Do not synthesize a second terminal here: that
+                    // produced a duplicate Interrupted-then-Failed pair on a
+                    // cancelled+errored turn and dropped the engine's real usage
+                    // and typed error code. Just record the failure.
                     warn!(
                         session_id = %turn_session_id_for_error,
                         turn_id = %turn_id_for_task,
                         error = %e,
                         "turn runner failed"
                     );
-                    let _ = inner_tx_for_error
-                        .send(CoreEvent::Protocol(
-                            coco_types::ServerNotification::TurnEnded(
-                                coco_types::TurnEndedParams::failed(
-                                    turn_id_for_task.clone(),
-                                    /*usage*/ None,
-                                    coco_types::ErrorPayload {
-                                        message: e.to_string(),
-                                        code: coco_types::ErrorCode::Unknown,
-                                    },
-                                ),
-                            ),
-                        ))
-                        .await;
                 }
             });
             ActiveTurnHandles {

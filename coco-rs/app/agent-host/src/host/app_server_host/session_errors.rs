@@ -175,6 +175,10 @@ pub(crate) fn attach_lifecycle_error_parts(
             LifecycleErrorKind::InvalidRequest,
             serde_json::json!({ "kind": "target_session_not_live", "session_id": session_id, "state": "closing" }),
         ),
+        coco_app_server::AttachError::SessionNotFound { session_id, .. } => (
+            LifecycleErrorKind::InvalidRequest,
+            serde_json::json!({ "kind": "target_session_not_live", "session_id": session_id, "state": "missing" }),
+        ),
     };
     lifecycle_error(kind, message, Some(data))
 }

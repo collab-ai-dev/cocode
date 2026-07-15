@@ -1301,16 +1301,27 @@ impl RemoteJsonRpcIncoming {
                 let Some(event) = remote_event_from_notification(notification) else {
                     return Ok(());
                 };
-                self.events
-                    .send(event)
-                    .await
-                    .map_err(|_| ClientError::Disconnected)
+                self.deliver_event(event)
             }
-            JsonRpcFrame::Request(request) => self
-                .events
-                .send(RemoteJsonRpcEvent::ServerRequest(request))
-                .await
-                .map_err(|_| ClientError::Disconnected),
+            JsonRpcFrame::Request(request) => {
+                self.deliver_event(RemoteJsonRpcEvent::ServerRequest(request))
+            }
+        }
+    }
+
+    /// Deliver an inbound event to the mixed event channel without blocking the
+    /// owner loop. A full channel means the caller is not draining the demux;
+    /// blocking here would deadlock the loop (the awaited response frame would
+    /// never be read, so a `request()` with no timeout hangs forever). Instead
+    /// this reports `SlowConsumer`, which the owner loop routes through the
+    /// guaranteed-disconnect path — resolving every pending RPC with
+    /// `Disconnected` so no caller hangs.
+    fn deliver_event(&self, event: RemoteJsonRpcEvent) -> Result<(), ClientError> {
+        use tokio::sync::mpsc::error::TrySendError;
+        match self.events.try_send(event) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => Err(ClientError::SlowConsumer),
+            Err(TrySendError::Closed(_)) => Err(ClientError::Disconnected),
         }
     }
 
@@ -1319,7 +1330,12 @@ impl RemoteJsonRpcIncoming {
             return;
         }
         self.drain_pending_disconnected();
-        let _ = self.events.send(RemoteJsonRpcEvent::Disconnected).await;
+        // Use `try_send`, not `send().await`: the disconnect may itself be
+        // triggered by a full events channel (SlowConsumer), and blocking here
+        // would re-introduce the deadlock. Pending RPCs are already resolved
+        // above, so dropping the terminal event when the consumer is not
+        // draining is safe.
+        let _ = self.events.try_send(RemoteJsonRpcEvent::Disconnected);
     }
 
     /// Resolve every in-flight RPC with `Disconnected`. Callers must have already
@@ -1408,6 +1424,8 @@ pub enum ClientError {
     Connect(String),
     #[error("transport disconnected")]
     Disconnected,
+    #[error("local event consumer is not draining (slow consumer)")]
+    SlowConsumer,
     #[error("client invalid (reconnect and resume)")]
     ClientInvalid,
     #[error("invalid request: {message}")]

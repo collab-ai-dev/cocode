@@ -86,6 +86,16 @@ impl SessionHandle {
         self.runtime.turn_coordinator.start(&self.session_id, build)
     }
 
+    /// Tombstone the turn coordinator so no turn can be admitted after the close
+    /// cascade drains the active turn (closes the validation->execution race).
+    /// Cancels a turn admitted in the drain->close window so it cannot run
+    /// detached against the closing session.
+    pub(crate) fn close_turn_coordinator(&self) {
+        if let Some(cancel) = self.runtime.turn_coordinator.close() {
+            cancel.cancel();
+        }
+    }
+
     pub(crate) fn next_turn_id(&self) -> coco_types::TurnId {
         self.runtime.turn_coordinator.next_turn_id(&self.session_id)
     }
@@ -195,6 +205,9 @@ impl SessionHandle {
         }
 
         let drain_result = self.drain_active_turn(turn_drain_timeout).await;
+        // Tombstone the coordinator so a turn/start that resolved its target
+        // before this close cannot admit a new turn against the draining session.
+        self.close_turn_coordinator();
         self.stop_reload_supervisor().await;
         self.runtime.fire_session_end_hooks(reason).await;
         self.runtime.shutdown_signal().cancel();

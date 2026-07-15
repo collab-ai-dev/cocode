@@ -8,7 +8,7 @@ use coco_types::{CoreEvent, SessionEnvelope, SessionId, SurfaceId};
 
 use crate::app_session::AppSessionHandle;
 
-use super::session_errors::{LifecycleError, attach_lifecycle_error_parts, local_lifecycle_error};
+use super::session_errors::{LifecycleError, attach_lifecycle_error_parts};
 
 pub(crate) fn attach_local_app_server_surface(
     app_server: &Arc<AppServer<AppSessionHandle>>,
@@ -21,7 +21,7 @@ pub(crate) fn attach_local_app_server_surface(
         ..Default::default()
     };
     app_server
-        .attach_surface_with_options(connection, surface_id.clone(), session_id, options)
+        .attach_live_surface_with_options(connection, surface_id.clone(), session_id, options)
         .map_err(|error| attach_lifecycle_error_parts("attach session surface", error))?;
     Ok(surface_id)
 }
@@ -37,15 +37,16 @@ pub(crate) async fn subscribe_local_app_server_session(
         ..Default::default()
     };
     match app_server
-        .subscribe_surface_with_options(
+        .subscribe_live_surface_with_options(
             connection,
             surface_id.clone(),
             params.target.session_id.clone(),
             params.after_seq,
             options,
         )
-        .map_err(|error| local_lifecycle_error("subscribe session", error))?
-    {
+        .map_err(|error| {
+            attach_lifecycle_error_parts("subscribe session", error).into_dispatch_error()
+        })? {
         SubscribeReplay::Replayed(replayed) => {
             let replayed = replayed
                 .into_iter()

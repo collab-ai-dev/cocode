@@ -156,6 +156,14 @@ where
         }
     }
 
+    /// Read one NDJSON-framed JSON-RPC record.
+    ///
+    /// Any `Err` is terminal for this reader: on `FrameTooLarge` the offending
+    /// bytes are left unconsumed in the underlying reader and the partial buffer
+    /// is retained, so a caller that retried `read_frame` would spin on the same
+    /// error forever with no way to resync to the next record. Every production
+    /// caller treats a read error as fatal and drops the connection; do not
+    /// retry after an error.
     pub async fn read_frame(&mut self) -> Result<Option<JsonRpcFrame>, TransportFrameError> {
         loop {
             let (consumed, complete_record) = {
@@ -267,11 +275,20 @@ where
             return Err(TransportFrameError::Closed);
         }
 
-        let frame = self.reader.read_frame().await?;
-        if frame.is_none() {
-            self.open = false;
+        match self.reader.read_frame().await {
+            Ok(None) => {
+                self.open = false;
+                Ok(None)
+            }
+            Ok(frame) => Ok(frame),
+            Err(error) => {
+                // A read error leaves the underlying reader positioned at the
+                // failing record (see `NdjsonFrameReader::read_frame`); mark the
+                // connection closed so it cannot be retried into that trap.
+                self.open = false;
+                Err(error)
+            }
         }
-        Ok(frame)
     }
 
     pub async fn send_frame(&mut self, frame: &JsonRpcFrame) -> Result<(), TransportFrameError> {

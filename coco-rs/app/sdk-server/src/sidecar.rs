@@ -90,11 +90,21 @@ impl SdkSidecarListeners {
     }
 
     pub async fn shutdown(self, shutdown_timeout: Duration) {
-        #[cfg(unix)]
-        shutdown_sdk_unix_listener(self.unix, shutdown_timeout).await;
-        shutdown_sdk_websocket_listener(self.websocket, shutdown_timeout).await;
-        #[cfg(windows)]
-        shutdown_sdk_named_pipe_listener(self.named_pipe, shutdown_timeout).await;
+        // Shut every listener down concurrently so two attached listeners cannot
+        // cost 2x the timeout. Each listener supervisor aborts its accepted
+        // connection owners on the shutdown signal, so these joins return
+        // promptly rather than waiting connected clients out.
+        tokio::join!(
+            async {
+                #[cfg(unix)]
+                shutdown_sdk_unix_listener(self.unix, shutdown_timeout).await;
+            },
+            shutdown_sdk_websocket_listener(self.websocket, shutdown_timeout),
+            async {
+                #[cfg(windows)]
+                shutdown_sdk_named_pipe_listener(self.named_pipe, shutdown_timeout).await;
+            },
+        );
     }
 }
 

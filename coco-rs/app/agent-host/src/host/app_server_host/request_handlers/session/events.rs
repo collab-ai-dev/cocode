@@ -25,6 +25,7 @@ pub(in crate::host::app_server_host::request_handlers) async fn forward_turn_eve
     tx: mpsc::Sender<OutboundMessage>,
     session: crate::session_runtime::SessionHandle,
     owner_session_id: coco_types::SessionId,
+    turn_id: coco_types::TurnId,
 ) {
     use coco_types::ServerNotification;
     // Clear the active-turn slot on the FIRST terminal `TurnEnded` only, so a
@@ -61,6 +62,18 @@ pub(in crate::host::app_server_host::request_handlers) async fn forward_turn_eve
                 // Swallow: SessionStarted is owned by the remote client server, not the engine.
             }
             CoreEvent::Protocol(ServerNotification::TurnEnded(ended)) => {
+                if turn_slot_cleared {
+                    // A terminal was already forwarded for this turn. A second
+                    // terminal is a bug (the executor owns exactly one); drop it
+                    // without touching the coordinator slot — a fast next turn
+                    // may already own it — so it cannot demote that turn to
+                    // Finishing or reach the wire/ring twice.
+                    tracing::warn!(
+                        session_id = %owner_session_id,
+                        "dropping duplicate terminal TurnEnded for turn"
+                    );
+                    continue;
+                }
                 session.mark_active_turn_finishing();
                 if let Some(result) = last_session_result.clone() {
                     if !forward_terminal_event(
@@ -124,11 +137,33 @@ pub(in crate::host::app_server_host::request_handlers) async fn forward_turn_eve
         .await;
     }
     if !turn_slot_cleared {
-        // Returning from TurnRunner closes this channel and is also a clean
-        // completion signal. A custom runner that omits TurnEnded must not
-        // permanently occupy the session's active-turn slot.
+        // The runner's channel closed without any terminal being forwarded. The
+        // executor owns a terminal on every real path, so this is a defensive
+        // backstop for a custom runner: synthesize one so a waiter
+        // (`start_turn_and_wait_for_end`, the TUI completion monitor, an SDK
+        // stream consumer) sees a complete cycle instead of hanging, then free
+        // the slot. `forward_terminal_event` clears the slot as it forwards.
+        tracing::warn!(
+            session_id = %owner_session_id,
+            %turn_id,
+            "turn runner exited without a terminal; synthesizing a failed TurnEnded"
+        );
         session.mark_active_turn_finishing();
-        session.complete_finishing_active_turn();
+        let _ = forward_terminal_event(
+            &tx,
+            &owner_session_id,
+            coco_types::TurnEndedParams::failed(
+                turn_id,
+                /*usage*/ None,
+                coco_types::ErrorPayload {
+                    message: "turn runner exited without a terminal".to_string(),
+                    code: coco_types::ErrorCode::Unknown,
+                },
+            ),
+            &session,
+            &mut turn_slot_cleared,
+        )
+        .await;
     }
 }
 
@@ -139,15 +174,24 @@ async fn forward_terminal_event(
     session: &crate::session_runtime::SessionHandle,
     turn_slot_cleared: &mut bool,
 ) -> bool {
+    // Belt against a duplicate terminal reaching the wire/ring. The active-turn
+    // slot is cleared exactly once, on the first terminal; a second terminal is
+    // dropped-with-warn rather than forwarded (it would otherwise be delivered
+    // to passive/replay/Hub consumers as a contradictory outcome).
+    if *turn_slot_cleared {
+        tracing::warn!(
+            session_id = %owner_session_id,
+            "dropping duplicate terminal TurnEnded before forward"
+        );
+        return true;
+    }
     // Free the per-session turn slot BEFORE forwarding the terminal
     // `TurnEnded`, so the client's next `turn/start` (sent the instant it sees
     // `TurnEnded`) finds the slot free instead of racing the turn task's own
     // clear and hitting `TurnAlreadyRunning`. This is now the sole clear site
     // for the active-turn record; the turn/compact tasks no longer clear it.
-    if !*turn_slot_cleared {
-        session.complete_finishing_active_turn();
-        *turn_slot_cleared = true;
-    }
+    session.complete_finishing_active_turn();
+    *turn_slot_cleared = true;
     send_session_event(
         tx,
         owner_session_id.clone(),

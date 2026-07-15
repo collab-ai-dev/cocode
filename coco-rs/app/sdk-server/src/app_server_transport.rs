@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use coco_app_server::{
     DisconnectOutcome, JsonRpcAdapterConnection, JsonRpcAdapterError, JsonRpcRequestHandler,
@@ -7,6 +8,7 @@ use coco_app_server_transport::JsonRpcFrame;
 use coco_error::StackError;
 use coco_types::CoreEvent;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 use coco_agent_host::remote_host::{
     RemoteAppServerBridgeHost, RemoteJsonRpcConnection, RemoteOutboundMessage,
@@ -26,6 +28,7 @@ pub async fn run_app_server_connection_over_sdk_transport_with_external_notifica
     external_notifications: Vec<mpsc::Receiver<CoreEvent>>,
 ) -> Result<DisconnectOutcome, RemoteAppServerBridgeError> {
     let app_server = connection.app_server();
+    let drain_timeout = bridge_host.turn_drain_timeout();
     let binding = bridge_host.open_connection_binding(
         Arc::clone(&app_server),
         connection.connection_key(),
@@ -44,6 +47,7 @@ pub async fn run_app_server_connection_over_sdk_transport_with_external_notifica
         transport,
         binding.handler,
         Some(binding.outbound_tx.clone()),
+        drain_timeout,
     )
     .await;
 
@@ -52,10 +56,41 @@ pub async fn run_app_server_connection_over_sdk_transport_with_external_notifica
         let _ = forwarder.await;
     }
     drop(binding.outbound_tx);
-    writer_task
-        .await
-        .map_err(RemoteAppServerBridgeError::join)?;
+    // Bound the outbound-writer join. The writer stays alive while a detached
+    // turn forwarder holds a clone of the outbound sender (until the turn's
+    // terminal event), so on stdin EOF an unbounded join here would block the
+    // whole shutdown sequence — including the host drain that would cancel the
+    // turn — for the full turn duration (or forever if it hangs). The peer is
+    // already gone, so wait at most the drain budget, then abort.
+    join_writer_bounded_unit(writer_task, drain_timeout).await;
     result
+}
+
+/// Bound a `JoinHandle<()>` writer join, aborting on timeout. Used on shutdown
+/// paths where the writer may be held alive by a detached turn forwarder.
+async fn join_writer_bounded_unit(mut writer_task: JoinHandle<()>, timeout: Duration) {
+    if tokio::time::timeout(timeout, &mut writer_task)
+        .await
+        .is_err()
+    {
+        writer_task.abort();
+        let _ = writer_task.await;
+    }
+}
+
+/// Bound a `JoinHandle<Result<(), _>>` writer join, aborting on timeout.
+async fn join_writer_bounded_result(
+    mut writer_task: JoinHandle<Result<(), RemoteAppServerBridgeError>>,
+    timeout: Duration,
+) -> Result<(), RemoteAppServerBridgeError> {
+    match tokio::time::timeout(timeout, &mut writer_task).await {
+        Ok(joined) => joined.map_err(RemoteAppServerBridgeError::join)?,
+        Err(_) => {
+            writer_task.abort();
+            let _ = writer_task.await;
+            Ok(())
+        }
+    }
 }
 
 async fn drive_app_server_connection_over_sdk_transport<H, Handler>(
@@ -63,6 +98,7 @@ async fn drive_app_server_connection_over_sdk_transport<H, Handler>(
     transport: Arc<dyn SdkTransport>,
     handler: Arc<Handler>,
     outbound_messages: Option<mpsc::Sender<RemoteOutboundMessage>>,
+    drain_timeout: Duration,
 ) -> Result<DisconnectOutcome, RemoteAppServerBridgeError>
 where
     H: Clone + Send + Sync + 'static,
@@ -120,9 +156,10 @@ where
         reader_task.abort();
         let _ = reader_task.await;
     }
-    writer_task
-        .await
-        .map_err(RemoteAppServerBridgeError::join)??;
+    // Bound the frame-writer join too: a stuck stdout would otherwise leave the
+    // writer blocked on `send_frame` after the owner already returned
+    // `SlowConsumer`, hanging shutdown.
+    join_writer_bounded_result(writer_task, drain_timeout).await?;
     owner_result
 }
 
