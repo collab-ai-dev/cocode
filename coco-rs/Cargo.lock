@@ -1145,6 +1145,8 @@ dependencies = [
  "coco-file-watch",
  "coco-frontmatter",
  "coco-git",
+ "coco-goal-runtime",
+ "coco-goals",
  "coco-hooks",
  "coco-hub-connector",
  "coco-inference",
@@ -1692,6 +1694,34 @@ dependencies = [
  "ts-rs",
  "unicode-normalization",
  "walkdir",
+]
+
+[[package]]
+name = "coco-goal-runtime"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "coco-error",
+ "coco-goals",
+ "coco-types",
+ "pretty_assertions",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "coco-goals"
+version = "0.1.1"
+dependencies = [
+ "coco-types",
+ "coco-utils-string",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "strum",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2703,6 +2733,7 @@ dependencies = [
  "coco-cron",
  "coco-error",
  "coco-file-encoding",
+ "coco-goals",
  "coco-messages",
  "coco-sandbox",
  "coco-shell",
@@ -2744,6 +2775,7 @@ dependencies = [
  "coco-file-encoding",
  "coco-file-ignore",
  "coco-git",
+ "coco-goals",
  "coco-memory",
  "coco-messages",
  "coco-permissions",

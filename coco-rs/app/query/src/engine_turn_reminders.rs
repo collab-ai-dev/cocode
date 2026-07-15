@@ -528,6 +528,15 @@ impl QueryEngine {
         )
         .then(structured_output_enforcement_message);
 
+        // Mandatory per-turn goal-context reminder (§5.5): the session's
+        // `GoalHandle` re-materializes the objective / budget / progress body
+        // when a goal-owned turn is running, so compaction cannot erase the
+        // objective. `None` outside a goal turn.
+        let reminder_goal_context = match self.goal_handle.as_ref() {
+            Some(handle) => handle.goal_context_fragment().await,
+            None => None,
+        };
+
         let reminder_input = TurnReminderInput {
             config: reminder_orchestrator.config(),
             turn_number: reminder_human_turn_number,
@@ -562,6 +571,7 @@ impl QueryEngine {
             new_date: reminder_new_date,
             current_date: reminder_current_date,
             coordinator_worker_context: reminder_coordinator_context,
+            goal_context: reminder_goal_context,
             has_pending_plan_verification: app_state_snapshot
                 .pending_plan_verification
                 .as_ref()

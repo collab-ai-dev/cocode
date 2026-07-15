@@ -265,6 +265,9 @@ async fn handle_turn_start_goal_shortcut(
         crate::goal_command::GoalOutcome::Text(text) => {
             let shortcut_turn = mint_shortcut_turn(ctx).await?;
             append_slash_text_and_emit(&runtime_handle, &ctx.notif_tx, "goal", &args, &text).await;
+            // Pause/resume change goal state with no following turn to re-emit;
+            // refresh the snapshot event so surfaces track the new status.
+            emit_active_goal_snapshot(&runtime_handle, &ctx.notif_tx).await;
             emit_shortcut_turn_lifecycle(&shortcut_turn, &ctx.notif_tx, Some(text)).await;
             Ok(TurnStartGoalShortcut::Complete(HandlerResult::ok(
                 coco_types::TurnStartResult {
@@ -412,12 +415,12 @@ async fn emit_active_goal_snapshot(
     session: &crate::session_runtime::SessionHandle,
     notif_tx: &mpsc::Sender<OutboundMessage>,
 ) {
-    let goal = crate::goal_command::persist_active_goal_snapshot(session).await;
+    let snapshot = crate::goal_command::read_goal_snapshot_view(session).await;
     let _ = send_session_event(
         notif_tx,
         session.session_id().clone(),
-        CoreEvent::Protocol(crate::goal_command::active_goal_changed_notification(
-            goal.clone(),
+        CoreEvent::Protocol(crate::goal_command::goal_snapshot_changed_notification(
+            snapshot,
         )),
     )
     .await;

@@ -137,11 +137,6 @@ pub async fn hydrate_runtime_for_resume(
         .replace_history_with_arc_messages(messages.clone())
         .await;
     seed_resume_transcript_state(session, session_id, prior_messages).await;
-
-    if prior_messages.is_empty() {
-        return;
-    }
-    restore_goal_metadata_from_messages(session, &messages).await;
 }
 
 pub async fn seed_resume_transcript_state(
@@ -155,27 +150,6 @@ pub async fn seed_resume_transcript_state(
     session
         .seed_tool_result_replacement_state(prior_messages, session_id, None)
         .await;
-}
-
-pub async fn restore_goal_metadata_from_messages(
-    session: &SessionHandle,
-    messages: &[Arc<coco_messages::Message>],
-) -> Option<coco_types::ActiveGoal> {
-    restore_goal_metadata_from_messages_with_trust(session, messages, /*trust_rejected*/ false)
-        .await
-}
-
-pub async fn restore_goal_metadata_from_messages_with_trust(
-    session: &SessionHandle,
-    messages: &[Arc<coco_messages::Message>],
-    trust_rejected: bool,
-) -> Option<coco_types::ActiveGoal> {
-    if messages.is_empty() {
-        return None;
-    }
-    session
-        .restore_goal_from_history(messages, trust_rejected)
-        .await
 }
 
 /// Case-insensitive exact resolve of `/resume <name>` when the argument does

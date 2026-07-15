@@ -93,7 +93,6 @@ pub fn fold_transcript_metadata(entries: &[Entry], session_id: &SessionId) -> Tr
     let mut mode: Option<String> = None;
     let mut worktree_state: Option<serde_json::Value> = None;
     let mut pr_link: Option<serde_json::Value> = None;
-    let mut goal: Option<GoalMetadata> = None;
     let mut tag: Option<String> = None;
     let mut last_prompt: Option<String> = None;
     let mut git_branch: Option<String> = None;
@@ -195,12 +194,6 @@ pub fn fold_transcript_metadata(entries: &[Entry], session_id: &SessionId) -> Tr
                 {
                     pr_link = Some(payload.clone());
                 }
-                MetadataEntry::Goal {
-                    session_id: entry_session_id,
-                    goal: next_goal,
-                } if entry_session_id == session_id => {
-                    goal.clone_from(next_goal);
-                }
                 MetadataEntry::SessionSeqWatermark {
                     session_id: entry_session_id,
                     session_seq,
@@ -224,7 +217,8 @@ pub fn fold_transcript_metadata(entries: &[Entry], session_id: &SessionId) -> Tr
                 | MetadataEntry::PrLink { .. }
                 | MetadataEntry::WorktreeState { .. }
                 | MetadataEntry::Mode { .. }
-                | MetadataEntry::Goal { .. }
+                | MetadataEntry::GoalSnapshot { .. }
+                | MetadataEntry::GoalCleared { .. }
                 | MetadataEntry::SessionSeqWatermark { .. } => {}
             },
             Entry::Unknown(_) => {}
@@ -243,7 +237,6 @@ pub fn fold_transcript_metadata(entries: &[Entry], session_id: &SessionId) -> Tr
         mode,
         worktree_state,
         pr_link,
-        goal,
         tag,
         last_prompt,
         git_branch,

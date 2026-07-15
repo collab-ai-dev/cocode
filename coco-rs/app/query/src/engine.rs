@@ -30,7 +30,6 @@ use coco_llm_types::TextPart;
 use coco_llm_types::ToolCallPart;
 use coco_llm_types::ToolInputInvalidReason;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -170,6 +169,17 @@ pub struct QueryEngine {
     /// swarm runtime. Sessions that skip installation intentionally
     /// restrict Agent tools to model-visible errors.
     pub(crate) agent_handle: Option<coco_tool_runtime::AgentHandleRef>,
+    /// Optional goal-runtime handle. Goal sessions install a real handle
+    /// (bridging to the session's `GoalRuntimeHandle`) via `with_goal_handle`;
+    /// otherwise the goal tools resolve to `NoOpGoalHandle` and stay hidden.
+    pub(crate) goal_handle: Option<coco_tool_runtime::GoalHandleRef>,
+    /// When set, this turn is driven by the session's `GoalSupervisor`, which
+    /// owns after-turn finalization (coordinate + `FinishTurn`) and continuation
+    /// (§10.3). The engine therefore runs exactly one logical turn and skips its
+    /// own goal-finalize hook, so the supervisor's finalize is the sole one and
+    /// there is no double-drive. Default `false`: user-started goal turns still
+    /// finalize in-engine until the full cut-over.
+    pub(crate) goal_supervisor_owns_finalize: bool,
     /// Tool-result budget replacement state. Threaded through every
     /// per-turn `apply_tool_result_budget` call so seen_ids freeze
     /// across turns (a result, once seen, is never re-evaluated for
@@ -416,9 +426,6 @@ pub struct QueryEngine {
     /// does NOT re-persist the already-recorded messages — it appends only new
     /// turns. False on a fresh spawn (empty file → seed is a no-op).
     pub(crate) agent_transcript_seeded: std::sync::atomic::AtomicBool,
-    /// Shared runtime flag set after terminal `/goal` success metadata
-    /// is written and cleared at the next main-session turn start.
-    pub(crate) terminal_goal_metadata_written: Option<Arc<AtomicBool>>,
     /// Live message-history sink read by the periodic AgentSummary timer.
     /// Set on (background) sub-agent engines via `with_live_transcript`
     /// when the spawn enabled summarization; the engine publishes a
@@ -1039,6 +1046,7 @@ impl QueryEngine {
                             history,
                             &event_tx,
                             &mut acc.run_artifacts,
+                            self.goal_handle.as_ref(),
                         )
                         .await;
                     }
@@ -1073,6 +1081,7 @@ impl QueryEngine {
                         history,
                         &event_tx,
                         &mut acc.run_artifacts,
+                        self.goal_handle.as_ref(),
                     )
                     .await
                     .prevent_continuation;

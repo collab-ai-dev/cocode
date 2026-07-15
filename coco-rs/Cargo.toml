@@ -86,6 +86,8 @@ members = [
     "core/workflow-runtime",
     "core/system-reminder",
     "core/subagent",
+    "core/goals",
+    "core/goal-runtime",
 
     # ─── exec/ (5) ───
     "exec/shell",
@@ -223,6 +225,8 @@ coco-workflow = { path = "core/workflow" }
 coco-workflow-runtime = { path = "core/workflow-runtime" }
 coco-system-reminder = { path = "core/system-reminder" }
 coco-subagent = { path = "core/subagent" }
+coco-goals = { path = "core/goals" }
+coco-goal-runtime = { path = "core/goal-runtime" }
 
 # Internal - exec
 coco-shell = { path = "exec/shell" }

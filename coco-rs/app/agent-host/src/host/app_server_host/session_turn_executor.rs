@@ -82,6 +82,10 @@ fn run_turn_with_session(
     let prompt = params.prompt;
     let images = params.images;
     let history_override = params.history_override;
+    // A `GoalSupervisor`-driven autonomous continuation (§10.3): no user prompt,
+    // the materialized goal context drives the turn, and the engine defers
+    // after-turn finalization/continuation to the supervisor.
+    let goal_continuation = params.goal_continuation;
     let slash_metadata = params.slash_metadata.clone();
     let model_selection_override = params.model_selection.clone();
     let permission_mode_override = params.permission_mode;
@@ -113,9 +117,12 @@ fn run_turn_with_session(
             "SessionTurnExecutor: run_turn"
         );
 
-        let engine = turn_engine.engine.with_permission_bridge(Arc::new(
+        let mut engine = turn_engine.engine.with_permission_bridge(Arc::new(
             super::AppServerPermissionBridge::new(Arc::clone(&app_server), session.clone()),
         ));
+        if goal_continuation {
+            engine = engine.with_goal_supervisor_owned_finalize();
+        }
 
         // Snapshot the prior history, append a fresh user message,
         // and **persist the combined history back to shared state
@@ -135,7 +142,15 @@ fn run_turn_with_session(
         // clients can correlate completion.
         let cycle_turn_id = turn_id;
 
-        let combined: Vec<std::sync::Arc<coco_messages::Message>> = if history_override.is_empty() {
+        let combined: Vec<std::sync::Arc<coco_messages::Message>> = if goal_continuation {
+            // Autonomous goal turn: no new user message. The current durable
+            // history plus the per-turn goal-context reminder (re-injected because
+            // the supervisor bound a running lease before starting this turn)
+            // drive the model. Snapshot the existing history unchanged.
+            session
+                .append_arc_messages_to_history_and_snapshot(Vec::new())
+                .await
+        } else if history_override.is_empty() {
             // Fire UserPromptSubmit hooks BEFORE the LLM call. Output
             // surfaces as `hook_*` reminders on the next reminder pass;
             // a blocking_error suppresses the turn (warns instead);

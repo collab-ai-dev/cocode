@@ -14,7 +14,6 @@ fn default_is_all_zero() {
     assert_eq!(s.permissions.mode, None);
     assert_eq!(s.permissions.pre_plan_mode, None);
     assert!(s.permissions.stripped_dangerous_rules.is_none());
-    assert_eq!(s.active_goal, None);
     assert!(!s.has_exited_plan_mode);
     assert!(!s.needs_plan_mode_exit_attachment);
     assert_eq!(s.pending_plan_mode_exit_outcome, None);

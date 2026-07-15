@@ -31,6 +31,7 @@ use coco_types::SessionUsageSnapshot;
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::lease::{SessionLeaseError, SessionLeaseStore, SessionWriteLease};
 use crate::storage::AgentMetadata;
 use crate::storage::ChainWriteOptions;
 use crate::storage::ChainWriteResult;
@@ -183,8 +184,23 @@ pub trait UsageSnapshotStore: Send + Sync {
 /// blanket impl so `Arc<dyn SessionStore>` is one object while the
 /// focused sub-traits stay available for narrower consumers / backends
 /// (ISP without tripping over Rust's no-`dyn A + B` rule).
-pub trait SessionStore: TranscriptIo + AgentTranscriptStore + UsageSnapshotStore {}
-impl<T: TranscriptIo + AgentTranscriptStore + UsageSnapshotStore> SessionStore for T {}
+pub trait SessionStore:
+    TranscriptIo + AgentTranscriptStore + UsageSnapshotStore + SessionLeaseStore
+{
+}
+impl<T: TranscriptIo + AgentTranscriptStore + UsageSnapshotStore + SessionLeaseStore> SessionStore
+    for T
+{
+}
+
+impl SessionLeaseStore for InMemoryStore {
+    fn require_write_lease(
+        &self,
+        session_id: &str,
+    ) -> Result<SessionWriteLease, SessionLeaseError> {
+        crate::lease::acquire_memory_lease(session_id)
+    }
+}
 
 /// A located session. Disk-only this iteration: `transcript_path` is the
 /// resolved `<sid>.jsonl`. A non-fs backend will replace the path with a

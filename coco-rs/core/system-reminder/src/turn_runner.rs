@@ -141,6 +141,11 @@ pub struct TurnReminderInput<'a> {
     /// agent when coordinator mode is active; `None` otherwise.
     pub coordinator_worker_context: Option<String>,
 
+    /// Pre-rendered goal-context reminder body for a goal-owned turn (§5.5),
+    /// or `None` outside a goal turn. Rendered by the session runtime's
+    /// `GoalContextMaterializer` and threaded through the `GoalHandle`.
+    pub goal_context: Option<String>,
+
     // ── Verify-plan reminder ──
     /// True when TS-shaped pending plan verification exists and has not
     /// started or completed.
@@ -264,6 +269,7 @@ pub async fn run_turn_reminders(
         new_date,
         current_date,
         coordinator_worker_context,
+        goal_context,
         has_pending_plan_verification,
         total_cost_usd,
         max_budget_usd,
@@ -372,6 +378,7 @@ pub async fn run_turn_reminders(
         .new_date(new_date)
         .current_date(current_date)
         .coordinator_worker_context(coordinator_worker_context)
+        .goal_context(goal_context)
         .has_pending_plan_verification(has_pending_plan_verification)
         .turns_since_plan_exit(turns_since_plan_exit)
         .plan_mode_turns_since_attachment(plan_mode_turns_since_attachment)

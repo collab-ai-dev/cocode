@@ -442,6 +442,13 @@ pub struct ToolUseContext {
     /// rather than silently dropping the message.
     pub mailbox: crate::MailboxHandleRef,
 
+    // ── Goal Runtime ──
+    /// Handle onto the session's first-class goal aggregate (§10.2). Goal tools
+    /// (`get_goal` / `report_goal_turn` / `create_goal`) read snapshots and
+    /// submit dispositions through it. `NoOpGoalHandle` outside goal sessions, so
+    /// the tools stay hidden via `is_enabled` / `is_available`.
+    pub goal: crate::GoalHandleRef,
+
     // ── Pending-Message Queue ──
     /// In-memory FIFO of pending messages per recipient agent. When a running agent
     /// receives a `SendMessage` from a peer, the message is queued here
@@ -711,6 +718,7 @@ impl ToolUseContext {
             lsp: self.lsp.clone(),
             schedules: self.schedules.clone(),
             agent: self.agent.clone(),
+            goal: self.goal.clone(),
             skill: self.skill.clone(),
             mailbox: self.mailbox.clone(),
             pending_messages: self.pending_messages.clone(),
@@ -979,6 +987,7 @@ impl ToolUseContext {
             lsp: Arc::new(crate::lsp_handle::NoOpLspHandle),
             schedules: Arc::new(crate::schedule_store::NoOpScheduleStore),
             agent: Arc::new(crate::agent_handle::NoOpAgentHandle),
+            goal: Arc::new(crate::goal_handle::NoOpGoalHandle),
             skill: Arc::new(crate::skill_handle::NoOpSkillHandle),
             mailbox: Arc::new(crate::NoOpMailboxHandle),
             pending_messages: Arc::new(crate::NoOpPendingMessageStore),

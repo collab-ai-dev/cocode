@@ -121,6 +121,7 @@ pub fn tool_name_tone(tool_name: &str) -> ToolNameTone {
         | ToolName::ListMcpResources
         | ToolName::ReadMcpResourceDir
         | ToolName::ReadMcpResource
+        | ToolName::GetGoal
         | ToolName::CronList => ToolNameTone::ReadOnly,
         ToolName::Bash | ToolName::PowerShell | ToolName::Repl => ToolNameTone::Shell,
         ToolName::Write
@@ -137,7 +138,9 @@ pub fn tool_name_tone(tool_name: &str) -> ToolNameTone {
         | ToolName::CronDelete
         | ToolName::ScheduleWakeup
         | ToolName::Monitor
-        | ToolName::RemoteTrigger => ToolNameTone::Write,
+        | ToolName::RemoteTrigger
+        | ToolName::ReportGoalTurn
+        | ToolName::CreateGoal => ToolNameTone::Write,
         ToolName::Agent | ToolName::Workflow | ToolName::Skill => ToolNameTone::Agent,
         ToolName::EnterPlanMode
         | ToolName::ExitPlanMode

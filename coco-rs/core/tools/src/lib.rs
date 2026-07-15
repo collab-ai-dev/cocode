@@ -65,6 +65,11 @@ pub fn register_all_tools(registry: &coco_tool_runtime::ToolRegistry) {
     registry.register(Arc::new(SendUserMessageTool));
     registry.register(Arc::new(LspTool));
 
+    // Goals (3) — lease-bound protocol tools (§12.1).
+    registry.register(Arc::new(GetGoalTool));
+    registry.register(Arc::new(ReportGoalTurnTool));
+    registry.register(Arc::new(CreateGoalTool));
+
     // MCP management (4)
     registry.register(Arc::new(McpAuthTool));
     registry.register(Arc::new(ListMcpResourcesTool));

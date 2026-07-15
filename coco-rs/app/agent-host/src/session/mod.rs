@@ -3,6 +3,12 @@
 pub(crate) mod at_mention_turn;
 pub mod conversation_export;
 pub mod goal_command;
+pub mod goal_driver;
+pub mod goal_plan;
+pub mod goal_reminder;
+pub mod goal_store;
+pub mod goal_tool_handle;
+pub mod goal_view;
 pub mod session_agents;
 pub mod session_bootstrap;
 pub(crate) mod session_close;

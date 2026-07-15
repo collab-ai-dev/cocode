@@ -114,11 +114,6 @@ pub struct ToolAppState {
     /// `appState.toolPermissionContext`. See [`LiveToolPermissionState`].
     pub permissions: LiveToolPermissionState,
 
-    /// Active `/goal` condition for this session. The Stop hook is stored in
-    /// `HookRegistry`; this tracks user-facing status and lets `/goal clear`
-    /// remove only the hook that belongs to the current goal.
-    pub active_goal: Option<ActiveGoal>,
-
     // ── Plan-mode latches (one-shot signaling) ──
     /// Set by `ExitPlanModeTool` on success; read + cleared by the
     /// plan-mode reminder on the first following turn to emit the
@@ -373,17 +368,6 @@ fn announced_tools_scope_key(agent_id: Option<&str>) -> String {
         Some(id) => format!("agent:{id}"),
         None => "main".to_string(),
     }
-}
-
-/// Session-scoped goal metadata for `/goal`.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ActiveGoal {
-    pub condition: String,
-    pub iterations: i32,
-    pub set_at_ms: i64,
-    pub tokens_at_start: i64,
-    pub last_reason: Option<String>,
 }
 
 /// Foreground worktree state stored on [`ToolAppState`].

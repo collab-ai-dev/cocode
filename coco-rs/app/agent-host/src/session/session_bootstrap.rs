@@ -214,6 +214,9 @@ pub async fn install_session_integrations(
         matches!(options.mcp_connect, SessionMcpConnectMode::Await),
     )
     .await;
+    // Own the goal cold edges (§10.3): resume-auto-start, waiting-wake, and
+    // restart reconciliation. Session-owned task; idles until a goal exists.
+    crate::session::goal_driver::spawn(session.clone());
     crate::leader_inbox_poller::install_leader(session, options.leader_permission_bridge).await;
     Ok(())
 }

@@ -135,6 +135,7 @@ fn minimal_turn_params(prompt: &str) -> TurnStartParams {
         model_selection: None,
         permission_mode: None,
         thinking_level: None,
+        goal_continuation: false,
     }
 }
 

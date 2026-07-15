@@ -70,6 +70,23 @@ impl SessionHandle {
         self.runtime.hook_registry()
     }
 
+    /// The session's first-class goal aggregate (§10.2). Sole writer of the live
+    /// goal projection; control-plane commands and tools reach it through here.
+    pub fn goal_runtime(&self) -> Arc<coco_goal_runtime::GoalRuntimeHandle> {
+        self.runtime.goal_runtime().clone()
+    }
+
+    /// The session-scoped runtime-owned evidence store (§10.2 #9).
+    pub fn goal_evidence(&self) -> Arc<dyn coco_goal_runtime::EvidenceStore> {
+        self.runtime.goal_evidence().clone()
+    }
+
+    /// The goal continuation driver's cold-edge signal (§10.3); nudge it after a
+    /// resume so the driver starts a turn for the now-active goal.
+    pub fn goal_driver_edge(&self) -> Arc<tokio::sync::Notify> {
+        self.runtime.goal_driver_edge().clone()
+    }
+
     pub fn skill_manager(&self) -> Arc<coco_skills::SkillManager> {
         self.runtime.skill_manager()
     }

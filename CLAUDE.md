@@ -267,6 +267,8 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 | `context` | System context assembly, CLAUDE.md discovery, attachments, plan-mode reminders |
 | `system-reminder` | Dynamic `<system-reminder>` injection: trait-based generators + parallel orchestrator + throttle |
 | `subagent` | Pure-logic subagent rules: definition catalog, source precedence, AgentTool prompt rendering, tool filter planning |
+| `goals` | Pure goal-runtime domain: `decide` reducer + `GoalSnapshot` state machine, sealed `CompletionAuthorization`, budgets/waits/evidence. Makes ownerless-active and wakeless-waiting unrepresentable. No I/O |
+| `goal-runtime` | Host orchestration over `coco-goals`: `GoalRuntimeHandle` transaction boundary (durable-before-visible), `GoalStore` persistence seam, completion coordinator/gate, context materializer, supervisor |
 
 ### Exec
 

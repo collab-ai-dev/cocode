@@ -33,6 +33,24 @@ pub(super) fn append_headless_goal_status(
     )));
 }
 
+/// Pre-runtime read of the durable goal snapshot straight from the session
+/// transcript, without constructing a `SessionRuntime`. This keeps headless
+/// `/goal` status/clear usable when no Main model is configured (CI/scripts):
+/// it reads the authoritative `MetadataEntry::GoalSnapshot` (§13.1), never a
+/// model turn.
+pub(super) fn headless_goal_snapshot(
+    cwd: &Path,
+    session_id: &coco_types::SessionId,
+) -> Option<coco_goals::GoalSnapshot> {
+    let store = coco_session::TranscriptStore::new(crate::paths::project_paths(cwd));
+    let entries = store.load_entries(session_id.as_str()).ok()?;
+    let record = coco_session::latest_goal_snapshot(&entries)?;
+    serde_json::from_value(record.snapshot).ok()
+}
+
+/// Resolve a headless `/goal` control-plane op that needs no model turn (status,
+/// clear-without-goal, parse error) into a zero-turn resumable outcome: append
+/// the slash-command transcript, persist it, and return `turns: 0`.
 pub(super) async fn headless_local_goal_text_outcome(
     cli: &AgentHostOptions,
     cwd: &Path,

@@ -25,6 +25,9 @@ pub(super) async fn run_goal_command(
                     .await;
             } else {
                 emit_slash_text(event_tx, "goal", &args, &text).await;
+                // Pause/resume change goal state with no following turn to
+                // re-emit; refresh the footer badge from the current snapshot.
+                emit_active_goal_snapshot(session, event_tx).await;
             }
             SlashFollowup::Done
         }
@@ -78,10 +81,10 @@ pub(super) async fn emit_active_goal_snapshot(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) {
-    let goal = goal_command::persist_active_goal_snapshot(session).await;
+    let snapshot = goal_command::read_goal_snapshot_view(session).await;
     let _ = event_tx
         .send(CoreEvent::Protocol(
-            goal_command::active_goal_changed_notification(goal.clone()),
+            goal_command::goal_snapshot_changed_notification(snapshot),
         ))
         .await;
 }

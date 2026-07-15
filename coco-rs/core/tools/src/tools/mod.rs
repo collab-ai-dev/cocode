@@ -11,6 +11,7 @@ pub mod edit;
 pub mod edit_utils;
 pub(crate) mod file_filter;
 pub mod glob;
+pub mod goal_tools;
 pub mod grep;
 pub mod lsp;
 pub mod lsp_tool;
@@ -85,6 +86,7 @@ pub use worktree::ExitWorktreeTool;
 // Utility (5)
 pub use ask_user_question::AskUserQuestionTool;
 pub use config::ConfigTool;
+pub use goal_tools::{CreateGoalTool, GetGoalTool, ReportGoalTurnTool};
 pub use lsp_tool::LspTool;
 pub use send_user_message::SendUserMessageTool;
 pub use tool_search::ToolSearchTool;

@@ -884,13 +884,21 @@ const GOAL_MAX_CONDITION_CHARS: usize = 4000;
 pub enum GoalCommandRequest {
     Status,
     Clear,
-    Set { condition: String },
+    /// Pause an active goal (design §11.3); autonomous work stops until resume.
+    Pause,
+    /// Resume a paused/blocked/usage/budget-stopped goal (design §11.3).
+    Resume,
+    Set {
+        condition: String,
+    },
 }
 
 fn goal_handler(args: &str) -> String {
     match parse_goal_command_args(args) {
         Ok(GoalCommandRequest::Status) => format!("{GOAL_SENTINEL}\nstatus"),
         Ok(GoalCommandRequest::Clear) => format!("{GOAL_SENTINEL}\nclear"),
+        Ok(GoalCommandRequest::Pause) => format!("{GOAL_SENTINEL}\npause"),
+        Ok(GoalCommandRequest::Resume) => format!("{GOAL_SENTINEL}\nresume"),
         Ok(GoalCommandRequest::Set { condition }) => format!("{GOAL_SENTINEL}\nset\n{condition}"),
         Err(message) => message,
     }
@@ -903,6 +911,12 @@ pub fn parse_goal_command_args(args: &str) -> std::result::Result<GoalCommandReq
     }
     if is_goal_clear_keyword(condition) {
         return Ok(GoalCommandRequest::Clear);
+    }
+    if condition.eq_ignore_ascii_case("pause") {
+        return Ok(GoalCommandRequest::Pause);
+    }
+    if condition.eq_ignore_ascii_case("resume") {
+        return Ok(GoalCommandRequest::Resume);
     }
 
     let char_count = condition.chars().count();
@@ -924,6 +938,8 @@ pub fn parse_goal_sentinel(handler_output: &str) -> Option<GoalCommandRequest> {
     match payload {
         "status" => Some(GoalCommandRequest::Status),
         "clear" => Some(GoalCommandRequest::Clear),
+        "pause" => Some(GoalCommandRequest::Pause),
+        "resume" => Some(GoalCommandRequest::Resume),
         _ => payload
             .strip_prefix("set\n")
             .map(|condition| GoalCommandRequest::Set {

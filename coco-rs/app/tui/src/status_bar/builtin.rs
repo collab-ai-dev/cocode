@@ -42,7 +42,7 @@ pub(crate) fn built_in_line_count(state: &AppState) -> u16 {
 fn show_permission_tasks_line(state: &AppState) -> bool {
     state.ui.input.vim.enabled
         || permission_mode_status(state.session.permission_mode).is_some()
-        || state.session.active_goal.is_some()
+        || state.session.goal.is_some()
         || state.session.has_running_background_task()
 }
 
@@ -429,7 +429,7 @@ fn permission_and_tasks_line(state: &AppState) -> Vec<StatusSpan> {
             StatusTone::Dim,
         ));
     }
-    if let Some(goal) = state.session.active_goal.as_ref() {
+    if let Some(goal) = state.session.goal.as_ref() {
         let lead = if spans.is_empty() { " " } else { " · " };
         spans.push(StatusSpan::new(lead, StatusTone::Dim));
         spans.push(StatusSpan::bold(
@@ -456,37 +456,23 @@ fn permission_and_tasks_line(state: &AppState) -> Vec<StatusSpan> {
     spans
 }
 
-fn goal_status_label(goal: &coco_types::ActiveGoal) -> String {
-    let elapsed_ms = unix_time_ms().saturating_sub(goal.set_at_ms);
-    if elapsed_ms <= 0 {
-        " /goal active".to_string()
-    } else {
-        format!(" /goal active ({})", format_goal_duration(elapsed_ms))
+/// Footer pill for the current goal: `/goal <status>`, with the autonomous-turn
+/// count while running so the composed `PLAN | GOAL …` footer reflects live
+/// runtime state (design §9.2).
+fn goal_status_label(goal: &coco_types::GoalSnapshotView) -> String {
+    use coco_types::GoalStatusKind;
+    match goal.status {
+        GoalStatusKind::Active => format!(
+            " /goal active ({}/{})",
+            goal.autonomous_turns, goal.max_autonomous_turns
+        ),
+        GoalStatusKind::Waiting => " /goal waiting".to_string(),
+        GoalStatusKind::Paused => " /goal paused".to_string(),
+        GoalStatusKind::Blocked => " /goal blocked".to_string(),
+        GoalStatusKind::UsageLimited => " /goal usage-limited".to_string(),
+        GoalStatusKind::BudgetLimited => " /goal budget-limited".to_string(),
+        GoalStatusKind::Completed => " /goal completed".to_string(),
     }
-}
-
-fn format_goal_duration(ms: i64) -> String {
-    let seconds = (ms / 1000).max(0);
-    if seconds < 60 {
-        format!("{seconds}s")
-    } else if seconds < 3600 {
-        format!("{}m", seconds / 60)
-    } else {
-        let hours = seconds / 3600;
-        let minutes = (seconds % 3600) / 60;
-        if minutes == 0 {
-            format!("{hours}h")
-        } else {
-            format!("{hours}h{minutes}m")
-        }
-    }
-}
-
-fn unix_time_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as i64)
-        .unwrap_or_default()
 }
 
 /// Symbol + localized label + tone for the current permission mode.

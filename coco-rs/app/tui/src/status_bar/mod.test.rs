@@ -237,12 +237,23 @@ fn background_pill_label_localizes_workflows() {
 fn status_bar_view_renders_active_goal_badge() {
     let _locale = locale_test_guard("en");
     let mut state = AppState::default();
-    state.session.active_goal = Some(coco_types::ActiveGoal {
-        condition: "finish tests".into(),
-        iterations: 0,
-        set_at_ms: 0,
-        tokens_at_start: 0,
-        last_reason: None,
+    state.session.goal = Some(coco_types::GoalSnapshotView {
+        goal_id: "goal-1".into(),
+        spec_revision: 1,
+        state_version: 1,
+        status: coco_types::GoalStatusKind::Active,
+        status_detail: None,
+        objective: "finish tests".into(),
+        total_turns: 0,
+        autonomous_turns: 0,
+        max_autonomous_turns: 20,
+        input_tokens: 0,
+        output_tokens: 0,
+        progress_summary: None,
+        last_rejection: None,
+        plan_digest: None,
+        created_at_ms: 0,
+        updated_at_ms: 0,
     });
 
     let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {

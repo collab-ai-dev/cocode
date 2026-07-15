@@ -1,24 +1,6 @@
 use super::*;
 
 impl SessionHandle {
-    pub async fn persist_goal_metadata(&self, goal: Option<coco_session::GoalMetadata>) {
-        self.runtime.persist_goal_metadata(goal).await;
-    }
-
-    pub async fn active_goal_snapshot(&self) -> Option<coco_types::ActiveGoal> {
-        self.runtime.active_goal_snapshot().await
-    }
-
-    pub async fn restore_goal_from_history(
-        &self,
-        messages: &[Arc<coco_messages::Message>],
-        trust_rejected: bool,
-    ) -> Option<coco_types::ActiveGoal> {
-        self.runtime
-            .restore_goal_from_history(messages, trust_rejected)
-            .await
-    }
-
     pub async fn persist_local_transcript_messages(&self, messages: &[coco_messages::Message]) {
         self.runtime
             .persist_local_transcript_messages(messages)

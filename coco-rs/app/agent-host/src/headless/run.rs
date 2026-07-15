@@ -150,6 +150,13 @@ pub async fn run_chat_with_options(
     } else {
         coco_types::SessionId::generate()
     };
+
+    // Local `/goal` control-plane fast path: status, clear-without-a-live-goal,
+    // and parse errors resolve without building a `SessionRuntime` or resolving a
+    // Main model, so `/goal` stays usable in headless/CI with no model configured.
+    // Status reads the durable `GoalSnapshot` straight from the transcript (§13.1),
+    // never a model turn. Set — and clear of a live goal — fall through to the
+    // runtime path below, where the goal runtime owns the mutation.
     if let Some(goal_args) = parse_headless_goal_slash(prompt) {
         match coco_commands::parse_goal_command_args(goal_args) {
             Err(text) => {
@@ -164,9 +171,10 @@ pub async fn run_chat_with_options(
                 .await);
             }
             Ok(coco_commands::GoalCommandRequest::Status) => {
-                let text =
-                    crate::goal_command::format_latest_goal_history_status(&opts.prior_messages)
-                        .unwrap_or_else(|| "No goal set. Usage: `/goal <condition>`".to_string());
+                let text = headless_goal_snapshot(&cwd, &session_id)
+                    .filter(|snapshot| !snapshot.is_terminal())
+                    .map(|snapshot| crate::goal_command::format_goal_snapshot_status(&snapshot))
+                    .unwrap_or_else(|| "No goal set. Usage: `/goal <objective>`".to_string());
                 return Ok(headless_local_goal_text_outcome(
                     cli,
                     &cwd,
@@ -178,9 +186,9 @@ pub async fn run_chat_with_options(
                 .await);
             }
             Ok(coco_commands::GoalCommandRequest::Clear) => {
-                if crate::goal_command::find_restorable_goal_condition(&opts.prior_messages)
-                    .is_none()
-                {
+                let has_live_goal = headless_goal_snapshot(&cwd, &session_id)
+                    .is_some_and(|snapshot| !snapshot.is_terminal());
+                if !has_live_goal {
                     return Ok(headless_local_goal_text_outcome(
                         cli,
                         &cwd,
@@ -192,9 +200,14 @@ pub async fn run_chat_with_options(
                     .await);
                 }
             }
-            Ok(coco_commands::GoalCommandRequest::Set { .. }) => {}
+            // Set / pause / resume mutate the goal, so they fall through to the
+            // runtime path below where the goal runtime owns the transition.
+            Ok(coco_commands::GoalCommandRequest::Set { .. })
+            | Ok(coco_commands::GoalCommandRequest::Pause)
+            | Ok(coco_commands::GoalCommandRequest::Resume) => {}
         }
     }
+
     tracing::info!(
         target: "coco_agent_host::headless",
         cwd = %cwd.display(),
@@ -496,7 +509,6 @@ pub async fn run_chat_with_options(
                     }
                     crate::goal_command::GoalOutcome::StatusThenText { status, text } => {
                         append_headless_goal_status(&mut prefix_messages, status);
-                        crate::goal_command::persist_active_goal_snapshot(&session).await;
                         append_headless_slash_text(&mut prefix_messages, "goal", &args, &text);
                         persist_headless_local_transcript_messages(
                             cli,
@@ -527,7 +539,6 @@ pub async fn run_chat_with_options(
                         kickoff,
                     } => {
                         append_headless_goal_status(&mut prefix_messages, status);
-                        crate::goal_command::persist_active_goal_snapshot(&session).await;
                         append_headless_slash_text(&mut prefix_messages, "goal", &args, &text);
                         effective_prompt = kickoff;
                     }
@@ -578,6 +589,7 @@ pub async fn run_chat_with_options(
                 model_selection: None,
                 permission_mode: Some(permission_mode),
                 thinking_level: turn_thinking_level,
+                goal_continuation: false,
             },
         )
         .await

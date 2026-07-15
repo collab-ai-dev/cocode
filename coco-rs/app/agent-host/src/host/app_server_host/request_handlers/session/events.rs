@@ -202,6 +202,14 @@ async fn forward_terminal_event(
     // for the active-turn record; the turn/compact tasks no longer clear it.
     session.complete_finishing_active_turn();
     *turn_slot_cleared = true;
+    // §10.3: a user-started goal turn just freed the slot. Nudge the goal
+    // continuation driver so it advances any queued autonomous turn (or
+    // registers a wake) now that the slot is free — no mid-turn race. Cheap
+    // no-op when no goal is live. The early-return guard above guarantees this
+    // runs exactly once, on the first terminal.
+    if session.goal_runtime().has_live_goal_sync() {
+        session.goal_driver_edge().notify_one();
+    }
     send_session_event(
         tx,
         owner_session_id.clone(),

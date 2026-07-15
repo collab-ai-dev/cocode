@@ -259,6 +259,41 @@ impl QueryEngine {
         }
 
         self.flush_successful_turn_state(&mut *history).await;
+
+        // Goal runtime (§10.2, §10.3): at a user-started goal turn's natural stop,
+        // run the completion coordinator + `FinishTurn` and record the transition
+        // cell. The engine executes exactly one logical turn and never
+        // self-continues — the `GoalSupervisor` driver owns the next turn (it is
+        // nudged once this turn's slot frees). Skipped when the supervisor already
+        // owns this turn's finalization, so exactly one component finalizes.
+        if let Some(goal_handle) = &self.goal_handle
+            && goal_handle.is_available()
+            && !self.goal_supervisor_owns_finalize
+        {
+            let finalization = goal_handle
+                .finalize_goal_turn(
+                    usage.input_tokens.total.max(0) as u64,
+                    usage.output_tokens.total.max(0) as u64,
+                    /*signals_present*/ true,
+                )
+                .await;
+            self.emit_active_goal_changed(goal_handle.as_ref(), event_tx)
+                .await;
+            // One concise transcript cell per durable goal transition (§9.2), so
+            // the conversation carries a permanent record of a completed / blocked
+            // / paused / budget / usage / waiting transition.
+            if let Some(payload) = finalization.transition {
+                crate::history_sync::history_push_and_emit(
+                    history,
+                    coco_messages::Message::Attachment(
+                        coco_messages::AttachmentMessage::silent_goal_status(payload),
+                    ),
+                    event_tx,
+                )
+                .await;
+            }
+        }
+
         self.maybe_spawn_prompt_suggestion_after_stop(event_tx)
             .await;
 

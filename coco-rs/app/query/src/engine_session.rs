@@ -12,7 +12,6 @@
 //! Extracted from `engine.rs` so the multi-turn loop file can stay
 //! focused on per-turn mechanics.
 
-use std::sync::atomic::Ordering;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing::warn;
@@ -115,6 +114,27 @@ impl QueryEngine {
             .await
     }
 
+    /// Emit `GoalSnapshotChanged` with the full bounded snapshot view (or `None`)
+    /// so the detail view, composed footer, and resume prompts track the
+    /// first-class goal runtime (design §8.1). Called at goal turn bind and
+    /// finalization.
+    pub(crate) async fn emit_active_goal_changed(
+        &self,
+        goal_handle: &dyn coco_tool_runtime::GoalHandle,
+        event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
+    ) {
+        let snapshot = goal_handle.goal_snapshot_view().await;
+        if let Some(tx) = event_tx.as_ref() {
+            let _ = tx
+                .send(CoreEvent::Protocol(
+                    ServerNotification::GoalSnapshotChanged(Box::new(
+                        coco_types::GoalSnapshotChangedParams { snapshot },
+                    )),
+                ))
+                .await;
+        }
+    }
+
     /// Core internal implementation: user + attachment messages.
     /// First message is the user message (used for file history snapshot UUID).
     /// Subsequent messages are attachment messages (is_meta=true, system-reminder wrapped).
@@ -164,13 +184,6 @@ impl QueryEngine {
         // all-defaults config and is zero-cost without an OTel exporter.
         crate::emit::emit_feature_state_metrics(&self.config.features);
 
-        if self.config.agent_id.is_none()
-            && let Some(flag) = &self.terminal_goal_metadata_written
-            && flag.swap(false, Ordering::SeqCst)
-        {
-            self.persist_goal_metadata(None).await;
-        }
-
         // Running — agent is actively processing.
         state_tracker
             .transition_to(coco_types::SessionState::Running, &event_tx)
@@ -187,6 +200,15 @@ impl QueryEngine {
                         turn_id: id.clone(),
                     },
                 )))
+                .await;
+        }
+
+        // Bind this cycle to the active goal if one is queued (§10.2). A
+        // user-initiated goal turn does not spend the autonomous quota; the
+        // finalize hook drives autonomous continuation from there.
+        if let (Some(goal_handle), Some(id)) = (self.goal_handle.as_ref(), cycle_turn_id.as_ref()) {
+            goal_handle.bind_turn(id.to_string()).await;
+            self.emit_active_goal_changed(goal_handle.as_ref(), &event_tx)
                 .await;
         }
 

@@ -125,6 +125,10 @@ pub(crate) struct ToolContextFactory {
     /// swarm-backed `SwarmAgentHandle`) at session bootstrap so
     /// `ctx.agent.spawn_agent(...)` reaches the real runtime.
     pub(crate) agent_handle: Option<AgentHandleRef>,
+    /// Optional goal-runtime handle. `None` resolves to `NoOpGoalHandle`, whose
+    /// `is_available() = false` hides the goal tools. Goal sessions install a
+    /// real handle bridging to the session's `GoalRuntimeHandle` at bootstrap.
+    pub(crate) goal_handle: Option<coco_tool_runtime::GoalHandleRef>,
     /// Optional skill-runtime handle. `None` resolves to
     /// `NoOpSkillHandle`, which returns `Unavailable` from every
     /// `invoke_skill` call — the model sees a clean error instead
@@ -617,6 +621,10 @@ impl ToolContextFactory {
                 .agent_handle
                 .clone()
                 .unwrap_or_else(|| Arc::new(coco_tool_runtime::NoOpAgentHandle)),
+            goal: self
+                .goal_handle
+                .clone()
+                .unwrap_or_else(|| Arc::new(coco_tool_runtime::NoOpGoalHandle)),
             skill: self
                 .skill_handle
                 .clone()

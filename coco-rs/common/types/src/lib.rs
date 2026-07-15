@@ -22,6 +22,7 @@ mod event;
 mod extended;
 pub mod features;
 mod fork_label;
+mod goal;
 mod hook;
 mod id;
 mod jsonrpc;
@@ -59,7 +60,7 @@ mod wire_tagged;
 
 // App-state (cross-turn shared state carried on ToolUseContext)
 pub use app_state::{
-    ActiveGoal, ActiveWorktreeState, AppStatePatch, AppStateReadHandle, ElicitationGuard,
+    ActiveWorktreeState, AppStatePatch, AppStateReadHandle, ElicitationGuard,
     LiveToolPermissionState, PendingPermissionGuard, PendingPlanVerificationState, ToolAppState,
 };
 
@@ -98,33 +99,33 @@ pub use apply_patch_preview::{
 
 // Event types (three-layer CoreEvent system; see event-system-design.md)
 pub use event::{
-    ActiveGoalChangedParams, AgentInfo, AgentStreamEvent, AgentsDialogEntry, AgentsDialogPayload,
-    AgentsKilledParams, CompactionFailedParams, CompactionHookType, CompactionPhase,
-    CompactionPhaseParams, ContentDeltaParams, ContextClearedParams, ContextCompactedParams,
-    ContextUsageWarningParams, CoreEvent, CostWarningParams, ElicitationCompleteParams, ErrorCode,
-    ErrorParams, ErrorPayload, EventLayer, EventReplayPolicy, FastModeState, FileChangeInfo,
-    FileChangeKind, FilesPersistedParams, HistoryReplaceReason, HookOutcomeStatus,
-    HookProgressParams, HookResponseParams, HookStartedParams, IdeDiagnosticsUpdatedParams,
-    IdeSelectionChangedParams, ItemStatus, LocalCommandOutputParams, McpServerInit,
-    McpStartupCompleteParams, McpStartupStatusParams, MemoryDialogEntry, MemoryDialogRowKind,
-    MemoryDialogScope, MoaAggregatingParams, MoaReferenceParams, ModelFallbackParams,
-    ModelRoleChangedParams, NotificationMethod, PermissionDenialInfo, PermissionDisplayInput,
-    PermissionModeChangedParams, PermissionsEditorDir, PermissionsEditorPayload,
-    PermissionsEditorRule, PersistedFileError, PersistedFileInfo, PlanApprovalRequestedParams,
-    PluginDialogAction, PluginDialogErrorRow, PluginDialogInstalledRow, PluginDialogMarketplaceRow,
-    PluginDialogMcpServerRow, PluginDialogMcpToolRow, PluginDialogOptionRow, PluginDialogPayload,
-    PluginDialogSkillRow, PluginDialogSkillUsage, PluginInit, QueuedCommandEditImage,
-    RateLimitParams, RateLimitStatus, ReasoningMetadataAttachedParams, RewindCompletedParams,
-    RewindDiffStatsPayload, RewindRowMetadata, SESSION_EVENT_METHOD, SESSION_LIFECYCLE_METHOD,
-    SandboxStateChangedParams, ServerNotification, ServerNotificationIdentity, SessionEndedParams,
-    SessionEnvelope, SessionModelUsage, SessionResultParams, SessionStartedParams, SessionState,
-    SkillLock, SkillLockSource, SkillOverrideState, SkillOverridesSaveErrorKind,
-    SkillOverridesSaveResult, SkillsDialogEntry, SkillsDialogPayload, SkillsDialogSource,
-    SlashCommandStatusKind, SummarizeCompletedParams, TaskCompletedParams, TaskCompletionStatus,
-    TaskPanelChangedParams, TaskProgressParams, TaskStartedParams, TaskUsage, ThreadItem,
-    ThreadItemDetails, ToolAbortReasonPayload, ToolProgressParams, ToolUseSummaryParams,
-    TuiOnlyEvent, TurnAbortReason, TurnEndedParams, TurnOutcome, TurnStartedParams,
-    WorkflowDialogEntry, WorkflowDialogPayload, WorktreeEnteredParams, WorktreeExitedParams,
+    AgentInfo, AgentStreamEvent, AgentsDialogEntry, AgentsDialogPayload, AgentsKilledParams,
+    CompactionFailedParams, CompactionHookType, CompactionPhase, CompactionPhaseParams,
+    ContentDeltaParams, ContextClearedParams, ContextCompactedParams, ContextUsageWarningParams,
+    CoreEvent, CostWarningParams, ElicitationCompleteParams, ErrorCode, ErrorParams, ErrorPayload,
+    EventLayer, EventReplayPolicy, FastModeState, FileChangeInfo, FileChangeKind,
+    FilesPersistedParams, HistoryReplaceReason, HookOutcomeStatus, HookProgressParams,
+    HookResponseParams, HookStartedParams, IdeDiagnosticsUpdatedParams, IdeSelectionChangedParams,
+    ItemStatus, LocalCommandOutputParams, McpServerInit, McpStartupCompleteParams,
+    McpStartupStatusParams, MemoryDialogEntry, MemoryDialogRowKind, MemoryDialogScope,
+    MoaAggregatingParams, MoaReferenceParams, ModelFallbackParams, ModelRoleChangedParams,
+    NotificationMethod, PermissionDenialInfo, PermissionDisplayInput, PermissionModeChangedParams,
+    PermissionsEditorDir, PermissionsEditorPayload, PermissionsEditorRule, PersistedFileError,
+    PersistedFileInfo, PlanApprovalRequestedParams, PluginDialogAction, PluginDialogErrorRow,
+    PluginDialogInstalledRow, PluginDialogMarketplaceRow, PluginDialogMcpServerRow,
+    PluginDialogMcpToolRow, PluginDialogOptionRow, PluginDialogPayload, PluginDialogSkillRow,
+    PluginDialogSkillUsage, PluginInit, QueuedCommandEditImage, RateLimitParams, RateLimitStatus,
+    ReasoningMetadataAttachedParams, RewindCompletedParams, RewindDiffStatsPayload,
+    RewindRowMetadata, SESSION_EVENT_METHOD, SESSION_LIFECYCLE_METHOD, SandboxStateChangedParams,
+    ServerNotification, ServerNotificationIdentity, SessionEndedParams, SessionEnvelope,
+    SessionModelUsage, SessionResultParams, SessionStartedParams, SessionState, SkillLock,
+    SkillLockSource, SkillOverrideState, SkillOverridesSaveErrorKind, SkillOverridesSaveResult,
+    SkillsDialogEntry, SkillsDialogPayload, SkillsDialogSource, SlashCommandStatusKind,
+    SummarizeCompletedParams, TaskCompletedParams, TaskCompletionStatus, TaskPanelChangedParams,
+    TaskProgressParams, TaskStartedParams, TaskUsage, ThreadItem, ThreadItemDetails,
+    ToolAbortReasonPayload, ToolProgressParams, ToolUseSummaryParams, TuiOnlyEvent,
+    TurnAbortReason, TurnEndedParams, TurnOutcome, TurnStartedParams, WorkflowDialogEntry,
+    WorkflowDialogPayload, WorktreeEnteredParams, WorktreeExitedParams,
 };
 pub use stream_accumulator::StreamAccumulator;
 
@@ -259,6 +260,10 @@ pub use features::{
 // Fork-label discriminator (used by logs / telemetry / transcripts to
 // identify framework-spawned, cache-shared side-channel queries).
 pub use fork_label::ForkLabel;
+pub use goal::{
+    GoalCommandResult, GoalCreateParams, GoalEditParams, GoalSetStatusParams,
+    GoalSnapshotChangedParams, GoalSnapshotView, GoalStatusKind, GoalStatusRequest,
+};
 
 // Tool filter pipeline (Layers 2 + 4)
 pub use tool_filter::{ToolFilter, ToolOverrides};

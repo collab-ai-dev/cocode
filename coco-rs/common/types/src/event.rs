@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::GoalSnapshotChangedParams;
 use crate::TokenUsage;
 use crate::wire_tagged::wire_tagged_enum;
 
@@ -645,12 +646,11 @@ matching `NotificationMethod` discriminant.",
     /// by the message UUID rather than re-walking transcript cells.
     /// Eliminates the prior I-2 exception in `TranscriptView`.
     "history/reasoningMetadataAttached" => ReasoningMetadataAttached(ReasoningMetadataAttachedParams),
-    /// Active `/goal` state changed.
-    ///
-    /// Mirrors the engine's `ToolAppState.active_goal` so consumers can
-    /// render live footer/status affordances without reverse-engineering
-    /// the silent `goal_status` transcript attachments.
-    "goal/activeChanged" => ActiveGoalChanged(Box<ActiveGoalChangedParams>),
+    /// First-class goal snapshot changed (design §8.1). Carries a bounded
+    /// projection of the durable `GoalSnapshot` (status, budget/usage, progress,
+    /// blocker/wait detail), so surfaces render the real goal runtime state —
+    /// detail view, composed footer, resume prompts.
+    "goal/snapshotChanged" => GoalSnapshotChanged(Box<GoalSnapshotChangedParams>),
 
     // === Turn lifecycle (2) ===
 
@@ -915,7 +915,7 @@ impl ServerNotification {
             | Self::StreamStallDetected { .. }
             | Self::SessionEnded(_)
             | Self::ReasoningMetadataAttached(_)
-            | Self::ActiveGoalChanged(_)
+            | Self::GoalSnapshotChanged(_)
             | Self::McpStartupStatus(_)
             | Self::McpStartupComplete(_)
             | Self::LspPrewarmComplete(_)
@@ -993,7 +993,7 @@ impl ServerNotification {
             | Self::StreamStallDetected { .. }
             | Self::SessionEnded(_)
             | Self::ReasoningMetadataAttached(_)
-            | Self::ActiveGoalChanged(_)
+            | Self::GoalSnapshotChanged(_)
             | Self::McpStartupStatus(_)
             | Self::McpStartupComplete(_)
             | Self::LspPrewarmComplete(_)
@@ -1083,7 +1083,7 @@ impl ServerNotification {
             | Self::SessionResetForResume { .. }
             | Self::HistoryReplaced { .. }
             | Self::ReasoningMetadataAttached(_)
-            | Self::ActiveGoalChanged(_)
+            | Self::GoalSnapshotChanged(_)
             | Self::McpStartupStatus(_)
             | Self::McpStartupComplete(_)
             | Self::LspPrewarmComplete(_)
@@ -1156,7 +1156,7 @@ impl ServerNotification {
             | Self::SessionResetForResume { .. }
             | Self::HistoryReplaced { .. }
             | Self::ReasoningMetadataAttached(_)
-            | Self::ActiveGoalChanged(_)
+            | Self::GoalSnapshotChanged(_)
             | Self::McpStartupStatus(_)
             | Self::McpStartupComplete(_)
             | Self::LspPrewarmComplete(_)
@@ -1735,18 +1735,6 @@ pub enum HistoryReplaceReason {
     /// Rewind / pre-clear prefix restore: the snapshot is a prefix of
     /// previously-seen history.
     Rewind,
-}
-
-/// Active `/goal` snapshot.
-///
-/// `goal = None` means no active goal. Terminal goal_status attachments
-/// still carry achieved / failed details; this event is only the live-state
-/// mirror.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActiveGoalChangedParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub goal: Option<crate::ActiveGoal>,
 }
 
 /// Why a turn was aborted. Lets consumers distinguish user cancel,

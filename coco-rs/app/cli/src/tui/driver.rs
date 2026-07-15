@@ -239,6 +239,7 @@ pub(super) async fn run_agent_driver(
                     ),
                     permission_mode: None,
                     thinking_level: slash_thinking_level,
+                    goal_continuation: false,
                 };
                 let started = match start_turn_with_busy_retry(
                     &mut local_app_server_bridge,
@@ -763,6 +764,22 @@ pub(super) async fn run_agent_driver(
                         handler,
                         target,
                     } = &state.cancel;
+                    // Pause an active goal before cancelling the turn so the
+                    // interrupt cannot leave it active-but-idle (design §7.6,
+                    // §9.2 Ctrl+C). The handler no-ops when there is no live
+                    // goal; errors (already stopped) are ignored.
+                    let session = current_session.read().await.clone();
+                    if session.goal_runtime().has_live_goal_sync() {
+                        let params = coco_types::GoalSetStatusParams {
+                            target: coco_types::SessionTarget {
+                                session_id: target.session_id.clone(),
+                            },
+                            status: coco_types::GoalStatusRequest::Pause,
+                        };
+                        if let Err(error) = client.goal_set_status(handler, params).await {
+                            tracing::debug!(%error, "Interrupt: goal pause skipped");
+                        }
+                    }
                     match client.turn_interrupt(handler, target.clone()).await {
                         Ok(()) => info!("Interrupt: cancelled AppServer active turn"),
                         Err(error) => {

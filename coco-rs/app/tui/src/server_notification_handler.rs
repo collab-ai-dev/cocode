@@ -116,7 +116,7 @@ fn core_event_variant(notif: &coco_types::ServerNotification) -> &'static str {
         N::MessageTruncated { .. } => "MessageTruncated",
         N::SessionResetForResume { .. } => "SessionResetForResume",
         N::ReasoningMetadataAttached(_) => "ReasoningMetadataAttached",
-        N::ActiveGoalChanged(_) => "ActiveGoalChanged",
+        N::GoalSnapshotChanged(_) => "GoalSnapshotChanged",
         N::HistoryReplaced { .. } => "HistoryReplaced",
         N::ToolUseSummary(_) => "ToolUseSummary",
         N::ToolProgress(_) => "ToolProgress",

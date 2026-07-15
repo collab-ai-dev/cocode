@@ -44,8 +44,8 @@ pub(crate) use support::resolve_additional_dirs;
 pub use support::resolve_additional_dirs_display;
 use support::{
     append_headless_goal_status, append_headless_slash_text, build_tool_filter,
-    headless_local_goal_text_outcome, headless_text_outcome, parse_headless_goal_slash,
-    persist_headless_local_transcript_messages, summarize_tool_filter,
+    headless_goal_snapshot, headless_local_goal_text_outcome, headless_text_outcome,
+    parse_headless_goal_slash, persist_headless_local_transcript_messages, summarize_tool_filter,
 };
 
 mod config;

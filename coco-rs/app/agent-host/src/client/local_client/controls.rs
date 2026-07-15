@@ -73,6 +73,21 @@ impl<H: Clone> LocalServerClient<H> {
             .await
     }
 
+    /// Apply a goal status transition (pause / resume) through the goal control
+    /// plane (design §8.2). Used by the TUI `Ctrl+C` path to pause an active goal
+    /// before cancelling its turn, so the interrupt cannot orphan it.
+    pub async fn goal_set_status<Handler>(
+        &self,
+        handler: &Handler,
+        params: coco_types::GoalSetStatusParams,
+    ) -> Result<coco_types::GoalCommandResult, ClientError>
+    where
+        Handler: LocalClientRequestHandler,
+    {
+        self.send_typed_client_request(handler, ClientRequest::SessionGoalSetStatus(params))
+            .await
+    }
+
     pub async fn set_thinking<Handler>(
         &self,
         handler: &Handler,

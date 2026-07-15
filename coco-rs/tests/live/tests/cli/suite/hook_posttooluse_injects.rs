@@ -49,7 +49,6 @@ pub async fn run(provider: &str, model: &str) -> Result<()> {
         is_async: false,
         async_rewake: false,
         status_message: None,
-        managed_by: None,
     });
 
     let cfg = SessionConfig {

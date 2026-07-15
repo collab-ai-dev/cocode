@@ -151,6 +151,7 @@ pub(super) async fn spawn_history_turn_through_app_server(
         model_selection: None,
         permission_mode: None,
         thinking_level: None,
+        goal_continuation: false,
     };
     let started = match local_app_server_bridge
         .start_turn(session_id.clone(), params)
@@ -242,6 +243,7 @@ pub(super) async fn spawn_slash_run_engine_turn(
         model_selection: model_runtime_source_to_turn_start_selection(model_runtime_source),
         permission_mode: None,
         thinking_level,
+        goal_continuation: false,
     };
     let started = match local_app_server_bridge
         .start_turn(session_id.clone(), params)

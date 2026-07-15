@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, atomic::AtomicBool},
-};
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::Result;
 use coco_context::{FileHistorySnapshotSink, FileHistoryState, FileReadState};
@@ -585,7 +582,6 @@ impl SessionRuntime {
         let transcript_dedup = Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::<
             uuid::Uuid,
         >::new()));
-        let terminal_goal_metadata_written = Arc::new(AtomicBool::new(false));
         let tool_result_replacement_state = Arc::new(tokio::sync::RwLock::new(
             coco_tool_runtime::tool_result_offload::ContentReplacementState::new(i64::MAX),
         ));
@@ -673,11 +669,22 @@ impl SessionRuntime {
             Arc::new(coco_hooks::async_registry::AsyncHookRegistry::new()),
             Arc::new(RwLock::new(None)),
         );
+        // First-class goal aggregate, recovered from the durable snapshot on
+        // resume (empty for a fresh session). Sole writer of the live projection.
+        let goal_store = std::sync::Arc::new(crate::session::goal_store::TranscriptGoalStore::new(
+            transcript_store.clone(),
+            typed_session_id.clone(),
+        ));
+        let goal_runtime = std::sync::Arc::new(
+            coco_goal_runtime::GoalRuntimeHandle::restore(typed_session_id.clone(), goal_store)
+                .map_err(|e| anyhow::anyhow!("restore goal runtime: {e}"))?,
+        );
         let persistence = SessionPersistenceResources::new(
             session_manager,
             project_paths,
             transcript_store,
             persist_session,
+            goal_runtime,
         );
         let project_resources = SessionProjectResources::new(process_runtime, project_services);
         let config_resources =
@@ -720,7 +727,6 @@ impl SessionRuntime {
             denial_tracker,
             transcript_dedup,
             Arc::new(tokio::sync::Mutex::new(None)),
-            terminal_goal_metadata_written,
             tool_result_replacement_state,
         );
         let integration_resources = SessionIntegrationResources::new(
