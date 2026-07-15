@@ -788,7 +788,7 @@ permission_mode.bubble_desc: " — 升级到父级代理做权限决策。"
 # （`permissionModeTitle(mode).toLowerCase() + ' on'`）。与 TS 不同——TS 在基线
 # 模式下完全隐藏指示——应用将基线显示为 `ask` 并附 shift+tab 切换提示，
 # 让该手势从新会话起即可被发现。
-permission_mode.status.default: "ask mode on"
+permission_mode.status.default: "manual mode on"
 permission_mode.status.cycle_hint: "shift+tab 切换"
 permission_mode.status.accept_edits: "accept edits on"
 permission_mode.status.plan: "plan mode on"

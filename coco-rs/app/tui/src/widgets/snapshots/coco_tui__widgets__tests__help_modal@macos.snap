@@ -1,6 +1,5 @@
 ---
 source: app/tui/src/widgets/mod.test.rs
-assertion_line: 555
 expression: output
 ---
                                                                                 
@@ -26,4 +25,4 @@ expression: output
 ❯           │cursor                                                │            
 ────────────│Shift+Enter        Insert a newline (multi-line input)│────────────
  opus-4 * au└──────────────────────────────────────────────────────┘            
- ⏯ ask mode on · shift+tab to cycle
+ ⏯ manual mode on · shift+tab to cycle
