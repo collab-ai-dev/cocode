@@ -401,7 +401,7 @@ fn separator(spans: &mut Vec<StatusSpan>) {
     spans.push(StatusSpan::new(" | ", StatusTone::Border));
 }
 
-/// Line 2: permission mode + cycle hint (`⏯ ask mode on · shift+tab to cycle`,
+/// Line 2: permission mode + cycle hint (`⏯ manual mode on · shift+tab to cycle`,
 /// `▸▸ auto mode on · shift+tab to cycle`) followed by the background-task pill
 /// (`· 1 agent · 2 shells`). Always rendered — every mode (incl. the baseline)
 /// shows its glyph, label, and the shift+tab affordance uniformly.

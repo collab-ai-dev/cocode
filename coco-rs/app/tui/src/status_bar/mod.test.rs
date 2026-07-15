@@ -269,7 +269,7 @@ fn status_bar_view_renders_active_goal_badge() {
 }
 
 #[test]
-fn status_bar_surfaces_ask_mode_and_cycle_hint_in_default_state() {
+fn status_bar_surfaces_manual_mode_and_cycle_hint_in_default_state() {
     let _locale = locale_test_guard("en");
     let state = AppState::default();
     // Model line + the baseline permission line. No working dir → no line 3.
@@ -282,9 +282,9 @@ fn status_bar_surfaces_ask_mode_and_cycle_hint_in_default_state() {
         .iter()
         .map(|span| span.text.as_str())
         .collect::<String>();
-    // Baseline mode is surfaced as `⏯ ask mode on` (play glyph, like other
+    // Baseline mode is surfaced as `⏯ manual mode on` (play glyph, like other
     // modes) plus the `·`-separated cycle hint shown uniformly across modes.
-    assert_eq!(line2, " ⏯ ask mode on · shift+tab to cycle");
+    assert_eq!(line2, " ⏯ manual mode on · shift+tab to cycle");
 }
 
 #[test]

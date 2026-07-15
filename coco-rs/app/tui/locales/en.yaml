@@ -807,7 +807,7 @@ permission_mode.bubble_desc: " — escalating to parent agent for permission dec
 # Unlike TS — which hides the indicator in the baseline mode — the app surfaces the
 # baseline as `ask` plus a shift+tab cycle hint, so the gesture is discoverable
 # from a fresh session.
-permission_mode.status.default: "ask mode on"
+permission_mode.status.default: "manual mode on"
 permission_mode.status.cycle_hint: "shift+tab to cycle"
 permission_mode.status.accept_edits: "accept edits on"
 permission_mode.status.plan: "plan mode on"
