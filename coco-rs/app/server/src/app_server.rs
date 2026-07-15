@@ -10,7 +10,7 @@ use coco_types::{
     SessionEnvelope, SessionId, SurfaceId, SurfaceLifecycleEffect, SurfaceLifecycleEffectKind,
     TurnId, UserInputResolveParams,
 };
-use snafu::{ResultExt, Snafu};
+use snafu::{IntoError, ResultExt, Snafu};
 
 use crate::{
     AttachError, AttachSurfaceOptions, CloseCompletion, CloseSessionSurfacesOutcome, CloseStart,
@@ -198,29 +198,38 @@ impl<H: Clone> AppServer<H> {
         new_session_id: &SessionId,
         new_handle: H,
         calling_surface: &SurfaceId,
-    ) -> Result<AppReplaceCommit<H>, AppServerError> {
+    ) -> Result<AppReplaceCommit<H>, ReplaceCommitFailure<H>> {
         let mut sessions = self
             .registry
             .sessions
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Every fallible step happens before `new_handle` is consumed, so on
+        // failure the un-committed handle is handed back to the caller for
+        // teardown — dropping it here would leak the fully-constructed runtime
+        // (SessionEnd hooks never fire, its shutdown token never cancels, and
+        // its session tasks never exit → an unbounded runtime/task leak).
         let old_handle = match sessions.get(old_session_id) {
             Some(SessionSlot::Live(handle)) => handle.clone(),
             _ => {
-                return crate::registry::OldNotReadySnafu {
-                    session_id: old_session_id.clone(),
-                }
-                .fail()
-                .context(RegistrySnafu);
+                let error = RegistrySnafu.into_error(
+                    crate::registry::OldNotReadySnafu {
+                        session_id: old_session_id.clone(),
+                    }
+                    .build(),
+                );
+                return Err(ReplaceCommitFailure::new(error, new_handle));
             }
         };
         if !matches!(sessions.get(new_session_id), Some(SessionSlot::Loading(_))) {
-            return crate::registry::SlotConflictSnafu {
-                session_id: new_session_id.clone(),
-                expected: "Loading",
-            }
-            .fail()
-            .context(RegistrySnafu);
+            let error = RegistrySnafu.into_error(
+                crate::registry::SlotConflictSnafu {
+                    session_id: new_session_id.clone(),
+                    expected: "Loading",
+                }
+                .build(),
+            );
+            return Err(ReplaceCommitFailure::new(error, new_handle));
         }
 
         let mut routing = self
@@ -228,18 +237,20 @@ impl<H: Clone> AppServer<H> {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(actual_session_id) = routing.surface_session(calling_surface).cloned() else {
-            return CallingSurfaceNotAttachedSnafu {
+            let error = CallingSurfaceNotAttachedSnafu {
                 surface_id: calling_surface.clone(),
             }
-            .fail();
+            .build();
+            return Err(ReplaceCommitFailure::new(error, new_handle));
         };
         if &actual_session_id != old_session_id {
-            return CallingSurfaceWrongSessionSnafu {
+            let error = CallingSurfaceWrongSessionSnafu {
                 surface_id: calling_surface.clone(),
                 expected_session_id: old_session_id.clone(),
                 actual_session_id,
             }
-            .fail();
+            .build();
+            return Err(ReplaceCommitFailure::new(error, new_handle));
         }
 
         // Everything validated — mutate with no further fallible step.
@@ -400,74 +411,6 @@ impl<H: Clone> AppServer<H> {
 
         Ok(AppCloseCommit {
             routing_outcome,
-            lifecycle_effects,
-        })
-    }
-
-    /// Combined registry+routing commit for a detached replace:
-    /// no calling surface, so *every* live surface on the old session is a
-    /// "peer" and receives `session/replaced { old, new }` at commit rather
-    /// than only `session/ended` at cascade completion. The old session
-    /// moves to `Closing`; the new reservation promotes (honoring
-    /// close-after-load). One synchronous section under registry-then-routing
-    /// lock order.
-    pub fn commit_replace_detached(
-        &self,
-        old_session_id: &SessionId,
-        new_session_id: &SessionId,
-        new_handle: H,
-    ) -> Result<AppReplaceDetachedCommit<H>, AppServerError> {
-        let mut sessions = self
-            .registry
-            .sessions
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let old_handle = match sessions.get(old_session_id) {
-            Some(SessionSlot::Live(handle)) => handle.clone(),
-            _ => {
-                return crate::registry::OldNotReadySnafu {
-                    session_id: old_session_id.clone(),
-                }
-                .fail()
-                .context(RegistrySnafu);
-            }
-        };
-        if !matches!(sessions.get(new_session_id), Some(SessionSlot::Loading(_))) {
-            return crate::registry::SlotConflictSnafu {
-                session_id: new_session_id.clone(),
-                expected: "Loading",
-            }
-            .fail()
-            .context(RegistrySnafu);
-        }
-
-        let mut routing = self
-            .routing
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-        let old_close = CloseState::new();
-        let old_close_completion = old_close.completion();
-        let Some(SessionSlot::Loading(new_load)) = sessions.remove(new_session_id) else {
-            unreachable!("new slot was matched as Loading above");
-        };
-        sessions.insert(new_session_id.clone(), new_load.promote(new_handle));
-        sessions.insert(
-            old_session_id.clone(),
-            SessionSlot::Closing(ClosingState {
-                handle: old_handle.clone(),
-                close: old_close,
-            }),
-        );
-        let close_outcome = routing.close_session_surfaces(old_session_id);
-        self.cancel_server_request_waiters(&close_outcome.cancelled_requests);
-        let lifecycle_effects =
-            replaced_lifecycle_effects(old_session_id, new_session_id, &close_outcome);
-        self.activity.touch(new_session_id.clone());
-
-        Ok(AppReplaceDetachedCommit {
-            old_handle,
-            old_close_completion,
             lifecycle_effects,
         })
     }
@@ -857,6 +800,20 @@ impl<H: Clone> AppServer<H> {
         }
     }
 
+    /// Cancel every pending server->client request scoped to `turn_id`, removing
+    /// its routing bookkeeping and resolving its waiter. Called when a turn ends
+    /// so an interrupted turn's outstanding approval/hook/MCP requests do not
+    /// leak their pending entries + retained payloads until the surface or
+    /// session goes away.
+    pub fn cancel_turn_server_requests(&self, turn_id: &TurnId) {
+        let cancelled = self
+            .routing
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .cancel_turn_server_requests(turn_id);
+        self.cancel_server_request_waiters(&cancelled);
+    }
+
     fn cancel_server_request_waiters(&self, request_ids: &[RequestId]) {
         if request_ids.is_empty() {
             return;
@@ -1130,7 +1087,10 @@ where
         new_session_id: SessionId,
         calling_surface: SurfaceId,
         factory: F,
-        close_old: Close,
+        // Runs the close cascade for a handle, deriving its target from the
+        // handle itself. Invoked on the OLD handle after a successful commit,
+        // or on the NEW handle to tear it down when the commit fails.
+        close_handle: Close,
     ) -> Result<AppReplaceStart<H>, AppServerError>
     where
         F: Future<Output = Result<H, RegistryError>> + Send + 'static,
@@ -1160,7 +1120,7 @@ where
                             // now is a panic in the old close cascade wedging old.
                             guard.arm_close(old_session_id.clone());
                             server.route_lifecycle_effects(commit.lifecycle_effects);
-                            let close_result = close_old(commit.old_handle).await;
+                            let close_result = close_handle(commit.old_handle).await;
                             if let Ok(close_commit) =
                                 server.complete_session_close(&old_session_id, close_result)
                             {
@@ -1168,75 +1128,20 @@ where
                             }
                             guard.disarm();
                         }
-                        Err(_) => {
-                            let _ = server.registry.complete_replace_failure(
-                                &new_session_id,
-                                crate::registry::SlotConflictSnafu {
-                                    session_id: new_session_id.clone(),
-                                    expected: "ReplaceCommit",
-                                }
-                                .build(),
+                        Err(failure) => {
+                            // Commit failed after the factory built a full
+                            // runtime (e.g. the calling surface disconnected
+                            // mid-construction). Tear the new runtime down via
+                            // the same close cascade so its SessionEnd hooks
+                            // fire and its session tasks are cancelled/joined —
+                            // dropping it would leak the runtime and its tasks
+                            // for the process lifetime.
+                            tracing::warn!(
+                                error = %failure.error,
+                                new_session_id = %new_session_id,
+                                "replace commit failed; tearing down the constructed runtime"
                             );
-                            guard.disarm();
-                        }
-                    }
-                }
-                Err(error) => {
-                    let _ = server
-                        .registry
-                        .complete_replace_failure(&new_session_id, error);
-                    guard.disarm();
-                }
-            }
-        });
-        Ok(AppReplaceStart::Started {
-            completion: new_completion,
-        })
-    }
-
-    pub fn spawn_replace_detached<F, Close, CloseFut>(
-        self: &Arc<Self>,
-        old_session_id: SessionId,
-        new_session_id: SessionId,
-        factory: F,
-        close_old: Close,
-    ) -> Result<AppReplaceStart<H>, AppServerError>
-    where
-        F: Future<Output = Result<H, RegistryError>> + Send + 'static,
-        Close: FnOnce(H) -> CloseFut + Send + 'static,
-        CloseFut: Future<Output = Result<(), RegistryError>> + Send + 'static,
-    {
-        let ReplaceStart::Reserved { new_completion, .. } = self
-            .registry
-            .begin_replace(&old_session_id, new_session_id.clone())
-            .context(RegistrySnafu)?;
-        let server = Arc::clone(self);
-        self.spawn_tracked(async move {
-            let mut guard = OwnerGuard::new(
-                Arc::clone(&server),
-                OwnerGuardAction::FailLoad(new_session_id.clone()),
-            );
-            match factory.await {
-                Ok(new_handle) => {
-                    // Detached commit emits `session/replaced` to every old
-                    // surface before the old close cascade runs.
-                    match server.commit_replace_detached(
-                        &old_session_id,
-                        &new_session_id,
-                        new_handle,
-                    ) {
-                        Ok(commit) => {
-                            guard.arm_close(old_session_id.clone());
-                            server.route_lifecycle_effects(commit.lifecycle_effects);
-                            let close_result = close_old(commit.old_handle).await;
-                            if let Ok(close_commit) =
-                                server.complete_session_close(&old_session_id, close_result)
-                            {
-                                server.route_lifecycle_effects(close_commit.lifecycle_effects);
-                            }
-                            guard.disarm();
-                        }
-                        Err(_error) => {
+                            let _ = close_handle(failure.handle).await;
                             let _ = server.registry.complete_replace_failure(
                                 &new_session_id,
                                 crate::registry::SlotConflictSnafu {
@@ -1408,25 +1313,6 @@ fn replace_lifecycle_effects(outcome: &ReplaceSurfaceOutcome) -> Vec<SurfaceLife
     effects
 }
 
-fn replaced_lifecycle_effects(
-    old_session_id: &SessionId,
-    new_session_id: &SessionId,
-    outcome: &CloseSessionSurfacesOutcome,
-) -> Vec<SurfaceLifecycleEffect> {
-    outcome
-        .closed_surfaces
-        .iter()
-        .cloned()
-        .map(|surface_id| SurfaceLifecycleEffect {
-            surface_id,
-            kind: SurfaceLifecycleEffectKind::SessionReplaced {
-                old_session_id: old_session_id.clone(),
-                new_session_id: new_session_id.clone(),
-            },
-        })
-        .collect()
-}
-
 fn close_lifecycle_effects(
     session_id: &SessionId,
     outcome: &CloseSessionSurfacesOutcome,
@@ -1452,16 +1338,26 @@ pub struct AppReplaceCommit<H> {
     pub lifecycle_effects: Vec<SurfaceLifecycleEffect>,
 }
 
-#[derive(Debug, Clone)]
-pub struct AppCloseCommit {
-    pub routing_outcome: CloseSessionSurfacesOutcome,
-    pub lifecycle_effects: Vec<SurfaceLifecycleEffect>,
+/// Failure of `commit_replace_for_surface` that hands the un-committed new
+/// handle back to the caller so it can run the runtime teardown (fire
+/// SessionEnd hooks, cancel the shutdown token, join session tasks). A plain
+/// struct, not a snafu enum: the generic `H` is not an `Error`, and this is a
+/// by-value control-flow carrier that is matched, never `?`-propagated.
+#[derive(Debug)]
+pub struct ReplaceCommitFailure<H> {
+    pub error: AppServerError,
+    pub handle: H,
+}
+
+impl<H> ReplaceCommitFailure<H> {
+    fn new(error: AppServerError, handle: H) -> Self {
+        Self { error, handle }
+    }
 }
 
 #[derive(Debug, Clone)]
-pub struct AppReplaceDetachedCommit<H> {
-    pub old_handle: H,
-    pub old_close_completion: CloseCompletion,
+pub struct AppCloseCommit {
+    pub routing_outcome: CloseSessionSurfacesOutcome,
     pub lifecycle_effects: Vec<SurfaceLifecycleEffect>,
 }
 

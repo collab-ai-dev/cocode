@@ -71,7 +71,6 @@ pub use request_context::{HandlerContext, HandlerResult, SessionRequestContext};
 pub use request_dispatch::dispatch_client_request;
 pub use runtime_replacement::RuntimeReplacementContext;
 pub use session_close::shutdown_local_app_server_sessions;
-pub use session_loading::load_local_app_server_session_runtime;
 pub use session_turn_executor::SessionTurnExecutor;
 pub use state::{AppServerHostState, HostInputs};
 pub use turn_runner::TurnRunner;

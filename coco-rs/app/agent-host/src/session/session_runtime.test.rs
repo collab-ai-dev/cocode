@@ -146,7 +146,6 @@ async fn factory_fresh_builds_create_distinct_runtime_identities() {
 async fn close_times_out_and_aborts_forwarder_task() {
     let home = TempDir::new().expect("home tempdir");
     let runtime = build_runtime(&home).await;
-    let session_id = runtime.session_id().clone();
     let (forwarder_drop_tx, forwarder_drop_rx) = tokio::sync::oneshot::channel();
     runtime
         .start_active_turn(|_, cancel_token| ActiveTurnHandles {
@@ -160,8 +159,7 @@ async fn close_times_out_and_aborts_forwarder_task() {
         .expect("start synthetic active turn");
 
     let error = runtime
-        .close_if_current_session(
-            &session_id,
+        .close_runtime(
             coco_hooks::orchestration::ExitReason::Other,
             std::time::Duration::from_millis(20),
         )
@@ -213,7 +211,6 @@ async fn finishing_active_turn_still_blocks_new_turn_until_cleared() {
 async fn close_drain_waits_finishing_turn_without_new_cancel() {
     let home = TempDir::new().expect("home tempdir");
     let runtime = build_runtime(&home).await;
-    let session_id = runtime.session_id().clone();
     let mut cancel_snapshot = None;
     runtime
         .start_active_turn(|_, cancel_token| {
@@ -228,8 +225,7 @@ async fn close_drain_waits_finishing_turn_without_new_cancel() {
     assert!(runtime.mark_active_turn_finishing());
 
     runtime
-        .close_if_current_session(
-            &session_id,
+        .close_runtime(
             coco_hooks::orchestration::ExitReason::Other,
             std::time::Duration::from_secs(1),
         )

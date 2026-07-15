@@ -123,11 +123,15 @@ async fn bridge_elicitation_to_remote_surface(
         mcp_server_name: server_name.to_string(),
         elicitation: elicitation_json,
     };
+    let turn_id = app_server
+        .registry()
+        .get(&session_id)
+        .and_then(|handle| handle.into_session().active_turn_id());
     let reply = app_server
         .route_server_request_with_reply(
             session_id,
             coco_app_server::SurfaceCapability::Interactive,
-            None,
+            turn_id,
             coco_types::ServerRequest::RequestElicitation(params),
         )
         .map_err(|error| {

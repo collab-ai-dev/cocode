@@ -29,7 +29,7 @@ impl SdkEventRenderer {
         let JsonRpcFrame::Notification(notification) = &frame else {
             return Ok(vec![frame]);
         };
-        if notification.method != "session/event" {
+        if notification.method != coco_types::SESSION_EVENT_METHOD {
             return Ok(vec![frame]);
         }
         match self.render_session_event(notification) {
@@ -55,23 +55,29 @@ impl SdkEventRenderer {
             turn_id: routed.envelope.turn_id,
             session_seq: routed.envelope.session_seq,
         };
-        let notifications = match routed.envelope.event.layer.as_str() {
-            "protocol" => {
+        let layer = routed
+            .envelope
+            .event
+            .layer
+            .parse::<coco_types::EventLayer>()
+            .map_err(|()| {
+                <serde_json::Error as serde::de::Error>::custom(format!(
+                    "unknown routed CoreEvent layer: {}",
+                    routed.envelope.event.layer
+                ))
+            })?;
+        let notifications = match layer {
+            coco_types::EventLayer::Protocol => {
                 let notification: ServerNotification =
                     serde_json::from_value(routed.envelope.event.payload)?;
                 self.render_protocol_event(&routed.envelope.session_id, notification)
             }
-            "stream" => {
+            coco_types::EventLayer::Stream => {
                 let event: AgentStreamEvent =
                     serde_json::from_value(routed.envelope.event.payload)?;
                 self.render_stream_event(&routed.envelope.session_id, event)
             }
-            "tui" => Vec::new(),
-            other => {
-                return Err(<serde_json::Error as serde::de::Error>::custom(format!(
-                    "unknown routed CoreEvent layer: {other}"
-                )));
-            }
+            coco_types::EventLayer::Tui => Vec::new(),
         };
         notifications
             .into_iter()

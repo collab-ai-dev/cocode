@@ -115,11 +115,13 @@ and SDK stamping seams derive `agent_id` from the protocol payload when present.
 `AppServerLocalBridge` is the preferred local entrypoint: it owns the local
 `AppServer`, `LocalServerClient`, shared handler, and outbound forwarder so
 TUI/headless code does not duplicate adapter wiring.
-AppServer lifecycle interception and protocol result mapping live in
-`app_server_host/session_lifecycle.rs` alongside the other protocol-neutral
-host pieces: idle deadline supervision, handler dispatch, local bridge
-composition, local event forwarding, session data, close/load/surface helpers,
-and registry register/replace helpers. SDK transport ownership lives in
+AppServer lifecycle interception and protocol result mapping live in the
+`app_server_host` operation modules — `session_start_operation.rs`,
+`session_resume_operation.rs`, `session_replace_operation.rs`,
+`session_close.rs`, `session_loading.rs`, `session_registry.rs`,
+`session_surfaces.rs` — alongside the other protocol-neutral host pieces: idle
+deadline supervision, handler dispatch, local bridge composition, local event
+forwarding, and session data. SDK transport ownership lives in
 `coco-sdk-server`, while AppServer-routed hook callbacks, client-hosted MCP
 routing, sandbox approval routing, and connection-profile runtime binding live
 under `app_server_host`. These modules must not absorb each other's connection
@@ -132,21 +134,21 @@ callers.
 Its AppServer registry stores `AppSessionHandle` snapshots rather than
 empty `()` handles. Installed runtime snapshots carry the current application-host
 `SessionHandle`, whose session id is an immutable snapshot. Close cascade logic
-checks the registry snapshot before touching runtime-backed state, so stale
-registry handles from a replacement swap do not tear down the new live runtime.
-Local `session/resume` uses `AppServer::spawn_replace`
-when the previous live session has an interactive local surface, and uses
-`AppServer::spawn_replace_detached` plus a fresh requester surface when no
-replace caller surface exists. Re-installing a runtime-backed handle for an
-already-live local session refreshes the registry handle without changing
-surface routing.
+The AppServer registry/owner tasks close only the exact slot they own, so a
+replacement swap never tears down the new live runtime.
+Local `session/resume` uses `AppServer::spawn_replace` (fresh factory build)
+when the destination is not already live, and `AppServer::spawn_replace_to_live`
+to repoint the caller surface onto an already-live orphan destination.
+Re-installing a runtime-backed handle for an already-live local session
+refreshes the registry handle without changing surface routing.
 AppServer close for local/SDK bridge handles now performs the bridge-owned
 cascade before archiving surfaces: if the closing session still matches the
 host active-session state, it cancels the state-owned active turn, waits
 boundedly for the turn runner and forwarder to drain, clears the slot, then
-asks the matching `SessionHandle` to fire runtime SessionEnd hooks and cancel
-the runtime shutdown signal. The registry snapshot guard skips fused-runtime
-shutdown when the runtime handle no longer matches the registry snapshot.
+asks the matching `SessionHandle` (`close_runtime`) to fire runtime SessionEnd
+hooks, tombstone the turn coordinator, and cancel the runtime shutdown signal.
+The close cascade closes only the AppServer slot it owns, so it never affects a
+replacement's new live runtime.
 The optional idle-session supervisor is event driven: AppServer activity, host
 session activity, and `CommandQueue` revisions wake it, and it sleeps to the
 earliest per-session deadline. Attached surfaces, active turns, and non-empty
@@ -214,8 +216,11 @@ are bounded by
 env `COCO_SERVER_SHUTDOWN_TIMEOUT_SECS`; default 30). Headless, TUI, and SDK
 stdio convert local AppServer shutdown drain and Event Hub connector flush
 failures or timeouts into a nonzero process result after their ordinary cleanup
-has run. Both bounded waits also observe OS interrupt signals and return a
-non-clean shutdown result instead of continuing to wait for the timeout.
+has run. The AppServer shutdown drain wait observes OS interrupt signals (via
+`drain_with_timeout_or_signal`) and returns a non-clean result instead of
+waiting out the timeout; the SDK sidecar listener join is a concurrent,
+timeout-bounded `tokio::join!` (each listener supervisor aborts its own accepted
+connection owners on the shutdown signal, so those joins return promptly).
 `AppServerHostState` keeps persisted-session storage behind install/snapshot
 methods backed by `app_server_host::session_store`, so the remaining
 `coco-session` boundary is localized outside SDK protocol handling.
@@ -273,13 +278,13 @@ For the TUI, `start_passive_event_pump` attaches a separate passive local
 surface and continuously forwards bridge-routed `CoreEvent`s into the TUI
 event channel. Keep the interactive surface for server-request ownership; use
 the passive pump for ordinary event delivery.
-Use `install_session_runtime` when TUI/headless have already built a
-`SessionRuntime`; it snapshots the existing session id/cwd/model into the
-shared handler state instead of issuing a fresh `session/start`, installs the
-runtime's `SessionManager` so local `session/list`, `session/read`, and
-`session/turns/list` see persisted transcripts, and installs the shared
-`SessionTurnExecutor` so local `turn/start` uses the same execution path as the
-remote AppServer adapters.
+TUI/headless build their initial `SessionRuntime` through
+`SessionRuntimeFactory` and load it through the local bridge's `spawn_load`
+owner task, then install the runtime's `SessionManager` (so local
+`session/list`, `session/read`, and `session/turns/list` see persisted
+transcripts) and the shared `SessionTurnExecutor` (so local `turn/start` uses
+the same execution path as the remote AppServer adapters) into the shared
+handler state.
 TUI, headless, and SDK bootstraps now construct their initial runtime through
 `SessionRuntimeFactory`; the factory owns the cloneable build inputs and can
 build explicit-id handles. TUI/headless startup reserve the fresh/resume target
@@ -290,9 +295,10 @@ first. Production SDK `session/start` builds the client-started runtime through
 the same factory inside the AppServer load/replace owner task and closes the
 explicit startup placeholder slot. Start/resume without a configured runtime
 factory fail closed with the stable `runtime_factory_required` error.
-The local bridge has runtime-backed `spawn_replace` /
-`spawn_replace_detached` helpers that return the constructed runtime handle to
-callers. The TUI driver now has a swappable current-session owner: each command
+Replacement routes through `session_replace_operation.rs`, which uses
+`AppServer::spawn_replace` (fresh factory build) or `spawn_replace_to_live`
+(repoint onto an already-live orphan). The TUI driver now has a swappable
+current-session owner: each command
 loop iteration reads the current `SessionHandle`, and `/resume` / `/branch`
 construct a fresh runtime through `SessionRuntimeFactory`, seed the loaded
 transcript state, commit the AppServer replacement, and install the returned
@@ -330,10 +336,13 @@ runtime construction and late binds. SDK `initialize` now prefers the installed
 runtime for command, agent, and output-style metadata, falling back to the
 bootstrap snapshot only before a runtime exists; live fast-mode state is now
 read from the installed runtime's engine config, while account/auth remains
-bootstrap-owned until those sources grow runtime accessors. SDK-supplied
-agents, initialize hook callbacks, and plan-mode instructions sit behind
-`InitializeState` and are replayed into session start/resume replacement paths
-through `AppServerHostState` methods. Client-hosted MCP manager
+bootstrap-owned until those sources grow runtime accessors. SDK-supplied agents
+come from the per-connection `ConnectionProfile.agents` (parsed by
+`initialize_agents::parse_client_agent_definitions`), initialize hook callbacks
+via `hook_callback_bridge::register_initialize_hooks`, and plan-mode
+instructions via `connection_runtime_binding`; pre-runtime bootstrap data sits
+behind `BootstrapState`. These are applied in the session start/resume
+replacement paths. Client-hosted MCP manager
 construction now happens after the startup runtime is loaded and uses that
 runtime's MCP config; TUI/headless MCP bootstrap already builds or reuses
 managers from the session runtime. TUI, headless, and SDK event-hub connectors
@@ -417,7 +426,23 @@ surfaces receive `SessionEnded` lifecycle notifications.
 `turn/start` lifecycle events must use the same `TurnId` returned by the
 synchronous `TurnStartResult`; `AppServerLocalBridge::start_turn_and_wait_for_end`
 depends on that correlation and waits for the matching `TurnEnded` on the local
-interactive surface. `TurnStartParams` carries optional base64 paste images,
+interactive surface.
+Turn-lifecycle invariants: (1) `SessionTurnExecutor` owns exactly one terminal
+`TurnEnded` on every exit path (including `prevent_continuation` and the
+error/cancel paths); `turn.rs` never synthesizes a second terminal;
+`forward_turn_events` clears the active-turn slot once on the first terminal,
+drops duplicates with a warn, and synthesizes a failed terminal if the runner
+channel closes with none (so waiters never hang). (2) `SessionTurnCoordinator`
+has a `closed` tombstone: the close cascade (`SessionHandle::close_turn_coordinator`
+in `close_runtime`) rejects turn admission after close and cancels a turn
+admitted in the drain->close race. (3) Shortcuts (`/cost`, `/btw`, …) reserve
+the slot atomically via `reserve_shortcut_turn` (a `TurnLifecycleState::Reserved`
++ RAII guard) instead of a check-then-act probe, so a shortcut and a real
+`turn/start` cannot both be admitted. (4) The active turn id is read via
+`SessionHandle::active_turn_id`; server-request bridges tag their pending
+requests with it, and the terminal-forwarding path calls
+`AppServer::cancel_turn_server_requests` so an interrupted turn's pending
+requests are reclaimed. `TurnStartParams` carries optional base64 paste images,
 slash metadata attachment text, explicit model selection, and thinking
 overrides so TUI-local turn cut-over preserves prompt-command semantics.
 Both headless and TUI bootstraps now create this bridge before initial runtime

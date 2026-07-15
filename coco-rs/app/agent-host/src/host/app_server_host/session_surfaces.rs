@@ -97,14 +97,3 @@ pub(crate) fn encode_session_subscribe_envelope(
         event,
     }
 }
-
-pub(crate) fn local_replace_calling_surface(
-    app_server: &AppServer<AppSessionHandle>,
-    session_id: &SessionId,
-) -> Option<SurfaceId> {
-    let routing = app_server
-        .routing()
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    routing.interactive_owner(session_id).cloned()
-}

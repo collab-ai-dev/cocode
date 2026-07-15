@@ -140,15 +140,24 @@ server implementation. In-process client composition lives in
   borrow. It still exposes the underlying demux for server requests,
   notifications, and other buffered surfaces.
 
+## Per-surface buffer bound
+
+`RemoteEventDemux` caps each surface's buffered events/lifecycle at
+`MAX_BUFFERED_SURFACE_QUEUE`. Unlike the connection-scoped queues it does NOT
+drop-oldest — an event stream is ordered and lifecycle drops desync surface
+state — so an overflow means the caller is not draining a surface it subscribed
+to (a slow consumer) and the demux disconnects (`disconnected = true`); the
+caller reconnects and re-snapshots. `RemoteJsonRpcIncoming::handle_frame`
+applies the same policy at the connection events channel: `try_send`, and on a
+full channel report `ClientError::SlowConsumer`, which the owner loop routes
+through the guaranteed-disconnect path so pending RPCs resolve instead of
+hanging.
+
 ## Pending
 
-Interactive handles do not yet inject their stored `session_id` / `surface_id`
-into turn and runtime-control requests because the canonical request DTOs lack
-an explicit target. Consequently one connection cannot safely control multiple
-interactive sessions even though event demux supports multiple surfaces. The
-breaking remediation is specified in
-`docs/coco-rs/multi-session-app-server/protocol-scope.md` and
-`docs/coco-rs/multi-session-app-server/remediation-plan.md`.
+Per-request targeting is implemented: `RemoteSessionClient` helpers set
+`params.target = self.interactive_target()` on turn and runtime-control
+requests, so one connection can control multiple interactive sessions.
 
 Direct AppServer-owned persisted session-store listing/read semantics and
 broader TUI/Hub cut-over remain pending follow-up work.

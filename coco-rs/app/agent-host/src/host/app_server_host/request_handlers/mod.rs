@@ -43,4 +43,7 @@ pub(crate) struct ShortcutTurnState {
     pub session_id: coco_types::SessionId,
     pub turn_id: coco_types::TurnId,
     pub session: crate::session_runtime::SessionHandle,
+    /// Held for its lifetime: releases the coordinator turn-slot reservation
+    /// back to `Idle` when this shortcut state is dropped.
+    pub _reservation: crate::session_runtime::ShortcutReservationGuard,
 }

@@ -66,6 +66,12 @@ const DEFAULT_REMOTE_WRITE_TIMEOUT: Option<Duration> = Some(Duration::from_secs(
 /// that floods notifications / server requests without a reader cannot grow the
 /// client unboundedly. Drop-oldest with a warning once full.
 const MAX_BUFFERED_CONNECTION_QUEUE: usize = 1024;
+/// Cap on a single surface's buffered events/lifecycle. Unlike the connection
+/// queues this does NOT drop-oldest: an event stream is ordered (dropping loses
+/// continuity) and lifecycle drops desync surface state, so overflow means the
+/// caller is not draining a surface it subscribed to — a slow consumer — and the
+/// demux disconnects (the caller reconnects and re-snapshots).
+const MAX_BUFFERED_SURFACE_QUEUE: usize = 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RemoteConnectOptions {

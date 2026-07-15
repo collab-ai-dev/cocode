@@ -67,6 +67,7 @@ pub use roles::{RoleOverride, SessionModelRoleChange, SessionModelRoleSelection}
 pub(crate) use sandbox::{build_sandbox_state, sandbox_settings_deny_paths};
 pub(crate) use session_handle::SessionCloseDrainError;
 pub use session_handle::SessionHandle;
+pub(crate) use session_handle::ShortcutReservationGuard;
 pub use turn::SessionStats;
 pub(crate) use turn::{
     ActiveTurnDrainState, ActiveTurnHandles, SessionAccounting, SessionTurnCoordinator,

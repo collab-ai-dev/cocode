@@ -125,7 +125,7 @@ impl SandboxApprovalBridge for AppServerSandboxApprovalBridge {
         let reply = match self.app_server.route_server_request_with_reply(
             self.session.session_id().clone(),
             coco_app_server::SurfaceCapability::Interactive,
-            None,
+            self.session.active_turn_id(),
             coco_types::ServerRequest::AskForApproval(params),
         ) {
             Ok(receiver) => match receiver.await {

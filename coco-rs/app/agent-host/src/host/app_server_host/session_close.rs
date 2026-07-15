@@ -201,20 +201,11 @@ pub(crate) async fn close_local_session_handle_with_reason(
     reason: coco_hooks::orchestration::ExitReason,
     turn_drain_timeout: Duration,
 ) -> Result<(), RegistryError> {
-    if let Some(current_session_id) = handle
+    handle
         .runtime()
-        .close_if_current_session(handle.session_id(), reason, turn_drain_timeout)
+        .close_runtime(reason, turn_drain_timeout)
         .await
-        .map_err(|error| close_drain_error(handle.session_id(), error))?
-    {
-        debug!(
-            target: "coco::app_server_local",
-            registry_session_id = %handle.session_id(),
-            current_session_id = %current_session_id,
-            "skipping local AppServer close cascade for stale registry snapshot"
-        );
-        return Ok(());
-    }
+        .map_err(|error| close_drain_error(handle.session_id(), error))?;
     debug!(
         target: "coco::app_server_local",
         session_id = %handle.session_id(),

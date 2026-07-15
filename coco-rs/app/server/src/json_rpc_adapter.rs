@@ -15,9 +15,9 @@ use coco_app_server_transport::{
     JsonRpcRequest, JsonRpcSuccess, NdjsonDuplexConnection, NdjsonFrameWriter, TransportFrameError,
 };
 use coco_types::{
-    ClientRequest, CoreEvent, RequestId, RequestScope, ServerRequest, ServerRequestDelivery,
-    SessionId, SurfaceDelivery, SurfaceId, SurfaceLifecycleEffect, SurfaceLifecycleEffectKind,
-    error_codes, request_scope,
+    ClientRequest, CoreEvent, RequestId, RequestScope, SESSION_EVENT_METHOD,
+    SESSION_LIFECYCLE_METHOD, ServerRequest, ServerRequestDelivery, SessionId, SurfaceDelivery,
+    SurfaceId, SurfaceLifecycleEffect, SurfaceLifecycleEffectKind, error_codes, request_scope,
 };
 use futures::{SinkExt, StreamExt};
 use snafu::{ResultExt, Snafu};
@@ -34,8 +34,6 @@ use crate::{
 
 const DEFAULT_JSON_RPC_CHANNEL_CAPACITY: usize = 128;
 const DEFAULT_JSON_RPC_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
-const SESSION_EVENT_METHOD: &str = "session/event";
-const SESSION_LIFECYCLE_METHOD: &str = "session/lifecycle";
 
 /// JSON-RPC adapter for remote transports.
 ///
@@ -1132,17 +1130,18 @@ async fn send_json_rpc_frame_with_timeout(
 
 fn encode_surface_delivery(delivery: SurfaceDelivery) -> Result<JsonRpcFrame, JsonRpcAdapterError> {
     let envelope = delivery.envelope;
+    let layer = envelope.event.layer().as_str();
     let event = match envelope.event {
         CoreEvent::Protocol(notification) => serde_json::json!({
-            "layer": "protocol",
+            "layer": layer,
             "payload": notification,
         }),
         CoreEvent::Stream(event) => serde_json::json!({
-            "layer": "stream",
+            "layer": layer,
             "payload": event,
         }),
         CoreEvent::Tui(event) => serde_json::json!({
-            "layer": "tui",
+            "layer": layer,
             "payload": event,
         }),
     };
