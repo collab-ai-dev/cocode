@@ -201,8 +201,21 @@ impl SdkTransport for StdioTransport {
                         continue;
                     }
                     trace!(line = %trimmed, "stdio transport: recv frame");
-                    let frame = serde_json::from_str::<JsonRpcFrame>(trimmed)?;
-                    return Ok(Some(frame));
+                    match serde_json::from_str::<JsonRpcFrame>(trimmed) {
+                        Ok(frame) => return Ok(Some(frame)),
+                        Err(error) => {
+                            // A malformed line is peer noise (e.g. a garbled
+                            // write from one SDK binding). Dropping it keeps the
+                            // whole multi-session process alive; only I/O errors
+                            // are fatal. The line is unparseable, so it carries
+                            // no id to send a `-32700` reply against.
+                            warn!(
+                                error = %error,
+                                "stdio transport: dropping malformed JSON-RPC line"
+                            );
+                            continue;
+                        }
+                    }
                 }
                 Err(e) => {
                     warn!(error = %e, "stdio transport: read error");

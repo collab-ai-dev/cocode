@@ -75,6 +75,10 @@ impl RemoteAppServerBridgeHost {
         self
     }
 
+    pub fn turn_drain_timeout(&self) -> Duration {
+        self.turn_drain_timeout
+    }
+
     pub fn session_seq_allocator(&self) -> Arc<coco_app_server::SessionSeqAllocator> {
         Arc::clone(self.state.session_seq_allocator())
     }

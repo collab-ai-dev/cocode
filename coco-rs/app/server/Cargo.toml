@@ -19,7 +19,8 @@ chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
-tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+tracing.workspace = true
 tokio-tungstenite.workspace = true
 futures = { workspace = true, features = ["std"] }
 

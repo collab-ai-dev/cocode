@@ -219,6 +219,12 @@ pub enum AttachError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("session {session_id} is not a live session"))]
+    SessionNotFound {
+        session_id: SessionId,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 impl ErrorExt for AttachError {
@@ -227,6 +233,7 @@ impl ErrorExt for AttachError {
             Self::InteractiveOwnerConflict { .. } => StatusCode::InvalidArguments,
             Self::SurfaceLimit { .. } => StatusCode::ResourcesExhausted,
             Self::SessionClosing { .. } => StatusCode::Cancelled,
+            Self::SessionNotFound { .. } => StatusCode::FileNotFound,
         }
     }
 
@@ -246,6 +253,10 @@ pub enum SubscribeReplay {
 pub struct RouteOutcome {
     pub delivered: usize,
     pub disconnected: Vec<ConnectionKey>,
+    /// Server-request ids cancelled by disconnecting a full/closed connection
+    /// mid-route. The AppServer layer must resolve these waiters after the
+    /// routing lock is released; dropping them would wedge an in-flight turn.
+    pub cancelled_requests: Vec<RequestId>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -287,6 +298,9 @@ pub type SurfaceLifecycleSender = tokio::sync::mpsc::Sender<SurfaceLifecycleEffe
 pub struct LifecycleRouteOutcome {
     pub delivered: usize,
     pub disconnected: Vec<ConnectionKey>,
+    /// Server-request ids cancelled by disconnecting a full/closed connection
+    /// mid-route. See [`RouteOutcome::cancelled_requests`].
+    pub cancelled_requests: Vec<RequestId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -363,6 +377,10 @@ pub enum ServerRequestRouteError {
     QueueUnavailable {
         request_id: RequestId,
         surface_id: SurfaceId,
+        /// Other pending server-request ids cancelled by disconnecting the
+        /// full/closed connection. The AppServer layer must resolve their
+        /// waiters even though this route failed.
+        cancelled_requests: Vec<RequestId>,
     },
 }
 
@@ -621,7 +639,10 @@ impl RoutingState {
                 | Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                     if !outcome.disconnected.contains(&connection) {
                         outcome.disconnected.push(connection);
-                        self.disconnect(connection);
+                        let disconnected = self.disconnect(connection);
+                        outcome
+                            .cancelled_requests
+                            .extend(disconnected.cancelled_requests);
                     }
                 }
             }
@@ -668,7 +689,10 @@ impl RoutingState {
                 Err(tokio::sync::mpsc::error::TrySendError::Full(_))
                 | Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                     outcome.disconnected.push(connection);
-                    self.disconnect(connection);
+                    let disconnected = self.disconnect(connection);
+                    outcome
+                        .cancelled_requests
+                        .extend(disconnected.cancelled_requests);
                 }
             }
         }
@@ -753,10 +777,11 @@ impl RoutingState {
             Err(tokio::sync::mpsc::error::TrySendError::Full(_))
             | Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                 let request_id = pending.request_id;
-                self.disconnect(connection);
+                let disconnected = self.disconnect(connection);
                 Err(ServerRequestRouteError::QueueUnavailable {
                     request_id,
                     surface_id,
+                    cancelled_requests: disconnected.cancelled_requests,
                 })
             }
         }

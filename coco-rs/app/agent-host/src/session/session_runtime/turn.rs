@@ -1,6 +1,6 @@
 use std::sync::{
     Mutex,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use tokio_util::sync::CancellationToken;
@@ -136,6 +136,11 @@ pub(crate) struct SessionTurnCoordinator {
     next_turn: AtomicU64,
     lifecycle: Mutex<TurnLifecycleState>,
     accounting: Mutex<SessionAccounting>,
+    /// Tombstone set once the session close cascade has drained the active
+    /// turn. A turn/start that resolved its target before the close but runs
+    /// after it (the validation->execution gap) is rejected here so no new turn
+    /// is admitted against a closed session.
+    closed: AtomicBool,
 }
 
 impl Default for SessionTurnCoordinator {
@@ -144,6 +149,7 @@ impl Default for SessionTurnCoordinator {
             next_turn: AtomicU64::new(0),
             lifecycle: Mutex::new(TurnLifecycleState::Idle),
             accounting: Mutex::new(SessionAccounting::default()),
+            closed: AtomicBool::new(false),
         }
     }
 }
@@ -163,13 +169,34 @@ impl SessionTurnCoordinator {
             .lifecycle
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if lifecycle.is_busy() {
+        // Reject under the lifecycle lock so `close` (which takes the same lock)
+        // cannot interleave between this check and the slot install.
+        if self.closed.load(Ordering::Acquire) || lifecycle.is_busy() {
             return Err(());
         }
         let turn_id = self.next_turn_id(session_id);
         let cancel = CancellationToken::new();
         *lifecycle = TurnLifecycleState::Running(build(turn_id.clone(), cancel));
         Ok(turn_id)
+    }
+
+    /// Tombstone the coordinator so no further turn can be admitted, and return
+    /// the cancel token of a turn admitted in the drain->close race window so
+    /// the caller can cancel it. A `Running` turn admitted after the close drain
+    /// snapshot would otherwise run detached against a closed session; a
+    /// `Finishing` turn is already done (its terminal is in flight) and is
+    /// deliberately left alone so close waits for its terminal instead of
+    /// issuing a spurious cancel.
+    pub(crate) fn close(&self) -> Option<CancellationToken> {
+        let lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.closed.store(true, Ordering::Release);
+        match &*lifecycle {
+            TurnLifecycleState::Running(active) => Some(active.cancel_token.clone()),
+            TurnLifecycleState::Finishing(_) | TurnLifecycleState::Idle => None,
+        }
     }
 
     pub(crate) fn cancel_token(&self) -> Option<CancellationToken> {

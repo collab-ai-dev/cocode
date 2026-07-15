@@ -333,6 +333,7 @@ async fn handle_turn_start_compact_shortcut(
                 notif_tx,
                 runtime_for_start.clone(),
                 start.session_id.clone(),
+                start.turn_id.clone(),
             ));
 
             let turn_id_for_task = start.turn_id.clone();

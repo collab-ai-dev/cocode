@@ -558,7 +558,7 @@ async fn json_rpc_frame_channel_owner_disconnects_slow_outbound_consumer() {
 }
 
 #[tokio::test]
-async fn json_rpc_frame_channel_owner_disconnects_after_adapter_error() {
+async fn json_rpc_frame_channel_owner_tolerates_unresolvable_response() {
     let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
     let adapter = JsonRpcAdapter::with_channel_capacity(Arc::clone(&server), 8);
     let connection = adapter.connect();
@@ -573,13 +573,17 @@ async fn json_rpc_frame_channel_owner_disconnects_after_adapter_error() {
         )
         .expect("attach surface");
     let (inbound_tx, inbound_rx) = tokio::sync::mpsc::channel(8);
-    let (outbound_tx, _outbound_rx) = tokio::sync::mpsc::channel(8);
+    let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::channel(8);
     let owner = tokio::spawn(connection.run_frame_channels(
         inbound_rx,
         outbound_tx,
         Arc::new(RecordingHandler::default()),
     ));
 
+    // A response frame with no matching pending server-request is peer noise
+    // (a late, duplicate, or already-cancelled reply). It must be dropped, not
+    // treated as fatal: doing so would tear down every session on a shared
+    // multi-session connection.
     inbound_tx
         .send(JsonRpcFrame::Success(JsonRpcSuccess::new(
             JsonRpcId::String("missing".to_string()),
@@ -587,14 +591,34 @@ async fn json_rpc_frame_channel_owner_disconnects_after_adapter_error() {
         )))
         .await
         .expect("send unexpected response");
-    let error = owner
+
+    // Prove the owner is still alive after dropping the stray response: a
+    // follow-up request is dispatched and answered normally.
+    inbound_tx
+        .send(JsonRpcFrame::Request(JsonRpcRequest::new(
+            JsonRpcId::String("req-after".to_string()),
+            "control/keepAlive",
+            None,
+        )))
+        .await
+        .expect("send keepalive after stray response");
+    let response = outbound_rx.recv().await.expect("keepalive response");
+    assert_eq!(
+        response,
+        JsonRpcFrame::Success(JsonRpcSuccess::new(
+            JsonRpcId::String("req-after".to_string()),
+            serde_json::json!({ "ok": true }),
+        ))
+    );
+
+    // Only closing the inbound channel ends the owner; it returns Ok with the
+    // disconnect outcome, not an error.
+    drop(inbound_tx);
+    let outcome = owner
         .await
         .expect("owner task")
-        .expect_err("unexpected response should fail owner");
-    assert!(matches!(
-        error,
-        JsonRpcAdapterError::UnknownResponseId { .. }
-    ));
+        .expect("unresolvable response must not fail the owner");
+    assert_eq!(outcome.detached_surfaces, vec![surface_id]);
     assert_eq!(
         server
             .routing()

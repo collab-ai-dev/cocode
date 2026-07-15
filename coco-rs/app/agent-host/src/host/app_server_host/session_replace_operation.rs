@@ -236,32 +236,29 @@ pub(crate) async fn replace_app_server_session_with_runtime(
     let _destination_runtime = destination_handle.into_session();
 
     if needs_live_repoint {
-        let commit = match app_server.commit_replace_to_live_for_surface(
-            &source_session_id,
-            &destination_id,
-            &source_surface_id,
-        ) {
-            Ok(commit) => commit,
-            Err(error) => {
-                return Err(app_server_lifecycle_error_parts("commit replacement", error).into());
-            }
-        };
-        app_server.route_lifecycle_effects(commit.lifecycle_effects);
-        let close_server = Arc::clone(&app_server);
+        // Run the whole commit + source-close through the AppServer owner-task
+        // wrapper so the source close cascade is `OwnerGuard`-protected and
+        // shutdown-tracked. A bare `tokio::spawn` here would wedge the source in
+        // `Closing` forever on a cascade panic (and escape shutdown joining).
         let close_state = Arc::clone(&state);
-        tokio::spawn(async move {
-            close_app_server_session_state(&close_state, &source_session_id).await;
-            let close_result = close_local_session_handle_with_reason(
-                commit.old_handle,
+        let close_source_id = source_session_id.clone();
+        let close_old = move |old_handle: AppSessionHandle| async move {
+            close_app_server_session_state(&close_state, &close_source_id).await;
+            close_local_session_handle_with_reason(
+                old_handle,
                 coco_hooks::orchestration::ExitReason::Other,
                 turn_drain_timeout,
             )
-            .await;
-            if let Ok(close) = close_server.complete_session_close(&source_session_id, close_result)
-            {
-                close_server.route_lifecycle_effects(close.lifecycle_effects);
-            }
-        });
+            .await
+        };
+        app_server
+            .spawn_replace_to_live(
+                source_session_id.clone(),
+                destination_id.clone(),
+                source_surface_id.clone(),
+                close_old,
+            )
+            .map_err(|error| app_server_lifecycle_error_parts("commit replacement", error))?;
     }
 
     Ok(SessionReplaceResult {

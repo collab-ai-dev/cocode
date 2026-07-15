@@ -214,6 +214,34 @@ fn run_turn_with_session(
                         },
                     ))
                     .await;
+                // Emit a self-contained TurnStarted + TurnEnded(HookBlocked)
+                // pair, mirroring the `blocking_error` branch above. Without it
+                // `turn/start` returned a `TurnId` for which no terminal ever
+                // arrives, hanging `start_turn_and_wait_for_end`, the TUI
+                // completion monitor, and SDK stream consumers forever.
+                let _ = event_tx
+                    .send(CoreEvent::Protocol(
+                        coco_types::ServerNotification::TurnStarted(
+                            coco_types::TurnStartedParams {
+                                turn_id: cycle_turn_id.clone(),
+                            },
+                        ),
+                    ))
+                    .await;
+                let _ = event_tx
+                    .send(CoreEvent::Protocol(
+                        coco_types::ServerNotification::TurnEnded(
+                            coco_types::TurnEndedParams::failed(
+                                cycle_turn_id.clone(),
+                                /*usage*/ None,
+                                coco_types::ErrorPayload {
+                                    message: stop_msg.clone(),
+                                    code: coco_types::ErrorCode::HookBlocked,
+                                },
+                            ),
+                        ),
+                    ))
+                    .await;
                 return Ok(());
             }
 
@@ -371,6 +399,23 @@ fn run_turn_with_session(
                     // observes the completed history (CS-2 / R13). A cancelled
                     // turn supersedes it with the Interrupted terminator above.
                     let _ = event_tx_for_error.send(terminal).await;
+                } else {
+                    // Defensive: the engine returned Ok without ever emitting a
+                    // terminal (a degenerate / custom runner path). Synthesize a
+                    // completed terminal so `start_turn_and_wait_for_end` and the
+                    // passive completion monitor never hang. The executor owns
+                    // exactly one terminal on every exit path.
+                    let _ = event_tx_for_error
+                        .send(CoreEvent::Protocol(
+                            coco_types::ServerNotification::TurnEnded(
+                                coco_types::TurnEndedParams::completed(
+                                    cycle_turn_id.clone(),
+                                    /*usage*/ None,
+                                    /*stop_reason*/ None,
+                                ),
+                            ),
+                        ))
+                        .await;
                 }
                 Ok(())
             }
@@ -380,13 +425,13 @@ fn run_turn_with_session(
                     "SessionTurnExecutor: engine returned error; \
                      user message already persisted to session history"
                 );
-                // Engine-bail path: when cancel was the cause the
-                // engine_session Err branch skipped its `Failed`
-                // emit, so we synthesize the Interrupted terminator
-                // here. When it's a true error the engine_session
-                // already emitted `Failed` — no second terminator
-                // needed.
+                // Single terminal on the error path. The executor owns exactly
+                // one `TurnEnded` on every exit; `turn.rs` must not synthesize a
+                // second one (that produced the duplicate Interrupted-then-Failed
+                // pair and dropped the engine's usage + typed error code).
                 if cancel_for_terminal.is_cancelled() {
+                    // Cancel raced past the engine's Ok/Err boundary; the
+                    // Interrupted terminator supersedes any engine `Failed`.
                     let _ = event_tx_for_error
                         .send(CoreEvent::Protocol(
                             coco_types::ServerNotification::TurnEnded(
@@ -394,6 +439,30 @@ fn run_turn_with_session(
                                     cycle_turn_id.clone(),
                                     /*usage*/ None,
                                     coco_types::TurnAbortReason::UserCancel,
+                                ),
+                            ),
+                        ))
+                        .await;
+                } else if let Some(terminal) = pending_terminal {
+                    // True error: the engine already emitted its own `Failed`
+                    // terminal carrying real usage and the typed error code.
+                    // Deliver it rather than a lossy `usage: None` / `Unknown`
+                    // synthetic.
+                    let _ = event_tx_for_error.send(terminal).await;
+                } else {
+                    // The engine bailed before emitting any terminal (e.g. a
+                    // compaction / transport failure). Synthesize one so
+                    // consumers and waiters see a complete cycle.
+                    let _ = event_tx_for_error
+                        .send(CoreEvent::Protocol(
+                            coco_types::ServerNotification::TurnEnded(
+                                coco_types::TurnEndedParams::failed(
+                                    cycle_turn_id.clone(),
+                                    /*usage*/ None,
+                                    coco_types::ErrorPayload {
+                                        message: e.to_string(),
+                                        code: coco_types::ErrorCode::Unknown,
+                                    },
                                 ),
                             ),
                         ))

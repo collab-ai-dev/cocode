@@ -23,7 +23,7 @@ use futures::{SinkExt, StreamExt};
 use snafu::{ResultExt, Snafu};
 use tokio::{
     io::{AsyncBufRead, AsyncRead, AsyncWrite},
-    task::JoinSet,
+    task::{JoinHandle, JoinSet},
 };
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message as WebSocketMessage};
 
@@ -146,6 +146,7 @@ impl<H: Clone> JsonRpcAdapter<H> {
         Factory: JsonRpcConnectionHandlerFactory,
     {
         let mut owners = JoinSet::new();
+        let mut accept_failures = 0u32;
 
         loop {
             tokio::select! {
@@ -153,26 +154,33 @@ impl<H: Clone> JsonRpcAdapter<H> {
                     break;
                 }
                 accepted = listener.accept() => {
-                    let transport = accepted.context(AcceptTransportSnafu)?;
-                    let connection = self.connect();
-                    let handler = factory.open(connection.connection_key());
-                    owners.spawn(async move {
-                        connection.run_ndjson_transport(transport, handler).await
-                    });
+                    match accepted {
+                        Ok(transport) => {
+                            accept_failures = 0;
+                            let connection = self.connect();
+                            let handler = factory.open(connection.connection_key());
+                            owners.spawn(async move {
+                                connection.run_ndjson_transport(transport, handler).await
+                            });
+                        }
+                        Err(source) => {
+                            if handle_accept_failure(&mut accept_failures, &source).await {
+                                owners.shutdown().await;
+                                return Err(source).context(AcceptTransportSnafu);
+                            }
+                        }
+                    }
                 }
                 joined = owners.join_next(), if !owners.is_empty() => {
-                    let Some(joined) = joined else {
-                        continue;
-                    };
-                    joined.context(OwnerJoinSnafu)?.context(OwnerSnafu)?;
+                    log_connection_owner_result(joined);
                 }
             }
         }
 
-        while let Some(joined) = owners.join_next().await {
-            joined.context(OwnerJoinSnafu)?.context(OwnerSnafu)?;
-        }
-
+        // Prompt teardown: a single misbehaving or idle connection must not make
+        // shutdown wait on it. Aborting accepted owners here is safe because the
+        // whole AppServer is shutting down; owner cleanup is best-effort.
+        owners.shutdown().await;
         Ok(())
     }
 
@@ -204,6 +212,7 @@ impl<H: Clone> JsonRpcAdapter<H> {
         Factory: JsonRpcConnectionHandlerFactory,
     {
         let mut owners = JoinSet::new();
+        let mut accept_failures = 0u32;
 
         loop {
             tokio::select! {
@@ -211,26 +220,30 @@ impl<H: Clone> JsonRpcAdapter<H> {
                     break;
                 }
                 accepted = listener.accept() => {
-                    let transport = accepted.context(AcceptTransportSnafu)?;
-                    let connection = self.connect();
-                    let handler = factory.open(connection.connection_key());
-                    owners.spawn(async move {
-                        connection.run_ndjson_transport(transport, handler).await
-                    });
+                    match accepted {
+                        Ok(transport) => {
+                            accept_failures = 0;
+                            let connection = self.connect();
+                            let handler = factory.open(connection.connection_key());
+                            owners.spawn(async move {
+                                connection.run_ndjson_transport(transport, handler).await
+                            });
+                        }
+                        Err(source) => {
+                            if handle_accept_failure(&mut accept_failures, &source).await {
+                                owners.shutdown().await;
+                                return Err(source).context(AcceptTransportSnafu);
+                            }
+                        }
+                    }
                 }
                 joined = owners.join_next(), if !owners.is_empty() => {
-                    let Some(joined) = joined else {
-                        continue;
-                    };
-                    joined.context(OwnerJoinSnafu)?.context(OwnerSnafu)?;
+                    log_connection_owner_result(joined);
                 }
             }
         }
 
-        while let Some(joined) = owners.join_next().await {
-            joined.context(OwnerJoinSnafu)?.context(OwnerSnafu)?;
-        }
-
+        owners.shutdown().await;
         Ok(())
     }
 
@@ -261,6 +274,7 @@ impl<H: Clone> JsonRpcAdapter<H> {
         Factory: JsonRpcConnectionHandlerFactory,
     {
         let mut owners = JoinSet::new();
+        let mut accept_failures = 0u32;
 
         loop {
             tokio::select! {
@@ -268,29 +282,41 @@ impl<H: Clone> JsonRpcAdapter<H> {
                     break;
                 }
                 accepted = listener.accept() => {
-                    let (stream, _) = accepted.context(AcceptWebSocketSnafu)?;
-                    let connection = self.connect();
-                    let handler = factory.open(connection.connection_key());
-                    owners.spawn(async move {
-                        let websocket = tokio_tungstenite::accept_async(stream)
-                            .await
-                            .context(WebSocketSnafu)?;
-                        connection.run_websocket_transport(websocket, handler).await
-                    });
+                    match accepted {
+                        Ok((stream, _)) => {
+                            accept_failures = 0;
+                            // Register the AppServer connection only after the
+                            // WebSocket handshake succeeds. Doing `connect()`
+                            // before `accept_async` would leak routing-state
+                            // entries for every failed handshake (e.g. a port
+                            // scan). The adapter is cloned into the owner task so
+                            // registration happens inside it, post-handshake.
+                            let adapter = self.clone();
+                            let factory = Arc::clone(&factory);
+                            owners.spawn(async move {
+                                let websocket = tokio_tungstenite::accept_async(stream)
+                                    .await
+                                    .context(WebSocketSnafu)?;
+                                let connection = adapter.connect();
+                                let handler = factory.open(connection.connection_key());
+                                connection.run_websocket_transport(websocket, handler).await
+                            });
+                        }
+                        Err(source) => {
+                            if handle_accept_failure(&mut accept_failures, &source).await {
+                                owners.shutdown().await;
+                                return Err(source).context(AcceptWebSocketSnafu);
+                            }
+                        }
+                    }
                 }
                 joined = owners.join_next(), if !owners.is_empty() => {
-                    let Some(joined) = joined else {
-                        continue;
-                    };
-                    joined.context(OwnerJoinSnafu)?.context(OwnerSnafu)?;
+                    log_connection_owner_result(joined);
                 }
             }
         }
 
-        while let Some(joined) = owners.join_next().await {
-            joined.context(OwnerJoinSnafu)?.context(OwnerSnafu)?;
-        }
-
+        owners.shutdown().await;
         Ok(())
     }
 }
@@ -407,199 +433,142 @@ impl<H: Clone> JsonRpcAdapterConnection<H> {
         dispatch_client_request_for_connection(self.connection, request, handler).await
     }
 
+    /// Owner loop for caller-supplied NDJSON streams.
+    ///
+    /// Reader and writer run as their own tasks that only shuttle frames to and
+    /// from bounded channels; the shared [`run_frame_channels`] owner performs
+    /// the request dispatch (in its own task set) and event/lifecycle ordering.
+    /// This keeps a slow request handler from head-of-line-blocking inbound
+    /// interrupts or outbound emission, and keeps a single event-before-terminal
+    /// ordering rule across every transport.
     pub async fn run_ndjson_transport<R, W, Handler>(
-        mut self,
+        self,
         transport: NdjsonDuplexConnection<R, W>,
         handler: Arc<Handler>,
     ) -> Result<DisconnectOutcome, JsonRpcConnectionOwnerError>
     where
-        R: AsyncBufRead + Unpin,
-        W: AsyncWrite + Unpin,
+        R: AsyncBufRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin + Send + 'static,
         Handler: JsonRpcRequestHandler,
     {
         let (mut reader, mut writer) = transport.split();
-        let result = loop {
-            tokio::select! {
-                frame = reader.read_frame() => {
-                    match frame {
-                        Ok(Some(frame)) => {
-                            let response = match self.handle_inbound_frame(frame, handler.as_ref()).await {
-                                Ok(response) => response,
-                                Err(error) => break Err(error.into()),
-                            };
-                            if let Some(response) = response
-                                && let Err(error) = write_ndjson_json_rpc_frame_with_timeout(
-                                    &mut writer,
-                                    &response,
-                                    self.write_timeout,
-                                )
-                                .await
-                            {
-                                break Err(error);
-                            }
+        let write_timeout = self.write_timeout;
+        let (inbound_tx, inbound_rx) =
+            tokio::sync::mpsc::channel::<JsonRpcFrame>(DEFAULT_JSON_RPC_CHANNEL_CAPACITY);
+        let (outbound_tx, mut outbound_rx) =
+            tokio::sync::mpsc::channel::<JsonRpcFrame>(DEFAULT_JSON_RPC_CHANNEL_CAPACITY);
+
+        let reader_task = tokio::spawn(async move {
+            loop {
+                match reader.read_frame().await {
+                    Ok(Some(frame)) => {
+                        if inbound_tx.send(frame).await.is_err() {
+                            break Ok(());
                         }
-                        Ok(None) => break Ok(()),
-                        Err(source) => break Err(JsonRpcConnectionOwnerError::Transport { source }),
                     }
-                }
-                delivery = self.events.recv() => {
-                    let Some(delivery) = delivery else {
-                        break Ok(());
-                    };
-                    let frame = match encode_surface_delivery(delivery) {
-                        Ok(frame) => frame,
-                        Err(error) => break Err(error.into()),
-                    };
-                    if let Err(error) = write_ndjson_json_rpc_frame_with_timeout(
-                        &mut writer,
-                        &frame,
-                        self.write_timeout,
-                    )
-                    .await
-                    {
-                        break Err(error);
-                    }
-                }
-                delivery = self.server_requests.recv() => {
-                    let Some(delivery) = delivery else {
-                        break Ok(());
-                    };
-                    let frame = match self.encode_server_request(delivery) {
-                        Ok(frame) => frame,
-                        Err(error) => break Err(error.into()),
-                    };
-                    if let Err(error) = write_ndjson_json_rpc_frame_with_timeout(
-                        &mut writer,
-                        &frame,
-                        self.write_timeout,
-                    )
-                    .await
-                    {
-                        break Err(error);
-                    }
-                }
-                delivery = self.lifecycle.recv() => {
-                    let Some(delivery) = delivery else {
-                        break Ok(());
-                    };
-                    let frame = encode_lifecycle_delivery(delivery);
-                    if let Err(error) = write_ndjson_json_rpc_frame_with_timeout(
-                        &mut writer,
-                        &frame,
-                        self.write_timeout,
-                    )
-                    .await
-                    {
-                        break Err(error);
-                    }
+                    Ok(None) => break Ok(()),
+                    Err(source) => break Err(JsonRpcConnectionOwnerError::Transport { source }),
                 }
             }
-        };
+        });
+        let writer_task = tokio::spawn(async move {
+            while let Some(frame) = outbound_rx.recv().await {
+                write_ndjson_json_rpc_frame_with_timeout(&mut writer, &frame, write_timeout)
+                    .await?;
+            }
+            Ok::<(), JsonRpcConnectionOwnerError>(())
+        });
 
-        let outcome = self.server.disconnect(self.connection);
-        result.map(|()| outcome)
+        self.drive_frame_pump(handler, inbound_rx, outbound_tx, reader_task, writer_task)
+            .await
     }
 
+    /// Owner loop for an already-accepted WebSocket stream.
+    ///
+    /// Same reader/writer-pump architecture as [`run_ndjson_transport`]: the
+    /// split stream half feeds inbound frames to a channel and the split sink
+    /// half drains an outbound channel, while [`run_frame_channels`] owns
+    /// dispatch and ordering.
     pub async fn run_websocket_transport<S, Handler>(
-        mut self,
-        mut websocket: WebSocketStream<S>,
+        self,
+        websocket: WebSocketStream<S>,
         handler: Arc<Handler>,
     ) -> Result<DisconnectOutcome, JsonRpcConnectionOwnerError>
     where
-        S: AsyncRead + AsyncWrite + Unpin,
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
         Handler: JsonRpcRequestHandler,
     {
-        let result = loop {
-            tokio::select! {
-                message = websocket.next() => {
-                    let Some(message) = message else {
-                        break Ok(());
-                    };
-                    let message = match message {
-                        Ok(message) => message,
-                        Err(source) => break Err(JsonRpcConnectionOwnerError::WebSocket { source }),
-                    };
-                    let inbound = match json_rpc_frame_from_websocket_message(message) {
-                        Ok(inbound) => inbound,
-                        Err(error) => break Err(error),
-                    };
-                    match inbound {
-                        WebSocketInboundFrame::Frame(frame) => {
-                            let response = match self.handle_inbound_frame(frame, handler.as_ref()).await {
-                                Ok(response) => response,
-                                Err(error) => break Err(error.into()),
-                            };
-                            if let Some(response) = response
-                                && let Err(error) = write_websocket_json_rpc_frame_with_timeout(
-                                    &mut websocket,
-                                    &response,
-                                    self.write_timeout,
-                                )
-                                .await
-                            {
-                                break Err(error);
-                            }
+        let write_timeout = self.write_timeout;
+        let (mut sink, mut stream) = websocket.split();
+        let (inbound_tx, inbound_rx) =
+            tokio::sync::mpsc::channel::<JsonRpcFrame>(DEFAULT_JSON_RPC_CHANNEL_CAPACITY);
+        let (outbound_tx, mut outbound_rx) =
+            tokio::sync::mpsc::channel::<JsonRpcFrame>(DEFAULT_JSON_RPC_CHANNEL_CAPACITY);
+
+        let reader_task = tokio::spawn(async move {
+            loop {
+                let Some(message) = stream.next().await else {
+                    break Ok(());
+                };
+                let message = match message {
+                    Ok(message) => message,
+                    Err(source) => break Err(JsonRpcConnectionOwnerError::WebSocket { source }),
+                };
+                match json_rpc_frame_from_websocket_message(message) {
+                    Ok(WebSocketInboundFrame::Frame(frame)) => {
+                        if inbound_tx.send(frame).await.is_err() {
+                            break Ok(());
                         }
-                        WebSocketInboundFrame::Ignore => {}
-                        WebSocketInboundFrame::Closed => break Ok(()),
                     }
-                }
-                delivery = self.events.recv() => {
-                    let Some(delivery) = delivery else {
-                        break Ok(());
-                    };
-                    let frame = match encode_surface_delivery(delivery) {
-                        Ok(frame) => frame,
-                        Err(error) => break Err(error.into()),
-                    };
-                    if let Err(error) = write_websocket_json_rpc_frame_with_timeout(
-                        &mut websocket,
-                        &frame,
-                        self.write_timeout,
-                    )
-                    .await
-                    {
-                        break Err(error);
-                    }
-                }
-                delivery = self.server_requests.recv() => {
-                    let Some(delivery) = delivery else {
-                        break Ok(());
-                    };
-                    let frame = match self.encode_server_request(delivery) {
-                        Ok(frame) => frame,
-                        Err(error) => break Err(error.into()),
-                    };
-                    if let Err(error) = write_websocket_json_rpc_frame_with_timeout(
-                        &mut websocket,
-                        &frame,
-                        self.write_timeout,
-                    )
-                    .await
-                    {
-                        break Err(error);
-                    }
-                }
-                delivery = self.lifecycle.recv() => {
-                    let Some(delivery) = delivery else {
-                        break Ok(());
-                    };
-                    let frame = encode_lifecycle_delivery(delivery);
-                    if let Err(error) = write_websocket_json_rpc_frame_with_timeout(
-                        &mut websocket,
-                        &frame,
-                        self.write_timeout,
-                    )
-                    .await
-                    {
-                        break Err(error);
-                    }
+                    Ok(WebSocketInboundFrame::Ignore) => {}
+                    Ok(WebSocketInboundFrame::Closed) => break Ok(()),
+                    Err(error) => break Err(error),
                 }
             }
-        };
+        });
+        let writer_task = tokio::spawn(async move {
+            while let Some(frame) = outbound_rx.recv().await {
+                write_websocket_split_frame_with_timeout(&mut sink, &frame, write_timeout).await?;
+            }
+            Ok::<(), JsonRpcConnectionOwnerError>(())
+        });
 
-        let outcome = self.server.disconnect(self.connection);
-        result.map(|()| outcome)
+        self.drive_frame_pump(handler, inbound_rx, outbound_tx, reader_task, writer_task)
+            .await
+    }
+
+    /// Drive the shared frame-channel owner alongside a reader/writer task pair.
+    ///
+    /// [`run_frame_channels`] disconnects the AppServer connection on exit, so
+    /// this helper only reconciles the three task results: the owner (and thus
+    /// disconnect) always runs; the reader is aborted if the owner ended first;
+    /// a reader/writer transport failure is surfaced when the owner otherwise
+    /// succeeded.
+    async fn drive_frame_pump<Handler>(
+        self,
+        handler: Arc<Handler>,
+        inbound_rx: tokio::sync::mpsc::Receiver<JsonRpcFrame>,
+        outbound_tx: tokio::sync::mpsc::Sender<JsonRpcFrame>,
+        reader_task: JoinHandle<Result<(), JsonRpcConnectionOwnerError>>,
+        writer_task: JoinHandle<Result<(), JsonRpcConnectionOwnerError>>,
+    ) -> Result<DisconnectOutcome, JsonRpcConnectionOwnerError>
+    where
+        Handler: JsonRpcRequestHandler,
+    {
+        let owner_result = self
+            .run_frame_channels(inbound_rx, outbound_tx, handler)
+            .await
+            .map_err(JsonRpcConnectionOwnerError::from);
+
+        let reader_result = join_or_abort_transport_task(reader_task).await;
+        let writer_result = join_or_abort_transport_task(writer_task).await;
+
+        match (owner_result, reader_result, writer_result) {
+            (Err(error), _, _) => Err(error),
+            (Ok(_), Err(error), _) => Err(error),
+            (Ok(_), Ok(()), Err(error)) => Err(error),
+            (Ok(outcome), Ok(()), Ok(())) => Ok(outcome),
+        }
     }
 
     pub async fn run_frame_channels<Handler>(
@@ -690,8 +659,18 @@ impl<H: Clone> JsonRpcAdapterConnection<H> {
                             }
                         }
                         response @ (JsonRpcFrame::Success(_) | JsonRpcFrame::Error(_)) => {
+                            // A reply to a server-initiated request. A late,
+                            // duplicate, or already-cancelled reply (the pending
+                            // ownership was cleared by turn interrupt / session
+                            // close before the client's reply arrived) is peer
+                            // noise; it must never tear down a multi-session
+                            // connection. Warn and drop; only encode/transport
+                            // failures below stay fatal.
                             if let Err(error) = self.resolve_server_request_response(response) {
-                                break Err(error);
+                                tracing::warn!(
+                                    %error,
+                                    "dropping unresolved JSON-RPC server-request response"
+                                );
                             }
                         }
                     }
@@ -729,34 +708,6 @@ impl<H: Clone> JsonRpcAdapterConnection<H> {
         self.server.disconnect(self.connection)
     }
 
-    async fn handle_inbound_frame(
-        &mut self,
-        frame: JsonRpcFrame,
-        handler: &dyn JsonRpcRequestHandler,
-    ) -> Result<Option<JsonRpcFrame>, JsonRpcAdapterError> {
-        match frame {
-            JsonRpcFrame::Request(request) => {
-                Ok(Some(self.dispatch_client_request(request, handler).await))
-            }
-            JsonRpcFrame::Notification(notification) => {
-                if let Ok(request) =
-                    client_request_from_method_and_params(notification.method, notification.params)
-                {
-                    let context = JsonRpcRequestContext {
-                        connection: self.connection,
-                        scope: request_scope(request.method()),
-                    };
-                    let _ = handler.handle_json_rpc_request(context, request).await;
-                }
-                Ok(None)
-            }
-            response @ (JsonRpcFrame::Success(_) | JsonRpcFrame::Error(_)) => {
-                self.resolve_server_request_response(response)?;
-                Ok(None)
-            }
-        }
-    }
-
     fn remove_pending_server_request(
         &mut self,
         id: &JsonRpcId,
@@ -764,6 +715,50 @@ impl<H: Clone> JsonRpcAdapterConnection<H> {
         self.pending_server_requests
             .remove(id)
             .ok_or_else(|| JsonRpcAdapterError::UnknownResponseId { id: id.clone() })
+    }
+}
+
+/// After this many consecutive `accept()` failures the listener supervisor
+/// stops instead of hot-looping on a permanently broken listener. Transient
+/// errors (EMFILE / ECONNABORTED) reset the counter on the next success.
+const MAX_CONSECUTIVE_ACCEPT_FAILURES: u32 = 16;
+
+/// Record one `accept()` failure. Returns `true` when the consecutive-failure
+/// budget is exhausted and the supervisor should stop. A short sleep keeps a
+/// transient condition (e.g. fd exhaustion) from burning CPU while it clears.
+async fn handle_accept_failure<E: std::fmt::Display>(
+    accept_failures: &mut u32,
+    source: &E,
+) -> bool {
+    *accept_failures += 1;
+    tracing::warn!(
+        %source,
+        accept_failures = *accept_failures,
+        "AppServer listener accept failed; continuing"
+    );
+    if *accept_failures >= MAX_CONSECUTIVE_ACCEPT_FAILURES {
+        return true;
+    }
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    false
+}
+
+/// Log the result of one completed connection owner task. A per-connection error
+/// or panic must never propagate out of the accept loop: doing so would drop the
+/// owner `JoinSet` and abort every sibling connection (and unlink the socket).
+fn log_connection_owner_result(
+    joined: Option<
+        Result<Result<DisconnectOutcome, JsonRpcConnectionOwnerError>, tokio::task::JoinError>,
+    >,
+) {
+    match joined {
+        None | Some(Ok(Ok(_))) => {}
+        Some(Ok(Err(error))) => {
+            tracing::warn!(%error, "AppServer connection owner exited with error");
+        }
+        Some(Err(join_error)) => {
+            tracing::warn!(%join_error, "AppServer connection owner task panicked");
+        }
     }
 }
 
@@ -849,6 +844,8 @@ pub enum JsonRpcConnectionOwnerError {
     DecodeWebSocketFrame { source: serde_json::Error },
     #[snafu(display("JSON-RPC transport did not accept a frame within {timeout:?}"))]
     TransportSlowConsumer { timeout: Duration },
+    #[snafu(display("JSON-RPC transport reader/writer task failed: {source}"))]
+    TransportTaskJoin { source: tokio::task::JoinError },
 }
 
 impl From<JsonRpcAdapterError> for JsonRpcConnectionOwnerError {
@@ -1085,32 +1082,40 @@ where
     }
 }
 
-async fn write_websocket_json_rpc_frame_with_timeout<S>(
-    websocket: &mut WebSocketStream<S>,
+async fn write_websocket_split_frame_with_timeout<S>(
+    sink: &mut futures::stream::SplitSink<WebSocketStream<S>, WebSocketMessage>,
     frame: &JsonRpcFrame,
     timeout: Duration,
 ) -> Result<(), JsonRpcConnectionOwnerError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    match tokio::time::timeout(timeout, write_websocket_json_rpc_frame(websocket, frame)).await {
-        Ok(result) => result,
+    let text = serde_json::to_string(frame).context(EncodeWebSocketFrameSnafu)?;
+    match tokio::time::timeout(timeout, sink.send(WebSocketMessage::Text(text.into()))).await {
+        Ok(result) => result.context(WebSocketSnafu),
         Err(_) => TransportSlowConsumerSnafu { timeout }.fail(),
     }
 }
 
-async fn write_websocket_json_rpc_frame<S>(
-    websocket: &mut WebSocketStream<S>,
-    frame: &JsonRpcFrame,
-) -> Result<(), JsonRpcConnectionOwnerError>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
-    let text = serde_json::to_string(frame).context(EncodeWebSocketFrameSnafu)?;
-    websocket
-        .send(WebSocketMessage::Text(text.into()))
-        .await
-        .context(WebSocketSnafu)
+/// Join a transport reader/writer task, ignoring an abort we requested because
+/// the owner ended first. A task that finished on its own surfaces its real
+/// result; a still-running task is aborted and its cancellation is treated as a
+/// clean exit (the owner already carries the connection outcome).
+async fn join_or_abort_transport_task(
+    task: JoinHandle<Result<(), JsonRpcConnectionOwnerError>>,
+) -> Result<(), JsonRpcConnectionOwnerError> {
+    if task.is_finished() {
+        return match task.await {
+            Ok(result) => result,
+            Err(source) => Err(source).context(TransportTaskJoinSnafu),
+        };
+    }
+    task.abort();
+    match task.await {
+        Ok(result) => result,
+        Err(source) if source.is_cancelled() => Ok(()),
+        Err(source) => Err(source).context(TransportTaskJoinSnafu),
+    }
 }
 
 async fn send_json_rpc_frame_with_timeout(
