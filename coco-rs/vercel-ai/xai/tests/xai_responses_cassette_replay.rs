@@ -44,11 +44,10 @@ async fn replay_responses_fixture(
     fixture: &str,
     options: LanguageModelV4CallOptions,
 ) -> Vec<LanguageModelV4StreamPart> {
-    let probe = create_xai(XaiProviderSettings {
-        base_url: Some("https://api.x.ai/v1".to_string()),
-        api_key: Some("test-key".to_string()),
-        ..Default::default()
-    })
+    let probe = create_xai(XaiProviderSettings::api_key(
+        Some("https://api.x.ai/v1".to_string()),
+        Some("test-key".to_string()),
+    ))
     .responses("grok-code-fast-1");
     let (mut recorded_body, _warnings, _names) = probe.get_args(&options).expect("get_args");
     recorded_body["stream"] = json!(true);
@@ -67,11 +66,10 @@ async fn replay_responses_fixture(
     }]);
 
     let player = CassettePlayer::start(cassette).await;
-    let model = create_xai(XaiProviderSettings {
-        base_url: Some(player.base_url()),
-        api_key: Some("test-key".to_string()),
-        ..Default::default()
-    })
+    let model = create_xai(XaiProviderSettings::api_key(
+        Some(player.base_url()),
+        Some("test-key".to_string()),
+    ))
     .responses("grok-code-fast-1");
 
     let mut stream = model

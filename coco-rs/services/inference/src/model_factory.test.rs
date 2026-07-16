@@ -108,6 +108,30 @@ fn build_gemini_dispatches_to_google_provider() {
 }
 
 #[test]
+fn custom_xai_instance_dispatches_by_api_type_not_provider_name() {
+    let runtime = build_runtime_with(Some((
+        "corp-grok".into(),
+        PartialProviderConfig {
+            api: Some(ProviderApi::Xai),
+            base_url: Some("https://gateway.example.test/v1".into()),
+            api_key: Some("test-key".into()),
+            env_key: Some("CORP_GROK_API_KEY".into()),
+            ..Default::default()
+        },
+    )));
+    let model = build_language_model_from_runtime(
+        &runtime,
+        &spec("corp-grok", ProviderApi::Xai, "grok-custom"),
+        None,
+        None,
+    )
+    .expect("typed xAI provider dispatches to dedicated adapter");
+
+    assert_eq!(model.provider(), "xai.chat");
+    assert_eq!(model.model_id(), "grok-custom");
+}
+
+#[test]
 fn build_volcengine_routes_to_openai_compat_via_runtime() {
     // Volcengine is a builtin provider with `api: Volcengine`. With G1 it
     // routes through openai-compatible and constructs successfully — no
@@ -137,7 +161,7 @@ fn build_openai_compat_routes_for_user_defined_instance() {
         },
     );
     let partial = PartialProviderConfig {
-        api: Some(ProviderApi::OpenaiCompat),
+        api: Some(ProviderApi::Xai),
         env_key: Some("LOCAL_KEY".into()),
         base_url: Some("http://localhost:8080/v1".into()),
         models: Some(models),
@@ -477,6 +501,7 @@ impl crate::credentials::ProviderCredentialResolver for FakeResolver {
     fn subscription_creds(
         &self,
         _provider_name: &str,
+        _expected_flow: coco_types::OAuthFlowId,
     ) -> Option<crate::credentials::SubscriptionCredsSupplier> {
         let creds = self.creds.clone()?;
         Some(Arc::new(move || Some(creds.clone())))
@@ -563,6 +588,42 @@ fn build_openai_auth_rejects_gemini_flow_on_openai_provider() {
         build_openai_auth(&cfg, Some(&resolver)).is_err(),
         "a Gemini flow on an OpenAI provider is a misconfiguration"
     );
+}
+
+fn grok_oauth_provider() -> ProviderConfig {
+    let partial = PartialProviderConfig {
+        api: Some(ProviderApi::OpenaiCompat),
+        auth: Some(coco_config::ProviderAuth::OAuth {
+            flow: coco_types::OAuthFlowId::XaiGrok,
+        }),
+        wire_api: Some(coco_types::WireApi::Responses),
+        base_url: Some("https://cli-chat-proxy.grok.com/v1".into()),
+        ..Default::default()
+    };
+    ProviderConfig::from_partial("grok", &partial).expect("grok provider")
+}
+
+#[test]
+fn build_xai_oauth_not_logged_in_errors_with_login_hint() {
+    let cfg = grok_oauth_provider();
+    let err = match build_xai(&cfg, "grok-code-fast-1", 30, None, None) {
+        Ok(_) => panic!("logged-out Grok OAuth must fail"),
+        Err(error) => error,
+    };
+    assert!(err.to_string().contains("coco login grok"));
+}
+
+#[test]
+fn build_xai_oauth_logged_in_builds_responses_model() {
+    let cfg = grok_oauth_provider();
+    let resolver = resolver_with(Some(crate::credentials::SubscriptionCreds {
+        access_token: "tok".into(),
+        ..Default::default()
+    }));
+    let model = build_xai(&cfg, "grok-code-fast-1", 30, Some(&resolver), None)
+        .expect("logged-in Grok provider builds");
+    assert_eq!(model.provider(), "xai.responses");
+    assert_eq!(model.model_id(), "grok-code-fast-1");
 }
 
 fn gemini_code_assist_provider() -> ProviderConfig {

@@ -13,11 +13,13 @@ use coco_provider_auth::error::ProviderAuthError;
 use coco_provider_auth::refresh::post_token;
 use coco_provider_auth::refresh::refresh_at;
 use coco_provider_auth::refresh::revoke;
+use coco_provider_auth::store::OAuthPrincipal;
 use coco_provider_auth::token_cell::TokenSnapshot;
 use serde_json::json;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::body_string_contains;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
@@ -68,6 +70,7 @@ fn prev(refresh_token: &str, login_epoch: u64) -> TokenSnapshot {
     TokenSnapshot {
         access_token: "old-access".into(),
         account_id: Some("acct-1".into()),
+        principal: None,
         refresh_token: Some(refresh_token.into()),
         subscription_type: Some("pro".into()),
         expires_at_ms: Some(0),
@@ -179,6 +182,60 @@ async fn refresh_401_maps_to_session_expired() {
         matches!(err, ProviderAuthError::SessionExpired { .. }),
         "401 on refresh ⇒ SessionExpired; got: {err:?}"
     );
+}
+
+#[tokio::test]
+async fn refresh_400_invalid_grant_is_terminal() {
+    let (_server, url) = mock_token_endpoint(ResponseTemplate::new(400).set_body_json(json!({
+        "error": "invalid_grant",
+        "error_description": "refresh token was rejected"
+    })))
+    .await;
+    let err = refresh_at(
+        &url,
+        &OPENAI_CHATGPT,
+        "openai-chatgpt",
+        &prev("dead", 1),
+        &reqwest::Client::new(),
+    )
+    .await
+    .expect_err("invalid_grant must terminate the session");
+
+    assert!(matches!(err, ProviderAuthError::SessionExpired { .. }));
+}
+
+#[tokio::test]
+async fn refresh_preserves_team_principal_in_request_and_snapshot() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .and(body_string_contains("principal_type=Team"))
+        .and(body_string_contains("principal_id=team-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "new-access",
+            "refresh_token": "new-refresh",
+            "expires_in": 3600
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut previous = prev("old-refresh", 4);
+    previous.principal = Some(OAuthPrincipal {
+        principal_type: "Team".into(),
+        principal_id: "team-123".into(),
+    });
+
+    let out = refresh_at(
+        &format!("{}/token", server.uri()),
+        &coco_provider_auth::descriptor::XAI_GROK,
+        "grok",
+        &previous,
+        &reqwest::Client::new(),
+    )
+    .await
+    .expect("team refresh succeeds");
+
+    assert_eq!(out.principal, previous.principal);
 }
 
 #[tokio::test]

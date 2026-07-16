@@ -36,6 +36,8 @@ pub struct StoredCredential {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<OAuthPrincipal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_type: Option<String>,
@@ -56,6 +58,7 @@ impl fmt::Debug for StoredCredential {
             )
             .field("id_token", &self.id_token.as_ref().map(|_| "<redacted>"))
             .field("account_id", &self.account_id)
+            .field("principal", &self.principal)
             .field("expires_at_ms", &self.expires_at_ms)
             .field("plan_type", &self.plan_type)
             .field("email", &self.email)
@@ -69,11 +72,32 @@ impl StoredCredential {
         TokenSnapshot {
             access_token: self.access_token.clone(),
             account_id: self.account_id.clone(),
+            principal: self.principal.clone(),
             refresh_token: self.refresh_token.clone(),
             subscription_type: self.plan_type.clone(),
             expires_at_ms: self.expires_at_ms,
             login_epoch: self.login_epoch,
         }
+    }
+}
+
+/// OAuth principal scope embedded in an access token. xAI requires this pair
+/// on refresh to retain a Team or Organization login instead of implicitly
+/// selecting the user's personal principal.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OAuthPrincipal {
+    pub principal_type: String,
+    pub principal_id: String,
+}
+
+impl OAuthPrincipal {
+    pub fn from_access_token(token: &str) -> Option<Self> {
+        let principal_type = crate::jwt::read_string_claim(token, &["principal_type"])?;
+        let principal_id = crate::jwt::read_string_claim(token, &["principal_id"])?;
+        Some(Self {
+            principal_type,
+            principal_id,
+        })
     }
 }
 

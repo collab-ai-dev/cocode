@@ -48,11 +48,10 @@ fn weather_tool() -> LanguageModelV4Tool {
 /// parallel_function_calling), a sanitized function tool, and tool_choice.
 #[test]
 fn chat_request_body_golden() {
-    let model = create_xai(XaiProviderSettings {
-        base_url: Some("https://api.x.ai/v1".to_string()),
-        api_key: Some("test-key".to_string()),
-        ..Default::default()
-    })
+    let model = create_xai(XaiProviderSettings::api_key(
+        Some("https://api.x.ai/v1".to_string()),
+        Some("test-key".to_string()),
+    ))
     .chat("grok-4.5");
 
     let options = LanguageModelV4CallOptions {
@@ -97,11 +96,10 @@ fn chat_request_body_golden() {
 /// and a sanitized function tool.
 #[test]
 fn responses_request_body_golden() {
-    let model = create_xai(XaiProviderSettings {
-        base_url: Some("https://api.x.ai/v1".to_string()),
-        api_key: Some("test-key".to_string()),
-        ..Default::default()
-    })
+    let model = create_xai(XaiProviderSettings::api_key(
+        Some("https://api.x.ai/v1".to_string()),
+        Some("test-key".to_string()),
+    ))
     .responses("grok-4.5");
 
     let options = LanguageModelV4CallOptions {

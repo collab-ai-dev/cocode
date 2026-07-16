@@ -96,11 +96,10 @@ async fn do_generate_parses_text_reasoning_toolcall_source_and_usage() {
         .mount(&server)
         .await;
 
-    let provider = create_xai(XaiProviderSettings {
-        base_url: Some(server.uri()),
-        api_key: Some("test-key".into()),
-        ..Default::default()
-    });
+    let provider = create_xai(XaiProviderSettings::api_key(
+        Some(server.uri()),
+        Some("test-key".into()),
+    ));
     let model = provider.responses("grok-4.5");
     let result = model
         .do_generate(&options(), None)
@@ -155,11 +154,10 @@ async fn do_generate_soft_error_on_200_is_not_retryable() {
         .mount(&server)
         .await;
 
-    let provider = create_xai(XaiProviderSettings {
-        base_url: Some(server.uri()),
-        api_key: Some("k".into()),
-        ..Default::default()
-    });
+    let provider = create_xai(XaiProviderSettings::api_key(
+        Some(server.uri()),
+        Some("k".into()),
+    ));
     let model = provider.responses("grok-4.5");
     let err = model
         .do_generate(&options(), None)
@@ -181,11 +179,10 @@ async fn do_generate_soft_error_service_unavailable_is_retryable() {
         .mount(&server)
         .await;
 
-    let provider = create_xai(XaiProviderSettings {
-        base_url: Some(server.uri()),
-        api_key: Some("k".into()),
-        ..Default::default()
-    });
+    let provider = create_xai(XaiProviderSettings::api_key(
+        Some(server.uri()),
+        Some("k".into()),
+    ));
     let model = provider.responses("grok-4.5");
     let err = model
         .do_generate(&options(), None)
@@ -222,11 +219,10 @@ async fn do_stream_text_reasoning_toolcall_and_usage() {
         .mount(&server)
         .await;
 
-    let provider = create_xai(XaiProviderSettings {
-        base_url: Some(server.uri()),
-        api_key: Some("test-key".into()),
-        ..Default::default()
-    });
+    let provider = create_xai(XaiProviderSettings::api_key(
+        Some(server.uri()),
+        Some("test-key".into()),
+    ));
     let model = provider.responses("grok-4.5");
     let mut stream_result = model.do_stream(&options(), None).await.expect("do_stream");
 
@@ -301,11 +297,10 @@ async fn do_stream_malformed_chunk_emits_error_and_other_finish() {
         .mount(&server)
         .await;
 
-    let provider = create_xai(XaiProviderSettings {
-        base_url: Some(server.uri()),
-        api_key: Some("test-key".into()),
-        ..Default::default()
-    });
+    let provider = create_xai(XaiProviderSettings::api_key(
+        Some(server.uri()),
+        Some("test-key".into()),
+    ));
     let model = provider.responses("grok-4.5");
     let mut stream_result = model.do_stream(&options(), None).await.expect("do_stream");
 
@@ -347,11 +342,10 @@ async fn do_stream_error_event_surfaces_error_part() {
         .mount(&server)
         .await;
 
-    let provider = create_xai(XaiProviderSettings {
-        base_url: Some(server.uri()),
-        api_key: Some("test-key".into()),
-        ..Default::default()
-    });
+    let provider = create_xai(XaiProviderSettings::api_key(
+        Some(server.uri()),
+        Some("test-key".into()),
+    ));
     let model = provider.responses("grok-4.5");
     let mut stream_result = model.do_stream(&options(), None).await.expect("do_stream");
 
@@ -390,11 +384,10 @@ async fn do_stream_surfaces_200_json_error_body_retryable() {
         .mount(&server)
         .await;
 
-    let provider = create_xai(XaiProviderSettings {
-        base_url: Some(server.uri()),
-        api_key: Some("test-key".into()),
-        ..Default::default()
-    });
+    let provider = create_xai(XaiProviderSettings::api_key(
+        Some(server.uri()),
+        Some("test-key".into()),
+    ));
     let model = provider.responses("grok-4.5");
     let err = model
         .do_stream(&options(), None)
@@ -417,11 +410,10 @@ async fn do_stream_200_json_error_body_not_retryable() {
         .mount(&server)
         .await;
 
-    let provider = create_xai(XaiProviderSettings {
-        base_url: Some(server.uri()),
-        api_key: Some("test-key".into()),
-        ..Default::default()
-    });
+    let provider = create_xai(XaiProviderSettings::api_key(
+        Some(server.uri()),
+        Some("test-key".into()),
+    ));
     let model = provider.responses("grok-4.5");
     let err = model
         .do_stream(&options(), None)
@@ -460,11 +452,10 @@ async fn do_stream_response_failed_maps_to_error_finish() {
         .mount(&server)
         .await;
 
-    let provider = create_xai(XaiProviderSettings {
-        base_url: Some(server.uri()),
-        api_key: Some("test-key".into()),
-        ..Default::default()
-    });
+    let provider = create_xai(XaiProviderSettings::api_key(
+        Some(server.uri()),
+        Some("test-key".into()),
+    ));
     let model = provider.responses("grok-4.5");
     let mut stream_result = model.do_stream(&options(), None).await.expect("do_stream");
 
@@ -516,11 +507,10 @@ async fn do_generate_response_body_echoes_the_response() {
         .mount(&server)
         .await;
 
-    let provider = create_xai(XaiProviderSettings {
-        base_url: Some(server.uri()),
-        api_key: Some("test-key".into()),
-        ..Default::default()
-    });
+    let provider = create_xai(XaiProviderSettings::api_key(
+        Some(server.uri()),
+        Some("test-key".into()),
+    ));
     let model = provider.responses("grok-4.5");
     let result = model
         .do_generate(&options(), None)

@@ -497,6 +497,7 @@ class ProviderApi(str, Enum):
     volcengine = "volcengine"
     zai = "zai"
     openai_compat = "openai_compat"
+    xai = "xai"
 
 
 class RateLimitStatus(str, Enum):

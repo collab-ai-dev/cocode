@@ -31,11 +31,10 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 fn provider_for(server: &MockServer) -> XaiProvider {
-    create_xai(XaiProviderSettings {
-        base_url: Some(server.uri()),
-        api_key: Some("test-key".into()),
-        ..Default::default()
-    })
+    create_xai(XaiProviderSettings::api_key(
+        Some(server.uri()),
+        Some("test-key".into()),
+    ))
 }
 
 fn xai_options(value: serde_json::Value) -> Option<ProviderOptions> {

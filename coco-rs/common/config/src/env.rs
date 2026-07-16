@@ -30,6 +30,11 @@ pub enum EnvKey {
     /// Test/diagnostic override for the Google (Gemini) OAuth token endpoint
     /// used by the provider-auth subscription flow (wiremock seam).
     CocoAuthGeminiTokenUrl,
+    /// Test/diagnostic override for the xAI Grok OAuth token endpoint used by
+    /// the provider-auth subscription flow (wiremock seam).
+    CocoAuthXaiTokenUrl,
+    /// Test/diagnostic override for the xAI Grok device authorization endpoint.
+    CocoAuthXaiDeviceUrl,
     /// Test/diagnostic override for the OpenAI OAuth revocation endpoint
     /// (logout). Wiremock seam; unset in normal use.
     CocoAuthOpenaiRevokeUrl,
@@ -394,6 +399,8 @@ impl EnvKey {
             Self::CocoAgentName => "COCO_AGENT_NAME",
             Self::CocoAuthOpenaiTokenUrl => "COCO_AUTH_OPENAI_TOKEN_URL",
             Self::CocoAuthGeminiTokenUrl => "COCO_AUTH_GEMINI_TOKEN_URL",
+            Self::CocoAuthXaiTokenUrl => "COCO_AUTH_XAI_TOKEN_URL",
+            Self::CocoAuthXaiDeviceUrl => "COCO_AUTH_XAI_DEVICE_URL",
             Self::CocoAuthOpenaiRevokeUrl => "COCO_AUTH_OPENAI_REVOKE_URL",
             Self::CocoAuthGeminiRevokeUrl => "COCO_AUTH_GEMINI_REVOKE_URL",
             Self::CocoAuthCredentialStore => "COCO_AUTH_CREDENTIAL_STORE",

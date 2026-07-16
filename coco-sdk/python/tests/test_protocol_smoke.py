@@ -124,10 +124,18 @@ def test_request_id_is_int_or_str_alias() -> None:
 # ── 4. Multi-provider types from coco_sdk.types ────────────────────
 
 
-def test_provider_api_enum_has_all_six_variants() -> None:
+def test_provider_api_enum_has_all_seven_variants() -> None:
     from coco_sdk import ProviderApi
 
-    expected = {"anthropic", "openai", "gemini", "volcengine", "zai", "openai_compat"}
+    expected = {
+        "anthropic",
+        "openai",
+        "gemini",
+        "volcengine",
+        "zai",
+        "openai_compat",
+        "xai",
+    }
     actual = {m.value for m in ProviderApi}
     assert actual == expected
 

@@ -1,18 +1,17 @@
-//! Interactive login orchestration: PKCE + loopback callback (the
-//! `tiny_http` pattern from `services/rmcp-client/src/perform_oauth_login.rs`)
-//! → authorization-code exchange → `StoredCredential`.
+//! Interactive login orchestration: PKCE + loopback callback or RFC 8628
+//! device authorization → token exchange → `StoredCredential`.
 //!
 //! Implements the `RedirectStrategy::Loopback` path with an optional **paste
 //! fallback** (`LoginOptions.paste`): for SSH/headless logins it races the
-//! loopback callback against a redirect-URL/code pasted on stdin. The
-//! descriptor-level `RedirectStrategy::LoopbackOrPaste` variant (a *hosted*
-//! paste page, for a future Claude flow) is still unimplemented.
+//! loopback callback against a redirect-URL/code pasted on stdin.
 
 use std::time::Duration;
 use std::time::Instant;
 
 use crate::descriptor::AccountIdSource;
+use crate::descriptor::AuthorizationCodeGrant;
 use crate::descriptor::OAuthFlowDescriptor;
+use crate::descriptor::OAuthGrant;
 use crate::descriptor::RedirectStrategy;
 use crate::descriptor::StateStrategy;
 use crate::error::CallbackSnafu;
@@ -43,20 +42,35 @@ pub struct LoginOptions {
     /// runs on a different machine than the CLI (SSH / headless), where the
     /// loopback callback can't be delivered.
     pub paste: bool,
-    /// How long to wait for the loopback callback before giving up.
-    pub timeout: Duration,
+    /// Explicit timeout override. `None` uses the selected grant's default.
+    pub timeout: Option<Duration>,
+    /// Presentation surface used for device-flow telemetry and UI behavior.
+    pub surface: LoginSurface,
     /// When set, the authorize URL is handed here instead of printed to stderr
     /// (used by the `/login` slash command to show it in the transcript).
     pub on_authorize_url: Option<AuthorizeUrlSink>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginSurface {
+    /// TUI/IDE provides an authorization URL sink.
+    Ui,
+    /// Human-operated terminal.
+    Cli,
+    /// Non-interactive process without a terminal.
+    Headless,
+    /// Infer UI from the URL sink, otherwise inspect stderr TTY state.
+    Auto,
+}
+
 impl LoginOptions {
-    /// Interactive CLI defaults: open the browser, loopback-only, 5-min timeout.
+    /// Interactive defaults. Each grant owns its timeout policy.
     pub fn interactive() -> Self {
         Self {
             open_browser: true,
             paste: false,
-            timeout: Duration::from_secs(300),
+            timeout: None,
+            surface: LoginSurface::Auto,
             on_authorize_url: None,
         }
     }
@@ -68,6 +82,7 @@ impl std::fmt::Debug for LoginOptions {
             .field("open_browser", &self.open_browser)
             .field("paste", &self.paste)
             .field("timeout", &self.timeout)
+            .field("surface", &self.surface)
             .field("on_authorize_url", &self.on_authorize_url.is_some())
             .finish()
     }
@@ -87,32 +102,37 @@ pub async fn login(
     opts: &LoginOptions,
     http: &reqwest::Client,
 ) -> Result<StoredCredential> {
+    match descriptor.grant {
+        OAuthGrant::DeviceCode(grant) => {
+            crate::device::login(descriptor, provider_name, grant, opts, http).await
+        }
+        OAuthGrant::AuthorizationCode(grant) => {
+            login_authorization_code(descriptor, provider_name, grant, opts, http).await
+        }
+    }
+}
+
+async fn login_authorization_code(
+    descriptor: &OAuthFlowDescriptor,
+    provider_name: &str,
+    grant: AuthorizationCodeGrant,
+    opts: &LoginOptions,
+    http: &reqwest::Client,
+) -> Result<StoredCredential> {
     let pkce = generate_pkce();
-    let state = match descriptor.state {
+    let state = match grant.state {
         StateStrategy::SeparateRandom => generate_state(),
         StateStrategy::VerifierAsState => pkce.code_verifier.clone(),
     };
 
-    let (default_port, fallback_port, callback_path) = match descriptor.redirect {
-        RedirectStrategy::Loopback {
-            default_port,
-            fallback_port,
-            callback_path,
-        } => (default_port, fallback_port, callback_path),
-        RedirectStrategy::LoopbackOrPaste { .. } => {
-            return Err(InternalSnafu {
-                message: "loopback-or-paste login is not implemented in this build",
-            }
-            .build());
-        }
-    };
+    let RedirectStrategy::Loopback {
+        default_port,
+        fallback_port,
+        callback_path,
+    } = grant.redirect;
 
     let (server, redirect_uri) = bind_loopback(default_port, fallback_port, callback_path)?;
-    let auth_url = build_authorize_url(descriptor, &pkce, &state, &redirect_uri);
-
-    if opts.open_browser {
-        let _ = webbrowser::open(&auth_url);
-    }
+    let auth_url = build_authorize_url(descriptor, grant, &pkce, &state, &redirect_uri);
     // Surface the URL: to the in-session sink (TUI transcript) when set,
     // otherwise to stderr for the CLI.
     match &opts.on_authorize_url {
@@ -121,16 +141,23 @@ pub async fn login(
             eprintln!("\nIf your browser didn't open, visit this URL to sign in:\n{auth_url}\n")
         }
     }
+    if opts.open_browser {
+        open_browser_detached(auth_url.clone());
+    }
+
+    let timeout = opts
+        .timeout
+        .unwrap_or_else(|| Duration::from_secs(grant.timeout_secs));
 
     // When paste is enabled, accept EITHER the loopback callback OR a pasted
     // redirect URL/code — whichever arrives first. Otherwise loopback only.
     let params = if opts.paste {
         tokio::select! {
-            r = wait_for_callback(server, callback_path, opts.timeout) => r?,
+            r = wait_for_callback(server, callback_path, timeout) => r?,
             r = read_pasted_callback() => r?,
         }
     } else {
-        wait_for_callback(server, callback_path, opts.timeout).await?
+        wait_for_callback(server, callback_path, timeout).await?
     };
 
     if let Some(err) = params.error {
@@ -170,7 +197,7 @@ pub async fn login(
     let tr = post_token(
         http,
         &descriptor.effective_token_url(),
-        descriptor.exchange_encoding,
+        grant.exchange_encoding,
         &exchange_params,
     )
     .await?;
@@ -188,6 +215,7 @@ pub async fn login(
         _ => None,
     };
     let expires = expires_at_ms(&tr);
+    let principal = crate::store::OAuthPrincipal::from_access_token(&tr.access_token);
 
     Ok(StoredCredential {
         flow: descriptor.flow,
@@ -195,6 +223,7 @@ pub async fn login(
         refresh_token: tr.refresh_token,
         id_token: tr.id_token,
         account_id,
+        principal,
         expires_at_ms: expires,
         plan_type: None,
         email,
@@ -210,7 +239,13 @@ async fn fetch_userinfo_field(
     access_token: &str,
     field: &str,
 ) -> Option<String> {
-    let resp = http.get(url).bearer_auth(access_token).send().await.ok()?;
+    let resp = http
+        .get(url)
+        .bearer_auth(access_token)
+        .timeout(crate::refresh::AUTH_REQUEST_TIMEOUT)
+        .send()
+        .await
+        .ok()?;
     if !resp.status().is_success() {
         return None;
     }
@@ -220,6 +255,7 @@ async fn fetch_userinfo_field(
 
 fn build_authorize_url(
     descriptor: &OAuthFlowDescriptor,
+    grant: AuthorizationCodeGrant,
     pkce: &PkceCodes,
     state: &str,
     redirect_uri: &str,
@@ -227,18 +263,24 @@ fn build_authorize_url(
     let enc = urlencoding::encode;
     let mut url = format!(
         "{}?response_type=code&client_id={}&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
-        descriptor.authorize_url,
+        grant.authorize_url,
         enc(descriptor.client_id),
         enc(redirect_uri),
         enc(descriptor.scope),
         enc(&pkce.code_challenge),
         enc(state),
     );
-    for (k, v) in descriptor.authorize_extra {
+    for (k, v) in grant.authorize_extra {
         url.push('&');
         url.push_str(&format!("{}={}", enc(k), enc(v)));
     }
     url
+}
+
+pub(crate) fn open_browser_detached(url: String) {
+    // Dropping a Tokio JoinHandle explicitly detaches the task. Browser launch
+    // must not hold up a headless/UI login while authorization continues.
+    std::mem::drop(tokio::task::spawn_blocking(move || webbrowser::open(&url)));
 }
 
 /// Bind a loopback HTTP server, preferring `default_port`, then `fallback_port`,

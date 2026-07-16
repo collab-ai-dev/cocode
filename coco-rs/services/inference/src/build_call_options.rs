@@ -220,6 +220,20 @@ pub fn build_call_options_with_extra(
             merge_into_extra(&mut extra, &k, &v);
         }
     }
+    if api == ProviderApi::Xai
+        && thinking
+            .as_ref()
+            .is_none_or(|level| level.effort != ReasoningEffort::Off)
+        && !extra.contains_key("reasoningSummary")
+    {
+        // Grok's Responses backend does not emit a human-readable reasoning
+        // stream unless a summary is requested. Keep this endpoint default
+        // independent of whether the model declares an explicit effort.
+        extra.insert(
+            "reasoningSummary".to_string(),
+            serde_json::Value::String("concise".to_string()),
+        );
+    }
 
     // Lane C: Anthropic-only `context_management`. The provider's
     // `extract_anthropic_options` reads it from the
@@ -340,8 +354,8 @@ pub fn build_call_options(
 /// Resolve the namespace key the language-model implementation will
 /// read from `call.provider_options`.
 ///
-/// - `Anthropic` / `Openai` / `Gemini` — SDK hardcodes the family
-///   name (`"anthropic"`, `"openai"`, `"google"`) regardless of
+/// - `Anthropic` / `Openai` / `Gemini` / `Xai` — SDK hardcodes the family
+///   name (`"anthropic"`, `"openai"`, `"google"`, `"xai"`) regardless of
 ///   `ProviderSettings.provider_id`. The wrap key MUST match.
 /// - `OpenaiCompat` / `Volcengine` / `Zai` — SDK passes the
 ///   `provider_id` through; the runtime instance name (e.g.
@@ -352,6 +366,7 @@ pub fn canonical_namespace_key(api: ProviderApi, provider_name: &str) -> &str {
         ProviderApi::Anthropic => "anthropic",
         ProviderApi::Openai => "openai",
         ProviderApi::Gemini => "google",
+        ProviderApi::Xai => "xai",
         ProviderApi::OpenaiCompat | ProviderApi::Volcengine | ProviderApi::Zai => provider_name,
     }
 }

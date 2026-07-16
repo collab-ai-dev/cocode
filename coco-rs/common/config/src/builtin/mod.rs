@@ -39,6 +39,7 @@ pub const GEMINI_CODE_ASSIST_PROVIDER: &str = "gemini-code-assist";
 /// registry entry (`builtin/groq.rs`) and the model-factory dispatch so the
 /// name that selects the dedicated `vercel-ai-groq` crate cannot drift.
 pub use groq::GROQ_PROVIDER;
+pub use xai::GROK_PROVIDER;
 /// Canonical name of the builtin xAI (Grok) provider instance. Shared by the
 /// builtin registry entry (`builtin/xai.rs`) and the model-factory dispatch
 /// (`services/inference::model_factory::build_language_model_from_runtime`) so

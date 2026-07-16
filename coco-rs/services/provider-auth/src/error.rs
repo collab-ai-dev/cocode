@@ -33,6 +33,7 @@ pub enum ProviderAuthError {
     #[snafu(display("token endpoint error ({status}): {message}"))]
     TokenEndpoint {
         status: i32,
+        oauth_error: Option<String>,
         message: String,
         #[snafu(implicit)]
         location: Location,

@@ -21,24 +21,46 @@ use crate::responses::XaiResponsesLanguageModel;
 use crate::speech::XaiSpeechModel;
 use crate::transcription::XaiTranscriptionModel;
 use crate::video::XaiVideoModel;
+use crate::xai_auth::XaiConnection;
 use crate::xai_config::XaiConfig;
 
 /// Default xAI API base URL.
 const DEFAULT_BASE_URL: &str = "https://api.x.ai/v1";
+const GROK_PROXY_BASE_URL: &str = "https://cli-chat-proxy.grok.com/v1";
 /// Environment variable holding the xAI API key.
 const API_KEY_ENV_VAR: &str = "XAI_API_KEY";
 
 /// Settings for constructing an [`XaiProvider`].
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct XaiProviderSettings {
-    /// Base URL for xAI API calls. Defaults to `https://api.x.ai/v1`.
-    pub base_url: Option<String>,
-    /// API key. Falls back to the `XAI_API_KEY` environment variable.
-    pub api_key: Option<String>,
+    /// Connection profile. A single enum owns both endpoint and credentials so
+    /// impossible combinations (custom endpoint + Grok bearer, API key + OAuth)
+    /// cannot be constructed.
+    pub connection: XaiConnection,
     /// Custom headers to include in requests.
     pub headers: Option<HashMap<String, String>>,
     /// Optional shared HTTP client for connection pooling.
     pub client: Option<Arc<reqwest::Client>>,
+}
+
+impl XaiProviderSettings {
+    /// Construct an API-key connection, optionally overriding the xAI endpoint.
+    pub fn api_key(base_url: Option<String>, api_key: Option<String>) -> Self {
+        Self {
+            connection: XaiConnection::ApiKey { base_url, api_key },
+            headers: None,
+            client: None,
+        }
+    }
+
+    /// Construct a production Grok-subscription connection.
+    pub fn grok_subscription(creds: crate::xai_auth::GrokCredsSupplier) -> Self {
+        Self {
+            connection: XaiConnection::GrokSubscription { creds },
+            headers: None,
+            client: None,
+        }
+    }
 }
 
 /// xAI (Grok) provider. Exposes chat language models over the Chat Completions
@@ -50,65 +72,88 @@ pub struct XaiProviderSettings {
 /// matching the sibling `vercel-ai-groq` crate).
 pub struct XaiProvider {
     base_url: String,
-    headers: Arc<dyn Fn() -> HashMap<String, String> + Send + Sync>,
+    connection: XaiConnection,
+    custom_headers: HashMap<String, String>,
     client: Option<Arc<reqwest::Client>>,
 }
 
 impl XaiProvider {
     /// Create a new provider from settings.
     pub fn new(settings: XaiProviderSettings) -> Self {
-        let base_url = settings
-            .base_url
-            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
-            .trim_end_matches('/')
-            .to_string();
-
-        let api_key = settings.api_key;
-        let custom_headers = settings.headers.unwrap_or_default();
-
-        let headers: Arc<dyn Fn() -> HashMap<String, String> + Send + Sync> = Arc::new(move || {
-            let mut h = HashMap::new();
-
-            let key = load_api_key(api_key.as_deref(), API_KEY_ENV_VAR, "xAI").unwrap_or_default();
-            if !key.is_empty() {
-                h.insert("Authorization".into(), format!("Bearer {key}"));
-            }
-
-            let version = env!("CARGO_PKG_VERSION");
-            let ua = format!("ai-sdk/xai/{version}");
-            h.entry("User-Agent".into())
-                .and_modify(|existing| {
-                    existing.push(' ');
-                    existing.push_str(&ua);
-                })
-                .or_insert(ua);
-
-            for (k, v) in &custom_headers {
-                h.insert(k.clone(), v.clone());
-            }
-
-            h
-        });
+        let base_url = match &settings.connection {
+            XaiConnection::ApiKey { base_url, .. } => base_url
+                .clone()
+                .unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
+            XaiConnection::GrokSubscription { .. } => GROK_PROXY_BASE_URL.to_string(),
+        }
+        .trim_end_matches('/')
+        .to_string();
 
         Self {
             base_url,
-            headers,
+            connection: settings.connection,
+            custom_headers: settings.headers.unwrap_or_default(),
             client: settings.client,
         }
     }
 
-    fn make_config(&self, sub_provider: &str) -> Arc<XaiConfig> {
+    fn make_config(&self, sub_provider: &str, model_id: &str) -> Arc<XaiConfig> {
+        let connection = self.connection.clone();
+        let custom_headers = self.custom_headers.clone();
+        let model_id = model_id.to_owned();
+        let headers: Arc<dyn Fn() -> HashMap<String, String> + Send + Sync> = Arc::new(move || {
+            let mut headers = custom_headers.clone();
+            let version = env!("CARGO_PKG_VERSION");
+            let user_agent = format!("ai-sdk/xai/{version}");
+            headers
+                .entry("User-Agent".into())
+                .and_modify(|existing| {
+                    existing.push(' ');
+                    existing.push_str(&user_agent);
+                })
+                .or_insert(user_agent);
+
+            match &connection {
+                XaiConnection::ApiKey { api_key, .. } => {
+                    let key = load_api_key(api_key.as_deref(), API_KEY_ENV_VAR, "xAI")
+                        .unwrap_or_default();
+                    if !key.is_empty() {
+                        headers.insert("Authorization".into(), format!("Bearer {key}"));
+                    }
+                }
+                XaiConnection::GrokSubscription { creds } => {
+                    headers.insert("X-XAI-Token-Auth".into(), "xai-grok-cli".into());
+                    headers.insert(
+                        "x-authenticateresponse".into(),
+                        "authenticate-response".into(),
+                    );
+                    headers.insert("x-grok-client-version".into(), version.into());
+                    headers.insert("x-grok-client-identifier".into(), "grok-shell".into());
+                    headers.insert("x-grok-client-mode".into(), "interactive".into());
+                    headers.insert("x-grok-model-override".into(), model_id.clone());
+                    if let Some(creds) = creds() {
+                        headers.insert(
+                            "Authorization".into(),
+                            format!("Bearer {}", creds.access_token),
+                        );
+                    } else {
+                        headers.remove("Authorization");
+                    }
+                }
+            }
+            headers
+        });
         Arc::new(XaiConfig {
             provider: format!("xai.{sub_provider}"),
             base_url: self.base_url.clone(),
-            headers: self.headers.clone(),
+            headers,
             client: self.client.clone(),
         })
     }
 
     /// Get an xAI chat language model.
     pub fn chat(&self, model_id: &str) -> XaiChatLanguageModel {
-        XaiChatLanguageModel::new(model_id, self.make_config("chat"))
+        XaiChatLanguageModel::new(model_id, self.make_config("chat", model_id))
     }
 
     /// Get an xAI Responses API language model.
@@ -117,17 +162,17 @@ impl XaiProvider {
     /// convention); the Responses surface is reached explicitly through this
     /// constructor (sub-provider id `xai.responses`).
     pub fn responses(&self, model_id: &str) -> XaiResponsesLanguageModel {
-        XaiResponsesLanguageModel::new(model_id, self.make_config("responses"))
+        XaiResponsesLanguageModel::new(model_id, self.make_config("responses", model_id))
     }
 
     /// Get an xAI image generation model (sub-provider id `xai.image`).
     pub fn image(&self, model_id: &str) -> XaiImageModel {
-        XaiImageModel::new(model_id, self.make_config("image"))
+        XaiImageModel::new(model_id, self.make_config("image", model_id))
     }
 
     /// Get an xAI video generation model (sub-provider id `xai.video`).
     pub fn video(&self, model_id: &str) -> XaiVideoModel {
-        XaiVideoModel::new(model_id, self.make_config("video"))
+        XaiVideoModel::new(model_id, self.make_config("video", model_id))
     }
 
     /// Get an xAI speech (text-to-speech) model (sub-provider id
@@ -135,7 +180,7 @@ impl XaiProvider {
     /// exposes `speech()` without a model id and pins it to `""`; pass `""`
     /// for parity. The id is carried only as response metadata.
     pub fn speech(&self, model_id: &str) -> XaiSpeechModel {
-        XaiSpeechModel::new(model_id, self.make_config("speech"))
+        XaiSpeechModel::new(model_id, self.make_config("speech", model_id))
     }
 
     /// Get an xAI batch transcription (speech-to-text) model (sub-provider
@@ -144,7 +189,7 @@ impl XaiProvider {
     /// `""`; pass `""` for parity. The id is carried only as response
     /// metadata.
     pub fn transcription(&self, model_id: &str) -> XaiTranscriptionModel {
-        XaiTranscriptionModel::new(model_id, self.make_config("transcription"))
+        XaiTranscriptionModel::new(model_id, self.make_config("transcription", model_id))
     }
 }
 

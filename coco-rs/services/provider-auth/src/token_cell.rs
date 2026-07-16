@@ -10,6 +10,8 @@ use arc_swap::ArcSwapOption;
 use coco_inference::SubscriptionCreds;
 use coco_inference::SubscriptionCredsSupplier;
 
+use crate::store::OAuthPrincipal;
+
 /// In-memory, cloneable credential snapshot read on every request. `account_id`
 /// lives here too so an account switch is transparent. Tokens are redacted in
 /// `Debug`.
@@ -17,6 +19,7 @@ use coco_inference::SubscriptionCredsSupplier;
 pub struct TokenSnapshot {
     pub access_token: String,
     pub account_id: Option<String>,
+    pub principal: Option<OAuthPrincipal>,
     pub refresh_token: Option<String>,
     pub subscription_type: Option<String>,
     pub expires_at_ms: Option<i64>,
@@ -31,6 +34,7 @@ impl fmt::Debug for TokenSnapshot {
         f.debug_struct("TokenSnapshot")
             .field("access_token", &"<redacted>")
             .field("account_id", &self.account_id)
+            .field("principal", &self.principal)
             .field(
                 "refresh_token",
                 &self.refresh_token.as_ref().map(|_| "<redacted>"),

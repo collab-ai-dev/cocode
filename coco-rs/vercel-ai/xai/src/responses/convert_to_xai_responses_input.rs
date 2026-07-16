@@ -178,7 +178,6 @@ fn convert_assistant_part(
                 "call_id": tc.tool_call_id,
                 "name": tc.tool_name,
                 "arguments": arguments,
-                "status": "completed",
             }));
         }
         AssistantContentPart::Reasoning(rp) => {
@@ -198,7 +197,6 @@ fn convert_assistant_part(
                 "type": "reasoning",
                 "id": item_id.unwrap_or_default(),
                 "summary": summary,
-                "status": "completed",
             });
             if let Some(enc) = encrypted {
                 item["encrypted_content"] = Value::String(enc);

@@ -9,6 +9,7 @@ fn sample() -> StoredCredential {
         refresh_token: Some("REFRESH-TOKEN-SECRET".into()),
         id_token: Some("ID-TOKEN-SECRET".into()),
         account_id: Some("acct_1".into()),
+        principal: None,
         expires_at_ms: Some(123),
         plan_type: Some("pro".into()),
         email: Some("a@b.c".into()),

@@ -13,6 +13,8 @@ use crate::error::TokenEndpointSnafu;
 use crate::jwt;
 use crate::token_cell::TokenSnapshot;
 
+pub(crate) const AUTH_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Common OAuth token-endpoint response shape.
 #[derive(Debug, Deserialize)]
 pub struct TokenResponse {
@@ -52,24 +54,31 @@ pub async fn post_token(
             http.post(url).json(&map)
         }
     };
-    let resp = builder.send().await.map_err(|e| {
-        crate::error::NetworkSnafu {
-            message: e.to_string(),
-        }
-        .build()
-    })?;
+    let resp = builder
+        .timeout(AUTH_REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| {
+            crate::error::NetworkSnafu {
+                message: e.to_string(),
+            }
+            .build()
+        })?;
     let status = resp.status();
     if !status.is_success() {
-        // Redact + cap the raw body before it lands in an error (which is
-        // printed to the terminal on interactive login AND written to the
-        // rotating log on background refresh). RFC 6749 §5.2 error bodies
-        // carry `error`/`error_description`, but some IdPs echo the submitted
-        // `code`/`refresh_token` in `error_description` — never persist that.
+        // RFC 6749 error descriptions are issuer-controlled and sometimes echo
+        // the submitted code/refresh token. Surface only the typed `error`
+        // identifier; raw bodies and descriptions never enter logs/errors.
         let raw = resp.text().await.unwrap_or_default();
-        let redacted = coco_secret_redact::redact_secrets(&raw);
-        let message: String = redacted.chars().take(512).collect();
+        let oauth_error = serde_json::from_str::<serde_json::Value>(&raw)
+            .ok()
+            .and_then(|value| value.get("error")?.as_str().map(safe_oauth_error));
+        let message = oauth_error
+            .as_deref()
+            .map_or_else(|| "OAuth request failed".to_string(), ToString::to_string);
         return Err(TokenEndpointSnafu {
             status: i32::from(status.as_u16()),
+            oauth_error,
             message,
         }
         .build());
@@ -80,6 +89,19 @@ pub async fn post_token(
         }
         .build()
     })
+}
+
+fn safe_oauth_error(error: &str) -> String {
+    let safe: String = error
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+        .take(64)
+        .collect();
+    if safe.is_empty() {
+        "unknown_error".to_string()
+    } else {
+        safe
+    }
 }
 
 /// Derive `expires_at_ms` from the response (`expires_in`) or the access-token
@@ -134,6 +156,10 @@ pub async fn refresh_at(
     if let Some(secret) = descriptor.client_secret {
         params.push(("client_secret", secret.to_string()));
     }
+    if let Some(principal) = &prev.principal {
+        params.push(("principal_type", principal.principal_type.clone()));
+        params.push(("principal_id", principal.principal_id.clone()));
+    }
     params.extend(
         descriptor
             .refresh_extra
@@ -144,6 +170,15 @@ pub async fn refresh_at(
     let tr = match post_token(http, token_url, descriptor.refresh_encoding, &params).await {
         Ok(tr) => tr,
         Err(crate::error::ProviderAuthError::TokenEndpoint { status: 401, .. }) => {
+            return Err(SessionExpiredSnafu {
+                provider: provider_name.to_string(),
+            }
+            .build());
+        }
+        Err(crate::error::ProviderAuthError::TokenEndpoint {
+            oauth_error: Some(ref code),
+            ..
+        }) if matches!(code.as_str(), "invalid_grant" | "invalid_client") => {
             return Err(SessionExpiredSnafu {
                 provider: provider_name.to_string(),
             }
@@ -178,6 +213,7 @@ pub async fn refresh_at(
     Ok(TokenSnapshot {
         access_token: tr.access_token.clone(),
         account_id: new_account_id,
+        principal: prev.principal.clone(),
         refresh_token: next_refresh,
         subscription_type: prev.subscription_type.clone(),
         expires_at_ms: expires_at_ms(&tr),
@@ -204,12 +240,17 @@ pub async fn revoke(
     if let Some(secret) = descriptor.client_secret {
         params.push(("client_secret", secret.to_string()));
     }
-    http.post(&url).form(&params).send().await.map_err(|e| {
-        crate::error::NetworkSnafu {
-            message: e.to_string(),
-        }
-        .build()
-    })?;
+    http.post(&url)
+        .form(&params)
+        .timeout(AUTH_REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| {
+            crate::error::NetworkSnafu {
+                message: e.to_string(),
+            }
+            .build()
+        })?;
     Ok(())
 }
 

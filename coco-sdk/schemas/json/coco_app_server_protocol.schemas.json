@@ -7499,16 +7499,25 @@
     },
     "ProviderApi": {
       "description": "Which LLM provider implementation to use.\nConsumed by coco-config (ProviderInfo) and coco-inference (ProviderFactory).",
-      "enum": [
-        "anthropic",
-        "openai",
-        "gemini",
-        "volcengine",
-        "zai",
-        "openai_compat"
+      "oneOf": [
+        {
+          "enum": [
+            "anthropic",
+            "openai",
+            "gemini",
+            "volcengine",
+            "zai",
+            "openai_compat"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "xai",
+          "description": "Dedicated xAI adapter. Authentication and wire API remain separate\nprovider settings; this variant selects xAI request/response semantics.",
+          "type": "string"
+        }
       ],
-      "title": "ProviderApi",
-      "type": "string"
+      "title": "ProviderApi"
     },
     "ProviderMetadata": {
       "additionalProperties": true,
