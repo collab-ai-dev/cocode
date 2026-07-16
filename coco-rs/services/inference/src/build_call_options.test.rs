@@ -73,6 +73,49 @@ fn openai_compat_uses_instance_name_as_namespace() {
 }
 
 #[test]
+fn custom_xai_instance_uses_xai_namespace_and_concise_summary_default() {
+    let info = info_with_defaults(BTreeMap::new());
+    let call = build_call_options(
+        &info,
+        ProviderApi::Xai,
+        "corp-grok",
+        &PerCallOverrides::default(),
+        Vec::new(),
+        None,
+    );
+    let options = call.provider_options.expect("xAI defaults are emitted");
+    assert!(!options.0.contains_key("corp-grok"));
+    assert_eq!(
+        options
+            .get("xai")
+            .and_then(|value| value.get("reasoningSummary")),
+        Some(&serde_json::json!("concise"))
+    );
+}
+
+#[test]
+fn explicit_xai_reasoning_summary_is_not_overwritten() {
+    let mut extra = BTreeMap::new();
+    extra.insert("reasoningSummary".into(), serde_json::json!("detailed"));
+    let info = info_with_defaults(extra);
+    let call = build_call_options(
+        &info,
+        ProviderApi::Xai,
+        "grok",
+        &PerCallOverrides::default(),
+        Vec::new(),
+        None,
+    );
+    assert_eq!(
+        call.provider_options
+            .as_ref()
+            .and_then(|options| options.get("xai"))
+            .and_then(|value| value.get("reasoningSummary")),
+        Some(&serde_json::json!("detailed"))
+    );
+}
+
+#[test]
 fn per_call_extra_body_wins_over_model_level() {
     let mut model_extra = BTreeMap::new();
     model_extra.insert("store".into(), serde_json::Value::Bool(true));

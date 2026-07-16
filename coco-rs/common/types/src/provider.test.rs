@@ -91,7 +91,11 @@ fn test_model_role_from_str_rejects_unknown() {
 /// disagree. Mirrors `test_model_role_as_str_matches_serde`.
 #[test]
 fn test_oauth_flow_id_as_str_matches_serde() {
-    for flow in [OAuthFlowId::OpenAiChatGpt, OAuthFlowId::GeminiCodeAssist] {
+    for flow in [
+        OAuthFlowId::OpenAiChatGpt,
+        OAuthFlowId::GeminiCodeAssist,
+        OAuthFlowId::XaiGrok,
+    ] {
         let json = serde_json::to_string(&flow).unwrap();
         assert_eq!(json, format!("\"{}\"", flow.as_str()));
         // Round-trips back from the canonical spelling.

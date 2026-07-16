@@ -94,6 +94,7 @@ pub fn read_codex_auth(path: &Path) -> Result<StoredCredential> {
             .and_then(|t| jwt::read_string_claim(t, CHATGPT_ACCOUNT_ID_CLAIM))
     });
     let expires_at_ms = jwt::read_exp_ms(&tokens.access_token);
+    let principal = crate::store::OAuthPrincipal::from_access_token(&tokens.access_token);
 
     Ok(StoredCredential {
         flow: OAuthFlowId::OpenAiChatGpt,
@@ -101,6 +102,7 @@ pub fn read_codex_auth(path: &Path) -> Result<StoredCredential> {
         refresh_token: tokens.refresh_token,
         id_token: tokens.id_token,
         account_id,
+        principal,
         expires_at_ms,
         plan_type: None,
         email: None,

@@ -13,7 +13,7 @@
 //! `ProviderClientOptions` (`headers`, `auth_token`, `organization_id`,
 //! `project_id`, `include_usage`, `full_url`,
 //! `supports_structured_outputs`) into each provider's
-//! `*ProviderSettings`. The match is exhaustive across all six
+//! `*ProviderSettings`. The match is exhaustive across all provider
 //! `ProviderApi` variants — adding a new variant is a compile error
 //! here.
 //!
@@ -92,7 +92,7 @@ fn warn_unused_client_options(provider_name: &str, api: ProviderApi, opts: &Prov
 }
 
 /// Build an `Arc<dyn LanguageModel>` for the (provider, model) pair
-/// referenced by `spec`. All six `ProviderApi` variants are wired:
+/// referenced by `spec`. All `ProviderApi` variants are wired:
 /// `Anthropic` / `Openai` / `Gemini` go through their direct SDKs;
 /// `Volcengine` / `Zai` / `OpenaiCompat` route through
 /// `vercel-ai-openai-compatible` with the runtime instance name as the
@@ -114,8 +114,8 @@ pub fn provider_credential_present(
         coco_config::ProviderAuth::ApiKey => provider_cfg
             .resolve_api_key()
             .is_some_and(|k| !k.trim().is_empty()),
-        coco_config::ProviderAuth::OAuth { .. } => resolver
-            .and_then(|r| r.subscription_creds(&provider_cfg.name))
+        coco_config::ProviderAuth::OAuth { flow } => resolver
+            .and_then(|r| r.subscription_creds(&provider_cfg.name, flow))
             .is_some(),
     }
 }
@@ -169,15 +169,17 @@ pub fn build_language_model_from_runtime(
             headers,
         ),
         ProviderApi::Gemini => build_google(provider_cfg, &api_model_name, resolver, headers),
+        ProviderApi::Xai => build_xai(
+            provider_cfg,
+            &api_model_name,
+            timeout_secs,
+            resolver,
+            headers,
+        ),
         ProviderApi::Volcengine | ProviderApi::Zai | ProviderApi::OpenaiCompat => {
-            // A few OpenAI-wire providers ship dedicated crates for wire details
-            // the generic path can't express (xAI: Live-Search `citations`,
-            // `max_completion_tokens`, per-model reasoning-effort gating; Groq:
-            // `x_groq.usage` streaming + the `reasoning` field). Route those by
-            // canonical instance name; everything else uses the generic path.
-            if provider_cfg.name == coco_config::builtin::XAI_PROVIDER {
-                build_xai(provider_cfg, &api_model_name, timeout_secs, headers)
-            } else if provider_cfg.name == coco_config::builtin::GROQ_PROVIDER {
+            // Groq ships a dedicated crate for `x_groq.usage` streaming and the
+            // `reasoning` field, but has not yet gained its own typed ProviderApi.
+            if provider_cfg.name == coco_config::builtin::GROQ_PROVIDER {
                 build_groq(provider_cfg, &api_model_name, timeout_secs, headers)
             } else {
                 build_openai_compat(provider_cfg, &api_model_name, timeout_secs, headers)
@@ -194,6 +196,7 @@ fn api_family_str(api: ProviderApi) -> &'static str {
         ProviderApi::Gemini => "gemini",
         ProviderApi::Volcengine => "volcengine",
         ProviderApi::Zai => "zai",
+        ProviderApi::Xai => "xai",
         ProviderApi::OpenaiCompat => "openai_compat",
     }
 }
@@ -489,7 +492,7 @@ fn build_openai_auth(
         coco_config::ProviderAuth::OAuth { flow } => match flow {
             coco_types::OAuthFlowId::OpenAiChatGpt => {
                 let supplier = resolver
-                    .and_then(|r| r.subscription_creds(&provider_cfg.name))
+                    .and_then(|r| r.subscription_creds(&provider_cfg.name, flow))
                     .ok_or_else(|| {
                         crate::errors::ProviderBuildFailedSnafu {
                             provider: "openai",
@@ -521,6 +524,12 @@ fn build_openai_auth(
                 }
                 .build())
             }
+            coco_types::OAuthFlowId::XaiGrok => Err(crate::errors::ProviderBuildFailedSnafu {
+                provider: "openai",
+                provider_name: provider_cfg.name.clone(),
+                message: "XaiGrok OAuth is not valid for an OpenAI provider".to_string(),
+            }
+            .build()),
         },
     }
 }
@@ -578,7 +587,7 @@ fn build_google_code_assist(
         .build());
     }
     let supplier = resolver
-        .and_then(|r| r.subscription_creds(&provider_cfg.name))
+        .and_then(|r| r.subscription_creds(&provider_cfg.name, flow))
         .ok_or_else(|| {
             crate::errors::ProviderBuildFailedSnafu {
                 provider: "google",
@@ -674,22 +683,56 @@ fn build_xai(
     provider_cfg: &ProviderConfig,
     api_model: &str,
     timeout_secs: i64,
+    resolver: Option<&Arc<dyn ProviderCredentialResolver>>,
     headers: Option<HashMap<String, String>>,
 ) -> Result<Arc<dyn LanguageModel>, InferenceError> {
+    let connection = match provider_cfg.auth {
+        coco_config::ProviderAuth::ApiKey => vercel_ai_xai::XaiConnection::ApiKey {
+            base_url: Some(provider_cfg.base_url.clone()),
+            api_key: provider_cfg.resolve_api_key(),
+        },
+        coco_config::ProviderAuth::OAuth {
+            flow: coco_types::OAuthFlowId::XaiGrok,
+        } => {
+            let supplier = resolver
+                .and_then(|resolver| {
+                    resolver
+                        .subscription_creds(&provider_cfg.name, coco_types::OAuthFlowId::XaiGrok)
+                })
+                .ok_or_else(|| {
+                    crate::errors::ProviderBuildFailedSnafu {
+                        provider: "xai",
+                        provider_name: provider_cfg.name.clone(),
+                        message: "Grok subscription not logged in — run `coco login grok`"
+                            .to_string(),
+                    }
+                    .build()
+                })?;
+            let creds: vercel_ai_xai::GrokCredsSupplier = Arc::new(move || {
+                supplier().map(|creds| vercel_ai_xai::GrokCreds {
+                    access_token: creds.access_token,
+                })
+            });
+            vercel_ai_xai::XaiConnection::GrokSubscription { creds }
+        }
+        coco_config::ProviderAuth::OAuth { flow } => {
+            return Err(crate::errors::ProviderBuildFailedSnafu {
+                provider: "xai",
+                provider_name: provider_cfg.name.clone(),
+                message: format!("{flow} OAuth is not valid for an xAI provider"),
+            }
+            .build());
+        }
+    };
     let settings = vercel_ai_xai::XaiProviderSettings {
-        base_url: Some(provider_cfg.base_url.clone()),
-        api_key: provider_cfg.resolve_api_key(),
+        connection,
         headers,
         client: build_http_client(timeout_secs),
     };
     let provider = vercel_ai_xai::create_xai(settings);
-    provider.language_model(api_model).map_err(|e| {
-        crate::errors::ProviderBuildFailedSnafu {
-            provider: "xai",
-            provider_name: provider_cfg.name.clone(),
-            message: e.to_string(),
-        }
-        .build()
+    Ok(match provider_cfg.wire_api {
+        WireApi::Chat => Arc::new(provider.chat(api_model)),
+        WireApi::Responses => Arc::new(provider.responses(api_model)),
     })
 }
 

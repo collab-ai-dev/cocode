@@ -1,5 +1,5 @@
 //! `coco-provider-auth` — interactive OAuth login + subscription credential
-//! management for LLM providers (OpenAI ChatGPT subscription in P1).
+//! management for LLM providers (OpenAI ChatGPT, Gemini Code Assist, and Grok).
 //!
 //! Generic, provider-agnostic machinery: PKCE + loopback login ([`flow`]),
 //! provider-scoped storage ([`store`]), a process-stable lock-free credential
@@ -24,16 +24,19 @@
 //! rotating single-use refresh token is never double-spent.
 
 pub mod descriptor;
+mod device;
 pub mod error;
 pub mod flow;
 pub mod import;
 pub mod jwt;
 pub mod pkce;
+mod process_lock;
 pub mod refresh;
 pub mod store;
 pub mod token_cell;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -56,6 +59,7 @@ pub use crate::descriptor::descriptor_for;
 pub use crate::error::ProviderAuthError;
 pub use crate::error::Result;
 pub use crate::flow::LoginOptions;
+pub use crate::flow::LoginSurface;
 use crate::refresh::now_ms;
 pub use crate::store::AutoBackend;
 pub use crate::store::CredentialBackend;
@@ -93,6 +97,9 @@ struct ManagedProvider {
 /// [`ProviderCredentialResolver`] for `model_factory`.
 pub struct AuthService {
     backend: Arc<dyn CredentialBackend>,
+    /// Directory containing per-provider cross-process refresh lock files.
+    /// Ephemeral/custom test backends omit it and rely on the process lock.
+    refresh_lock_dir: Option<PathBuf>,
     http: reqwest::Client,
     /// Lazily populated, keyed by provider-instance name (`providers.<name>`).
     providers: Mutex<HashMap<String, ManagedProvider>>,
@@ -113,8 +120,16 @@ fn build_is_signed_release() -> bool {
 impl AuthService {
     /// Build a service over the given credential backend.
     pub fn new(backend: Arc<dyn CredentialBackend>) -> Arc<Self> {
+        Self::new_with_lock_dir(backend, None)
+    }
+
+    fn new_with_lock_dir(
+        backend: Arc<dyn CredentialBackend>,
+        refresh_lock_dir: Option<PathBuf>,
+    ) -> Arc<Self> {
         let service = Arc::new(Self {
             backend,
+            refresh_lock_dir,
             http: reqwest::Client::new(),
             providers: Mutex::new(HashMap::new()),
             me: OnceLock::new(),
@@ -144,11 +159,11 @@ impl AuthService {
     pub fn with_config_dir(config_dir: std::path::PathBuf) -> Arc<Self> {
         let auth_dir = config_dir.join("auth");
         let backend: Arc<dyn CredentialBackend> = if build_is_signed_release() {
-            Arc::new(AutoBackend::new(auth_dir))
+            Arc::new(AutoBackend::new(auth_dir.clone()))
         } else {
-            Arc::new(store::FileBackend::new(auth_dir))
+            Arc::new(store::FileBackend::new(auth_dir.clone()))
         };
-        Self::new(backend)
+        Self::new_with_lock_dir(backend, Some(auth_dir))
     }
 
     /// Build the service over an explicitly-pinned credential backend, for when
@@ -160,12 +175,13 @@ impl AuthService {
     pub fn with_store(config_dir: std::path::PathBuf, mode: CredentialStoreMode) -> Arc<Self> {
         let auth_dir = config_dir.join("auth");
         let backend: Arc<dyn CredentialBackend> = match mode {
-            CredentialStoreMode::Auto => Arc::new(AutoBackend::new(auth_dir)),
-            CredentialStoreMode::File => Arc::new(store::FileBackend::new(auth_dir)),
+            CredentialStoreMode::Auto => Arc::new(AutoBackend::new(auth_dir.clone())),
+            CredentialStoreMode::File => Arc::new(store::FileBackend::new(auth_dir.clone())),
             CredentialStoreMode::Keyring => Arc::new(store::KeyringBackend::default()),
             CredentialStoreMode::Ephemeral => Arc::new(EphemeralBackend::default()),
         };
-        Self::new(backend)
+        let refresh_lock_dir = (mode != CredentialStoreMode::Ephemeral).then_some(auth_dir);
+        Self::new_with_lock_dir(backend, refresh_lock_dir)
     }
 
     fn lock_providers(&self) -> std::sync::MutexGuard<'_, HashMap<String, ManagedProvider>> {
@@ -182,6 +198,9 @@ impl AuthService {
     fn cell_for(&self, name: &str, flow_hint: Option<OAuthFlowId>) -> Option<TokenCell> {
         // Fast path: already managed.
         if let Some(p) = self.lock_providers().get(name) {
+            if flow_hint.is_some_and(|expected| expected != p.descriptor.flow) {
+                return None;
+            }
             return Some(p.cell.clone());
         }
         // Cache miss: discover the flow + load any stored credential OUTSIDE the
@@ -191,6 +210,17 @@ impl AuthService {
         // would orphan it — the refresher and re-login only ever `store()` into
         // the map's cell, so an orphan would never see refreshed tokens/logout.
         let stored = self.backend.load(name).ok().flatten();
+        if let (Some(credential), Some(expected)) = (&stored, flow_hint)
+            && credential.flow != expected
+        {
+            warn!(
+                provider = name,
+                stored_flow = %credential.flow,
+                configured_flow = %expected,
+                "stored credential belongs to a different OAuth flow"
+            );
+            return None;
+        }
         let flow = stored.as_ref().map(|c| c.flow).or(flow_hint)?;
         let descriptor = descriptor_for(flow)?;
         let local = match &stored {
@@ -239,13 +269,33 @@ impl AuthService {
             }
             .build()
         })?;
+        let cell = self.cell_for(provider_name, Some(flow)).ok_or_else(|| {
+            error::InternalSnafu {
+                message: format!(
+                    "provider '{provider_name}' is already bound to a different OAuth flow"
+                ),
+            }
+            .build()
+        })?;
+        let lock = self.refresh_lock_for(provider_name).ok_or_else(|| {
+            error::InternalSnafu {
+                message: format!("missing refresh lock for provider '{provider_name}'"),
+            }
+            .build()
+        })?;
         let mut cred = flow::login(descriptor, provider_name, opts, &self.http).await?;
+        let _permit = lock.acquire().await.map_err(|e| {
+            error::InternalSnafu {
+                message: format!("refresh semaphore closed: {e}"),
+            }
+            .build()
+        })?;
+        let _process_lock =
+            process_lock::acquire(self.refresh_lock_dir.as_deref(), provider_name).await?;
         // Bump login_epoch relative to any prior credential (identity change).
         let prev_epoch = self
             .backend
-            .load(provider_name)
-            .ok()
-            .flatten()
+            .load(provider_name)?
             .map(|c| c.login_epoch)
             .unwrap_or(0);
         cred.login_epoch = prev_epoch.saturating_add(1);
@@ -254,14 +304,9 @@ impl AuthService {
         // `cell_for` returns the existing cell (holding the OLD token), so the
         // explicit `store` is load-bearing — and it is serialized under the
         // refresh lock so a racing in-flight refresh can't clobber it.
-        if let Some(cell) = self.cell_for(provider_name, Some(flow)) {
-            let lock = self.refresh_lock_for(provider_name);
-            let _permit = match &lock {
-                Some(l) => l.acquire().await.ok(),
-                None => None,
-            };
-            cell.store(cred.to_snapshot());
-        }
+        cell.store(cred.to_snapshot());
+        drop(_process_lock);
+        drop(_permit);
         self.spawn_refresher(provider_name);
         self.status(provider_name, flow)
     }
@@ -278,24 +323,39 @@ impl AuthService {
         cred: crate::store::StoredCredential,
     ) -> Result<ProviderAuthStatus> {
         let flow = cred.flow;
+        let cell = self.cell_for(provider_name, Some(flow)).ok_or_else(|| {
+            error::InternalSnafu {
+                message: format!(
+                    "provider '{provider_name}' is already bound to a different OAuth flow"
+                ),
+            }
+            .build()
+        })?;
+        let lock = self.refresh_lock_for(provider_name).ok_or_else(|| {
+            error::InternalSnafu {
+                message: format!("missing refresh lock for provider '{provider_name}'"),
+            }
+            .build()
+        })?;
+        let _permit = lock.acquire().await.map_err(|e| {
+            error::InternalSnafu {
+                message: format!("refresh semaphore closed: {e}"),
+            }
+            .build()
+        })?;
+        let _process_lock =
+            process_lock::acquire(self.refresh_lock_dir.as_deref(), provider_name).await?;
         let prev_epoch = self
             .backend
-            .load(provider_name)
-            .ok()
-            .flatten()
+            .load(provider_name)?
             .map(|c| c.login_epoch)
             .unwrap_or(0);
         let mut cred = cred;
         cred.login_epoch = prev_epoch.saturating_add(1);
         self.backend.save(provider_name, &cred)?;
-        if let Some(cell) = self.cell_for(provider_name, Some(flow)) {
-            let lock = self.refresh_lock_for(provider_name);
-            let _permit = match &lock {
-                Some(l) => l.acquire().await.ok(),
-                None => None,
-            };
-            cell.store(cred.to_snapshot());
-        }
+        cell.store(cred.to_snapshot());
+        drop(_process_lock);
+        drop(_permit);
         self.spawn_refresher(provider_name);
         self.status(provider_name, flow)
     }
@@ -307,21 +367,11 @@ impl AuthService {
     /// clearing, so a refresh that is mid network round-trip cannot `store()`
     /// resurrected credentials afterwards.
     pub async fn logout(&self, provider_name: &str) -> Result<bool> {
-        // Best-effort RFC 7009 revocation BEFORE clearing local state, so the
-        // grant is invalidated server-side, not just forgotten locally.
-        if let Some(cred) = self.backend.load(provider_name).ok().flatten()
-            && let Some(descriptor) = descriptor_for(cred.flow)
-        {
-            let token = cred
-                .refresh_token
-                .clone()
-                .unwrap_or_else(|| cred.access_token.clone());
-            if let Err(e) = refresh::revoke(descriptor, &token, &self.http).await {
-                warn!(
-                    provider = provider_name,
-                    "token revocation failed (continuing logout): {e}"
-                );
-            }
+        // Materialize the managed cell/lock for a credential first touched by
+        // logout, so local and background operations share one serialization
+        // point even when no model has used the provider in this process.
+        if let Some(credential) = self.backend.load(provider_name)? {
+            let _ = self.cell_for(provider_name, Some(credential.flow));
         }
 
         // Take the refresh lock + the running refresher handle under the map
@@ -347,6 +397,25 @@ impl AuthService {
             Some(l) => l.acquire().await.ok(),
             None => None,
         };
+        let _process_lock =
+            process_lock::acquire(self.refresh_lock_dir.as_deref(), provider_name).await?;
+
+        // Re-read after both locks: another process may have refreshed or
+        // re-authenticated before this logout acquired the file lock.
+        if let Some(credential) = self.backend.load(provider_name)?
+            && let Some(descriptor) = descriptor_for(credential.flow)
+        {
+            let token = credential
+                .refresh_token
+                .clone()
+                .unwrap_or_else(|| credential.access_token.clone());
+            if let Err(error) = refresh::revoke(descriptor, &token, &self.http).await {
+                warn!(
+                    provider = provider_name,
+                    "token revocation failed (continuing logout): {error}"
+                );
+            }
+        }
         let removed = self.backend.delete(provider_name)?;
         if let Some(p) = self.lock_providers().get(provider_name) {
             p.cell.clear();
@@ -424,7 +493,7 @@ impl AuthService {
 /// the `Arc` across an `await`.
 async fn run_refresher(weak: Weak<AuthService>, name: String) {
     loop {
-        let (backend, http, descriptor, cell, lock, sleep_ms) = {
+        let (backend, http, descriptor, cell, lock, lock_dir, sleep_ms) = {
             let Some(service) = weak.upgrade() else {
                 return;
             };
@@ -445,6 +514,7 @@ async fn run_refresher(weak: Weak<AuthService>, name: String) {
                 p.descriptor,
                 p.cell.clone(),
                 p.refresh_lock.clone(),
+                service.refresh_lock_dir.clone(),
                 sleep_ms,
             )
         };
@@ -454,9 +524,16 @@ async fn run_refresher(weak: Weak<AuthService>, name: String) {
             return; // service dropped while we slept
         }
 
-        match refresh_once(
-            &backend, &http, &name, descriptor, &cell, &lock, /* force */ false,
-        )
+        match refresh_once(RefreshAttempt {
+            backend: &backend,
+            http: &http,
+            provider_name: &name,
+            descriptor,
+            cell: &cell,
+            lock: &lock,
+            lock_dir: lock_dir.as_deref(),
+            rejected_access_token: None,
+        })
         .await
         {
             Ok(()) => {
@@ -493,32 +570,67 @@ const REFRESH_BACKOFF_SECS: u64 = 30;
 /// persist the rotated tokens. Because `login`/`logout` also mutate the cell
 /// under this same lock, the post-acquire re-check below also correctly sees a
 /// concurrent logout (snapshot `None`) or re-login (already fresh).
-async fn refresh_once(
-    backend: &Arc<dyn CredentialBackend>,
-    http: &reqwest::Client,
-    provider_name: &str,
+struct RefreshAttempt<'a> {
+    backend: &'a Arc<dyn CredentialBackend>,
+    http: &'a reqwest::Client,
+    provider_name: &'a str,
     descriptor: &'static OAuthFlowDescriptor,
-    cell: &TokenCell,
-    lock: &Arc<Semaphore>,
-    force: bool,
-) -> Result<()> {
+    cell: &'a TokenCell,
+    lock: &'a Arc<Semaphore>,
+    lock_dir: Option<&'a std::path::Path>,
+    rejected_access_token: Option<&'a str>,
+}
+
+async fn refresh_once(attempt: RefreshAttempt<'_>) -> Result<()> {
+    let RefreshAttempt {
+        backend,
+        http,
+        provider_name,
+        descriptor,
+        cell,
+        lock,
+        lock_dir,
+        rejected_access_token,
+    } = attempt;
     let _permit = lock.acquire().await.map_err(|e| {
         error::InternalSnafu {
             message: format!("refresh semaphore closed: {e}"),
         }
         .build()
     })?;
-    let Some(snap) = cell.snapshot() else {
-        return Ok(()); // logged out while we waited
+    let _process_lock = process_lock::acquire(lock_dir, provider_name).await?;
+
+    // Another process may have refreshed, logged out, or re-authenticated while
+    // this process was waiting. Durable state wins and is adopted before the
+    // freshness check, preventing reuse of a rotated refresh token.
+    let durable = backend.load(provider_name)?;
+    let Some(credential) = durable else {
+        cell.clear();
+        return Ok(());
     };
-    // `force` (reactive 401) refreshes even when not near-expiry — a rejected
-    // token may be revoked or clock-skewed rather than clock-expired.
-    if !force && !snap.needs_refresh(now_ms()) {
+    if credential.flow != descriptor.flow {
+        return Err(error::InternalSnafu {
+            message: format!(
+                "stored OAuth flow {} does not match configured flow {} for provider '{provider_name}'",
+                credential.flow, descriptor.flow
+            ),
+        }
+        .build());
+    }
+    let snap = credential.to_snapshot();
+    cell.store(snap.clone());
+    // Reactive refresh is bound to the token that actually received 401/403.
+    // If another task/process already replaced it while we waited, adopting the
+    // durable token is sufficient and avoids spending a second rotating token.
+    if rejected_access_token.is_some_and(|rejected| rejected != snap.access_token) {
+        return Ok(());
+    }
+    if rejected_access_token.is_none() && !snap.needs_refresh(now_ms()) {
         return Ok(()); // someone else already refreshed (or re-login made it fresh)
     }
     let new_snap = refresh::refresh(descriptor, provider_name, &snap, http).await?;
-    cell.store(new_snap.clone());
-    persist_refreshed(backend, provider_name, descriptor.flow, &new_snap);
+    persist_refreshed(backend, provider_name, descriptor.flow, &new_snap)?;
+    cell.store(new_snap);
     Ok(())
 }
 
@@ -529,14 +641,15 @@ fn persist_refreshed(
     provider_name: &str,
     flow: OAuthFlowId,
     snap: &TokenSnapshot,
-) {
-    let prev = backend.load(provider_name).ok().flatten();
+) -> Result<()> {
+    let prev = backend.load(provider_name)?;
     let cred = StoredCredential {
         flow,
         access_token: snap.access_token.clone(),
         refresh_token: snap.refresh_token.clone(),
         id_token: prev.as_ref().and_then(|c| c.id_token.clone()),
         account_id: snap.account_id.clone(),
+        principal: snap.principal.clone(),
         expires_at_ms: snap.expires_at_ms,
         plan_type: snap.subscription_type.clone(),
         email: prev.as_ref().and_then(|c| c.email.clone()),
@@ -544,21 +657,18 @@ fn persist_refreshed(
         // unreadable backend can't silently downgrade the identity epoch.
         login_epoch: snap.login_epoch,
     };
-    if let Err(e) = backend.save(provider_name, &cred) {
-        warn!(
-            provider = provider_name,
-            "persist refreshed credential: {e}"
-        );
-    }
+    backend.save(provider_name, &cred)
 }
 
 impl ProviderCredentialResolver for AuthService {
-    fn subscription_creds(&self, provider_name: &str) -> Option<SubscriptionCredsSupplier> {
-        // Lazily load the instance's cell (keyed by name). `None` flow hint
-        // means we only resolve when a stored credential exists — so api-key
-        // providers / never-logged-in instances correctly report no supplier
-        // and callers can gate availability.
-        let cell = self.cell_for(provider_name, None)?;
+    fn subscription_creds(
+        &self,
+        provider_name: &str,
+        expected_flow: OAuthFlowId,
+    ) -> Option<SubscriptionCredsSupplier> {
+        // Lazily load the instance's cell and verify the durable credential's
+        // flow matches the provider configuration before exposing a supplier.
+        let cell = self.cell_for(provider_name, Some(expected_flow))?;
         cell.snapshot()?; // only report a supplier when logged in
         Some(cell.supplier())
     }
@@ -568,19 +678,36 @@ impl ProviderCredentialResolver for AuthService {
         // a client was built, so the instance is in the map; if not, no-op.
         let parts = {
             let map = self.lock_providers();
-            map.get(provider_name)
-                .map(|p| (p.descriptor, p.cell.clone(), p.refresh_lock.clone()))
+            map.get(provider_name).map(|p| {
+                (
+                    p.descriptor,
+                    p.cell.clone(),
+                    p.refresh_lock.clone(),
+                    p.cell.snapshot().map(|snapshot| snapshot.access_token),
+                )
+            })
         };
+        let lock_dir = self.refresh_lock_dir.clone();
         let backend = self.backend.clone();
         let http = self.http.clone();
         let name = provider_name.to_string();
         Box::pin(async move {
-            let Some((descriptor, cell, lock)) = parts else {
+            let Some((descriptor, cell, lock, rejected_access_token)) = parts else {
                 return false;
             };
-            refresh_once(
-                &backend, &http, &name, descriptor, &cell, &lock, /* force */ true,
-            )
+            let Some(rejected_access_token) = rejected_access_token else {
+                return false;
+            };
+            refresh_once(RefreshAttempt {
+                backend: &backend,
+                http: &http,
+                provider_name: &name,
+                descriptor,
+                cell: &cell,
+                lock: &lock,
+                lock_dir: lock_dir.as_deref(),
+                rejected_access_token: Some(&rejected_access_token),
+            })
             .await
             .is_ok()
         })

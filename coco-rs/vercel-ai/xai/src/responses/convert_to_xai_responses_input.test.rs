@@ -137,7 +137,6 @@ fn assistant_tool_call_becomes_function_call() {
             "call_id": "call_1",
             "name": "get_weather",
             "arguments": "{\"city\":\"SF\"}",
-            "status": "completed",
         })]
     );
 }
@@ -165,7 +164,6 @@ fn reasoning_round_trips_with_item_id() {
             "type": "reasoning",
             "id": "rs_1",
             "summary": [{ "type": "summary_text", "text": "thinking" }],
-            "status": "completed",
         })]
     );
     assert!(warnings.is_empty());

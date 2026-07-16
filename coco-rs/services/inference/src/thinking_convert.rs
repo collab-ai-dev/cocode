@@ -202,6 +202,20 @@ pub fn to_extra_body(
                 );
             }
         }
+        ProviderApi::Xai => {
+            if level.effort.is_explicit_level() {
+                out.insert(
+                    "reasoningEffort".into(),
+                    serde_json::Value::String(level.effort.to_string()),
+                );
+            }
+            if level.effort != ReasoningEffort::Off {
+                out.insert(
+                    "reasoningSummary".into(),
+                    serde_json::Value::String("concise".into()),
+                );
+            }
+        }
         ProviderApi::Volcengine | ProviderApi::Zai | ProviderApi::OpenaiCompat => {
             // xAI / DeepSeek / Volcengine / Z.AI / generic compat:
             // { "reasoningEffort": "<level>" }. Disable/Auto: only

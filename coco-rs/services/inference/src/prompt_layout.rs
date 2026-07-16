@@ -206,7 +206,10 @@ pub fn build_prompt_layout_from_prompt(
             // messages; no separate top-level slot is populated. The
             // provider crate ignores `prompt_layout` and falls back to
             // the System message already in the prompt stream.
-            ProviderApi::OpenaiCompat | ProviderApi::Volcengine | ProviderApi::Zai => {}
+            ProviderApi::Xai
+            | ProviderApi::OpenaiCompat
+            | ProviderApi::Volcengine
+            | ProviderApi::Zai => {}
         }
     }
 

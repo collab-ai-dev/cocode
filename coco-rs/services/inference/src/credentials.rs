@@ -13,12 +13,15 @@
 use std::fmt;
 use std::sync::Arc;
 
+use coco_types::OAuthFlowId;
+
 /// Live subscription credentials, supplied per request. Fields cover the union
 /// of what subscription providers need; each provider's `model_factory` arm
 /// reads only the fields its wire mode uses:
 /// - OpenAI ChatGPT → `access_token` + `account_id` (→ `ChatGPT-Account-ID`).
 /// - Anthropic (future) → `access_token` + `subscription_type` (cache-TTL).
-/// - Gemini (future) → `access_token` + `project_id`.
+/// - Gemini Code Assist → `access_token` + `project_id`.
+/// - Grok subscription → `access_token`.
 ///
 /// `Debug` is hand-rolled to redact the bearer — this carrier crosses into
 /// `model_factory` and the provider header closures, so a future
@@ -63,7 +66,11 @@ pub type RefreshHook = Arc<dyn Fn() -> RefreshFuture + Send + Sync>;
 pub trait ProviderCredentialResolver: Send + Sync {
     /// Returns a live credential supplier for the named provider instance, or
     /// `None` when that provider is not OAuth-backed / not logged in.
-    fn subscription_creds(&self, provider_name: &str) -> Option<SubscriptionCredsSupplier>;
+    fn subscription_creds(
+        &self,
+        provider_name: &str,
+        expected_flow: OAuthFlowId,
+    ) -> Option<SubscriptionCredsSupplier>;
 
     /// Force a token refresh for an OAuth provider instance — the reactive-401
     /// recovery path. The default is a no-op (`false`) so api-key resolvers and

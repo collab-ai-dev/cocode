@@ -98,11 +98,10 @@ async fn do_stream_decodes_partial_final_and_finish() {
     })
     .await;
 
-    let provider = create_xai(XaiProviderSettings {
-        base_url: Some(base),
-        api_key: Some("test-key".into()),
-        ..Default::default()
-    });
+    let provider = create_xai(XaiProviderSettings::api_key(
+        Some(base),
+        Some("test-key".into()),
+    ));
     let model = provider.transcription("grok-stt");
     let result = model
         .do_stream(stream_options("audio/pcm"))
@@ -188,11 +187,10 @@ async fn do_stream_error_event_terminates_with_error() {
     })
     .await;
 
-    let provider = create_xai(XaiProviderSettings {
-        base_url: Some(base),
-        api_key: Some("test-key".into()),
-        ..Default::default()
-    });
+    let provider = create_xai(XaiProviderSettings::api_key(
+        Some(base),
+        Some("test-key".into()),
+    ));
     let model = provider.transcription("grok-stt");
     let result = model
         .do_stream(stream_options("audio/pcm"))
@@ -214,11 +212,10 @@ async fn do_stream_error_event_terminates_with_error() {
 #[tokio::test]
 async fn do_stream_multichannel_without_channels_errors() {
     // Validation happens before any connection — no server needed.
-    let provider = create_xai(XaiProviderSettings {
-        base_url: Some("https://api.x.ai/v1".to_string()),
-        api_key: Some("test-key".into()),
-        ..Default::default()
-    });
+    let provider = create_xai(XaiProviderSettings::api_key(
+        Some("https://api.x.ai/v1".to_string()),
+        Some("test-key".into()),
+    ));
     let model = provider.transcription("grok-stt");
 
     let mut ns = HashMap::new();

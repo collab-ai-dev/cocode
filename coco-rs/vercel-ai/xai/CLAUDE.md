@@ -53,9 +53,16 @@ xAI is OpenAI-wire but diverges enough to warrant its own model impl:
   `tool-input-start → tool-input-delta → tool-input-end → tool-call` with no
   cross-delta accumulation.
 
-## Defaults
+## Authentication and defaults
 
-- Base URL `https://api.x.ai/v1`; API key from `XAI_API_KEY`.
+- `XaiConnection::ApiKey` owns both endpoint (default `https://api.x.ai/v1`) and key
+  (fallback `XAI_API_KEY`); `XaiConnection::GrokSubscription` is a mutually exclusive
+  connection profile.
+- Grok subscription bearers are host-bound to
+  `https://cli-chat-proxy.grok.com/v1`. Each request reads the live token and
+  emits the proxy auth, client identity/mode/version, and model-override headers.
+  The builtin uses the Responses API; `coco login grok` acquires its credential
+  through xAI device authorization.
 - `language_model()` routes to Chat Completions (the coco-rs convention; the
   upstream `languageModel` default routes to the Responses API — see
   Non-goals). Embedding models return `NoSuchModelError`; `image_model()` /
@@ -216,9 +223,10 @@ request option is intentionally omitted — xAI's endpoint now rejects it.
 
 This crate is dispatched at runtime:
 
-- **Builtin provider** `xai` (`common/config/src/builtin/xai.rs`): `api =
-  OpenaiCompat`, `base_url = https://api.x.ai/v1`, `env_key = XAI_API_KEY`. Users
-  declare Grok models against it (no builtin model rows).
+- **Builtin providers** (`common/config/src/builtin/xai.rs`): `xai` keeps API-key
+  auth at `https://api.x.ai/v1`; `grok` uses OAuth subscription auth at
+  `https://cli-chat-proxy.grok.com/v1` with `wire_api = Responses`. Users
+  declare Grok models against either instance (no builtin model rows).
 - **Model-factory dispatch** (`services/inference::model_factory`): the
   `OpenaiCompat` arm name-checks `coco_config::builtin::XAI_PROVIDER` and routes
   to `build_xai` → `vercel_ai_xai::create_xai`. The `services/inference` dep is

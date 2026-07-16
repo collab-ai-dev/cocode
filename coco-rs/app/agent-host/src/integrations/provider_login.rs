@@ -13,6 +13,7 @@ use coco_config::global_config;
 use coco_inference::ProviderCredentialResolver;
 use coco_provider_auth::AuthService;
 use coco_provider_auth::LoginOptions;
+use coco_provider_auth::LoginSurface;
 use coco_types::OAuthFlowId;
 
 use crate::session_runtime::SessionHandle;
@@ -59,6 +60,7 @@ pub fn shared_resolver() -> Arc<dyn ProviderCredentialResolver> {
 /// logs each in by its own name.
 pub fn instance_name(provider: Option<&str>) -> String {
     use coco_config::builtin::GEMINI_CODE_ASSIST_PROVIDER;
+    use coco_config::builtin::GROK_PROVIDER;
     use coco_config::builtin::OPENAI_CHATGPT_PROVIDER;
     match provider {
         // `openai-oauth` / `oauth` are auth-method shorthands for users who
@@ -68,6 +70,7 @@ pub fn instance_name(provider: Option<&str>) -> String {
             OPENAI_CHATGPT_PROVIDER.to_string()
         }
         Some("gemini") | Some("google") => GEMINI_CODE_ASSIST_PROVIDER.to_string(),
+        Some("grok") | Some("xai-oauth") => GROK_PROVIDER.to_string(),
         Some(other) => other.to_string(),
     }
 }
@@ -135,6 +138,11 @@ pub async fn run_login(
         // Headless / SSH (`--no-browser`): the browser is likely on another
         // machine, so enable the paste fallback alongside the loopback wait.
         paste: no_browser,
+        surface: if no_browser {
+            LoginSurface::Headless
+        } else {
+            LoginSurface::Cli
+        },
         ..LoginOptions::interactive()
     };
     let status = service
@@ -148,11 +156,21 @@ pub async fn run_login(
         status.provider_name, status.display_name
     );
     println!(
-        "  Use it by binding a model role to `{}` (e.g. `--models.main {}/gpt-5.5`, \
+        "  Use it by binding a model role to `{}` (e.g. `--models.main {}/{}`, \
          or set it as a role in settings.json).",
-        status.provider_name, status.provider_name
+        status.provider_name,
+        status.provider_name,
+        example_model(flow),
     );
     Ok(())
+}
+
+fn example_model(flow: OAuthFlowId) -> &'static str {
+    match flow {
+        OAuthFlowId::OpenAiChatGpt => "gpt-5.5",
+        OAuthFlowId::GeminiCodeAssist => "gemini-2.5-pro",
+        OAuthFlowId::XaiGrok => "grok-code-fast-1",
+    }
 }
 
 /// `coco login <provider> --import <path>` — adopt an existing credential from
@@ -221,6 +239,7 @@ pub async fn run_login_session(
     let opts = LoginOptions {
         open_browser: true,
         paste: false,
+        surface: LoginSurface::Ui,
         on_authorize_url: Some(url_sink),
         ..LoginOptions::interactive()
     };
@@ -289,3 +308,7 @@ pub fn print_auth_status(runtime_config: &coco_config::RuntimeConfig) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "provider_login.test.rs"]
+mod tests;

@@ -22,10 +22,10 @@
 //! ```ignore
 //! use vercel_ai_xai::{create_xai, XaiProviderSettings};
 //!
-//! let provider = create_xai(XaiProviderSettings {
-//!     api_key: Some("xai-...".into()),
-//!     ..Default::default()
-//! });
+//! let provider = create_xai(XaiProviderSettings::api_key(
+//!     None,
+//!     Some("xai-...".into()),
+//! ));
 //!
 //! let chat = provider.chat("grok-4.5");
 //! ```
@@ -35,6 +35,7 @@ pub mod convert_xai_chat_usage;
 pub mod map_xai_finish_reason;
 pub mod remove_additional_properties;
 pub mod supports_reasoning_effort;
+pub mod xai_auth;
 pub mod xai_config;
 pub mod xai_error;
 pub mod xai_provider;
@@ -53,6 +54,9 @@ pub use convert_xai_chat_usage::convert_xai_chat_usage;
 pub use map_xai_finish_reason::map_xai_finish_reason;
 pub use remove_additional_properties::remove_additional_properties_false;
 pub use supports_reasoning_effort::supports_reasoning_effort;
+pub use xai_auth::GrokCreds;
+pub use xai_auth::GrokCredsSupplier;
+pub use xai_auth::XaiConnection;
 pub use xai_config::XaiConfig;
 pub use xai_error::XaiErrorData;
 pub use xai_error::XaiFailedResponseHandler;

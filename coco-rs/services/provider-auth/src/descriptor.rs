@@ -4,12 +4,11 @@
 //! mode in the provider crate — no new engine code.
 //!
 //! Wired today: `OPENAI_CHATGPT` (loopback + Form exchange / JSON refresh,
-//! rotating token, id_token account claim) and `GEMINI_CODE_ASSIST` (loopback +
-//! Form exchange/refresh, persistent token, client_secret, userinfo email).
-//! The strategy enums also carry variants reserved for Claude Max
-//! (`VerifierAsState`, `LoopbackOrPaste`) so that flow slots in as pure data +
-//! one engine arm later; until its `OAuthFlowId` lands, the engine returns
-//! `Internal` for the unimplemented `LoopbackOrPaste` combination.
+//! rotating token, id_token account claim), `GEMINI_CODE_ASSIST` (loopback +
+//! Form exchange/refresh, persistent token, client_secret, userinfo email), and
+//! `XAI_GROK` (RFC 8628 device code + Form refresh, rotating token).
+//! Grant-specific fields are nested under typed grant descriptors so invalid
+//! authorization-code/device-code combinations are not constructible.
 
 use coco_config::EnvKey;
 use coco_types::OAuthFlowId;
@@ -23,13 +22,44 @@ pub enum RedirectStrategy {
         fallback_port: Option<u16>,
         callback_path: &'static str,
     },
-    /// Try loopback first; fall back to a hosted-paste redirect (Claude/Gemini).
-    LoopbackOrPaste {
-        default_port: u16,
-        fallback_port: Option<u16>,
-        callback_path: &'static str,
-        paste_redirect_uri: &'static str,
-    },
+}
+
+/// Authorization-code grant settings. Fields that have no meaning for device
+/// authorization live here so invalid grant combinations are unrepresentable.
+#[derive(Debug, Clone, Copy)]
+pub struct AuthorizationCodeGrant {
+    pub authorize_url: &'static str,
+    pub redirect: RedirectStrategy,
+    pub state: StateStrategy,
+    pub exchange_encoding: BodyEncoding,
+    pub authorize_extra: &'static [(&'static str, &'static str)],
+    pub timeout_secs: u64,
+}
+
+/// Accepted user-code alphabet returned by an RFC 8628 issuer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserCodePolicy {
+    AsciiAlphanumericDash,
+}
+
+/// RFC 8628 device-grant settings. Optional header names describe protocol
+/// extensions without putting provider names in the device engine.
+#[derive(Debug, Clone, Copy)]
+pub struct DeviceCodeGrant {
+    pub authorize_url: &'static str,
+    pub authorize_url_env: Option<EnvKey>,
+    pub request_extra: &'static [(&'static str, &'static str)],
+    pub client_version_header: Option<&'static str>,
+    pub client_surface_header: Option<&'static str>,
+    pub user_code_policy: UserCodePolicy,
+    pub timeout_secs: u64,
+}
+
+/// Interactive grant used to acquire the first credential.
+#[derive(Debug, Clone, Copy)]
+pub enum OAuthGrant {
+    AuthorizationCode(AuthorizationCodeGrant),
+    DeviceCode(DeviceCodeGrant),
 }
 
 /// What goes in the `state` param and how it is validated.
@@ -82,18 +112,13 @@ pub struct OAuthFlowDescriptor {
     /// OAuth client secret for desktop-app flows (Google). `None` for pure
     /// PKCE-public clients (OpenAI). Sent in the token exchange + refresh body.
     pub client_secret: Option<&'static str>,
-    pub authorize_url: &'static str,
     pub token_url: &'static str,
     /// RFC 7009 revocation endpoint. `logout` best-effort POSTs the token here.
     pub revoke_url: Option<&'static str>,
     pub scope: &'static str,
-    pub redirect: RedirectStrategy,
-    pub state: StateStrategy,
-    pub exchange_encoding: BodyEncoding,
+    pub grant: OAuthGrant,
     pub refresh_encoding: BodyEncoding,
     pub refresh_rotation: RefreshTokenRotation,
-    /// Extra static authorize-URL query params.
-    pub authorize_extra: &'static [(&'static str, &'static str)],
     /// Extra static refresh-body params (e.g. Claude `scope`).
     pub refresh_extra: &'static [(&'static str, &'static str)],
     pub account_id: AccountIdSource,
@@ -109,24 +134,27 @@ pub const OPENAI_CHATGPT: OAuthFlowDescriptor = OAuthFlowDescriptor {
     display_name: "ChatGPT subscription",
     client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
     client_secret: None,
-    authorize_url: "https://auth.openai.com/oauth/authorize",
     token_url: "https://auth.openai.com/oauth/token",
     revoke_url: Some("https://auth.openai.com/oauth/revoke"),
     scope: "openid profile email offline_access api.connectors.read api.connectors.invoke",
-    redirect: RedirectStrategy::Loopback {
-        default_port: 1455,
-        fallback_port: Some(1457),
-        callback_path: "/auth/callback",
-    },
-    state: StateStrategy::SeparateRandom,
-    exchange_encoding: BodyEncoding::Form,
+    grant: OAuthGrant::AuthorizationCode(AuthorizationCodeGrant {
+        authorize_url: "https://auth.openai.com/oauth/authorize",
+        redirect: RedirectStrategy::Loopback {
+            default_port: 1455,
+            fallback_port: Some(1457),
+            callback_path: "/auth/callback",
+        },
+        state: StateStrategy::SeparateRandom,
+        exchange_encoding: BodyEncoding::Form,
+        authorize_extra: &[
+            ("id_token_add_organizations", "true"),
+            ("codex_cli_simplified_flow", "true"),
+            ("originator", "codex_cli_rs"),
+        ],
+        timeout_secs: 300,
+    }),
     refresh_encoding: BodyEncoding::Json,
     refresh_rotation: RefreshTokenRotation::Rotates,
-    authorize_extra: &[
-        ("id_token_add_organizations", "true"),
-        ("codex_cli_simplified_flow", "true"),
-        ("originator", "codex_cli_rs"),
-    ],
     refresh_extra: &[],
     account_id: AccountIdSource::IdTokenClaim {
         path: &["https://api.openai.com/auth", "chatgpt_account_id"],
@@ -145,22 +173,25 @@ pub const GEMINI_CODE_ASSIST: OAuthFlowDescriptor = OAuthFlowDescriptor {
     display_name: "Gemini Code Assist",
     client_id: "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com",
     client_secret: Some("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"),
-    authorize_url: "https://accounts.google.com/o/oauth2/v2/auth",
     token_url: "https://oauth2.googleapis.com/token",
     revoke_url: Some("https://oauth2.googleapis.com/revoke"),
     scope: "https://www.googleapis.com/auth/cloud-platform \
             https://www.googleapis.com/auth/userinfo.email \
             https://www.googleapis.com/auth/userinfo.profile",
-    redirect: RedirectStrategy::Loopback {
-        default_port: 0, // ephemeral — Google desktop clients accept any localhost port
-        fallback_port: None,
-        callback_path: "/oauth2callback",
-    },
-    state: StateStrategy::SeparateRandom,
-    exchange_encoding: BodyEncoding::Form,
+    grant: OAuthGrant::AuthorizationCode(AuthorizationCodeGrant {
+        authorize_url: "https://accounts.google.com/o/oauth2/v2/auth",
+        redirect: RedirectStrategy::Loopback {
+            default_port: 0, // ephemeral — Google desktop clients accept any localhost port
+            fallback_port: None,
+            callback_path: "/oauth2callback",
+        },
+        state: StateStrategy::SeparateRandom,
+        exchange_encoding: BodyEncoding::Form,
+        authorize_extra: &[("access_type", "offline"), ("prompt", "consent")],
+        timeout_secs: 300,
+    }),
     refresh_encoding: BodyEncoding::Form,
     refresh_rotation: RefreshTokenRotation::Persists,
-    authorize_extra: &[("access_type", "offline"), ("prompt", "consent")],
     refresh_extra: &[],
     account_id: AccountIdSource::UserInfoEndpoint {
         url: "https://www.googleapis.com/oauth2/v2/userinfo",
@@ -170,12 +201,40 @@ pub const GEMINI_CODE_ASSIST: OAuthFlowDescriptor = OAuthFlowDescriptor {
     revoke_url_env: Some(EnvKey::CocoAuthGeminiRevokeUrl),
 };
 
+/// Grok subscription login, matching Grok Build's production device-code flow.
+pub const XAI_GROK: OAuthFlowDescriptor = OAuthFlowDescriptor {
+    flow: OAuthFlowId::XaiGrok,
+    display_name: "Grok subscription",
+    client_id: "b1a00492-073a-47ea-816f-4c329264a828",
+    client_secret: None,
+    token_url: "https://auth.x.ai/oauth2/token",
+    revoke_url: None,
+    scope: "openid profile email offline_access grok-cli:access api:access \
+            conversations:read conversations:write",
+    grant: OAuthGrant::DeviceCode(DeviceCodeGrant {
+        authorize_url: "https://auth.x.ai/oauth2/device/code",
+        authorize_url_env: Some(EnvKey::CocoAuthXaiDeviceUrl),
+        request_extra: &[("referrer", "grok-build")],
+        client_version_header: Some("x-grok-client-version"),
+        client_surface_header: Some("x-grok-client-surface"),
+        user_code_policy: UserCodePolicy::AsciiAlphanumericDash,
+        timeout_secs: 600,
+    }),
+    refresh_encoding: BodyEncoding::Form,
+    refresh_rotation: RefreshTokenRotation::Rotates,
+    refresh_extra: &[],
+    account_id: AccountIdSource::IdTokenClaim { path: &["sub"] },
+    token_url_env: Some(EnvKey::CocoAuthXaiTokenUrl),
+    revoke_url_env: None,
+};
+
 /// Resolve the descriptor for a flow id. Returns `None` for flows whose
 /// descriptor is not yet populated (Claude in P1).
 pub fn descriptor_for(flow: OAuthFlowId) -> Option<&'static OAuthFlowDescriptor> {
     match flow {
         OAuthFlowId::OpenAiChatGpt => Some(&OPENAI_CHATGPT),
         OAuthFlowId::GeminiCodeAssist => Some(&GEMINI_CODE_ASSIST),
+        OAuthFlowId::XaiGrok => Some(&XAI_GROK),
     }
 }
 
@@ -212,5 +271,24 @@ impl OAuthFlowDescriptor {
             return Some(v);
         }
         self.revoke_url.map(str::to_string)
+    }
+}
+
+impl DeviceCodeGrant {
+    /// Effective device authorization endpoint. Like token overrides, this is
+    /// debug-only so release credentials cannot be redirected by environment.
+    pub fn effective_authorize_url(self) -> String {
+        if cfg!(debug_assertions)
+            && let Some(key) = self.authorize_url_env
+            && let Some(value) = coco_config::env::env_opt(key.as_str())
+            && !value.trim().is_empty()
+        {
+            tracing::warn!(
+                env = key.as_str(),
+                "using debug device-authorization override (not for production)"
+            );
+            return value;
+        }
+        self.authorize_url.to_string()
     }
 }

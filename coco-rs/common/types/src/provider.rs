@@ -15,6 +15,9 @@ pub enum ProviderApi {
     Gemini,
     Volcengine,
     Zai,
+    /// Dedicated xAI adapter. Authentication and wire API remain separate
+    /// provider settings; this variant selects xAI request/response semantics.
+    Xai,
     OpenaiCompat,
 }
 
@@ -27,6 +30,7 @@ impl ProviderApi {
             Self::Gemini => "google",
             Self::Volcengine => "volcengine",
             Self::Zai => "zai",
+            Self::Xai => "xai",
             Self::OpenaiCompat => "openai-compat",
         }
     }
@@ -394,6 +398,8 @@ pub enum OAuthFlowId {
     OpenAiChatGpt,
     /// Google Gemini Code Assist (Google account OAuth).
     GeminiCodeAssist,
+    /// Grok subscription via xAI's RFC 8628 device-code flow.
+    XaiGrok,
     // Future: AnthropicClaude (Claude Max).
 }
 
@@ -404,6 +410,7 @@ impl OAuthFlowId {
         match self {
             Self::OpenAiChatGpt => "openai_chatgpt",
             Self::GeminiCodeAssist => "gemini_code_assist",
+            Self::XaiGrok => "xai_grok",
         }
     }
 }

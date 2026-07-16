@@ -10,7 +10,7 @@ use super::*;
 #[test]
 fn builtin_provider_count() {
     let providers = builtin_providers().expect("builtin partials must resolve");
-    assert_eq!(providers.len(), 11);
+    assert_eq!(providers.len(), 12);
 }
 
 #[test]
@@ -20,9 +20,28 @@ fn builtin_xai_provider_resolves() {
         .iter()
         .find(|p| p.name == super::XAI_PROVIDER)
         .expect("xai builtin");
-    assert_eq!(xai.api, ProviderApi::OpenaiCompat);
+    assert_eq!(xai.api, ProviderApi::Xai);
     assert_eq!(xai.env_key, "XAI_API_KEY");
     assert_eq!(xai.base_url, "https://api.x.ai/v1");
+}
+
+#[test]
+fn builtin_grok_provider_resolves_oauth_responses_route() {
+    let providers = builtin_providers().expect("builtin partials must resolve");
+    let grok = providers
+        .iter()
+        .find(|p| p.name == super::GROK_PROVIDER)
+        .expect("grok builtin");
+    assert_eq!(grok.api, ProviderApi::Xai);
+    assert_eq!(grok.env_key, "");
+    assert_eq!(grok.base_url, "https://cli-chat-proxy.grok.com/v1");
+    assert_eq!(grok.wire_api, coco_types::WireApi::Responses);
+    assert_eq!(
+        grok.auth,
+        crate::provider::ProviderAuth::OAuth {
+            flow: coco_types::OAuthFlowId::XaiGrok
+        }
+    );
 }
 
 #[test]
