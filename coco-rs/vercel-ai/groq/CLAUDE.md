@@ -8,6 +8,8 @@ Transcription, plus the `groq.browser_search` provider tool.
 Faithful port of `@ai-sdk/groq`. Built on the coco-rs `vercel-ai-provider`
 traits and `vercel-ai-provider-utils` transport (shared `reqwest::Client` +
 typed `ResponseHandler`), not a pluggable `fetch`.
+Baseline commit, mirror scope, and intentional deviations: see
+[`../README.md`](../README.md).
 
 ## Key Types
 
@@ -60,3 +62,11 @@ Groq is OpenAI-wire but diverges enough to warrant its own model impl:
   signal, not the finish reason.
 - Wire schemas in `chat/groq_api_types.rs` are intentionally a minimal subset —
   only fields the impl reads — so upstream API additions don't break parsing.
+
+## Wiring (runtime-reachable)
+
+Dispatched by name inside the model factory's `OpenaiCompat` arm:
+`provider_cfg.name == coco_config::builtin::GROQ_PROVIDER` routes to
+`build_groq` (`services/inference::model_factory`) — unlike xai, which has its
+own dedicated `ProviderApi::Xai` variant. The `"groq"` provider-options
+namespace comes from the instance name.

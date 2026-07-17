@@ -4,7 +4,8 @@ Google Generative AI (Gemini) provider for Vercel AI SDK v4. Supports language, 
 
 ## SDK Spec
 
-Implements the `@ai-sdk/google` v4 specification.
+Implements the `@ai-sdk/google` v4 specification. Baseline commit, mirror
+scope, and intentional deviations: see [`../README.md`](../README.md).
 
 ## Key Types
 

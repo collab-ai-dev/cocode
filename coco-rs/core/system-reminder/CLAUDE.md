@@ -1,71 +1,72 @@
 # coco-system-reminder
 
-Per-turn dynamic `<system-reminder>` injection. Owns the entire reminder subsystem: types, generators, throttle, orchestration, and message injection.
-
+Per-turn dynamic `<system-reminder>` injection. Owns the reminder subsystem: types, generators, orchestration, cross-crate source traits, and message injection.
 
 ## Key Types
 
-- `AttachmentType` — generator variants mapped to discriminators or coco-rs
-  synthetic grouping keys. Grouped by phase:
-  - **Phase A/B/C (11)**: plan-mode trio (`plan_mode` / `plan_mode_exit` / `plan_mode_reentry`), auto-mode pair (`auto_mode` / `auto_mode_exit`), todo/task pair (`todo_reminder` / `task_reminder`), `critical_system_reminder`, `compaction_reminder`, `date_change`, `verify_plan_reminder`.
-  - **Phase 1 engine-local (5)**: `ultrathink_effort` / `token_usage` / `budget_usd` / `output_token_usage` / `companion_intro`.
-  - **Phase 2 history-diff (3)**: `deferred_tools_delta` / `agent_listing_delta` / `mcp_instructions_delta`.
-  - **Phase 3 cross-crate (14)**: `hook_success` / `hook_blocking_error` / `hook_additional_context` / `hook_stopped_continuation` / `async_hook_response` / `diagnostics` / `output_style` / `queued_command` / `task_status` / `skill_listing` / `invoked_skills` / `teammate_mailbox` / `team_context` / `agent_pending_messages`.
-  - **Phase 4 user-input (3, UserPrompt tier)**: `at_mentioned_files` / `mcp_resources` / `agent_mentions`.
-  - **Main-thread IDE (2)**: `ide_selection` / `ide_opened_file`.
-  - **Silent native (2)**: `already_read_file` / `edited_image_file`.
-  - **Audit note (May 2026)**: only `skill_discovery` is a model-visible
-    generator. API-hidden events (`command_permissions`, `dynamic_skill`,
-    `structured_output`, `max_turns_reached`, `teammate_shutdown_batch`) are
-    emitted by their owning crates through typed `AttachmentMessage` history
-    events. `current_session_memory` is consumed through the memory/compact
-    provider path, not a reminder generator.
-  - `AttachmentType::all()` returns the full catalog.
-- `ReminderTier` — `Core` (all agents / all-thread batch), `MainAgentOnly` (main-thread batch), `UserPrompt` (only when user input is present). Maps to the three attachment batches in `getAttachments`.
-- `XmlTag` — `SystemReminder` = `<system-reminder>`, `None` = raw.
-- `SystemReminder` — unified generator output: `{ attachment_type, output: ReminderOutput, is_meta, is_silent }`.
-- `ReminderOutput::{ Text | Messages | ModelAttachment | SilentAttachment }` — model-visible shapes plus silent/display-only metadata.
-- `AttachmentGenerator` trait (`async_trait`) — one impl per reminder type. 4-hook lifecycle: `is_enabled`, `tier`, `throttle_config_for_context`, `generate`.
-- `GeneratorContext<'a>` — per-turn state: permission-mode flags, tool list, turn-since-* counters, todos/plan_tasks, context-window metrics, date-change + verify-plan signals, full-content flags pre-computed by the orchestrator.
-- `ThrottleManager` / `ThrottleConfig` — central rate limiter keyed by `AttachmentType`. Fields: `min_turns_between` = `TURNS_BETWEEN_*`, `full_content_every_n` = `FULL_REMINDER_EVERY_N_*`. Presets: `plan_mode` / `auto_mode` / `todo_reminder` / `verify_plan_reminder` / `none`.
-- `SystemReminderOrchestrator` — parallel execution with per-generator timeout. Default registration order: user-input batch, all-thread batch, then main-thread batch.
-- `TurnReminderInput` + `run_turn_reminders()` — one-call engine entry point; packages every per-turn input as named struct fields.
-- `InjectedMessage` / `InjectedBlock` — post-orchestration conversion; `inject_reminders` writes `coco_types::Message::Attachment` with `is_meta=true` + `origin=SystemInjected`.
-- `SystemReminderConfig` / `AttachmentSettings` — **live in `coco-config`** (re-exported here). Wired via `Settings.system_reminder` so every reminder can be toggled from `settings.json`.
+- `AttachmentType` — one variant per reminder; full catalog is `AttachmentType::all()`.
+  Conceptually grouped by phase: core plan/auto/todo/task reminders; engine-local
+  (token/budget/companion/goal-context); history-diff deltas (deferred tools /
+  agent listing / MCP instructions); cross-crate snapshots (hooks, diagnostics,
+  skills, team, queued commands, …); user-input tier (@-mentions, MCP resources,
+  agent mentions); IDE; silent-native (`already_read_file` / `edited_image_file`).
+- `ReminderTier` — `Core` (all agents) / `MainAgentOnly` / `UserPrompt` (only when user input is present).
+- `SystemReminder` — `{ attachment_type, output, is_meta, is_silent }`;
+  `ReminderOutput::{Text | Messages | SkillDiscovery | ModelAttachment | SilentAttachment}`.
+  Consumers check both `reminder.is_silent || reminder.output.is_silent()`.
+- `AttachmentGenerator` trait — one impl per reminder type under `generators/`.
+  **3-hook lifecycle**: `is_enabled(config)`, `tier()` (defaults to
+  `AttachmentType::tier()`), `generate(ctx)`. Errors bubble to the orchestrator,
+  which logs and continues — one failure never poisons another's output.
+- `GeneratorContext<'a>` (+ builder) — per-turn state precomputed by the engine:
+  mode flags, tools, todos/plan tasks, context-window metrics, delta + cross-crate
+  snapshots, and history-derived cadence counters.
+- `SystemReminderOrchestrator` — session-owned generator registry
+  (`with_default_generators()` wires built-ins in injection order: user-input,
+  all-thread, main-thread batch). Gate chain: config `enabled` → generator
+  `is_enabled` → tier; survivors run concurrently under a batch timeout (2x
+  per-generator timeout as safety net).
+- `TurnReminderInput` + `run_turn_reminders()` — one-call engine entry point.
+- `ReminderSources` (`sources/`) — per-subsystem source traits (`HookEventsSource`,
+  `DiagnosticsSource`, `TaskStatusSource`, `SkillsSource`, `McpSource`, `SwarmSource`,
+  `IdeBridgeSource`, `MemorySource`), implemented by the owning crates — the
+  reminder analog of `core/tool-runtime`'s handle pattern (one-way edge, no
+  cycles). `materialize()` fans out via `tokio::join!` with per-source timeout,
+  degrading errors/timeouts to defaults.
+- `QueueOrigin` + `wrap_command_text` (`queue_origin`) — typed origin for mid-turn
+  queued commands (`Coordinator` / `TaskNotification` / `Channel{server}` / `Human`
+  / `Cron`); each origin gets its own framing prose.
+- `InjectedMessage` / `inject_reminders` — converts orchestrator output into `coco_types::Message::Attachment`.
+- `SystemReminderConfig` / `AttachmentSettings` — **live in `coco-config`** (re-exported here); every reminder toggleable via `Settings.system_reminder`.
+
+## Cadence lives in generators (no orchestrator throttle)
+
+The former `ThrottleManager` / `ThrottleConfig` are gone — the orchestrator
+holds **no** throttle state. Throttled generators (plan/auto steady-state,
+todo/task/verify nudges, Full-vs-Sparse cycling) derive their gate inside
+`generate()` from history-scan counters the engine precomputes onto
+`GeneratorContext` (`plan_mode_turns_since_attachment`,
+`turns_since_last_todo_write`, …) via the `turn_counting` helpers; `Ok(None)`
+skips the turn. History-derived cadence survives session restarts with no
+seeded state. Plan/auto cadence counts *human* turns (non-meta user messages),
+not LLM iterations — `last_human_turn_uuid` on `GeneratorContext` is scanned
+from history so multi-tool-round iterations within one human turn count once
+(`turn_counting::human_turns_since_attachment_opt` and friends).
 
 ## Module Layout
 
-```
-src/
-├── error.rs          SystemReminderError + ErrorExt (codes 13_xxx)
-├── types.rs          AttachmentType, ReminderTier, XmlTag, SystemReminder, ReminderOutput
-├── xml.rs            wrap_with_tag / extract_system_reminder
-├── throttle.rs       ThrottleConfig (+ presets) + ThrottleManager
-├── generator.rs      AttachmentGenerator trait + GeneratorContext(Builder)
-├── orchestrator.rs   SystemReminderOrchestrator (parallel + timeout)
-├── inject.rs         InjectedMessage -> coco_types::Message
-├── context_builder.rs app_state → GeneratorContext mapping helpers
-├── turn_counting.rs  count_assistant_turns_since_tool/any_tool, count_human_turns
-├── turn_runner.rs    TurnReminderInput + run_turn_reminders (engine entry)
-├── generators/       plan/auto modes, todo/task reminders, hook events,
-│                     deltas, memory, team/swarm, user input, IDE,
-│                     token/budget, silent markers
-└── lib.rs            module declarations + re-exports (SystemReminderConfig from coco-config)
-```
+`error` (codes 13_xxx) · `types` (AttachmentType/ReminderTier/SystemReminder/ReminderOutput) · `xml` (wrap/extract) · `generator` (trait + context/builder + snapshot structs) · `orchestrator` · `inject` · `context_builder` (app_state → ctx helpers) · `turn_counting` · `turn_runner` (engine entry) · `queue_origin` · `sources/` (traits + materialized + noop) · `generators/` (the generator impls; related reminders share a file, e.g. `hook_events.rs`).
 
 ## Key Invariants
 
-- **Logic is canonical**: cadence, text content, and trigger conditions are well-defined and stable — see the README catalog for the per-reminder specs.
-- **Human-turn UUID throttle**: plan-mode cadence counts non-meta user messages, not LLM iterations. The engine tracks `last_human_turn_uuid_seen` on `ToolAppState` and advances the throttle counter only on a new UUID; `PlanModeReminder::turn_start_side_effects_only` writes it.
-- **is_meta=true on all reminders**: hidden from UI transcripts, sent to the API wrapped in `<system-reminder>`.
-- **Per-generator timeout**: `SystemReminderConfig::timeout_ms` (default 1000ms). Timed-out generators produce zero reminders; the turn continues.
-- **Typed `ToolName` throughout**: no hand-written tool-name strings in gates or cadence helpers. `TASK_MANAGEMENT_TOOLS` + `count_assistant_turns_since_tool(ToolName::X)` thread typed references through so a `ToolName` rename propagates automatically.
-- **Auto-mode gate**: `is_auto_mode == (mode == Auto) || (mode == Plan && is_auto_classifier_active)`. The engine reads `AutoModeState::is_active()` from `core/permissions` and threads it into `TurnReminderInput`.
-- **Cross-run cadence**: each `run_session_loop` invocation constructs a fresh orchestrator. Engine seeds `ThrottleManager::seed_state` from `app_state.plan_mode_attachment_count` + `turns_since_last_attachment` so cadence survives. Post-emit bookkeeping syncs the throttle back onto `app_state`.
+- **is_meta=true on all reminders**: hidden from UI transcripts, sent to the API wrapped in `<system-reminder>` with `origin=SystemInjected`.
+- **Timeout**: `SystemReminderConfig::timeout_ms` (default 1000ms). Timed-out generators produce zero reminders; the turn continues.
+- **Typed `ToolName` throughout**: no hand-written tool-name strings in gates or cadence helpers — `TASK_MANAGEMENT_TOOLS` + `count_assistant_turns_since_tool(ToolName::X)` thread typed references so a rename propagates.
+- **Generators only render**: cross-crate data arrives as typed `*Snapshot` / `*Info` structs on `GeneratorContext`, populated through the `sources/` traits — generators never call into sibling crates.
 
 ## What this crate does NOT own
 
-- **File / image / PDF / memory attachments** — those stay in `core/context::Attachment` (user-input-side, token-budgeted + deduped). Phase 4's `at_mentioned_files` generator emits a *reminder* (listing display paths); the **file content** still flows through `core/context`.
+- **File / image / PDF / memory attachments** — those stay in `core/context::Attachment` (user-input-side, token-budgeted + deduped). The `at_mentioned_files` generator emits a *reminder* (listing display paths); the **file content** still flows through `core/context`.
 - **Static system prompt assembly** — that's `core/context::build_system_prompt`. This crate handles *dynamic per-turn* injection only.
 - **Compaction summarization** — `services/compact` owns that. `plan_file_reference` is emitted **by** the compaction pipeline (not this crate) so it survives the context-bust.
-- **Cross-crate data sources for Phase 3/4 snapshots** — each owning crate (`services/lsp`, `hooks`, `tasks`, `skills`, `coordinator`, `app/query::CommandQueue`, `bridge`) populates a typed `*Snapshot` / `*Info` struct on `GeneratorContext`. The generators in `src/generators/` only *render* — they never call into a sibling crate.
+- **Cross-crate data sources for the snapshots** — each owning crate (`services/lsp`, `hooks`, `tasks`, `skills`, `coordinator`, `app/query::CommandQueue`, `bridge`, `memory`) implements its `*Source` trait and populates `GeneratorContext`.

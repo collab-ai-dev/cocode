@@ -15,10 +15,20 @@ adapters. Reusable application behavior belongs in `coco-agent-host`.
 - The TUI surface invokes host application operations through `AppServerLocalBridge`; it
   does not build a second generic runner abstraction.
 
+## Allocator (jemalloc)
+
+- `#[global_allocator]` (tikv-jemallocator) lives in `src/main.rs`, gated on
+  `all(feature = "jemalloc", not(target_os = "windows"))`; tuning is baked at
+  build time via `JEMALLOC_SYS_WITH_MALLOC_CONF` in `.cargo/config.toml`.
+- The binary's `jemalloc` feature also enables `coco-tui/jemalloc` →
+  `coco-utils-jemalloc` (purge/stats); the two MUST move together — see
+  `utils/jemalloc/CLAUDE.md`.
+
 ## Verification
 
-Run formatting and checks from the workspace root. The focused TUI suite is:
+Run formatting and checks from the workspace root. The focused TUI suite
+(companion tests under `src/tui/*.test.rs`, e.g. the `tui::tests` module) is:
 
 ```bash
-cargo nextest run -p coco-cli tui_runner --no-fail-fast
+cargo nextest run -p coco-cli tui --no-fail-fast
 ```

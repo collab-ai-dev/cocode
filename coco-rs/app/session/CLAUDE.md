@@ -73,14 +73,12 @@ normalised session cwd / worktree path, with a djb2 suffix for paths over
 │           ├── tool-results/                # persisted tool-result blobs
 │           └── session-memory/
 │               └── summary.md               # 9-section per-session memory
-└── sessions/                                # cross-PID registry
-    ├── <pid>.json                           # SessionRegistration (claude ps)
-    └── ...
 ```
 
-`history.json` (PromptHistory) lives under `<config_home>` directly, not in
-`<memory_base>/projects/...` — it's user-typed input recall, not session
-state.
+The cross-PID registry does NOT live under `<memory_base>` — it keys off
+`config_home`: `<config_home>/sessions/pids/<pid>.json` (SessionRegistration,
+for `coco ps`). `history.json` (PromptHistory) also lives under
+`<config_home>` directly — user-typed input recall, not session state.
 
 ## Worktree path invariant
 
@@ -92,7 +90,8 @@ keeping transcripts separate.
 ## Concurrent session registry
 
 `SessionRegistry` writes one `<pid>.json` file per top-level session under
-`<config_home>/sessions/`. Subagents (those with a non-null `agent_id`) intentionally
+`<config_home>/sessions/pids/` (the dedicated `pids/` subdir keeps the
+registry namespaced away from other session artifacts). Subagents (those with a non-null `agent_id`) intentionally
 do NOT register — counting them would conflate swarm activity with real
 concurrency. Live patches (`update_session_name`, `update_session_bridge_id`,
 `update_session_activity`) are serialised via the registry's internal write

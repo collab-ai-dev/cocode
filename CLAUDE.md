@@ -23,33 +23,16 @@ just pre-commit   # REQUIRED before commit: quick-check + nextest test run
 
 ### Pre-commit is expensive — run it ONCE per commit, at the very end
 
-`pre-commit` compiles every test binary in the workspace and runs the full
-nextest suite. It is *orders of magnitude* slower than `quick-check`. Treat
-it as the **final gate**, not an iteration tool.
+Every iteration uses `quick-check`; `pre-commit` (full test-binary compile +
+nextest run, orders of magnitude slower) fires exactly once, immediately
+before `git commit` — never mid-iteration. Why: clippy/check artifacts
+(`.rmeta`) and test binaries are separate cargo caches that do not share, so
+a clippy failure inside `pre-commit` surfaces only after nextest has already
+burned its compile budget. `quick-check` catches the same warnings without
+entering the test-compile path.
 
-**The rule:** every iteration uses `quick-check`; `pre-commit` fires exactly
-once, immediately before `git commit`.
-
-```
-edit → just quick-check → repeat until green
-                                ↓
-                       just pre-commit (final gate, ONCE)
-                                ↓
-                            git commit
-```
-
-**Why never run `pre-commit` mid-iteration:** `cargo clippy` / `cargo check`
-write `.rmeta` (metadata, no codegen). `cargo test --no-run` writes test-cfg
-ELF binaries with dev-deps linked. **These two artifact caches do not share.**
-If `pre-commit` is going to fail on a clippy warning, you only find out *after*
-nextest has already spent its compile budget on output that gets thrown away.
-`quick-check` catches the same warnings without entering the test-compile path.
-
-**Linker speedup (already configured):** `coco-rs/.cargo/config.toml` sets
-`mold` as the Linux linker (`-C link-arg=-fuse-ld=mold`). Install once with
-`apt install mold`; the config picks it up automatically. Linking is a large
-fraction of test-binary build time, so this materially shortens both warm
-incremental rebuilds and cold `pre-commit` runs.
+Linker: `coco-rs/.cargo/config.toml` sets `mold` on Linux (`apt install mold`
+once); linking dominates test-binary build time.
 
 Scoped helpers (use only when you genuinely need a single piece):
 
@@ -82,29 +65,21 @@ just help               # All commands
 
 ### String Slicing — UTF-8 safety
 
-Slicing or indexing a `&str`/`String` by a **computed byte offset** panics
-when the offset lands inside a multi-byte UTF-8 char (CJK, box-drawing glyphs,
-emoji). This has shipped as a live crash more than once — e.g. `/diff`
-truncation panicking on a `─` sitting across the byte limit. **Always go
-through `coco_utils_string`; never compute a byte cut by hand.**
+Slicing a `&str` by a **computed byte offset** panics when the offset lands
+inside a multi-byte char (CJK, box-drawing glyphs, emoji) — this has shipped
+as a live crash more than once. **Never** write `&s[..n]` / `s.truncate(n)`
+with a computed index, and never hand-roll `is_char_boundary` loops. Blessed
+forms:
 
-- **Never** write `&s[..n]`, `&s[n..]`, `&s[a..b]`, or `s.truncate(n)` when the
-  index is a *computed* value (variable, arithmetic, a `const` byte budget, a
-  `.len()` fraction). Raw slicing is only safe at a literal index on
-  known-ASCII, or at a `.find()`/`rfind()` result for a single-byte char like
-  `\n` (always a boundary).
-- **Never** hand-roll `while !s.is_char_boundary(k) { k -= 1 }`. Two blessed
-  forms, pick by need:
-  - `coco_utils_string::{take_bytes_at_char_boundary, take_last_bytes_at_char_boundary}`
-    — borrowed prefix / suffix within a byte budget; `truncate_str(s, max)` /
-    `truncate_for_log(s, max)` for owned + `...`.
-  - The std primitive `s.floor_char_boundary(n)` when you want an in-place
-    truncate or a one-off slice without adding a dep:
-    `content.truncate(content.floor_char_boundary(n))` — never
-    `content.truncate(n)`.
-- Truncating to **terminal columns** (display width), not bytes? That's a
-  different problem — use `coco_tui_ui::truncate::truncate_to_width`, which is
-  width-aware (CJK = 2 cols), not a byte budget.
+- `coco_utils_string::{take_bytes_at_char_boundary, take_last_bytes_at_char_boundary}`
+  (borrowed prefix/suffix); `truncate_str` / `truncate_for_log` (owned + `...`).
+- `s.floor_char_boundary(n)` for an in-place truncate without adding a dep:
+  `content.truncate(content.floor_char_boundary(n))` — never `content.truncate(n)`.
+- Truncating to **terminal columns** (display width) is a different problem —
+  use `coco_tui_ui::truncate::truncate_to_width` (width-aware, CJK = 2 cols).
+
+Raw slicing is only safe at a literal index on known-ASCII, or at a
+`.find()`/`rfind()` result for a single-byte char like `\n`.
 
 ### Error Handling
 
@@ -159,19 +134,27 @@ Add for `None` / booleans / numeric literals. Skip for string/char literals unle
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  App:         cli, tui, session, query, state                        │
-│  Root:        commands, skills, hooks, tasks, memory, plugins,       │
-│               keybindings                                             │
-│  Core:        tool-runtime → tools, permissions, messages, context, │
-│               system-reminder, subagent                               │
-│  Services:    inference, compact, mcp, rmcp-client, mcp-types, lsp   │
+│  App:         cli, agent-host, sdk-server, runtime, server,          │
+│               server-client, server-transport, tui, session, query   │
+│  Hub:         protocol, connector, server                            │
+│  Root:        commands, skills, hooks, tasks, memory, maintenance,   │
+│               coordinator, plugins, keybindings, output-styles,      │
+│               skill-learn, journey                                   │
+│  Core:        tool-runtime → tools, permissions, messages, context,  │
+│               system-reminder, subagent, goals, goal-runtime,        │
+│               workflow, workflow-runtime                             │
+│  Services:    inference, compact, mcp, mcp-skills, mcp-types,        │
+│               rmcp-client, provider-auth, lsp, session-trace,        │
+│               wire-dump                                              │
 │  Exec:        shell, sandbox, process-hardening, exec-server,        │
-│               apply-patch                                             │
-│  Standalone:  bridge, retrieval                                      │
-│  Vercel AI:   ai → openai, openai-compatible, google, anthropic,     │
-│               bytedance (on provider + provider-utils)                │
-│  Common:      types, llm-types, config, error, otel,                 │
-│               stack-trace-macro, model-card                           │
+│               apply-patch                                            │
+│  Standalone:  bridge, retrieval, voice, tui-ui, tui-markdown,        │
+│               tui-mermaid                                            │
+│  Vercel AI:   ai → openai, openai-compatible, google,                │
+│               google-codeassist, xai, groq, anthropic, bytedance     │
+│               (on provider + provider-utils)                         │
+│  Common:      types, llm-types, config, config-reload, error, otel,  │
+│               stack-trace-macro, model-card                          │
 │  Utils:       see Utils table below                                  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -197,7 +180,8 @@ User input → ConversationContext → MessageHistory + attachments
 ### Configuration Resolution
 
 ```
-~/.coco/{provider,model,config}.json + env + CLI overrides
+<config_home>/settings.json (default ~/.cocode) + project .cocode/settings.json
+  + managed/policy files + env + CLI overrides
   → Settings → EnvOnlyConfig → RuntimeOverrides → ResolvedConfig
   → GlobalConfig (hot-reload via SettingsWatcher)
   → ModelRoles + ModelAlias + FastModeState
@@ -208,8 +192,9 @@ User input → ConversationContext → MessageHistory + attachments
 
 ```
 QueryEngine → ApiClient [services/inference]
-  → Arc<dyn LanguageModelV4> → vercel-ai (generate_text / stream_text)
-  → provider impl [vercel-ai/{openai,anthropic,google,bytedance,openai-compatible}]
+  → Arc<dyn LanguageModelV4>.do_generate / do_stream (production bypasses
+    vercel-ai's generate_text / stream_text — see vercel-ai/ai/CLAUDE.md)
+  → provider impl [vercel-ai/{openai,anthropic,google,google-codeassist,xai,groq,bytedance,openai-compatible}]
   → HTTP → typed stream → CacheBreakDetector + UsageAccumulator → QueryResult
 ```
 
@@ -224,8 +209,9 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 | Crate | Purpose |
 |-------|---------|
 | `types` | Foundation types incl. Message family + wire-tagged unions. Source-level vercel-ai-free (DTOs reach via `coco-llm-types`). |
-| `llm-types` | DTO seam: pure re-export shim for `vercel-ai-provider` shapes (LlmMessage / content parts / StopReason / Usage / …). Paired with `services/inference` to form the dual-seam — SDK upgrade edits both crates. |
+| `llm-types` | DTO seam: pure re-export shim for `vercel-ai-provider` shapes; SDK upgrades edit this + `services/inference` (dual-seam) |
 | `config` | Layered config: JSON + env + runtime overrides + hot reload |
+| `config-reload` | Settings hot-reload watcher (`RuntimeReloader` over settings files + `managed-settings.d`) |
 | `error` | Unified errors with `StatusCode` classification (snafu + virtstack) |
 | `otel` | OpenTelemetry tracing and metrics |
 | `stack-trace-macro` | `#[stack_trace_debug]` proc macro for snafu enums |
@@ -239,11 +225,13 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 | `vercel-ai-provider-utils` | Utilities for AI SDK v4 providers (Fetch, ResponseHandler, Schema) |
 | `vercel-ai` | High-level SDK matching `@ai-sdk/ai` (generate_text, stream_text, …) |
 | `vercel-ai-openai` | OpenAI provider (Chat + Responses + Embeddings + Image) |
-| `vercel-ai-openai-compatible` | Generic OpenAI-compatible provider (xAI, Groq, Together) |
+| `vercel-ai-openai-compatible` | Generic OpenAI-compatible provider (Together, Fireworks, DeepSeek, GLM, Ollama) |
 | `vercel-ai-google` | Google Gemini provider (API key → generativelanguage) |
 | `vercel-ai-google-codeassist` | Gemini Code Assist subscription transport (OAuth → cloudcode-pa); reuses `vercel-ai-google`'s codec |
 | `vercel-ai-anthropic` | Anthropic Claude provider |
-| `vercel-ai-bytedance` | ByteDance Seedance video provider |
+| `vercel-ai-xai` | xAI (Grok) provider: Chat + Responses + multimodal incl. streaming STT; Grok subscription transport |
+| `vercel-ai-groq` | Groq provider: Chat + transcription; `x_groq.usage` streaming usage; `browser_search` tool |
+| `vercel-ai-bytedance` | ByteDance Seedance video provider (coco-original; no TS counterpart) |
 
 ### Services
 
@@ -252,9 +240,13 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 | `inference` | Thin multi-provider wrapper: generic retry, usage aggregation, tool-schema, cache-break. Auth/caching/betas live in provider crates |
 | `compact` | Context compaction: full / micro / reactive / session-memory + auto-trigger |
 | `mcp` | MCP server lifecycle, OAuth (incl. xaa IDP), elicitation, channel permissions |
-| `mcp-types` | Auto-generated MCP message types |
+| `mcp-types` | Auto-generated MCP message types (regenerate, never hand-edit) |
+| `mcp-skills` | MCP-provided skills bridge (`skill://` sources) |
 | `rmcp-client` | MCP client: stdio + HTTP/SSE transport, OAuth persistence |
+| `provider-auth` | Provider OAuth flows (device flow, PKCE), token store/refresh, cross-process lock |
 | `lsp` | AI-friendly LSP (query by name+kind, not position); rust-analyzer/gopls/pyright/tsserver |
+| `session-trace` | Non-invasive session event tee + replay bundles |
+| `wire-dump` | Redacted HTTP wire capture for diagnostics (`COCO_DIAGNOSTICS_WIRE_DUMP`) |
 
 ### Core
 
@@ -265,10 +257,12 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 | `permissions` | Evaluator + 2-stage auto-mode/yolo XML-LLM classifier + bypass killswitch |
 | `messages` | MessageHistory, normalization/filtering/predicates, cost tracking |
 | `context` | System context assembly, CLAUDE.md discovery, attachments, plan-mode reminders |
-| `system-reminder` | Dynamic `<system-reminder>` injection: trait-based generators + parallel orchestrator + throttle |
+| `system-reminder` | Dynamic `<system-reminder>` injection: trait-based generators + parallel orchestrator (cadence is generator-owned) |
 | `subagent` | Pure-logic subagent rules: definition catalog, source precedence, AgentTool prompt rendering, tool filter planning |
-| `goals` | Pure goal-runtime domain: `decide` reducer + `GoalSnapshot` state machine, sealed `CompletionAuthorization`, budgets/waits/evidence. Makes ownerless-active and wakeless-waiting unrepresentable. No I/O |
-| `goal-runtime` | Host orchestration over `coco-goals`: `GoalRuntimeHandle` transaction boundary (durable-before-visible), `GoalStore` persistence seam, completion coordinator/gate, context materializer, supervisor |
+| `goals` | Pure goal domain: `decide` reducer + `GoalSnapshot` state machine, sealed completion authorization. No I/O |
+| `goal-runtime` | Host orchestration over `coco-goals`: durable-before-visible transactions, `GoalStore` seam, completion gate, supervisor |
+| `workflow` | Dynamic workflow source loading/validation: size cap, source-kind precedence, meta/script parsing |
+| `workflow-runtime` | Embedded QuickJS sandbox executing workflow scripts (single-threaded engine on a `LocalSet`; determinism shim) |
 
 ### Exec
 
@@ -289,26 +283,29 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 | `hooks` | Pre/post event interception with scoped priority, async registry, SSRF guard |
 | `tasks` | Three kinds: `running` (bg tasks), `task_list` (durable plan items), `todos` (per-agent) |
 | `memory` | Persistent cross-session: CLAUDE.md mgmt, auto-extraction, session memory, KAIROS auto-dream, team sync |
-| `maintenance` | Shared cross-process maintenance lock and fail-closed write-fence path extraction for memory and skill upkeep |
+| `maintenance` | Cross-process maintenance lock + fail-closed write-fence for memory/skill upkeep |
 | `skill-learn` | Skill review and curator workflows |
 | `coordinator` | Multi-agent spawn, mailbox, teammate, worktree, and team lifecycle orchestration |
 | `plugins` | Plugin system via `PLUGIN.toml` (contributions, marketplace, hot-reload) |
 | `keybindings` | Shortcuts with context-based resolution and chord support |
-| `output-styles` | Built-in catalog (`Explanatory` / `Learning`) + project / user / managed dir loader + plugin loader (`force-for-plugin`) + system-prompt section + `OutputStyleManager` |
+| `output-styles` | Output-style catalog + loaders (built-in / project / user / managed / plugin) + system-prompt section |
+| `journey` | Learning-timeline read-side assembler over the append-only journals (pure, no I/O; consumed by `app/cli`) |
 
 ### App
 
 | Crate | Purpose |
 |-------|---------|
 | `cli` | Thin `coco` entry: clap schema, subcommand/process policy, mode selection, and TUI surface loop |
-| `agent-host` | Agent-session host: session composition, local AppServer client facade, protocol-neutral AppServer handlers, headless operations, and runtime integrations |
+| `agent-host` | Agent-session host: session composition, local AppServer facade + handlers, headless ops, runtime integrations |
 | `sdk-server` | SDK JSON-RPC/NDJSON adapter: stdio/sidecar transport, outbound writer, callback correlation, and AppServer bridge wiring |
 | `runtime` | Transport-independent process/project resources, workspace paths, and session bootstrap contracts |
 | `server` | Multi-session lifecycle/routing registry plus local and JSON-RPC adapters |
 | `server-client` | Remote AppServer JSON-RPC client, per-surface demux, and transport owners; independent of the server implementation |
 | `server-transport` | JSON-RPC framing and concrete stream/listener transports |
-| `tui` | Terminal UI shell: Elm architecture (TEA) + rust-i18n; owns `AppState`, the AppState→Line projection, and the domain renderers. Drives `coco-tui-ui` for the actual painting |
-| `tui-ui` (top-level crate) | Pure, domain-free presentational layer: native-scrollback paint engine (`SurfaceTerminal`, BSU/ESU, cell-diff), generic widgets, theme/style/color, width-aware truncation. Depends only on ratatui/crossterm/unicode/tracing — no `AppState`, no i18n. Seam enforced by `scripts/check-tui-ui-seam.sh` |
+| `tui` | Terminal UI shell (TEA + rust-i18n): owns `AppState` and the AppState→Line projection; drives `coco-tui-ui` for painting |
+| `tui-ui` (top-level crate) | Pure, domain-free presentational layer: scrollback paint engine, widgets, theme; no `AppState`, no i18n (seam-guarded) |
+| `tui-markdown` (top-level crate) | Markdown → ratatui `Line`s renderer (LeadMarker structural contract; optional mermaid feature) |
+| `tui-mermaid` (top-level crate) | Mermaid → ratatui `Line`s renderer (never panics — `catch_unwind`; graceful text fallback) |
 | `session` | Session persistence, title generation, transcript recovery |
 | `query` | Multi-turn agent loop driver (`QueryEngine`) + budget + command queue |
 
@@ -326,7 +323,7 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 |-------|---------|
 | `bridge` | IDE bridge (VS Code/JetBrains), REPL bridge, JWT auth, trusted-device store |
 | `retrieval` | BM25 + vector + AST + RepoMap (PageRank) via Facade; isolated `RetrievalEvent` stream |
-| `voice` | Voice input (speech-to-text dictation): `VoiceEngine` trait + remote (OpenAI-wire) / local Whisper backends, `VoiceSession` state machine; isolated `VoiceEvent` stream. Gated by `Feature::Voice` |
+| `voice` | Voice input (STT dictation): `VoiceEngine` trait, remote / local Whisper backends; isolated `VoiceEvent` stream; `Feature::Voice` |
 
 ### Utils
 
@@ -339,8 +336,11 @@ Reusable primitives. **Check here first** before implementing any basic utility.
 | `audio-capture` | Microphone capture (cpal, feature-gated) → 16 kHz mono WAV for voice STT |
 | `cache` | LRU cache with Tokio mutex protection |
 | `cargo-bin` | Cargo binary helpers for test harnesses |
-| `common` | Shared cross-crate utility functions |
+| `coco-cron` | Cron-subset parsing + scheduling in local timezone (missed-fire detection) |
+| `coco-paths` | Canonical project-directory slug layout (Claude Code `sanitizePath` parity — never reimplement slug logic) |
+| `common` | Shared cross-crate utility functions (incl. `COCO_CONFIG_DIR_NAME` config home, default `~/.cocode`) |
 | `cursor` | Text cursor with kill ring (Ctrl+K/Y), word boundaries, UTF-8 safe |
+| `download` | Streaming download-to-disk primitive (replaces buffered-in-memory fetches) |
 | `file-encoding` | File encoding and line-ending detection/preservation |
 | `file-ignore` | .gitignore-aware file filtering (unified ignore service) |
 | `file-search` | Fuzzy file search with nucleo and gitignore support |
@@ -348,38 +348,24 @@ Reusable primitives. **Check here first** before implementing any basic utility.
 | `frontmatter` | YAML frontmatter parser for skills, commands, agents, memory files |
 | `git` | Git operations wrapper |
 | `image` | Image processing utilities |
+| `jemalloc` | jemalloc global-allocator wrapper (isolates the `unsafe`; `MALLOC_CONF` env gotcha) |
+| `json-repair` | Tolerant JSON repair for LLM tool-call arguments (`llm_json` wrapper; post-stream only) |
 | `json-to-toml` | JSON to TOML conversion |
 | `keyring-store` | Secure credential storage using system keyring |
+| `path-uri` | Typed path↔URI conversion (`PathUri` normalization, legacy-compat, bad-prefix sentinel) |
 | `pty` | Pseudo-terminal handling |
 | `readiness` | Readiness flag with token-based auth and async waiting |
 | `rustls-provider` | TLS provider init via rustls crypto ring |
 | `secret-redact` | Secret redaction (OpenAI, Anthropic, GitHub, Slack, AWS, bearer tokens) |
+| `shell-discovery` | Login-shell / pwsh / Git-Bash discovery (platform-asymmetric strategies) |
 | `shell-parser` | Shell command parsing and security analysis |
 | `sleep-inhibitor` | Cross-platform sleep prevention (macOS/Linux/Windows) |
 | `stdio-to-uds` | Bridge stdio streams to Unix domain sockets |
 | `stream-parser` | Stream parsing (text, citation, inline hidden tag, proposed plan, UTF-8) |
-| `string` | UTF-8-safe truncation / byte-boundary slicing (`take_bytes_at_char_boundary`, `truncate_str`). Use instead of raw `&s[..n]`, which panics mid-char — see [String Slicing](#string-slicing--utf-8-safety) |
+| `string` | UTF-8-safe truncation / byte-boundary slicing — see [String Slicing](#string-slicing--utf-8-safety); never raw `&s[..n]` |
 | `symbol-search` | Symbol search for code navigation |
-| `test-harness` | Test harness utilities for integration tests |
 
-## Key Design Patterns
-
-| Pattern | Where | Details |
-|---------|-------|---------|
-| **Builder** | Most crates | `QueryEngine::new()`, `SearchRequest` (fluent), `RetrievalFacade` |
-| **Arc-heavy sharing** | core/, root, app/ | `Arc<Mutex<T>>` / `Arc<RwLock<T>>` for registries/managers |
-| **Event-driven** | query, tui, tasks | `mpsc::Sender<CoreEvent>` sinks; `with_event_sink()` opt-in emitters |
-| **3-layer event dispatch** | types, query | `CoreEvent::Protocol`/`Stream`/`Tui` — emit once, consumers pick layer |
-| **Cancellation** | All async | `CancellationToken` threaded through all layers |
-| **Registry** | tool-runtime, commands, skills, plugins, mcp | `ToolRegistry`, `CommandRegistry`, `SkillManager`, `PluginLoader`, `DiscoveryCache` |
-| **State Machine** | query, permissions, mcp | `ContinueReason`, `AutoModeState`, `RmcpClient` |
-| **Callback decoupling** | core/tool-runtime | `AgentHandle`, `HookHandle`, `MailboxHandle`, `McpHandle`, `ToolPermissionBridge` — avoid tool→subsystem cycles; `NoOp*` test doubles |
-| **Permission pipeline** | permissions, tool-runtime | `check_permission()` → auto-mode/yolo XML classifier → `DenialTracker` + killswitch |
-| **Facade** | retrieval | Single `RetrievalFacade` hides search + index + repomap + reranker |
-| **Elm (TEA)** | tui | Model (`AppState`) + Message (`TuiEvent`) + Update + View |
-| **Middleware** | vercel-ai | `FnOnce` + `BoxFuture` callbacks for `do_generate` / `do_stream` |
-| **Typed extension slots** | vercel-ai providers | `ProviderOptions` / `ProviderMetadata` = `serde_json::Value` on purpose |
-| **Isolated event stream** | retrieval | `RetrievalEvent` intentionally not bridged into `CoreEvent` |
+(Test-harness utilities live at `tests/harness` and `tests/cassette`, not under `utils/`.)
 
 ## Error Handling
 
@@ -387,7 +373,7 @@ Three tiers, each with one allowed error library. Pick by layer, not taste.
 
 | Tier | Where | Library | Notes |
 |------|-------|---------|-------|
-| **3 (main trunk)** | `common/`, `core/`, `services/`, root modules (`commands`, `skills`, `hooks`, `tasks`, `memory`, `plugins`, `keybindings`), `app/query` | **snafu + `coco-error`** | Required when the error crosses ≥2 layers, drives retry / classification, or surfaces to users. Implement `ErrorExt` and pick a `StatusCode`. |
+| **3 (main trunk)** | `common/`, `core/`, `services/`, root modules, `app/query` | **snafu + `coco-error`** | Required when the error crosses ≥2 layers, drives retry / classification, or surfaces to users. Implement `ErrorExt` and pick a `StatusCode`. |
 | **2 (boundary)** | `vercel-ai/*`, `utils/*` (libraries), `retrieval`, `bridge` | **thiserror** | Leaf libraries. No `coco-error` dep — main-trunk callers convert at the boundary via `boxed(err, StatusCode::X)`. |
 | **1 (application)** | `app/cli`, `app/agent-host`, `app/tui`, `exec/shell`, `exec/exec-server`, tests, `[dev-dependencies]` | **anyhow** | Process/surface composition where errors are printed or translated to protocol results. Domain crates below this boundary keep typed errors. |
 
@@ -432,16 +418,6 @@ Tests go in `implementation.test.rs` alongside the source. Integration tests in 
 - Generate: `cargo test -p coco-tui`; Pending: `cargo insta pending-snapshots -p coco-tui`
 - Review `*.snap.new` directly or `cargo insta show`; Accept: `cargo insta accept -p coco-tui`
 
-## TUI Conventions (ratatui)
-
-- Stylize helpers: `"text".dim().bold().cyan()` — avoid manual `Style`
-- Simple conversions: `"text".into()`, `vec![...].into()`
-- Runtime-computed style: `Span::styled` or `Span::from(t).set_style(s)` is OK
-- Avoid `.white()`; prefer default foreground
-- Don't refactor between equivalent forms without a readability gain
-- Prefer forms that stay on one line after rustfmt
-- Text wrapping: `textwrap::wrap` with `initial_indent`/`subsequent_indent` — don't roll your own
-
 ## Async Conventions
 
 - `tokio::task::spawn_blocking` for blocking ops
@@ -451,37 +427,21 @@ Tests go in `implementation.test.rs` alongside the source. Integration tests in 
 ## Tracing & Logging
 
 The global `tracing` subscriber is installed once from the binary
-(`app/cli/src/main.rs::main`) via `coco_otel::subscriber::init_subscriber`.
-**Without that install every `tracing::*` call is a no-op** — library /
-test code MUST NOT install one. Tests that need to assert on logs use
-`coco_otel::subscriber::init_for_tests` (`OnceLock`-guarded).
+(`app/cli/src/main.rs::main`). **Without that install every `tracing::*`
+call is a no-op** — library / test code MUST NOT install one; tests use
+`coco_otel::subscriber::init_for_tests` (`OnceLock`-guarded). Stdout is
+reserved (TUI screen, SDK NDJSON RPC) — logs go to file/stderr sinks.
 
-Filter resolution: `--log-level` > `COCO_LOG` > `RUST_LOG` >
-`subscriber::DEFAULT_FILTER` (`coco=debug,info`). File sink is rotating
-daily under `<config_home>/logs/coco.log` in TUI / SDK / Headless modes.
-Stdout is reserved (TUI ratatui screen, SDK NDJSON RPC) — logs land on
-stderr only when explicitly opted in via `--log-stderr` (Headless does
-this by default).
-
-Levels, span-anchor list (the seven canonical anchors), `#[instrument]`
-policy, standard field names, and the secret-redaction rule for HTTP
-bodies — see `common/otel/CLAUDE.md` "Logging conventions". Adopt those
-field names verbatim across crates so ops can pivot.
+Filter/sink resolution, levels, span anchors, `#[instrument]` policy,
+standard field names, secret redaction: see `common/otel/CLAUDE.md`
+"Logging conventions" — adopt those field names verbatim so ops can pivot.
 
 ## Dependencies
 
-| Purpose | Crate |
-|---------|-------|
-| Async runtime | `tokio` |
-| HTTP | `reqwest` |
-| JSON | `serde_json` |
-| Errors | `anyhow`, `snafu`, `thiserror` |
-| Logging | `tracing` |
-| Testing | `pretty_assertions`, `insta`, `wiremock` |
-| TUI | `ratatui`, `crossterm` |
-| MCP | `rmcp` |
-
-Prefer well-maintained crates; check security advisories; use workspace deps.
+Standard picks: `tokio` / `reqwest` / `serde_json` / `tracing`; errors per the
+tier table above; testing with `pretty_assertions` + `insta` + `wiremock`;
+TUI on `ratatui` + `crossterm`; MCP via `rmcp`. Prefer well-maintained
+crates; check security advisories; use workspace deps.
 
 ## Design Decisions
 
@@ -522,7 +482,7 @@ Raw strings only for unconstrained input (user text, opaque external IDs, third-
 ### Config & Feature Gates
 
 - **Consume `RuntimeConfig`, never raw `Settings`/env.** All layering (settings.json → `EnvOnlyConfig` → `RuntimeOverrides`) is folded once in `coco_config::build_runtime_config`. Leaf crates read the resolved sub-config (`tool`, `shell`, `sandbox`, `memory`, `mcp`, `compact`, `web_*`, `paths`, …) and `features` / `tool_overrides` off `RuntimeConfig` — they never re-merge `Partial*` overlays or call `std::env::var`.
-- **Feature is a coarse capability gate, not a sub-toggle.** `coco_types::Feature` is closed (`WebSearch`, `WebFetch`, `Sandbox`, `AutoMemory`, `Retrieval`, `AgentTeams`, `Worktree`, `Lsp`). Sub-toggles (`MemoryConfig.extraction_enabled`, `SandboxConfig.mode`, `RetrievalConfig.reranker.enabled`, …) stay inside their `*Config`. Enterprise policy and "configured = enabled" subsystems (hooks, plugins, skills, telemetry) are **not** Features.
+- **Feature is a coarse capability gate, not a sub-toggle.** `coco_types::Feature` is a closed enum — see `common/types/src/features.rs` for the current variant set (don't enumerate it in docs; it grows). Sub-toggles (`MemoryConfig.extraction_enabled`, `SandboxConfig.mode`, `RetrievalConfig.reranker.enabled`, …) stay inside their `*Config`. Enterprise policy and "configured = enabled" subsystems (hooks, plugins, skills, telemetry) are **not** Features.
 - **Three resolution layers, single merge site.** `Features::with_defaults()` → `apply_map(settings.features)` → `apply_map(env COCO_FEATURE_*)` → `RuntimeOverrides.feature_overrides`. Never bypass: no ad-hoc `COCO_DISABLE_*` env, no `Features::default()` (the type intentionally has no `Default` impl — pick `with_defaults()` or `empty()`).
 - **Gate at the right layer.** Tool-level gate → implement `Tool::is_enabled(ctx) { ctx.features.enabled(Feature::X) }` (Layer 1 of the 5-layer filter pipeline). Subsystem-level gate (`AutoMemory`, `Retrieval`, `Sandbox`) → check at the subsystem entry point, not in tool registry. Subagents inherit parent `Arc<Features>` and **must never widen**.
 
@@ -534,18 +494,11 @@ Raw strings only for unconstrained input (user text, opaque external IDs, third-
 
 ## Specialized Documentation
 
-Every crate in `coco-rs/` has its own `CLAUDE.md` (path = `coco-rs/<layer>/<crate>/CLAUDE.md`).
+Every workspace crate has its own `CLAUDE.md` (path = `coco-rs/<layer>/<crate>/CLAUDE.md`) — the per-layer crate tables above double as the index, so the lists are not repeated here.
 
-- **Common**: types, llm-types, config, error ([codes](coco-rs/common/error/README.md)), otel, stack-trace-macro
-- **Vercel AI**: ai, provider, provider-utils, openai, openai-compatible, google, anthropic, bytedance
-- **Services**: inference, compact, mcp, lsp
-- **Core**: tool-runtime, tools, permissions, messages, context, system-reminder, subagent
-- **Exec**: shell, sandbox, process-hardening, exec-server, apply-patch
-- **Root**: commands, skills, hooks, tasks, memory, plugins, keybindings, output-styles
-- **App**: cli, tui, query, state, session
-- **Hub**: protocol, connector, server. Design: [docs/internal/event-hub/spec.md](docs/internal/event-hub/spec.md)
-- **Standalone**: bridge, retrieval
-- **Utils**: each of the 26 utils/ crates has one
+- **Error codes**: [common/error/README.md](coco-rs/common/error/README.md)
+- **Vercel AI TS-port lineage** (baseline commit, mirror scope, deviations): [coco-rs/vercel-ai/README.md](coco-rs/vercel-ai/README.md)
+- **Event Hub design**: [docs/internal/event-hub/spec.md](docs/internal/event-hub/spec.md)
 - **User docs**: [docs/](docs/) — getting-started, configuration, providers-and-auth,
   models-and-moa, cli-reference, slash-commands, tools, permissions, sandbox, mcp,
   memory, extending, subagents-and-teams, sdk, troubleshooting. Tables marked

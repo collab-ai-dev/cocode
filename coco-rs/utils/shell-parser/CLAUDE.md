@@ -4,7 +4,7 @@ Shell command parsing (tree-sitter + tokenizer fallback) and security analysis. 
 
 ## Security Analyzers
 
-24 risk types across two phases: **16 Deny** (critical/high, auto-blocked) + **8 Ask** (medium, require approval). See `security` module.
+Risk types (`RiskKind`) span two phases: **Deny** (critical/high, auto-blocked) and **Ask** (medium, require approval). See `security/risks.rs` for the enum — don't cite counts, they grow.
 
 ## Key Types
 

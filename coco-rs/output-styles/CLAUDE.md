@@ -1,9 +1,10 @@
 # coco-output-styles
 
 Output style catalog, dir/plugin loading, and active-style resolution.
-Covers built-in styles (`default` / `Explanatory` / `Learning`), project +
-user `.coco/output-styles/*.md` discovery, plugin-sourced styles, system-prompt
-injection, and per-turn reminder generation.
+Covers built-in styles (`default` / `Explanatory` / `Learning`), project
+(`.cocode/output-styles/*.md`) + user (`<config_home>/output-styles/*.md`)
+discovery, plugin-sourced styles, system-prompt injection, and per-turn
+reminder generation.
 
 ## Key Types
 
@@ -42,7 +43,8 @@ src/
   `Aggregated.by_name` and the `None` mapping is baked into
   `Aggregated::get`. Callers that need the literal sentinel string
   (SDK init, picker default option) read `DEFAULT_OUTPUT_STYLE_NAME`.
-- **Aggregation order**: `built-in < plugin < user < project < managed`.
+- **Aggregation order**: `built-in < plugin < user < project < policy`
+  (`PolicySettings`, loaded from the managed dir).
   Implemented numerically by `OutputStyleSource::priority()` with
   `>=` overwrite so a later layer with the same priority replaces an
   earlier one of the same priority.

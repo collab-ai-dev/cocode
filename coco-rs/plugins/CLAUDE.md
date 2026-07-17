@@ -25,12 +25,16 @@ contribution bridges register from it.
   resolves marketplaces + standing dirs, gates on settings.json
   `enabled_plugins`, returns the enabled `Vec<LoadedPluginV2>`. The session
   bootstrap and `/reload-plugins` register commands / hooks / skills from this.
-- `get_plugin_dirs(config_dir, project_dir)` — `~/.coco/plugins/*/` +
-  `.claude/plugins/*/` (the inline standing dirs).
+- `get_plugin_dirs(config_dir, project_dir)` — `{config_home}/plugins/*` +
+  `{project}/.cocode/plugins/*` (the inline standing dirs).
 
 ## Modules
 - `loader` — manifest reading, per-dir validation, and the `load_all_plugins` orchestrator
-- `marketplace` — manifest fetch/reconcile/dependency resolution
+- `schemas` / `identifier` — manifest + marketplace + `PluginId` schemas; settings-layer `name@marketplace` id twin
+- `marketplace` / `fetch` / `parse_marketplace_input` / `official` — marketplace reconcile; git/HTTP source materialization; typed `MarketplaceSource` parsing; official-marketplace startup auto-install
+- `install` / `versioning` / `dependency` / `security` — shared install pipeline (`/plugin install` + CLI); per-source version strings; apt-style pure dependency resolution; security validation
+- `builtins` — compiled-in plugins under the `builtin` marketplace sentinel
+- `mcpb` — MCPB (`.mcpb` / `.dxt`) ZIP bundle loader
 - `hot_reload` / `watcher` — change detection (surfaces *that* something changed; refresh is the explicit `/reload-plugins` action)
-- `schemas` — manifest + marketplace + `PluginId` schemas
-- `command_bridge` / `hook_bridge` / `skill_bridge` — wire `LoadedPluginV2` contributions into `CommandRegistry` / `HookRegistry` / `SkillManager`
+- `command_bridge` / `hook_bridge` / `skill_bridge` / `mcp_bridge` / `lsp_bridge` — wire `LoadedPluginV2` contributions into `CommandRegistry` / `HookRegistry` / `SkillManager` / MCP server config / `LspServersConfig`
+- `errors` / `hints` — plugin error taxonomy; hints-protocol parser + pending-hint store

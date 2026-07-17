@@ -4,102 +4,42 @@ Message **operations** crate: creation, normalization, predicates,
 lookups, history persistence, cost tracking, **and the unified message
 mutation pipeline** ([`pipeline::MessagePass`] + [`pipeline::run_message_passes`]).
 
-The Message-family **type definitions** themselves live in
-`coco-types` (relocated alongside `ServerNotification` so the wire
-enum can carry typed `Message` payloads). This crate re-exports them
-at its crate root for backward compat with the established
-`coco_messages::Message` import path used across the ops layer.
+## Type definitions live in `coco-types`
 
-## Key Types
+The Message family — `Message` (**7 variants**: `User` / `Assistant` /
+`System` / `Attachment` / `ToolResult` / `Progress` / `Tombstone`), the
+`SystemMessage` sub-variants, attachment payloads, persistence types, LLM
+aliases — is defined in `coco-types::messages` and re-exported at this
+crate's root (`pub use coco_types::messages::*;`). See
+`common/types/CLAUDE.md` for the family. Note: `ToolUseSummary` is an SDK
+event side-channel, **not** a `Message` variant.
 
-### Re-exported from `coco-types::messages` (canonical home)
+## Owned here (operations) + Module Layout
 
-```rust
-pub use coco_types::messages::*;
-```
+- `history` — `MessageHistory` persistence
+- `cost` — `CostTracker`, `calculate_cost_usd`, `get_model_pricing`
+- `creation` — the `create_*` constructor family (user / assistant / tool-result / system / meta / progress / compact-boundary / …)
+- `normalize` — `normalize_messages_for_api(&[Arc<Message>]) -> Vec<LlmMessage>`, `to_llm_prompt`, `filter_by_options`; hosts the 7 [`MessagePass`] impls used by steps 8-13a
+- `pipeline` — `MessagePass` trait + `run_message_passes` + `borrow_refs` ("Arc → owned → mutate → Arc" bridge; shared with coco-compact)
+- `predicates` / `lookups` — `is_*`/`has_*` predicates; `MessageLookups` O(1) index builders
+- `wrapping` — system-reminder wrapping helpers
+- `changed_file` — model-visible reminder for files changed since the model last saw them
+- `command_tags` — slash-command echo/result transcript messages
+- `content_kind` — per-content-kind token-estimation density (single source of truth for the density magic numbers)
+- `token_estimation` — token estimation over `Message` content parts (lives here, not in `core/context`)
+- `resume` — resume-time history normalization
 
-Surfaces the full Message family at `coco_messages::*`:
-
-- **Message envelope**: `Message` (8 variants), `UserMessage`,
-  `AssistantMessage`, `ToolResultMessage`, `AttachmentMessage`,
-  `ProgressMessage`, `TombstoneMessage`, `ToolUseSummaryMessage`,
-  `Visibility`, `MessageKind`, `MessageOrigin`, `StopReason`,
-  `ApiError`, `PreservedSegment`, `PartialCompactDirection`.
-- **System messages**: `SystemMessage` + 16 sub-variants
-  (`SystemInformationalMessage`, `SystemApiErrorMessage`,
-  `SystemCompactBoundaryMessage`, `SystemMicrocompactBoundaryMessage`,
-  `SystemLocalCommandMessage`, `SystemPermissionRetryMessage`,
-  `SystemBridgeStatusMessage`, `SystemMemorySavedMessage`,
-  `SystemAwaySummaryMessage`, `SystemAgentsKilledMessage`,
-  `SystemApiMetricsMessage`, `SystemStopHookSummaryMessage`,
-  `SystemTurnDurationMessage`, `SystemScheduledTaskFireMessage`,
-  `SystemContextUsageMessage`, `SystemUserInterruptionMessage`),
-  `SystemMessageLevel`.
-- **Attachment payloads**: `AttachmentBody`, `SilentPayload` + 10
-  silent payload structs.
-- **Tool result**: `ToolResult<T>` (carries `Vec<Message>`).
-- **Hook result**: `HookResult` (embeds `Option<Message>`).
-- **Persistence**: `SerializedMessage`, `TranscriptMessage`,
-  `TranscriptEntry`.
-- **LLM aliases (via `coco-llm-types`)**: `LlmMessage`, `LlmPrompt`,
-  `UserContent`, `AssistantContent`, `ToolContent`, `TextContent`,
-  `FileContent`, `ReasoningContent`, `ToolCallContent`,
-  `ToolResultContent`.
-
-### Owned here (operations only)
-
-- **History**: `MessageHistory`
-- **Cost**: `CostTracker`, `calculate_cost_usd`, `format_cost`, `get_model_pricing`
-- **Creation**: `create_user_message`, `create_user_message_with_parts`,
-  `create_assistant_message`, `create_assistant_error_message`,
-  `create_cancellation_message`, `create_compact_boundary_message`,
-  `create_error_tool_result`, `create_info_message`,
-  `create_meta_message`, `create_permission_denied_message`,
-  `create_progress_message`, `create_tool_result_message`,
-  `create_user_interruption_system_message`
-- **Normalize**: `normalize_messages_for_api(&[Arc<Message>]) -> Vec<LlmMessage>`,
-  `to_llm_prompt`, `ensure_user_first`, `merge_consecutive_user_messages`,
-  `merge_consecutive_assistant_messages`, `strip_images_from_messages`,
-  `strip_signature_blocks`
-- **Lookups**: `MessageLookups`, `build_message_lookups`
-- **Pipeline**: `MessagePass` trait + `run_message_passes` helper +
-  `borrow_refs` (shared by coco-messages and coco-compact for any
-  pass-based mutation pipeline). See [Pipeline section](#pipeline-architecture).
-
-## Module Layout
-
-- `creation` — message constructors
-- `normalize` — API-shape normalization. Hosts 7 [`MessagePass`] impls
-  (`OrphanedThinkingOnly`, `TrailingThinking`, `WhitespaceOnly`,
-  `EnsureNonEmptyContent`, `MergeConsecutiveUsers`,
-  `MergeAssistantsByRequestId`, `StripExitPlanModeInjectedFields`)
-  used by `normalize_messages_for_api` step 8-13a.
-- `pipeline` — `MessagePass` trait + `run_message_passes` helper
-  ("Arc → owned → mutate → Arc" bridge).
-- `predicates` — is_* / has_* predicates
-- `lookups` — O(1) index builders
-- `wrapping` — message wrapping helpers
-- `history` — persistence
-- `cost` — token/cost tracking
-
-Note: the legacy `filtering` module was deleted in the pipeline
-refactor — production uses `normalize::filter_by_options` directly
-(Arc-vec in, Arc-vec out). Type definitions live in
-`coco-types::messages` and are re-exported at the crate root.
+Note: the legacy `filtering` module was deleted in the pipeline refactor —
+production uses `normalize::filter_by_options` directly (Arc-vec in, Arc-vec out).
 
 ## Vercel-AI Seam
 
-`coco-messages` does **not** depend on `coco-inference`. DTO content
-shapes reach this crate via `coco-types` (which depends on
-`coco-llm-types`). Runtime types (`LanguageModel` trait, model runtime,
-etc.) are inference's domain and not needed for ops-layer work.
-
-## Architecture
-
-Internal messages embed an `LlmMessage` body directly — no twin
-types, no conversion layer. `coco-llm-types` provides the
-version-stripped `LlmMessage` alias so SDK upgrades stay scoped to
-`common/llm-types/src/lib.rs` + `services/inference/src/lib.rs`.
+`coco-messages` does **not** depend on `coco-inference`. DTO content shapes
+reach this crate via `coco-types` (which depends on `coco-llm-types`).
+Internal messages embed an `LlmMessage` body directly — no twin types, no
+conversion layer. `coco-llm-types` provides the version-stripped `LlmMessage`
+alias so SDK upgrades stay scoped to `common/llm-types/src/lib.rs` +
+`services/inference/src/lib.rs`.
 
 ## Pipeline Architecture
 
@@ -131,10 +71,14 @@ pub fn run_message_passes(
   reporting (false negative) IS a bug — silently skips mutation.
 
 **Pipeline construction** — explicit static dispatch, no `dyn`, with one
-pass-order declaration:
+pass-order declaration in `normalize.rs`:
 
 ```rust
-declare_normalize_passes!(Pass1, Pass2);
+declare_normalize_passes!(
+    OrphanedThinkingOnly, TrailingThinking, WhitespaceOnly,
+    EnsureNonEmptyContent, MergeConsecutiveUsers,
+    MergeAssistantsByRequestId, StripExitPlanModeInjectedFields,
+);
 ```
 
 The macro generates `NORMALIZE_PASS_ORDER`,
@@ -160,10 +104,9 @@ mode (false-negative predicate → mutation silently skipped).
    (`normalize::passes` or `compact::compact_passes`).
 2. `impl MessagePass for X` with `would_mutate` (cheap scan) and
    `apply` (delegates to the existing `pub(crate) fn` algorithm).
-3. Add the pass once to `declare_normalize_passes!(...)` in
-   `normalize.rs`.
+3. Add the pass once to `declare_normalize_passes!(...)` in `normalize.rs`.
 4. Cover the new trigger condition in `pipeline_invariants` so the
    drift test exercises both fast and slow paths.
 
-See [docs/internal/message-pipeline.md](../../docs/internal/message-pipeline.md)
+See [docs/internal/message-pipeline.md](../../../docs/internal/message-pipeline.md)
 for the design rationale and migration history.

@@ -36,16 +36,11 @@ them.
 vercel-ai-provider (3rd-party SDK)
    ├── common/llm-types          ← DTO seam (this crate)
    │     re-exports message + content + finish/usage/metadata
-   │     consumers: coco-types (Message family), coco-messages,
-   │                services/inference (DTOs for inputs / results),
-   │                services/compact, app/query, app/cli, app/tui,
-   │                tests/harness, tests/live
    │
    └── services/inference        ← runtime/client seam
          owns: LanguageModelV4 trait, CallOptions, GenerateResult,
                StreamResult, Provider trait, model runtime, retry, auth,
                prompt-cache detection, thinking-level conversion
-         consumers: app/query, app/cli, model_factory
 ```
 
 ## SDK upgrade story
@@ -58,13 +53,9 @@ Everything else stays unchanged.
 
 ## Why two crates, not one
 
-Conflating DTOs and runtime would force one of:
-- Schema-only consumers (like `coco-messages` ops, transcript persistence,
-  `coco-compact`) to compile the client+retry+auth machinery.
-- Runtime callers to import a giant "everything" crate.
-
-Two narrow seams keeps `coco-messages` ops at ~50 LOC of vercel-ai dep
-weight and stays decoupled from `services/inference` runtime changes.
+One crate would force schema-only consumers (transcript persistence,
+`coco-messages` ops, `coco-compact`) to compile client/retry/auth
+machinery — or runtime callers to import a giant "everything" crate.
 
 ## Seam enforcement
 

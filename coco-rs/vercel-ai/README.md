@@ -30,8 +30,11 @@ See `Phase 0 catch-up scope` below for what was caught.
 | `@ai-sdk/openai` | `vercel-ai/openai` | ✅ | Chat + Responses + Completion + Embedding + Image + Speech + Transcription |
 | `@ai-sdk/openai-compatible` | `vercel-ai/openai-compatible` | ✅ | Chat + Completion + Embedding + Image; `StreamingToolCallTracker` integration |
 | `@ai-sdk/google` | `vercel-ai/google` | ✅ | Generative AI; per-modality token detail |
-| `@ai-sdk/bytedance` | `vercel-ai/bytedance` | ✅ | Seedance video; Dreamina 2.0 IDs |
-| All other 40+ TS provider packages (alibaba, amazon-bedrock, azure, cohere, deepseek, fireworks, gateway, groq, mistral, perplexity, replicate, togetherai, xai, etc.) | — | ❌ | **Not in mirror scope** — coco-rs ships the providers above. New providers are added on demand. |
+| `@ai-sdk/xai` | `vercel-ai/xai` | ✅ | Chat + Responses + multimodal (image / video / speech / batch + streaming STT); Grok subscription transport |
+| `@ai-sdk/groq` | `vercel-ai/groq` | ✅ | Chat + transcription; `x_groq.usage` streaming usage; `browser_search` provider tool |
+| — (coco-original) | `vercel-ai/bytedance` | ✅ | ByteDance ModelArk / Seedance video — no TS counterpart (`@ai-sdk` has no bytedance package; see the crate's CLAUDE.md "Origin") |
+| — (coco-original) | `vercel-ai/google-codeassist` | ✅ | Gemini Code Assist subscription transport; reuses `vercel-ai/google`'s codec (structured after `@ai-sdk/google-vertex`'s reuse pattern) |
+| All other 40+ TS provider packages (alibaba, amazon-bedrock, azure, cohere, deepseek, fireworks, gateway, mistral, perplexity, replicate, togetherai, etc.) | — | ❌ | **Not in mirror scope** — coco-rs ships the providers above. New providers are added on demand. |
 | `@ai-sdk/rsc`, `@ai-sdk/react`, `@ai-sdk/svelte`, `@ai-sdk/vue`, `@ai-sdk/angular`, `@ai-sdk/langchain`, `@ai-sdk/llamaindex`, `@ai-sdk/workflow` | — | ❌ | UI / framework adapters — out of scope for a CLI/SDK runtime |
 | `@ai-sdk/codemod`, `@ai-sdk/test-server`, `@ai-sdk/devtools`, `@ai-sdk/valibot` | — | ❌ | Tooling / dev-only |
 
@@ -60,7 +63,7 @@ sweep — only items with concrete user-visible value.
 | Anthropic `inference_geo` | New option (`"us"` / `"global"`) | `@ai-sdk/anthropic` |
 | Anthropic `sanitize_json_schema` | Wrap schema before `output_config` | `@ai-sdk/anthropic` |
 | Google per-modality token detail | `prompt_tokens_details` + `candidates_tokens_details` on usage | `@ai-sdk/google` |
-| ByteDance Dreamina | Seedance 2.0 model IDs | `@ai-sdk/bytedance` |
+| ByteDance Dreamina | Seedance 2.0 model IDs | — (coco-original crate; no TS counterpart) |
 | Legacy cleanup | Deleted `vercel_ai_provider::tool::{ToolCall, ToolResult}` (input: JSONValue, output: JSONValue) — superseded by v4 types | (cleanup, no TS counterpart) |
 
 ### Items observed in TS upstream but NOT yet mirrored
@@ -127,9 +130,12 @@ wire bodies from these typed representations).
 | `ai` | High-level `generate_text` / `stream_text` / etc. + middleware + registry + telemetry | ✅ |
 | `anthropic` | Claude provider (Messages API; cache control; thinking; OAuth handled via inference seam) | ✅ |
 | `openai` | OpenAI provider (Chat + Responses + Completion + Embed + Image + Speech + Transcribe) | ✅ |
-| `openai-compatible` | Generic OpenAI-compatible provider (xAI / Groq / Together / etc.) | ✅ |
+| `openai-compatible` | Generic OpenAI-compatible provider (Together / Fireworks / DeepSeek / etc.) | ✅ |
 | `google` | Gemini / Generative AI provider | ✅ |
-| `bytedance` | Seedance video provider | ✅ |
+| `google-codeassist` | Gemini Code Assist subscription transport (coco-original; reuses `google`'s codec) | ✅ |
+| `xai` | xAI (Grok) provider — Chat + Responses + multimodal incl. streaming STT; Grok subscription | ✅ |
+| `groq` | Groq provider — Chat + transcription + `browser_search` | ✅ |
+| `bytedance` | Seedance video provider (coco-original) | ✅ |
 
 Each crate's `CLAUDE.md` has key types, TS source pointers, and any
 crate-specific conventions.
@@ -138,14 +144,14 @@ crate-specific conventions.
 
 When you do a fresh sweep against TS upstream:
 
-1. `cd {upstream repo} && git fetch && git log <baseline>..HEAD --no-merges -- packages/ai/ packages/provider/ packages/provider-utils/ packages/anthropic/ packages/openai/ packages/openai-compatible/ packages/google/ packages/bytedance/`
+1. `cd {upstream repo} && git fetch && git log <baseline>..HEAD --no-merges -- packages/ai/ packages/provider/ packages/provider-utils/ packages/anthropic/ packages/openai/ packages/openai-compatible/ packages/google/ packages/xai/ packages/groq/` (`bytedance` and `google-codeassist` are coco-original — no upstream package to sweep)
 2. Triage each commit: feature port? bug fix? cosmetic refactor? skip?
 3. Apply deltas; update this README's **Mirror baseline commit** field to the new pinned TS commit; update the "Items observed but NOT yet mirrored" section.
 4. Run `just pre-commit` — there are 7000+ workspace tests; vercel-ai changes commonly trigger seam violations or provider-test regressions.
 
 ## Architectural rule
 
-`services/inference` is the **only** crate allowed to depend on
-`vercel-ai-*` crates directly (enforced by
-`scripts/check-vercel-ai-seam.sh`). All upstream callers reach AI SDK
-types via `coco_inference::*` aliases.
+Only `services/inference` (runtime calls) and `common/llm-types` (the
+DTO re-export shim) may depend on `vercel-ai-*` crates directly
+(enforced by `scripts/check-vercel-ai-seam.sh`). All other crates reach
+AI SDK types via `coco_inference::*` / `coco_llm_types::*` aliases.

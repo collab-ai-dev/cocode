@@ -1,10 +1,11 @@
 # vercel-ai-openai-compatible
 
-Generic OpenAI-compatible provider for any API following the OpenAI protocol (xAI, Groq, Together, Fireworks, DeepSeek, etc.).
+Generic OpenAI-compatible provider for any API following the OpenAI protocol (Together, Fireworks, DeepSeek, GLM, Ollama, etc.). xAI and Groq have graduated to dedicated crates (`vercel-ai-xai`, `vercel-ai-groq`) and are dispatched away from this one by the model factory.
 
 ## SDK Spec
 
-Implements the `@ai-sdk/openai-compatible` v4 specification.
+Implements the `@ai-sdk/openai-compatible` v4 specification. Baseline commit,
+mirror scope, and intentional deviations: see [`../README.md`](../README.md).
 
 ## Key Types
 

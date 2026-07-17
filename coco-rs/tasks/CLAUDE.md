@@ -9,7 +9,7 @@ their lifecycles differ:
 | [`task_list`](src/task_list.rs) | Durable plan items stored on disk per task-list-id with `fs2` file locking + high-water-mark. Shared across a team. |
 | [`todos`](src/todos.rs) | Ephemeral per-agent TodoWrite (V1) checklist. In-memory only — not persisted to disk. |
 
-V1 (`TodoWrite`) and V2 (`Task*` tools) are gated by `is_todo_v2_enabled()` at the CLI layer — never both at once. Running-task state is orthogonal and always on.
+V1 (`TodoWrite`) and V2 (`Task*` tools) are gated by `Feature::TaskV2` via `Tool::is_enabled` (`core/tools/src/tools/task_tools.rs`): the `Task*` tools require the feature enabled, `TodoWrite` requires it disabled — never both at once. Running-task state is orthogonal and always on.
 
 ## Key Types
 

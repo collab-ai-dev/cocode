@@ -4,24 +4,15 @@ AI-friendly LSP client — queries by symbol name + kind instead of exact line/c
 
 ## Key Types
 
-- `LspServerManager`, `ServerConfigInfo`, `ServerStatus`, `ServerStatusInfo` — top-level manager
+- `LspServerManager` (top-level manager; `create_manager()` convenience constructor)
 - `LspClient` — per-connection AI-friendly operations + caching
-- `LspServersConfig`, `LspServerConfig`, `BuiltinServer`, `BUILTIN_SERVERS`, `ConfigLevel`, `LifecycleConfig`, `LSP_SERVERS_CONFIG_FILE`, `command_exists`
-- `SymbolKind`, `ResolvedSymbol`, `SymbolMatch`, `find_matching_symbols`, `flatten_symbols`
-- `DiagnosticsStore`, `DiagnosticEntry`, `DiagnosticSeverityLevel`
-- `ServerLifecycle`, `ServerHealth`, `ServerStats`
-- `LspInstaller`, `InstallEvent`, `InstallerType`
-- `TimeoutConfig`, `LspErr`
-- `create_manager()` — convenience constructor
+- `LspServersConfig` / `BuiltinServer` / `BUILTIN_SERVERS` — config + built-in server registry
+- `SymbolKind`, `ResolvedSymbol`, `find_matching_symbols` — name+kind symbol resolution
+- `DiagnosticsStore`; `ServerLifecycle`; `LspInstaller`; `LspErr`
 
 ## AI-Friendly Symbol Resolution
 
-Query by name+kind instead of position:
-```rust
-client.definition(path, "Config", Some(SymbolKind::Struct)).await?;
-client.references(path, "process", Some(SymbolKind::Function), true).await?;
-```
-Position-based variants available with `_at_position` suffix. `SymbolKind::from_str_loose()` accepts `fn`/`func`/`function`, `trait`/`interface`, `var`/`let`/`variable`, etc.
+Query by name+kind instead of position: `client.definition(path, "Config", Some(SymbolKind::Struct))`, `client.references(path, "process", Some(SymbolKind::Function), true)`. Position-based variants use the `_at_position` suffix. `SymbolKind::from_str_loose()` accepts `fn`/`func`/`function`, `trait`/`interface`, `var`/`let`/`variable`, etc.
 
 ## Built-in Language Servers
 
@@ -53,8 +44,9 @@ Config files: `~/.coco/lsp_servers.json` (user) → `.coco/lsp_servers.json` (pr
 ## Tool Layer Integration
 
 The agent-facing `LspTool` lives in `coco-tools` and dispatches via the
-`coco_tool_runtime::LspHandle` trait. The concrete adapter
-(`coco_agent_host::lsp_handle_adapter::LspManagerAdapter`) wraps an
+`coco_tool_runtime::LspHandle` trait. The concrete adapter is
+`LspManagerAdapter` in
+`app/agent-host/src/integrations/lsp_handle_adapter.rs`, wrapping an
 `Arc<LspServerManager>` + the manager's `DiagnosticsStore`. Integration seam:
 
 | Operation | Implementation |
