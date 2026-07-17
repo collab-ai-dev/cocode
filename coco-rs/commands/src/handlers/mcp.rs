@@ -1,34 +1,72 @@
 //! `/mcp` — MCP server management (list, add, remove, enable, disable).
 //!
-//! Reads and writes the same files as [`coco_mcp::McpConfigLoader`], via
-//! [`coco_mcp::config_paths`], so what `/mcp list` shows is what actually
-//! loads and what `/mcp add|enable|disable|remove` writes actually takes
-//! effect. Settings.json is deliberately not consulted: the loader never reads
-//! it, and `mcpServers` is not a Settings field.
+//! Definitions ("what is this server") live in the mcp.json family, read and
+//! written via [`coco_mcp::config_paths`]. Whether a defined server *runs* is
+//! a separate concern with separate ownership: `/mcp enable|disable` writes
+//! per-project user toggles into `GlobalConfig` (outside the repository), and
+//! [`coco_mcp::McpActivationPolicy`] — the same authority the session loader
+//! uses — resolves each server's activation for `/mcp list`. The two views
+//! cannot disagree because there is only one.
 
 use std::path::Path;
 use std::path::PathBuf;
 
+use coco_config::McpPolicyConfig;
+use coco_config::global_config;
 use coco_mcp::ConfigScope;
+use coco_mcp::McpActivation;
+use coco_mcp::McpActivationPolicy;
 use coco_mcp::McpConfigLoader;
 use coco_mcp::McpConfigRoots;
 use coco_mcp::McpServerConfig;
+
+/// The per-session inputs `/mcp` needs, captured at registry build time.
+///
+/// `project_root` is the *resolved* project root (the `ProjectServices` cache
+/// key), not the session cwd — it anchors the project-scope config files and,
+/// critically, the `GlobalConfig.projects` key the user toggles live under.
+/// Using the cwd here would write toggles under a subdirectory key the session
+/// loader never reads.
+#[derive(Debug, Clone)]
+pub struct McpCommandContext {
+    pub project_root: PathBuf,
+    pub session_cwd: PathBuf,
+    /// Settings-side activation policy (trust gate + deny list), resolved at
+    /// the `build_runtime_config` merge site.
+    pub policy: McpPolicyConfig,
+}
+
+impl McpCommandContext {
+    /// Both roots at `cwd`, default policy — for callers without a resolved
+    /// project root (tests, the bare `register_extended_builtins`).
+    pub fn for_cwd(cwd: PathBuf) -> Self {
+        Self {
+            project_root: cwd.clone(),
+            session_cwd: cwd,
+            policy: McpPolicyConfig::default(),
+        }
+    }
+}
 
 /// Filesystem roots the `/mcp` handler resolves config against.
 struct McpPaths {
     project_root: PathBuf,
     session_cwd: PathBuf,
     config_home: PathBuf,
+    /// User-side toggle store (`GlobalConfig`). Explicit so tests never touch
+    /// the real per-user file.
+    global_config: PathBuf,
 }
 
 impl McpPaths {
-    /// Resolve against the session cwd threaded in from registration, mirroring
-    /// the loader's `load(cwd, ..)`.
-    fn new(cwd: PathBuf) -> Self {
+    /// Mirror the session loader's roots exactly: project files at the
+    /// resolved project root, local files at the session cwd.
+    fn new(context: &McpCommandContext) -> Self {
         Self {
-            project_root: cwd.clone(),
-            session_cwd: cwd,
+            project_root: context.project_root.clone(),
+            session_cwd: context.session_cwd.clone(),
             config_home: McpConfigLoader::config_home(),
+            global_config: global_config::global_config_path(),
         }
     }
 
@@ -45,24 +83,33 @@ impl McpPaths {
             .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
             .join("mcp.json")
     }
+
+    /// The activation authority for this project — settings-side policy plus
+    /// the current user toggles, re-read per invocation so an
+    /// enable → list round trip observes the toggle immediately.
+    fn activation_policy(&self, policy: &McpPolicyConfig) -> McpActivationPolicy {
+        McpActivationPolicy::resolve_at(&self.global_config, &self.project_root, policy)
+    }
 }
 
-/// Run `/mcp [list|add|remove|enable|disable]` against `cwd`.
+/// Run `/mcp [list|add|remove|enable|disable]`.
 ///
-/// `cwd` is the session cwd captured at registration, never the process cwd: a
-/// single app-server process hosts sessions from different projects, so reading
-/// the process cwd here would operate on the wrong project (§6.5, D-37).
-pub async fn run(args: &str, cwd: &Path) -> crate::Result<String> {
+/// The context roots are captured at registration, never read from the
+/// process cwd: a single app-server process hosts sessions from different
+/// projects, so reading the process cwd here would operate on the wrong
+/// project (§6.5, D-37).
+pub async fn run(args: &str, context: &McpCommandContext) -> crate::Result<String> {
     let subcommand = args.trim();
-    let paths = McpPaths::new(cwd.to_path_buf());
+    let paths = McpPaths::new(context);
+    let policy = &context.policy;
 
     match subcommand {
-        "" | "list" => list_mcp_servers(&paths).await,
+        "" | "list" => list_mcp_servers(&paths, policy).await,
         _ => {
             if let Some(name) = subcommand.strip_prefix("enable ") {
-                toggle_server(name.trim(), /*enable*/ true, &paths).await
+                enable_server(name.trim(), &paths, policy).await
             } else if let Some(name) = subcommand.strip_prefix("disable ") {
-                toggle_server(name.trim(), /*enable*/ false, &paths).await
+                disable_server(name.trim(), &paths).await
             } else if let Some(rest) = subcommand.strip_prefix("add ") {
                 add_server(rest.trim(), &paths).await
             } else if let Some(name) = subcommand.strip_prefix("remove ") {
@@ -72,22 +119,19 @@ pub async fn run(args: &str, cwd: &Path) -> crate::Result<String> {
                     "Unknown MCP subcommand: {subcommand}\n\n\
                      Usage:\n\
                      /mcp              List configured MCP servers\n\
-                     /mcp enable <n>   Enable a disabled server\n\
-                     /mcp disable <n>  Disable a server\n\
+                     /mcp enable <n>   Enable (and approve) a server for this project\n\
+                     /mcp disable <n>  Disable a server for this project\n\
                      /mcp add <n> <cmd> [args...]  Add a new server\n\
-                     /mcp remove <n>   Remove a server"
+                     /mcp remove <n>   Remove a server definition"
                 ))
             }
         }
     }
 }
 
-/// List MCP servers exactly as the loader sees them.
-async fn list_mcp_servers(paths: &McpPaths) -> crate::Result<String> {
-    // The loader is the authority on what actually loads; `defined_servers`
-    // adds the source file plus the entries the loader skips (disabled or
-    // malformed), which would otherwise be invisible here.
-    let loaded = McpConfigLoader::load_with_roots(paths.roots(), &paths.config_home);
+/// List MCP servers with the activation each one resolves to.
+async fn list_mcp_servers(paths: &McpPaths, policy: &McpPolicyConfig) -> crate::Result<String> {
+    let activation_policy = paths.activation_policy(policy);
     let mut defined = coco_mcp::defined_servers(paths.roots(), &paths.config_home);
     defined.sort_by(|a, b| a.name.cmp(&b.name));
 
@@ -102,30 +146,54 @@ async fn list_mcp_servers(paths: &McpPaths) -> crate::Result<String> {
             if defined.len() == 1 { "" } else { "s" }
         ));
 
+        let mut awaiting = false;
+        let mut legacy = false;
         for server in &defined {
-            let is_loaded = loaded.iter().any(|s| s.name == server.name);
-            let (status_icon, status) = match (server.disabled, is_loaded) {
-                (true, _) => ("[-]", "disabled"),
-                (false, true) => ("[+]", "active"),
-                // Neither disabled nor loaded: the entry has no `command` and
-                // no `url`, so `parse_server_config` rejects it.
-                (false, false) => ("[!]", "invalid"),
+            let (status_icon, status) = if server.config.is_none() && !server.legacy_disabled {
+                // No `command` and no `url`: nothing could ever connect.
+                ("[!]", "invalid")
+            } else {
+                match activation_policy.for_defined(server) {
+                    McpActivation::Active => ("[+]", "active"),
+                    McpActivation::UserDisabled => ("[-]", "disabled"),
+                    McpActivation::AwaitingApproval => {
+                        awaiting = true;
+                        ("[?]", "needs approval")
+                    }
+                    McpActivation::PolicyDenied => ("[x]", "denied"),
+                    McpActivation::LegacyDisabled => {
+                        legacy = true;
+                        ("[-]", "disabled*")
+                    }
+                }
             };
             let transport = server.config.as_ref().map_or("-", transport_label);
             out.push_str(&format!(
-                "  {status_icon} {:<20} {status:<9} {transport:<6} {}\n",
+                "  {status_icon} {:<20} {status:<14} {transport:<6} {}\n",
                 server.name,
                 scope_label(server.scope),
             ));
             out.push_str(&format!("      {}\n", display_path(&server.path)));
         }
+        if awaiting {
+            out.push_str(
+                "\nServers marked [?] come from this repository and won't connect \
+                 until you approve them with /mcp enable <name>.\n",
+            );
+        }
+        if legacy {
+            out.push_str(
+                "\ndisabled*: the entry still uses the removed \"disabled\" field \
+                 and stays off. /mcp enable <name> migrates it.\n",
+            );
+        }
     }
 
     out.push_str("\n\nCommands:\n");
-    out.push_str("  /mcp enable <name>     Enable a server\n");
-    out.push_str("  /mcp disable <name>    Disable a server\n");
+    out.push_str("  /mcp enable <name>     Enable (and approve) a server\n");
+    out.push_str("  /mcp disable <name>    Disable a server for this project\n");
     out.push_str("  /mcp add <name> <cmd>  Add a new server\n");
-    out.push_str("  /mcp remove <name>     Remove a server");
+    out.push_str("  /mcp remove <name>     Remove a server definition");
 
     Ok(out)
 }
@@ -153,48 +221,89 @@ fn empty_state(paths: &McpPaths) -> String {
     out
 }
 
-/// Enable or disable a server by editing the file that defines it.
-async fn toggle_server(name: &str, enable: bool, paths: &McpPaths) -> crate::Result<String> {
-    let action = if enable { "Enabled" } else { "Disabled" };
-
-    let Some((path, scope)) = coco_mcp::defining_path(name, paths.roots(), &paths.config_home)
-    else {
+/// Enable a server: clear the user's disable toggle, record approval for a
+/// repo-defined server, and migrate a residual legacy `"disabled"` field out
+/// of the defining file. All state changes are user-side (GlobalConfig)
+/// except the explicit legacy migration.
+async fn enable_server(
+    name: &str,
+    paths: &McpPaths,
+    policy: &McpPolicyConfig,
+) -> crate::Result<String> {
+    let Some(server) = find_defined(name, paths) else {
         return Ok(not_found_message(name, paths));
     };
-    if let Some(refusal) = refuse_policy_scope(name, scope, &path) {
+
+    // A denied server can never activate; say so instead of writing a toggle
+    // that has no effect.
+    let activation_policy = paths.activation_policy(policy);
+    if activation_policy.is_denied(name, server.config.as_ref()) {
+        return Ok(format!(
+            "Cannot enable '{name}': it is denied by a `denied_mcp_servers` settings entry.\n\
+             Remove the deny entry (or ask your administrator) first."
+        ));
+    }
+
+    // Migrate a residual legacy field: without this the fail-safe keeps the
+    // server off no matter what the toggle says.
+    if server.legacy_disabled {
+        if let Some(refusal) = refuse_policy_scope(name, server.scope, &server.path) {
+            return Ok(refusal);
+        }
+        strip_legacy_disabled(name, &server.path).await?;
+    }
+
+    let mut global = load_global(paths)?;
+    let project = global
+        .projects
+        .entry(coco_mcp::project_key(&paths.project_root))
+        .or_default();
+    project.disabled_mcp_servers.remove(name);
+    let newly_approved = server.scope == ConfigScope::Project
+        && project.approved_mcp_servers.insert(name.to_string());
+    global_config::write_global_config_at(&paths.global_config, &global)
+        .map_err(|e| crate::CommandsError::generic(e.to_string()))?;
+
+    let mut out = format!("Enabled MCP server '{name}' for this project");
+    if newly_approved {
+        out.push_str(" (repo-defined server approved)");
+    }
+    if server.legacy_disabled {
+        out.push_str(&format!(
+            "\nRemoved the legacy \"disabled\" field from {}.",
+            display_path(&server.path)
+        ));
+    }
+    out.push_str("\nRestart the session to apply.");
+    Ok(out)
+}
+
+/// Disable a server for this project — a user-side toggle keyed by name, so
+/// it holds regardless of which file defines the server (no lower-precedence
+/// definition can sneak back in, unlike the old file-edit disable).
+async fn disable_server(name: &str, paths: &McpPaths) -> crate::Result<String> {
+    let Some(server) = find_defined(name, paths) else {
+        return Ok(not_found_message(name, paths));
+    };
+    // Enterprise/managed servers are admin-mandated; the user toggle does not
+    // override policy in either direction.
+    if let Some(refusal) = refuse_policy_scope(name, server.scope, &server.path) {
         return Ok(refusal);
     }
 
-    let mut parsed = read_json(&path).await?;
-    let Some(server_config) = parsed
-        .get_mut("mcpServers")
-        .and_then(|v| v.as_object_mut())
-        .and_then(|servers| servers.get_mut(name))
-    else {
-        return Ok(format!(
-            "MCP server '{name}' not found in {}",
-            display_path(&path)
-        ));
-    };
+    let mut global = load_global(paths)?;
+    global
+        .projects
+        .entry(coco_mcp::project_key(&paths.project_root))
+        .or_default()
+        .disabled_mcp_servers
+        .insert(name.to_string());
+    global_config::write_global_config_at(&paths.global_config, &global)
+        .map_err(|e| crate::CommandsError::generic(e.to_string()))?;
 
-    if enable {
-        if let Some(obj) = server_config.as_object_mut() {
-            obj.remove("disabled");
-        }
-    } else {
-        server_config["disabled"] = serde_json::Value::Bool(true);
-    }
-    write_json(&path, &parsed).await?;
-
-    let mut out = format!("{action} MCP server '{name}' in {}", display_path(&path));
-    // A lower-precedence file may define the same name. The loader skips the
-    // now-disabled entry and falls back to that one, so say so rather than
-    // report a disable that didn't take.
-    match (enable, residual_note(name, paths)) {
-        (false, Some(note)) => out.push_str(&note),
-        (false, None) | (true, _) => out.push_str("\nRestart the session to apply."),
-    }
-    Ok(out)
+    Ok(format!(
+        "Disabled MCP server '{name}' for this project\nRestart the session to apply."
+    ))
 }
 
 /// Add a server to the project-scoped `.cocode/mcp.json`.
@@ -289,17 +398,45 @@ async fn remove_server(name: &str, paths: &McpPaths) -> crate::Result<String> {
     Ok(out)
 }
 
-/// Report a definition that survives an edit meant to stop the server loading.
+/// The merged definition for `name`, if any.
+fn find_defined(name: &str, paths: &McpPaths) -> Option<coco_mcp::DefinedMcpServer> {
+    coco_mcp::defined_servers(paths.roots(), &paths.config_home)
+        .into_iter()
+        .find(|server| server.name == name)
+}
+
+fn load_global(paths: &McpPaths) -> crate::Result<coco_config::global_config::GlobalConfig> {
+    global_config::load_global_config_at(&paths.global_config)
+        .map_err(|e| crate::CommandsError::generic(e.to_string()))
+}
+
+/// Delete the legacy `"disabled"` field from `name`'s entry in `path`.
+async fn strip_legacy_disabled(name: &str, path: &Path) -> crate::Result<()> {
+    let mut parsed = read_json(path).await?;
+    if let Some(entry) = parsed
+        .get_mut("mcpServers")
+        .and_then(|v| v.as_object_mut())
+        .and_then(|servers| servers.get_mut(name))
+        .and_then(|entry| entry.as_object_mut())
+    {
+        entry.remove("disabled");
+        write_json(path, &parsed).await?;
+    }
+    Ok(())
+}
+
+/// Report a definition that survives a `/mcp remove`.
 ///
 /// Asks the loader, so it only fires when a *lower*-precedence file defines the
-/// same name: the loader drops the edited entry and silently falls back to that
-/// definition, and the disable/remove the user just ran doesn't take.
+/// same name: the merge falls back to that definition and the removal alone
+/// doesn't stop the server loading.
 fn residual_note(name: &str, paths: &McpPaths) -> Option<String> {
     let survivor = McpConfigLoader::load_with_roots(paths.roots(), &paths.config_home)
         .into_iter()
         .find(|server| server.name == name)?;
     Some(format!(
-        "\n\nNote: '{name}' is also defined at {} scope and will keep loading from there.",
+        "\n\nNote: '{name}' is also defined at {} scope and will keep loading from there. \
+         Use /mcp disable {name} to stop it regardless of where it is defined.",
         scope_label(survivor.scope)
     ))
 }
@@ -314,7 +451,9 @@ fn shadowing_definition(
     (defining != target).then_some((defining, scope))
 }
 
-/// Refuse to edit enterprise/managed policy files.
+/// Refuse to override enterprise/managed policy, in either direction: their
+/// files are not editable from `/mcp`, and the user toggle must not switch
+/// off an admin-mandated server.
 fn refuse_policy_scope(name: &str, scope: ConfigScope, path: &Path) -> Option<String> {
     match scope {
         ConfigScope::Enterprise | ConfigScope::Managed => Some(format!(

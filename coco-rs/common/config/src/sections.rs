@@ -1534,19 +1534,46 @@ pub struct PartialMcpRuntimeSettings {
     pub tool_idle_timeout_ms: Option<i32>,
 }
 
+/// Settings-derived MCP server activation policy, resolved once at the
+/// `build_runtime_config` merge site through the per-source accessors.
+///
+/// This is the *settings* half of the run/don't-run decision; `coco-mcp`'s
+/// `McpActivationPolicy` combines it with the per-project user toggles from
+/// `GlobalConfig` (which live outside the repository by construction).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpPolicyConfig {
+    /// Trusted-source `enable_all_project_mcp_servers`: repo-defined servers
+    /// connect without per-server user approval.
+    pub project_servers_pre_approved: bool,
+    /// Server names pre-approved via trusted-source `allowed_mcp_servers`.
+    pub trusted_allowed_servers: Vec<String>,
+    /// Deny entries unioned across every settings source.
+    pub denied_servers: Vec<crate::settings::DeniedMcpServerEntry>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpRuntimeConfig {
     pub tool_timeout_ms: Option<i32>,
     pub tool_idle_timeout_ms: Option<i32>,
+    /// Server activation policy (trust gate + deny list). Enforced by
+    /// `coco-mcp::McpActivationPolicy` at registration time.
+    pub policy: McpPolicyConfig,
 }
 
 impl McpRuntimeConfig {
-    pub fn resolve(settings: &Settings, env: &EnvSnapshot) -> Self {
-        let mut config = Self::default();
-        if let Some(v) = settings.mcp_runtime.tool_timeout_ms {
+    pub fn resolve(settings: &SettingsWithSource, env: &EnvSnapshot) -> Self {
+        let mut config = Self {
+            policy: McpPolicyConfig {
+                project_servers_pre_approved: settings.enable_all_project_mcp_servers(),
+                trusted_allowed_servers: settings.trusted_allowed_mcp_servers(),
+                denied_servers: settings.denied_mcp_servers(),
+            },
+            ..Self::default()
+        };
+        if let Some(v) = settings.merged.mcp_runtime.tool_timeout_ms {
             config.tool_timeout_ms = Some(v);
         }
-        if let Some(v) = settings.mcp_runtime.tool_idle_timeout_ms {
+        if let Some(v) = settings.merged.mcp_runtime.tool_idle_timeout_ms {
             config.tool_idle_timeout_ms = Some(v);
         }
         if let Some(v) = env.get_i32(EnvKey::CocoMcpToolTimeoutMs) {

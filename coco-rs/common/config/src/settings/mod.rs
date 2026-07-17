@@ -563,7 +563,11 @@ pub struct AutoModeConfig {
 }
 
 /// An allowed MCP server entry in settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Only entries from trusted sources pre-approve a project-scope server —
+/// read via [`SettingsWithSource::trusted_allowed_mcp_servers`], never off
+/// the merged struct.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AllowedMcpServerEntry {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -571,9 +575,21 @@ pub struct AllowedMcpServerEntry {
 }
 
 /// A denied MCP server entry in settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Matches a server by exact `name`, and additionally by content — `command`
+/// (exact stdio command) or `url` (prefix on http/sse/ws URLs) — so a ban
+/// cannot be dodged by redefining the same server under another name.
+/// Denies narrow what can run, so entries from *every* source count — read
+/// via [`SettingsWithSource::denied_mcp_servers`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeniedMcpServerEntry {
     pub name: String,
+    /// Also deny any stdio server whose command equals this value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// Also deny any http/sse/ws server whose URL starts with this prefix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 /// Plugin configuration in settings.
@@ -891,6 +907,48 @@ impl SettingsWithSource {
             .filter_map(|source| self.per_source.get(source))
             .find_map(source_api_key_helper)
     }
+
+    /// Whether repo-defined (project-scope) MCP servers are pre-approved to
+    /// connect without per-server user approval.
+    ///
+    /// `.mcp.json` arrives with the checked-out repository: connecting one of
+    /// its servers spawns an arbitrary process or reaches an arbitrary URL at
+    /// session start. The layer granting that auto-connect must therefore not
+    /// itself be the repository — reading this field from `Project`/`Plugin`
+    /// settings would let a cloned repo approve its own servers. Trusted
+    /// sources only, highest precedence first: the first source that sets the
+    /// field wins, so managed policy can pin `false` over a user `true`.
+    pub fn enable_all_project_mcp_servers(&self) -> bool {
+        TRUSTED_SETTING_SOURCES
+            .iter()
+            .filter_map(|source| self.per_source.get(source))
+            .find_map(source_enable_all_project_mcp_servers)
+            .unwrap_or(false)
+    }
+
+    /// Server names pre-approved via trusted-source `allowed_mcp_servers`
+    /// (union: a name listed by any trusted layer is approved). `Project` and
+    /// `Plugin` entries are ignored for the same reason as
+    /// [`Self::enable_all_project_mcp_servers`].
+    pub fn trusted_allowed_mcp_servers(&self) -> Vec<String> {
+        TRUSTED_SETTING_SOURCES
+            .iter()
+            .filter_map(|source| self.per_source.get(source))
+            .flat_map(source_allowed_mcp_server_names)
+            .collect()
+    }
+
+    /// `denied_mcp_servers` unioned across *every* source, project included.
+    ///
+    /// The union — not the merged struct, whose deep-merge would let a
+    /// higher-precedence layer replace a lower one's list — because a deny
+    /// only ever narrows what can run: no layer weakens another's ban.
+    pub fn denied_mcp_servers(&self) -> Vec<DeniedMcpServerEntry> {
+        self.per_source
+            .values()
+            .flat_map(source_denied_mcp_servers)
+            .collect()
+    }
 }
 
 /// Settings layers allowed to decide bypass-permission posture, ordered
@@ -917,6 +975,34 @@ fn source_api_key_helper(value: &serde_json::Value) -> Option<String> {
         .pointer("/api_key_helper")
         .and_then(serde_json::Value::as_str)
         .map(String::from)
+}
+
+fn source_enable_all_project_mcp_servers(value: &serde_json::Value) -> Option<bool> {
+    value
+        .pointer("/enable_all_project_mcp_servers")
+        .and_then(serde_json::Value::as_bool)
+}
+
+fn source_allowed_mcp_server_names(value: &serde_json::Value) -> Vec<String> {
+    value
+        .pointer("/allowed_mcp_servers")
+        .and_then(serde_json::Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| entry.pointer("/name"))
+                .filter_map(serde_json::Value::as_str)
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn source_denied_mcp_servers(value: &serde_json::Value) -> Vec<DeniedMcpServerEntry> {
+    value
+        .pointer("/denied_mcp_servers")
+        .and_then(|raw| serde_json::from_value(raw.clone()).ok())
+        .unwrap_or_default()
 }
 
 fn source_disables_bypass_mode(value: &serde_json::Value) -> bool {

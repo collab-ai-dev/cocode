@@ -397,6 +397,8 @@ fn test_mcp_server_in_both_lists() {
         }],
         denied_mcp_servers: vec![crate::settings::DeniedMcpServerEntry {
             name: "server-x".into(),
+            command: None,
+            url: None,
         }],
         ..Default::default()
     };

@@ -145,10 +145,18 @@ type AsyncSpec = (
 /// These complement the original 25 from `register_builtins()` with real
 /// logic: reading files, running git, formatting output, etc.
 pub fn register_extended_builtins(registry: &mut CommandRegistry) {
-    register_extended_builtins_with_cwd(registry, PathBuf::from("."));
+    register_extended_builtins_with_cwd(
+        registry,
+        PathBuf::from("."),
+        handlers::mcp::McpCommandContext::for_cwd(PathBuf::from(".")),
+    );
 }
 
-pub fn register_extended_builtins_with_cwd(registry: &mut CommandRegistry, cwd: PathBuf) {
+pub fn register_extended_builtins_with_cwd(
+    registry: &mut CommandRegistry,
+    cwd: PathBuf,
+    mcp: handlers::mcp::McpCommandContext,
+) {
     use CommandSafety::AlwaysSafe;
     use CommandSafety::BridgeSafe;
     use CommandSafety::LocalOnly;
@@ -409,7 +417,7 @@ pub fn register_extended_builtins_with_cwd(registry: &mut CommandRegistry, cwd: 
         command_type: CommandType::Local(LocalCommandData {
             handler: names::ENV.to_string(),
         }),
-        handler: Some(Arc::new(EnvCommand { cwd: cwd.clone() })),
+        handler: Some(Arc::new(EnvCommand { cwd })),
         is_enabled: None,
     });
 
@@ -692,7 +700,7 @@ pub fn register_extended_builtins_with_cwd(registry: &mut CommandRegistry, cwd: 
         command_type: CommandType::LocalOverlay(LocalCommandData {
             handler: names::MCP.to_string(),
         }),
-        handler: Some(Arc::new(McpCommand { cwd })),
+        handler: Some(Arc::new(McpCommand { context: mcp })),
         is_enabled: None,
     });
 
@@ -1609,16 +1617,17 @@ impl CommandHandler for EnvCommand {
     }
 }
 
-/// `/mcp` — holds the registration cwd so MCP config resolves against this
-/// session's project rather than the process cwd.
+/// `/mcp` — holds the session's [`handlers::mcp::McpCommandContext`] (resolved
+/// project root + session cwd + settings-side activation policy) so MCP config
+/// resolves against this session's project rather than the process cwd.
 struct McpCommand {
-    cwd: PathBuf,
+    context: handlers::mcp::McpCommandContext,
 }
 
 #[async_trait]
 impl CommandHandler for McpCommand {
     async fn execute(&self, args: &str) -> crate::Result<String> {
-        handlers::mcp::run(args, &self.cwd).await
+        handlers::mcp::run(args, &self.context).await
     }
 
     fn handler_name(&self) -> &str {

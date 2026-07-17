@@ -32,7 +32,13 @@ impl SessionRuntime {
         let Some(manager) = self.current_mcp_manager().await else {
             return 0;
         };
-        let scoped = project_services.plugin_mcp_servers();
+        // Same activation choke point as bootstrap: plugin contributions must
+        // not bypass user toggles or the settings deny list on reload.
+        let activation_policy = coco_mcp::McpActivationPolicy::resolve(
+            self.project_root(),
+            &self.runtime_config().mcp.policy,
+        );
+        let scoped = activation_policy.filter_active(project_services.plugin_mcp_servers());
         let count = scoped.len();
         let new_names: std::collections::HashSet<String> =
             scoped.iter().map(|s| s.name.clone()).collect();
@@ -158,6 +164,7 @@ impl SessionRuntime {
             coco_types::UserType::from_env(),
             command_features,
             runtime_config.loop_config.clone(),
+            runtime_config.mcp.policy.clone(),
             cwd.to_path_buf(),
             dirs::home_dir().unwrap_or_else(|| cwd.to_path_buf()),
             None,

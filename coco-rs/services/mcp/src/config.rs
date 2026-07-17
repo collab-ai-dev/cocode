@@ -33,22 +33,26 @@ pub struct McpConfigRoots<'a> {
     pub session_cwd: &'a Path,
 }
 
-/// A server entry as *written* in a config file, before the loader's
-/// disabled/shape filtering drops it.
+/// A server entry as *written* in a config file.
 ///
-/// Deduplicated by name across [`config_paths`] exactly like the loader, so
-/// `path`/`scope` name the file holding the *effective* definition.
+/// The single merge authority: [`defined_servers`] deduplicates by name
+/// across [`config_paths`], and every consumer — the connection loader
+/// ([`McpConfigLoader::load_with_roots`]), `/mcp list`, and
+/// [`defining_path`] — derives from this one view, so they cannot disagree
+/// about which definition is effective.
 #[derive(Debug, Clone)]
 pub struct DefinedMcpServer {
     pub name: String,
     pub scope: ConfigScope,
     /// File holding the effective definition — the one an edit must target.
     pub path: PathBuf,
-    /// `"disabled": true`. The loader skips these entirely, so a disabled entry
-    /// never appears in [`McpConfigLoader::load_with_roots`] output.
-    pub disabled: bool,
-    /// The parsed shape, ignoring `disabled`. `None` = unrecognized entry
-    /// (neither `command` nor `url`), which the loader also skips.
+    /// The entry still carries the removed `"disabled"` field. Fail-safe: it
+    /// never loads until the field is deleted (whether a server runs is a
+    /// user toggle in `GlobalConfig` now — see `crate::activation`), so a
+    /// stale file keeps the server off rather than silently re-enabling it.
+    pub legacy_disabled: bool,
+    /// The parsed shape. `None` = unrecognized entry (neither `command` nor
+    /// `url`), which never loads.
     pub config: Option<McpServerConfig>,
 }
 
@@ -100,12 +104,21 @@ pub fn config_paths(roots: McpConfigRoots<'_>, config_home: &Path) -> Vec<(PathB
     ]
 }
 
-/// Every server *defined* across [`config_paths`], keyed to its effective
-/// definition, including entries the loader skips (disabled or unparseable).
+/// Whether a raw server entry still carries the removed `"disabled"` field.
 ///
-/// Matches on raw key presence rather than [`parse_server_config`], so a
-/// `"disabled": true` entry — invisible to the loader — is still reported.
-/// `/mcp enable` depends on that.
+/// The field is no longer part of the schema (run/don't-run is a user toggle
+/// in `GlobalConfig`, not a property of the definition). Entries that still
+/// carry it are refused fail-safe — kept *off* with a warning — because
+/// silently loading them would re-enable servers their owner turned off.
+pub fn entry_is_legacy_disabled(value: &serde_json::Value) -> bool {
+    value
+        .get("disabled")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Every server *defined* across [`config_paths`] — the single merge: a later
+/// file's entry replaces an earlier one by name, unconditionally.
 pub fn defined_servers(roots: McpConfigRoots<'_>, config_home: &Path) -> Vec<DefinedMcpServer> {
     let mut by_name: HashMap<String, DefinedMcpServer> = HashMap::new();
     for (path, scope) in config_paths(roots, config_home) {
@@ -113,24 +126,14 @@ pub fn defined_servers(roots: McpConfigRoots<'_>, config_home: &Path) -> Vec<Def
             continue;
         };
         for (name, value) in servers {
-            let disabled = value
-                .get("disabled")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            // Parse against a copy without `disabled` so the transport is known
-            // even for entries the loader skips.
-            let mut enabled_value = value.clone();
-            if let Some(obj) = enabled_value.as_object_mut() {
-                obj.remove("disabled");
-            }
             by_name.insert(
                 name.clone(),
                 DefinedMcpServer {
                     name,
                     scope,
                     path: path.clone(),
-                    disabled,
-                    config: parse_server_config(&enabled_value),
+                    legacy_disabled: entry_is_legacy_disabled(&value),
+                    config: parse_server_config(&value),
                 },
             );
         }
@@ -138,11 +141,8 @@ pub fn defined_servers(roots: McpConfigRoots<'_>, config_home: &Path) -> Vec<Def
     by_name.into_values().collect()
 }
 
-/// Locate the file where `name` is effectively defined.
-///
-/// Writing `"disabled": true` into a *later*-loading file does not disable an
-/// earlier definition (the loader simply skips the disabled entry and keeps the
-/// earlier one), so an edit must target the defining file this returns.
+/// Locate the file where `name` is effectively defined — the file an edit
+/// (`/mcp remove`, legacy-field migration) must target.
 pub fn defining_path(
     name: &str,
     roots: McpConfigRoots<'_>,
@@ -173,17 +173,57 @@ impl McpConfigLoader {
     /// Project files are rooted at `project_root`; local files stay rooted at
     /// `session_cwd` so callers can split ProjectServices-owned config from
     /// session-local overrides without changing layer priority.
+    ///
+    /// Derived from [`defined_servers`] — the same merge `/mcp list` renders —
+    /// dropping only entries that cannot load: unrecognized shapes and
+    /// legacy-`disabled` entries (fail-safe: kept off, never silently
+    /// re-enabled). Whether a *loadable* server actually connects is decided
+    /// separately by `crate::activation`.
     pub fn load_with_roots(
         roots: McpConfigRoots<'_>,
         config_home: &Path,
     ) -> Vec<ScopedMcpServerConfig> {
-        let mut configs_by_name: HashMap<String, ScopedMcpServerConfig> = HashMap::new();
-
-        for (path, scope) in config_paths(roots, config_home) {
-            load_mcp_json(&path, scope, &mut configs_by_name);
-        }
-
-        configs_by_name.into_values().collect()
+        defined_servers(roots, config_home)
+            .into_iter()
+            .filter_map(|server| {
+                if server.legacy_disabled {
+                    warn!(
+                        server = %server.name,
+                        path = %server.path.display(),
+                        "MCP entry uses the removed \"disabled\" field; refusing to load it. \
+                         Delete the field and use `/mcp disable` instead"
+                    );
+                    return None;
+                }
+                let Some(mut config) = server.config else {
+                    debug!(server = %server.name, path = %server.path.display(),
+                        "skipping unrecognized MCP entry (no command or url)");
+                    return None;
+                };
+                // Expand ${VAR} / ${VAR:-default} references against the
+                // process environment before the config reaches the
+                // launch/transport layer.
+                let missing = crate::env_expansion::expand_config(
+                    &mut config,
+                    &crate::env_expansion::ProcessEnv,
+                );
+                if !missing.is_empty() {
+                    warn!(
+                        server = %server.name,
+                        scope = ?server.scope,
+                        missing_vars = ?missing,
+                        "MCP config references unset environment variables; left as literal ${{...}}"
+                    );
+                }
+                debug!(server = %server.name, scope = ?server.scope, "loaded MCP server config");
+                Some(ScopedMcpServerConfig {
+                    name: server.name,
+                    config,
+                    scope: server.scope,
+                    plugin_source: None,
+                })
+            })
+            .collect()
     }
 
     /// Register Claude.ai org-managed configs (fetched via API at startup).
@@ -236,58 +276,14 @@ fn read_mcp_servers(path: &Path) -> Option<serde_json::Map<String, serde_json::V
     value.get("mcpServers").and_then(|s| s.as_object()).cloned()
 }
 
-/// Load servers from a single .mcp.json file, deduplicating by name.
-fn load_mcp_json(
-    path: &Path,
-    scope: ConfigScope,
-    configs: &mut HashMap<String, ScopedMcpServerConfig>,
-) {
-    let Some(servers) = read_mcp_servers(path) else {
-        return;
-    };
-
-    for (name, server_config) in &servers {
-        if let Some(mut config) = parse_server_config(server_config) {
-            // Expand ${VAR} / ${VAR:-default} references against the process
-            // environment before the config reaches the launch/transport layer.
-            let missing =
-                crate::env_expansion::expand_config(&mut config, &crate::env_expansion::ProcessEnv);
-            if !missing.is_empty() {
-                warn!(
-                    server = %name,
-                    ?scope,
-                    missing_vars = ?missing,
-                    "MCP config references unset environment variables; left as literal ${{...}}"
-                );
-            }
-            debug!(server = %name, ?scope, "loaded MCP server config");
-            configs.insert(
-                name.clone(),
-                ScopedMcpServerConfig {
-                    name: name.clone(),
-                    config,
-                    scope,
-                    plugin_source: None,
-                },
-            );
-        }
-    }
-}
-
-/// Parse a server config from JSON. Detects the transport from the shape
-/// (`command` → stdio, `url` → http/sse), so callers (settings + plugins)
-/// don't need an explicit `transport` tag. Returns `None` for a disabled or
-/// unrecognized entry.
+/// Parse a server config from JSON — pure shape detection (`command` →
+/// stdio, `url` → http/sse), so callers (settings + plugins) don't need an
+/// explicit `transport` tag. Returns `None` for an unrecognized entry.
+///
+/// Deliberately knows nothing about whether the server should *run*: that is
+/// `crate::activation`'s job (plus the [`entry_is_legacy_disabled`] fail-safe
+/// for stale files).
 pub fn parse_server_config(value: &serde_json::Value) -> Option<McpServerConfig> {
-    // Check for disabled server
-    if value
-        .get("disabled")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-    {
-        return None;
-    }
-
     // Detect transport type
     if value.get("command").is_some() {
         return parse_stdio_config(value);

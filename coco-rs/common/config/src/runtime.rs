@@ -396,7 +396,7 @@ pub fn build_runtime_config_with(
         sandbox: SandboxSettings::resolve(merged, &env),
         memory,
         memory_activation,
-        mcp: McpRuntimeConfig::resolve(merged, &env),
+        mcp: McpRuntimeConfig::resolve(&settings, &env),
         web_fetch: WebFetchConfig::resolve(merged),
         web_search: WebSearchConfig::resolve(merged),
         diagnostics: DiagnosticsConfig::resolve(merged, &env),

@@ -122,6 +122,16 @@ fn merge_record_value(value: &Value, out: &mut Vec<(String, McpServerConfig)>) {
         return;
     };
     for (name, entry) in map {
+        // Same fail-safe as the file loader: the removed `"disabled"` field
+        // keeps an entry off rather than silently re-enabling it.
+        if coco_mcp::entry_is_legacy_disabled(entry) {
+            tracing::warn!(
+                server = %name,
+                "plugin MCP entry uses the removed \"disabled\" field; refusing to load it. \
+                 Delete the field and use `/mcp disable` instead"
+            );
+            continue;
+        }
         if let Some(config) = parse_server_config(entry) {
             if let Some(slot) = out.iter_mut().find(|(n, _)| n == name) {
                 slot.1 = config;

@@ -323,6 +323,7 @@ fn registry_for_root_with_features_and_loop_config(
         UserType::Human,
         features,
         loop_config,
+        handlers::mcp::McpCommandContext::for_cwd(project_root.clone()),
         project_root,
         PathBuf::from("/home/test"),
         None,

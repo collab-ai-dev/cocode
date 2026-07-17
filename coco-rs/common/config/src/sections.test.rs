@@ -1114,13 +1114,13 @@ fn test_sandbox_settings_resolves_mode_and_network() {
 
 #[test]
 fn test_mcp_runtime_config_json_first_env_override() {
-    let settings = Settings {
+    let settings = settings_with_sources(Settings {
         mcp_runtime: PartialMcpRuntimeSettings {
             tool_timeout_ms: Some(5_000),
             tool_idle_timeout_ms: Some(4_000),
         },
         ..Default::default()
-    };
+    });
     let env = EnvSnapshot::from_pairs([
         (EnvKey::CocoMcpToolTimeoutMs, "2500"),
         (EnvKey::ClaudeCodeMcpToolIdleTimeout, "0"),
