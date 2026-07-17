@@ -104,6 +104,7 @@ members = [
     "memory",
     "maintenance",
     "skill-learn",
+    "journey",
     "plugins",
     "keybindings",
     "coordinator",
@@ -243,6 +244,7 @@ coco-tasks = { path = "tasks" }
 coco-memory = { path = "memory" }
 coco-maintenance = { path = "maintenance" }
 coco-skill-learn = { path = "skill-learn" }
+coco-journey = { path = "journey" }
 coco-plugins = { path = "plugins" }
 coco-keybindings = { path = "keybindings" }
 coco-coordinator = { path = "coordinator" }

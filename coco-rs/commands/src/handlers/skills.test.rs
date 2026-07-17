@@ -490,7 +490,7 @@ async fn dialog_payload_roundtrip_reflects_persisted_overrides() {
     // OpenSkillsDialog dispatch).
     let mgr = SkillManager::new();
     register_bundled(&mgr);
-    enrich_payload_with_tiers(&mut payload2, &locked_tiers, &mgr);
+    enrich_payload_with_tiers(&mut payload2, &locked_tiers, &mgr, 5);
     let post_enrich = payload2
         .entries
         .iter()

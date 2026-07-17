@@ -32,6 +32,7 @@ use crate::sections::PartialOutputRewriteSettings;
 use crate::sections::PartialPathSettings;
 use crate::sections::PartialServerSettings;
 use crate::sections::PartialShellSettings;
+use crate::sections::PartialSkillLearnSettings;
 use crate::sections::PartialToolSettings;
 use crate::sections::PartialVoiceSettings;
 use crate::sections::PartialWebFetchSettings;
@@ -151,6 +152,9 @@ pub struct Settings {
     pub paths: PartialPathSettings,
     #[serde(default)]
     pub agent_teams: PartialAgentTeamsSettings,
+    /// Autonomous skill-learning loop knobs (`Feature::SkillLearning`).
+    #[serde(default)]
+    pub skill_learn: PartialSkillLearnSettings,
 
     // === Compaction ===
     /// Compaction (auto / micro / api-native / session-memory / experimental).

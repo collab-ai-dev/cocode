@@ -250,6 +250,10 @@ pub fn context_stack(ctx: TuiContext) -> Vec<KbContext> {
         // (and chars to filter / Y-N-A) before the editor's `intercept`
         // sees them as the `Cursor*` / `InsertChar` it expects.
         PermissionsEditor => vec![KbContext::Global],
+        // Global-only, same rationale as `PermissionsEditor`: `/journey`
+        // navigation + actions come entirely from `journey::map_key`, so no
+        // Select/Confirmation contexts resolve keys before its intercept.
+        Journey => vec![KbContext::Global],
         // Global-only, same rationale as `PermissionsEditor`: the overlay's
         // text input + nav come entirely from `add_directory::map_key`. No
         // Select/Confirmation so chars/arrows aren't resolved to filter /

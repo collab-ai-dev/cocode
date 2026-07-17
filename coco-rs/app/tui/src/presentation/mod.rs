@@ -14,6 +14,7 @@ pub(crate) mod header;
 pub(crate) mod help;
 pub(crate) mod information;
 pub(crate) mod input;
+pub(crate) mod journey;
 pub(crate) mod layout;
 pub(crate) mod login_picker;
 pub(crate) mod model_picker;

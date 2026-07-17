@@ -1,0 +1,15 @@
+---
+source: app/tui/src/presentation/journey.test.rs
+expression: body(&state)
+---
+● skills 2   ◆ memories 1   ★ promoted 1   ✕ retired 1
+
+   4 Jul │━━━━━━━◆◆  7+2
+  15 Jul │━━━━━◆◆◆  5+3
+  oldest ──────────→ now
+──────────────────────────────────────────────
+Delete memory coco-voice-and-disk-gotcha? This cannot be undone.
+
+No, keep      Yes, delete
+
+←/→ toggle · enter confirm · esc cancel

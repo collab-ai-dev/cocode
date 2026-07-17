@@ -105,6 +105,8 @@ pub(crate) fn modal_text_surface(modal: &ModalState) -> Option<TextSurfaceConten
         ModalState::TaskDetail(td) => TextSurfaceContent::TaskDetail(td),
         // Styled render path (see `picker_styled::background_tasks_lines`).
         ModalState::BackgroundTasks(_) => return None,
+        // Styled render path (see `presentation::journey::journey_lines`).
+        ModalState::Journey(_) => return None,
         ModalState::Feedback(f) => TextSurfaceContent::Feedback(f),
         ModalState::McpServerSelect(ms) => TextSurfaceContent::McpServerSelect(ms),
         ModalState::PluginHint(ph) => TextSurfaceContent::PluginHint(ph),
@@ -139,6 +141,9 @@ pub(crate) fn modal_styled_surface(
         ModalState::TeamRoster(r) => ps::team_roster_lines(r, styles, list_budget),
         ModalState::BackgroundTasks(bt) => {
             ps::background_tasks_lines(bt, state, styles, list_budget)
+        }
+        ModalState::Journey(j) => {
+            crate::presentation::journey::journey_lines(j, styles, list_budget)
         }
         _ => return None,
     })

@@ -157,3 +157,117 @@ fn messages_after_compact_boundary_uses_most_recent() {
     let after = messages_after_compact_boundary(&msgs);
     assert_eq!(after.len(), 2);
 }
+
+/// Assistant message carrying one tool call per name in `tools`.
+fn make_assistant_with_tools(tools: &[&str]) -> Message {
+    let content = tools
+        .iter()
+        .map(|name| {
+            AssistantContent::ToolCall(ToolCallContent::new(
+                format!("call-{name}"),
+                (*name).to_string(),
+                serde_json::json!({}),
+            ))
+        })
+        .collect();
+    Message::Assistant(AssistantMessage {
+        message: LlmMessage::Assistant {
+            content,
+            provider_options: None,
+        },
+        uuid: Uuid::new_v4(),
+        model: "test".into(),
+        stop_reason: Some(StopReason::ToolUse),
+        usage: None,
+        cost_usd: None,
+        request_id: None,
+        api_error: None,
+    })
+}
+
+#[test]
+fn messages_since_last_user_prompt_spans_whole_cycle() {
+    let msgs = vec![
+        make_user_msg("older prompt", false, false),
+        make_assistant_msg(None),
+        make_user_msg("current prompt", false, false),
+        make_assistant_with_tools(&["Read"]),
+        make_assistant_with_tools(&["Edit"]),
+        make_assistant_msg(None),
+    ];
+    let cycle = messages_since_last_user_prompt(&msgs);
+    assert_eq!(cycle.len(), 3);
+}
+
+#[test]
+fn messages_since_last_user_prompt_ignores_virtual_and_compact_summary() {
+    let summary = Message::User(UserMessage {
+        message: LlmMessage::user_text("[summary]"),
+        uuid: Uuid::new_v4(),
+        timestamp: String::new(),
+        is_visible_in_transcript_only: false,
+        is_virtual: false,
+        is_compact_summary: true,
+        permission_mode: None,
+        origin: None,
+        parent_tool_use_id: None,
+    });
+    let msgs = vec![
+        make_user_msg("real prompt", false, false),
+        make_assistant_with_tools(&["Read"]),
+        summary,
+        make_user_msg("virtual", false, true),
+        make_assistant_msg(None),
+    ];
+    // Engine bookkeeping must not open a new cycle, or the signal would be
+    // computed over a slice that excludes the work the user actually asked for.
+    let cycle = messages_since_last_user_prompt(&msgs);
+    assert_eq!(cycle.len(), 4);
+}
+
+#[test]
+fn messages_since_last_user_prompt_returns_all_when_no_prompt() {
+    let msgs = vec![
+        make_assistant_msg(None),
+        make_assistant_with_tools(&["Read"]),
+    ];
+    assert_eq!(messages_since_last_user_prompt(&msgs).len(), 2);
+}
+
+#[test]
+fn count_tool_calls_in_sums_across_the_cycle() {
+    let msgs = vec![
+        make_user_msg("prompt", false, false),
+        make_assistant_with_tools(&["Read", "Grep"]),
+        make_assistant_with_tools(&["Edit"]),
+        make_assistant_msg(None),
+    ];
+    // The regression this guards: a tail-anchored count sees the trailing
+    // text-only message and reports 0 for a 3-tool-call cycle.
+    let cycle = messages_since_last_user_prompt(&msgs);
+    assert_eq!(count_tool_calls_in(cycle), 3);
+    assert_eq!(count_tool_calls_in_last_assistant_turn(cycle), 0);
+}
+
+#[test]
+fn skill_invoked_in_detects_skill_before_a_text_only_ending() {
+    let msgs = vec![
+        make_user_msg("prompt", false, false),
+        make_assistant_with_tools(&[coco_types::ToolName::Skill.as_str()]),
+        make_assistant_with_tools(&["Read"]),
+        make_assistant_msg(None),
+    ];
+    let cycle = messages_since_last_user_prompt(&msgs);
+    assert!(skill_invoked_in(cycle));
+}
+
+#[test]
+fn skill_invoked_in_is_false_without_a_skill_call() {
+    let msgs = vec![
+        make_user_msg("prompt", false, false),
+        make_assistant_with_tools(&["Read"]),
+        make_assistant_msg(None),
+    ];
+    let cycle = messages_since_last_user_prompt(&msgs);
+    assert!(!skill_invoked_in(cycle));
+}

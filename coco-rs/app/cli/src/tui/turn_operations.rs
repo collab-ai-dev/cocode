@@ -97,6 +97,12 @@ pub(super) enum PendingEditorRequest {
     Agent {
         path: std::path::PathBuf,
     },
+    /// `/journey` `e` on the selected node → fork `$EDITOR` against the node's
+    /// backing file (a SKILL.md or a memory entry). Refreshes the journey
+    /// snapshot on editor exit, mirroring [`Self::Agent`].
+    Journey {
+        path: std::path::PathBuf,
+    },
 }
 
 /// Cancel the in-flight turn (if any) and drain its task.

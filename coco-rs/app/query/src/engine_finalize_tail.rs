@@ -654,7 +654,11 @@ impl QueryEngine {
     /// a terminal continuation) and `handle_no_tool_calls_terminal` — which
     /// are mutually exclusive per round, so the throttle ticks once per
     /// delivered user-prompt cycle.
-    pub(crate) fn run_skill_review_finalize(&self, history: &MessageHistory) {
+    pub(crate) async fn run_skill_review_finalize(
+        &self,
+        history: &mut MessageHistory,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    ) {
         let Some(runtime) = self.skill_review_runtime.as_ref() else {
             return;
         };
@@ -676,9 +680,71 @@ impl QueryEngine {
         let is_subagent = self.config.agent_id.is_some();
         // A cancelled cycle is an undelivered turn — don't count or review it.
         let turn_delivered = !self.cancel.is_cancelled();
-        let _ = runtime.maybe_review(turn_delivered, is_subagent, &self.session_id, || {
-            history.to_vec()
-        });
+        // L4 signal: fire only when the cycle did material work. Scoped to the
+        // whole user cycle, NOT the last assistant round: a substantial cycle
+        // ends on a text-only summary round, so a tail-anchored signal reports
+        // `tool_calls = 0, skill_invoked = false` for exactly the sessions most
+        // worth reviewing — which would leave the throttle permanently unticked.
+        let cycle = coco_messages::messages_since_last_user_prompt(history.as_slice());
+        let signal = coco_skill_learn::ReviewSignal {
+            tool_calls: coco_messages::count_tool_calls_in(cycle),
+            skill_invoked: coco_messages::skill_invoked_in(cycle),
+        };
+        let _ = runtime.maybe_review(
+            signal,
+            turn_delivered,
+            is_subagent,
+            &self.session_id,
+            || history.to_vec(),
+        );
+        // Project notices a *prior* fork queued. The review fork is detached,
+        // so a skill learned during turn N typically surfaces at turn N+1's
+        // finalize — the same latency as memory's `SystemMemorySavedMessage`.
+        self.project_skill_learn_notices(history, event_tx).await;
+    }
+
+    /// Dual channel for drained skill notices: a user-visible transcript line
+    /// plus a model-visible `<system-reminder>` so the agent knows the skill
+    /// exists (and that it is quarantined).
+    async fn project_skill_learn_notices(
+        &self,
+        history: &mut MessageHistory,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    ) {
+        let Some(runtime) = self.skill_review_runtime.as_ref() else {
+            return;
+        };
+        for notice in runtime.drain_notices() {
+            let user_text = match notice.verb {
+                coco_skill_learn::SkillLearnVerb::Learned => format!(
+                    "Learned skill: {} — quarantined until 5 successful uses",
+                    notice.name
+                ),
+                coco_skill_learn::SkillLearnVerb::Updated => {
+                    format!("Improved skill: {}", notice.name)
+                }
+            };
+            let msg = coco_messages::create_info_message("Skill learning", &user_text);
+            crate::history_sync::history_push_and_emit(history, msg, event_tx).await;
+
+            let reminder = match notice.verb {
+                coco_skill_learn::SkillLearnVerb::Learned => format!(
+                    "A background skill review created the agent skill `{}`. It is \
+quarantined: the user can run it with /{}, but you cannot auto-invoke it until it \
+proves useful. Mention it if it fits the user's next task.",
+                    notice.name, notice.name
+                ),
+                coco_skill_learn::SkillLearnVerb::Updated => format!(
+                    "A background skill review updated the agent skill `{}`.",
+                    notice.name
+                ),
+            };
+            let msg = coco_messages::wrapping::create_system_reminder_message_with_kind(
+                coco_types::AttachmentKind::SkillLearnedReminder,
+                &reminder,
+            );
+            crate::history_sync::history_push_and_emit(history, msg, event_tx).await;
+        }
     }
 
     /// Build the `FinalizeTurnContext` from engine-side state and

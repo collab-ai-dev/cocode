@@ -247,8 +247,12 @@ impl SessionRuntime {
         let skill_review_runtime = if runtime_config
             .features
             .enabled(coco_types::Feature::SkillLearning)
+            && runtime_config.skill_learn.enabled
         {
-            let rt = Arc::new(coco_skill_learn::SkillReviewRuntime::new(&config_home));
+            let rt = Arc::new(coco_skill_learn::SkillReviewRuntime::with_config(
+                &config_home,
+                &runtime_config.skill_learn,
+            ));
             // Pre-creates the agent skills dir (the watcher must see it
             // before it spawns) and kicks a time-gated curator pass.
             rt.bootstrap();

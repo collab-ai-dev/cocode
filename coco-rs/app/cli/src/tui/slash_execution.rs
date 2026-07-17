@@ -551,6 +551,43 @@ pub(super) async fn dispatch_slash_command(
     use coco_commands::{CommandResult, DialogSpec, PromptPart};
     match result {
         CommandResult::Skip => SlashOutcome::Handled,
+        CommandResult::TriggerSkillLearn { directive } => {
+            // `/learn` — fire a user-initiated review fork now, bypassing the
+            // turn throttle. The fork context is this session's history slice;
+            // the notice channel announces the result on a later turn.
+            let text = match session.skill_review_runtime() {
+                Some(runtime) => {
+                    let fork_context = session.history_messages().await;
+                    match runtime.manual_review(directive, session.session_id(), fork_context) {
+                        coco_skill_learn::ReviewTrigger::Spawned => {
+                            "Learning from this session — the skill will be announced when ready."
+                        }
+                        coco_skill_learn::ReviewTrigger::InProgress => {
+                            "A skill review is already running; try again once it finishes."
+                        }
+                        coco_skill_learn::ReviewTrigger::Skipped
+                        | coco_skill_learn::ReviewTrigger::Throttled => {
+                            "Skill learning is not available right now."
+                        }
+                    }
+                }
+                // The runtime is absent when EITHER gate is closed, so name the
+                // one that actually is: sending a user to flip a feature they
+                // already enabled is worse than saying nothing.
+                None => {
+                    let cfg = session.runtime_config();
+                    if !cfg.features.enabled(coco_types::Feature::SkillLearning) {
+                        "Skill learning is off — set `features.skill_learning: true` in settings.json."
+                    } else if !cfg.skill_learn.enabled {
+                        "Skill learning is off — set `skill_learn.enabled: true` in settings.json."
+                    } else {
+                        "Skill learning is unavailable in this session."
+                    }
+                }
+            };
+            emit_slash_text(event_tx, name, args, text).await;
+            SlashOutcome::Handled
+        }
         CommandResult::Text(text) => {
             // Sentinel detection — handlers like `/compact`, `/dream`,
             // `/summary` produce a sentinel-prefixed string instead of
@@ -781,6 +818,17 @@ pub(super) async fn dispatch_slash_command(
                 DialogSpec::PluginPicker => {
                     refresh_plugin_dialog_payload(session, event_tx).await;
                 }
+                DialogSpec::Journey => {
+                    // Assemble the learning timeline host-side (blocking disk
+                    // walks run on a blocking thread inside the builder), then
+                    // hand the wire snapshot to the TUI overlay.
+                    let payload =
+                        coco_agent_host::session_dialogs::build_journey_dialog_payload(session)
+                            .await;
+                    let _ = event_tx
+                        .send(CoreEvent::Tui(TuiOnlyEvent::OpenJourneyDialog { payload }))
+                        .await;
+                }
                 DialogSpec::McpbConfig { .. } | DialogSpec::Confirm { .. } => {
                     let dialog_kind = match spec {
                         DialogSpec::McpbConfig { .. } => "MCPB config form",
@@ -790,6 +838,7 @@ pub(super) async fn dispatch_slash_command(
                         | DialogSpec::SkillsList { .. }
                         | DialogSpec::AgentsList { .. }
                         | DialogSpec::PluginPicker
+                        | DialogSpec::Journey
                         | DialogSpec::ModelPicker
                         | DialogSpec::ProviderWizard
                         | DialogSpec::WorkflowPicker

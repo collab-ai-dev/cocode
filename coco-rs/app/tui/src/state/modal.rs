@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 
 use crate::state::agents_dialog::AgentsDialogState;
+use crate::state::journey::JourneyState;
 use crate::state::permissions_editor::PermissionsEditorState;
 use crate::state::plugin_dialog::PluginDialogState;
 use crate::state::provider_wizard::ProviderWizardState;
@@ -43,6 +44,8 @@ pub enum ModalState {
     SkillsDialog(SkillsDialogState),
     PluginDialog(PluginDialogState),
     AgentsDialog(AgentsDialogState),
+    /// `/journey` learning-timeline overlay.
+    Journey(JourneyState),
     /// `/provider` (no-arg) add-provider wizard.
     ProviderWizard(ProviderWizardState),
     PermissionsEditor(PermissionsEditorState),
@@ -92,6 +95,7 @@ impl ModalState {
             | Self::SkillsDialog(_)
             | Self::PluginDialog(_)
             | Self::AgentsDialog(_)
+            | Self::Journey(_)
             | Self::ProviderWizard(_)
             | Self::PermissionsEditor(_)
             | Self::CopyPicker(_)

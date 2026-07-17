@@ -59,6 +59,12 @@ pub enum EnvKey {
     /// Windows named-pipe path for the SDK AppServer NDJSON listener.
     /// Opt-in only; ignored by non-SDK entrypoints and unsupported on Unix.
     CocoServerNamedPipe,
+    /// Disable the autonomous skill-learning loop (review + curator).
+    CocoSkillLearnDisable,
+    /// Override the review-fork throttle (eligible turns between forks).
+    CocoSkillLearnReviewThrottle,
+    /// Disable only the periodic skill curator.
+    CocoSkillLearnCuratorDisable,
     /// Maximum live AppServer session slots for multi-session SDK mode.
     CocoServerMaxSessions,
     /// Maximum AppServer surfaces that one connection may attach.
@@ -402,6 +408,9 @@ impl EnvKey {
             Self::CocoServerUnixSocketPath => "COCO_SERVER_UNIX_SOCKET_PATH",
             Self::CocoServerWebSocketBind => "COCO_SERVER_WEBSOCKET_BIND",
             Self::CocoServerNamedPipe => "COCO_SERVER_NAMED_PIPE",
+            Self::CocoSkillLearnDisable => "COCO_SKILL_LEARN_DISABLE",
+            Self::CocoSkillLearnReviewThrottle => "COCO_SKILL_LEARN_REVIEW_THROTTLE",
+            Self::CocoSkillLearnCuratorDisable => "COCO_SKILL_LEARN_CURATOR_DISABLE",
             Self::CocoServerMaxSessions => "COCO_SERVER_MAX_SESSIONS",
             Self::CocoServerMaxSurfacesPerConnection => "COCO_SERVER_MAX_SURFACES_PER_CONNECTION",
             Self::CocoServerMaxPassiveSurfacesPerSession => {

@@ -318,7 +318,7 @@ impl QueryEngine {
             stop_decision,
             crate::engine_stop_hooks::StopHookDecision::BlockedContinueLoop
         ) {
-            self.run_skill_review_finalize(history);
+            self.run_skill_review_finalize(history, event_tx).await;
         }
 
         match stop_decision {

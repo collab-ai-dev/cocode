@@ -67,6 +67,23 @@ impl MemoryDir {
     }
 }
 
+/// `projects/<san>/memory-journal.jsonl` — the append-only learning journal for
+/// memory events, placed as a **sibling** of `memdir` (not inside it). The
+/// extract/dream forks' write fence requires a `.md` suffix AND containment in
+/// `memdir`, so a memdir-sibling `.jsonl` is unwritable by any fork; only
+/// trusted host-side service code appends here. Named after what it journals,
+/// next to the `memory/` dir it observes.
+///
+/// Falls back to a file inside `memdir` if `memdir` has no parent (defensive;
+/// a resolved memdir always does).
+pub fn memory_journal_path(memdir: &Path) -> PathBuf {
+    const JOURNAL_NAME: &str = "memory-journal.jsonl";
+    match memdir.parent() {
+        Some(parent) => parent.join(JOURNAL_NAME),
+        None => memdir.join(JOURNAL_NAME),
+    }
+}
+
 #[cfg(test)]
 #[path = "resolve.test.rs"]
 mod tests;

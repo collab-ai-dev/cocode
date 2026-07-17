@@ -6,6 +6,7 @@ mod team;
 mod validate;
 
 pub use resolve::MemoryDir;
+pub use resolve::memory_journal_path;
 pub use scope::MemoryScope;
 pub use scope::SessionFileType;
 pub use scope::WriteClassification;

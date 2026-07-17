@@ -23,6 +23,7 @@ fn entry(name: &str, source: coco_types::SkillsDialogSource) -> SkillsDialogEntr
         current_local: None,
         baseline: coco_types::SkillOverrideState::On,
         lock: None,
+        quarantine: None,
     }
 }
 

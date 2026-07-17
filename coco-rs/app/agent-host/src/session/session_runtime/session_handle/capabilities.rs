@@ -103,6 +103,12 @@ impl SessionHandle {
         self.runtime.memory_runtime()
     }
 
+    /// The skill-learning review runtime, when the loop is enabled. Mirrors
+    /// [`Self::memory_runtime`]; consumed by the `/learn` slash dispatcher.
+    pub fn skill_review_runtime(&self) -> Option<&Arc<coco_skill_learn::SkillReviewRuntime>> {
+        self.runtime.skill_review_runtime()
+    }
+
     pub fn command_queue(&self) -> &coco_query::CommandQueue {
         self.runtime.command_queue()
     }

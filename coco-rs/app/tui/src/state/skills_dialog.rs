@@ -67,6 +67,9 @@ pub struct SkillRow {
     /// surfaced as `pending` so save-diff never tries to persist
     /// a different value.
     pub lock: Option<SkillLock>,
+    /// Present only for quarantined agent skills — renders the
+    /// `learning n/5 · try it` hint that makes the invocation gate visible.
+    pub quarantine: Option<coco_types::SkillQuarantineWire>,
 }
 
 /// TUI-side mirror of `coco_types::SkillsDialogSource`. Pinned to
@@ -154,6 +157,7 @@ impl SkillsDialogState {
                     baseline: e.baseline,
                     pending,
                     lock: e.lock,
+                    quarantine: e.quarantine,
                 }
             })
             .collect();

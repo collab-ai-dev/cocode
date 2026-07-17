@@ -111,7 +111,7 @@ pub fn parse_memory_index(content: &str) -> MemoryIndex {
     MemoryIndex { entries }
 }
 
-fn parse_index_line(line: &str) -> Option<MemoryIndexEntry> {
+pub(crate) fn parse_index_line(line: &str) -> Option<MemoryIndexEntry> {
     let title_start = line.find('[')? + 1;
     let title_end = line[title_start..].find(']')? + title_start;
     let file_start = line[title_end..].find('(')? + title_end + 1;

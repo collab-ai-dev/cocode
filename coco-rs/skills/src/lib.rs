@@ -285,6 +285,9 @@ pub enum SkillAuthor {
     Review,
     /// The periodic curator (e.g. umbrella consolidation).
     Curator,
+    /// A user-initiated `/learn` review fork. Quarantine still applies (the
+    /// trust model does not relax because the user asked).
+    Manual,
 }
 
 impl SkillAuthor {
@@ -293,6 +296,7 @@ impl SkillAuthor {
         match self {
             Self::Review => "review",
             Self::Curator => "curator",
+            Self::Manual => "manual",
         }
     }
 }
@@ -998,6 +1002,28 @@ pub fn find_skill_md(dir: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Atomically flip the `disabled` frontmatter of a `SKILL.md`.
+///
+/// Pure extraction of the Curator's retire pattern: parse the existing
+/// frontmatter, set `disabled: <disabled>`, re-emit, and atomically write —
+/// preserving every other key (`coco_frontmatter::parse` + `emit_frontmatter`
+/// + `write_atomic`, all already deps). Used by the Curator (retire) and by
+/// `/journey` (retire / restore).
+///
+/// Blocking I/O — call from `spawn_blocking` in async contexts.
+pub fn set_skill_disabled(skill_md: &Path, disabled: bool) -> crate::Result<()> {
+    let content = std::fs::read_to_string(skill_md)?;
+    let fm = coco_frontmatter::parse(&content);
+    let mut obj = fm.data_to_json_map();
+    obj.insert(
+        frontmatter_keys::DISABLED.into(),
+        serde_json::Value::Bool(disabled),
+    );
+    let updated = coco_frontmatter::emit_frontmatter(&obj, &fm.content);
+    coco_utils_common::write_atomic(skill_md, updated)?;
+    Ok(())
 }
 
 /// Try to load a skill from a file, deduplicating by canonical path.

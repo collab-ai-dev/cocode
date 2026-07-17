@@ -1066,177 +1066,163 @@ async fn fixture_with_turn_gate_and_timeout(
 
 #[tokio::test]
 async fn shortcut_turns_emit_terminal_session_result_and_accounting() {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        let fixture = fixture().await;
-        let client = LocalServerClient::connect_local(&fixture.adapter);
-        let started = client
-            .session_start(&fixture.handler, SessionStartParams::default())
-            .await
-            .expect("start shortcut session");
-        let target = InteractiveTarget {
-            session_id: started.session_id.clone(),
-            surface_id: started.surface_id.clone(),
-        };
+    let fixture = fixture().await;
+    let client = LocalServerClient::connect_local(&fixture.adapter);
+    let started = client
+        .session_start(&fixture.handler, SessionStartParams::default())
+        .await
+        .expect("start shortcut session");
+    let target = InteractiveTarget {
+        session_id: started.session_id.clone(),
+        surface_id: started.surface_id.clone(),
+    };
 
-        let cost_prompt = coco_commands::handlers::cost::handler(String::new())
-            .await
-            .expect("cost sentinel");
-        let cost_turn = client
-            .turn_start(
-                &fixture.handler,
-                coco_types::TurnStartParams {
-                    target: target.clone(),
-                    prompt: cost_prompt,
-                    history_override: Vec::new(),
-                    images: Vec::new(),
-                    slash_metadata: None,
-                    model_selection: None,
-                    permission_mode: None,
-                    thinking_level: None,
-                    goal_continuation: false,
-                },
-            )
-            .await
-            .expect("start cost shortcut");
-        let cost_ended = wait_for_observed_outbound(&fixture, |event| {
-            event.session_id == started.session_id
-                && event.kind == "turn/ended"
-                && event.turn_id.as_ref() == Some(&cost_turn.turn_id)
-        })
-        .await;
-        assert_eq!(cost_ended.turn_session_result_total_turns, Some(1));
-        assert_eq!(
-            cost_ended.turn_session_result_stop_reason.as_deref(),
-            Some("shortcut_completed")
-        );
-
-        let compact_prompt = coco_commands::handlers::compact::handler(String::new())
-            .await
-            .expect("compact sentinel");
-        let compact_turn = client
-            .turn_start(
-                &fixture.handler,
-                coco_types::TurnStartParams {
-                    target: target.clone(),
-                    prompt: compact_prompt,
-                    history_override: Vec::new(),
-                    images: Vec::new(),
-                    slash_metadata: None,
-                    model_selection: None,
-                    permission_mode: None,
-                    thinking_level: None,
-                    goal_continuation: false,
-                },
-            )
-            .await
-            .expect("start compact shortcut");
-        let compact_ended = wait_for_observed_outbound(&fixture, |event| {
-            event.session_id == started.session_id
-                && event.kind == "turn/ended"
-                && event.turn_id.as_ref() == Some(&compact_turn.turn_id)
-        })
-        .await;
-        assert_eq!(compact_ended.turn_session_result_total_turns, Some(1));
-        assert_eq!(
-            compact_ended.turn_session_result_stop_reason.as_deref(),
-            Some("manual_compact_skipped")
-        );
-
-        client
-            .session_close(
-                &fixture.handler,
-                SessionCloseParams {
-                    target: SessionCloseTarget::Interactive { target },
-                },
-            )
-            .await
-            .expect("close shortcut session");
-        let final_result = fixture
-            .observed_outbound
-            .lock()
-            .await
-            .iter()
-            .rev()
-            .find(|event| event.session_id == started.session_id && event.kind == "session/result")
-            .cloned()
-            .expect("final session/result event");
-        assert_eq!(final_result.session_result_total_turns, Some(2));
-        assert_eq!(
-            final_result.session_result_stop_reason.as_deref(),
-            Some("manual_compact_skipped")
-        );
+    let cost_prompt = coco_commands::handlers::cost::handler(String::new())
+        .await
+        .expect("cost sentinel");
+    let cost_turn = client
+        .turn_start(
+            &fixture.handler,
+            coco_types::TurnStartParams {
+                target: target.clone(),
+                prompt: cost_prompt,
+                history_override: Vec::new(),
+                images: Vec::new(),
+                slash_metadata: None,
+                model_selection: None,
+                permission_mode: None,
+                thinking_level: None,
+                goal_continuation: false,
+            },
+        )
+        .await
+        .expect("start cost shortcut");
+    let cost_ended = wait_for_observed_outbound(&fixture, |event| {
+        event.session_id == started.session_id
+            && event.kind == "turn/ended"
+            && event.turn_id.as_ref() == Some(&cost_turn.turn_id)
     })
-    .await
-    .expect("shortcut terminal session_result regression timed out");
+    .await;
+    assert_eq!(cost_ended.turn_session_result_total_turns, Some(1));
+    assert_eq!(
+        cost_ended.turn_session_result_stop_reason.as_deref(),
+        Some("shortcut_completed")
+    );
+
+    let compact_prompt = coco_commands::handlers::compact::handler(String::new())
+        .await
+        .expect("compact sentinel");
+    let compact_turn = client
+        .turn_start(
+            &fixture.handler,
+            coco_types::TurnStartParams {
+                target: target.clone(),
+                prompt: compact_prompt,
+                history_override: Vec::new(),
+                images: Vec::new(),
+                slash_metadata: None,
+                model_selection: None,
+                permission_mode: None,
+                thinking_level: None,
+                goal_continuation: false,
+            },
+        )
+        .await
+        .expect("start compact shortcut");
+    let compact_ended = wait_for_observed_outbound(&fixture, |event| {
+        event.session_id == started.session_id
+            && event.kind == "turn/ended"
+            && event.turn_id.as_ref() == Some(&compact_turn.turn_id)
+    })
+    .await;
+    assert_eq!(compact_ended.turn_session_result_total_turns, Some(1));
+    assert_eq!(
+        compact_ended.turn_session_result_stop_reason.as_deref(),
+        Some("manual_compact_skipped")
+    );
+
+    client
+        .session_close(
+            &fixture.handler,
+            SessionCloseParams {
+                target: SessionCloseTarget::Interactive { target },
+            },
+        )
+        .await
+        .expect("close shortcut session");
+    let final_result = fixture
+        .observed_outbound
+        .lock()
+        .await
+        .iter()
+        .rev()
+        .find(|event| event.session_id == started.session_id && event.kind == "session/result")
+        .cloned()
+        .expect("final session/result event");
+    assert_eq!(final_result.session_result_total_turns, Some(2));
+    assert_eq!(
+        final_result.session_result_stop_reason.as_deref(),
+        Some("manual_compact_skipped")
+    );
 }
 
 #[tokio::test]
 async fn one_connection_holds_two_independent_interactive_authorities() {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        let fixture = fixture().await;
-        let client = LocalServerClient::connect_local(&fixture.adapter);
-        let first = client
-            .session_start(&fixture.handler, SessionStartParams::default())
-            .await
-            .expect("start A");
-        let second = client
-            .session_start(&fixture.handler, SessionStartParams::default())
-            .await
-            .expect("start B");
+    let fixture = fixture().await;
+    let client = LocalServerClient::connect_local(&fixture.adapter);
+    let first = client
+        .session_start(&fixture.handler, SessionStartParams::default())
+        .await
+        .expect("start A");
+    let second = client
+        .session_start(&fixture.handler, SessionStartParams::default())
+        .await
+        .expect("start B");
 
-        assert_ne!(first.session_id, second.session_id);
-        assert_ne!(first.surface_id, second.surface_id);
-        let live = fixture.server.list_live_sessions();
-        assert_eq!(live.len(), 2);
-        assert!(
-            live.iter()
-                .all(|summary| summary.surface_counts.attached == 1)
-        );
-    })
-    .await
-    .expect("interactive authority isolation timed out");
+    assert_ne!(first.session_id, second.session_id);
+    assert_ne!(first.surface_id, second.surface_id);
+    let live = fixture.server.list_live_sessions();
+    assert_eq!(live.len(), 2);
+    assert!(
+        live.iter()
+            .all(|summary| summary.surface_counts.attached == 1)
+    );
 }
 
 #[tokio::test]
 async fn session_start_initial_messages_seed_lifecycle_owned_history() {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        let fixture = fixture().await;
-        let client = LocalServerClient::connect_local(&fixture.adapter);
-        let started = client
-            .session_start(
-                &fixture.handler,
-                SessionStartParams {
-                    initial_messages: vec![coco_messages::create_user_message(
-                        "seeded-before-start",
-                    )],
-                    ..Default::default()
-                },
-            )
-            .await
-            .expect("start with initial messages");
+    let fixture = fixture().await;
+    let client = LocalServerClient::connect_local(&fixture.adapter);
+    let started = client
+        .session_start(
+            &fixture.handler,
+            SessionStartParams {
+                initial_messages: vec![coco_messages::create_user_message("seeded-before-start")],
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("start with initial messages");
 
-        let read = client
-            .session_read(
-                &fixture.handler,
-                SessionReadParams {
-                    target: coco_types::SessionTarget {
-                        session_id: started.session_id,
-                    },
-                    cursor: None,
-                    limit: None,
+    let read = client
+        .session_read(
+            &fixture.handler,
+            SessionReadParams {
+                target: coco_types::SessionTarget {
+                    session_id: started.session_id,
                 },
-            )
-            .await
-            .expect("read started session");
+                cursor: None,
+                limit: None,
+            },
+        )
+        .await
+        .expect("read started session");
 
-        assert!(
-            read.messages
-                .iter()
-                .any(|message| message.to_string().contains("seeded-before-start"))
-        );
-    })
-    .await
-    .expect("initial messages lifecycle seed timed out");
+    assert!(
+        read.messages
+            .iter()
+            .any(|message| message.to_string().contains("seeded-before-start"))
+    );
 }
 
 /// CS-1 new-only authority: `session/start` must never reach, reuse, or mutate
@@ -1244,62 +1230,58 @@ async fn session_start_initial_messages_seed_lifecycle_owned_history() {
 /// any runtime is built, config/accounting applied, or surface attached.
 #[tokio::test]
 async fn session_start_rejects_existing_live_id_without_mutation() {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        let fixture = fixture().await;
-        let client = LocalServerClient::connect_local(&fixture.adapter);
+    let fixture = fixture().await;
+    let client = LocalServerClient::connect_local(&fixture.adapter);
 
-        let chosen = coco_types::SessionId::generate();
-        let first = client
-            .session_start(
-                &fixture.handler,
-                SessionStartParams {
-                    session_id: Some(chosen.clone()),
-                    ..Default::default()
-                },
-            )
-            .await
-            .expect("first start reserves the fresh id");
-        assert_eq!(first.session_id, chosen);
+    let chosen = coco_types::SessionId::generate();
+    let first = client
+        .session_start(
+            &fixture.handler,
+            SessionStartParams {
+                session_id: Some(chosen.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("first start reserves the fresh id");
+    assert_eq!(first.session_id, chosen);
 
-        // A hostile second start naming the live id must not reuse the runtime,
-        // apply its model/permission override, reset accounting, or attach a
-        // second surface. The rejection happens before the load factory runs.
-        let conflict = client
-            .session_start(
-                &fixture.handler,
-                SessionStartParams {
-                    session_id: Some(chosen.clone()),
-                    model: Some("hostile-override".to_string()),
-                    ..Default::default()
-                },
-            )
-            .await
-            .expect_err("start against a live id must be rejected");
-        let ClientError::Server { data, .. } = conflict else {
-            panic!("expected a server error for duplicate start");
-        };
-        assert_eq!(
-            data.as_ref().and_then(|data| data.get("kind")),
-            Some(&serde_json::json!("session_start_slot_conflict"))
-        );
-        assert_eq!(
-            data.as_ref().and_then(|data| data.get("state")),
-            Some(&serde_json::json!("live"))
-        );
+    // A hostile second start naming the live id must not reuse the runtime,
+    // apply its model/permission override, reset accounting, or attach a
+    // second surface. The rejection happens before the load factory runs.
+    let conflict = client
+        .session_start(
+            &fixture.handler,
+            SessionStartParams {
+                session_id: Some(chosen.clone()),
+                model: Some("hostile-override".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("start against a live id must be rejected");
+    let ClientError::Server { data, .. } = conflict else {
+        panic!("expected a server error for duplicate start");
+    };
+    assert_eq!(
+        data.as_ref().and_then(|data| data.get("kind")),
+        Some(&serde_json::json!("session_start_slot_conflict"))
+    );
+    assert_eq!(
+        data.as_ref().and_then(|data| data.get("state")),
+        Some(&serde_json::json!("live"))
+    );
 
-        // The original session is untouched: exactly one live session with its
-        // single interactive surface; the duplicate start left no new slot and
-        // attached no second surface.
-        let live = fixture.server.list_live_sessions();
-        assert_eq!(live.len(), 1, "duplicate start must not create a slot");
-        assert_eq!(live[0].session_id, chosen);
-        assert_eq!(
-            live[0].surface_counts.attached, 1,
-            "duplicate start must not attach a second surface"
-        );
-    })
-    .await
-    .expect("duplicate start rejection timed out");
+    // The original session is untouched: exactly one live session with its
+    // single interactive surface; the duplicate start left no new slot and
+    // attached no second surface.
+    let live = fixture.server.list_live_sessions();
+    assert_eq!(live.len(), 1, "duplicate start must not create a slot");
+    assert_eq!(live[0].session_id, chosen);
+    assert_eq!(
+        live[0].surface_counts.attached, 1,
+        "duplicate start must not attach a second surface"
+    );
 }
 
 /// CS-1 §0.2: `session/start.json_schema` is the per-session home for structured
@@ -1307,66 +1289,65 @@ async fn session_start_rejects_existing_live_id_without_mutation() {
 /// registers the StructuredOutput tool without error).
 #[tokio::test]
 async fn session_start_accepts_json_schema_for_structured_output() {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        let fixture = fixture().await;
-        let client = LocalServerClient::connect_local(&fixture.adapter);
-        let started = client
-            .session_start(
-                &fixture.handler,
-                SessionStartParams {
-                    json_schema: Some(serde_json::json!({
-                        "type": "object",
-                        "properties": { "answer": { "type": "string" } },
-                        "required": ["answer"],
-                    })),
-                    ..Default::default()
-                },
-            )
-            .await
-            .expect("start with a valid json_schema succeeds");
+    let fixture = fixture().await;
+    let client = LocalServerClient::connect_local(&fixture.adapter);
+    let started = client
+        .session_start(
+            &fixture.handler,
+            SessionStartParams {
+                json_schema: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": { "answer": { "type": "string" } },
+                    "required": ["answer"],
+                })),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("start with a valid json_schema succeeds");
 
-        let live = fixture.server.list_live_sessions();
-        assert_eq!(live.len(), 1);
-        assert_eq!(live[0].session_id, started.session_id);
-    })
-    .await
-    .expect("json_schema start timed out");
+    let live = fixture.server.list_live_sessions();
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].session_id, started.session_id);
+}
+
+// Conformance is asserted **one surface per test** rather than looping every
+// surface inside a single test. Each surface builds real session runtimes, so
+// the looped form was ~3x the work of any one case — it approached nextest's
+// slow/terminate budget on a loaded machine and, when it failed, did not say
+// which surface broke. Split, the cases run in parallel and name their own
+// surface on failure.
+
+#[tokio::test]
+async fn lifecycle_conformance_local_typed_shares_start_read_close_contract() {
+    lifecycle_conformance_start_read_close(LifecycleConformanceSurface::LocalTyped).await;
 }
 
 #[tokio::test]
-async fn lifecycle_conformance_surfaces_share_start_read_close_contract() {
-    tokio::time::timeout(std::time::Duration::from_secs(20), async {
-        let mut surfaces = vec![
-            LifecycleConformanceSurface::LocalTyped,
-            LifecycleConformanceSurface::JsonRpc,
-        ];
-        #[cfg(unix)]
-        surfaces.push(LifecycleConformanceSurface::UnixSidecar);
+async fn lifecycle_conformance_json_rpc_shares_start_read_close_contract() {
+    lifecycle_conformance_start_read_close(LifecycleConformanceSurface::JsonRpc).await;
+}
 
-        for surface in surfaces {
-            lifecycle_conformance_start_read_close(surface).await;
-        }
-    })
-    .await
-    .expect("lifecycle conformance timed out");
+#[cfg(unix)]
+#[tokio::test]
+async fn lifecycle_conformance_unix_sidecar_shares_start_read_close_contract() {
+    lifecycle_conformance_start_read_close(LifecycleConformanceSurface::UnixSidecar).await;
 }
 
 #[tokio::test]
-async fn lifecycle_conformance_surfaces_share_resume_contract() {
-    tokio::time::timeout(std::time::Duration::from_secs(20), async {
-        let mut surfaces = vec![
-            LifecycleConformanceSurface::LocalTyped,
-            LifecycleConformanceSurface::JsonRpc,
-        ];
-        #[cfg(unix)]
-        surfaces.push(LifecycleConformanceSurface::UnixSidecar);
+async fn lifecycle_conformance_local_typed_shares_resume_contract() {
+    lifecycle_conformance_resume(LifecycleConformanceSurface::LocalTyped).await;
+}
 
-        for surface in surfaces {
-            lifecycle_conformance_resume(surface).await;
-        }
-    })
-    .await
-    .expect("lifecycle resume conformance timed out");
+#[tokio::test]
+async fn lifecycle_conformance_json_rpc_shares_resume_contract() {
+    lifecycle_conformance_resume(LifecycleConformanceSurface::JsonRpc).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn lifecycle_conformance_unix_sidecar_shares_resume_contract() {
+    lifecycle_conformance_resume(LifecycleConformanceSurface::UnixSidecar).await;
 }
 
 async fn lifecycle_conformance_start_read_close(surface: LifecycleConformanceSurface) {
@@ -1524,12 +1505,7 @@ async fn lifecycle_conformance_resume(surface: LifecycleConformanceSurface) {
 
 #[tokio::test]
 async fn one_connection_runs_and_interrupts_two_runtime_backed_turns_independently() {
-    tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        one_connection_runtime_isolation_scenario(),
-    )
-    .await
-    .expect("one-connection runtime isolation timed out");
+    one_connection_runtime_isolation_scenario().await;
 }
 
 async fn one_connection_runtime_isolation_scenario() {
@@ -1896,207 +1872,196 @@ async fn one_connection_runtime_isolation_scenario() {
 
 #[tokio::test]
 async fn two_initialized_connections_keep_profiles_runtimes_and_writers_isolated() {
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        let fixture = fixture().await;
-        let mut client_a = LocalServerClient::connect_local(&fixture.adapter);
-        let mut client_b = LocalServerClient::connect_local(&fixture.adapter);
-        let responder_a = spawn_client_mcp_responder(
-            client_a.take_server_requests(),
-            Arc::clone(&fixture.server),
-            "mcp-a",
-        );
-        let responder_b = spawn_client_mcp_responder(
-            client_b.take_server_requests(),
-            Arc::clone(&fixture.server),
-            "mcp-b",
-        );
-        let handler_a = fixture
-            .handler
-            .open(coco_app_server::ConnectionKey::generate());
-        let handler_b = fixture
-            .handler
-            .open(coco_app_server::ConnectionKey::generate());
-        let initialize = |profile: &str, tool: &str| InitializeParams {
-            client_mcp_servers: Some(vec![profile.replace("profile", "mcp")]),
-            agents: Some(std::collections::HashMap::from([(
-                format!("agent-{tool}"),
-                coco_types::ClientAgentDefinition {
-                    tools: Some(vec![tool.to_string()]),
-                    ..Default::default()
-                },
-            )])),
-            ..Default::default()
+    let fixture = fixture().await;
+    let mut client_a = LocalServerClient::connect_local(&fixture.adapter);
+    let mut client_b = LocalServerClient::connect_local(&fixture.adapter);
+    let responder_a = spawn_client_mcp_responder(
+        client_a.take_server_requests(),
+        Arc::clone(&fixture.server),
+        "mcp-a",
+    );
+    let responder_b = spawn_client_mcp_responder(
+        client_b.take_server_requests(),
+        Arc::clone(&fixture.server),
+        "mcp-b",
+    );
+    let handler_a = fixture
+        .handler
+        .open(coco_app_server::ConnectionKey::generate());
+    let handler_b = fixture
+        .handler
+        .open(coco_app_server::ConnectionKey::generate());
+    let initialize = |profile: &str, tool: &str| InitializeParams {
+        client_mcp_servers: Some(vec![profile.replace("profile", "mcp")]),
+        agents: Some(std::collections::HashMap::from([(
+            format!("agent-{tool}"),
+            coco_types::ClientAgentDefinition {
+                tools: Some(vec![tool.to_string()]),
+                ..Default::default()
+            },
+        )])),
+        ..Default::default()
+    };
+    client_a
+        .initialize(handler_a.as_ref(), initialize("profile-a", "Read"))
+        .await
+        .expect("initialize A");
+    client_b
+        .initialize(handler_b.as_ref(), initialize("profile-b", "Bash"))
+        .await
+        .expect("initialize B");
+    let cwd_a = fixture._home.path().join("initialized-a");
+    let cwd_b = fixture._home.path().join("initialized-b");
+    std::fs::create_dir_all(&cwd_a).expect("create A cwd");
+    std::fs::create_dir_all(&cwd_b).expect("create B cwd");
+    let first = client_a
+        .session_start(
+            handler_a.as_ref(),
+            SessionStartParams {
+                cwd: Some(cwd_a.to_string_lossy().into_owned()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("start A");
+    let second = client_b
+        .session_start(
+            handler_b.as_ref(),
+            SessionStartParams {
+                cwd: Some(cwd_b.to_string_lossy().into_owned()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("start B");
+    let make_turn =
+        |started: &coco_types::SessionStartResult, prompt: &str| coco_types::TurnStartParams {
+            target: InteractiveTarget {
+                session_id: started.session_id.clone(),
+                surface_id: started.surface_id.clone(),
+            },
+            prompt: prompt.to_string(),
+            history_override: Vec::new(),
+            images: Vec::new(),
+            slash_metadata: None,
+            model_selection: None,
+            permission_mode: None,
+            thinking_level: None,
+            goal_continuation: false,
         };
-        client_a
-            .initialize(handler_a.as_ref(), initialize("profile-a", "Read"))
-            .await
-            .expect("initialize A");
-        client_b
-            .initialize(handler_b.as_ref(), initialize("profile-b", "Bash"))
-            .await
-            .expect("initialize B");
-        let cwd_a = fixture._home.path().join("initialized-a");
-        let cwd_b = fixture._home.path().join("initialized-b");
-        std::fs::create_dir_all(&cwd_a).expect("create A cwd");
-        std::fs::create_dir_all(&cwd_b).expect("create B cwd");
-        let first = client_a
-            .session_start(
-                handler_a.as_ref(),
-                SessionStartParams {
-                    cwd: Some(cwd_a.to_string_lossy().into_owned()),
-                    ..Default::default()
-                },
-            )
-            .await
-            .expect("start A");
-        let second = client_b
-            .session_start(
-                handler_b.as_ref(),
-                SessionStartParams {
-                    cwd: Some(cwd_b.to_string_lossy().into_owned()),
-                    ..Default::default()
-                },
-            )
-            .await
-            .expect("start B");
-        let make_turn =
-            |started: &coco_types::SessionStartResult, prompt: &str| coco_types::TurnStartParams {
-                target: InteractiveTarget {
-                    session_id: started.session_id.clone(),
-                    surface_id: started.surface_id.clone(),
-                },
-                prompt: prompt.to_string(),
-                history_override: Vec::new(),
-                images: Vec::new(),
-                slash_metadata: None,
-                model_selection: None,
-                permission_mode: None,
-                thinking_level: None,
-                goal_continuation: false,
-            };
-        let (turn_a, turn_b) = tokio::join!(
-            client_a.turn_start(&fixture.handler, make_turn(&first, "profile-a")),
-            client_b.turn_start(&fixture.handler, make_turn(&second, "profile-b")),
-        );
-        assert_ne!(
-            turn_a.expect("turn A").turn_id,
-            turn_b.expect("turn B").turn_id
-        );
-        let runtime_a = fixture
-            .server
-            .registry()
-            .get(&first.session_id)
-            .expect("A runtime")
-            .into_session();
-        let runtime_b = fixture
-            .server
-            .registry()
-            .get(&second.session_id)
-            .expect("B runtime")
-            .into_session();
-        assert!(
-            runtime_a
-                .callback_requirements()
-                .hook_callback_ids
-                .is_empty()
-        );
-        assert!(
-            runtime_b
-                .callback_requirements()
-                .hook_callback_ids
-                .is_empty()
-        );
-        assert_eq!(runtime_a.original_cwd(), &cwd_a);
-        assert_eq!(runtime_b.original_cwd(), &cwd_b);
-        assert_eq!(
-            runtime_a.runtime_config().settings.merged.fast_mode,
-            Some(true)
-        );
-        assert_eq!(
-            runtime_b.runtime_config().settings.merged.fast_mode,
-            Some(false)
-        );
+    let (turn_a, turn_b) = tokio::join!(
+        client_a.turn_start(&fixture.handler, make_turn(&first, "profile-a")),
+        client_b.turn_start(&fixture.handler, make_turn(&second, "profile-b")),
+    );
+    assert_ne!(
+        turn_a.expect("turn A").turn_id,
+        turn_b.expect("turn B").turn_id
+    );
+    let runtime_a = fixture
+        .server
+        .registry()
+        .get(&first.session_id)
+        .expect("A runtime")
+        .into_session();
+    let runtime_b = fixture
+        .server
+        .registry()
+        .get(&second.session_id)
+        .expect("B runtime")
+        .into_session();
+    assert!(
         runtime_a
-            .append_messages_to_history(vec![coco_messages::create_user_message(
-                "profile-history-a",
-            )])
-            .await;
+            .callback_requirements()
+            .hook_callback_ids
+            .is_empty()
+    );
+    assert!(
         runtime_b
-            .append_messages_to_history(vec![coco_messages::create_user_message(
-                "profile-history-b",
-            )])
-            .await;
-        assert!(runtime_a.history_messages().await.iter().any(|message| {
-            coco_messages::wrapping::extract_text_from_message(message)
-                .contains("profile-history-a")
-        }));
-        assert!(!runtime_a.history_messages().await.iter().any(|message| {
-            coco_messages::wrapping::extract_text_from_message(message)
-                .contains("profile-history-b")
-        }));
-        assert!(
-            runtime_a
-                .tools()
-                .get_by_name("mcp__mcp-a__isolated_tool")
-                .is_some()
-        );
-        assert!(
-            runtime_b
-                .tools()
-                .get_by_name("mcp__mcp-b__isolated_tool")
-                .is_some()
-        );
-        assert!(
-            runtime_a
-                .tools()
-                .get_by_name("mcp__mcp-b__isolated_tool")
-                .is_none()
-        );
-        assert!(
-            runtime_b
-                .tools()
-                .get_by_name("mcp__mcp-a__isolated_tool")
-                .is_none()
-        );
-        let mut observations = fixture.turn_observations.lock().await;
-        for _ in 0..2 {
-            observations
-                .recv()
-                .await
-                .expect("initialized turn completes");
-        }
-        drop(observations);
-        client_a.disconnect();
-        client_b.disconnect();
-        let closer = LocalServerClient::connect_local(&fixture.adapter);
-        for session_id in [first.session_id, second.session_id] {
-            closer
-                .session_close(
-                    &fixture.handler,
-                    SessionCloseParams {
-                        target: SessionCloseTarget::Orphaned {
-                            target: coco_types::SessionTarget { session_id },
-                        },
+            .callback_requirements()
+            .hook_callback_ids
+            .is_empty()
+    );
+    assert_eq!(runtime_a.original_cwd(), &cwd_a);
+    assert_eq!(runtime_b.original_cwd(), &cwd_b);
+    assert_eq!(
+        runtime_a.runtime_config().settings.merged.fast_mode,
+        Some(true)
+    );
+    assert_eq!(
+        runtime_b.runtime_config().settings.merged.fast_mode,
+        Some(false)
+    );
+    runtime_a
+        .append_messages_to_history(vec![coco_messages::create_user_message(
+            "profile-history-a",
+        )])
+        .await;
+    runtime_b
+        .append_messages_to_history(vec![coco_messages::create_user_message(
+            "profile-history-b",
+        )])
+        .await;
+    assert!(runtime_a.history_messages().await.iter().any(|message| {
+        coco_messages::wrapping::extract_text_from_message(message).contains("profile-history-a")
+    }));
+    assert!(!runtime_a.history_messages().await.iter().any(|message| {
+        coco_messages::wrapping::extract_text_from_message(message).contains("profile-history-b")
+    }));
+    assert!(
+        runtime_a
+            .tools()
+            .get_by_name("mcp__mcp-a__isolated_tool")
+            .is_some()
+    );
+    assert!(
+        runtime_b
+            .tools()
+            .get_by_name("mcp__mcp-b__isolated_tool")
+            .is_some()
+    );
+    assert!(
+        runtime_a
+            .tools()
+            .get_by_name("mcp__mcp-b__isolated_tool")
+            .is_none()
+    );
+    assert!(
+        runtime_b
+            .tools()
+            .get_by_name("mcp__mcp-a__isolated_tool")
+            .is_none()
+    );
+    let mut observations = fixture.turn_observations.lock().await;
+    for _ in 0..2 {
+        observations
+            .recv()
+            .await
+            .expect("initialized turn completes");
+    }
+    drop(observations);
+    client_a.disconnect();
+    client_b.disconnect();
+    let closer = LocalServerClient::connect_local(&fixture.adapter);
+    for session_id in [first.session_id, second.session_id] {
+        closer
+            .session_close(
+                &fixture.handler,
+                SessionCloseParams {
+                    target: SessionCloseTarget::Orphaned {
+                        target: coco_types::SessionTarget { session_id },
                     },
-                )
-                .await
-                .expect("close initialized session");
-        }
-        responder_a.await.expect("MCP responder A exits");
-        responder_b.await.expect("MCP responder B exits");
-    })
-    .await
-    .expect("initialized connection isolation timed out");
+                },
+            )
+            .await
+            .expect("close initialized session");
+    }
+    responder_a.await.expect("MCP responder A exits");
+    responder_b.await.expect("MCP responder B exits");
 }
 
 #[tokio::test]
 async fn cross_connection_surface_authority_is_rejected_without_mutation() {
-    tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        cross_connection_surface_authority_scenario(),
-    )
-    .await
-    .expect("cross-connection authority scenario timed out");
+    cross_connection_surface_authority_scenario().await;
 }
 
 async fn cross_connection_surface_authority_scenario() {
@@ -2128,12 +2093,7 @@ async fn cross_connection_surface_authority_scenario() {
 
 #[tokio::test]
 async fn mismatched_session_surface_pair_is_rejected_with_stable_kind() {
-    tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        mismatched_session_surface_scenario(),
-    )
-    .await
-    .expect("mismatched session/surface scenario timed out");
+    mismatched_session_surface_scenario().await;
 }
 
 async fn mismatched_session_surface_scenario() {
@@ -2169,12 +2129,7 @@ async fn mismatched_session_surface_scenario() {
 
 #[tokio::test]
 async fn passive_surface_cannot_issue_interactive_mutation() {
-    tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        passive_surface_mutation_scenario(),
-    )
-    .await
-    .expect("passive mutation scenario timed out");
+    passive_surface_mutation_scenario().await;
 }
 
 async fn passive_surface_mutation_scenario() {
@@ -2210,12 +2165,7 @@ async fn passive_surface_mutation_scenario() {
 
 #[tokio::test]
 async fn targeted_project_and_local_config_writes_cannot_modify_the_sibling_project() {
-    tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        targeted_config_write_scenario(),
-    )
-    .await
-    .expect("targeted config-write scenario timed out");
+    targeted_config_write_scenario().await;
 }
 
 async fn targeted_config_write_scenario() {
@@ -2305,12 +2255,7 @@ async fn targeted_config_write_scenario() {
 
 #[tokio::test]
 async fn disconnected_session_is_closed_through_explicit_orphan_authority() {
-    tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        disconnected_orphan_lifecycle_scenario(),
-    )
-    .await
-    .expect("disconnected orphan lifecycle scenario timed out");
+    disconnected_orphan_lifecycle_scenario().await;
 }
 
 async fn disconnected_orphan_lifecycle_scenario() {
@@ -2403,704 +2348,664 @@ async fn disconnected_orphan_lifecycle_scenario() {
 
 #[tokio::test]
 async fn close_timeout_aborts_active_turn_and_returns_structured_error() {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        let (turn_drop_tx, turn_drop_rx) = tokio::sync::oneshot::channel();
-        let gate = Arc::new(TurnGate {
-            started: tokio::sync::Barrier::new(2),
-            release: tokio::sync::Semaphore::new(0),
-            ignore_cancel: true,
-            result_emission: TurnResultEmission::None,
-            drop_signal: Some(tokio::sync::Mutex::new(Some(turn_drop_tx))),
-        });
-        let fixture = fixture_with_turn_gate_and_timeout(
-            Some(Arc::clone(&gate)),
-            std::time::Duration::from_millis(20),
+    let (turn_drop_tx, turn_drop_rx) = tokio::sync::oneshot::channel();
+    let gate = Arc::new(TurnGate {
+        started: tokio::sync::Barrier::new(2),
+        release: tokio::sync::Semaphore::new(0),
+        ignore_cancel: true,
+        result_emission: TurnResultEmission::None,
+        drop_signal: Some(tokio::sync::Mutex::new(Some(turn_drop_tx))),
+    });
+    let fixture = fixture_with_turn_gate_and_timeout(
+        Some(Arc::clone(&gate)),
+        std::time::Duration::from_millis(20),
+    )
+    .await;
+    let client = LocalServerClient::connect_local(&fixture.adapter);
+    let started = client
+        .session_start(&fixture.handler, SessionStartParams::default())
+        .await
+        .expect("start timeout session");
+    let target = InteractiveTarget {
+        session_id: started.session_id.clone(),
+        surface_id: started.surface_id.clone(),
+    };
+    client
+        .turn_start(
+            &fixture.handler,
+            coco_types::TurnStartParams {
+                target: target.clone(),
+                prompt: "hang until close timeout".to_string(),
+                history_override: Vec::new(),
+                images: Vec::new(),
+                slash_metadata: None,
+                model_selection: None,
+                permission_mode: None,
+                thinking_level: None,
+                goal_continuation: false,
+            },
         )
-        .await;
-        let client = LocalServerClient::connect_local(&fixture.adapter);
-        let started = client
-            .session_start(&fixture.handler, SessionStartParams::default())
-            .await
-            .expect("start timeout session");
-        let target = InteractiveTarget {
-            session_id: started.session_id.clone(),
-            surface_id: started.surface_id.clone(),
-        };
-        client
-            .turn_start(
-                &fixture.handler,
-                coco_types::TurnStartParams {
-                    target: target.clone(),
-                    prompt: "hang until close timeout".to_string(),
-                    history_override: Vec::new(),
-                    images: Vec::new(),
-                    slash_metadata: None,
-                    model_selection: None,
-                    permission_mode: None,
-                    thinking_level: None,
-                    goal_continuation: false,
-                },
-            )
-            .await
-            .expect("start hanging turn");
-        gate.started.wait().await;
+        .await
+        .expect("start hanging turn");
+    gate.started.wait().await;
 
-        let error = client
-            .session_close(
-                &fixture.handler,
-                SessionCloseParams {
-                    target: SessionCloseTarget::Interactive { target },
-                },
-            )
-            .await
-            .expect_err("close must surface drain timeout");
-        let ClientError::Server { data, .. } = error else {
-            panic!("expected typed server error");
-        };
-        let data = data.expect("structured close timeout data");
-        assert_eq!(
-            data.get("kind"),
-            Some(&serde_json::json!("session_close_timeout"))
-        );
-        assert_eq!(data.get("task"), Some(&serde_json::json!("turn_task")));
-        assert_eq!(
-            data.get("session_id"),
-            Some(&serde_json::json!(started.session_id.clone()))
-        );
-        assert_eq!(data.get("timeout_ms"), Some(&serde_json::json!(20)));
+    let error = client
+        .session_close(
+            &fixture.handler,
+            SessionCloseParams {
+                target: SessionCloseTarget::Interactive { target },
+            },
+        )
+        .await
+        .expect_err("close must surface drain timeout");
+    let ClientError::Server { data, .. } = error else {
+        panic!("expected typed server error");
+    };
+    let data = data.expect("structured close timeout data");
+    assert_eq!(
+        data.get("kind"),
+        Some(&serde_json::json!("session_close_timeout"))
+    );
+    assert_eq!(data.get("task"), Some(&serde_json::json!("turn_task")));
+    assert_eq!(
+        data.get("session_id"),
+        Some(&serde_json::json!(started.session_id.clone()))
+    );
+    assert_eq!(data.get("timeout_ms"), Some(&serde_json::json!(20)));
 
-        turn_drop_rx.await.expect("timed-out turn task aborted");
-        assert!(fixture.server.registry().get(&started.session_id).is_none());
-        assert!(fixture.server.list_live_sessions().is_empty());
-    })
-    .await
-    .expect("close timeout regression timed out");
+    turn_drop_rx.await.expect("timed-out turn task aborted");
+    assert!(fixture.server.registry().get(&started.session_id).is_none());
+    assert!(fixture.server.list_live_sessions().is_empty());
 }
 
 #[tokio::test]
 async fn successful_close_has_no_late_session_events_after_completion() {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        let gate = Arc::new(TurnGate {
-            started: tokio::sync::Barrier::new(2),
-            release: tokio::sync::Semaphore::new(0),
-            ignore_cancel: false,
-            result_emission: TurnResultEmission::None,
-            drop_signal: None,
-        });
-        let fixture = fixture_with_turn_gate(Some(Arc::clone(&gate))).await;
-        let client = LocalServerClient::connect_local(&fixture.adapter);
-        let started = client
-            .session_start(&fixture.handler, SessionStartParams::default())
-            .await
-            .expect("start close session");
-        let target = InteractiveTarget {
-            session_id: started.session_id.clone(),
-            surface_id: started.surface_id.clone(),
-        };
+    let gate = Arc::new(TurnGate {
+        started: tokio::sync::Barrier::new(2),
+        release: tokio::sync::Semaphore::new(0),
+        ignore_cancel: false,
+        result_emission: TurnResultEmission::None,
+        drop_signal: None,
+    });
+    let fixture = fixture_with_turn_gate(Some(Arc::clone(&gate))).await;
+    let client = LocalServerClient::connect_local(&fixture.adapter);
+    let started = client
+        .session_start(&fixture.handler, SessionStartParams::default())
+        .await
+        .expect("start close session");
+    let target = InteractiveTarget {
+        session_id: started.session_id.clone(),
+        surface_id: started.surface_id.clone(),
+    };
 
-        client
-            .turn_start(
-                &fixture.handler,
-                coco_types::TurnStartParams {
-                    target: target.clone(),
-                    prompt: "close should drain this turn".to_string(),
-                    history_override: Vec::new(),
-                    images: Vec::new(),
-                    slash_metadata: None,
-                    model_selection: None,
-                    permission_mode: None,
-                    thinking_level: None,
-                    goal_continuation: false,
-                },
-            )
-            .await
-            .expect("start turn");
-        gate.started.wait().await;
-
-        client
-            .session_close(
-                &fixture.handler,
-                SessionCloseParams {
-                    target: SessionCloseTarget::Interactive { target },
-                },
-            )
-            .await
-            .expect("close session");
-
-        let observation = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            fixture.turn_observations.lock().await.recv(),
+    client
+        .turn_start(
+            &fixture.handler,
+            coco_types::TurnStartParams {
+                target: target.clone(),
+                prompt: "close should drain this turn".to_string(),
+                history_override: Vec::new(),
+                images: Vec::new(),
+                slash_metadata: None,
+                model_selection: None,
+                permission_mode: None,
+                thinking_level: None,
+                goal_continuation: false,
+            },
         )
         .await
-        .expect("turn observation timeout")
-        .expect("turn observation");
-        assert!(
-            observation.cancelled,
-            "interactive close must cancel the active turn before completing"
-        );
+        .expect("start turn");
+    gate.started.wait().await;
 
-        let events_after_close = fixture.observed_outbound.lock().await.clone();
-        assert!(
-            events_after_close
-                .iter()
-                .any(|event| event.session_id == started.session_id && event.kind == "turn/ended"),
-            "close should drain the active turn before returning"
-        );
-        assert!(
-            events_after_close
-                .iter()
-                .any(|event| event.session_id == started.session_id
-                    && event.kind == "session/result"),
-            "close should emit the final session/result before returning"
-        );
-        let count_after_close = events_after_close
-            .iter()
-            .filter(|event| event.session_id == started.session_id)
-            .count();
-        drop(events_after_close);
+    client
+        .session_close(
+            &fixture.handler,
+            SessionCloseParams {
+                target: SessionCloseTarget::Interactive { target },
+            },
+        )
+        .await
+        .expect("close session");
 
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let final_count = fixture
-            .observed_outbound
-            .lock()
-            .await
-            .iter()
-            .filter(|event| event.session_id == started.session_id)
-            .count();
-        assert_eq!(
-            final_count, count_after_close,
-            "session close returned before all session events were drained"
-        );
-        assert!(fixture.server.registry().get(&started.session_id).is_none());
-        assert!(fixture.server.list_live_sessions().is_empty());
-    })
+    let observation = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        fixture.turn_observations.lock().await.recv(),
+    )
     .await
-    .expect("no-late-session-events regression timed out");
+    .expect("turn observation timeout")
+    .expect("turn observation");
+    assert!(
+        observation.cancelled,
+        "interactive close must cancel the active turn before completing"
+    );
+
+    let events_after_close = fixture.observed_outbound.lock().await.clone();
+    assert!(
+        events_after_close
+            .iter()
+            .any(|event| event.session_id == started.session_id && event.kind == "turn/ended"),
+        "close should drain the active turn before returning"
+    );
+    assert!(
+        events_after_close
+            .iter()
+            .any(|event| event.session_id == started.session_id && event.kind == "session/result"),
+        "close should emit the final session/result before returning"
+    );
+    let count_after_close = events_after_close
+        .iter()
+        .filter(|event| event.session_id == started.session_id)
+        .count();
+    drop(events_after_close);
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let final_count = fixture
+        .observed_outbound
+        .lock()
+        .await
+        .iter()
+        .filter(|event| event.session_id == started.session_id)
+        .count();
+    assert_eq!(
+        final_count, count_after_close,
+        "session close returned before all session events were drained"
+    );
+    assert!(fixture.server.registry().get(&started.session_id).is_none());
+    assert!(fixture.server.list_live_sessions().is_empty());
 }
 
 #[tokio::test]
 async fn close_waits_for_inflight_turn_result_before_final_session_result() {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        let gate = Arc::new(TurnGate {
-            started: tokio::sync::Barrier::new(2),
-            release: tokio::sync::Semaphore::new(0),
-            ignore_cancel: false,
-            result_emission: TurnResultEmission::Standalone,
-            drop_signal: None,
-        });
-        let fixture = fixture_with_turn_gate(Some(Arc::clone(&gate))).await;
-        let client = LocalServerClient::connect_local(&fixture.adapter);
-        let started = client
-            .session_start(&fixture.handler, SessionStartParams::default())
-            .await
-            .expect("start accounting session");
-        let target = InteractiveTarget {
-            session_id: started.session_id.clone(),
-            surface_id: started.surface_id.clone(),
-        };
+    let gate = Arc::new(TurnGate {
+        started: tokio::sync::Barrier::new(2),
+        release: tokio::sync::Semaphore::new(0),
+        ignore_cancel: false,
+        result_emission: TurnResultEmission::Standalone,
+        drop_signal: None,
+    });
+    let fixture = fixture_with_turn_gate(Some(Arc::clone(&gate))).await;
+    let client = LocalServerClient::connect_local(&fixture.adapter);
+    let started = client
+        .session_start(&fixture.handler, SessionStartParams::default())
+        .await
+        .expect("start accounting session");
+    let target = InteractiveTarget {
+        session_id: started.session_id.clone(),
+        surface_id: started.surface_id.clone(),
+    };
 
-        client
-            .turn_start(
-                &fixture.handler,
-                coco_types::TurnStartParams {
-                    target: target.clone(),
-                    prompt: "close should include in-flight accounting".to_string(),
-                    history_override: Vec::new(),
-                    images: Vec::new(),
-                    slash_metadata: None,
-                    model_selection: None,
-                    permission_mode: None,
-                    thinking_level: None,
-                    goal_continuation: false,
-                },
-            )
-            .await
-            .expect("start turn");
-        gate.started.wait().await;
+    client
+        .turn_start(
+            &fixture.handler,
+            coco_types::TurnStartParams {
+                target: target.clone(),
+                prompt: "close should include in-flight accounting".to_string(),
+                history_override: Vec::new(),
+                images: Vec::new(),
+                slash_metadata: None,
+                model_selection: None,
+                permission_mode: None,
+                thinking_level: None,
+                goal_continuation: false,
+            },
+        )
+        .await
+        .expect("start turn");
+    gate.started.wait().await;
 
-        client
-            .session_close(
-                &fixture.handler,
-                SessionCloseParams {
-                    target: SessionCloseTarget::Interactive { target },
-                },
-            )
-            .await
-            .expect("close session");
+    client
+        .session_close(
+            &fixture.handler,
+            SessionCloseParams {
+                target: SessionCloseTarget::Interactive { target },
+            },
+        )
+        .await
+        .expect("close session");
 
-        let final_result = fixture
-            .observed_outbound
-            .lock()
-            .await
-            .iter()
-            .rev()
-            .find(|event| event.session_id == started.session_id && event.kind == "session/result")
-            .cloned()
-            .expect("final session/result event");
-        assert_eq!(final_result.session_result_total_turns, Some(1));
-        assert_eq!(final_result.session_result_input_tokens, Some(7));
-        assert_eq!(final_result.session_result_output_tokens, Some(11));
-        assert_eq!(
-            final_result.session_result_stop_reason.as_deref(),
-            Some("interrupted")
-        );
-    })
-    .await
-    .expect("close in-flight accounting regression timed out");
+    let final_result = fixture
+        .observed_outbound
+        .lock()
+        .await
+        .iter()
+        .rev()
+        .find(|event| event.session_id == started.session_id && event.kind == "session/result")
+        .cloned()
+        .expect("final session/result event");
+    assert_eq!(final_result.session_result_total_turns, Some(1));
+    assert_eq!(final_result.session_result_input_tokens, Some(7));
+    assert_eq!(final_result.session_result_output_tokens, Some(11));
+    assert_eq!(
+        final_result.session_result_stop_reason.as_deref(),
+        Some("interrupted")
+    );
 }
 
 #[tokio::test]
 async fn embedded_turn_result_is_accounted_without_standalone_session_result() {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        let gate = Arc::new(TurnGate {
-            started: tokio::sync::Barrier::new(2),
-            release: tokio::sync::Semaphore::new(0),
-            ignore_cancel: false,
-            result_emission: TurnResultEmission::Embedded,
-            drop_signal: None,
-        });
-        let fixture = fixture_with_turn_gate(Some(Arc::clone(&gate))).await;
-        let client = LocalServerClient::connect_local(&fixture.adapter);
-        let started = client
-            .session_start(&fixture.handler, SessionStartParams::default())
-            .await
-            .expect("start embedded-result session");
-        let target = InteractiveTarget {
-            session_id: started.session_id.clone(),
-            surface_id: started.surface_id.clone(),
-        };
+    let gate = Arc::new(TurnGate {
+        started: tokio::sync::Barrier::new(2),
+        release: tokio::sync::Semaphore::new(0),
+        ignore_cancel: false,
+        result_emission: TurnResultEmission::Embedded,
+        drop_signal: None,
+    });
+    let fixture = fixture_with_turn_gate(Some(Arc::clone(&gate))).await;
+    let client = LocalServerClient::connect_local(&fixture.adapter);
+    let started = client
+        .session_start(&fixture.handler, SessionStartParams::default())
+        .await
+        .expect("start embedded-result session");
+    let target = InteractiveTarget {
+        session_id: started.session_id.clone(),
+        surface_id: started.surface_id.clone(),
+    };
 
-        let turn = client
-            .turn_start(
-                &fixture.handler,
-                coco_types::TurnStartParams {
-                    target: target.clone(),
-                    prompt: "embedded result only".to_string(),
-                    history_override: Vec::new(),
-                    images: Vec::new(),
-                    slash_metadata: None,
-                    model_selection: None,
-                    permission_mode: None,
-                    thinking_level: None,
-                    goal_continuation: false,
-                },
-            )
-            .await
-            .expect("start embedded-result turn");
-        gate.started.wait().await;
-        gate.release.add_permits(1);
+    let turn = client
+        .turn_start(
+            &fixture.handler,
+            coco_types::TurnStartParams {
+                target: target.clone(),
+                prompt: "embedded result only".to_string(),
+                history_override: Vec::new(),
+                images: Vec::new(),
+                slash_metadata: None,
+                model_selection: None,
+                permission_mode: None,
+                thinking_level: None,
+                goal_continuation: false,
+            },
+        )
+        .await
+        .expect("start embedded-result turn");
+    gate.started.wait().await;
+    gate.release.add_permits(1);
 
-        let ended = wait_for_observed_outbound(&fixture, |event| {
-            event.session_id == started.session_id
-                && event.kind == "turn/ended"
-                && event.turn_id.as_ref() == Some(&turn.turn_id)
-        })
-        .await;
-        assert_eq!(ended.turn_session_result_total_turns, Some(1));
-        assert_eq!(
-            ended.turn_session_result_stop_reason.as_deref(),
-            Some("interrupted")
-        );
-        assert!(
-            fixture.observed_outbound.lock().await.iter().all(|event| {
-                event.session_id != started.session_id || event.kind != "session/result"
-            }),
-            "embedded per-turn result must not require a standalone session/result event"
-        );
-
-        client
-            .session_close(
-                &fixture.handler,
-                SessionCloseParams {
-                    target: SessionCloseTarget::Interactive { target },
-                },
-            )
-            .await
-            .expect("close embedded-result session");
-        let final_result = fixture
-            .observed_outbound
-            .lock()
-            .await
-            .iter()
-            .rev()
-            .find(|event| event.session_id == started.session_id && event.kind == "session/result")
-            .cloned()
-            .expect("final session/result event");
-        assert_eq!(final_result.session_result_total_turns, Some(1));
-        assert_eq!(final_result.session_result_input_tokens, Some(7));
-        assert_eq!(final_result.session_result_output_tokens, Some(11));
-        assert_eq!(
-            final_result.session_result_stop_reason.as_deref(),
-            Some("interrupted")
-        );
+    let ended = wait_for_observed_outbound(&fixture, |event| {
+        event.session_id == started.session_id
+            && event.kind == "turn/ended"
+            && event.turn_id.as_ref() == Some(&turn.turn_id)
     })
-    .await
-    .expect("embedded-result accounting regression timed out");
+    .await;
+    assert_eq!(ended.turn_session_result_total_turns, Some(1));
+    assert_eq!(
+        ended.turn_session_result_stop_reason.as_deref(),
+        Some("interrupted")
+    );
+    assert!(
+        fixture.observed_outbound.lock().await.iter().all(|event| {
+            event.session_id != started.session_id || event.kind != "session/result"
+        }),
+        "embedded per-turn result must not require a standalone session/result event"
+    );
+
+    client
+        .session_close(
+            &fixture.handler,
+            SessionCloseParams {
+                target: SessionCloseTarget::Interactive { target },
+            },
+        )
+        .await
+        .expect("close embedded-result session");
+    let final_result = fixture
+        .observed_outbound
+        .lock()
+        .await
+        .iter()
+        .rev()
+        .find(|event| event.session_id == started.session_id && event.kind == "session/result")
+        .cloned()
+        .expect("final session/result event");
+    assert_eq!(final_result.session_result_total_turns, Some(1));
+    assert_eq!(final_result.session_result_input_tokens, Some(7));
+    assert_eq!(final_result.session_result_output_tokens, Some(11));
+    assert_eq!(
+        final_result.session_result_stop_reason.as_deref(),
+        Some("interrupted")
+    );
 }
 
 #[tokio::test]
 async fn embedded_and_standalone_turn_result_is_accounted_once() {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        let gate = Arc::new(TurnGate {
-            started: tokio::sync::Barrier::new(2),
-            release: tokio::sync::Semaphore::new(0),
-            ignore_cancel: false,
-            result_emission: TurnResultEmission::Both,
-            drop_signal: None,
-        });
-        let fixture = fixture_with_turn_gate(Some(Arc::clone(&gate))).await;
-        let client = LocalServerClient::connect_local(&fixture.adapter);
-        let started = client
-            .session_start(&fixture.handler, SessionStartParams::default())
-            .await
-            .expect("start duplicate-result session");
-        let target = InteractiveTarget {
-            session_id: started.session_id.clone(),
-            surface_id: started.surface_id.clone(),
-        };
+    let gate = Arc::new(TurnGate {
+        started: tokio::sync::Barrier::new(2),
+        release: tokio::sync::Semaphore::new(0),
+        ignore_cancel: false,
+        result_emission: TurnResultEmission::Both,
+        drop_signal: None,
+    });
+    let fixture = fixture_with_turn_gate(Some(Arc::clone(&gate))).await;
+    let client = LocalServerClient::connect_local(&fixture.adapter);
+    let started = client
+        .session_start(&fixture.handler, SessionStartParams::default())
+        .await
+        .expect("start duplicate-result session");
+    let target = InteractiveTarget {
+        session_id: started.session_id.clone(),
+        surface_id: started.surface_id.clone(),
+    };
 
-        let turn = client
-            .turn_start(
-                &fixture.handler,
-                coco_types::TurnStartParams {
-                    target: target.clone(),
-                    prompt: "embedded and standalone result".to_string(),
-                    history_override: Vec::new(),
-                    images: Vec::new(),
-                    slash_metadata: None,
-                    model_selection: None,
-                    permission_mode: None,
-                    thinking_level: None,
-                    goal_continuation: false,
-                },
-            )
-            .await
-            .expect("start duplicate-result turn");
-        gate.started.wait().await;
-        gate.release.add_permits(1);
+    let turn = client
+        .turn_start(
+            &fixture.handler,
+            coco_types::TurnStartParams {
+                target: target.clone(),
+                prompt: "embedded and standalone result".to_string(),
+                history_override: Vec::new(),
+                images: Vec::new(),
+                slash_metadata: None,
+                model_selection: None,
+                permission_mode: None,
+                thinking_level: None,
+                goal_continuation: false,
+            },
+        )
+        .await
+        .expect("start duplicate-result turn");
+    gate.started.wait().await;
+    gate.release.add_permits(1);
 
-        let ended = wait_for_observed_outbound(&fixture, |event| {
-            event.session_id == started.session_id
-                && event.kind == "turn/ended"
-                && event.turn_id.as_ref() == Some(&turn.turn_id)
-        })
-        .await;
-        assert_eq!(ended.turn_session_result_total_turns, Some(1));
-
-        client
-            .session_close(
-                &fixture.handler,
-                SessionCloseParams {
-                    target: SessionCloseTarget::Interactive { target },
-                },
-            )
-            .await
-            .expect("close duplicate-result session");
-        let final_result = fixture
-            .observed_outbound
-            .lock()
-            .await
-            .iter()
-            .rev()
-            .find(|event| event.session_id == started.session_id && event.kind == "session/result")
-            .cloned()
-            .expect("final session/result event");
-        assert_eq!(
-            final_result.session_result_total_turns,
-            Some(1),
-            "embedded plus standalone per-turn result must not double-count"
-        );
-        assert_eq!(final_result.session_result_input_tokens, Some(7));
-        assert_eq!(final_result.session_result_output_tokens, Some(11));
+    let ended = wait_for_observed_outbound(&fixture, |event| {
+        event.session_id == started.session_id
+            && event.kind == "turn/ended"
+            && event.turn_id.as_ref() == Some(&turn.turn_id)
     })
-    .await
-    .expect("duplicate-result accounting regression timed out");
+    .await;
+    assert_eq!(ended.turn_session_result_total_turns, Some(1));
+
+    client
+        .session_close(
+            &fixture.handler,
+            SessionCloseParams {
+                target: SessionCloseTarget::Interactive { target },
+            },
+        )
+        .await
+        .expect("close duplicate-result session");
+    let final_result = fixture
+        .observed_outbound
+        .lock()
+        .await
+        .iter()
+        .rev()
+        .find(|event| event.session_id == started.session_id && event.kind == "session/result")
+        .cloned()
+        .expect("final session/result event");
+    assert_eq!(
+        final_result.session_result_total_turns,
+        Some(1),
+        "embedded plus standalone per-turn result must not double-count"
+    );
+    assert_eq!(final_result.session_result_input_tokens, Some(7));
+    assert_eq!(final_result.session_result_output_tokens, Some(11));
 }
 
 #[tokio::test]
 async fn delete_rejects_live_session_and_close_preserves_transcript_until_delete() {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        let fixture = fixture().await;
-        let client = LocalServerClient::connect_local(&fixture.adapter);
-        let started = client
-            .session_start(&fixture.handler, SessionStartParams::default())
-            .await
-            .expect("start deletable session");
-        let runtime = fixture
-            .server
-            .registry()
-            .get(&started.session_id)
-            .expect("live runtime")
-            .into_session();
-        let transcript_store = runtime
-            .session_manager_handle()
-            .store_for(runtime.original_cwd());
-        transcript_store
-            .append_message(
-                started.session_id.as_str(),
-                &coco_session::storage::TranscriptEntry {
-                    entry_type: "user".to_string(),
-                    uuid: "delete-seed".to_string(),
-                    parent_uuid: None,
-                    logical_parent_uuid: None,
-                    session_id: Some(started.session_id.clone()),
-                    cwd: runtime.original_cwd().to_string_lossy().into_owned(),
-                    timestamp: "2026-07-13T00:00:00Z".to_string(),
-                    version: None,
-                    git_branch: None,
-                    is_sidechain: false,
-                    agent_id: None,
-                    message: Some(serde_json::json!({"role":"user","content":"seed"})),
-                    usage: None,
-                    model: None,
-                    request_id: None,
-                    cost_usd: None,
-                    extra: serde_json::Map::new(),
-                },
-            )
-            .expect("seed transcript");
-        let transcript_path = transcript_store
-            .transcript_path(started.session_id.as_str())
-            .expect("disk transcript path");
-        let bytes_before_close = std::fs::read(&transcript_path).expect("read seeded transcript");
+    let fixture = fixture().await;
+    let client = LocalServerClient::connect_local(&fixture.adapter);
+    let started = client
+        .session_start(&fixture.handler, SessionStartParams::default())
+        .await
+        .expect("start deletable session");
+    let runtime = fixture
+        .server
+        .registry()
+        .get(&started.session_id)
+        .expect("live runtime")
+        .into_session();
+    let transcript_store = runtime
+        .session_manager_handle()
+        .store_for(runtime.original_cwd());
+    transcript_store
+        .append_message(
+            started.session_id.as_str(),
+            &coco_session::storage::TranscriptEntry {
+                entry_type: "user".to_string(),
+                uuid: "delete-seed".to_string(),
+                parent_uuid: None,
+                logical_parent_uuid: None,
+                session_id: Some(started.session_id.clone()),
+                cwd: runtime.original_cwd().to_string_lossy().into_owned(),
+                timestamp: "2026-07-13T00:00:00Z".to_string(),
+                version: None,
+                git_branch: None,
+                is_sidechain: false,
+                agent_id: None,
+                message: Some(serde_json::json!({"role":"user","content":"seed"})),
+                usage: None,
+                model: None,
+                request_id: None,
+                cost_usd: None,
+                extra: serde_json::Map::new(),
+            },
+        )
+        .expect("seed transcript");
+    let transcript_path = transcript_store
+        .transcript_path(started.session_id.as_str())
+        .expect("disk transcript path");
+    let bytes_before_close = std::fs::read(&transcript_path).expect("read seeded transcript");
 
-        let delete_target = coco_types::SessionTarget {
-            session_id: started.session_id.clone(),
-        };
-        let live_delete_error = client
-            .session_delete(
-                &fixture.handler,
-                SessionDeleteParams {
-                    target: delete_target.clone(),
-                },
-            )
-            .await
-            .expect_err("live delete must fail");
-        let ClientError::Server { data, .. } = live_delete_error else {
-            panic!("expected server error for live delete");
-        };
-        assert_eq!(
-            data.as_ref().and_then(|data| data.get("kind")),
-            Some(&serde_json::json!("SessionStillLive"))
-        );
+    let delete_target = coco_types::SessionTarget {
+        session_id: started.session_id.clone(),
+    };
+    let live_delete_error = client
+        .session_delete(
+            &fixture.handler,
+            SessionDeleteParams {
+                target: delete_target.clone(),
+            },
+        )
+        .await
+        .expect_err("live delete must fail");
+    let ClientError::Server { data, .. } = live_delete_error else {
+        panic!("expected server error for live delete");
+    };
+    assert_eq!(
+        data.as_ref().and_then(|data| data.get("kind")),
+        Some(&serde_json::json!("SessionStillLive"))
+    );
 
-        client
-            .session_close(
-                &fixture.handler,
-                SessionCloseParams {
-                    target: SessionCloseTarget::Interactive {
-                        target: InteractiveTarget {
-                            session_id: started.session_id.clone(),
-                            surface_id: started.surface_id.clone(),
-                        },
+    client
+        .session_close(
+            &fixture.handler,
+            SessionCloseParams {
+                target: SessionCloseTarget::Interactive {
+                    target: InteractiveTarget {
+                        session_id: started.session_id.clone(),
+                        surface_id: started.surface_id.clone(),
                     },
                 },
-            )
-            .await
-            .expect("close session");
-        assert!(fixture.server.registry().get(&started.session_id).is_none());
+            },
+        )
+        .await
+        .expect("close session");
+    assert!(fixture.server.registry().get(&started.session_id).is_none());
 
-        let bytes_after_close = std::fs::read(&transcript_path).expect("read closed transcript");
-        assert_eq!(
-            bytes_after_close, bytes_before_close,
-            "session/close must preserve existing transcript bytes exactly"
-        );
-        let read_after_close = client
-            .session_read(
-                &fixture.handler,
-                SessionReadParams {
-                    target: delete_target.clone(),
-                    cursor: None,
-                    limit: None,
-                },
-            )
-            .await
-            .expect("close preserves persisted transcript");
-        assert!(!read_after_close.messages.is_empty());
+    let bytes_after_close = std::fs::read(&transcript_path).expect("read closed transcript");
+    assert_eq!(
+        bytes_after_close, bytes_before_close,
+        "session/close must preserve existing transcript bytes exactly"
+    );
+    let read_after_close = client
+        .session_read(
+            &fixture.handler,
+            SessionReadParams {
+                target: delete_target.clone(),
+                cursor: None,
+                limit: None,
+            },
+        )
+        .await
+        .expect("close preserves persisted transcript");
+    assert!(!read_after_close.messages.is_empty());
 
-        client
-            .session_delete(
-                &fixture.handler,
-                SessionDeleteParams {
-                    target: delete_target.clone(),
-                },
-            )
-            .await
-            .expect("delete closed session");
-        client
-            .session_read(
-                &fixture.handler,
-                SessionReadParams {
-                    target: delete_target,
-                    cursor: None,
-                    limit: None,
-                },
-            )
-            .await
-            .expect_err("delete removes transcript");
-        assert!(
-            !transcript_path.exists(),
-            "session/delete must remove the transcript file"
-        );
-    })
-    .await
-    .expect("delete lifecycle scenario timed out");
+    client
+        .session_delete(
+            &fixture.handler,
+            SessionDeleteParams {
+                target: delete_target.clone(),
+            },
+        )
+        .await
+        .expect("delete closed session");
+    client
+        .session_read(
+            &fixture.handler,
+            SessionReadParams {
+                target: delete_target,
+                cursor: None,
+                limit: None,
+            },
+        )
+        .await
+        .expect_err("delete removes transcript");
+    assert!(
+        !transcript_path.exists(),
+        "session/delete must remove the transcript file"
+    );
 }
 
 #[tokio::test]
 async fn orphan_close_rejects_owned_session_before_turn_or_runtime_side_effects() {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        let gate = Arc::new(TurnGate {
-            started: tokio::sync::Barrier::new(2),
-            release: tokio::sync::Semaphore::new(0),
-            ignore_cancel: false,
-            result_emission: TurnResultEmission::None,
-            drop_signal: None,
-        });
-        let fixture = fixture_with_turn_gate(Some(Arc::clone(&gate))).await;
-        let owner = LocalServerClient::connect_local(&fixture.adapter);
-        let started = owner
-            .session_start(&fixture.handler, SessionStartParams::default())
-            .await
-            .expect("start owned session");
-        let target = InteractiveTarget {
-            session_id: started.session_id.clone(),
-            surface_id: started.surface_id.clone(),
-        };
-        owner
-            .turn_start(
-                &fixture.handler,
-                coco_types::TurnStartParams {
-                    target,
-                    prompt: "must survive rejected orphan close".to_string(),
-                    history_override: Vec::new(),
-                    images: Vec::new(),
-                    slash_metadata: None,
-                    model_selection: None,
-                    permission_mode: None,
-                    thinking_level: None,
-                    goal_continuation: false,
-                },
-            )
-            .await
-            .expect("start turn");
-        tokio::time::timeout(std::time::Duration::from_secs(5), gate.started.wait())
-            .await
-            .expect("turn reaches barrier");
-
-        let closer = LocalServerClient::connect_local(&fixture.adapter);
-        let error = closer
-            .session_close(
-                &fixture.handler,
-                SessionCloseParams {
-                    target: SessionCloseTarget::Orphaned {
-                        target: coco_types::SessionTarget {
-                            session_id: started.session_id.clone(),
-                        },
-                    },
-                },
-            )
-            .await
-            .expect_err("owned session is not orphan authority");
-        let ClientError::Server { data, .. } = error else {
-            panic!("expected typed server error");
-        };
-        assert_eq!(
-            data.and_then(|value| value.get("kind").cloned()),
-            Some(serde_json::json!("interactive_owner_conflict"))
-        );
-        assert!(fixture.server.registry().get(&started.session_id).is_some());
-
-        gate.release.add_permits(1);
-        let observation = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            fixture.turn_observations.lock().await.recv(),
+    let gate = Arc::new(TurnGate {
+        started: tokio::sync::Barrier::new(2),
+        release: tokio::sync::Semaphore::new(0),
+        ignore_cancel: false,
+        result_emission: TurnResultEmission::None,
+        drop_signal: None,
+    });
+    let fixture = fixture_with_turn_gate(Some(Arc::clone(&gate))).await;
+    let owner = LocalServerClient::connect_local(&fixture.adapter);
+    let started = owner
+        .session_start(&fixture.handler, SessionStartParams::default())
+        .await
+        .expect("start owned session");
+    let target = InteractiveTarget {
+        session_id: started.session_id.clone(),
+        surface_id: started.surface_id.clone(),
+    };
+    owner
+        .turn_start(
+            &fixture.handler,
+            coco_types::TurnStartParams {
+                target,
+                prompt: "must survive rejected orphan close".to_string(),
+                history_override: Vec::new(),
+                images: Vec::new(),
+                slash_metadata: None,
+                model_selection: None,
+                permission_mode: None,
+                thinking_level: None,
+                goal_continuation: false,
+            },
         )
         .await
-        .expect("turn observation timeout")
-        .expect("turn observation");
-        assert!(!observation.cancelled);
-    })
+        .expect("start turn");
+    tokio::time::timeout(std::time::Duration::from_secs(5), gate.started.wait())
+        .await
+        .expect("turn reaches barrier");
+
+    let closer = LocalServerClient::connect_local(&fixture.adapter);
+    let error = closer
+        .session_close(
+            &fixture.handler,
+            SessionCloseParams {
+                target: SessionCloseTarget::Orphaned {
+                    target: coco_types::SessionTarget {
+                        session_id: started.session_id.clone(),
+                    },
+                },
+            },
+        )
+        .await
+        .expect_err("owned session is not orphan authority");
+    let ClientError::Server { data, .. } = error else {
+        panic!("expected typed server error");
+    };
+    assert_eq!(
+        data.and_then(|value| value.get("kind").cloned()),
+        Some(serde_json::json!("interactive_owner_conflict"))
+    );
+    assert!(fixture.server.registry().get(&started.session_id).is_some());
+
+    gate.release.add_permits(1);
+    let observation = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        fixture.turn_observations.lock().await.recv(),
+    )
     .await
-    .expect("orphan close preauthorization timed out");
+    .expect("turn observation timeout")
+    .expect("turn observation");
+    assert!(!observation.cancelled);
 }
 
 #[tokio::test]
 async fn orphaning_cancels_pending_callback_and_rebind_cannot_resolve_it() {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        let fixture = fixture().await;
-        let mut owner = LocalServerClient::connect_local(&fixture.adapter);
-        let started = owner
-            .session_start(&fixture.handler, SessionStartParams::default())
-            .await
-            .expect("start callback session");
-        let mut pending_reply = fixture
-            .server
-            .route_server_request_with_reply(
-                started.session_id.clone(),
-                SurfaceCapability::Interactive,
-                None,
-                coco_types::ServerRequest::RequestUserInput(
-                    coco_types::ServerRequestUserInputParams {
-                        request_id: "payload-request-id".to_string(),
-                        prompt: "continue?".to_string(),
-                        description: None,
-                        choices: Vec::new(),
-                        default: None,
-                    },
-                ),
-            )
-            .expect("route callback");
-        let delivery = owner
-            .server_requests_mut()
-            .recv()
-            .await
-            .expect("callback delivery");
+    let fixture = fixture().await;
+    let mut owner = LocalServerClient::connect_local(&fixture.adapter);
+    let started = owner
+        .session_start(&fixture.handler, SessionStartParams::default())
+        .await
+        .expect("start callback session");
+    let mut pending_reply = fixture
+        .server
+        .route_server_request_with_reply(
+            started.session_id.clone(),
+            SurfaceCapability::Interactive,
+            None,
+            coco_types::ServerRequest::RequestUserInput(coco_types::ServerRequestUserInputParams {
+                request_id: "payload-request-id".to_string(),
+                prompt: "continue?".to_string(),
+                description: None,
+                choices: Vec::new(),
+                default: None,
+            }),
+        )
+        .expect("route callback");
+    let delivery = owner
+        .server_requests_mut()
+        .recv()
+        .await
+        .expect("callback delivery");
 
-        owner.disconnect();
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_secs(1), &mut pending_reply)
-                .await
-                .expect("orphan callback cancellation timeout")
-                .is_err(),
-            "disconnect must fail the pending callback closed"
-        );
-
-        let rebound = LocalServerClient::connect_local(&fixture.adapter);
-        let rebound_surface = rebound
-            .attach_interactive_session(started.session_id.clone(), AttachSurfaceOptions::default())
-            .expect("reattach orphaned session");
-        let error = rebound
-            .user_input_resolve(
-                &fixture.handler,
-                coco_types::UserInputResolveParams {
-                    target: rebound_surface.interactive_target(),
-                    request_id: delivery.request_id.as_display(),
-                    answer: "yes".to_string(),
-                },
-            )
+    owner.disconnect();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(1), &mut pending_reply)
             .await
-            .expect_err("rebound surface cannot resolve cancelled callback");
-        let ClientError::Server { data, .. } = error else {
-            panic!("expected typed server error");
-        };
-        assert_eq!(
-            data.and_then(|value| value.get("kind").cloned()),
-            Some(serde_json::json!("server_request_not_found"))
-        );
-    })
-    .await
-    .expect("orphan callback invalidation timed out");
+            .expect("orphan callback cancellation timeout")
+            .is_err(),
+        "disconnect must fail the pending callback closed"
+    );
+
+    let rebound = LocalServerClient::connect_local(&fixture.adapter);
+    let rebound_surface = rebound
+        .attach_interactive_session(started.session_id.clone(), AttachSurfaceOptions::default())
+        .expect("reattach orphaned session");
+    let error = rebound
+        .user_input_resolve(
+            &fixture.handler,
+            coco_types::UserInputResolveParams {
+                target: rebound_surface.interactive_target(),
+                request_id: delivery.request_id.as_display(),
+                answer: "yes".to_string(),
+            },
+        )
+        .await
+        .expect_err("rebound surface cannot resolve cancelled callback");
+    let ClientError::Server { data, .. } = error else {
+        panic!("expected typed server error");
+    };
+    assert_eq!(
+        data.and_then(|value| value.get("kind").cloned()),
+        Some(serde_json::json!("server_request_not_found"))
+    );
 }
 
 #[tokio::test]
 async fn callback_reply_cannot_cross_session_on_the_same_connection() {
-    tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        callback_authority_matrix_scenario(),
-    )
-    .await
-    .expect("callback authority matrix timed out");
+    callback_authority_matrix_scenario().await;
 }
 
 async fn callback_authority_matrix_scenario() {
@@ -3246,12 +3151,7 @@ async fn callback_authority_matrix_scenario() {
 
 #[tokio::test]
 async fn orphan_resume_enforces_callback_requirements_before_rebinding() {
-    tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        orphan_resume_callback_requirements_scenario(),
-    )
-    .await
-    .expect("orphan resume requirements scenario timed out");
+    orphan_resume_callback_requirements_scenario().await;
 }
 
 async fn orphan_resume_callback_requirements_scenario() {
@@ -3374,12 +3274,7 @@ async fn orphan_resume_callback_requirements_scenario() {
 
 #[tokio::test]
 async fn session_events_and_replay_never_cross_session_identity() {
-    tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        event_replay_identity_scenario(),
-    )
-    .await
-    .expect("event replay identity scenario timed out");
+    event_replay_identity_scenario().await;
 }
 
 async fn event_replay_identity_scenario() {
@@ -3423,162 +3318,147 @@ async fn event_replay_identity_scenario() {
 
 #[tokio::test]
 async fn reload_supervisors_coexist_and_close_reaps_only_the_target_runtime() {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        let fixture = fixture().await;
-        let client = LocalServerClient::connect_local(&fixture.adapter);
-        let first = client
-            .session_start(&fixture.handler, SessionStartParams::default())
-            .await
-            .expect("start A");
-        let second = client
-            .session_start(&fixture.handler, SessionStartParams::default())
-            .await
-            .expect("start B");
-        let runtime_a = fixture
-            .server
-            .registry()
-            .get(&first.session_id)
-            .expect("A runtime")
-            .into_session();
-        let runtime_b = fixture
-            .server
-            .registry()
-            .get(&second.session_id)
-            .expect("B runtime")
-            .into_session();
-        let (drop_a_tx, drop_a_rx) = tokio::sync::oneshot::channel();
-        let (drop_b_tx, mut drop_b_rx) = tokio::sync::oneshot::channel();
-        runtime_a
-            .install_reload_supervisor(tokio::spawn(async move {
-                let _signal = DropSignal(Some(drop_a_tx));
-                std::future::pending::<()>().await;
-            }))
-            .await;
-        runtime_b
-            .install_reload_supervisor(tokio::spawn(async move {
-                let _signal = DropSignal(Some(drop_b_tx));
-                std::future::pending::<()>().await;
-            }))
-            .await;
+    let fixture = fixture().await;
+    let client = LocalServerClient::connect_local(&fixture.adapter);
+    let first = client
+        .session_start(&fixture.handler, SessionStartParams::default())
+        .await
+        .expect("start A");
+    let second = client
+        .session_start(&fixture.handler, SessionStartParams::default())
+        .await
+        .expect("start B");
+    let runtime_a = fixture
+        .server
+        .registry()
+        .get(&first.session_id)
+        .expect("A runtime")
+        .into_session();
+    let runtime_b = fixture
+        .server
+        .registry()
+        .get(&second.session_id)
+        .expect("B runtime")
+        .into_session();
+    let (drop_a_tx, drop_a_rx) = tokio::sync::oneshot::channel();
+    let (drop_b_tx, mut drop_b_rx) = tokio::sync::oneshot::channel();
+    runtime_a
+        .install_reload_supervisor(tokio::spawn(async move {
+            let _signal = DropSignal(Some(drop_a_tx));
+            std::future::pending::<()>().await;
+        }))
+        .await;
+    runtime_b
+        .install_reload_supervisor(tokio::spawn(async move {
+            let _signal = DropSignal(Some(drop_b_tx));
+            std::future::pending::<()>().await;
+        }))
+        .await;
 
-        client
-            .session_close(
-                &fixture.handler,
-                SessionCloseParams {
-                    target: SessionCloseTarget::Interactive {
-                        target: InteractiveTarget {
-                            session_id: first.session_id,
-                            surface_id: first.surface_id.clone(),
-                        },
+    client
+        .session_close(
+            &fixture.handler,
+            SessionCloseParams {
+                target: SessionCloseTarget::Interactive {
+                    target: InteractiveTarget {
+                        session_id: first.session_id,
+                        surface_id: first.surface_id.clone(),
                     },
                 },
-            )
+            },
+        )
+        .await
+        .expect("close A");
+    drop_a_rx.await.expect("A reload supervisor stopped");
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), &mut drop_b_rx)
             .await
-            .expect("close A");
-        drop_a_rx.await.expect("A reload supervisor stopped");
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(50), &mut drop_b_rx)
-                .await
-                .is_err(),
-            "closing A must not reap B reload supervisor"
-        );
-        let replaced = client
-            .session_replace(
-                &fixture.handler,
-                coco_types::SessionReplaceParams {
-                    source: InteractiveTarget {
-                        session_id: second.session_id.clone(),
-                        surface_id: second.surface_id.clone(),
-                    },
-                    destination: coco_types::SessionReplacement::Fresh(
-                        SessionStartParams::default(),
-                    ),
+            .is_err(),
+        "closing A must not reap B reload supervisor"
+    );
+    let replaced = client
+        .session_replace(
+            &fixture.handler,
+            coco_types::SessionReplaceParams {
+                source: InteractiveTarget {
+                    session_id: second.session_id.clone(),
+                    surface_id: second.surface_id.clone(),
                 },
-            )
-            .await
-            .expect("replace B");
-        drop_b_rx
-            .await
-            .expect("B reload supervisor stopped by replacement");
-        assert!(fixture.server.registry().get(&second.session_id).is_none());
-        assert!(
-            fixture
-                .server
-                .registry()
-                .get(&replaced.session_id)
-                .is_some()
-        );
-    })
-    .await
-    .expect("reload supervisor isolation timed out");
+                destination: coco_types::SessionReplacement::Fresh(SessionStartParams::default()),
+            },
+        )
+        .await
+        .expect("replace B");
+    drop_b_rx
+        .await
+        .expect("B reload supervisor stopped by replacement");
+    assert!(fixture.server.registry().get(&second.session_id).is_none());
+    assert!(
+        fixture
+            .server
+            .registry()
+            .get(&replaced.session_id)
+            .is_some()
+    );
 }
 
 #[tokio::test]
 async fn slow_consumer_disconnects_whole_connection_and_both_sessions_replay_cleanly() {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        let fixture = fixture().await;
-        let stalled = LocalServerClient::connect_local(&fixture.adapter);
-        let first = stalled
-            .session_start(&fixture.handler, SessionStartParams::default())
-            .await
-            .expect("start A");
-        let second = stalled
-            .session_start(&fixture.handler, SessionStartParams::default())
-            .await
-            .expect("start B");
-        for seq in 1..=9 {
-            for session_id in [&first.session_id, &second.session_id] {
-                fixture.server.route_envelope(SessionEnvelope::durable(
-                    session_id.clone(),
-                    None,
-                    None,
-                    seq,
-                    CoreEvent::Protocol(ServerNotification::SessionStateChanged {
-                        state: SessionState::Running,
-                    }),
-                ));
-            }
+    let fixture = fixture().await;
+    let stalled = LocalServerClient::connect_local(&fixture.adapter);
+    let first = stalled
+        .session_start(&fixture.handler, SessionStartParams::default())
+        .await
+        .expect("start A");
+    let second = stalled
+        .session_start(&fixture.handler, SessionStartParams::default())
+        .await
+        .expect("start B");
+    for seq in 1..=9 {
+        for session_id in [&first.session_id, &second.session_id] {
+            fixture.server.route_envelope(SessionEnvelope::durable(
+                session_id.clone(),
+                None,
+                None,
+                seq,
+                CoreEvent::Protocol(ServerNotification::SessionStateChanged {
+                    state: SessionState::Running,
+                }),
+            ));
         }
-        assert!(
-            fixture
-                .server
-                .list_live_sessions()
-                .iter()
-                .all(|summary| summary.surface_counts.attached == 0),
-            "overflow must disconnect the connection and orphan both sessions"
-        );
+    }
+    assert!(
+        fixture
+            .server
+            .list_live_sessions()
+            .iter()
+            .all(|summary| summary.surface_counts.attached == 0),
+        "overflow must disconnect the connection and orphan both sessions"
+    );
 
-        for session_id in [first.session_id, second.session_id] {
-            let observer = fixture.adapter.connect();
-            let LocalClientSubscribeOutcome::Attached(subscription) = observer
-                .subscribe_surface(session_id.clone(), Some(0), AttachSurfaceOptions::default())
-                .expect("reconnect with replay")
-            else {
-                panic!("retention should cover the complete disconnected interval");
-            };
-            assert_eq!(subscription.replayed.len(), 9);
-            assert!(
-                subscription
-                    .replayed
-                    .iter()
-                    .enumerate()
-                    .all(|(index, event)| event.session_id == session_id
-                        && event.session_seq == Some((index + 1) as i64))
-            );
-        }
-    })
-    .await
-    .expect("slow-consumer recovery timed out");
+    for session_id in [first.session_id, second.session_id] {
+        let observer = fixture.adapter.connect();
+        let LocalClientSubscribeOutcome::Attached(subscription) = observer
+            .subscribe_surface(session_id.clone(), Some(0), AttachSurfaceOptions::default())
+            .expect("reconnect with replay")
+        else {
+            panic!("retention should cover the complete disconnected interval");
+        };
+        assert_eq!(subscription.replayed.len(), 9);
+        assert!(
+            subscription
+                .replayed
+                .iter()
+                .enumerate()
+                .all(|(index, event)| event.session_id == session_id
+                    && event.session_seq == Some((index + 1) as i64))
+        );
+    }
 }
 
 #[tokio::test]
 async fn process_shutdown_drains_both_runtime_backed_sessions() {
-    tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        concurrent_shutdown_scenario(),
-    )
-    .await
-    .expect("concurrent shutdown scenario timed out");
+    concurrent_shutdown_scenario().await;
 }
 
 async fn concurrent_shutdown_scenario() {

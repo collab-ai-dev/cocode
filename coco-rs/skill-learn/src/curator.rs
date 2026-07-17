@@ -25,7 +25,7 @@
 use std::path::{Path, PathBuf};
 
 use coco_maintenance::{MaintenanceLock, MaintenanceLockOutcome};
-use coco_skills::agent_scope::agent_skills_dir;
+use coco_types::{JourneyEvent, SkillRetireReason};
 
 /// Lock file basename. Lives in `<config_home>/skills` — a **sibling** of the
 /// fenced `.agent` root, so the review fork cannot write (or unlink) it.
@@ -65,19 +65,31 @@ pub enum CuratorOutcome {
     },
 }
 
-/// Periodic write-only lifecycle manager for agent-created skills. The
-/// retire/promote thresholds are the `DEFAULT_*` consts above — deliberately
-/// not configurable until a real caller needs to vary them.
+/// Periodic write-only lifecycle manager for agent-created skills. Every
+/// threshold is resolved from `SkillLearnConfig`; the `DEFAULT_*` consts above
+/// are that config's defaults.
 pub struct SkillCurator {
     config_home: PathBuf,
-    agent_root: PathBuf,
     lock: MaintenanceLock,
     min_hours: i64,
+    min_invocations: i64,
+    /// Retire **below** this success rate (a floor, not a failure ceiling).
+    retire_success_rate: f64,
+    promote_success_rate: f64,
+    retire_inactive_days: i64,
+    /// Mirrors `SkillLearnConfig::journal_enabled`.
+    journal_enabled: bool,
 }
 
 impl SkillCurator {
-    /// Build a curator over `<config_home>/skills/.agent`.
+    /// Build a curator over `<config_home>/skills/.agent` with default
+    /// thresholds.
     pub fn new(config_home: &Path) -> Self {
+        Self::with_config(config_home, &coco_config::SkillLearnConfig::default())
+    }
+
+    /// Build a curator from resolved config (thresholds from `SkillLearnConfig`).
+    pub fn with_config(config_home: &Path, config: &coco_config::SkillLearnConfig) -> Self {
         // The lock is a sibling of the fenced root — geometry owned by
         // `agent_scope` so it can never drift inside the fence.
         let lock = MaintenanceLock::new(
@@ -86,9 +98,13 @@ impl SkillCurator {
         );
         Self {
             config_home: config_home.to_path_buf(),
-            agent_root: agent_skills_dir(config_home),
             lock,
-            min_hours: DEFAULT_MIN_HOURS,
+            min_hours: config.curator_min_hours,
+            min_invocations: config.promote_min_invocations,
+            retire_success_rate: config.retire_success_rate,
+            promote_success_rate: config.promote_success_rate,
+            retire_inactive_days: config.retire_inactive_days,
+            journal_enabled: config.journal_enabled,
         }
     }
 
@@ -124,83 +140,70 @@ impl SkillCurator {
         let mut retired = 0usize;
         let mut scanned = 0usize;
 
-        if let Ok(entries) = std::fs::read_dir(&self.agent_root) {
-            for entry in entries.flatten() {
-                let dir = entry.path();
-                if !dir.is_dir() {
-                    continue;
+        // Single scan implementation shared with `/journey`. Retired skills are
+        // included so `scanned` counts every curator-managed directory; the
+        // already-disabled ones are skipped from the gates below.
+        for scan in coco_skills::agent_scope::scan_agent_skills(
+            &self.config_home,
+            coco_skills::agent_scope::IncludeDisabled::Yes,
+        ) {
+            // Location-keyed: living under the agent root IS the
+            // curator-managed signal.
+            scanned += 1;
+            let name = scan.skill.name.clone();
+            let skill_md = &scan.skill_md;
+            // Never-invoked skills have no telemetry entry — the grace floor.
+            let Some(stats) = telemetry.get(&name) else {
+                continue;
+            };
+            if scan.disabled {
+                continue;
+            }
+            // Inactivity aging first: a once-used skill nobody invokes anymore
+            // ages out regardless of its success rate (the failure gate below
+            // only sees infra errors, so "runs but unhelpful" skills retire
+            // through THIS gate).
+            let inactive_ms = now.saturating_sub(stats.last_used_at_ms);
+            if stats.last_used_at_ms > 0
+                && inactive_ms >= self.retire_inactive_days.saturating_mul(86_400_000)
+            {
+                if coco_skills::set_skill_disabled(skill_md, true).is_ok() {
+                    tracing::info!(
+                        target: "coco_skill_learn::curator",
+                        skill = %name,
+                        inactive_days = inactive_ms / 86_400_000,
+                        "retired inactive agent skill"
+                    );
+                    self.append_journal_event(JourneyEvent::SkillRetired {
+                        name: name.clone(),
+                        reason: SkillRetireReason::Inactivity,
+                    });
+                    retired += 1;
                 }
-                // Same case-insensitive lookup as the loader — a lowercase
-                // `skill.md` that loads must also be curatable.
-                let Some(skill_md) = coco_skills::find_skill_md(&dir) else {
-                    continue;
-                };
-                // Location-keyed: living under the agent root IS the
-                // curator-managed signal; the (untrusted) frontmatter is only
-                // read for the current `disabled` state.
-                scanned += 1;
-                let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
-                    continue;
-                };
-                // Never-invoked skills have no telemetry entry — the grace
-                // floor. Bail before paying for the file read + parse.
-                let Some(stats) = telemetry.get(name) else {
-                    continue;
-                };
-                let Ok(content) = std::fs::read_to_string(&skill_md) else {
-                    continue;
-                };
-                let fm = coco_frontmatter::parse(&content);
-                let already_disabled = fm
-                    .data
-                    .get(coco_skills::frontmatter_keys::DISABLED)
-                    .and_then(coco_frontmatter::FrontmatterValue::as_bool)
-                    .unwrap_or(false);
-                if already_disabled {
-                    continue;
+                continue;
+            }
+            if stats.total_invocations() < self.min_invocations {
+                continue;
+            }
+            if stats.success_rate() < self.retire_success_rate {
+                if coco_skills::set_skill_disabled(skill_md, true).is_ok() {
+                    tracing::info!(
+                        target: "coco_skill_learn::curator",
+                        skill = %name,
+                        success = stats.success_count,
+                        failure = stats.failure_count,
+                        "retired misfiring agent skill"
+                    );
+                    self.append_journal_event(JourneyEvent::SkillRetired {
+                        name: name.clone(),
+                        reason: SkillRetireReason::FailureRate,
+                    });
+                    retired += 1;
                 }
-                // Inactivity aging first: a once-used skill nobody invokes
-                // anymore ages out regardless of its success rate (the
-                // failure gate below only sees infra errors, so "runs but
-                // unhelpful" skills retire through THIS gate).
-                let inactive_ms = now.saturating_sub(stats.last_used_at_ms);
-                if stats.last_used_at_ms > 0
-                    && inactive_ms >= DEFAULT_RETIRE_INACTIVE_DAYS.saturating_mul(86_400_000)
-                {
-                    if retire(&skill_md, &fm) {
-                        tracing::info!(
-                            target: "coco_skill_learn::curator",
-                            skill = %name,
-                            inactive_days = inactive_ms / 86_400_000,
-                            "retired inactive agent skill"
-                        );
-                        retired += 1;
-                    }
-                    continue;
-                }
-                if stats.total_invocations() < DEFAULT_MIN_INVOCATIONS {
-                    continue;
-                }
-                if stats.success_rate() < DEFAULT_RETIRE_SUCCESS_RATE {
-                    if retire(&skill_md, &fm) {
-                        tracing::info!(
-                            target: "coco_skill_learn::curator",
-                            skill = %name,
-                            success = stats.success_count,
-                            failure = stats.failure_count,
-                            "retired misfiring agent skill"
-                        );
-                        retired += 1;
-                    }
-                } else if stats.success_rate() >= DEFAULT_PROMOTE_SUCCESS_RATE
-                    && promotions.insert(name.to_string())
-                {
-                    newly_promoted.push((
-                        name.to_string(),
-                        stats.success_count,
-                        stats.failure_count,
-                    ));
-                }
+            } else if stats.success_rate() >= self.promote_success_rate
+                && promotions.insert(name.clone())
+            {
+                newly_promoted.push((name.clone(), stats.success_count, stats.failure_count));
             }
         }
 
@@ -219,6 +222,7 @@ impl SkillCurator {
                     failure,
                     "promoted agent skill to model-invocable"
                 );
+                self.append_journal_event(JourneyEvent::SkillPromoted { name: name.clone() });
             }
         }
 
@@ -230,18 +234,16 @@ impl SkillCurator {
             scanned,
         }
     }
-}
 
-/// Disable a skill in place: rewrite `skill_md` with `disabled: true` set in
-/// the (pre-parsed) frontmatter, preserving every other key.
-fn retire(skill_md: &Path, fm: &coco_frontmatter::Frontmatter) -> bool {
-    let mut obj = fm.data_to_json_map();
-    obj.insert(
-        coco_skills::frontmatter_keys::DISABLED.into(),
-        serde_json::Value::Bool(true),
-    );
-    let disabled = coco_frontmatter::emit_frontmatter(&obj, &fm.content);
-    coco_utils_common::write_atomic(skill_md, disabled).is_ok()
+    /// Append one curator event to the learning journal (best-effort; the
+    /// curator carries no session context so `session_id` is `None`). A no-op
+    /// when `SkillLearnConfig::journal_enabled` is off.
+    fn append_journal_event(&self, event: JourneyEvent) {
+        if !self.journal_enabled {
+            return;
+        }
+        crate::journal::append_event(&self.config_home, None, event);
+    }
 }
 
 #[cfg(test)]

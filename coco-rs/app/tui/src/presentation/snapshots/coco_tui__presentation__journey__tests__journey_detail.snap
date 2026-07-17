@@ -1,0 +1,20 @@
+---
+source: app/tui/src/presentation/journey.test.rs
+expression: body(&state)
+---
+● skills 2   ◆ memories 1   ★ promoted 1   ✕ retired 1
+
+   4 Jul │━━━━━━━◆◆  7+2
+  15 Jul │━━━━━◆◆◆  5+3
+  oldest ──────────→ now
+──────────────────────────────────────────────
+● fix-nextest-filter  learning 2/5
+
+what fix-nextest-filter does
+
+2 ok · 1 fail · 2 patches
+
+History:
+  • learned
+
+enter/esc back · esc close

@@ -113,6 +113,13 @@ impl SessionRuntime {
     pub fn memory_runtime(&self) -> Option<&Arc<coco_memory::MemoryRuntime>> {
         self.memory_resources.memory_runtime.as_ref()
     }
+
+    /// Borrow the optional `SkillReviewRuntime`. `None` when
+    /// `Feature::SkillLearning` is off (or the loop is config-disabled).
+    /// Used by the `/learn` slash dispatcher to fire a manual review.
+    pub fn skill_review_runtime(&self) -> Option<&Arc<coco_skill_learn::SkillReviewRuntime>> {
+        self.memory_resources.skill_review_runtime.as_ref()
+    }
     /// The production swarm `AgentHandle` once `attach_agent_handle` has
     /// late-bound it (the eager `swarm_agent_handle` is a no-op until then).
     /// `None` before attach / in non-swarm sessions. Used by the leader

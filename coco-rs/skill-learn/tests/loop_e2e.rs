@@ -108,7 +108,7 @@ async fn full_loop_write_stamp_load_measure_promote_degrade_retire() {
         Ok(id) => id,
         Err(_) => unreachable!("test session id must be valid"),
     };
-    let outcome = svc.run(session_id, Vec::new()).await;
+    let outcome = svc.run(session_id, Vec::new(), None).await;
     assert_eq!(outcome, SkillReviewOutcome::Completed { paths_written: 1 });
 
     let skill_md = coco_skills::agent_scope::agent_skills_dir(&config_home)

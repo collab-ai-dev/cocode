@@ -80,6 +80,8 @@ pub mod names {
     pub const MCP: &str = "mcp";
     pub const PLUGIN: &str = "plugin";
     pub const AGENTS: &str = "agents";
+    pub const JOURNEY: &str = "journey";
+    pub const LEARN: &str = "learn";
     pub const TASKS: &str = "tasks";
     pub const WORKFLOW: &str = "workflow";
     pub const SKILLS: &str = "skills";
@@ -1542,6 +1544,39 @@ fn doctor_handler_async(
 
 // ── PR-G4 batch-1 sync handlers ──────────────────────────────────────
 
+/// `/learn [directive]` — fire a user-initiated skill-review fork now.
+/// The free-form directive (may be empty) becomes the fork's top-priority
+/// instruction; the surface owns actually spawning it.
+struct LearnHandler;
+
+#[async_trait]
+impl CommandHandler for LearnHandler {
+    async fn execute_command(&self, args: &str) -> crate::Result<crate::CommandResult> {
+        Ok(crate::CommandResult::TriggerSkillLearn {
+            directive: args.trim().to_string(),
+        })
+    }
+
+    fn handler_name(&self) -> &str {
+        "learn"
+    }
+}
+
+/// `/journey` — open the learning-timeline overlay. Payload-less: assembly
+/// happens at the CLI/host translation site (see `DialogSpec::Journey`).
+struct JourneyHandler;
+
+#[async_trait]
+impl CommandHandler for JourneyHandler {
+    async fn execute_command(&self, _args: &str) -> crate::Result<crate::CommandResult> {
+        Ok(crate::CommandResult::OpenDialog(crate::DialogSpec::Journey))
+    }
+
+    fn handler_name(&self) -> &str {
+        "journey"
+    }
+}
+
 /// `/env` — dump runtime environment (cwd, shell, platform, version).
 /// Local-only: the output is printed in the TUI and not sent to the
 /// agent.
@@ -1735,6 +1770,29 @@ pub fn register_ts_parity_handlers(
                 handler: names::THEME.to_string(),
             }),
             handler: Some(Arc::new(handlers::theme::ThemeHandler)),
+            is_enabled: None,
+        });
+    }
+
+    // /journey — learning-timeline overlay. Payload-less: the CLI/host
+    // translation site assembles the snapshot, so `commands` stays free of the
+    // `coco-memory` transitive tree. Always available (passive view, like
+    // `/context`).
+    {
+        let mut base = crate::builtin_base_ext(
+            names::JOURNEY,
+            "Open the learning-timeline view (skills + memories over time)",
+            &[],
+            CommandSafety::AlwaysSafe,
+            None,
+        );
+        base.loaded_from = Some(CommandSource::Builtin);
+        registry.register(RegisteredCommand {
+            base,
+            command_type: CommandType::LocalOverlay(LocalCommandData {
+                handler: names::JOURNEY.to_string(),
+            }),
+            handler: Some(Arc::new(JourneyHandler)),
             is_enabled: None,
         });
     }
@@ -2115,6 +2173,27 @@ pub fn register_ts_parity_handlers(
     // MemoryRuntime, but surfacing the commands in /-typeahead under those
     // conditions is misleading. These commands are gated on the AutoMemory
     // feature.
+    // /learn — user-initiated skill review. Gated on SkillLearning: without
+    // the loop there is no review fork to fire.
+    if features.enabled(coco_types::Feature::SkillLearning) {
+        let mut learn_base = crate::builtin_base_ext(
+            names::LEARN,
+            "Learn a skill from this session now (optionally describe what to capture)",
+            &[],
+            CommandSafety::LocalOnly,
+            Some("[what to learn]"),
+        );
+        learn_base.loaded_from = Some(CommandSource::Builtin);
+        registry.register(RegisteredCommand {
+            base: learn_base,
+            command_type: CommandType::Local(LocalCommandData {
+                handler: names::LEARN.to_string(),
+            }),
+            handler: Some(Arc::new(LearnHandler)),
+            is_enabled: None,
+        });
+    }
+
     if features.enabled(coco_types::Feature::AutoMemory) {
         let mut dream_base = crate::builtin_base_ext(
             names::DREAM,
