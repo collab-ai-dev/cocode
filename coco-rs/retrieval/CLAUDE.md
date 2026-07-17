@@ -17,65 +17,22 @@ conventions).
 | `local` | Both of the above | `fastembed` |
 
 Default build is lightweight — BM25 + OpenAI embeddings / reranker API only.
-
-## Architecture
-
-```
-src/
-├── facade.rs              RetrievalFacade — primary entry point (build_index, search, generate_repomap)
-├── config.rs              RetrievalConfig — ~/.coco/retrieval.toml + workdir overrides
-├── context.rs             RetrievalContext + RetrievalFeatures (presets: NONE/MINIMAL/STANDARD/FULL)
-├── error.rs               RetrievalErr (structured; is_retryable, suggested_retry_delay_ms)
-├── traits.rs              Indexer, Searcher, EmbeddingProvider, ChunkStore (all Send+Sync, #[async_trait])
-├── types.rs               CodeChunk, SearchResult, SearchQuery, SourceFileId, ScoreType
-├── events.rs              RetrievalEvent (isolated from CoreEvent — see below)
-├── event_emitter.rs       EventEmitter + ScopedEventCollector
-├── metrics.rs             CodeMetrics
-├── health.rs              Health probes
-│
-├── indexing/              IndexManager, FileWatcher, walker, change_detector (SHA256)
-├── chunking/              AST-aware splitter (tree-sitter) + fallback + token-budget collapser
-├── embeddings/            fastembed (local ONNX) + openai + batched queue
-├── search/                BM25 (k1=0.8, b=0.5), HybridSearcher, RRF fusion, RecentFilesCache, SnippetSearcher
-├── storage/               SqliteStore (metadata + FTS5), SqliteVecStore / LanceDbStore (vectors), snippet storage
-├── query/                 LLM-based query rewrite (CN/EN bilingual) + preprocessor
-├── reranker/              RuleBasedReranker + local (fastembed) + remote (Cohere/Voyage)
-├── repomap/               Dependency graph + PageRank + token-budgeted renderer
-├── tags/                  tree-sitter symbol extraction
-├── services/              IndexService, SearchService, RecentFilesService, SearchRequest builder
-├── tui/                   Stand-alone TUI for `retrieval` binary
-└── bin/                   `retrieval` binary (build/search/tui)
-```
+BM25 is tuned for code: `k1 = 0.8`, `b = 0.5` (`search/bm25_index.rs`).
 
 ## Primary API
 
-```rust
-use coco_retrieval::{RetrievalFacade, FacadeBuilder, RetrievalFeatures, SearchRequest};
+**Everything goes through `RetrievalFacade`** — CLI, TUI, and agents alike.
+No direct access to `IndexManager`, `SqliteStore`, or `FileWatcher`.
 
-// Create facade for a workspace
-let facade = FacadeBuilder::new(config)
-    .features(RetrievalFeatures::STANDARD)
-    .workspace(workdir)
-    .build()
-    .await?;
-
-// Simple search (hybrid mode)
-let results = facade.search("query").await?;
-
-// Fluent builder for advanced modes
-let results = facade.search_service().execute(
-    SearchRequest::new("query").bm25().limit(10)
-).await?;
-
-// Or: .vector(), .hybrid(), .snippet()
-
-// Operations
-facade.build_index(mode, cancel_token).await?;    // Receiver<IndexProgress>
-facade.generate_repomap(request).await?;           // RepoMapResult
-```
-
-Convenience: `create_manager(cwd, coco_home) -> Option<Arc<RetrievalFacade>>`
-(honors `config.enabled`).
+- Build: `FacadeBuilder::new(config).features(RetrievalFeatures::STANDARD).workspace(dir).build().await?`
+  — feature presets `NONE` / `MINIMAL` / `STANDARD` / `FULL`.
+- Search: `facade.search("query")` (hybrid); advanced modes via
+  `facade.search_service().execute(SearchRequest::new("q").bm25().limit(10))`
+  — or `.vector()` / `.hybrid()` / `.snippet()`.
+- Ops: `facade.build_index(mode, cancel_token)` (returns `Receiver<IndexProgress>`),
+  `facade.generate_repomap(request)`.
+- Convenience: `create_manager(cwd, coco_home) -> Option<Arc<RetrievalFacade>>`
+  (honors `config.enabled`).
 
 ## Event Integration
 
@@ -106,23 +63,13 @@ Uses `RetrievalErr` (not `anyhow`). Key variants:
 
 Always check `is_retryable()` / `suggested_retry_delay_ms()` for transient errors.
 
-## Supported Languages (AST)
+## Languages (AST)
 
-| Language | Symbol Extraction | Chunking |
-|----------|-------------------|----------|
-| Go | yes | yes |
-| Rust | yes | yes |
-| Python | yes | yes |
-| Java | yes | yes |
-
-TypeScript / JavaScript / C++ are not yet supported for AST features (BM25
-+ vector still work on any language).
+TypeScript / JavaScript / C++ are not yet supported for AST features (symbol
+extraction, AST-aware chunking); BM25 + vector search work on any language.
 
 ## Configuration
 
-`{workdir}/.codex/retrieval.toml` → `~/.codex/retrieval.toml` (workdir wins).
-Sections: `indexing`, `chunking`, `search`, `embedding`, `query_rewrite`,
-`extended_reranker`, `repo_map`.
-
-CLI and TUI both use the facade — no direct access to `IndexManager`,
-`SqliteStore`, or `FileWatcher`.
+`{workdir}/.cocode/retrieval.toml` → `{coco_home}/retrieval.toml` (project
+wins; neither present → disabled default). Sections: `indexing`, `chunking`,
+`search`, `embedding`, `query_rewrite`, `extended_reranker`, `repo_map`.

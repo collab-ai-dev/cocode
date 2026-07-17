@@ -1,31 +1,27 @@
 # coco-types
 
 Foundation types shared across all crates. **Source-level
-vercel-ai-free.** Provider DTOs reach this crate via `coco-llm-types`
-(the DTO seam) — no direct `vercel_ai_provider::*` import here.
-Upgrading the SDK only edits `common/llm-types` + `services/inference`;
-this crate stays unchanged. Guarded by `scripts/check-vercel-ai-seam.sh`.
+vercel-ai-free** — provider DTOs arrive via `coco-llm-types`; see
+"Vercel-AI Seam" below.
 
 ## Key Types
 
-Tool / Agent identity: `ToolName` (44 builtin variants, Copy), `ToolId` (Builtin/Mcp/Custom, flat-string serde), `SubagentType` (7 builtin variants), `AgentTypeId`, `ToolProgress`.
+Tool / Agent identity: `ToolName` (builtin tool names, Copy — see `src/tool.rs`), `ToolId` (Builtin/Mcp/Custom, flat-string serde), `SubagentType` (builtin subagents — see `src/agent.rs`), `AgentTypeId`, `ToolProgress`.
 
 Permission: `PermissionMode` (camelCase wire), `PermissionBehavior`, `PermissionRule`, `PermissionRuleSource`, `PermissionDecision`, `PermissionDecisionReason`, `ToolPermissionContext`.
 
-Hook / Task / Command: `HookEventType` (32 variants, `#[non_exhaustive]`), `HookOutcome`, `HookScope`, `TaskType`, `TaskStatus`, `TaskStateBase`, `CommandBase`, `CommandType`, `CommandSource`.
+Hook / Task / Command: `HookEventType` (`#[non_exhaustive]` — see `src/hook.rs`), `HookOutcome`, `HookScope`, `TaskType`, `TaskStatus`, `TaskStateBase`, `CommandBase`, `CommandType`, `CommandSource`.
 
 Provider / Model: `ProviderApi`, `ModelRole`, `ModelSpec`, `Capability`, `CapabilitySet`, `ApplyPatchToolType`, `WireApi`.
 
-Thinking / Token / ID / Sandbox: `ThinkingLevel { effort, budget_tokens, options }`, `ReasoningEffort` (7 variants), `TokenUsage`, `ModelUsage`, `SessionId`, `AgentId`, `TaskId`, `SandboxMode`.
+Thinking / Token / ID / Sandbox: `ThinkingLevel { effort, budget_tokens, options }`, `ReasoningEffort`, `TokenUsage`, `ModelUsage`, `SessionId`, `AgentId`, `TaskId`, `SandboxMode`.
 
-Event envelope (owned here — see `event-system-design.md`): `CoreEvent` (3-layer), `ServerNotification` (59 variants — Turn lifecycle is `TurnStarted` + `TurnEnded(TurnEndedParams)` with discriminated `TurnOutcome`: Completed/Failed/Interrupted/MaxTurnsReached/BudgetExhausted) + `NotificationMethod` (typed wire-method enum), `AgentStreamEvent`, `TuiOnlyEvent`, `ThreadItem`, plus 50+ event param structs.
+Event envelope (owned here — see `event-system-design.md`): `CoreEvent` (3-layer), `ServerNotification` (see `src/event.rs`; Turn lifecycle is `TurnStarted` + `TurnEnded(TurnEndedParams)` with discriminated `TurnOutcome`) + `NotificationMethod` (typed wire-method enum), `AgentStreamEvent`, `TuiOnlyEvent`, `ThreadItem`, plus per-event param structs.
 
-Wire protocol: `ClientRequest` + `ClientRequestMethod` (43 variants), `ServerRequest` + `ServerRequestMethod` (5 variants), `JsonRpcMessage` family, `RequestId`, `error_codes`.
-`TurnStartParams` is the shared SDK/TUI local-AppServer turn DTO: it carries
-the prompt plus optional paste images, slash metadata attachment text,
-turn-scoped model selection, permission mode, and thinking override.
+Wire protocol: `ClientRequest` + `ClientRequestMethod` (see `src/client_request.rs`), `ServerRequest` + `ServerRequestMethod` (see `src/server_request.rs`), `JsonRpcMessage` family, `RequestId`, `error_codes`.
+`TurnStartParams` — shared SDK/TUI local-AppServer turn DTO: prompt + optional paste images, slash metadata attachment text, and turn-scoped model / permission-mode / thinking overrides.
 
-Attachment taxonomy: `AttachmentKind` (60 variants), `AttachmentEvent`, `Coverage`, `coverage_of`.
+Attachment taxonomy: `AttachmentKind` (see `src/attachment_kind.rs`), `AttachmentEvent`, `Coverage`, `coverage_of`.
 
 App-state: `ToolAppState`, `AppStatePatch`, `AppStateReadHandle` (typed cross-turn state).
 
@@ -33,17 +29,15 @@ Extended types: `AgentColorEntry`, `AttributionSnapshotEntry`, `CommandResultDis
 
 ### Message family (in `messages/` submodule, flat re-exported at crate root)
 
-- **Envelope**: `Message` (7 variants), `UserMessage`, `AssistantMessage`, `ToolResultMessage`, `AttachmentMessage`, `ProgressMessage`, `TombstoneMessage`. Tool-use summaries are NOT a Message variant — they ride a `ServerNotification::ToolUseSummary` side-channel into `tool_group_summaries` (UI-only label cache, I-3).
-- **System**: `SystemMessage` + 16 sub-variants + `SystemMessageLevel`.
-- **Attachment payloads**: `AttachmentBody`, `SilentPayload`, 10 silent payload structs, `AttachmentEmitter`.
+- **Envelope**: `Message` + `UserMessage`, `AssistantMessage`, `ToolResultMessage`, `AttachmentMessage`, `ProgressMessage`, `TombstoneMessage`. Tool-use summaries are NOT a Message variant — they ride a `ServerNotification::ToolUseSummary` side-channel into `tool_group_summaries` (UI-only label cache, I-3).
+- **System**: `SystemMessage` + sub-variants + `SystemMessageLevel`.
+- **Attachment payloads**: `AttachmentBody`, `SilentPayload` + payload structs, `AttachmentEmitter`.
 - **Tool / hook result**: `ToolResult<T>`, `HookResult`.
 - **Persistence**: `SerializedMessage`, `TranscriptMessage`, `TranscriptEntry`.
 - **Metadata enums**: `Visibility`, `MessageKind`, `MessageOrigin`, `StopReason`, `ApiError`, `PreservedSegment`, `PartialCompactDirection`.
 - **Vercel-ai DTO aliases** (re-exported from `coco-llm-types`): `LlmMessage`, `LlmPrompt`, `UserContent` (= `UserContentPart`), `AssistantContent`, `ToolContent`, `TextContent`, `FileContent`, `ReasoningContent`, `ToolCallContent`, `ToolResultContent` (= `ToolResultPart`), `ToolResultOutput` (= raw `ToolResultContent` from vercel-ai), `ToolResultContentPart`, `DataContent`, plus the `tool_reference_content_part` builder.
 
-The operations layer (`coco-messages`) re-exports these from
-`coco_types::messages::*` so the established `coco_messages::Message`
-import path keeps working.
+The operations layer (`coco-messages`) re-exports these from `coco_types::messages::*`, so the established `coco_messages::Message` import path keeps working.
 
 `CompactTrigger` lives in coco-types root because `event::CompactionPhaseParams` references it.
 
@@ -61,14 +55,11 @@ The same `$wire` literal drives `#[serde(rename)]` **and** `#[strum(serialize)]`
 
 ## Vercel-AI Seam
 
-`coco-types` depends on `coco-llm-types` (the DTO seam crate) for the
-LLM type aliases that Message embeds. It does NOT depend on
-`vercel-ai-provider` directly — the seam CI gate
-(`scripts/check-vercel-ai-seam.sh`) enforces. Two crates own the
-direct vercel-ai dep by design:
-
-- `common/llm-types` — DTO seam
-- `services/inference` — runtime/client seam
+Depends on `coco-llm-types` (DTO seam) for the LLM aliases Message
+embeds — never on `vercel-ai-provider` directly. Upgrading the SDK
+edits only `common/llm-types` (DTO seam) + `services/inference`
+(runtime/client seam), the two crates that own the direct vercel-ai
+dep; this crate stays unchanged. CI gate: `scripts/check-vercel-ai-seam.sh`.
 
 ## Conventions
 

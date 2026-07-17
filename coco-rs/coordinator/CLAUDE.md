@@ -1,40 +1,42 @@
 # coco-coordinator
 
 Spawn lifecycle for the agent-team subsystem. Owns the runner, runner
-loop, mailbox IPC, team file, terminal pane backends (tmux / iTerm2 /
-in-process), agent identity / discovery / reconnect, and the
+loop, mailbox IPC, team files, terminal pane backends (tmux / iTerm2 /
+in-process), agent identity / discovery, and the
 [`coco_tool_runtime::AgentHandle`] implementation the tool layer
 invokes.
 
 ## Layer
 
-L5 (root). Sits next to `commands`, `tasks`, `memory`. Shared data shapes (mailbox protocol,
-sub-agent state snapshots, team / teammate / standalone-agent context,
-task entry) live in `coco_types::agent_ipc` so the coordinator, host, and
-surfaces share values without importing one another.
+L5 (root). Sits next to `commands`, `tasks`, `memory`. Shared data shapes
+(mailbox protocol, sub-agent state snapshots, team / teammate /
+standalone-agent context, task entry — incl. `InProcessTeammateTaskState`,
+which lives in `coco_types`) live in `coco_types::agent_ipc` so the
+coordinator, host, and surfaces share values without importing one another.
 
 ## Module map
 
 | Module | Purpose |
 |---|---|
 | `runner` / `runner_loop` | Outer lifecycle + per-iteration scheduling. `InProcessAgentRunner`, `PermissionBridge`, `InProcessRunnerConfig`, `AgentExecutionEngine` trait. |
-| `agent_handle/` | `SwarmAgentHandle: AgentHandle` — the bridge that AgentTool dispatches to. Split: `mod.rs` (struct + setters + trait impl + teammate dispatch), `spawn.rs` (sync + background subagent dispatch), `handoff.rs` (post-spawn classifier + AgentSummary), `resume.rs` (background-spawn resume). |
+| `runner_loop_mailbox_permission` / `_notify` / `_wait` | Split from `runner_loop`: cross-process worker permission over mailbox IPC (pane-mode teammates can't share the leader's `ToolPermissionBridge`); notification / task helpers writing to the team-lead inbox; plan-approval mailbox waiter. |
+| `agent_handle/` | `SwarmAgentHandle: AgentHandle` — the bridge AgentTool dispatches to. Split: `mod.rs` (struct + setters + trait impl + teammate dispatch), `spawn.rs` (sync + background subagent dispatch), `handoff.rs` (post-spawn classifier + AgentSummary), `resume.rs` (background-spawn resume), `teammate_engine.rs` (`AgentQueryEngine` → `AgentExecutionEngine` bridge). |
 | `inprocess_backend` | `InProcessBackend: TeammateExecutor` — wraps `InProcessAgentRunner` for the registry. Lives outside `pane/` because it composes the runner. |
-| `mailbox/{mod,io,lock,protocol}.rs` | File-based teammate inboxes (`~/.coco/teams/{team}/inboxes/{agent}.json`) with `fs2` advisory locking + retry/jitter. Split into `io.rs` (path / JSON r/w), `lock.rs` (fs2 + 30-retry exponential backoff), `protocol.rs` (envelope codec). |
-| `team_file` | `~/.coco/teams/{team}/config.json` r/w + lock helpers. |
-| `task` | `InProcessTeammateTaskState` — UI mirror state for in-process teammates (capped at 50 messages). |
+| `mailbox/{mod,io,lock,protocol}` | File-based teammate inboxes (`<config_home>/teams/{team}/inboxes/{agent}.json`) with `fs2` advisory locking: `io.rs` (path / JSON r/w), `lock.rs` (30-retry exponential backoff), `protocol.rs` (envelope codec). |
+| `team_file` | `<config_home>/teams/{team}/config.json` r/w + lock helpers. `COCO_TEAMS_DIR` overrides the base dir (test isolation). |
+| `roster_store` | Coordinator-owned roster lifecycle — the single write path for team membership and active/idle transitions (`team_file` stays raw file IO for discovery/tests). |
+| `session_team` | Implicit session-team bootstrap: a leader session idempotently owns one team, `session-<sessionId[:8]>`, created at CLI startup — not by a model tool call. |
 | `identity` | 3-tier teammate identity resolution: thread-local context → dynamic context → env vars. |
-| `discovery` | Team / teammate enumeration via `team.json`. |
+| `discovery` | Team / teammate enumeration from the teams dir. |
 | `prompt` | Teammate system-prompt addendum builder. |
-| `reconnect` | Restore team context from resumed sessions. |
 | `teammate` | Model fallback, init hooks, mode snapshot, leader permission bridge, spawn helpers. |
 | `config` | `TeammateMode` (Auto / Tmux / Iterm2 / InProcess) + per-team config. |
 | `worktree` | `AgentWorktreeManager` for `isolation: "worktree"` subagents. |
 | `spawn` | CLI flag building + env var inheritance for spawned teammates. |
 | `constants` | Tmux session names, env-var keys, `TEAM_LEAD_NAME`. Re-exports `coco_types::AgentColorName` for path stability. |
 | `types` | `BackendType`, `TeammateIdentity`, `TeamManager`, `TeamFile`, `TeamMember`, `HandoffDecision`, `AgentSpawnResult`, plus the SwarmPermission* + related types. |
-| `pane/mod.rs` | `PaneBackend` trait, `TeammateExecutor` trait, `BackendRegistry`, detection helpers (`is_inside_tmux`, `is_in_iterm2`, `is_it2_cli_available`, `is_tmux_available`). |
-| `pane/{tmux,iterm2,pane_executor,layout,it2_setup}` | Concrete backend impls + iTerm2 Python bootstrap. |
+| `error` | Tier-3 typed error: `ErrorExt` + `StatusCode` classification. |
+| `pane/` | `PaneBackend` / `TeammateExecutor` traits, `BackendRegistry`, detection helpers (`is_inside_tmux`, `is_in_iterm2`, …); concrete `tmux` / `iterm2` / `pane_executor` / `layout` / `it2_setup` backends. `layout::assign_teammate_color(name@team)` is the per-teammate color cache (stable within a session). |
 
 ## Key invariants
 
@@ -61,27 +63,11 @@ surfaces share values without importing one another.
 ## Conventions
 
 - Modules import siblings via `use crate::<module>` — no `as swarm_*`
-  alias artifacts (those were a mechanical-move leftover and were
-  removed in the post-extraction cleanup).
-- `coco_types::AgentColorName` is the single canonical color enum;
-  `crate::constants::AgentColorName` re-exports it.
+  alias artifacts.
 - Pure-logic helpers belong in `coco-subagent` (catalog, prompt rendering,
   filter, fork context, transcript filter, coordinator-mode templates).
   This crate is the orchestration layer — tokio, fs2, file IO, env vars,
   process spawning.
-
-## Color caches
-
-Two distinct caches live in `pane::layout`, both reset by
-[`clear_teammate_colors`]:
-
-- `assign_teammate_color(name@team)` — per-teammate, persists across
-  spawns within a session so `lead@my-team` always renders in the same
-  color. Used by `agent_handle::spawn_teammate` and `send_message` color
-  routing.
-- `assign_agent_type_color(AgentTypeId)` — per-agent-type, so all
-  `Explore` spawns share one color regardless of how many copies are
-  running. Populated by `agent_handle::spawn::spawn_subagent`.
 
 ## Open follow-ups (tracked in code as `TODO(...)`)
 

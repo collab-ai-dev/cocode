@@ -34,9 +34,12 @@ QueryEngine ─► CoreEvent ─► BridgeOutMessage ─► transport (NDJSON/WS
 
 The IDE bridge is NOT a direct IDE↔agent WebSocket relay. IDEs connect as MCP
 servers (not through this crate). This crate owns the REPL bridge (stdio NDJSON)
-and permission-relay primitives. The CCR daemon spawn modes (SingleSession /
-Worktree / SameDir) are documented in `docs/internal/crate-coco-bridge.md` and
-wired from `coco-cli` (`Commands::RemoteControl`).
+and permission-relay primitives. There is no CLI daemon entry point — the former
+`remote-control` / `rc` / `bridge` subcommands were removed (`app/cli` rejects
+them as removed placeholders). The production consumer is `app/agent-host`
+(`bridge_control.rs` implements `ControlRequestHandler`, routed via
+`coco_bridge::dispatch_control`). CCR daemon spawn modes exist only as a design
+sketch in `docs/internal/crate-coco-bridge.md` (historical; the code wins).
 
 ## Deliberately Not Implemented
 

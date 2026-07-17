@@ -3,9 +3,8 @@
 Host orchestration layer over the pure [`coco-goals`] domain — turns reducer
 decisions into durable, observable session state. Tier-3 main-trunk
 (thiserror + `coco-error` `ErrorExt`). Depends only on `coco-goals`,
-`coco-types`, `coco-error`, `tokio` (sync). The concrete session-store-backed
-`GoalStore` and the live session-runtime/query/AppServer/TUI wiring live in the
-consuming crates (agent-host / query), not here.
+`coco-types`, `coco-error`, `tokio` (sync). Live wiring lives in the
+consuming crates — see the last section.
 
 ## Key types
 
@@ -31,11 +30,18 @@ consuming crates (agent-host / query), not here.
 - The handle never schedules turns or registers wakes itself — it returns
   `GoalEffect`s for the supervisor/session-runtime to execute.
 
-## Live-wiring seams (implemented by the session runtime / query engine)
+## Live-wiring seams (implemented by)
 
-The traits above are the boundary to the live surfaces, still to be wired:
-`GoalStore` (session-JSONL-backed, lease-guarded), `PlanSource`
-(`PlanArtifactService` over the plan file), `CompletionVerifier` (tool-capable,
-model-backed), `SessionTurnPort` (AppServer turn slot), plus the reminder adapter
-that renders `GoalTurnContext` through `coco-system-reminder` and the goal tools
-(`get_goal` / `report_goal_turn`) that feed dispositions back to the coordinator.
+Concrete impls live in the consuming crates:
+
+- `GoalStore` → `TranscriptGoalStore`; `PlanSource` → `SessionPlanSource`;
+  `SessionTurnPort` + supervisor driver → `SessionGoalTurnPort` — all under
+  `app/agent-host/src/session/` (`goal_store.rs` / `goal_plan.rs` / `goal_driver.rs`).
+- Reminder adapter → `goal_reminder::render_goal_context` (agent-host), feeding
+  the `goal_context` generator in `coco-system-reminder`.
+- Goal tools (`GetGoalTool` / `ReportGoalTurnTool` / `CreateGoalTool`) →
+  `core/tools` (`goal_tools.rs`, default-registered), reaching the runtime via
+  `coco-tool-runtime::GoalHandle` (impl: `goal_tool_handle.rs`).
+- `CompletionVerifier` — live wiring passes the `AlwaysVerified` double (the
+  coordinator's deterministic gates carry the audit); a tool-capable /
+  model-backed verifier is not yet implemented.

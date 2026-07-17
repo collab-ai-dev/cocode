@@ -8,7 +8,6 @@ argument-hint: [target-file-path]
 
 - Target file: $ARGUMENTS (default: CLAUDE.md in project root)
 - Active workspace: `coco-rs/` (primary development)
-- Reference projects: `coco-rs/` and `codex-rs/` (read-only reference implementations)
 - Workspace root: !`ls coco-rs/Cargo.toml`
 - Existing CLAUDE.md line count: !`wc -l CLAUDE.md`
 
@@ -21,6 +20,9 @@ Regenerate CLAUDE.md by **discovering** all project structure at runtime. This c
 - **Size budget**: target **< 30k chars** (CC memory warns at 40k). Root CLAUDE.md is loaded every session and consumes context for every turn; the smaller it is, the more room the agent has for real work.
 - **Root file = rules & conventions.** Reference content (type lists, field enumerations, exhaustive module inventories) belongs in each crate's own `CLAUDE.md`. Root links to them; it does not copy them.
 - **Concise but informative**: tables over prose. One-line purpose per crate is enough — the agent opens the crate's own `CLAUDE.md` for detail.
+- **Crate-table rows are HARD-CAPPED at one line (~140 chars).** A row that grows invariants, type lists, or seam details is copying the crate's own `CLAUDE.md` — trim it back to purpose-only. The row is a routing entry, not a summary.
+- **Root contains only universally-applicable conventions.** Domain-scoped convention blocks (e.g. ratatui style, provider-specific rules) belong in the owning crate's `CLAUDE.md`, which auto-loads when the agent works there.
+- **State each rule once.** No rule + diagram + "why" triplication — one statement plus at most one compact why.
 - **No fragile counts.** Do not write `"(5)"`, `"26 crates"`, `"42 tool impls"`, `"18 contexts, 73+ actions"`, `"8 roles"`. These drift every time someone adds a file and carry no insight. Just name the thing (`ModelRoles`, `Utils`, `tools`); anyone who cares can `ls` or grep.
 - **Utils is the exception — it is a capability catalog.** For every utils crate, keep a one-line description in a table so the agent can scan for existing capabilities (path handling, caching, git, encoding, fuzzy search, frontmatter, secret redaction, …) before rolling its own. A bare list of names defeats the purpose.
 - **Progressive disclosure**: main file gives the overview; links point at detailed docs.
@@ -56,17 +58,7 @@ Regenerate CLAUDE.md by **discovering** all project structure at runtime. This c
 
    Other flows (shell execution, MCP integration, background tasks, …) should **not** be inlined — add a trailing sentence like `"For shell execution, MCP integration, background tasks: see the respective crate's CLAUDE.md"`. Six detailed diagrams in root was a major source of past bloat. Keep each diagram terse (≤ 10 lines) and discovered from code, not hardcoded.
 
-9. **Discover design patterns**: Scan the workspace for cross-cutting design patterns by grepping for characteristic signatures:
-   - `Arc<Mutex` / `Arc<RwLock` → shared state pattern (note which crates use it heavily)
-   - `CancellationToken` → cancellation pattern
-   - `mpsc::Sender` / `watch::Sender` → event-driven pattern
-   - Builder structs (types ending in `Builder`) → builder pattern
-   - `#[async_trait]` + `pub trait` → trait abstraction pattern
-   - `is_meta` / meta messages → meta message pattern
-   - Callback function types (`Fn`, `Box<dyn Fn`) → callback decoupling pattern
-   - Facade types → facade pattern
-
-   Summarize as a "Key Design Patterns" table with columns: Pattern | Where | Details. Only include patterns that are actually found in the codebase.
+9. **Do NOT emit a "Key Design Patterns" table.** Inferable patterns (Builder, Arc sharing, cancellation, registries, facades) are exactly the content best practice says to cut — an agent derives them from code for free. Cross-cutting *policies* with a non-obvious "why" (event-stream isolation, typed extension slots, permission pipeline) belong in the preserved **Design Decisions** section, stated once.
 
 ### Step 2: Generate Architecture Diagram
 
@@ -84,13 +76,12 @@ Assemble the file in this section order:
 2. **AGENTS.md reference** — "Read `AGENTS.md` for Rust conventions."
 3. **Commands** — from justfile discovery (Step 1.5)
 4. **Architecture** — generated diagram (Step 2)
-5. **Key Data Flows** — ASCII flow diagrams for agent turn lifecycle, configuration resolution, provider call chain, and shell execution flow (Step 1.8)
-6. **Crate Guide** — one table per layer. **All layers use `Crate | Purpose` only** — no `Key Types` column in root (types live in per-crate CLAUDE.md). **Do NOT put a count in the heading** (`### Utils`, not `### Utils (26)`). The Utils table is mandatory full-width (one-line description per crate) because it serves as the agent's capability catalog — "check here first before implementing any basic utility" — a bare name list defeats that purpose.
-7. **Key Design Patterns** — table from Step 1.9 with columns: Pattern | Where | Details
-8. **Error Handling** — from error pattern scan (Step 1.6)
-9. **Specialized Documentation** — table linking all discovered CLAUDE.md files (Step 1.4)
-10. **Preserved sections** — Design Decisions, References, or any other human-authored sections from Step 1.7
-11. **References** — links to AGENTS.md, error docs, user docs
+5. **Key Data Flows** — exactly the 3 ASCII flow diagrams from Step 1.8 (agent turn lifecycle, configuration resolution, provider call chain)
+6. **Crate Guide** — one table per layer. **All layers use `Crate | Purpose` only** — no `Key Types` column in root (types live in per-crate CLAUDE.md), every row a single line (~140 chars max). **Do NOT put a count in the heading** (`### Utils`, not `### Utils (26)`). The Utils table is mandatory full-width (one-line description per crate) because it serves as the agent's capability catalog — "check here first before implementing any basic utility" — a bare name list defeats that purpose.
+7. **Error Handling** — from error pattern scan (Step 1.6)
+8. **Specialized Documentation** — pointer section only: state that every crate has a `CLAUDE.md` and that the per-layer crate tables double as the index; link only the docs that are NOT crate CLAUDE.mds (error-codes README, vercel-ai TS-port lineage README, event-hub spec, user docs, internal notes). Do NOT re-enumerate crate lists here — that was a third copy of the same inventory.
+9. **Preserved sections** — Design Decisions, References, or any other human-authored sections from Step 1.7
+10. **References** — links to AGENTS.md, error docs, user docs
 
 ### Step 4: Write and Verify
 
@@ -104,6 +95,10 @@ Write the file, then verify:
 6. **No fragile counts**: grep the generated file for `\(\d+\)` in headings, and for patterns like `\d+ (crates|impls|roles|modules|contexts|actions|tools)`. Any hit is a regression — replace with a plain name or remove.
 7. **No Key Types column**: every crate table must have only `Crate | Purpose`. A `Key Types` column in root is a regression.
 8. **Utils table has per-crate descriptions**: not a bare comma-separated name list. Utils is the agent's capability catalog and earns its full table.
+9. **No "Key Design Patterns" section**: its presence is a regression (see Step 1.9).
+10. **Single-line crate rows**: no crate-table row exceeds ~140 chars. Longer rows are copying the crate's own CLAUDE.md — trim to purpose-only.
+11. **Universal-only conventions**: no domain-scoped convention block (TUI/ratatui style, provider-specific rules) at root — move to the owning crate's CLAUDE.md.
+12. **No closed-set enumerations that live in code**: don't list enum variants (Feature, ModelRole variants beyond what a Design Decision needs) or per-tier module name lists — point at the source file; enumerations rot.
 
 If any check fails, fix the issue and re-verify before proceeding.
 
@@ -129,6 +124,9 @@ Output a summary:
 - [ ] No fragile counts (no `(N)` headings, no `"N crates/impls/roles/…"`)
 - [ ] No `Key Types` column in any crate table
 - [ ] Utils table has per-crate one-line descriptions
+- [ ] No "Key Design Patterns" section
+- [ ] All crate rows single-line (≤ ~140 chars)
+- [ ] No domain-scoped convention blocks (root = universal only)
 ```
 
 ## Important Rules
@@ -141,6 +139,10 @@ Output a summary:
 - Do NOT add a `Key Types` column to any crate table — those types belong in per-crate `CLAUDE.md`
 - Do NOT write counts (`(5)`, `26 crates`, `42 tool impls`, `8 roles`) — they drift and carry no insight
 - Do NOT inline more than 3 data flow diagrams — every extra one becomes dead weight within a year
+- Do NOT emit a "Key Design Patterns" table — inferable patterns are cut-content; policies go in Design Decisions
+- Do NOT let any crate-table row exceed one line (~140 chars) — longer rows copy the crate's own CLAUDE.md
+- Do NOT keep domain-scoped convention blocks (TUI style, provider rules) at root — root is universal-only
+- Do NOT enumerate code-owned closed sets (enum variants, per-tier module lists) — point at the source file
 - DO enforce a size budget: target < 30k chars, hard stop at 40k (CC memory warning threshold)
 - DO make Utils a full-width table with per-crate descriptions — it is the agent's capability catalog
 - DO preserve human-authored sections (Design Decisions, etc.) from the existing file
@@ -157,3 +159,5 @@ A past regeneration hit **42k chars** (over the 40k CC warning) because it inlin
 5. Keeping the Utils table *full* because the agent uses it as a capability catalog — a bare name list defeats the purpose
 
 The generator that produced the bloated version followed its own instructions faithfully. The root cause was in the instructions, not the execution — hence these hard rules.
+
+A second audit (2026-07) found the residual bloat sources were again instruction-driven: the then-mandated "Key Design Patterns" table (pure inferable content), crate-table rows that had grown into multi-line mini-CLAUDE.mds (`llm-types`, `tui-ui`, `goals`), a domain-scoped TUI-conventions block, one rule stated three times (pre-commit), and a third full crate enumeration in Specialized Documentation. All five are now banned above. The audit also confirmed enumerated closed sets rot fastest: the root's `Feature` list claimed 8 variants while the enum had ~33.

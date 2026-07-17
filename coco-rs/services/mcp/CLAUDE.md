@@ -4,18 +4,13 @@ MCP server lifecycle, config, auth, discovery, naming, channel permissions. Dele
 
 ## Key Types
 
-- Connections: `McpConnectionManager`, `McpConnectionState`, `McpClientError`, `ConnectedMcpServer`
-- Config: `McpConfigLoader`, `McpServerConfig`, `ScopedMcpServerConfig`, `ConfigScope`, `McpTransport`, `McpConfigChanged`, `watch_mcp_configs`, `DefinedMcpServer`, `defined_servers` (the single definition merge; the loader and `/mcp list` both derive from it), `entry_is_legacy_disabled` (removed `"disabled"` field → fail-safe off)
-- Activation (`activation`): `McpActivation` (`Active` / `UserDisabled` / `AwaitingApproval` / `PolicyDenied` / `LegacyDisabled`), `McpActivationPolicy` (combines per-project user toggles from `GlobalConfig.projects` with the settings-derived `coco_config::McpPolicyConfig`; `filter_active` is the connection-path choke point for file **and** plugin servers), `project_key`. Definitions may come from the repo; nothing that *activates* one may. Repo-defined (Project-scope) servers fail closed until approved.
-- Discovery: `DiscoveryCache`, `DiscoveredTool`, `DiscoveredResource`, `DynamicResourceQuery`, `ServerCapabilities`, `McpCapabilities`, `McpResource`, `McpToolDefinition`, `ToolAnnotations`, `discover_all`, `discover_tools_from_server`, `discover_resources`, `discover_resources_matching`, `refresh_server_capabilities`
-- Auth: `OAuthConfig`, `OAuthTokens`, `OAuthTokenStore`
-- Client-hosted MCP: `ClientRouteMessage`, `ClientRouteFuture`,
-  `McpServerConfig::ClientHosted`, `McpClientHostedConfig`
-- Channels: `ChannelPermission`, `ChannelPermissionRelay`, `DenyAllRelay`, `StaticPermissionRelay`
-- Elicitation: `ElicitationRequest`, `ElicitationResult`, `ElicitationField`, `ElicitationFieldType`, `ElicitationMode`, `ElicitationType`, `ElicitResult`
+- Connections: `McpConnectionManager` (+ `McpConnectionState`, `ConnectedMcpServer`)
+- Config: `McpConfigLoader`, `McpServerConfig` (incl. `::ClientHosted`), `ConfigScope`, `watch_mcp_configs`; `defined_servers` is the single definition merge — the loader and `/mcp list` both derive from it, so the views cannot disagree
+- Activation (`activation`): `McpActivation` + `McpActivationPolicy`, which combines per-project user toggles from `GlobalConfig.projects` with the settings-derived `coco_config::McpPolicyConfig`. `filter_active` is the connection-path choke point for file **and** plugin servers. Definitions may come from the repo; nothing that *activates* one may — repo-defined (Project-scope) servers fail closed until approved, and a removed `"disabled"` field is fail-safe off (`entry_is_legacy_disabled`)
+- Discovery: `DiscoveryCache` + `discover_*` functions
+- Auth: `OAuthConfig`, `OAuthTokenStore`; elicitation types under `Elicitation*`
+- Channels: `ChannelPermissionRelay` (+ `DenyAllRelay`, `StaticPermissionRelay`)
 - Naming: `mcp_tool_id`, `parse_mcp_tool_id`
-- Tool call: `tool_call` module
-- Re-exports from `coco-rmcp-client`: `RmcpClient`, `ElicitationResponse`, `McpAuthStatus`, `SendElicitation`
 
 ## Note
 

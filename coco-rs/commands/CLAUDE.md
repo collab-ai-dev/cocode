@@ -1,14 +1,14 @@
 # coco-commands
 
-Slash command registry and built-in implementations (help, config, clear, compact, model, session, mcp, plugin, diff, commit, pr, review, doctor, ...). ~96 commands across v1/v2/v3.
+Slash command registry and built-in implementations (help, config, clear, compact, model, session, mcp, plugin, diff, commit, pr, review, doctor, ...).
 
 ## Key Types
-- `CommandHandler` trait — `execute(args: &str) -> Result<String>`
+- `CommandHandler` trait — primary method `execute_command(&self, args: &str) -> Result<CommandResult>`; `execute(args) -> Result<String>` is a legacy default-error shim only
 - `RegisteredCommand` — metadata (`CommandBase` from coco-types) + optional handler + `is_enabled` feature-flag gate
-- `CommandRegistry` — name-keyed map with alias lookup; filter views: `visible()`, `client_visible()` (strips `is_sensitive`), `safe_for(CommandSafety)`
+- `CommandRegistry` — name-keyed map with alias lookup; `execute` / `execute_command` dispatch; filter views: `visible()`, `client_visible()` (strips `is_sensitive`), `safe_for(CommandSafety)`
 - `BuiltinCommand` / `AsyncBuiltinCommand` — sync and async built-in handler wrappers
 - `builtin_base()`, `builtin_base_ext()` — construct default `CommandBase` with safety + argument-hint options
-- `register_builtins()` — registers the starter ~25; `register_extended_builtins` in `implementations::`
+- `register_builtins()` (lib.rs) + `register_extended_builtins[_with_cwd]()` (implementations)
 
 ## Modules
 - `handlers/` — richer command handlers that need app state
@@ -17,19 +17,18 @@ Slash command registry and built-in implementations (help, config, clear, compac
 ## Deliberately Not Ported
 
 **Audits should skip the commands listed below — these are conscious omissions,
-not gaps.** If a future change re-introduces one of these, remove the
-corresponding row from this table and add it to the registry.
+not gaps.** If a future change re-introduces one, remove the row and add the
+command to the registry.
 
 ### Group A — Provider / account-specific (Anthropic-only flows)
 
-Skipped because the multi-provider scope means no single sign-in / billing /
-account-management surface applies across providers.
+No single sign-in / billing / account surface applies across providers.
 
 | Command | Reason |
 |---|---|
-| `/bug` | Anthropic `/feedback` alias. coco-rs intentionally does not register it so prompts and docs point users at the explicit `/feedback` command and the `collab-ai-dev/cocode` issue tracker instead of upstream Anthropic routes. |
+| `/bug` | Anthropic `/feedback` alias. Intentionally unregistered so prompts and docs point at `/feedback` + the `collab-ai-dev/cocode` issue tracker. |
 | `/fast` | Claude.ai/console-only fast-mode picker; coco-rs exposes fast-mode via `FastModeState` + Ctrl+Shift+F keybind only. |
-| `/release-notes` | Fetches Anthropic-hosted changelog; not slash-invoked in coco-rs (CLI subcommand only). |
+| `/release-notes` | Fetches Anthropic-hosted changelog; CLI subcommand only in coco-rs, not slash-invoked. |
 | `/privacy-settings` | `isConsumerSubscriber()`-gated; calls Anthropic Grove API. |
 | `/rate-limit-options` | Claude.ai-only, hidden internal. |
 | `/reset-limits` (+ non-interactive) | Upstream source is a literal `isEnabled: () => false` stub. |
@@ -39,47 +38,34 @@ account-management surface applies across providers.
 | `/mobile` (aliases `/ios`, `/android`) | claude.ai mobile-app QR flow. |
 | `/desktop` (alias `/app`) | `claude-ai` + macOS/win32 only; Anthropic desktop client install. |
 | `/passes` | claude.ai referral / Passes program. |
-| `/terminal-setup` | NOT actually provider-specific (corrected): upstream is a generic Shift+Enter newline keybinding installer for VS Code / Apple Terminal. Deferred as a low-priority generic port, not a provider/account concern — port if users ask for it. |
+| `/terminal-setup` | NOT actually provider-specific (corrected): generic Shift+Enter newline keybinding installer for VS Code / Apple Terminal. Deferred as a low-priority generic port — port if users ask. |
 | `/extra-usage` (+ non-interactive) | Anthropic admin-overage request flow. |
 | `/think-back` / `/thinkback-play` | Statsig-gated experimental Anthropic feature. |
-| `/stickers` | Anthropic Code sticker-merch order flow (ungated/user-facing upstream, but claude.ai-account-only merch). |
+| `/stickers` | Anthropic sticker-merch order flow (claude.ai-account-only). |
 
 ### Group B — Anthropic-internal stubs / first-party-only
 
-Skipped because the upstream source is already a literal stub placeholder, or
-the feature depends on Anthropic-internal infrastructure (KAIROS, CCR, advisor
-API beta) that coco-rs does not ship.
+Upstream source is a literal stub, or depends on Anthropic-internal
+infrastructure (KAIROS, CCR, advisor API beta) coco-rs does not ship.
 
 | Command | Reason |
 |---|---|
 | `/advisor` | Server-side Anthropic API beta `advisor-tool-2026-03-01`, first-party-only. |
 | `/ultraplan` | `feature('ULTRAPLAN')`; depends on Claude-Code-on-Web ("CCR") session backend. |
 | `/ultrareview` | CCR-backed multi-agent review with no local execution path. |
-| `/bughunter` | Upstream source is a literal `isEnabled: () => false` stub. |
-| `/autofix-pr` | Upstream source is a literal stub. |
-| `/issue` | Upstream source is a literal stub. |
-| `/onboarding` | Upstream source is a literal stub; in `INTERNAL_ONLY_COMMANDS`. |
-| `/share` | Upstream source is a literal stub; in `INTERNAL_ONLY_COMMANDS`. |
-| `/teleport` | Upstream source is a literal stub; in `INTERNAL_ONLY_COMMANDS`. |
+| `/bughunter`, `/autofix-pr`, `/issue`, `/ant-trace` | Upstream sources are literal stubs (`/ant-trace` was an Anthropic-only OTel trace toggle). |
+| `/onboarding`, `/share`, `/teleport`, `/backfill-sessions`, `/break-cache`, `/mock-limits`, `/good-claude`, `/perf-issue`, `/oauth-refresh` | Literal `isEnabled: () => false` stubs in `INTERNAL_ONLY_COMMANDS`. |
 | `/heapdump` | Node.js V8 heap snapshot; no Rust runtime equivalent. |
 | `/ctx_viz` | Anthropic-internal context probe; in `INTERNAL_ONLY_COMMANDS`. |
-| `/ant-trace` | Upstream source is a literal stub; original feature was an Anthropic-only OTel trace toggle. |
 | `/brief` | KAIROS-only (`feature('KAIROS_BRIEF')`); depends on Anthropic-internal `BriefTool`. |
-| `/backfill-sessions` | Literal `isEnabled:()=>false` stub in `INTERNAL_ONLY_COMMANDS`. |
-| `/break-cache` | Literal `isEnabled:()=>false` stub in `INTERNAL_ONLY_COMMANDS` (prompt-cache debug). |
-| `/mock-limits` | Literal `isEnabled:()=>false` stub in `INTERNAL_ONLY_COMMANDS` (rate-limit mocking). |
-| `/good-claude` | Literal `isEnabled:()=>false` stub in `INTERNAL_ONLY_COMMANDS`. |
-| `/perf-issue` | Literal `isEnabled:()=>false` stub in `INTERNAL_ONLY_COMMANDS`. |
-| `/oauth-refresh` | Literal `isEnabled:()=>false` stub in `INTERNAL_ONLY_COMMANDS` (provider-internal). |
 | `/bridge-kick` | Real but `USER_TYPE==='ant'`-gated bridge-failure-injection diagnostic; `INTERNAL_ONLY_COMMANDS`. |
 | `/init-verifiers` | `type:'prompt'`, `INTERNAL_ONLY_COMMANDS` (ant-only); generates Verify-agent verifier skills. |
 
 ### Group C — Feature-gated upstream optionals (compiled out of the public build)
 
-Skipped because upstream gates each behind a GrowthBook/`feature(...)` flag
-that is **off** in the public bundle (the command module is dead-code-eliminated),
-or behind claude.ai-only subscriber/policy checks. coco-rs ships no equivalent
-backend, so the slash command is intentionally absent.
+Gated behind GrowthBook/`feature(...)` flags off in the public bundle
+(dead-code-eliminated) or claude.ai-only subscriber/policy checks; coco-rs
+ships no equivalent backend.
 
 | Command | Upstream gate |
 |---|---|
@@ -95,48 +81,43 @@ backend, so the slash command is intentionally absent.
 
 ### Re-introducing one of these
 
-If a downstream consumer needs a skipped command, treat it as a feature add,
-not a bug fix:
-1. Remove the row from the table above.
-2. Implement the command in `implementations.rs` or `handlers/`.
-3. If the command depends on Anthropic-only infrastructure, hide it behind a
-   `Feature` gate so non-Anthropic providers stay clean.
+Treat it as a feature add, not a bug fix: remove the row, implement in
+`implementations.rs` or `handlers/`, and hide Anthropic-only infrastructure
+behind a `Feature` gate so non-Anthropic providers stay clean.
 
 ## Deferred (registered but thinned)
 
 These commands ARE registered and respond, but the body is intentionally
-simpler than the full feature pending follow-up work. Don't flag them as
-missing — they are stubs by design — but DO update this table when the gap
-closes.
+simpler than the full feature. Don't flag them as missing — DO update this
+table when a gap closes.
 
 | Command | Rust state | Gap |
 |---|---|---|
-| `/insights` | `register_static_prompt` with 12-line body in `prompts/insights.txt` | Full behavior: Opus-driven facet extraction + SCP-from-Coder for remote sessions + JSONL log parsing. Rust delegates the work to the agent via prompt. P3. |
-| `/workflow` (alias `/workflows`) | Prompt command in `prompts/workflow.txt` with `allowed_tools=["Workflow"]` | Bare `/workflow` opens the workflow picker; `/workflow <name>` launches through the Workflow tool. Launched workflows run as `local_workflow` background tasks and the TUI background-task/detail surfaces render workflow progress notifications. Gap: no workflow editor/creation UI yet. P2. |
-| `/ide` | Static text stub in `ide_handler` | Full behavior: `detectRunningIDEs`, JetBrains/VS Code auto-connect dialogs, MCP cache invalidation. Rust ships the `coco-bridge` crate but the slash command is not wired to it. P2 — wire when bridge UX is finalized. |
-| `/help` | Hardcoded `CATEGORIES` in `handlers/help.rs` | User-installed skills, plugin contributions, and MCP-bridged tools won't appear in `/help` output. P1 — refactor to iterate the live `CommandRegistry`; needs handler-side registry access (currently `CommandHandler::execute_command(&self, args: &str)` doesn't carry one). |
-| `/color` | `dispatch_color` writes only to live `app_state.agent_color` | Choice should persist in the session transcript so it survives restarts. Currently ephemeral. P3 — wire to settings.json or session metadata. |
-| `/diff` | Plain `/diff` renders the uncommitted git diff; TUI intercepts `/diff session` and `/diff turn <message-id>` to render file-history snapshot diffs | SDK/headless still expose only the git-diff text handler. P3. |
-| `/tasks` (alias `bashes`) | No-arg opens the background-tasks modal; `list`, `detail <id>`, and `cancel <id>` use the live `TaskRuntime` | Full interactive output scrolling remains TUI-side follow-up. P3. |
-| `/mcp` | Async overlay for list/add/remove/enable/disable | Core ops work; interactive wizard UX (xaa IDP, add-server) thinned. P2. |
-| `/hooks` | Async overlay shows hook configs; `/hooks reload` reloads the live registry | Read-oriented; interactive editing not yet available. P3. |
-| `/sandbox` (file `sandbox-toggle`) | Sync handler writes canonical modes and supports `exclusions`, `exclude <pattern>`, `unexclude <pattern>` | Per-platform availability panel text is still thin. P3. |
-| `/doctor` | Async health-check text report | Install-method + auto-updater status not applicable to coco's distribution. Text report is sufficient. P3. |
-| `/status` | Sentinel → live `runtime.status_report()`; TUI opens a read-only status panel, SDK/headless keep text output | Panel jump actions to model/settings/permissions/sandbox surfaces are not implemented. P3. |
+| `/insights` | `register_static_prompt` body in `prompts/insights.txt` | Full behavior (Opus facet extraction, remote-session SCP, JSONL parsing) delegated to the agent via prompt. |
+| `/workflow` (alias `/workflows`) | Prompt command (`prompts/workflow.txt`, `allowed_tools=["Workflow"]`); bare form opens the picker, `<name>` launches via the Workflow tool as a `local_workflow` background task | No workflow editor/creation UI yet. |
+| `/ide` | Static text stub in `ide_handler` | Not wired to `coco-bridge` (IDE detect / auto-connect / MCP cache invalidation). Wire when bridge UX is finalized. |
+| `/help` | Hardcoded `CATEGORIES` in `handlers/help.rs` | User skills, plugin contributions, MCP tools don't appear. Needs handler-side registry access (`execute_command` doesn't carry one). |
+| `/color` | `dispatch_color` writes only live `app_state.agent_color` | Ephemeral; should persist to settings/session metadata. |
+| `/diff` | Plain form renders uncommitted git diff; TUI intercepts `/diff session` and `/diff turn <message-id>` for file-history snapshot diffs | SDK/headless expose only the git-diff text handler. |
+| `/tasks` (alias `bashes`) | No-arg opens the background-tasks modal; `list` / `detail <id>` / `cancel <id>` use the live `TaskRuntime` | Full interactive output scrolling is TUI-side follow-up. |
+| `/mcp` | Async overlay for list/add/remove/enable/disable | Interactive wizard UX (xaa IDP, add-server) thinned. |
+| `/hooks` | Async overlay shows hook configs; `reload` reloads the live registry | Read-oriented; no interactive editing. |
+| `/sandbox` (file `sandbox-toggle`) | Sync handler writes canonical modes; supports `exclusions`, `exclude`, `unexclude` | Per-platform availability panel text still thin. |
+| `/doctor` | Async health-check text report | Install-method/auto-updater status not applicable to coco's distribution. |
+| `/status` | Sentinel → live `runtime.status_report()`; TUI opens read-only panel, SDK/headless text | Panel jump actions to model/settings/permissions/sandbox not implemented. |
 
 ## Interactive-only commands (TUI; no SDK/headless path)
 
 `/export`, `/branch` (alias `/fork`), and `/btw` do their real work in the TUI
-runner (`app/cli/tui_runner.rs` dispatch interceptors), not the registry sync
-handler. These are interactive-only (TUI) commands — they don't run meaningfully in headless `-p` mode. The registry
-handlers (`branch_handler`, `export_handler`) return honest usage guidance for
-the non-interactive surface; `/btw` additionally has an SDK `turn/start`
-handler fork path (shared `coco_agent_host::side_question`). Behavior notes:
+slash dispatch (`app/cli/src/tui/slash_execution.rs` / `slash_resolution.rs`),
+not the registry sync handler — they don't run meaningfully in headless `-p`
+mode. Registry handlers return honest usage guidance for non-interactive
+surfaces; `/btw` additionally has an SDK `turn/start` handler path (shared
+`coco_agent_host::side_question`).
 
-- `/export <filename>` writes the conversation (incl. tool activity) under cwd;
-  format inferred from extension (`.md`/`.json`/else text). No-arg opens the
-  format picker, which writes a timestamped default. Clipboard export is `/copy`
-  (coco split; TS bundles clipboard into the export dialog).
+- `/export <filename>` writes the conversation under cwd; format inferred from
+  extension (`.md`/`.json`/else text); no-arg opens the format picker.
+  Clipboard export is `/copy` (coco split).
 - `/branch` forks the on-disk transcript (`recovery::fork_conversation`,
   relabeling `session_id`) + live-switches via the `/resume` hydration path.
 - `/btw` answer is model-invisible but transcript-visible (TS modal is fully
@@ -144,46 +125,39 @@ handler fork path (shared `coco_agent_host::side_question`). Behavior notes:
 
 ## Always-Enabled General-Purpose Commands
 
-These commands are plain Rust features with no gating in coco-rs. **Do not
-introduce `is_enabled` for these** — they are intentionally available to
-every user.
+Plain Rust features with no gating. **Do not introduce `is_enabled` for
+these** — intentionally available to every user.
 
 | Command | What it does in coco-rs |
 |---|---|
 | `/version` | Prints `cocode v{CARGO_PKG_VERSION}`. |
-| `/feedback` | Generates a prefilled `collab-ai-dev/cocode` GitHub issue URL with version, commit, build time, OS, arch, and timestamp. Logs are excluded by default; `--with-logs` includes only a best-effort redacted tail of the current coco log and tells the user to review before submitting. No `/bug` alias. |
+| `/feedback` | Prefilled `collab-ai-dev/cocode` GitHub issue URL (version, commit, build time, OS, arch, timestamp). Logs excluded by default; `--with-logs` adds a redacted best-effort tail with a review reminder. No `/bug` alias. |
 | `/tag` | Toggles a searchable tag on the current session via `SessionManager::toggle_tag` (sentinel-based dispatch). |
-| `/files` | Lists `git ls-files` grouped by top-level directory with rough context-size estimate. (Description: "List git-tracked files in this repository".) |
+| `/files` | Lists `git ls-files` grouped by top-level directory with rough context-size estimate. |
 
 ## Rewind / Resume Naming
 
-Two distinct features:
-
 - **`/rewind`** — in-session TUI checkpoint picker (`openMessageSelector`
-  semantics). Operates on file-history snapshots; touches no
-  transcript-on-disk.
-- **`/resume`** — load a prior transcript and continue. CLI form: `--resume`
-  / `-r`. Reads JSONL; rebuilds chain via `coco_session::recovery`.
+  semantics); operates on file-history snapshots, touches no transcript-on-disk.
+- **`/resume`** — load a prior transcript and continue (CLI `--resume` / `-r`);
+  reads JSONL, rebuilds chain via `coco_session::recovery`.
 
-**Canonical names only.** Aliases (`/rewind` → `[checkpoint]`,
-`/resume` → `[continue]`) are intentionally dropped. Single dispatch
-arm per command — no `matches!(name, "rewind" | "checkpoint" | "undo")`
-fan-out, no alias entries in `RegisteredCommand.base.aliases`. Audits that
-reintroduce an alias must first justify why the divergence from this rule is
-worth carrying. The historical `/restore` and `--restore` names from an
-earlier coco-rs draft are likewise off the table.
+**Canonical names only.** Aliases (`checkpoint`, `continue`) are intentionally
+dropped: single dispatch arm per command, no `matches!(...)` fan-out, no
+entries in `RegisteredCommand.base.aliases`. Audits reintroducing an alias must
+justify the divergence. The historical `/restore` / `--restore` names from an
+earlier draft are likewise off the table.
 
 ## Permission/persistence gaps below the slash-command layer
 
-These items are NOT command-handler bugs but show up in audits because
-they manifest as "the command doesn't seem to do anything". They're
-tracked here so audits can cross-reference.
+NOT command-handler bugs, but they manifest as "the command doesn't seem to
+do anything" in audits:
 
-- `DialogSpec::PluginPicker`, `DialogSpec::McpbConfig`, `DialogSpec::Confirm`:
-  registered but `tui_runner::dispatch_slash_command` emits
-  `SlashCommandStatusKind::DialogPending` instead of opening a real
-  overlay. The dialog data is plumbed; the TUI consumer is not. Track
-  in `coco-tui::overlays`, not here.
-- `/permissions allow|deny|reset`: mutates `engine_config` for the
-  session but does not write to settings.json. Behavior is session-only
-  (`PermissionUpdateDestination::Session`). No fix needed.
+- `DialogSpec::PluginPicker` / `McpbConfig` / `Confirm`: registered, but the
+  TUI slash dispatch (`app/cli/src/tui/slash_execution.rs`) emits
+  `SlashCommandStatusKind::DialogPending` instead of opening a real overlay.
+  Dialog data is plumbed; the TUI consumer is not. Track in
+  `coco-tui::overlays`, not here.
+- `/permissions allow|deny|reset`: mutates `engine_config` for the session
+  only (`PermissionUpdateDestination::Session`); never writes settings.json.
+  No fix needed.

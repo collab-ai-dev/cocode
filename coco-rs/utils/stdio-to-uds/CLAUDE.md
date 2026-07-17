@@ -4,4 +4,4 @@ Connect to a Unix Domain Socket (or Windows equivalent via `uds_windows`) and br
 
 ## Key API
 
-- `run(socket_path: &Path) -> anyhow::Result<()>` — blocking; spawns a thread for socket→stdout, main thread copies stdin→socket, half-closes on EOF.
+- `run(socket_path: &Path) -> Result<(), StdioBridgeError>` (thiserror, Tier-2) — blocking; spawns a thread for socket→stdout, main thread copies stdin→socket, half-closes on EOF.

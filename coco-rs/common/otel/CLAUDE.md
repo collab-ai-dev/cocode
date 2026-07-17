@@ -15,7 +15,7 @@ OpenTelemetry tracing and metrics: OTLP gRPC/HTTP export, base events, metrics c
 
 ## Current Scope
 
-- **Shipped**: export pipeline (OTLP gRPC/HTTP, TLS, Statsig, InMemory) + 7 base events (conversation, prompt, tool_decision, tool_result, api_request, sse_event, completion).
+- **Shipped**: export pipeline (OTLP gRPC/HTTP, TLS, Statsig, InMemory) + app events — see `AppEventType` in `src/events.rs`.
 - **Not yet shipped**: higher-layer span hierarchy, business metrics, custom exporters (BigQuery / Perfetto / first-party event logger), operational controls (sampling / killswitch / PII safety / opt-out). See `docs/internal/crate-coco-otel.md` for the full roadmap.
 
 ## Conventions
@@ -54,23 +54,13 @@ third-party output. Full `EnvFilter` directives pass through verbatim.
 
 ### Layout toggles: `--log-location` (`COCO_LOG_LOCATION`)
 
-`SubscriberOpts.location` + `.thread_names` add `filename:line` and the
-thread name to each event (~30–80 bytes per line).
-Tri-state resolution in `app/cli/src/tracing_init.rs`:
-
-```
-explicit --log-location > COCO_LOG_LOCATION > settings.log.location > auto-rule
-```
-
-Auto-rule: when the resolved static filter enables DEBUG or TRACE for
-any `coco*` target, the toggle defaults to on. This includes both bare
-levels and full directives such as `coco=debug,info`. Thread name
-follows `location` byte-for-byte; there's intentionally no separate
-flag.
-
-Errors won't carry the **caller** site though — `file!()/line!()`
-points at the `tracing::*` macro call, not the error origin. For
-that, see `#[stack_trace_debug]` in `common/stack-trace-macro`.
+Adds `filename:line` + thread name per event. Resolution
+(`app/cli/src/tracing_init.rs`): `--log-location` > `COCO_LOG_LOCATION` >
+`settings.log.location` > auto-rule. **Auto-rule gotcha**: defaults ON
+whenever the resolved filter enables DEBUG/TRACE for any `coco*` target —
+including the default `coco=debug,info`. Thread name follows `location`;
+no separate flag. Note `file!()/line!()` is the macro call site, not the
+error origin — for that see `#[stack_trace_debug]` in `common/stack-trace-macro`.
 
 ## Logging conventions (workspace-wide)
 
@@ -117,6 +107,6 @@ current span unless they own substantial work worth a child span.
 ### Secret safety
 
 Any HTTP body, header, or env-var dump goes through
-`coco_secret_redact::redact_secrets` (`utils/secret-redact/src/lib.rs:122`)
+`coco_secret_redact::redact_secrets` (`utils/secret-redact`)
 before logging — and only at `trace!`. Never log a raw `Authorization`
 or `x-api-key` value at any level.

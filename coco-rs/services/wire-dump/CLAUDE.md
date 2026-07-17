@@ -15,11 +15,8 @@ provider transport's `vercel_ai_provider::WireTap` sink lives in
 on **neither `coco-inference` nor `vercel-ai-*`**.
 
 Deps: `coco-config` (the `WireDumpLevel` enum), `coco-secret-redact`,
-`serde_json`, `tokio` (off-thread writes), `tracing`. The only "upward"
-dep is `coco-config` (Common) — which is why it sits in `services/` for
-now. If `WireDumpLevel` were inlined as a crate-local enum, this would
-become a true `utils/` leaf; kept here until a second consumer makes
-that move worthwhile.
+`serde_json`, `tokio` (off-thread writes), `tracing`. The `coco-config`
+dep alone is why this sits in `services/` rather than `utils/`.
 
 ## Architecture: two seams
 
@@ -39,17 +36,15 @@ observe a secret.
 ## Key Types
 
 - `WireDumpConfig` — session-scoped config + seq counter + `Arc<dyn WireSink>`.
-  `new(session_dir, level, max_body_bytes, redact)` → `FileSink`;
-  `with_sink(sink, …)` injects a custom sink. `begin(ctx)` mints one
-  recorder per call.
-- `SessionWireRecorder` — capture/redact/classify core. Inherent
-  `on_request` / `on_response_chunk` / `on_response_body` / `finish`.
+  `new(…)` → `FileSink`; `with_sink(…)` injects a custom sink;
+  `begin(ctx)` mints one recorder per call.
+- `SessionWireRecorder` — capture/redact/classify core (the inherent
+  methods above).
 - `WireRecord` — redacted, ready-to-persist data handed to the sink.
-- `WireSink` (trait) + `FileSink` (default). Implement `WireSink` to send
-  captures elsewhere; redaction is already applied.
-- `WireOutcome` (`Success` / `Failure`) — the typed completion the
-  consumer passes to `finish`; authoritative for the persist decision so
-  `level=error` never guesses from bytes.
+- `WireSink` (trait) + `FileSink` (default); redaction is already applied.
+- `WireOutcome` (`Success` / `Failure`) — typed completion passed to
+  `finish`; authoritative for the persist decision so `level=error`
+  never guesses from bytes.
 - `WireTurnCtx` — `{ turn_id, provider, model }` identity for one call.
 
 ## Lifecycle
@@ -62,9 +57,9 @@ observe a secret.
   (cancellation, a failed stream *open*): synchronous write, byte
   heuristic for the outcome (non-2xx status / in-band `error` marker).
 
-The engine wiring (`LoopTurnState` field, create-in-`enter_turn`,
-`finish`-in-`consume_stream`, the `WireTap` adapter) all stays in
-`app/query`. This crate owns only capture + sink.
+Engine wiring (create-in-`enter_turn`, `finish`-in-`consume_stream`,
+the `WireTap` adapter) stays in `app/query`; this crate owns only
+capture + sink.
 
 ## On-disk layout (FileSink)
 

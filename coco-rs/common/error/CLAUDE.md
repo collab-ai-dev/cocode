@@ -4,7 +4,7 @@ Unified error handling: `StatusCode` classification, `ErrorExt` trait, snafu + v
 
 ## Key Types
 
-- `StatusCode` — 5-digit `XX_YYY` classification (categories: General 00-05, Config 10, Provider 11, Resource 12). Full list in `common/error/README.md`.
+- `StatusCode` — 5-digit `XX_YYY` classification (categories: General 00-05, Config 10, Provider 11, Resource 12, SystemReminder 13). Full list in `common/error/README.md`.
 - `ErrorExt` trait — `status_code()`, `is_retryable()`, `retry_after()`, `output_msg()`. Future: `telemetry_msg()` for PII-safe logging.
 - `StackError`, `BoxedError`, `BoxedErrorSource`, `PlainError`, `boxed` / `boxed_err` helpers.
 - Re-exports `snafu`, `snafu::Location`, and `#[stack_trace_debug]` proc macro.

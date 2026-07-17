@@ -4,32 +4,35 @@ Shared utilities for implementing AI SDK v4 providers. Depends only on `vercel-a
 
 ## SDK Spec
 
-Implements the `@ai-sdk/provider-utils` v4 specification.
+Implements the `@ai-sdk/provider-utils` v4 specification. Baseline commit,
+mirror scope, and intentional deviations: see [`../README.md`](../README.md).
 
-## Key Types
+## Domains
 
-API / fetch: `post_json_to_api[_with_client][_and_headers]`, `post_stream_to_api[_with_client][_and_headers]`, `get_from_api[_with_client]`, `ApiError`, `ApiResponse`, `ByteStream`, `DefaultErrorHandler`, `ErrorHandler`, `Fetch`, `FetchOptions`.
+One line per domain — browse `lib.rs` for the full surface.
 
-SSE framing: `SseDecoder` — UTF-8-safe byte→`data:`-line accumulator for OpenAI-wire chat streams. Buffers raw bytes and decodes only complete lines, so a multi-byte char split across a network chunk boundary is never corrupted. Shared by the `openai` / `openai-compatible` / `groq` chat models (each keeps its own event state machine but pumps bytes through this one decoder). Distinct from the blocking `parse_json_event_stream` (a `std::io::Read` iterator used off the async path).
+- API / fetch: `post_json_to_api*` / `post_stream_to_api*` / `get_from_api*` + `ResponseHandler` family (`Json` / `Stream` / `Text`), `ApiError`.
+- SSE framing: `SseDecoder` — see below.
+- Headers / URL / media: `combine_headers` / `normalize_headers`, data-URI + media-type parsing, URL normalization, `FormData`.
+- Loading: `load_api_key` / `load_setting` (+ `_optional` variants).
+- JSON / schema: `parse_json`, `Schema` / `json_schema_from_type`, JSON-instruction injection helpers.
+- Tooling: `dynamic_tool`, `execute_tool`, tool-call ID generate/parse, `StreamingToolCallTracker` (OpenAI-delta streaming tool-call accumulation, arguments-before-name safe).
+- Reasoning / validation: `map_reasoning_to_provider_{budget,effort}`, model-ID / tool-name / download-URL validation.
+- IDs / timing / encoding: `generate_id`, `delay`, `parse_retry_after`, base64 conversions.
 
-Response handlers: `ResponseHandler`, `JsonResponseHandler`, `StreamResponseHandler`, `TextResponseHandler`.
+## SseDecoder
 
-Headers / URL / media: `combine_headers`, `extract_header`, `normalize_headers`, `is_url_supported`, `parse_data_url`, `DataUri`, `parse_data_uri`, `MediaType`, `media_type_from_extension`, `without_trailing_slash`, `with_trailing_slash`, `normalize_url`, `build_user_agent`, `FormData`, `strip_extension`, `strip_specific_extension`.
-
-Loading: `load_api_key`, `load_optional_api_key`, `load_setting`, `load_optional_setting`, `LoadAPIKeyError` (re-exported from provider).
-
-JSON / schema: `parse_json`, `parse_json_event_stream`, `Schema`, `ValidationError`, `as_schema`, `json_schema`, `json_schema_from_type`, `schema_from_type`, `add_required_fields`, `merge_into_schema`, `GeneratedSchema`, `inject_json_instruction[_with_description]`, `inject_json_array_instruction`, `create_json_response_instruction`.
-
-Tooling: `dynamic_tool`, `execute_tool`, `ExecutableTool`, `SimpleTool`, `ToolExecutionOptions`, `ToolRegistry`, `ToolMapping`, `generate_tool_call_id`, `parse_tool_call_id`.
-
-Reasoning / validation: `map_reasoning_to_provider_budget`, `map_reasoning_to_provider_effort`, `is_custom_reasoning`, `validate_model_id`, `validate_tool_name`, `validate_download_url`, `is_valid_download_url`, `DownloadUrlError`, `download_file`.
-
-IDs / timing / encoding: `generate_id`, `delay`, `parse_retry_after`, `convert_base64_to_bytes`, `convert_bytes_to_base64`, `convert_to_base64`, `get_error_message`, `VERSION`.
+UTF-8-safe byte→`data:`-line accumulator for OpenAI-wire streams. Buffers raw
+bytes and decodes only complete lines, so a multi-byte char split across a
+network chunk boundary is never corrupted. Shared by the `openai` /
+`openai-compatible` / `groq` / `xai` models (each keeps its own event state
+machine but pumps bytes through this one decoder). Distinct from the blocking
+`parse_json_event_stream` (a `std::io::Read` iterator used off the async path).
 
 ## Conventions
 
 - Async-first: all I/O supports `CancellationToken`.
-- Errors propagate as `AISdkError` from provider crate.
+- Errors propagate as `AISdkError` from the provider crate.
 - Header handling canonicalizes keys via `normalize_headers` before combining.
 
 ## Coco-rs-specific deviations from the spec

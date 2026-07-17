@@ -4,6 +4,7 @@ Gemini **Code Assist** subscription transport (`cloudcode-pa.googleapis.com/v1in
 coco-original — there is **no** `@ai-sdk` Code Assist provider. Structured after
 `@ai-sdk/google-vertex`'s reuse of `@ai-sdk/google`: depends on
 `vercel-ai-google` and reuses its Gemini wire codec, swapping only the transport.
+Mirror scope and baseline for the sibling ports: see [`../README.md`](../README.md).
 
 ## What it reuses vs. owns
 

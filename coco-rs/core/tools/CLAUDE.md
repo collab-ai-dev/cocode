@@ -1,15 +1,15 @@
 # coco-tools
 
-41 default-registered statically-typed built-in tools (`type Input = SomeStruct`) plus two `type Input = Value` tools whose schema is runtime-supplied: `McpTool` (wire schema from MCP server / SDK in-process transport) and `StructuredOutputTool` (user JSON Schema via `--json-schema` or workflow `agent(prompt, {schema})`). Each implements `coco_tool_runtime::Tool`; `coco-tool-runtime` defines the trait.
+Built-in tool implementations. Statically-typed tools (`type Input = SomeStruct`) plus two dynamic-schema `type Input = Value` tools: `McpTool` (wire schema from MCP server / SDK in-process transport) and `StructuredOutputTool` (user JSON Schema via `--json-schema` or workflow `agent(prompt, {schema})`). Each implements `coco_tool_runtime::Tool`; `coco-tool-runtime` defines the trait. The default set is whatever `register_all_tools` registers (`src/lib.rs`) — don't rely on a hardcoded count or list.
 
 ## Key Types
 
-- `register_all_tools(&mut ToolRegistry)` — registers the default static tools
-- `register_core_tools(&mut ToolRegistry)` — Bash/Read/Write/Edit/Glob/Grep only (lightweight)
-- `register_mcp_tools(registry, server_name, tools)` — dynamic registration after MCP server connects (idempotent, deregisters prior tools from the same server first)
-- `deregister_mcp_server(registry, server_name)` — on disconnect
-- Tool input enums (owned here): `GrepOutputMode`, `ConfigAction`, `LspAction`
-- Per-tool structs (`BashTool`, `ReadTool`, `WriteTool`, `EditTool`, `GlobTool`, `GrepTool`, `NotebookEditTool`, `WebFetchTool`, `WebSearchTool`, `AgentTool`, `SkillTool`, `SendMessageTool`, `TaskCreateTool`, `TaskGetTool`, `TaskListTool`, `TaskUpdateTool`, `TaskStopTool`, `TaskOutputTool`, `TodoWriteTool`, `EnterPlanModeTool`, `ExitPlanModeTool`, `VerifyPlanExecutionTool` [implemented but not default-registered], `EnterWorktreeTool`, `ExitWorktreeTool`, `AskUserQuestionTool`, `ToolSearchTool`, `ConfigTool`, `BriefTool`, `LspTool`, `McpAuthTool`, `ListMcpResourcesTool`, `ReadMcpResourceDirTool`, `ReadMcpResourceTool`, `CronCreateTool`, `CronDeleteTool`, `CronListTool`, `RemoteTriggerTool`, `PowerShellTool`, `ReplTool`, `SleepTool`, `SyntheticOutputTool`, `McpTool`)
+- `register_all_tools(&ToolRegistry)` — the default static-tool set (single source of truth; includes the goal tools)
+- `register_core_tools(&ToolRegistry)` — Bash/Read/Write/Edit/Glob/Grep only (lightweight)
+- `register_structured_output_tool(...)` — opt-in registration (headless print / SDK NDJSON paths, or a workflow child engine's private registry); `StructuredOutputTool` is intentionally excluded from `register_all_tools`
+- `register_mcp_tools(registry, server_name, tools)` — dynamic registration after MCP server connect (idempotent; deregisters prior tools from the same server first); `deregister_mcp_server` on disconnect
+- Tool input enums (`input_types.rs`): `GrepOutputMode`, `LspAction`
+- One file per tool under `src/tools/` (`lsp_tool.rs` is suffixed because `lsp.rs` holds the shared DTOs + formatters the tool consumes)
 
 ## Cross-Cutting Helpers (crate-private)
 
@@ -22,12 +22,16 @@
 
 ## Architecture
 
-- **Two dynamic-schema tools** (both `type Input = serde_json::Value`):
-  - `McpTool` — schema from MCP server (external stdio/SSE or SDK in-process transport via `McpServerConfig::Sdk`). Re-connection is idempotent: the registry deregisters prior tools for that server first.
-  - `StructuredOutputTool` — schema from `--json-schema` or workflow `agent(prompt, {schema})`. Registered only when `register_structured_output_tool()` is called (headless print / SDK NDJSON paths, or a workflow child engine's private registry).
-  - Both **MUST** override `input_json_schema()` — the blanket default derives from `Self::Input = Value` which produces schemas that strict OpenAI-compatible providers (DeepSeek etc.) reject as `type: null`. Any future `type Input = Value` tool inherits the same obligation. See [docs/internal/tool-schema-source-plan.md](../../../docs/internal/tool-schema-source-plan.md) for the long-term refactor (three-source design: TypedSchema / ManualSchema / DynamicSchema, with sanitize-preserve strict-subset).
+- **Two dynamic-schema tools** (`type Input = Value`): the schema is
+  runtime-supplied, so both build a `ToolInputSchema::from_value(...)` from the
+  wire/user schema and return it from `runtime_validation_schema()` (`McpTool`
+  in `mcp_tools.rs`, `StructuredOutputTool` in `structured_output.rs`). Never
+  derive a schema from `Value` — that yields a `type: null` schema that strict
+  OpenAI-compatible providers (DeepSeek etc.) reject. Any future
+  `type Input = Value` tool inherits the same obligation. See
+  `docs/internal/tool-schema-final-plan.md` and the Schema-ownership section in
+  `core/tool-runtime/CLAUDE.md`.
 - All file-mutation tools (Edit/Write/NotebookEdit/apply_patch/Bash) invoke the team-mem secret guard + file-history tracking helpers before touching disk.
-- One file per tool. Utility tools live in their own modules: `ask_user_question.rs`, `tool_search.rs`, `config.rs`, `brief.rs`, `lsp_tool.rs`, `notebook_edit.rs`. (`lsp_tool.rs` is suffixed because `lsp.rs` holds the shared DTOs + formatters that the tool consumes.)
 
 ### Task/Todo defer policy
 
@@ -38,48 +42,27 @@ loaded avoids a ToolSearch round-trip before the first call on weaker
 non-Anthropic providers. `TaskOutput` is the only deferred Task-family tool
 because it is deprecated and low-frequency.
 
-### LSP tool dispatch
+### LSP tool
 
-`LspAction` (9 variants: `goToDefinition` / `findReferences` / `hover` /
-`documentSymbol` / `workspaceSymbol` / `goToImplementation` /
-`prepareCallHierarchy` / `incomingCalls` / `outgoingCalls`). Wire format
-is **camelCase** so the model's tool calls validate identically across
-runtimes. Diagnostics are **not** an `LspAction` — they flow through the
-passive `system_reminder` pipeline (`coco-lsp::DiagnosticsStore` →
-`app/query::reminder_adapters`).
+`LspAction` wire format is **camelCase** (`goToDefinition` / `findReferences` /
+`hover` / `documentSymbol` / `workspaceSymbol` / `goToImplementation` /
+`prepareCallHierarchy` / `incomingCalls` / `outgoingCalls`) so the model's tool
+calls validate identically across runtimes. Diagnostics are **not** an
+`LspAction` — they flow through the passive system-reminder pipeline
+(`coco-lsp::DiagnosticsStore` → `app/query::reminder_adapters`).
 
 `LspTool::is_enabled` is double-gated: `Feature::Lsp` enabled **and**
-`ctx.lsp.is_connected()` (adapter reports running state after
-bootstrap prewarm). Without either gate the tool is filtered out of
-the model's tool list.
+`ctx.lsp.is_connected()` — without either, the tool is filtered out of the
+model's tool list.
 
-Dispatch flow:
-1. `LspTool::execute` parses input + resolves relative paths against
-   `ctx.cwd_override` (worktree-aware) → fall back to process cwd.
-2. `validate_lsp_file` rejects UNC paths (`\\…` / `//…`) for Windows
-   NTLM safety and files larger than 10MB.
-3. `build_params(action, uri, line, character)` produces 0-based LSP
-   `Position` from 1-based input.
-4. `ctx.lsp.send_request(path, method, params)` → adapter
-   (`coco_agent_host::lsp_handle_adapter::LspManagerAdapter`) routes via
-   `LspServerManager::get_client(path)` which walks up to find
-   `.git` / `Cargo.toml` — auto-routing per worktree.
-5. For `incomingCalls` / `outgoingCalls`, dispatch runs the
-   two-step pattern: `prepareCallHierarchy` → pick first item →
-   `callHierarchy/{incomingCalls,outgoingCalls}`.
-6. Location-returning ops (`goToDefinition` / `findReferences` /
-   `goToImplementation` / `workspaceSymbol`) are filtered through
-   `coco_file_ignore::PathChecker` — uses the in-process unified path
-   (see user memory `feedback_unified_ignore_service`).
-7. Typed formatters in `tools::lsp::format_*` produce the
-   markdown-ish `LspOutput` returned to the model.
+Dispatch invariants:
 
-`Write` / `Edit` / `NotebookEdit` / `ApplyPatch` all call
-`ctx.lsp.notify_save(path)` after a successful write. The adapter forwards to `client.notify_save`
-(sends `textDocument/didSave` only if the file is already in the
-server's `opened` tracker) AND clears the file's entries from
-`DiagnosticsStore.delivered_for_file` so re-published diagnostics for
-the edited file are not suppressed by cross-turn dedup.
+- Relative paths resolve against `ctx.cwd_override` (worktree-aware) → process cwd; `LspServerManager::get_client(path)` walks up to `.git` / `Cargo.toml` for per-worktree auto-routing.
+- `validate_lsp_file` rejects UNC paths (`\\…` / `//…`, Windows NTLM safety) and files larger than 10MB.
+- 1-based input `line`/`character` → 0-based LSP `Position`.
+- `incomingCalls` / `outgoingCalls` run the two-step pattern: `prepareCallHierarchy` → pick first item → `callHierarchy/{incomingCalls,outgoingCalls}`.
+- Location-returning ops (`goToDefinition` / `findReferences` / `goToImplementation` / `workspaceSymbol`) are filtered through `coco_file_ignore::PathChecker` (in-process unified ignore path).
+- `Write` / `Edit` / `NotebookEdit` / `ApplyPatch` call `ctx.lsp.notify_save(path)` after a successful write: sends `textDocument/didSave` only if the file is already in the server's `opened` tracker AND clears the file's entries from `DiagnosticsStore.delivered_for_file`, so re-published diagnostics for the edited file are not suppressed by cross-turn dedup.
 
 ## Per-tool Result Persistence Thresholds
 
@@ -110,36 +93,25 @@ content-addressed `ArtifactKey::Named`.
 
 ### WebSearchTool — client-side backends instead of Anthropic server tool
 
-The upstream implementation routes search as a passthrough to the Anthropic-only
-`web_search_20250305` server tool: the query is handed to Claude, which runs
-it on Anthropic infrastructure and returns `server_tool_use` +
-`web_search_tool_result` content blocks with inline citations. This is
-Anthropic-specific — no other provider exposes an equivalent.
+Upstream routes search as a passthrough to the Anthropic-only
+`web_search_20250305` server tool (runs on Anthropic infrastructure, returns
+`server_tool_use` + `web_search_tool_result` blocks with inline citations) —
+no other provider has an equivalent. coco-rs must work against every provider,
+so search is **client-side** with a pluggable backend via
+`WebSearchConfig.provider` (`common/config`):
 
-coco-rs must work against every provider (Anthropic, OpenAI, Google,
-DeepSeek, xAI, …), so we implement search **client-side** with a
-pluggable backend selected via `WebSearchConfig.provider`
-(`common/config/src/sections.rs:590-629`). Implementation mirrors
-`cocode-rs/core/tools/src/builtin/web_search.rs`:
+- **DuckDuckGo HTML scraping** (default) — no API key. POSTs to
+  `html.duckduckgo.com/html/`, regex-parses anchors + snippets, decodes the
+  `uddg=` redirect to the target URL.
+- **Tavily REST API** — opt-in via `provider = "tavily"` + `api_key` (or
+  `TAVILY_API_KEY` env). Structured JSON, no scraping.
+- **OpenAI** variant currently falls back to DuckDuckGo (future expansion).
 
-- **DuckDuckGo HTML scraping** (default) — no API key, no sign-up. POSTs
-  to `html.duckduckgo.com/html/`, regex-parses result anchors + snippets,
-  decodes the `uddg=` redirect back to the target URL.
-- **Tavily REST API** — opt-in via `WebSearchConfig.provider = "tavily"`
-  + `api_key` (or `TAVILY_API_KEY` env). Returns structured JSON so no
-  HTML scraping required.
-- **OpenAI** variant currently falls back to DuckDuckGo (no native
-  passthrough implemented — present for future expansion).
-
-Trade-offs vs Anthropic passthrough:
-
-| Aspect | Native server tool | coco-rs client-side |
-|--------|----------------|---------------------|
-| Citations in reply | Server-injected `citations` blocks | Model builds its own `Sources:` section (prompt requires it) |
-| Streaming progress | `server_tool_use` + `web_search_tool_result` deltas | Single blocking fetch |
-| Rate limits | Anthropic's (`max_uses: 8` per turn) | Per-backend (DuckDuckGo scraping limits, Tavily plan quota) |
-| Domain filters | Server-side, provider-enforced | Client-side, post-fetch host-suffix match |
-| Geographic availability | US-only per Anthropic | Anywhere the backend is reachable |
+Trade-offs vs native passthrough: citations become a model-built `Sources:`
+section (the prompt requires it); one blocking fetch instead of streamed
+deltas; rate limits + domain filters are per-backend and client-side
+(post-fetch host-suffix match); works anywhere the backend is reachable
+(the native tool is US-only).
 
 ### Cache keys
 

@@ -27,8 +27,8 @@ host module.
 
 - Keep DTO parsing, SDK transport, callback correlation, and outbound ordering
   here.
-- Keep runtime construction, session selection, history, MCP ownership, reload,
-  file history, permissions, and turn accounting in `coco-agent-host`.
+- Session/runtime behavior: see agent-host's CLAUDE.md (Multi-Session
+  Ownership).
 - SDK startup must not rebuild `SessionRuntimeFactory` or direct MCP/history
   owners; `coco-cli` prepares `coco_agent_host::remote_host::PreparedHost`, and
   this crate wraps it with SDK transports.
@@ -43,5 +43,5 @@ host module.
 - `coco-cli` chooses startup mode and maps Clap into
   `coco_agent_host::remote_host::RemoteHostOptions` plus `SdkSidecarConfig`. The
   SDK process entrypoint `run_sdk_mode` (stdio/sidecar composition, dispatch-loop
-  + OS-signal shutdown sequencing) lives in `coco-cli` (`app/cli/src/sdk.rs`);
+  + OS-signal shutdown sequencing) lives in `coco-cli` (`app/cli/src/sdk/mod.rs`);
   this crate owns only the wire/transport machinery it composes.
