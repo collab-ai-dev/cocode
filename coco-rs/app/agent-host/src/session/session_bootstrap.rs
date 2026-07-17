@@ -354,6 +354,7 @@ pub(crate) fn build_session_command_registry(
         UserType::from_env(),
         command_features,
         runtime_config.loop_config.clone(),
+        runtime_config.mcp.policy.clone(),
         cwd.to_path_buf(),
         dirs::home_dir().unwrap_or_else(|| cwd.to_path_buf()),
         /*managed_root*/ None,
@@ -620,9 +621,16 @@ pub async fn bootstrap_session_mcp(
     // Register config-file + plugin servers (config-map seeding only; the actual
     // connect is deferred to the background pass below). Project MCP config and
     // plugin contributions are rooted at the ProjectServices key; local config
-    // remains session-cwd scoped.
+    // remains session-cwd scoped. Activation (user toggles from GlobalConfig +
+    // the trust gate / deny list resolved from trusted settings sources)
+    // filters what registers — a repo-defined server the user never approved
+    // does not connect.
     let project_services = Arc::clone(session.project_services());
-    let mcp_servers = project_services.mcp_servers(&config_home, cwd);
+    let activation_policy = coco_mcp::McpActivationPolicy::resolve(
+        project_services.project_root(),
+        &session.runtime_config().mcp.policy,
+    );
+    let mcp_servers = project_services.mcp_servers(&config_home, cwd, &activation_policy);
     {
         let mut mgr = manager.lock().await;
         mgr.register_all(mcp_servers);

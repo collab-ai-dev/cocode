@@ -232,6 +232,7 @@ fn tool_idle_timeout_is_remote_only_and_clamped_to_overall_timeout() {
     let runtime = coco_config::McpRuntimeConfig {
         tool_timeout_ms: Some(2_000),
         tool_idle_timeout_ms: Some(10_000),
+        policy: Default::default(),
     };
     let manager = McpConnectionManager::new_with_runtime_config(std::env::temp_dir(), &runtime);
 
@@ -263,6 +264,7 @@ fn tool_idle_timeout_zero_disables_remote_idle_watchdog() {
     let runtime = coco_config::McpRuntimeConfig {
         tool_timeout_ms: Some(2_000),
         tool_idle_timeout_ms: Some(0),
+        policy: Default::default(),
     };
     let manager = McpConnectionManager::new_with_runtime_config(std::env::temp_dir(), &runtime);
     let http = crate::types::McpServerConfig::Http(crate::types::McpHttpConfig {

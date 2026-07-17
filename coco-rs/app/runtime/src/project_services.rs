@@ -360,10 +360,15 @@ impl ProjectServices {
         self.catalog.agent_search_paths(config_home, cwd)
     }
 
+    /// Servers that actually connect this session: file-defined + plugin
+    /// contributions, both passed through the activation policy (user
+    /// toggles, project-server approval gate, deny list) — the single choke
+    /// point between "defined" and "runs".
     pub fn mcp_servers(
         &self,
         config_home: &Path,
         session_cwd: &Path,
+        policy: &coco_mcp::McpActivationPolicy,
     ) -> Vec<coco_mcp::ScopedMcpServerConfig> {
         let mut servers = coco_mcp::McpConfigLoader::load_with_roots(
             coco_mcp::McpConfigRoots {
@@ -373,9 +378,12 @@ impl ProjectServices {
             config_home,
         );
         servers.extend(self.plugin_mcp_servers());
-        servers
+        policy.filter_active(servers)
     }
 
+    /// Raw plugin MCP contributions, before activation filtering. Callers on
+    /// the connection path (plugin reload) must run the result through
+    /// [`coco_mcp::McpActivationPolicy::filter_active`].
     pub fn plugin_mcp_servers(&self) -> Vec<coco_mcp::ScopedMcpServerConfig> {
         self.catalog.plugin_mcp_servers()
     }
@@ -407,6 +415,7 @@ impl ProjectServices {
         user_type: coco_types::UserType,
         features: coco_types::Features,
         loop_config: coco_config::LoopConfig,
+        mcp_policy: coco_config::McpPolicyConfig,
         session_cwd: PathBuf,
         user_home: PathBuf,
         managed_root: Option<PathBuf>,
@@ -418,6 +427,14 @@ impl ProjectServices {
             user_type,
             features,
             loop_config,
+            // `/mcp` must key user toggles by the same resolved project root
+            // the session loader uses, while local-scope files stay anchored
+            // at the session cwd — mirroring `Self::mcp_servers`.
+            coco_commands::handlers::mcp::McpCommandContext {
+                project_root: self.project_root().to_path_buf(),
+                session_cwd: session_cwd.clone(),
+                policy: mcp_policy,
+            },
             session_cwd,
             user_home,
             managed_root,

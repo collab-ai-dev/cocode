@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -114,6 +115,17 @@ pub struct ProjectConfig {
     /// short-circuit subsequent /init invocations.
     #[serde(default)]
     pub has_completed_project_onboarding: bool,
+    /// MCP servers the user switched off for this project (`/mcp disable`).
+    /// Lives here — outside the repository — so no checked-in file can flip
+    /// a server the user turned off back on.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub disabled_mcp_servers: BTreeSet<String>,
+    /// Repo-defined (project-scope) MCP servers the user approved to run in
+    /// this project (`/mcp enable`). Same ownership argument as
+    /// [`Self::disabled_mcp_servers`]: approval must not be grantable by the
+    /// repository being approved.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub approved_mcp_servers: BTreeSet<String>,
 }
 
 /// Session cost tracking state.
@@ -153,11 +165,17 @@ pub fn global_config_path() -> PathBuf {
 
 /// Load global config from disk.
 pub fn load_global_config() -> crate::Result<GlobalConfig> {
-    let path = global_config_path();
+    load_global_config_at(&global_config_path())
+}
+
+/// Load global config from an explicit path (missing file = defaults).
+/// Production callers use [`load_global_config`]; the explicit path exists so
+/// tests and path-injecting callers never touch the real user file.
+pub fn load_global_config_at(path: &Path) -> crate::Result<GlobalConfig> {
     if !path.exists() {
         return Ok(GlobalConfig::default());
     }
-    let contents = std::fs::read_to_string(&path)?;
+    let contents = std::fs::read_to_string(path)?;
     let config: GlobalConfig = crate::jsonc::from_str(&contents)?;
     Ok(config)
 }
@@ -165,10 +183,11 @@ pub fn load_global_config() -> crate::Result<GlobalConfig> {
 /// Write global config to disk.
 pub fn write_global_config(config: &GlobalConfig) -> crate::Result<()> {
     let path = global_config_path();
-    write_global_config_at_path(&path, config)
+    write_global_config_at(&path, config)
 }
 
-fn write_global_config_at_path(path: &Path, config: &GlobalConfig) -> crate::Result<()> {
+/// Write global config to an explicit path — see [`load_global_config_at`].
+pub fn write_global_config_at(path: &Path, config: &GlobalConfig) -> crate::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }

@@ -152,11 +152,16 @@ Set `commit` or `pr` to empty string `""` to hide that attribution.
 ### MCP Server Management
 ```json
 {
-  "enableAllProjectMcpServers": true,
-  "enabledMcpjsonServers": ["server1", "server2"],
-  "disabledMcpjsonServers": ["blocked-server"]
+  "enable_all_project_mcp_servers": true,
+  "allowed_mcp_servers": [{ "name": "server1" }],
+  "denied_mcp_servers": [{ "name": "blocked-server" }]
 }
 ```
+`enable_all_project_mcp_servers` and `allowed_mcp_servers` approve repo-defined
+(.mcp.json) servers and are only honored from user/local/policy settings —
+never from a project's own settings. `denied_mcp_servers` bans servers from any
+settings layer; entries may also match by `command` (exact) or `url` (prefix).
+Per-project enable/disable toggles are not settings — use `/mcp enable|disable`.
 
 ### Plugins
 ```json

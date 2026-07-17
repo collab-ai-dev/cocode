@@ -4,6 +4,7 @@
 //! SDK. This crate adds coco-specific business logic: naming normalization,
 //! config scopes, discovery caching, file watching.
 
+pub mod activation;
 pub mod auth;
 pub mod auth_cache;
 pub mod channel_permission;
@@ -19,6 +20,9 @@ pub mod types;
 pub mod xaa;
 pub mod xaa_idp_login;
 
+pub use activation::McpActivation;
+pub use activation::McpActivationPolicy;
+pub use activation::project_key;
 pub use auth::OAuthConfig;
 pub use auth::OAuthTokenStore;
 pub use auth::OAuthTokens;
@@ -36,6 +40,7 @@ pub use config::McpConfigRoots;
 pub use config::config_paths;
 pub use config::defined_servers;
 pub use config::defining_path;
+pub use config::entry_is_legacy_disabled;
 pub use config_watcher::McpConfigChanged;
 pub use config_watcher::watch_mcp_configs;
 pub use discovery::DiscoveredResource;

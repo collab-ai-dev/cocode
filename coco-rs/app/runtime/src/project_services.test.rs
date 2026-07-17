@@ -8,6 +8,20 @@ use tempfile::tempdir;
 
 use super::*;
 
+/// An activation policy that pre-approves project-scope servers, for tests
+/// exercising project-root scoping rather than the approval gate itself
+/// (which is covered in `coco-mcp::activation`).
+fn pre_approved_policy(project_root: &std::path::Path) -> coco_mcp::McpActivationPolicy {
+    coco_mcp::McpActivationPolicy::resolve_with_global(
+        &coco_config::global_config::GlobalConfig::default(),
+        project_root,
+        &coco_config::McpPolicyConfig {
+            project_servers_pre_approved: true,
+            ..Default::default()
+        },
+    )
+}
+
 #[test]
 fn registry_reuses_services_for_same_project_root() {
     let temp = tempdir().unwrap();
@@ -71,12 +85,12 @@ fn different_project_roots_resolve_independent_mcp_servers() {
     let services_b = registry.get_or_load(&config_home, project_b.clone());
 
     let names_a: Vec<String> = services_a
-        .mcp_servers(&config_home, &project_a)
+        .mcp_servers(&config_home, &project_a, &pre_approved_policy(&project_a))
         .into_iter()
         .map(|server| server.name)
         .collect();
     let names_b: Vec<String> = services_b
-        .mcp_servers(&config_home, &project_b)
+        .mcp_servers(&config_home, &project_b, &pre_approved_policy(&project_b))
         .into_iter()
         .map(|server| server.name)
         .collect();
@@ -237,7 +251,11 @@ fn mcp_servers_use_project_root_and_session_cwd() {
     let services = ProjectServices::load(&config_home, project_root.clone());
     assert_eq!(services.project_root(), project_root.as_path());
 
-    let servers = services.mcp_servers(&config_home, &session_cwd);
+    let servers = services.mcp_servers(
+        &config_home,
+        &session_cwd,
+        &pre_approved_policy(&project_root),
+    );
     let by_name: HashMap<_, _> = servers
         .into_iter()
         .map(|server| (server.name.clone(), server))
@@ -345,6 +363,7 @@ fn build_command_registry_matches_base_registry_without_plugins() {
         coco_types::UserType::from_env(),
         features.clone(),
         loop_config.clone(),
+        coco_commands::handlers::mcp::McpCommandContext::for_cwd(project_root.clone()),
         project_root.clone(),
         home.clone(),
         None,
@@ -355,6 +374,7 @@ fn build_command_registry_matches_base_registry_without_plugins() {
         coco_types::UserType::from_env(),
         features,
         loop_config,
+        coco_config::McpPolicyConfig::default(),
         project_root,
         home,
         None,

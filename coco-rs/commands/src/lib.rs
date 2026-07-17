@@ -591,6 +591,7 @@ pub fn build_command_registry(
     user_type: coco_types::UserType,
     features: coco_types::Features,
     loop_config: coco_config::LoopConfig,
+    mcp: handlers::mcp::McpCommandContext,
     project_root: std::path::PathBuf,
     user_home: std::path::PathBuf,
     managed_root: Option<std::path::PathBuf>,
@@ -600,7 +601,7 @@ pub fn build_command_registry(
 
     // 1. Hardcoded slash commands.
     register_builtins(&mut registry);
-    implementations::register_extended_builtins_with_cwd(&mut registry, project_root.clone());
+    implementations::register_extended_builtins_with_cwd(&mut registry, project_root.clone(), mcp);
 
     // 2-5. Skill-derived commands (filtered by feature gates + the
     // `off` override; the dialog's gate keeps the `name-only` /
@@ -958,6 +959,7 @@ mod seam_tests {
             UserType::Human,
             Features::with_defaults(),
             coco_config::LoopConfig::default(),
+            handlers::mcp::McpCommandContext::for_cwd(std::path::PathBuf::from(".")),
             std::path::PathBuf::from("."),
             std::path::PathBuf::from("/home/test"),
             None,
@@ -1002,6 +1004,7 @@ mod seam_tests {
             UserType::Ant,
             Features::empty(),
             coco_config::LoopConfig::default(),
+            handlers::mcp::McpCommandContext::for_cwd(std::path::PathBuf::from(".")),
             std::path::PathBuf::from("."),
             std::path::PathBuf::from("/home/test"),
             None,
@@ -1040,6 +1043,7 @@ mod seam_tests {
             UserType::Ant,
             features,
             coco_config::LoopConfig::default(),
+            handlers::mcp::McpCommandContext::for_cwd(std::path::PathBuf::from(".")),
             std::path::PathBuf::from("."),
             std::path::PathBuf::from("/home/test"),
             None,
@@ -1062,6 +1066,7 @@ mod seam_tests {
             UserType::Human,
             Features::with_defaults(),
             coco_config::LoopConfig::default(),
+            handlers::mcp::McpCommandContext::for_cwd(std::path::PathBuf::from(".")),
             std::path::PathBuf::from("."),
             std::path::PathBuf::from("/home/test"),
             None,
@@ -1263,6 +1268,7 @@ mod seam_tests {
             UserType::Human,
             Features::with_defaults(),
             coco_config::LoopConfig::default(),
+            handlers::mcp::McpCommandContext::for_cwd(std::path::PathBuf::from(".")),
             std::path::PathBuf::from("."),
             std::path::PathBuf::from("/home/test"),
             None,

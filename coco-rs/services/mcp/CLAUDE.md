@@ -5,7 +5,8 @@ MCP server lifecycle, config, auth, discovery, naming, channel permissions. Dele
 ## Key Types
 
 - Connections: `McpConnectionManager`, `McpConnectionState`, `McpClientError`, `ConnectedMcpServer`
-- Config: `McpConfigLoader`, `McpServerConfig`, `ScopedMcpServerConfig`, `ConfigScope`, `McpTransport`, `McpConfigChanged`, `watch_mcp_configs`
+- Config: `McpConfigLoader`, `McpServerConfig`, `ScopedMcpServerConfig`, `ConfigScope`, `McpTransport`, `McpConfigChanged`, `watch_mcp_configs`, `DefinedMcpServer`, `defined_servers` (the single definition merge; the loader and `/mcp list` both derive from it), `entry_is_legacy_disabled` (removed `"disabled"` field → fail-safe off)
+- Activation (`activation`): `McpActivation` (`Active` / `UserDisabled` / `AwaitingApproval` / `PolicyDenied` / `LegacyDisabled`), `McpActivationPolicy` (combines per-project user toggles from `GlobalConfig.projects` with the settings-derived `coco_config::McpPolicyConfig`; `filter_active` is the connection-path choke point for file **and** plugin servers), `project_key`. Definitions may come from the repo; nothing that *activates* one may. Repo-defined (Project-scope) servers fail closed until approved.
 - Discovery: `DiscoveryCache`, `DiscoveredTool`, `DiscoveredResource`, `DynamicResourceQuery`, `ServerCapabilities`, `McpCapabilities`, `McpResource`, `McpToolDefinition`, `ToolAnnotations`, `discover_all`, `discover_tools_from_server`, `discover_resources`, `discover_resources_matching`, `refresh_server_capabilities`
 - Auth: `OAuthConfig`, `OAuthTokens`, `OAuthTokenStore`
 - Client-hosted MCP: `ClientRouteMessage`, `ClientRouteFuture`,

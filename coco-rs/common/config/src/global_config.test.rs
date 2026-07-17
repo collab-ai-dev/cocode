@@ -188,7 +188,7 @@ fn test_write_global_config_preserves_jsonc_comments() {
         },
     );
 
-    write_global_config_at_path(&path, &config).expect("write global config");
+    write_global_config_at(&path, &config).expect("write global config");
 
     let updated = std::fs::read_to_string(&path).expect("read global config");
     assert!(updated.contains("// keep global comment"));

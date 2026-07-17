@@ -64,7 +64,11 @@ async fn env_uses_registered_cwd() {
     let cwd = tmp.path().join("project");
     std::fs::create_dir_all(&cwd).expect("create cwd");
     let mut registry = CommandRegistry::new();
-    register_extended_builtins_with_cwd(&mut registry, cwd.clone());
+    register_extended_builtins_with_cwd(
+        &mut registry,
+        cwd.clone(),
+        handlers::mcp::McpCommandContext::for_cwd(cwd.clone()),
+    );
 
     let output = registry
         .execute(names::ENV, "")
@@ -760,7 +764,8 @@ async fn test_compact_handler_with_instructions() {
 #[tokio::test]
 async fn test_mcp_handler_list() {
     let cwd = tempfile::tempdir().unwrap();
-    let output = handlers::mcp::run("", cwd.path()).await.unwrap();
+    let context = handlers::mcp::McpCommandContext::for_cwd(cwd.path().to_path_buf());
+    let output = handlers::mcp::run("", &context).await.unwrap();
     assert!(output.contains("MCP"));
     assert!(output.contains("enable") || output.contains("disable"));
 }
@@ -771,7 +776,8 @@ async fn test_mcp_handler_list() {
 #[tokio::test]
 async fn test_mcp_handler_enable_unknown_server_reports_not_found() {
     let cwd = tempfile::tempdir().unwrap();
-    let output = handlers::mcp::run("enable definitely-not-a-real-server", cwd.path())
+    let context = handlers::mcp::McpCommandContext::for_cwd(cwd.path().to_path_buf());
+    let output = handlers::mcp::run("enable definitely-not-a-real-server", &context)
         .await
         .unwrap();
     assert!(output.contains("not found"), "{output}");
@@ -791,7 +797,11 @@ async fn test_mcp_command_registered_with_cwd() {
     .unwrap();
 
     let mut registry = CommandRegistry::new();
-    register_extended_builtins_with_cwd(&mut registry, project.path().to_path_buf());
+    register_extended_builtins_with_cwd(
+        &mut registry,
+        project.path().to_path_buf(),
+        handlers::mcp::McpCommandContext::for_cwd(project.path().to_path_buf()),
+    );
 
     let command = registry.get(names::MCP).unwrap();
     let handler = command.handler.as_ref().unwrap();

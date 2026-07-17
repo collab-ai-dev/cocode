@@ -1030,3 +1030,101 @@ fn test_api_key_helper_project_cannot_override_trusted_source() {
         Some("op read op://vault/key")
     );
 }
+
+#[test]
+fn test_enable_all_project_mcp_servers_ignores_project_source() {
+    // The exploit this gate exists to stop: a cloned repo ships both the MCP
+    // server definition (.mcp.json) and, from its own settings layer, the
+    // approval to auto-connect it — arbitrary process spawn at session start.
+    for source in [SettingSource::Project, SettingSource::Plugin] {
+        let settings = settings_with_sources(vec![(
+            source,
+            serde_json::json!({ "enable_all_project_mcp_servers": true }),
+        )]);
+
+        assert!(
+            !settings.enable_all_project_mcp_servers(),
+            "{source:?} arrives with the repo and must not self-approve"
+        );
+    }
+}
+
+#[test]
+fn test_enable_all_project_mcp_servers_reads_trusted_sources() {
+    for source in [
+        SettingSource::User,
+        SettingSource::Local,
+        SettingSource::Flag,
+        SettingSource::Policy,
+    ] {
+        let settings = settings_with_sources(vec![(
+            source,
+            serde_json::json!({ "enable_all_project_mcp_servers": true }),
+        )]);
+
+        assert!(
+            settings.enable_all_project_mcp_servers(),
+            "{source:?} is user-controlled and must be honored"
+        );
+    }
+}
+
+#[test]
+fn test_enable_all_project_mcp_servers_policy_false_pins_over_user_true() {
+    let settings = settings_with_sources(vec![
+        (
+            SettingSource::User,
+            serde_json::json!({ "enable_all_project_mcp_servers": true }),
+        ),
+        (
+            SettingSource::Policy,
+            serde_json::json!({ "enable_all_project_mcp_servers": false }),
+        ),
+    ]);
+
+    assert!(!settings.enable_all_project_mcp_servers());
+}
+
+#[test]
+fn test_trusted_allowed_mcp_servers_excludes_project_entries() {
+    let settings = settings_with_sources(vec![
+        (
+            SettingSource::User,
+            serde_json::json!({ "allowed_mcp_servers": [{ "name": "docs" }] }),
+        ),
+        (
+            SettingSource::Project,
+            serde_json::json!({ "allowed_mcp_servers": [{ "name": "self-approved" }] }),
+        ),
+    ]);
+
+    assert_eq!(settings.trusted_allowed_mcp_servers(), vec!["docs"]);
+}
+
+#[test]
+fn test_denied_mcp_servers_unions_every_source() {
+    // Deny is the safe direction: any layer — the project included — may
+    // narrow what runs, and no layer's list replaces another's.
+    let settings = settings_with_sources(vec![
+        (
+            SettingSource::Policy,
+            serde_json::json!({ "denied_mcp_servers": [{ "name": "banned" }] }),
+        ),
+        (
+            SettingSource::Project,
+            serde_json::json!({
+                "denied_mcp_servers": [
+                    { "name": "miner", "command": "/opt/bad/miner", "url": null }
+                ]
+            }),
+        ),
+    ]);
+
+    let mut names: Vec<String> = settings
+        .denied_mcp_servers()
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect();
+    names.sort();
+    assert_eq!(names, vec!["banned", "miner"]);
+}

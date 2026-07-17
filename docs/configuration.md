@@ -84,7 +84,7 @@ Settings come from six ranked layers. They merge in this order, with each layer 
 
 Four of these are files you can edit: User, Project, Local, and Policy, plus whatever you point `--settings` at. The Plugin tier is the ranking floor and is where plugin-contributed hooks and permission rules are attributed; installed plugins do not currently contribute a `settings.json` layer of their own, so in practice the merge starts at User.
 
-A missing file at any layer is simply skipped. The result is a single merged `Settings` object, but cocode also tracks which layer each individual setting came from, and it uses that provenance to enforce security rules — for example, a project's settings file is not permitted to configure `api_key_helper`, auto-mode behavior, or bypass mode, because those would let a checked-out repository escalate its own privileges.
+A missing file at any layer is simply skipped. The result is a single merged `Settings` object, but cocode also tracks which layer each individual setting came from, and it uses that provenance to enforce security rules — for example, a project's settings file is not permitted to configure `api_key_helper`, auto-mode behavior, bypass mode, or MCP server approval (`enable_all_project_mcp_servers` / `allowed_mcp_servers`), because those would let a checked-out repository escalate its own privileges. The one deliberate inversion is `denied_mcp_servers`, which is honored from every layer — a deny only narrows what can run.
 
 ### Restricting layers with `--setting-sources`
 

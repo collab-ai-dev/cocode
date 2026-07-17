@@ -68,12 +68,6 @@ There is no explicit `transport` field for stdio servers — the transport is in
     "issues": {
       "transport": "http",
       "url": "https://mcp.example.com/mcp"
-    },
-
-    // Kept in the file but not loaded
-    "retired": {
-      "command": "old-server",
-      "disabled": true
     }
   }
 }
@@ -91,7 +85,7 @@ Only three transports can be expressed in a config file. Anything else is reject
 
 Note the default: a bare `url` with no `transport` gives you **SSE**, not HTTP. If your server speaks streamable HTTP you must say so explicitly.
 
-`disabled: true` on any entry drops it at parse time — the server is never launched or connected.
+There is no `disabled` field. A config file answers "what is this server"; whether it *runs* is tracked separately, per project and per user — see [Which servers actually run](#which-servers-actually-run). An entry that still carries the old `"disabled": true` field is refused fail-safe: it stays off, a warning is logged, and `/mcp enable <name>` migrates it.
 
 `headersHelper` names an external command whose output supplies request headers, for servers that need a short-lived token minted per connection.
 
@@ -132,6 +126,38 @@ Two runtime knobs live in `settings.json` under the `mcp` key rather than in the
 
 Both can be overridden by environment variable: `COCO_MCP_TOOL_TIMEOUT_MS` and `COCO_MCP_TOOL_IDLE_TIMEOUT_MS`.
 
+## Which servers actually run
+
+Defining a server and running it are separate decisions with separate owners. The config files above say *what* a server is; whether a defined server connects in a given project is resolved at session start from three inputs, strongest first:
+
+1. **Deny list.** Any settings file may carry `denied_mcp_servers`; a matching server never connects, in any project, no matter who defined or approved it.
+2. **Your per-project toggle.** `/mcp disable <name>` switches a server off for the current project. The toggle is stored in your per-user global config (`~/.cocode.json`), keyed by server *name* — so it holds no matter which file defines the server, and nothing checked into a repository can flip it back.
+3. **Approval for repo-defined servers.** A server defined in the project's `.mcp.json` or `.cocode/mcp.json` arrives with the repository: connecting it spawns whatever process, or contacts whatever URL, the repo says. Those servers do **not** connect until you approve them with `/mcp enable <name>` (also stored in `~/.cocode.json`, per project), or until a trusted settings layer pre-approves them. User, local, enterprise, and managed definitions are yours or your administrator's and need no approval.
+
+The settings side of this lives in `settings.json`:
+
+```jsonc
+// ~/.cocode/settings.json
+{
+  // Approve every repo-defined server without per-server prompts.
+  // Honored from user, local, and policy settings — a repository cannot
+  // grant this to itself from .cocode/settings.json.
+  "enable_all_project_mcp_servers": true,
+
+  // Pre-approve specific repo-defined servers by name (same trust rule).
+  "allowed_mcp_servers": [{ "name": "docs" }],
+
+  // Ban servers. Honored from every settings layer, because a deny only
+  // narrows what can run. `command` (exact) and `url` (prefix) matching
+  // catch a banned server that a repo redefines under another name.
+  "denied_mcp_servers": [
+    { "name": "retired" },
+    { "name": "miner", "command": "/opt/bad/miner" },
+    { "name": "exfil", "url": "https://evil.example.com/" }
+  ]
+}
+```
+
 ## Managing servers
 
 > **Do not use `coco mcp list`, `coco mcp add`, or `coco mcp remove`.** These three subcommands are unimplemented placeholders. `coco mcp list` always prints `MCP servers: (none connected)` regardless of your configuration; `add` and `remove` print what they would do and exit without touching a file. Only `coco mcp login` and `coco mcp logout` do real work.
@@ -140,16 +166,12 @@ The `/mcp` slash command, run inside a session, is the supported management path
 
 | Command | What it does |
 | --- | --- |
-| `/mcp` or `/mcp list` | Lists every server the loader finds, with its scope, transport, and whether it is disabled |
+| `/mcp` or `/mcp list` | Lists every defined server with its scope, transport, and resolved status: `active`, `disabled` (your toggle), `needs approval` (repo-defined, not yet approved), `denied` (deny list), or `invalid` (unparseable entry) |
 | `/mcp add <name> <command> [args...]` | Writes the server into `<project>/.cocode/mcp.json`, and warns if a higher-precedence file already defines that name |
-| `/mcp enable <name>` / `/mcp disable <name>` | Sets or clears `"disabled"` in the file that actually defines the server |
+| `/mcp enable <name>` / `/mcp disable <name>` | Flips your per-project toggle in `~/.cocode.json`. `enable` also records approval for a repo-defined server, and migrates a legacy `"disabled"` field out of the defining file |
 | `/mcp remove <name>` | Deletes the server from its defining file |
 
-Each command names the file it touched, so you can check the result yourself.
-
-Enable, disable, and remove edit **the file where the server is defined**, which is the only thing that works: a `"disabled": true` written into a different file does not mask a definition from a lower-precedence one — the loader skips disabled entries rather than recording them, so the original definition simply survives. Servers defined by enterprise or managed policy are refused rather than edited.
-
-Editing the config files by hand does the same job; to disable a server that way, set `"disabled": true` on its entry in whichever file defines it.
+`add` and `remove` manage definitions and name the file they touched; `enable` and `disable` manage the run/don't-run state and never rewrite server definitions. Because the toggle is keyed by name, disabling a server holds even when several files define the same name — whichever definition wins the merge, it stays off. Servers defined by enterprise or managed policy are refused in both directions: their files are not editable from `/mcp`, and the toggle does not switch off an admin-mandated server.
 
 ## Tool naming
 

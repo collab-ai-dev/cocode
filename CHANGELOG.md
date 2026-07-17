@@ -95,8 +95,38 @@ The `coco` binary and the `@cocode-cli/cocode-cli` package still report
   (prompting on every rebuild). Provenance is now an explicit build flag set
   only by the release workflow; local builds are file-backed under
   `~/.cocode/auth/`, and `COCO_AUTH_CREDENTIAL_STORE` still forces the choice.
+- **A cloned repository's `.mcp.json` no longer auto-connects its MCP
+  servers.** Connecting an MCP server spawns whatever process (or contacts
+  whatever URL) the config names, and repo-defined servers previously did so at
+  session start with no gate of any kind. Project-scope servers now fail closed
+  until approved — per server via `/mcp enable`, stored in your per-user
+  `~/.cocode.json`, or wholesale via `enable_all_project_mcp_servers` /
+  `allowed_mcp_servers`, which are honored only from settings layers the person
+  running the agent controls (never from the repository's own settings).
+- **Administrators can actually ban an MCP server now.** `denied_mcp_servers`
+  existed in the settings schema but nothing read it; it is now enforced at
+  activation time, unioned across every settings layer, and matches by exact
+  name, exact stdio `command`, or URL prefix — so redefining a banned server
+  under a different name does not dodge the ban. Writing `"disabled": true`
+  into `managed-mcp.json`, which previously did nothing (the loader skipped the
+  entry and kept the user's definition), now also keeps the server off, because
+  the merge is single and unconditional and a legacy-`disabled` entry fail-safes
+  off.
 
 ### Fixed
+
+- **`/mcp disable` now actually disables the server.** Disabling wrote
+  `"disabled": true` into the file that defined the server, but the loader
+  *skipped* disabled entries instead of recording them — so any
+  lower-precedence file defining the same name silently kept the server
+  loading, and `/mcp list` could simultaneously report it disabled. Run/don't-
+  run state is no longer part of the definition files at all: `/mcp
+  enable|disable` writes a per-project toggle in `~/.cocode.json`, keyed by
+  server name, which holds no matter which file defines the server. `/mcp
+  list` and the session loader now derive from one merged view and one
+  activation authority, so they cannot disagree. Config entries still carrying
+  the removed `disabled` field are refused fail-safe (kept off, with a
+  warning) rather than silently re-enabled; `/mcp enable` migrates them.
 
 - **`coco config set` now writes the setting.** It printed `Would set '<key>' =
   '<value>'` and returned without touching the file, so every scripted

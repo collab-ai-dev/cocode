@@ -114,14 +114,59 @@ fn test_parse_invalid_config() {
     assert!(parse_server_config(&json).is_none());
 }
 
+/// `parse_server_config` is pure shape detection: the removed `disabled`
+/// field is not its concern (the loader's legacy fail-safe and
+/// `crate::activation` own run/don't-run).
 #[test]
-fn test_parse_disabled_server_returns_none() {
+fn test_parse_ignores_legacy_disabled_field() {
     let json = serde_json::json!({
         "command": "npx",
         "args": ["server"],
         "disabled": true
     });
-    assert!(parse_server_config(&json).is_none());
+    assert!(parse_server_config(&json).is_some());
+    assert!(entry_is_legacy_disabled(&json));
+    assert!(!entry_is_legacy_disabled(
+        &serde_json::json!({"command": "npx"})
+    ));
+}
+
+/// Fail-safe: a legacy `"disabled": true` entry never loads — and because the
+/// merge is single and unconditional, a later-layer legacy entry *masks* an
+/// earlier enabled definition instead of silently falling back to it.
+#[test]
+fn test_legacy_disabled_entry_refused_and_masks_earlier_layer() {
+    use tempfile::TempDir;
+
+    let tmp = TempDir::new().unwrap();
+    let project_dir = tmp.path().join("project");
+    let config_home = tmp.path().join("config");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    std::fs::create_dir_all(&config_home).unwrap();
+
+    std::fs::write(
+        config_home.join("mcp.json"),
+        serde_json::json!({
+            "mcpServers": { "srv": {"command": "user-cmd"} }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        config_home.join("managed-mcp.json"),
+        serde_json::json!({
+            "mcpServers": { "srv": {"command": "user-cmd", "disabled": true} }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let loaded = McpConfigLoader::load(&project_dir, &config_home);
+    assert!(
+        loaded.is_empty(),
+        "the managed entry wins the merge and fail-safes off; the user \
+         definition must not survive underneath it"
+    );
 }
 
 #[test]
@@ -379,7 +424,7 @@ fn test_config_paths_scopes_match_loaded_scopes() {
 }
 
 #[test]
-fn test_defining_path_finds_disabled_entry_the_loader_skips() {
+fn test_defining_path_finds_legacy_disabled_entry_the_loader_refuses() {
     use tempfile::TempDir;
 
     let tmp = TempDir::new().unwrap();
@@ -401,12 +446,18 @@ fn test_defining_path_finds_disabled_entry_the_loader_skips() {
     )
     .unwrap();
 
-    // Invisible to the loader...
+    // Refused by the loader (fail-safe)...
     assert!(McpConfigLoader::load_with_roots(roots, &config_home).is_empty());
-    // ...but still locatable, which is what `/mcp enable` needs.
+    // ...but still locatable, which is what `/mcp enable`'s migration needs.
     let (path, scope) = defining_path("off", roots, &config_home).unwrap();
     assert_eq!(path, project_root.join(".mcp.json"));
     assert_eq!(scope, ConfigScope::Project);
+    let defined = defined_servers(roots, &config_home);
+    assert!(defined[0].legacy_disabled);
+    assert!(
+        defined[0].config.is_some(),
+        "shape still parses for display"
+    );
 }
 
 #[test]
