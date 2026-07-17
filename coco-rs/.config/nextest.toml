@@ -1,3 +1,20 @@
 [profile.default]
 # Do not increase, fix your test instead
 slow-timeout = { period = "15s", terminate-after = 2 }
+
+# `coco-tests-live` is the one package whose tests spawn the real `coco`
+# binary (two full process starts per test), so its wall-clock is dominated by
+# process startup rather than in-process work. The 15s/30s default above is
+# calibrated for in-process tests; under a saturated `pre-commit` run a
+# legitimate live run exceeds it, which made these tests fail on machine load
+# rather than on behavior.
+#
+# This is a *scoped category* budget, not a global bump — every other package
+# keeps the strict default. It also restores a coherent layering: each test's
+# own 90s per-subprocess timeout now fires FIRST with a precise message
+# ("coco subprocess timed out"), and nextest's 180s remains the outer
+# hang backstop. Previously the order was inverted (nextest's 30s always won),
+# so the in-test timeout was unreachable dead code.
+[[profile.default.overrides]]
+filter = 'package(coco-tests-live)'
+slow-timeout = { period = "60s", terminate-after = 3 }
