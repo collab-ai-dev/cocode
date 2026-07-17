@@ -550,6 +550,136 @@ fn test_teammate_mode_accepts_iterm2() {
 }
 
 #[test]
+fn test_skill_learn_config_defaults_match_historical_constants() {
+    let config = SkillLearnConfig::resolve(&Settings::default(), &EnvSnapshot::default());
+    assert!(config.enabled);
+    assert_eq!(config.review_throttle, 5);
+    assert_eq!(config.review_max_turns, 6);
+    assert_eq!(config.review_min_tool_calls, 3);
+    assert!(config.curator_enabled);
+    assert_eq!(config.curator_min_hours, 24);
+    assert_eq!(config.promote_min_invocations, 5);
+    assert_eq!(config.promote_success_rate, 0.8);
+    assert_eq!(config.retire_success_rate, 0.34);
+    assert_eq!(config.retire_inactive_days, 90);
+    assert!(config.journal_enabled);
+}
+
+/// `retire_success_rate` is a success FLOOR (curator retires below it), not a
+/// failure ceiling. A key named after failures would invert every override, so
+/// pin the direction: a *low* value must mean *tolerant* (retire less).
+#[test]
+fn test_skill_learn_retire_rate_is_a_success_floor() {
+    let tolerant = SkillLearnConfig::resolve(
+        &Settings {
+            skill_learn: PartialSkillLearnSettings {
+                retire_success_rate: Some(0.1),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        &EnvSnapshot::default(),
+    );
+    let strict = SkillLearnConfig::resolve(
+        &Settings {
+            skill_learn: PartialSkillLearnSettings {
+                retire_success_rate: Some(0.9),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        &EnvSnapshot::default(),
+    );
+    assert!(
+        tolerant.retire_success_rate < strict.retire_success_rate,
+        "a lower retire_success_rate must be the more tolerant setting"
+    );
+    // Rates are clamped into [0,1] rather than trusted verbatim.
+    let clamped = SkillLearnConfig::resolve(
+        &Settings {
+            skill_learn: PartialSkillLearnSettings {
+                retire_success_rate: Some(9.0),
+                promote_success_rate: Some(-1.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        &EnvSnapshot::default(),
+    );
+    assert_eq!(clamped.retire_success_rate, 1.0);
+    assert_eq!(clamped.promote_success_rate, 0.0);
+}
+
+/// A large i64 setting must clamp, not wrap through `as i32` into the minimum.
+#[test]
+fn test_skill_learn_large_values_clamp_instead_of_wrapping() {
+    let config = SkillLearnConfig::resolve(
+        &Settings {
+            skill_learn: PartialSkillLearnSettings {
+                review_throttle: Some(i64::from(i32::MAX) + 1),
+                review_min_tool_calls: Some(4_294_967_296),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        &EnvSnapshot::default(),
+    );
+    assert_eq!(
+        config.review_throttle,
+        i32::MAX,
+        "2^31 must clamp to i32::MAX, not wrap to 1"
+    );
+    assert_eq!(
+        config.review_min_tool_calls,
+        i32::MAX,
+        "2^32 must clamp, not wrap to 0 (which would disable the signal gate)"
+    );
+}
+
+#[test]
+fn test_skill_learn_config_settings_overlay() {
+    let config = SkillLearnConfig::resolve(
+        &Settings {
+            skill_learn: PartialSkillLearnSettings {
+                review_throttle: Some(10),
+                journal_enabled: Some(false),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        &EnvSnapshot::default(),
+    );
+    assert_eq!(config.review_throttle, 10);
+    assert!(!config.journal_enabled);
+    // Untouched fields keep their defaults.
+    assert_eq!(config.retire_inactive_days, 90);
+}
+
+#[test]
+fn test_skill_learn_config_env_overrides_win() {
+    let env = EnvSnapshot::from_pairs([
+        (EnvKey::CocoSkillLearnDisable, "1"),
+        (EnvKey::CocoSkillLearnReviewThrottle, "3"),
+        (EnvKey::CocoSkillLearnCuratorDisable, "true"),
+    ]);
+    let config = SkillLearnConfig::resolve(
+        &Settings {
+            skill_learn: PartialSkillLearnSettings {
+                enabled: Some(true),
+                review_throttle: Some(9),
+                curator_enabled: Some(true),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        &env,
+    );
+    assert!(!config.enabled, "env disable wins over settings");
+    assert_eq!(config.review_throttle, 3, "env throttle wins");
+    assert!(!config.curator_enabled, "env curator-disable wins");
+}
+
+#[test]
 fn test_agent_teams_config_resolves_role_overrides() {
     let config = AgentTeamsConfig::resolve(&Settings {
         agent_teams: PartialAgentTeamsSettings {

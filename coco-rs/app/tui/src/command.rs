@@ -239,6 +239,11 @@ pub enum UserCommand {
     /// Like the "Always Allow" persist path, but the editor lets the
     /// user pick any of the three writable scopes.
     ApplyPermissionUpdate { update: PermissionUpdate },
+    /// Apply one `/journey` mutation (retire/restore a skill, delete a memory,
+    /// or open a node's backing file). The CLI executes it, appends the matching
+    /// journal event, then re-emits `OpenJourneyDialog` so the overlay refreshes
+    /// in place. In-process (no serde), so `JourneyAction` carries `PathBuf`.
+    ApplyJourneyAction { action: coco_types::JourneyAction },
     /// Leader → teammate: set a teammate's permission mode from the teams
     /// roster picker (gap 8). Routed to `AgentHandle::set_teammate_mode`,
     /// which persists it + notifies the live teammate via `ModeSetRequest`.

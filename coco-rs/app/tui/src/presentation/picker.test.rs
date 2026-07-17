@@ -69,6 +69,7 @@ fn skills_dialog_content_renders_flat_list_with_state_and_lock() {
                 current_local: None,
                 baseline: coco_types::SkillOverrideState::On,
                 lock: None,
+                quarantine: None,
             },
             coco_types::SkillsDialogEntry {
                 name: "claude-api".into(),
@@ -82,6 +83,7 @@ fn skills_dialog_content_renders_flat_list_with_state_and_lock() {
                     source: coco_types::SkillLockSource::Plugin,
                     forced_value: coco_types::SkillOverrideState::On,
                 }),
+                quarantine: None,
             },
             coco_types::SkillsDialogEntry {
                 name: "noisy".into(),
@@ -92,6 +94,7 @@ fn skills_dialog_content_renders_flat_list_with_state_and_lock() {
                 current_local: Some(coco_types::SkillOverrideState::Off),
                 baseline: coco_types::SkillOverrideState::On,
                 lock: None,
+                quarantine: None,
             },
         ],
         bytes_per_token: 4,
@@ -112,6 +115,56 @@ fn skills_dialog_content_renders_flat_list_with_state_and_lock() {
     assert!(body.contains("off"));
     // Plugin footer.
     assert!(body.contains("Plugin skills are managed via /plugin"));
+}
+
+#[test]
+fn skills_dialog_shows_quarantine_progress_and_try_it_hint() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let payload = coco_types::SkillsDialogPayload {
+        entries: vec![
+            coco_types::SkillsDialogEntry {
+                name: "fix-nextest-filter".into(),
+                source: coco_types::SkillsDialogSource::User,
+                description: "agent-learned skill".into(),
+                plugin_name: None,
+                frontmatter_bytes: 100,
+                current_local: None,
+                baseline: coco_types::SkillOverrideState::On,
+                lock: None,
+                quarantine: Some(coco_types::SkillQuarantineWire {
+                    invocations: 2,
+                    required: 5,
+                }),
+            },
+            // A normal (non-quarantined) skill must NOT get the hint.
+            coco_types::SkillsDialogEntry {
+                name: "deploy".into(),
+                source: coco_types::SkillsDialogSource::User,
+                description: "human skill".into(),
+                plugin_name: None,
+                frontmatter_bytes: 100,
+                current_local: None,
+                baseline: coco_types::SkillOverrideState::On,
+                lock: None,
+                quarantine: None,
+            },
+        ],
+        bytes_per_token: 4,
+    };
+    let state = SkillsDialogState::from_wire(payload);
+    let (_, body, _) = skills_dialog_content(&state, UiStyles::new(&theme));
+
+    assert!(
+        body.contains("learning 2/5"),
+        "quarantined row shows promotion progress: {body}"
+    );
+    assert!(
+        body.contains("try it to promote"),
+        "quarantined row shows the try-it hint: {body}"
+    );
+    // Exactly one row carries the hint.
+    assert_eq!(body.matches("try it to promote").count(), 1);
 }
 
 #[test]

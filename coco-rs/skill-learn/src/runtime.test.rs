@@ -1,4 +1,4 @@
-use super::{ReviewTrigger, SkillReviewRuntime};
+use super::{ReviewSignal, ReviewTrigger, SkillReviewRuntime};
 use coco_types::SessionId;
 
 fn runtime(throttle: i32) -> (SkillReviewRuntime, tempfile::TempDir) {
@@ -11,11 +11,20 @@ fn session_id() -> SessionId {
     SessionId::try_new("s").unwrap()
 }
 
+/// A signal with enough material work to clear the default 3-tool-call gate.
+fn material() -> ReviewSignal {
+    ReviewSignal {
+        tool_calls: 3,
+        skill_invoked: false,
+    }
+}
+
 #[tokio::test]
 async fn subagent_turns_are_skipped_and_do_not_count() {
     let (rt, _tmp) = runtime(2);
     assert_eq!(
         rt.maybe_review(
+            material(),
             /*turn_delivered*/ true,
             /*is_subagent*/ true,
             &session_id(),
@@ -27,6 +36,7 @@ async fn subagent_turns_are_skipped_and_do_not_count() {
     // non-subagent turns are still Throttled then Spawned.
     assert_eq!(
         rt.maybe_review(
+            material(),
             /*turn_delivered*/ true,
             /*is_subagent*/ false,
             &session_id(),
@@ -36,6 +46,7 @@ async fn subagent_turns_are_skipped_and_do_not_count() {
     );
     assert_eq!(
         rt.maybe_review(
+            material(),
             /*turn_delivered*/ true,
             /*is_subagent*/ false,
             &session_id(),
@@ -50,6 +61,7 @@ async fn undelivered_turns_are_skipped() {
     let (rt, _tmp) = runtime(1);
     assert_eq!(
         rt.maybe_review(
+            material(),
             /*turn_delivered*/ false,
             /*is_subagent*/ false,
             &session_id(),
@@ -60,34 +72,146 @@ async fn undelivered_turns_are_skipped() {
 }
 
 #[tokio::test]
-async fn fires_every_throttle_turns() {
-    let (rt, _tmp) = runtime(3);
+async fn empty_signal_skips_at_zero_cost_without_advancing_throttle() {
+    let (rt, _tmp) = runtime(1);
+    let empty = ReviewSignal::default();
     assert_eq!(
         rt.maybe_review(
+            empty,
             /*turn_delivered*/ true,
             /*is_subagent*/ false,
             &session_id(),
             Vec::new,
         ),
-        ReviewTrigger::Throttled
+        ReviewTrigger::Skipped,
+        "no material work → no fork even at the throttle boundary"
     );
+    // The counter never advanced, so a material turn still fires immediately.
     assert_eq!(
         rt.maybe_review(
-            /*turn_delivered*/ true,
-            /*is_subagent*/ false,
-            &session_id(),
-            Vec::new,
-        ),
-        ReviewTrigger::Throttled
-    );
-    assert_eq!(
-        rt.maybe_review(
+            material(),
             /*turn_delivered*/ true,
             /*is_subagent*/ false,
             &session_id(),
             Vec::new,
         ),
         ReviewTrigger::Spawned
+    );
+}
+
+#[tokio::test]
+async fn skill_invocation_alone_is_material_signal() {
+    let (rt, _tmp) = runtime(1);
+    let signal = ReviewSignal {
+        tool_calls: 0,
+        skill_invoked: true,
+    };
+    assert_eq!(
+        rt.maybe_review(
+            signal,
+            /*turn_delivered*/ true,
+            /*is_subagent*/ false,
+            &session_id(),
+            Vec::new,
+        ),
+        ReviewTrigger::Spawned,
+        "an invoked skill is signal even with no tool calls"
+    );
+}
+
+#[tokio::test]
+async fn fires_every_throttle_turns() {
+    let (rt, _tmp) = runtime(3);
+    assert_eq!(
+        rt.maybe_review(
+            material(),
+            /*turn_delivered*/ true,
+            /*is_subagent*/ false,
+            &session_id(),
+            Vec::new,
+        ),
+        ReviewTrigger::Throttled
+    );
+    assert_eq!(
+        rt.maybe_review(
+            material(),
+            /*turn_delivered*/ true,
+            /*is_subagent*/ false,
+            &session_id(),
+            Vec::new,
+        ),
+        ReviewTrigger::Throttled
+    );
+    assert_eq!(
+        rt.maybe_review(
+            material(),
+            /*turn_delivered*/ true,
+            /*is_subagent*/ false,
+            &session_id(),
+            Vec::new,
+        ),
+        ReviewTrigger::Spawned
+    );
+}
+
+#[tokio::test]
+async fn failure_backoff_stretches_the_effective_throttle() {
+    use std::sync::atomic::Ordering;
+
+    let (rt, _tmp) = runtime(1);
+    // Two consecutive failures → effective throttle 1 << 2 == 4.
+    rt.consecutive_failures.store(2, Ordering::SeqCst);
+    assert_eq!(rt.effective_throttle(), 4);
+    for _ in 0..3 {
+        assert_eq!(
+            rt.maybe_review(
+                material(),
+                /*turn_delivered*/ true,
+                /*is_subagent*/ false,
+                &session_id(),
+                Vec::new,
+            ),
+            ReviewTrigger::Throttled,
+            "a failing spawn stretches the next fire"
+        );
+    }
+    assert_eq!(
+        rt.maybe_review(
+            material(),
+            /*turn_delivered*/ true,
+            /*is_subagent*/ false,
+            &session_id(),
+            Vec::new,
+        ),
+        ReviewTrigger::Spawned
+    );
+}
+
+#[tokio::test]
+async fn backoff_shift_is_capped() {
+    use std::sync::atomic::Ordering;
+
+    let (rt, _tmp) = runtime(2);
+    rt.consecutive_failures.store(99, Ordering::SeqCst);
+    // Clamped to a 5-bit shift: 2 << 5 == 64, not an unbounded value.
+    assert_eq!(rt.effective_throttle(), 64);
+}
+
+#[tokio::test]
+async fn manual_review_bypasses_throttle_but_respects_single_flight() {
+    use std::sync::atomic::Ordering;
+
+    let (rt, _tmp) = runtime(100);
+    // Throttle is 100, yet a user-initiated /learn fires immediately.
+    assert_eq!(
+        rt.manual_review("learn the nextest filter".into(), &session_id(), Vec::new()),
+        ReviewTrigger::Spawned
+    );
+    // While a review is in flight, a second manual request is suppressed.
+    rt.in_progress.store(true, Ordering::SeqCst);
+    assert_eq!(
+        rt.manual_review("again".into(), &session_id(), Vec::new()),
+        ReviewTrigger::InProgress
     );
 }
 
@@ -99,6 +223,7 @@ async fn in_progress_suppresses_then_retries_on_next_eligible_turn() {
     rt.in_progress.store(true, Ordering::SeqCst);
     assert_eq!(
         rt.maybe_review(
+            material(),
             /*turn_delivered*/ true,
             /*is_subagent*/ false,
             &session_id(),
@@ -110,6 +235,7 @@ async fn in_progress_suppresses_then_retries_on_next_eligible_turn() {
     rt.in_progress.store(false, Ordering::SeqCst);
     assert_eq!(
         rt.maybe_review(
+            material(),
             /*turn_delivered*/ true,
             /*is_subagent*/ false,
             &session_id(),

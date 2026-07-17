@@ -93,6 +93,12 @@ is_tier3_main_trunk() {
         # crosses the crate boundary, so there is nothing for coco-error to
         # classify. Same rationale as services/wire-dump.
         skill-learn)                          return 1 ;;
+        # Read-side observability assembler: `build_journey` is infallible by
+        # contract (a missing/corrupt source contributes nothing plus a
+        # tracing::warn) and `bucketize` / `day_label` are pure functions. No
+        # Result crosses the crate boundary, so there is nothing for coco-error
+        # to classify. Same rationale as skill-learn / services/wire-dump.
+        journey)                              return 1 ;;
         keybindings)                          return 1 ;;
         core/messages)                        return 1 ;;
         # Pure goal-runtime domain reducer: no I/O, no locks, no clock. Its only

@@ -214,6 +214,8 @@ fn tui_event_variant(t: &coco_types::TuiOnlyEvent) -> &'static str {
         E::OpenAddDirectory => "OpenAddDirectory",
         E::OpenExport => "OpenExport",
         E::SkillOverridesSaved { .. } => "SkillOverridesSaved",
+        E::OpenJourneyDialog { .. } => "OpenJourneyDialog",
+        E::JourneyMutationFailed { .. } => "JourneyMutationFailed",
         E::SlashCommandStatus { .. } => "SlashCommandStatus",
     }
 }

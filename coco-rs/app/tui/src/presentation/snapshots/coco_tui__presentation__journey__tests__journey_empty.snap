@@ -1,0 +1,9 @@
+---
+source: app/tui/src/presentation/journey.test.rs
+expression: body(&state)
+---
+● skills 0   ◆ memories 0   ★ promoted 0   ✕ retired 0
+
+No learned skills or memories yet.
+
+j/k select · enter detail · e edit · d retire/delete · esc close

@@ -9,7 +9,7 @@ fn write_file(dir: &std::path::Path, name: &str, content: &str) {
 #[test]
 fn returns_empty_for_missing_dir() {
     let path = std::path::Path::new("/no/such/dir");
-    assert!(scan_memory_files(path).is_empty());
+    assert!(scan_memory_files(path, MAX_SCANNED_FILES).is_empty());
 }
 
 #[test]
@@ -25,7 +25,7 @@ fn skips_memory_md_index_file() {
         "user_role.md",
         "---\nname: x\ndescription: d\ntype: user\n---\nbody\n",
     );
-    let scanned = scan_memory_files(temp.path());
+    let scanned = scan_memory_files(temp.path(), MAX_SCANNED_FILES);
     assert_eq!(scanned.len(), 1);
     assert_eq!(scanned[0].filename, "user_role.md");
 }
@@ -48,7 +48,7 @@ fn parses_frontmatter_and_sorts_newest_first() {
         "---\nname: new\ndescription: new desc\ntype: feedback\n---\nbody\n",
     );
 
-    let scanned = scan_memory_files(temp.path());
+    let scanned = scan_memory_files(temp.path(), MAX_SCANNED_FILES);
     assert_eq!(scanned.len(), 2);
     assert_eq!(scanned[0].filename, "new.md");
     assert_eq!(scanned[1].filename, "old.md");
@@ -64,7 +64,7 @@ fn manifest_formats_each_entry() {
         "x.md",
         "---\nname: x\ndescription: short hook\ntype: project\n---\nbody\n",
     );
-    let scanned = scan_memory_files(temp.path());
+    let scanned = scan_memory_files(temp.path(), MAX_SCANNED_FILES);
     let m = format_memory_manifest(&scanned);
     // Line shape: `- [type] file (iso-ts): desc`
     assert!(m.starts_with("- [project] x.md ("), "got: {m}");
@@ -86,7 +86,7 @@ fn manifest_empty_input_returns_empty_string() {
 fn manifest_omits_type_tag_when_no_frontmatter() {
     let temp = tempdir().unwrap();
     write_file(temp.path(), "loose.md", "no frontmatter at all\n");
-    let scanned = scan_memory_files(temp.path());
+    let scanned = scan_memory_files(temp.path(), MAX_SCANNED_FILES);
     let m = format_memory_manifest(&scanned);
     assert!(
         m.starts_with("- loose.md ("),

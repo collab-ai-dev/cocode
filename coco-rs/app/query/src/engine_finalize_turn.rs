@@ -691,7 +691,7 @@ impl QueryEngine {
         // text-only endings; the two tails are mutually exclusive per round,
         // so each delivered cycle ticks the throttle exactly once.
         if continuation.is_terminal() {
-            self.run_skill_review_finalize(history);
+            self.run_skill_review_finalize(history, event_tx).await;
         }
 
         // Collapse-aware guard: when staged_compact is active it owns

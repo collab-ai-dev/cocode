@@ -47,6 +47,7 @@ use crate::sections::OutputRewriteConfig;
 use crate::sections::PathConfig;
 use crate::sections::ServerConfig;
 use crate::sections::ShellConfig;
+use crate::sections::SkillLearnConfig;
 use crate::sections::ToolConfig;
 use crate::sections::VoiceConfig;
 use crate::sections::WebFetchConfig;
@@ -107,6 +108,9 @@ pub struct RuntimeConfig {
     /// source of truth — `coco_compact` reads this and never touches env.
     pub compact: CompactConfig,
     pub agent_teams: AgentTeamsConfig,
+    /// Autonomous skill-learning loop knobs. Single source of truth —
+    /// `coco-skill-learn` reads this and never touches env directly.
+    pub skill_learn: SkillLearnConfig,
     /// Provider-agnostic prompt-cache settings (1h-TTL allowlist).
     /// Adapter (`vercel-ai-anthropic`) reads `allowlist` via
     /// `AnthropicConfig.prompt_cache_allowlist` (set by `build_anthropic`).
@@ -403,6 +407,7 @@ pub fn build_runtime_config_with(
         paths: PathConfig::resolve(merged),
         compact: CompactConfig::resolve(merged, &env),
         agent_teams: AgentTeamsConfig::resolve(merged)?,
+        skill_learn: SkillLearnConfig::resolve(merged, &env),
         prompt_cache: PromptCacheRuntimeConfig::resolve(merged, &env),
         account: AccountConfig::resolve(merged, &env),
         features,

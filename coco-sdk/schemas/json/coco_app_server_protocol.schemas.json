@@ -61,6 +61,52 @@
       ],
       "description": "One entry in `AgentDefinition.mcp_servers`:\neither a `string` (reference to an existing MCP server config) or\nan inline `{name: config}` mapping that stands up a dynamic\nserver scoped to this agent. Inline configs are stored as\n`serde_json::Value` because the underlying `McpServerConfig`\nshape lives in `coco-mcp` (a higher layer that depends on\n`coco-types`); keeping it as opaque JSON avoids a back-edge."
     },
+    "AgentSkillLifecycleWire": {
+      "description": "Wire mirror of an agent skill's lifecycle.",
+      "oneOf": [
+        {
+          "description": "Quarantined, with host-resolved progress toward the invocation gate.\nSee [`SkillQuarantineWire`] for why the pair travels with the state.",
+          "properties": {
+            "progress": {
+              "$ref": "#/$defs/SkillQuarantineWire"
+            },
+            "state": {
+              "const": "learning",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "progress"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "state": {
+              "const": "learned",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "state": {
+              "const": "retired",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "AgentSource": {
       "description": "Where an agent definition came from. Drives precedence when the same\n`agent_type` is defined in multiple places: later source wins.",
       "oneOf": [
@@ -1016,7 +1062,7 @@
       ]
     },
     "AttachmentKind": {
-      "description": "Every `AttachmentKind` discriminator, plus coco-rs-synthetic\nreminder kinds. 67 variants.\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]`\nto match `AttachmentKind` exactly, so transcripts round-trip.",
+      "description": "Every `AttachmentKind` discriminator, plus coco-rs-synthetic\nreminder kinds. 68 variants.\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]`\nto match `AttachmentKind` exactly, so transcripts round-trip.",
       "oneOf": [
         {
           "enum": [
@@ -1097,6 +1143,11 @@
         {
           "const": "memory_update_reminder",
           "description": "Background memory consolidation notice emitted after auto-dream.",
+          "type": "string"
+        },
+        {
+          "const": "skill_learned_reminder",
+          "description": "Background skill-learning notice emitted after a review fork created or\nupdated an agent skill (the model-visible half of the notices channel).",
           "type": "string"
         },
         {
@@ -5016,6 +5067,227 @@
         "declined"
       ],
       "type": "string"
+    },
+    "JourneyBusiestDayWire": {
+      "description": "Busiest-day summary (label + node count).",
+      "properties": {
+        "count": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "count"
+      ],
+      "type": "object"
+    },
+    "JourneyDialogPayload": {
+      "description": "`/journey` overlay payload: the assembled learning timeline. Wire mirror of\n`coco_journey::JourneySnapshot` + the pre-computed timeline buckets. Uses\n`String` paths + snake_case + `tag = \"kind\"` per the wire convention (the\nin-process domain types carry `PathBuf` instead).",
+      "properties": {
+        "buckets": {
+          "description": "Pre-computed timeline rows (host does not re-bucket on resize in v1).",
+          "items": {
+            "$ref": "#/$defs/TimelineBucketWire"
+          },
+          "type": "array"
+        },
+        "nodes": {
+          "description": "List rows, ascending `last_activity_ms`.",
+          "items": {
+            "$ref": "#/$defs/JourneyNodeWire"
+          },
+          "type": "array"
+        },
+        "stats": {
+          "$ref": "#/$defs/JourneyStatsWire"
+        }
+      },
+      "required": [
+        "stats"
+      ],
+      "type": "object"
+    },
+    "JourneyMutationFailed": {
+      "description": "Outcome of a `/journey` mutation (retire / restore / delete). Emitted only\non failure \u2014 a success is already visible as the refreshed timeline, whereas\na swallowed failure is indistinguishable from \"the key didn't register\".\n\nCarries **no display text**, matching [`SkillOverridesSaveResult`]: the TUI\nowns wording and severity.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/JourneyMutationKind",
+          "description": "What the user tried to do."
+        },
+        "message": {
+          "description": "Underlying error's display text.",
+          "type": "string"
+        },
+        "target": {
+          "description": "Skill or memory-entry name, for the toast body.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "target",
+        "message"
+      ],
+      "type": "object"
+    },
+    "JourneyMutationKind": {
+      "description": "Which `/journey` mutation failed.",
+      "enum": [
+        "retire_skill",
+        "restore_skill",
+        "delete_memory"
+      ],
+      "type": "string"
+    },
+    "JourneyNodeBodyWire": {
+      "description": "Wire mirror of the node kind + kind-specific data (`tag = \"kind\"`).",
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "agent_skill",
+              "type": "string"
+            },
+            "lifecycle": {
+              "$ref": "#/$defs/AgentSkillLifecycleWire"
+            },
+            "path": {
+              "type": "string"
+            },
+            "telemetry": {
+              "$ref": "#/$defs/SkillTelemetryWire"
+            }
+          },
+          "required": [
+            "kind",
+            "path",
+            "lifecycle",
+            "telemetry"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "user_skill",
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "telemetry": {
+              "$ref": "#/$defs/SkillTelemetryWire"
+            }
+          },
+          "required": [
+            "kind",
+            "path",
+            "telemetry"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "filename": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "memory",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "filename"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "JourneyNodeWire": {
+      "description": "Wire mirror of one learning-timeline node.",
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/JourneyNodeBodyWire"
+        },
+        "date_label": {
+          "default": "",
+          "description": "Host-formatted day label for `last_activity_ms` (e.g. `\"15 Jul\"`), so the\nTUI needs no date math / `chrono` dependency.",
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "first_seen_ms": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "history": {
+          "description": "Newest-first journal history (capped host-side). Opaque to the schema \u2014\n`JourneyRecord` intentionally does not derive `JsonSchema`.",
+          "items": true,
+          "type": "array"
+        },
+        "last_activity_ms": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "description",
+        "first_seen_ms",
+        "last_activity_ms",
+        "body"
+      ],
+      "type": "object"
+    },
+    "JourneyStatsWire": {
+      "description": "Wire mirror of the aggregate journey stats.",
+      "properties": {
+        "busiest_day": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JourneyBusiestDayWire"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "learned": {
+          "default": 0,
+          "format": "int32",
+          "type": "integer"
+        },
+        "learning": {
+          "default": 0,
+          "format": "int32",
+          "type": "integer"
+        },
+        "memories": {
+          "default": 0,
+          "format": "int32",
+          "type": "integer"
+        },
+        "retired": {
+          "default": 0,
+          "format": "int32",
+          "type": "integer"
+        },
+        "user_skills": {
+          "default": 0,
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "type": "object"
     },
     "JsonRpcError": {
       "description": "Error response payload. Mirrors JSON-RPC 2.0 error structure.",
@@ -11264,6 +11536,63 @@
         }
       ]
     },
+    "SkillQuarantineWire": {
+      "description": "Quarantine progress for an agent-created skill, measured against the\ncurator's **invocation** gate (`total_invocations >= promote_min_invocations`).\n\nDeliberately counts invocations, not successes: the curator's first gate is\n`total_invocations()` (successes + failures), so a success-only bar\nunder-reports real progress. It is also only *half* the promotion rule \u2014 the\ncurator additionally requires `success_rate >= promote_success_rate`. That\nhalf is not a countable bar and is not modelled here, because invoking the\nskill is the only thing the user can do to advance it; the rate is quality,\nnot progress. Reaching `required` therefore means \"eligible\", not \"promoted\".",
+      "properties": {
+        "invocations": {
+          "description": "Invocations so far (successes + failures).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "required": {
+          "description": "Invocations required before the promotion gates apply. Resolved from\n`SkillLearnConfig::promote_min_invocations` \u2014 never a UI-side constant,\nor an operator who raises the threshold gets a bar that fills early and\nthen stalls with no explanation.",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "invocations",
+        "required"
+      ],
+      "type": "object"
+    },
+    "SkillTelemetryWire": {
+      "description": "Wire mirror of `coco_skills::telemetry::SkillTelemetryStats` (coco-types\ncannot depend on coco-skills, so the fields are mirrored here).",
+      "properties": {
+        "failure_count": {
+          "default": 0,
+          "format": "int64",
+          "type": "integer"
+        },
+        "last_patched_at_ms": {
+          "default": 0,
+          "format": "int64",
+          "type": "integer"
+        },
+        "last_status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_used_at_ms": {
+          "default": 0,
+          "format": "int64",
+          "type": "integer"
+        },
+        "patch_count": {
+          "default": 0,
+          "format": "int64",
+          "type": "integer"
+        },
+        "success_count": {
+          "default": 0,
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "SkillsDialogEntry": {
       "description": "One row in the `/skills` dialog. Every field is required so the dialog\nnever has to fabricate defaults for `baseline` / `lock` / etc.",
       "properties": {
@@ -11312,6 +11641,17 @@
             "string",
             "null"
           ]
+        },
+        "quarantine": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SkillQuarantineWire"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present only for agent-created skills still in quarantine (the\nskill-learning loop). Drives the dialog's `learning n/5 \u00b7 try it`\nrow hint \u2014 the gate is on *invocation*, so making it visible is what\nlets a user push a quarantined skill toward promotion."
         },
         "source": {
           "$ref": "#/$defs/SkillsDialogSource",
@@ -13019,6 +13359,38 @@
           "type": "object"
         }
       ]
+    },
+    "TimelineBucketWire": {
+      "description": "Wire mirror of one timeline bucket (row).",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "memories": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "recency": {
+          "format": "float",
+          "type": "number"
+        },
+        "skills": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "start_ms": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start_ms",
+        "label",
+        "skills",
+        "memories",
+        "recency"
+      ],
+      "type": "object"
     },
     "TodoRecord": {
       "description": "A TodoWrite item (no `id` field, positional identity).",
@@ -15256,6 +15628,40 @@
           "required": [
             "type",
             "result"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`/journey` overlay \u2014 opens the learning timeline (skills + memories over\ntime). The payload is a CLI/host-assembled snapshot (`coco-journey`\n`build_journey` + `bucketize`) since the TUI cannot reach the skill /\nmemory stores directly. Re-emitted after each edit so the open overlay\nrefreshes in place.",
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/JourneyDialogPayload"
+            },
+            "type": {
+              "const": "open_journey_dialog",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A `/journey` mutation failed (read-only file, vanished entry, \u2026). Success\nneeds no event \u2014 the refreshed overlay IS the confirmation.",
+          "properties": {
+            "failure": {
+              "$ref": "#/$defs/JourneyMutationFailed"
+            },
+            "type": {
+              "const": "journey_mutation_failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "failure"
           ],
           "type": "object"
         }

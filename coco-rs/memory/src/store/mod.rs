@@ -13,6 +13,7 @@ pub use index::MAX_ENTRYPOINT_LINES;
 pub use index::MemoryIndex;
 pub use index::MemoryIndexEntry;
 pub(crate) use index::format_byte_count;
+pub(crate) use index::parse_index_line;
 pub use index::parse_memory_index;
 pub use index::truncate_entrypoint_content;
 pub use types::ENTRYPOINT_NAME;

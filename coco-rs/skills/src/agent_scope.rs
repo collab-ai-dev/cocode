@@ -53,6 +53,15 @@ fn promotions_path(config_home: &Path) -> PathBuf {
     skills_root(config_home).join(".agent-promotions.json")
 }
 
+/// `<config_home>/skills/.agent-journal.jsonl` — the append-only learning
+/// journal for skill events. A **sibling** of the `.agent` root (same trick as
+/// [`promotions_path`]): the review fork's write fence contains it to `.agent`
+/// with a `[md,txt,json,yaml,yml,toml]` extension whitelist that denies
+/// dot-prefixed names, so only trusted host-side Rust can append here.
+pub fn agent_journal_path(config_home: &Path) -> PathBuf {
+    skills_root(config_home).join(".agent-journal.jsonl")
+}
+
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 struct PromotionsFile {
     #[serde(default)]
@@ -84,6 +93,78 @@ pub fn save_promotions(config_home: &Path, promoted: &HashSet<String>) -> bool {
         return false;
     };
     coco_utils_common::write_atomic(&promotions_path(config_home), json).is_ok()
+}
+
+/// Whether a scan includes Curator-retired (`disabled: true`) skills.
+/// Two-variant enum (not a bool param) so call sites read unambiguously.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IncludeDisabled {
+    /// Include retired skills (journey: the timeline must show them).
+    Yes,
+    /// Skip retired skills (loader parity).
+    No,
+}
+
+/// One agent skill as seen by a location-keyed scan: the enforced definition
+/// plus the on-disk facts the Curator and `/journey` need for lifecycle
+/// decisions and mutations.
+#[derive(Debug, Clone)]
+pub struct AgentSkillScan {
+    /// Parsed definition with [`enforce_agent_quarantine`] applied (origin
+    /// stamped, executable fields dropped, model-invocability from promotions).
+    pub skill: SkillDefinition,
+    /// Canonical `SKILL.md` path — the stable node identity + mutation target.
+    pub skill_md: PathBuf,
+    /// `disabled: true` in frontmatter (Curator-retired).
+    pub disabled: bool,
+    /// Promoted to model-invocability by the Curator.
+    pub promoted: bool,
+}
+
+/// Location-keyed scan of every agent skill directory under
+/// `<config_home>/skills/.agent`, parsing each `SKILL.md` and applying the same
+/// quarantine enforcement as [`discover_agent_skills`], but WITHOUT the
+/// disabled-skill filter that the normal discovery walk applies (so retired
+/// skills are visible to `/journey`). Shared by the Curator and journey so
+/// there is a single scan implementation.
+///
+/// Blocking I/O — call from `spawn_blocking` in async contexts.
+pub fn scan_agent_skills(
+    config_home: &Path,
+    include_disabled: IncludeDisabled,
+) -> Vec<AgentSkillScan> {
+    let agent_root = agent_skills_dir(config_home);
+    let promoted_set = load_promotions(config_home);
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&agent_root) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        // Same case-insensitive lookup as the loader/curator.
+        let Some(skill_md) = crate::find_skill_md(&dir) else {
+            continue;
+        };
+        let Ok(mut skill) = crate::load_skill_from_file(&skill_md) else {
+            continue;
+        };
+        let disabled = skill.disabled;
+        if disabled && include_disabled == IncludeDisabled::No {
+            continue;
+        }
+        let promoted = promoted_set.contains(&skill.name);
+        enforce_agent_quarantine(&mut skill, promoted);
+        out.push(AgentSkillScan {
+            skill,
+            skill_md,
+            disabled,
+            promoted,
+        });
+    }
+    out
 }
 
 /// Discover, enforce, and register every agent-scope skill into `manager`.

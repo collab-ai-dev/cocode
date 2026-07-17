@@ -6,6 +6,7 @@
 
 pub mod agents_dialog;
 pub mod interaction;
+pub mod journey;
 pub mod modal;
 pub mod permissions_editor;
 pub mod plugin_dialog;
@@ -50,6 +51,7 @@ pub use interaction::PanePromptState;
 pub use interaction::SlashCommandName;
 pub use interaction::SlashPopupState;
 pub use interaction::SymbolPopupState;
+pub use journey::{JourneyMode, JourneyState};
 pub use modal::ModalQueue;
 pub use modal::ModalState;
 pub use permissions_editor::AddForm;

@@ -15,6 +15,7 @@ fn entry(
         current_local: None,
         baseline: coco_types::SkillOverrideState::On,
         lock: None,
+        quarantine: None,
     }
 }
 

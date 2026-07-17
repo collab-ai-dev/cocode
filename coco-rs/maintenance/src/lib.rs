@@ -16,6 +16,7 @@
 //! role, the maintenance strategy, and the per-path write predicate) stays in
 //! the consuming crate.
 
+pub mod journal;
 pub mod lock;
 pub mod write_fence;
 

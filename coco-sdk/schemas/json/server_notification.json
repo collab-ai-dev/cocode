@@ -2025,7 +2025,7 @@
       ]
     },
     "AttachmentKind": {
-      "description": "Every `AttachmentKind` discriminator, plus coco-rs-synthetic\nreminder kinds. 67 variants.\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]`\nto match `AttachmentKind` exactly, so transcripts round-trip.",
+      "description": "Every `AttachmentKind` discriminator, plus coco-rs-synthetic\nreminder kinds. 68 variants.\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]`\nto match `AttachmentKind` exactly, so transcripts round-trip.",
       "oneOf": [
         {
           "type": "string",
@@ -2107,6 +2107,11 @@
           "description": "Background memory consolidation notice emitted after auto-dream.",
           "type": "string",
           "const": "memory_update_reminder"
+        },
+        {
+          "description": "Background skill-learning notice emitted after a review fork created or\nupdated an agent skill (the model-visible half of the notices channel).",
+          "type": "string",
+          "const": "skill_learned_reminder"
         },
         {
           "description": "TS-style slash-command metadata (`<command-name>`, optional args)\ninjected before expanded prompt content.",

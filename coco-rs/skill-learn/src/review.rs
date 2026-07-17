@@ -50,6 +50,12 @@ pub struct SkillReviewService {
     agent: AgentSlot,
     agent_root: PathBuf,
     config_home: PathBuf,
+    /// Per-fork turn cap (from `SkillLearnConfig.review_max_turns`).
+    max_turns: i32,
+    /// Mirrors `SkillLearnConfig::journal_enabled`.
+    journal_enabled: bool,
+    /// User-visible notice channel, shared with the runtime's drain hook.
+    notices: crate::notice::SkillLearnInbox,
 }
 
 impl SkillReviewService {
@@ -59,14 +65,39 @@ impl SkillReviewService {
             agent,
             agent_root: agent_skills_dir(config_home),
             config_home: config_home.to_path_buf(),
+            max_turns: DEFAULT_REVIEW_MAX_TURNS,
+            journal_enabled: true,
+            notices: crate::notice::SkillLearnInbox::new(),
         }
     }
 
+    /// Override the per-fork turn cap (from config).
+    pub fn with_max_turns(mut self, max_turns: i32) -> Self {
+        self.max_turns = max_turns.max(1);
+        self
+    }
+
+    /// Honour `SkillLearnConfig::journal_enabled`.
+    pub fn with_journal_enabled(mut self, enabled: bool) -> Self {
+        self.journal_enabled = enabled;
+        self
+    }
+
+    /// Share a notice inbox with the runtime (so `drain_notices` sees pushes).
+    pub fn with_notices(mut self, notices: crate::notice::SkillLearnInbox) -> Self {
+        self.notices = notices;
+        self
+    }
+
     /// Run one review fork over `fork_context` (the parent's message slice).
+    /// A `Some(directive)` marks a user-initiated `/learn` run: the directive
+    /// is injected as the top-priority instruction and created skills are
+    /// stamped `created-by: manual`.
     pub async fn run(
         &self,
         session_id: SessionId,
         fork_context: Vec<Arc<Message>>,
+        directive: Option<String>,
     ) -> SkillReviewOutcome {
         // Ensure the fenced root exists so the fork's first write lands.
         if let Err(e) = std::fs::create_dir_all(&self.agent_root) {
@@ -75,7 +106,22 @@ impl SkillReviewService {
             };
         }
 
-        let prompt = build_skill_review_prompt(&self.agent_root);
+        let author = if directive.is_some() {
+            coco_skills::SkillAuthor::Manual
+        } else {
+            coco_skills::SkillAuthor::Review
+        };
+
+        // Snapshot which skills exist BEFORE the fork runs. This is the only
+        // trustworthy basis for "did the fork create this skill?" — the
+        // frontmatter it writes is LLM-authored and may claim any `created-at`.
+        let pre_existing = crate::stamp::existing_skill_names(&self.agent_root);
+
+        // Capture the session id for the journal before it is moved into the
+        // spawn request below.
+        let session_id_str = session_id.as_str().to_string();
+
+        let prompt = build_skill_review_prompt(&self.agent_root, directive.as_deref());
 
         // Synthetic definition pins `ModelRole::Memory` — background
         // self-improvement shares the memory role's model, not the (often
@@ -101,7 +147,7 @@ impl SkillReviewService {
             },
             permissions: AgentSpawnPermissions {
                 constraints: Some(AgentSpawnConstraints {
-                    max_turns: Some(DEFAULT_REVIEW_MAX_TURNS),
+                    max_turns: Some(self.max_turns),
                     allowed_write_roots: vec![self.agent_root.clone()],
                 }),
                 can_use_tool: Some(create_skill_write_handle(self.agent_root.clone())),
@@ -140,17 +186,36 @@ impl SkillReviewService {
                     let config_home = self.config_home.clone();
                     let paths = resp.paths_written;
                     let now = chrono::Utc::now().to_rfc3339();
+                    let sid = session_id_str.clone();
+                    let journal_enabled = self.journal_enabled;
                     let stamped = tokio::task::spawn_blocking(move || {
-                        crate::stamp::stamp_written_skills(&agent_root, &config_home, &paths, &now)
+                        crate::stamp::stamp_written_skills(crate::stamp::StampRequest {
+                            agent_root: &agent_root,
+                            config_home: &config_home,
+                            paths_written: &paths,
+                            now_rfc3339: &now,
+                            session_id: Some(&sid),
+                            author,
+                            pre_existing: &pre_existing,
+                            journal_enabled,
+                        })
                     })
                     .await;
                     match stamped {
-                        Ok(stamped) => tracing::debug!(
-                            target: "coco_skill_learn::review",
-                            paths_written,
-                            stamped,
-                            "review fork wrote skills"
-                        ),
+                        Ok(outcome) => {
+                            let notice_count = outcome.notices.len();
+                            let stamped_count = outcome.stamped;
+                            for notice in outcome.notices {
+                                self.notices.push(notice);
+                            }
+                            tracing::debug!(
+                                target: "coco_skill_learn::review",
+                                paths_written,
+                                stamped = stamped_count,
+                                notice_count,
+                                "review fork wrote skills"
+                            );
+                        }
                         Err(e) => tracing::warn!(
                             target: "coco_skill_learn::review",
                             "provenance stamp task failed: {e}"
@@ -165,11 +230,20 @@ impl SkillReviewService {
 }
 
 /// Build the skill-review prompt. `agent_root` is interpolated so the fork
-/// knows where it may write.
-fn build_skill_review_prompt(agent_root: &Path) -> String {
+/// knows where it may write. A `Some(directive)` (user `/learn`) is injected as
+/// the top-priority instruction ahead of the standard heuristics.
+fn build_skill_review_prompt(agent_root: &Path, directive: Option<&str>) -> String {
     let root = agent_root.display();
+    let directive_block = match directive {
+        Some(d) if !d.trim().is_empty() => format!(
+            "The user explicitly asked to learn the following — honor their named \
+sources and intent; the preference order below still applies:\n{d}\n\n",
+            d = d.trim()
+        ),
+        _ => String::new(),
+    };
     format!(
-        "You are a skill-review subagent running after a coding session. Review the \
+        "{directive_block}You are a skill-review subagent running after a coding session. Review the \
 conversation and decide whether a reusable *skill* should be created or updated so \
 future sessions handle this class of task better.\n\
 \n\
@@ -212,6 +286,8 @@ below the capture bar. A real user correction usually IS worth persisting.\n\
 (users can run them via /name; the model cannot auto-invoke them) and are \
 promoted automatically once they prove useful.\n\
 - NEVER include `shell:` or `hooks:` frontmatter — agent skills load inert.\n\
+- Keep the `description` frontmatter to one sentence, \u{2264} 60 characters — it \
+loads every session, so an overlong description silently burns context budget.\n\
 - Keep skills concise and class-level (an umbrella), not one-off.\n\
 - If nothing meets the bar, do nothing and finish.\n"
     )

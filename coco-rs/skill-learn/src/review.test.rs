@@ -5,7 +5,34 @@ use async_trait::async_trait;
 use coco_tool_runtime::{AgentHandle, AgentHandleRef, AgentSpawnRequest, AgentSpawnResponse};
 use coco_types::{ForkLabel, ModelRole, SessionId};
 
-use super::{AgentSlot, SkillReviewOutcome, SkillReviewService};
+use super::{AgentSlot, SkillReviewOutcome, SkillReviewService, build_skill_review_prompt};
+
+#[test]
+fn manual_directive_is_injected_ahead_of_the_standard_prompt() {
+    let prompt = build_skill_review_prompt(
+        std::path::Path::new("/root/.agent"),
+        Some("learn how we fixed the nextest filter"),
+    );
+    assert!(
+        prompt.starts_with("The user explicitly asked to learn"),
+        "directive leads the prompt: {prompt:.120}"
+    );
+    assert!(prompt.contains("learn how we fixed the nextest filter"));
+    // The standard heuristics still follow the directive.
+    assert!(prompt.contains("Preference order"));
+}
+
+#[test]
+fn absent_directive_leaves_the_standard_prompt_unchanged() {
+    let prompt = build_skill_review_prompt(std::path::Path::new("/root/.agent"), None);
+    assert!(prompt.starts_with("You are a skill-review subagent"));
+}
+
+#[test]
+fn blank_directive_is_treated_as_absent() {
+    let prompt = build_skill_review_prompt(std::path::Path::new("/root/.agent"), Some("   "));
+    assert!(prompt.starts_with("You are a skill-review subagent"));
+}
 
 /// Records the last spawn request so tests can assert its shape.
 #[derive(Default)]
@@ -49,7 +76,7 @@ async fn review_fork_uses_memory_role_fence_and_label() {
     let svc = SkillReviewService::new(slot, tmp.path());
 
     let session_id = SessionId::try_new("sess-1").unwrap();
-    let outcome = svc.run(session_id.clone(), Vec::new()).await;
+    let outcome = svc.run(session_id.clone(), Vec::new(), None).await;
     assert_eq!(outcome, SkillReviewOutcome::Completed { paths_written: 1 });
 
     let req = handle
@@ -100,7 +127,9 @@ async fn review_fork_surfaces_spawn_failure() {
         Arc::new(coco_tool_runtime::NoOpAgentHandle) as AgentHandleRef
     ));
     let svc = SkillReviewService::new(slot, tmp.path());
-    let outcome = svc.run(SessionId::try_new("s").unwrap(), Vec::new()).await;
+    let outcome = svc
+        .run(SessionId::try_new("s").unwrap(), Vec::new(), None)
+        .await;
     assert!(
         matches!(outcome, SkillReviewOutcome::Failed { .. }),
         "spawn failure must surface as Failed, got {outcome:?}"

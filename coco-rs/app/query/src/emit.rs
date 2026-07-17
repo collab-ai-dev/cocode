@@ -259,6 +259,8 @@ fn tui_kind(evt: &TuiOnlyEvent) -> &'static str {
         TuiOnlyEvent::OpenAddDirectory => "open_add_directory",
         TuiOnlyEvent::OpenExport => "open_export",
         TuiOnlyEvent::SkillOverridesSaved { .. } => "skill_overrides_saved",
+        TuiOnlyEvent::OpenJourneyDialog { .. } => "open_journey_dialog",
+        TuiOnlyEvent::JourneyMutationFailed { .. } => "journey_mutation_failed",
     }
 }
 

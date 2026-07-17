@@ -9,12 +9,14 @@ workspace = true
 
 [dependencies]
 coco-types.workspace = true
+coco-config.workspace = true
 coco-tool-runtime.workspace = true
 coco-skills.workspace = true
 coco-frontmatter.workspace = true
 coco-maintenance.workspace = true
 coco-utils-absolute-path.workspace = true
 coco-utils-common.workspace = true
+coco-utils-string.workspace = true
 coco-shell-parser.workspace = true
 async-trait.workspace = true
 chrono = { workspace = true }

@@ -140,6 +140,10 @@ pub enum CommandResult {
     MoaOneShot { prompt: String },
     /// Open a TUI dialog/overlay.
     OpenDialog(DialogSpec),
+    /// `/learn [directive]` — fire a user-initiated skill-review fork now
+    /// (bypassing the turn throttle). A typed variant rather than the older
+    /// sentinel-text pattern: closed sets are enums, not magic strings.
+    TriggerSkillLearn { directive: String },
     /// No output.
     Skip,
 }
@@ -205,6 +209,11 @@ pub enum DialogSpec {
     AgentsList {
         payload: coco_types::AgentsDialogPayload,
     },
+    /// `/journey` — learning-timeline overlay (learned skills + memories over
+    /// time). Payload-less by design: the CLI/host translation site assembles
+    /// the snapshot (`coco-journey`), so `commands` inherits no `coco-memory`
+    /// transitive tree.
+    Journey,
 }
 
 /// One row in the memory-file selector.
@@ -471,6 +480,9 @@ impl CommandRegistry {
                 .collect::<Vec<_>>()
                 .join("\n\n")),
             CommandResult::OpenDialog(_) => Ok(String::new()),
+            // Runtime-behavior command: the surface fires the review fork; the
+            // legacy string shape has nothing to print.
+            CommandResult::TriggerSkillLearn { .. } => Ok(String::new()),
             CommandResult::Skip => Ok(String::new()),
         }
     }
@@ -546,6 +558,7 @@ fn command_result_kind(r: &CommandResult) -> &'static str {
         CommandResult::Prompt { .. } => "prompt",
         CommandResult::MoaOneShot { .. } => "moa_one_shot",
         CommandResult::OpenDialog(_) => "open_dialog",
+        CommandResult::TriggerSkillLearn { .. } => "trigger_skill_learn",
         CommandResult::Skip => "skip",
     }
 }

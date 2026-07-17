@@ -56,6 +56,7 @@ coco-mcp.workspace = true
 coco-permissions.workspace = true
 coco-plugins.workspace = true
 coco-skills.workspace = true
+coco-skill-learn.workspace = true
 coco-output-styles.workspace = true
 coco-coordinator.workspace = true
 coco-tasks.workspace = true
