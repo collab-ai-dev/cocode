@@ -48,11 +48,15 @@ impl JourneyRecord {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum JourneyEvent {
-    /// Review fork created a new agent skill (stamp saw no prior `created-at`).
+    /// Review fork created a new agent skill — decided by the host's pre-fork
+    /// directory snapshot, never the fork-written `created-at` (that field is
+    /// LLM-authored, so it cannot be evidence of its own birth).
     SkillLearned { name: String },
     /// Review fork updated an existing agent skill or its support files.
     SkillUpdated { name: String },
-    /// Curator promoted a skill on telemetry (≥5 invocations, success ≥ 0.8).
+    /// Curator promoted a skill on telemetry, i.e. it cleared both gates:
+    /// `total_invocations >= promote_min_invocations` and
+    /// `success_rate >= promote_success_rate` (both operator-configurable).
     SkillPromoted { name: String },
     /// Curator or user retired the skill (`disabled: true` flip).
     SkillRetired {
@@ -89,7 +93,9 @@ impl JourneyEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillRetireReason {
-    /// ≥5 invocations with success rate below the retire threshold.
+    /// Cleared `promote_min_invocations` but fell below `retire_success_rate`.
+    /// Note this signal is infrastructure-level (spawn/dispatch failures) — a
+    /// skill that runs fine but gives bad guidance retires via [`Self::Inactivity`].
     FailureRate,
     /// Previously used, then idle past the inactivity horizon.
     Inactivity,
