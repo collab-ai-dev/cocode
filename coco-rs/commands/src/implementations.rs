@@ -409,7 +409,7 @@ pub fn register_extended_builtins_with_cwd(registry: &mut CommandRegistry, cwd: 
         command_type: CommandType::Local(LocalCommandData {
             handler: names::ENV.to_string(),
         }),
-        handler: Some(Arc::new(EnvCommand { cwd })),
+        handler: Some(Arc::new(EnvCommand { cwd: cwd.clone() })),
         is_enabled: None,
     });
 
@@ -551,15 +551,6 @@ pub fn register_extended_builtins_with_cwd(registry: &mut CommandRegistry, cwd: 
             Some("[list|install|enable|disable|add|remove] [server]"),
         ),
         (
-            names::MCP,
-            "Manage MCP servers",
-            &[],
-            handlers::mcp::handler,
-            true,
-            LocalOnly,
-            Some("[list|add|remove|enable|disable] [name]"),
-        ),
-        (
             names::PLUGIN,
             "Manage installed plugins",
             &["plugins", "marketplace"],
@@ -681,6 +672,29 @@ pub fn register_extended_builtins_with_cwd(registry: &mut CommandRegistry, cwd: 
             },
         });
     }
+
+    // `/mcp` is not in `async_specs`: those are bare fn pointers, and it needs
+    // the registration cwd to resolve project-scoped MCP config against the
+    // right project. Registers as a struct command (like `/env`) through the
+    // same `Arc<dyn CommandHandler>` seam `AsyncBuiltinCommand` uses.
+    registry.register(RegisteredCommand {
+        base: {
+            let mut base = builtin_base_ext(
+                names::MCP,
+                "Manage MCP servers",
+                &[],
+                LocalOnly,
+                Some("[list|add|remove|enable|disable] [name]"),
+            );
+            base.argument_kind = builtin_argument_kind(names::MCP, base.argument_kind);
+            base
+        },
+        command_type: CommandType::LocalOverlay(LocalCommandData {
+            handler: names::MCP.to_string(),
+        }),
+        handler: Some(Arc::new(McpCommand { cwd })),
+        is_enabled: None,
+    });
 
     // Hide Rust-only debug commands from `/-typeahead`. They stay
     // enabled (so power users can still invoke them by name) but
@@ -1592,6 +1606,23 @@ impl CommandHandler for EnvCommand {
 
     fn handler_name(&self) -> &str {
         names::ENV
+    }
+}
+
+/// `/mcp` — holds the registration cwd so MCP config resolves against this
+/// session's project rather than the process cwd.
+struct McpCommand {
+    cwd: PathBuf,
+}
+
+#[async_trait]
+impl CommandHandler for McpCommand {
+    async fn execute(&self, args: &str) -> crate::Result<String> {
+        handlers::mcp::run(args, &self.cwd).await
+    }
+
+    fn handler_name(&self) -> &str {
+        names::MCP
     }
 }
 

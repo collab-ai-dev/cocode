@@ -1424,7 +1424,9 @@ dependencies = [
  "coco-config",
  "coco-context",
  "coco-error",
+ "coco-hooks",
  "coco-lsp",
+ "coco-mcp",
  "coco-plugins",
  "coco-secret-redact",
  "coco-skills",
@@ -1433,6 +1435,7 @@ dependencies = [
  "coco-utils-common",
  "coco-utils-string",
  "dirs 6.0.0",
+ "pretty_assertions",
  "serde",
  "serde_json",
  "tempfile",
@@ -11450,6 +11453,20 @@ checksum = "ec1cdab258fb55c0da61328dc52c8764709b249011b2cad0454c72f0bf10a1f6"
 dependencies = [
  "libc",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "xtask"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "coco-cli",
+ "coco-config",
+ "coco-provider-auth",
+ "coco-types",
+ "pretty_assertions",
+ "similar",
 ]
 
 [[package]]

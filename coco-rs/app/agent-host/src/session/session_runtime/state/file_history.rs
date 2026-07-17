@@ -8,7 +8,7 @@ use tracing::warn;
 /// concrete disk store directly: file-history checkpoints are a low-frequency,
 /// local-only convenience (rewind / disk backup), not authoritative session
 /// state - they are not needed to recover a conversation and are explicitly
-/// declared local-cache (`docs/coco-rs/session-storage-backend-design.md`
+/// declared local-cache (`docs/internal/session-storage-backend-design.md`
 /// §3.4). So even under a non-`Disk` `session.backend` they stay on disk;
 /// there's nothing to gain from routing them through the swappable boundary.
 /// Holds the immutable session id directly, so file-history persistence does

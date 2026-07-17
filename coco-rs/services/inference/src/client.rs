@@ -98,7 +98,7 @@ pub struct QueryParams {
     /// **Session-stable** account / overage state is NOT carried here —
     /// it lives on the provider's `AnthropicConfig`, set by
     /// `build_anthropic` from `RuntimeConfig.account.*`. See
-    /// `docs/coco-rs/prompt-cache-design.md` §9.5 / R3-F3.
+    /// `docs/internal/prompt-cache-design.md` §9.5 / R3-F3.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache: Option<PromptCacheConfig>,
     /// Per-call agentic-loop flag. Helper calls (compaction, title

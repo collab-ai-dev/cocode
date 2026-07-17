@@ -58,7 +58,7 @@ without a workflow).
    python3 coco-cli/scripts/stage_npm_packages.py \
      --release-version 0.1.1 \
      --package coco-cli \
-     --workflow-url https://github.com/coco-collab-dev/cocode/actions/runs/<run-id>
+     --workflow-url https://github.com/collab-ai-dev/cocode/actions/runs/<run-id>
    ```
    This downloads the artifacts, hydrates `coco-cli/vendor/`, and writes
    four tarballs to `dist/npm/`.

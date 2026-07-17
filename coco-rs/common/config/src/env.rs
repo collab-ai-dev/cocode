@@ -308,14 +308,14 @@ pub enum EnvKey {
     /// Override the number of recently read files restored after full compact.
     CocoCompactPostCompactMaxFilesToRestore,
     /// Enable Tool Result Budget Level 2 (per-message aggregate cap).
-    /// Default off. See `docs/coco-rs/tool-result-budget-plan.md`.
+    /// Default off. See `docs/internal/tool-result-budget-plan.md`.
     CocoCompactToolResultBudgetEnable,
     /// Per-message byte cap for Tool Result Budget Level 2. Overrides the
     /// window-scaled default with a fixed cap.
     CocoCompactToolResultBudgetPerMessageBytes,
     /// 1h-TTL allowlist for prompt-cache (comma-separated `query_source`
     /// patterns, exact match or `prefix*` glob).
-    /// See `docs/coco-rs/prompt-cache-design.md` §16a.
+    /// See `docs/internal/prompt-cache-design.md` §16a.
     CocoPromptCacheAllowlist,
     /// Enable coordinator mode (system-prompt swap + worker pool +
     /// `<task-notification>` XML routing). Requires `Feature::AgentTeams`.

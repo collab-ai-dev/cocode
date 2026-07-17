@@ -5,7 +5,7 @@
 //! per-session config fold and the input to session-runtime construction —
 //! both of which are moving behind this crate boundary. The producer of the
 //! bundle is host-coupled and lives in `coco-agent-host`; see
-//! `docs/coco-rs/multi-session-app-server/current-architecture.md`.
+//! `docs/internal/multi-session-app-server/current-architecture.md`.
 
 use std::path::Path;
 use std::sync::Arc;

@@ -81,12 +81,7 @@ async fn list_hooks() -> crate::Result<String> {
         out.push_str("  {\n");
         out.push_str("    \"hooks\": {\n");
         out.push_str("      \"PreToolUse\": [\n");
-        out.push_str("        {\n");
-        out.push_str("          \"matcher\": \"Bash\",\n");
-        out.push_str("          \"hooks\": [\n");
-        out.push_str("            { \"type\": \"command\", \"command\": \"echo pre-bash\" }\n");
-        out.push_str("          ]\n");
-        out.push_str("        }\n");
+        out.push_str("        { \"matcher\": \"Bash\", \"type\": \"command\", \"command\": \"echo pre-bash\" }\n");
         out.push_str("      ]\n");
         out.push_str("    }\n");
         out.push_str("  }\n\n");

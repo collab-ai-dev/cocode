@@ -1,7 +1,7 @@
 //! Cross-process session write lease.
 //!
 //! Every *writable* materialization of a session id must hold one exclusive
-//! lease (§9.1 of `docs/coco-rs/goal-architecture-redesign.md`). Two coco
+//! lease (§9.1 of `docs/internal/goal-architecture-redesign.md`). Two coco
 //! processes may share a workspace, but they must not materialize the same
 //! session for mutation at once. This protects transcript appends, metadata,
 //! resume recovery, usage snapshots, plan binding, goal state — every session

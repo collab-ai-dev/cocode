@@ -127,6 +127,18 @@ check-seam:
 check-error-policy:
     bash "{{justfile_directory()}}/scripts/check-error-policy.sh"
 
+# Regenerate the reference tables in docs/ that are derived from source (the
+# provider catalog, feature gates, model roles, CLI flags and subcommands).
+# Rewrites only the `<!-- BEGIN GENERATED: ... -->` blocks; prose is yours.
+docs-gen:
+    cargo run -q -p xtask -- docs-gen
+
+# Fail if any generated docs block is stale. Same drift-gate posture as
+# `sdk-py-check`: change the provider catalog or the clap schema without
+# regenerating and this is what catches it.
+check-docs:
+    cargo run -q -p xtask -- docs-gen --check
+
 # Fast validation: same chain as `pre-commit` minus the test run. Use
 # during iteration when you want fmt + seam guards + clippy (which is a
 # superset of `cargo check`) but don't yet need to pay for nextest.
@@ -147,7 +159,7 @@ quick-check: fmt check-seam check-error-policy clippy-affected
 # `sdk-py-test` runs the actual Python suite (unit + e2e); e2e tests
 # self-skip without DEEPSEEK_API_KEY, so the recipe stays usable for
 # everyone.
-pre-commit: fmt check-seam check-error-policy clippy-affected test sdk-py-check sdk-py-test
+pre-commit: fmt check-seam check-error-policy check-docs clippy-affected test sdk-py-check sdk-py-test
 
 # ============================================================================
 # Running

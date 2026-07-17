@@ -109,14 +109,23 @@ jobs:
       # under cargo-zigbuild cross-compile — confirm the first release run is
       # green; if zig mis-probes jemalloc's configure, drop the flag here and
       # keep it only on the native target.
+      #
+      # COCO_BUILD_OFFICIAL=1 marks these artifacts as the official distribution,
+      # which is what lets the shipped binary default to the OS keychain for
+      # credentials (services/provider-auth). It must be set *only* here — a local
+      # `cargo build --release` deliberately stays file-backed.
       - name: Build (musl)
         if: contains(matrix.target, 'linux-musl')
         shell: bash
+        env:
+          COCO_BUILD_OFFICIAL: "1"
         run: cargo zigbuild --release --target ${{ matrix.target }} -p coco-cli --bin coco --features jemalloc
 
       - name: Build (native)
         if: ${{ !contains(matrix.target, 'linux-musl') }}
         shell: bash
+        env:
+          COCO_BUILD_OFFICIAL: "1"
         run: cargo build --release --target ${{ matrix.target }} -p coco-cli --bin coco --features jemalloc
 
       - name: Install zstd (macOS)

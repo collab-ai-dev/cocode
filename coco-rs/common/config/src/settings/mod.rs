@@ -69,6 +69,12 @@ pub struct Settings {
     /// Shell command that prints an API key on stdout. Consumed by
     /// `coco_inference::auth::resolve_auth` when env vars and stored
     /// tokens don't resolve.
+    ///
+    /// **Do not read this off the merged snapshot.** It runs through `sh -c`,
+    /// so the merged view hands a cloned repository's `.cocode/settings.json`
+    /// arbitrary code execution as the user. Go through
+    /// [`SettingsWithSource::api_key_helper`], which honors only the layers the
+    /// person running the agent controls.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key_helper: Option<String>,
 
@@ -180,7 +186,7 @@ pub struct Settings {
     // === Feature gates ===
     /// Coarse-grained feature toggles. Each key matches `Feature::key()`;
     /// unknown keys are silently ignored so old configs still load. See
-    /// `docs/coco-rs/feature-gates-and-tool-filtering.md`.
+    /// `docs/internal/feature-gates-and-tool-filtering.md`.
     #[serde(default)]
     pub features: BTreeMap<String, bool>,
 
@@ -712,7 +718,7 @@ pub struct SessionSettings {
 /// transcripts, tool-result blobs) keep their own local-cache policy and
 /// may still touch disk under a non-`Disk` backend — full-fidelity
 /// recovery of those degrades by design (see
-/// `docs/coco-rs/session-storage-backend-design.md` §0/§3.4).
+/// `docs/internal/session-storage-backend-design.md` §0/§3.4).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionBackend {
@@ -831,6 +837,93 @@ impl SettingsWithSource {
             .get(&SettingSource::Policy)
             .is_some_and(source_force_remote_settings_refresh)
     }
+
+    /// The session's configured startup permission mode, honoring only sources
+    /// the person running the agent controls.
+    ///
+    /// `permissions.default_mode` can select `BypassPermissions`, which
+    /// auto-approves every tool call for the whole session. `Project` settings
+    /// ship inside the checked-out tree and are authored by whoever wrote the
+    /// repository, not by the person running the agent — so letting that layer
+    /// reach this field would let a cloned repo disable its own reviewer.
+    /// Excluded for the same reason as
+    /// [`Self::auto_mode_classify_all_shell_enabled`].
+    ///
+    /// Trusted sources are consulted highest-precedence first, matching the
+    /// merge order (`User < Local < Flag < Policy`); the first that sets the
+    /// field wins. `Local` is trusted because `settings.local.json` is
+    /// gitignored and machine-owned, unlike the shared project file.
+    pub fn startup_permission_mode(&self) -> Option<PermissionMode> {
+        TRUSTED_SETTING_SOURCES
+            .iter()
+            .filter_map(|source| self.per_source.get(source))
+            .find_map(source_permission_default_mode)
+    }
+
+    /// Whether any trusted source engages the bypass killswitch.
+    ///
+    /// OR across trusted sources: one layer turning the switch on is enough,
+    /// and a higher-precedence absent/`false` field does not weaken it — the
+    /// same posture as [`Self::auto_mode_classify_all_shell_enabled`].
+    /// `Project` is excluded in this direction too: a repository must not be
+    /// able to switch off a killswitch the user turned on.
+    pub fn disable_bypass_mode_enabled(&self) -> bool {
+        TRUSTED_SETTING_SOURCES
+            .iter()
+            .filter_map(|source| self.per_source.get(source))
+            .any(source_disables_bypass_mode)
+    }
+
+    /// The API-key helper command, honoring only sources the person running the
+    /// agent controls.
+    ///
+    /// The value is handed to `sh -c`, so whoever sets it gets arbitrary code
+    /// execution as the user at startup. A `Project` layer arrives with the
+    /// checked-out repository, which would turn "clone and open this repo" into
+    /// "run this repo's shell command" — with the credentials in
+    /// `<config_dir>/auth` in reach and the permission system nowhere near this
+    /// path. Excluded for the same reason as
+    /// [`Self::startup_permission_mode`]; highest-precedence trusted source
+    /// wins.
+    pub fn api_key_helper(&self) -> Option<String> {
+        TRUSTED_SETTING_SOURCES
+            .iter()
+            .filter_map(|source| self.per_source.get(source))
+            .find_map(source_api_key_helper)
+    }
+}
+
+/// Settings layers allowed to decide bypass-permission posture, ordered
+/// highest-precedence first. `Project` (and `Plugin`) are absent by design:
+/// both arrive with the repository rather than from the person running the
+/// agent. See [`SettingsWithSource::startup_permission_mode`].
+const TRUSTED_SETTING_SOURCES: &[SettingSource] = &[
+    SettingSource::Policy,
+    SettingSource::Flag,
+    SettingSource::Local,
+    SettingSource::User,
+];
+
+/// Read `permissions.default_mode` from one source's raw JSON. Deserializing
+/// through [`PermissionMode`] keeps the accepted spellings identical to the
+/// merged struct's, aliases included.
+fn source_permission_default_mode(value: &serde_json::Value) -> Option<PermissionMode> {
+    let raw = value.pointer("/permissions/default_mode")?;
+    serde_json::from_value::<PermissionMode>(raw.clone()).ok()
+}
+
+fn source_api_key_helper(value: &serde_json::Value) -> Option<String> {
+    value
+        .pointer("/api_key_helper")
+        .and_then(serde_json::Value::as_str)
+        .map(String::from)
+}
+
+fn source_disables_bypass_mode(value: &serde_json::Value) -> bool {
+    value
+        .pointer("/permissions/disable_bypass_mode")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
 }
 
 fn auto_mode_source_classifies_all_shell(value: &serde_json::Value) -> bool {

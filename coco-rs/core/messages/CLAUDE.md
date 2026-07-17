@@ -165,5 +165,5 @@ mode (false-negative predicate → mutation silently skipped).
 4. Cover the new trigger condition in `pipeline_invariants` so the
    drift test exercises both fast and slow paths.
 
-See [docs/coco-rs/message-pipeline.md](../../docs/coco-rs/message-pipeline.md)
+See [docs/internal/message-pipeline.md](../../docs/internal/message-pipeline.md)
 for the design rationale and migration history.

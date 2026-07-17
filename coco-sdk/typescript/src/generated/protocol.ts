@@ -1791,7 +1791,7 @@ export interface MentionSummaryPayload {
  * and the TUI side-caches the text without writing it to
  * `MessageHistory`. Keeping UI-only data out of the authoritative
  * transcript upholds I-3 from
- * `docs/coco-rs/engine-tui-unified-transcript-plan.md`.
+ * `docs/internal/engine-tui-unified-transcript-plan.md`.
  */
 export type Message = UserMessage | AssistantMessage | SystemMessage | AttachmentMessage | ToolResultMessage | ProgressMessage | TombstoneMessage;
 

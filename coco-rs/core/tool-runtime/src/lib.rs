@@ -241,7 +241,7 @@ pub use traits::render_text_or_json;
 // Re-export the SDK content-part type so tool implementors can
 // override `Tool::render_for_model` without depending on
 // `coco-messages` (or, transitively, on `vercel-ai-provider`)
-// directly. See `docs/coco-rs/tool-result-rendering.md`.
+// directly. See `docs/internal/tool-result-rendering.md`.
 pub use coco_messages::ToolResultContentPart;
 pub use coco_messages::tool_reference_content_part;
 pub use validated_input::ValidatedInput;

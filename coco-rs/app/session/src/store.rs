@@ -15,7 +15,7 @@
 //! current disk-shaped form and change when `RemoteStore` lands —
 //! back-compat is not a constraint.
 //!
-//! See `docs/coco-rs/session-storage-backend-design.md`.
+//! See `docs/internal/session-storage-backend-design.md`.
 
 use std::collections::HashMap;
 use std::collections::HashSet;

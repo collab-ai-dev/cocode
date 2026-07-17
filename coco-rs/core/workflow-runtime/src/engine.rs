@@ -3,7 +3,7 @@
 //! (`agent`/`parallel`/`pipeline`/`phase`/`log`/`workflow` + `args`/`budget`)
 //! bridged to a [`WorkflowHost`]. Single-threaded by design (rquickjs `Ctx`/
 //! `Value` are `!Send`) — drive it on a tokio current-thread runtime /
-//! `LocalSet`. See `docs/coco-rs/workflow-runtime-plan.md`.
+//! `LocalSet`. See `docs/internal/workflow-runtime-plan.md`.
 
 use std::cell::Cell;
 use std::rc::Rc;

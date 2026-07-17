@@ -161,7 +161,10 @@ async fn remote_auth_method(
         return None;
     }
     let config_dir = global_config::config_home();
-    let api_key_helper = runtime_config.settings.merged.api_key_helper.clone();
+    // Deliberately not `settings.merged`: this string is executed via `sh -c`,
+    // and the merged view would let a cloned repository's `.cocode/settings.json`
+    // supply it. See `SettingsWithSource::api_key_helper`.
+    let api_key_helper = runtime_config.settings.api_key_helper();
     let force_env_auth = runtime_config.env_only.force_env_auth;
     tokio::task::spawn_blocking(move || {
         coco_inference::auth::resolve_auth(&coco_inference::auth::AuthResolveOptions {

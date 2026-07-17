@@ -3,7 +3,7 @@
 Sandbox runtime + adapter. Two-module split: adapter (policy → runtime config) over
 sandbox-runtime. Rust ships both halves in-tree.
 
-See [crate-coco-sandbox.md](../../../docs/coco-rs/crate-coco-sandbox.md)
+See [crate-coco-sandbox.md](../../../docs/internal/crate-coco-sandbox.md)
 for the full architecture, including how `app/cli/session_runtime.rs`
 bootstraps the state.
 

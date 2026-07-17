@@ -107,14 +107,25 @@ pub struct AuthService {
     me: OnceLock<Weak<AuthService>>,
 }
 
-/// Whether the running binary is a signed distribution build (release profile),
-/// versus an unsigned dev / test build (debug profile). Decides whether the
-/// default credential store ([`AuthService::with_config_dir`]) may read the OS
-/// keychain. `debug_assertions` is the build-provenance proxy for "unsigned": it
-/// is off only for `--release` (CI / official) artifacts and on for every
-/// `cargo build` / `cargo test` binary, which are unsigned or ad-hoc-signed.
-fn build_is_signed_release() -> bool {
-    !cfg!(debug_assertions)
+/// Whether the running binary came from the official release pipeline, as
+/// opposed to any locally-built artifact. Decides whether the default credential
+/// store ([`AuthService::with_config_dir`]) may read the OS keychain.
+///
+/// The signal is the `COCO_BUILD_OFFICIAL` build-time env var, set only by the
+/// release workflow and resolved by this crate's `build.rs`. It deliberately is
+/// *not* the optimization profile: `debug_assertions` is off for a plain local
+/// `cargo build --release` too, so keying on it classified every developer's
+/// release build as an official one and sent it to the keychain.
+fn build_is_official_distribution() -> bool {
+    official_build_flag(env!("COCO_BUILD_OFFICIAL"))
+}
+
+/// Parse the `COCO_BUILD_OFFICIAL` value. Split out from
+/// [`build_is_official_distribution`] because the compile-time env var is fixed
+/// for any given build, so this is the only part a test can exercise both ways.
+/// Opt-in and exact: anything but `1` (unset, empty, `true`, `0`) is unofficial.
+fn official_build_flag(raw: &str) -> bool {
+    raw == "1"
 }
 
 impl AuthService {
@@ -141,24 +152,24 @@ impl AuthService {
     /// The default deployment backend under `<config_dir>/auth/`, selected by
     /// build provenance:
     ///
-    /// - **signed release build** → [`AutoBackend`] (OS keychain first, file
-    ///   fallback) — credentials rest in the OS vault;
-    /// - **unsigned dev / test build** → file-only backend — the OS keychain is
-    ///   never touched.
+    /// - **official release build** (`COCO_BUILD_OFFICIAL=1`) → [`AutoBackend`]
+    ///   (OS keychain first, file fallback) — credentials rest in the OS vault;
+    /// - **any locally-built binary**, `--release` included → file-only backend —
+    ///   the OS keychain is never touched.
     ///
-    /// Why gate on signing: the macOS Keychain ACL is keyed to the accessing
-    /// binary's code signature. An unsigned / ad-hoc-signed dev or test binary
-    /// (every `cargo build` / `cargo test` artifact) reading an item that a
+    /// Why gate on provenance: the macOS Keychain ACL is keyed to the accessing
+    /// binary's code signature. A locally-built binary (any `cargo build` /
+    /// `cargo test` artifact, `--release` included) reading an item that a
     /// *differently*-signed release binary created is not in that item's ACL, so
     /// macOS pops a modal "allow access" prompt — which blocks headless PTY e2e
     /// tests until the nextest timeout kills them, and re-fires on every local
     /// rebuild. `COCO_CONFIG_DIR` cannot isolate this: it redirects the file
     /// backend but not the process-global, OS-session-scoped keychain namespace.
-    /// Mirrors codex's LOCAL_DEV_BUILD keyring downgrade; signed releases keep the
-    /// more secure keychain-backed store.
+    /// Mirrors codex's LOCAL_DEV_BUILD keyring downgrade; official releases keep
+    /// the more secure keychain-backed store.
     pub fn with_config_dir(config_dir: std::path::PathBuf) -> Arc<Self> {
         let auth_dir = config_dir.join("auth");
-        let backend: Arc<dyn CredentialBackend> = if build_is_signed_release() {
+        let backend: Arc<dyn CredentialBackend> = if build_is_official_distribution() {
             Arc::new(AutoBackend::new(auth_dir.clone()))
         } else {
             Arc::new(store::FileBackend::new(auth_dir.clone()))

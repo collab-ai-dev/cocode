@@ -10,7 +10,7 @@
 //! filter, coordinator-mode prompt). This crate is the orchestration
 //! layer that calls into those helpers.
 //!
-//! See `docs/coco-rs/agentteam-architecture.md` for the multi-PR plan
+//! See `docs/internal/agentteam-architecture.md` for the multi-PR plan
 //! that produced this crate.
 
 // ── Public surface ──

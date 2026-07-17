@@ -49,7 +49,7 @@ writers, and callback correlation. Callback replies are accepted only when
 connection, surface, session, and request id all match pending AppServer
 ownership. Do not add sole-session inference, optional live-runtime handles, or
 process-keyed session capability maps. See
-`docs/coco-rs/multi-session-app-server/README.md` and `protocol-scope.md`.
+`docs/internal/multi-session-app-server/README.md` and `protocol-scope.md`.
 
 ## Startup Flow
 

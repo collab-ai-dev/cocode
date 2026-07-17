@@ -3,7 +3,7 @@
 //! Provider-neutral data carried through `services/inference` to the
 //! Anthropic adapter via `provider_options`. The adapter (`vercel-ai-anthropic`)
 //! cannot import this crate directly — it defines structurally-equivalent
-//! mirror types and the boundary is JSON. See `docs/coco-rs/prompt-cache-design.md` §7.
+//! mirror types and the boundary is JSON. See `docs/internal/prompt-cache-design.md` §7.
 
 use serde::Deserialize;
 use serde::Serialize;

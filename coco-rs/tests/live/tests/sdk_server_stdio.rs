@@ -160,8 +160,7 @@ async fn serve(args: Args) -> Result<()> {
         &[],
     );
     let session_manager = Arc::new(SessionManager::new(sessions_dir.path().to_path_buf()));
-    let startup =
-        headless::resolve_startup_permission_state(&cli, &runtime_config.settings.merged)?;
+    let startup = headless::resolve_startup_permission_state(&cli, &runtime_config.settings)?;
 
     let mut command_registry = CommandRegistry::new();
     register_extended_builtins(&mut command_registry);

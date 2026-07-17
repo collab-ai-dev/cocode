@@ -109,6 +109,11 @@ jobs:
         run: just check-seam
       - name: just check-error-policy
         run: just check-error-policy
+      # Reference tables in docs/ (provider catalog, feature gates, model roles,
+      # CLI flags/subcommands) are generated from source. Change the catalog or
+      # the clap schema without running `just docs-gen` and this fails.
+      - name: just check-docs (generated docs drift)
+        run: just check-docs
       - name: just clippy (full workspace)
         run: just clippy
 

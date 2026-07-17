@@ -275,7 +275,7 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 | Crate | Purpose |
 |-------|---------|
 | `shell` | Shell execution with security analysis, destructive warnings, sandbox decisions |
-| `sandbox` | Three modes: None/ReadOnly/Strict (disabled by default) |
+| `sandbox` | `SandboxMode`: `read_only` / `workspace_write` / `full_access` / `external_sandbox` (gated by `features.sandbox`, off by default) |
 | `process-hardening` | OS-level security (macOS PT_DENY_ATTACH, Linux prctl) |
 | `exec-server` | Minimal `ExecutorFileSystem` trait for local and remote execution |
 | `apply-patch` | Unified diff/patch application with fuzzy matching |
@@ -513,7 +513,7 @@ Raw strings only for unconstrained input (user text, opaque external IDs, third-
 
 - **Provider concerns stay in provider crates.** OAuth, API-key helpers, prompt-cache breakpoint detection, beta headers, 529-capacity retry, rate-limit messaging, Claude.ai/Anthropic policy limits live in `vercel-ai-<provider>` — **not** `services/inference`. `services/inference` owns only generic concerns. **Anthropic cloud-credential routes (Bedrock / Vertex / Foundry) are explicit non-goals** — coco-rs targets Anthropic FirstParty, OpenAI, Google Gemini, ByteDance, and generic OpenAI-compatible providers. `services/inference/src/auth.rs` keeps env-based detection only for diagnostic clarity; `model_factory.rs` does not and will not dispatch on these variants.
 
-- **Models are `(provider, api, model_id)`, never a bare string.** Always go through `coco_config::ModelRoles::get(ModelRole::X)`. The canonical `ModelRole` owner is `coco_types::ModelRole` / `docs/coco-rs/crate-coco-types.md`; current roles are `Main`, `Fast`, `Plan`, `Explore`, `Review`, `Subagent`, `Memory`, and `HookAgent`. `Subagent` is the default LLM role for generic/custom subagent execution; built-in subagent types may resolve to narrower roles such as `Explore`, `Plan`, or `Review`. There is no `Compact` model role in the current enum. Never add `title_model: String`; expose a `bool` flag and route via the appropriate role. Add a new `ModelRole` variant rather than a raw string.
+- **Models are `(provider, api, model_id)`, never a bare string.** Always go through `coco_config::ModelRoles::get(ModelRole::X)`. The canonical `ModelRole` owner is `coco_types::ModelRole` / `docs/internal/crate-coco-types.md`; current roles are `Main`, `Fast`, `Plan`, `Explore`, `Review`, `Subagent`, `Memory`, and `HookAgent`. `Subagent` is the default LLM role for generic/custom subagent execution; built-in subagent types may resolve to narrower roles such as `Explore`, `Plan`, or `Review`. There is no `Compact` model role in the current enum. Never add `title_model: String`; expose a `bool` flag and route via the appropriate role. Add a new `ModelRole` variant rather than a raw string.
 
 - **Compaction — three generic strategies only:** micro-compact (clear old tool results), full LLM summarization, reactive (on `prompt_too_long`). `HISTORY_SNIP` and `CONTEXT_COLLAPSE` are not implemented — cache-aware optimizations of that kind belong in the `vercel-ai-*` provider crates.
 
@@ -543,7 +543,13 @@ Every crate in `coco-rs/` has its own `CLAUDE.md` (path = `coco-rs/<layer>/<crat
 - **Exec**: shell, sandbox, process-hardening, exec-server, apply-patch
 - **Root**: commands, skills, hooks, tasks, memory, plugins, keybindings, output-styles
 - **App**: cli, tui, query, state, session
-- **Hub**: protocol, connector, server. Design: [docs/coco-rs/event-hub/spec.md](docs/coco-rs/event-hub/spec.md)
+- **Hub**: protocol, connector, server. Design: [docs/internal/event-hub/spec.md](docs/internal/event-hub/spec.md)
 - **Standalone**: bridge, retrieval
 - **Utils**: each of the 26 utils/ crates has one
-- **User docs**: [docs/](docs/) — getting-started.md, config.md, sandbox.md
+- **User docs**: [docs/](docs/) — getting-started, configuration, providers-and-auth,
+  models-and-moa, cli-reference, slash-commands, tools, permissions, sandbox, mcp,
+  memory, extending, subagents-and-teams, sdk, troubleshooting. Tables marked
+  `<!-- BEGIN GENERATED: ... -->` are produced by `just docs-gen` — edit the
+  generator in `coco-rs/xtask/`, not the table. `just check-docs` gates drift.
+- **Internal design notes**: [docs/internal/](docs/internal/) — historical, may be stale;
+  the code wins over anything in there

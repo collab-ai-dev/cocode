@@ -759,18 +759,45 @@ async fn test_compact_handler_with_instructions() {
 
 #[tokio::test]
 async fn test_mcp_handler_list() {
-    let output = handlers::mcp::handler(String::new()).await.unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let output = handlers::mcp::run("", cwd.path()).await.unwrap();
     assert!(output.contains("MCP"));
     assert!(output.contains("enable") || output.contains("disable"));
 }
 
+/// A name that no config file defines reports where it looked, rather than
+/// claiming to have enabled something. Scoped-path behavior is covered by
+/// `handlers::mcp::tests`, which uses explicit tempdir roots.
 #[tokio::test]
-async fn test_mcp_handler_enable() {
-    let output = handlers::mcp::handler("enable my-server".to_string())
+async fn test_mcp_handler_enable_unknown_server_reports_not_found() {
+    let cwd = tempfile::tempdir().unwrap();
+    let output = handlers::mcp::run("enable definitely-not-a-real-server", cwd.path())
         .await
         .unwrap();
-    assert!(output.contains("Enabling"));
-    assert!(output.contains("my-server"));
+    assert!(output.contains("not found"), "{output}");
+    assert!(output.contains("definitely-not-a-real-server"), "{output}");
+}
+
+/// `/mcp` must carry the registration cwd, not re-read the process cwd — one
+/// app-server process hosts sessions from different projects.
+#[tokio::test]
+async fn test_mcp_command_registered_with_cwd() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project.path().join(".mcp.json"),
+        serde_json::json!({ "mcpServers": { "registered-server": {"command": "npx"} } })
+            .to_string(),
+    )
+    .unwrap();
+
+    let mut registry = CommandRegistry::new();
+    register_extended_builtins_with_cwd(&mut registry, project.path().to_path_buf());
+
+    let command = registry.get(names::MCP).unwrap();
+    let handler = command.handler.as_ref().unwrap();
+    let output = handler.execute("list").await.unwrap();
+
+    assert!(output.contains("registered-server"), "{output}");
 }
 
 #[tokio::test]

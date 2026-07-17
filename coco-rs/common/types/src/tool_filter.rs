@@ -1,6 +1,6 @@
 //! Layer 2 + Layer 4 of the tool-filter pipeline.
 //!
-//! See `docs/coco-rs/feature-gates-and-tool-filtering.md` §7.
+//! See `docs/internal/feature-gates-and-tool-filtering.md` §7.
 //!
 //! - [`ToolOverrides`] — Layer 2: per-model adjustments to the universal
 //! tool baseline. Extra tools the model adds (e.g. gpt-5's

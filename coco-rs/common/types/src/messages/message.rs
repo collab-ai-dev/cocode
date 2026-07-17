@@ -38,7 +38,7 @@ use super::attachment_body::TaskNotificationPayload;
 /// and the TUI side-caches the text without writing it to
 /// `MessageHistory`. Keeping UI-only data out of the authoritative
 /// transcript upholds I-3 from
-/// `docs/coco-rs/engine-tui-unified-transcript-plan.md`.
+/// `docs/internal/engine-tui-unified-transcript-plan.md`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

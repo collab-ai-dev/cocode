@@ -174,7 +174,7 @@ pub fn put_system_prompt_parts(opts: &mut ProviderOptions, parts: &[SystemPrompt
 /// `LlmMessage::System`, so the adapter places that text
 /// verbatim in the chosen slot. When `app/query` later constructs a
 /// richer `PromptEnvelope` with semantic sections, the routing table in
-/// `docs/coco-rs/provider-prompt-role-architecture.md` §4 picks the
+/// `docs/internal/provider-prompt-role-architecture.md` §4 picks the
 /// destination per `(kind, family)`.
 pub fn build_prompt_layout_from_prompt(
     prompt: &LlmPrompt,

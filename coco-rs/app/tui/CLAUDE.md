@@ -51,7 +51,7 @@ coco-query → CoreEvent ─────→ handle_core_event (fold into AppStat
                             UserCommand → coco-query (via mpsc)
 ```
 
-See `docs/coco-rs/crate-coco-tui.md` for widget taxonomy, overlay catalog, and
+See `docs/internal/crate-coco-tui.md` for widget taxonomy, overlay catalog, and
 snapshot-testing conventions (`insta`).
 
 ## Transcript Reader
@@ -73,7 +73,7 @@ mode, or a full transcript `Vec<Line>`/`String` path for overlay rendering.
 ## Transcript Pipeline (tui-v2)
 
 `src/transcript/` owns the v2 streaming→scrollback pipeline
-(`docs/coco-rs/ui/tui-v2-design.md` §6.4): crate-internal `cells`
+(`docs/internal/ui/tui-v2-design.md` §6.4): crate-internal `cells`
 (`RenderedCell` / `CellKind` / `SystemCellKind`, engine-message grouping,
 and the tool-commit boundary), `derive` (`Message` → cells plus tool-cell
 accessors), `render/` (the ONLY renderer home: `cells_renderer.rs` —
@@ -109,7 +109,7 @@ history driver.
 ## Transcript Invariants
 
 The unified transcript refactor
-(`docs/coco-rs/engine-tui-unified-transcript-plan.md`) pins three rules:
+(`docs/internal/engine-tui-unified-transcript-plan.md`) pins three rules:
 
 - **I-1 Authority** — `coco_messages::MessageHistory` is the single source
   of truth. Every transcript mutation emits one of:

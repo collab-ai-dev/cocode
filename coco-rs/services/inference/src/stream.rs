@@ -3,7 +3,7 @@
 //! End-of-turn assistant reconstruction reads `StreamEvent::Finish.snapshot`,
 //! an `Arc<AssistantTurnSnapshot>` that captures per-part `provider_metadata`
 //! (Gemini `thoughtSignature`, Anthropic `signature`, OpenAI `encrypted_content`)
-//! verbatim. See `docs/coco-rs/streaming-metadata-roundtrip-plan.md`.
+//! verbatim. See `docs/internal/streaming-metadata-roundtrip-plan.md`.
 
 use coco_llm_types::AssistantContentPart;
 use coco_llm_types::FinishReason;

@@ -275,7 +275,7 @@ pub fn build_engine_resources(
         output_style_manager.active(),
     )?;
 
-    let startup = resolve_startup_permission_state(cli, &runtime_config.settings.merged)?;
+    let startup = resolve_startup_permission_state(cli, &runtime_config.settings)?;
 
     let (command_registry, skill_manager) =
         build_session_command_registry(cli, runtime_config, cwd, &project_services);

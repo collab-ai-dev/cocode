@@ -215,7 +215,7 @@ impl QueryEngine {
         // `event.snapshot` at `StreamEvent::Finish` — this is the path
         // that preserves per-part `provider_metadata` (Gemini
         // `thoughtSignature`, Anthropic `signature`, OpenAI
-        // `encrypted_content`). See `docs/coco-rs/streaming-metadata-roundtrip-plan.md`.
+        // `encrypted_content`). See `docs/internal/streaming-metadata-roundtrip-plan.md`.
         let mut response_text = String::new();
         let mut reasoning_text = String::new();
         let mut tool_order: Vec<String> = Vec::new();

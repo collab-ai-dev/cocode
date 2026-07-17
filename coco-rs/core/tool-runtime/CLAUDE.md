@@ -37,7 +37,7 @@ Tool trait, concurrent executor, tool registry, callback handles. Defines the in
 Module DAG (strict, no cycles): `coco_types::persisted_output` (tags + the two
 string predicates) ← `tool_result_storage` (write mechanics) ←
 `tool_result_offload` (policy: window + budgets + Level 2). Design:
-[`docs/coco-rs/tool-result-offload-v2-design.md`](../../../docs/coco-rs/tool-result-offload-v2-design.md).
+[`docs/internal/tool-result-offload-v2-design.md`](../../../docs/internal/tool-result-offload-v2-design.md).
 
 - **`tool_result_storage`** — write mechanics only:
   - `ToolOutputStore::write_artifact(key, content)` — `ToolUse` keys use
@@ -149,4 +149,4 @@ E0046 forces it). The model-facing wire shape is the single source of truth
 its default builds a `Function` from `prompt()` + the runtime schema, and tools
 override it to hide hook-injected runtime-only fields (Bash/Agent/ExitPlanMode)
 or to present a `Freeform` grammar tool (apply_patch). There is no separate
-validator cache. See `docs/coco-rs/tool-schema-final-plan.md` (v4.3).
+validator cache. See `docs/internal/tool-schema-final-plan.md` (v4.3).

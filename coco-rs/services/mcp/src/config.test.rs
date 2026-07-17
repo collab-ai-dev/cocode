@@ -293,3 +293,150 @@ fn test_load_with_roots_splits_project_and_local_roots() {
     };
     assert_eq!(stdio.command, "local-shared");
 }
+
+/// `config_paths` must be exactly the file set the loader reads: a server
+/// written into any listed path loads, and the loader reads nothing else.
+#[test]
+fn test_config_paths_matches_files_load_with_roots_reads() {
+    use tempfile::TempDir;
+
+    let tmp = TempDir::new().unwrap();
+    let project_root = tmp.path().join("repo");
+    let config_home = tmp.path().join("config");
+    std::fs::create_dir_all(&project_root).unwrap();
+    std::fs::create_dir_all(&config_home).unwrap();
+    let roots = McpConfigRoots {
+        project_root: &project_root,
+        session_cwd: &project_root,
+    };
+
+    let paths = config_paths(roots, &config_home);
+    // One uniquely-named server per listed file.
+    for (index, (path, _)) in paths.iter().enumerate() {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(
+            path,
+            serde_json::json!({
+                "mcpServers": { format!("server-{index}"): {"command": "cmd"} }
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+
+    let loaded = McpConfigLoader::load_with_roots(roots, &config_home);
+
+    let mut loaded_names: Vec<_> = loaded.iter().map(|c| c.name.clone()).collect();
+    loaded_names.sort();
+    let mut expected: Vec<_> = (0..paths.len()).map(|i| format!("server-{i}")).collect();
+    expected.sort();
+    assert_eq!(loaded_names, expected, "every config_paths file must load");
+}
+
+#[test]
+fn test_config_paths_scopes_match_loaded_scopes() {
+    use tempfile::TempDir;
+
+    let tmp = TempDir::new().unwrap();
+    let project_root = tmp.path().join("repo");
+    let config_home = tmp.path().join("config");
+    std::fs::create_dir_all(&project_root).unwrap();
+    std::fs::create_dir_all(&config_home).unwrap();
+    let roots = McpConfigRoots {
+        project_root: &project_root,
+        session_cwd: &project_root,
+    };
+
+    let paths = config_paths(roots, &config_home);
+    for (index, (path, _)) in paths.iter().enumerate() {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(
+            path,
+            serde_json::json!({
+                "mcpServers": { format!("server-{index}"): {"command": "cmd"} }
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+
+    let loaded = McpConfigLoader::load_with_roots(roots, &config_home);
+    let by_name: std::collections::HashMap<_, _> = loaded
+        .into_iter()
+        .map(|config| (config.name.clone(), config))
+        .collect();
+    for (index, (_, scope)) in paths.iter().enumerate() {
+        assert_eq!(
+            by_name[&format!("server-{index}")].scope,
+            *scope,
+            "scope for config_paths entry {index} must match the loaded scope"
+        );
+    }
+}
+
+#[test]
+fn test_defining_path_finds_disabled_entry_the_loader_skips() {
+    use tempfile::TempDir;
+
+    let tmp = TempDir::new().unwrap();
+    let project_root = tmp.path().join("repo");
+    let config_home = tmp.path().join("config");
+    std::fs::create_dir_all(&project_root).unwrap();
+    std::fs::create_dir_all(&config_home).unwrap();
+    let roots = McpConfigRoots {
+        project_root: &project_root,
+        session_cwd: &project_root,
+    };
+
+    std::fs::write(
+        project_root.join(".mcp.json"),
+        serde_json::json!({
+            "mcpServers": { "off": {"command": "cmd", "disabled": true} }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    // Invisible to the loader...
+    assert!(McpConfigLoader::load_with_roots(roots, &config_home).is_empty());
+    // ...but still locatable, which is what `/mcp enable` needs.
+    let (path, scope) = defining_path("off", roots, &config_home).unwrap();
+    assert_eq!(path, project_root.join(".mcp.json"));
+    assert_eq!(scope, ConfigScope::Project);
+}
+
+#[test]
+fn test_defining_path_returns_highest_precedence_definition() {
+    use tempfile::TempDir;
+
+    let tmp = TempDir::new().unwrap();
+    let project_root = tmp.path().join("repo");
+    let config_home = tmp.path().join("config");
+    std::fs::create_dir_all(&project_root).unwrap();
+    std::fs::create_dir_all(&config_home).unwrap();
+    let roots = McpConfigRoots {
+        project_root: &project_root,
+        session_cwd: &project_root,
+    };
+
+    for path in [config_home.join("mcp.json"), project_root.join(".mcp.json")] {
+        std::fs::write(
+            path,
+            serde_json::json!({ "mcpServers": { "dup": {"command": "cmd"} } }).to_string(),
+        )
+        .unwrap();
+    }
+
+    let (path, scope) = defining_path("dup", roots, &config_home).unwrap();
+    assert_eq!(
+        path,
+        project_root.join(".mcp.json"),
+        "project wins over user"
+    );
+    assert_eq!(scope, ConfigScope::Project);
+    assert!(defining_path("absent", roots, &config_home).is_none());
+}

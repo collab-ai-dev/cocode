@@ -4,7 +4,7 @@
 //! QuickJS engine (`rquickjs`): a sandboxed context per run, the DSL globals
 //! (`agent`/`parallel`/`pipeline`/`phase`/`log`/`workflow` + `args`/`budget`),
 //! a runtime determinism shim, and intrinsic hardening. See
-//! `docs/coco-rs/workflow-runtime-plan.md`.
+//! `docs/internal/workflow-runtime-plan.md`.
 //!
 //! The engine is single-threaded by design (rquickjs `Ctx`/`Value` are
 //! `!Send`): drive [`WorkflowEngine::run`] on a tokio current-thread runtime

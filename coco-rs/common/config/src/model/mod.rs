@@ -91,7 +91,7 @@ pub struct ModelInfo {
     /// `with_extra(ApplyPatch)` on `tool_overrides`.
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     /// Per-model tool-availability adjustments. Layered on top of the
-    /// built-in registry. See `docs/coco-rs/feature-gates-and-tool-filtering.md`.
+    /// built-in registry. See `docs/internal/feature-gates-and-tool-filtering.md`.
     pub tool_overrides: Option<ToolOverrides>,
     pub shell_tool_type: ModelShellToolType,
     pub max_tool_output_chars: Option<i32>,

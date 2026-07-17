@@ -12,6 +12,7 @@ coco-config.workspace = true
 coco-context.workspace = true
 coco-error.workspace = true
 coco-lsp.workspace = true
+coco-mcp.workspace = true
 coco-types.workspace = true
 coco-plugins.workspace = true
 coco-secret-redact.workspace = true
@@ -31,5 +32,10 @@ urlencoding.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true
+# Dev-only: lets the /hooks test feed the config example this command prints
+# through the real loader, instead of trusting that the two agree.
+coco-hooks.workspace = true
+pretty_assertions.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "process", "fs"] }
 tempfile.workspace = true

@@ -13,13 +13,18 @@ pub struct StartupPermissionState {
 }
 
 /// Resolve the session's initial `PermissionMode` and the bypass capability.
+///
+/// Takes the source-tracked settings rather than the merged snapshot: bypass
+/// posture must ignore the `Project` layer, and that distinction only exists
+/// before the layers are flattened. See
+/// [`coco_config::SettingsWithSource::startup_permission_mode`].
 pub fn resolve_startup_permission_state(
     cli: &AgentHostOptions,
-    settings: &coco_config::Settings,
+    settings: &coco_config::SettingsWithSource,
 ) -> Result<StartupPermissionState> {
     use coco_types::PermissionMode;
 
-    let policy_flag = Some(settings.permissions.disable_bypass_mode);
+    let policy_flag = Some(settings.disable_bypass_mode_enabled());
 
     let permission_mode_cli = cli.permission_mode.as_deref().and_then(|raw| {
         match serde_json::from_value::<PermissionMode>(serde_json::json!(raw)) {
@@ -34,7 +39,7 @@ pub fn resolve_startup_permission_state(
     let resolved = coco_permissions::resolve_initial_permission_mode(
         cli.dangerously_skip_permissions,
         permission_mode_cli,
-        settings.permissions.default_mode,
+        settings.startup_permission_mode(),
         policy_flag,
     );
     let mode = resolved.mode;
@@ -46,7 +51,11 @@ pub fn resolve_startup_permission_state(
     );
 
     let auto_available = coco_permissions::compute_auto_mode_capability(
-        settings.auto_mode.as_ref().is_some_and(|c| c.disabled),
+        settings
+            .merged
+            .auto_mode
+            .as_ref()
+            .is_some_and(|c| c.disabled),
     );
 
     let requesting_bypass =

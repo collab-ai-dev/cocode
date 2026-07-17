@@ -4,7 +4,7 @@
 # headless composition lives in coco-cli (app/cli/src/{tui,headless,sdk}) and the
 # SDK transport in coco-sdk-server; agent-host exposes protocol-neutral host
 # operations only. See Phase G of
-# docs/coco-rs/multi-session-app-server/remediation-plan.md.
+# docs/internal/multi-session-app-server/remediation-plan.md.
 #
 # Scans every `[dependencies]`-family section (including target-gated and the
 # dotted `[dependencies.<name>]` form). `[dev-dependencies]` is exempt.

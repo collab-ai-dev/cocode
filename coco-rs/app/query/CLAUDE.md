@@ -58,7 +58,7 @@ per-round `turn_id` (`format!("turn-{n}")`) survives only as a log
 correlation field — it never reaches the wire.
 Stream: `TextDelta`, `ThinkingDelta`, `ToolUseQueued`, `ToolUseStarted`,
 `ToolUseCompleted`.
-(See `docs/coco-rs/event-system-design.md` for full catalog.)
+(See `docs/internal/event-system-design.md` for full catalog.)
 
 ## Tool Input Pipeline
 

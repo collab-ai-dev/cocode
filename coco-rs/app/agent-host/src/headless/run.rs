@@ -260,7 +260,7 @@ pub async fn run_chat_with_options(
     let tool_count = registry.len();
     let cancel = opts.cancel.unwrap_or_default();
 
-    let startup = resolve_startup_permission_state(cli, &settings.merged)?;
+    let startup = resolve_startup_permission_state(cli, settings)?;
     let permission_mode = startup.mode;
     let bypass_permissions_available = startup.bypass_available;
     tracing::info!(

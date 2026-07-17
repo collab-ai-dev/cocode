@@ -16,7 +16,7 @@ OpenTelemetry tracing and metrics: OTLP gRPC/HTTP export, base events, metrics c
 ## Current Scope
 
 - **Shipped**: export pipeline (OTLP gRPC/HTTP, TLS, Statsig, InMemory) + 7 base events (conversation, prompt, tool_decision, tool_result, api_request, sse_event, completion).
-- **Not yet shipped**: higher-layer span hierarchy, business metrics, custom exporters (BigQuery / Perfetto / first-party event logger), operational controls (sampling / killswitch / PII safety / opt-out). See `docs/coco-rs/crate-coco-otel.md` for the full roadmap.
+- **Not yet shipped**: higher-layer span hierarchy, business metrics, custom exporters (BigQuery / Perfetto / first-party event logger), operational controls (sampling / killswitch / PII safety / opt-out). See `docs/internal/crate-coco-otel.md` for the full roadmap.
 
 ## Conventions
 
