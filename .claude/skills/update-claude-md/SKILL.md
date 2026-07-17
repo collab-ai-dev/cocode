@@ -1,6 +1,6 @@
 ---
-allowed-tools: Read, Glob, Grep, Write, Bash(ls *), Bash(wc *)
-description: Regenerate CLAUDE.md from workspace discovery (zero hardcoded content)
+allowed-tools: Read, Glob, Grep, Write, Bash(ls *), Bash(wc *), Bash(bash .claude/skills/update-claude-md/scripts/*)
+description: Regenerate the root CLAUDE.md from live workspace discovery (zero hardcoded content). Use whenever the user asks to update, refresh, regenerate, or audit CLAUDE.md, says it is stale or bloated, or after workspace restructuring (crates added, renamed, or moved) — even if they don't name this skill.
 argument-hint: [target-file-path]
 ---
 
@@ -25,9 +25,11 @@ Regenerate CLAUDE.md by **discovering** all project structure at runtime. This c
 - **State each rule once.** No rule + diagram + "why" triplication — one statement plus at most one compact why.
 - **No fragile counts.** Do not write `"(5)"`, `"26 crates"`, `"42 tool impls"`, `"18 contexts, 73+ actions"`, `"8 roles"`. These drift every time someone adds a file and carry no insight. Just name the thing (`ModelRoles`, `Utils`, `tools`); anyone who cares can `ls` or grep.
 - **Utils is the exception — it is a capability catalog.** For every utils crate, keep a one-line description in a table so the agent can scan for existing capabilities (path handling, caching, git, encoding, fuzzy search, frontmatter, secret redaction, …) before rolling its own. A bare list of names defeats the purpose.
+- **Never enumerate code-owned closed sets** (enum variants, per-tier module lists) — point at the source file instead. Enumerations rot fastest: a past root claimed 8 `Feature` variants while the enum had ~33.
 - **Progressive disclosure**: main file gives the overview; links point at detailed docs.
-- **Single source of truth**: reference `AGENTS.md` for conventions, don't duplicate.
+- **Single source of truth**: if `AGENTS.md` carries its own conventions, reference it instead of duplicating. In this repo `AGENTS.md` is a pointer *back* at CLAUDE.md — don't add a circular reference.
 - **No inline code examples**: link to source instead.
+- **Complete coverage is mandatory**: every workspace member appears in exactly one crate table.
 
 ## Procedure
 
@@ -72,8 +74,8 @@ Build an ASCII art layer diagram **from the discovered layers and crate names**.
 
 Assemble the file in this section order:
 
-1. **Title + one-liner** — e.g. "Multi-provider LLM SDK and CLI. All development in `coco-rs/`."
-2. **AGENTS.md reference** — "Read `AGENTS.md` for Rust conventions."
+1. **Title + one-liner** — e.g. "Multi-provider LLM SDK and CLI. All development in `coco-rs/`." Immediately after, the navigation hint: *"Each crate has its own `CLAUDE.md` — read it when working in that crate. This root file covers conventions and high-level structure only."*
+2. **AGENTS.md check** — only if `AGENTS.md` holds real conventions, add "Read `AGENTS.md` for Rust conventions." Here it merely points back at CLAUDE.md, so skip the reference.
 3. **Commands** — from justfile discovery (Step 1.5)
 4. **Architecture** — generated diagram (Step 2)
 5. **Key Data Flows** — exactly the 3 ASCII flow diagrams from Step 1.8 (agent turn lifecycle, configuration resolution, provider call chain)
@@ -85,20 +87,21 @@ Assemble the file in this section order:
 
 ### Step 4: Write and Verify
 
-Write the file, then verify:
+Write the file, then run the mechanical checks:
 
-1. **Size budget**: `wc -c CLAUDE.md` must report **< 30000** (hard target) and absolutely **< 40000** (CC warning threshold). If over, re-trim (data flows, preserved sections, over-long purposes) before proceeding.
-2. **Crate coverage**: count of crates in generated file == count of workspace members (exact match). List any missing crates as errors.
-3. **Link check**: every file path referenced in the CLAUDE.md actually exists on disk.
-4. **CLAUDE.md coverage**: every discovered `**/CLAUDE.md` file is reachable from root (grouped per-layer link is fine; one link per file not required).
-5. **Data flow coverage**: exactly **3** inlined data flow diagrams (agent turn, config resolution, provider call chain). Any others must be replaced with a one-line pointer to the owning crate's CLAUDE.md.
-6. **No fragile counts**: grep the generated file for `\(\d+\)` in headings, and for patterns like `\d+ (crates|impls|roles|modules|contexts|actions|tools)`. Any hit is a regression — replace with a plain name or remove.
-7. **No Key Types column**: every crate table must have only `Crate | Purpose`. A `Key Types` column in root is a regression.
-8. **Utils table has per-crate descriptions**: not a bare comma-separated name list. Utils is the agent's capability catalog and earns its full table.
-9. **No "Key Design Patterns" section**: its presence is a regression (see Step 1.9).
-10. **Single-line crate rows**: no crate-table row exceeds ~140 chars. Longer rows are copying the crate's own CLAUDE.md — trim to purpose-only.
-11. **Universal-only conventions**: no domain-scoped convention block (TUI/ratatui style, provider-specific rules) at root — move to the owning crate's CLAUDE.md.
-12. **No closed-set enumerations that live in code**: don't list enum variants (Feature, ModelRole variants beyond what a Design Decision needs) or per-tier module name lists — point at the source file; enumerations rot.
+```bash
+bash .claude/skills/update-claude-md/scripts/verify.sh CLAUDE.md
+```
+
+The script enforces: size budget (< 30k target, < 40k hard), no fragile counts, no "Key Design Patterns" section, no `Key Types` column, no domain-scoped TUI convention block, crate-row length cap (warn > 140 chars, fail > 160), exactly 3 data-flow diagrams, and no dead local links. A FAIL means re-trim and re-run; WARNs need a judgment call (trim or accept with a reason).
+
+Then verify by hand what a script can't:
+
+1. **Crate coverage**: every workspace member appears in a crate table (exact match against Step 1's list). List any missing crates as errors.
+2. **CLAUDE.md coverage**: every discovered `**/CLAUDE.md` file is reachable from root (grouped per-layer link is fine; one link per file not required).
+3. **Utils table quality**: per-crate one-line descriptions, not a bare name list — Utils is the agent's capability catalog.
+4. **Universal-only conventions**: no domain-scoped convention block (TUI/ratatui style, provider-specific rules) at root — move to the owning crate's CLAUDE.md.
+5. **No closed-set enumerations that live in code**: don't list enum variants (Feature, ModelRole variants beyond what a Design Decision needs) or per-tier module name lists — point at the source file.
 
 If any check fails, fix the issue and re-verify before proceeding.
 
@@ -116,37 +119,11 @@ Output a summary:
 | Crates documented | X/N | Y/N | = N |
 
 ### Verification
-- [ ] Char count < 30k (hard target), < 40k (CC warning)
-- [ ] All workspace crates documented (exact match)
-- [ ] All file links valid
-- [ ] Every `**/CLAUDE.md` reachable from root
-- [ ] Exactly 3 inlined data flows
-- [ ] No fragile counts (no `(N)` headings, no `"N crates/impls/roles/…"`)
-- [ ] No `Key Types` column in any crate table
-- [ ] Utils table has per-crate one-line descriptions
-- [ ] No "Key Design Patterns" section
-- [ ] All crate rows single-line (≤ ~140 chars)
-- [ ] No domain-scoped convention blocks (root = universal only)
+<paste verify.sh output verbatim>
+- [ ] Manual: all workspace crates documented (exact match)
+- [ ] Manual: every `**/CLAUDE.md` reachable from root
+- [ ] Manual: Utils table has per-crate descriptions; universal-only conventions; no closed-set enumerations
 ```
-
-## Important Rules
-
-- Do NOT hardcode any crate names, layer names, or architecture content in this command
-- Do NOT duplicate content from AGENTS.md
-- Do NOT include inline code examples (link to source files)
-- Do NOT use prose for crate descriptions (use tables; one-line purpose per crate)
-- Do NOT skip any workspace crate (complete coverage is mandatory)
-- Do NOT add a `Key Types` column to any crate table — those types belong in per-crate `CLAUDE.md`
-- Do NOT write counts (`(5)`, `26 crates`, `42 tool impls`, `8 roles`) — they drift and carry no insight
-- Do NOT inline more than 3 data flow diagrams — every extra one becomes dead weight within a year
-- Do NOT emit a "Key Design Patterns" table — inferable patterns are cut-content; policies go in Design Decisions
-- Do NOT let any crate-table row exceed one line (~140 chars) — longer rows copy the crate's own CLAUDE.md
-- Do NOT keep domain-scoped convention blocks (TUI style, provider rules) at root — root is universal-only
-- Do NOT enumerate code-owned closed sets (enum variants, per-tier module lists) — point at the source file
-- DO enforce a size budget: target < 30k chars, hard stop at 40k (CC memory warning threshold)
-- DO make Utils a full-width table with per-crate descriptions — it is the agent's capability catalog
-- DO preserve human-authored sections (Design Decisions, etc.) from the existing file
-- DO add a one-line navigation hint at the top: *"Each crate has its own `CLAUDE.md` — read it when working in that crate. This root file covers conventions and high-level structure only."*
 
 ## Why these rules exist (prior-run lessons)
 
@@ -161,3 +138,5 @@ A past regeneration hit **42k chars** (over the 40k CC warning) because it inlin
 The generator that produced the bloated version followed its own instructions faithfully. The root cause was in the instructions, not the execution — hence these hard rules.
 
 A second audit (2026-07) found the residual bloat sources were again instruction-driven: the then-mandated "Key Design Patterns" table (pure inferable content), crate-table rows that had grown into multi-line mini-CLAUDE.mds (`llm-types`, `tui-ui`, `goals`), a domain-scoped TUI-conventions block, one rule stated three times (pre-commit), and a third full crate enumeration in Specialized Documentation. All five are now banned above. The audit also confirmed enumerated closed sets rot fastest: the root's `Feature` list claimed 8 variants while the enum had ~33.
+
+A skill-creator review pass (2026-07) then applied the same medicine to this skill itself: each rule now lives in exactly two places — a principle (the why) and its enforcement point — instead of four; the mechanical checks moved into `scripts/verify.sh` so verification is deterministic instead of eyeballed. Keep it that way: a new rule gets one Principles bullet plus either a verify.sh check or a Step 4 manual item, nothing else.

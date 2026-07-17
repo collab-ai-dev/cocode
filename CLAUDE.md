@@ -18,7 +18,7 @@ work. Pick one of:
 ```bash
 just fmt          # After Rust changes (auto-approve)
 just quick-check  # Iteration: fmt + seam guard + check-error-policy + incremental clippy. NO tests.
-just pre-commit   # REQUIRED before commit: quick-check + nextest test run
+just pre-commit   # REQUIRED before commit: quick-check + check-docs + nextest + Python SDK checks
 ```
 
 ### Pre-commit is expensive — run it ONCE per commit, at the very end
@@ -365,7 +365,7 @@ Reusable primitives. **Check here first** before implementing any basic utility.
 | `string` | UTF-8-safe truncation / byte-boundary slicing — see [String Slicing](#string-slicing--utf-8-safety); never raw `&s[..n]` |
 | `symbol-search` | Symbol search for code navigation |
 
-(Test-harness utilities live at `tests/harness` and `tests/cassette`, not under `utils/`.)
+(Workspace members outside these tables: test harnesses `tests/harness`, `tests/cassette`, `tests/live`, and the docs-gen build tool `xtask`.)
 
 ## Error Handling
 
