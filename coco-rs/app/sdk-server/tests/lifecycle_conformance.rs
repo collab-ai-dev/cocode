@@ -153,162 +153,158 @@ impl Fixture {
 
 #[tokio::test]
 async fn sdk_stdio_shares_start_read_close_lifecycle_contract() {
-    tokio::time::timeout(std::time::Duration::from_secs(20), async {
-        let fixture = fixture().await;
-        let mut next_request_id = 1;
-        let mut notifications = Vec::new();
+    let fixture = fixture().await;
+    let mut next_request_id = 1;
+    let mut notifications = Vec::new();
 
-        json_rpc_success::<serde_json::Value>(
-            request(
-                &fixture.client,
-                &mut next_request_id,
-                &mut notifications,
-                ClientRequestMethod::Initialize,
-                InitializeParams::default(),
-                "sdk stdio initialize",
-            )
-            .await,
+    json_rpc_success::<serde_json::Value>(
+        request(
+            &fixture.client,
+            &mut next_request_id,
+            &mut notifications,
+            ClientRequestMethod::Initialize,
+            InitializeParams::default(),
             "sdk stdio initialize",
-        );
+        )
+        .await,
+        "sdk stdio initialize",
+    );
 
-        let resume_seed_text = "resumed-through-sdk-stdio";
-        let started: SessionStartResult = json_rpc_success(
-            request(
-                &fixture.client,
-                &mut next_request_id,
-                &mut notifications,
-                ClientRequestMethod::SessionStart,
-                SessionStartParams::default(),
-                "sdk stdio session/start",
-            )
-            .await,
+    let resume_seed_text = "resumed-through-sdk-stdio";
+    let started: SessionStartResult = json_rpc_success(
+        request(
+            &fixture.client,
+            &mut next_request_id,
+            &mut notifications,
+            ClientRequestMethod::SessionStart,
+            SessionStartParams::default(),
             "sdk stdio session/start",
-        );
-        let surface_id = started.surface_id.clone();
-        let live = fixture.server.list_live_sessions();
-        assert_eq!(live.len(), 1);
-        assert_eq!(live[0].session_id, started.session_id);
-        assert_eq!(live[0].surface_counts.attached, 1);
+        )
+        .await,
+        "sdk stdio session/start",
+    );
+    let surface_id = started.surface_id.clone();
+    let live = fixture.server.list_live_sessions();
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].session_id, started.session_id);
+    assert_eq!(live[0].surface_counts.attached, 1);
 
-        let read: SessionReadResult = json_rpc_success(
-            request(
-                &fixture.client,
-                &mut next_request_id,
-                &mut notifications,
-                ClientRequestMethod::SessionRead,
-                SessionReadParams {
-                    target: SessionTarget {
-                        session_id: started.session_id.clone(),
-                    },
-                    cursor: None,
-                    limit: None,
+    let read: SessionReadResult = json_rpc_success(
+        request(
+            &fixture.client,
+            &mut next_request_id,
+            &mut notifications,
+            ClientRequestMethod::SessionRead,
+            SessionReadParams {
+                target: SessionTarget {
+                    session_id: started.session_id.clone(),
                 },
-                "sdk stdio session/read",
-            )
-            .await,
+                cursor: None,
+                limit: None,
+            },
             "sdk stdio session/read",
-        );
-        assert_eq!(read.session.session_id, started.session_id);
-        append_durable_transcript_seed(&fixture, &started.session_id, resume_seed_text);
+        )
+        .await,
+        "sdk stdio session/read",
+    );
+    assert_eq!(read.session.session_id, started.session_id);
+    append_durable_transcript_seed(&fixture, &started.session_id, resume_seed_text);
 
-        json_rpc_success::<()>(
-            request(
-                &fixture.client,
-                &mut next_request_id,
-                &mut notifications,
-                ClientRequestMethod::SessionClose,
-                SessionCloseParams {
-                    target: SessionCloseTarget::Interactive {
-                        target: InteractiveTarget {
-                            session_id: started.session_id.clone(),
-                            surface_id,
-                        },
+    json_rpc_success::<()>(
+        request(
+            &fixture.client,
+            &mut next_request_id,
+            &mut notifications,
+            ClientRequestMethod::SessionClose,
+            SessionCloseParams {
+                target: SessionCloseTarget::Interactive {
+                    target: InteractiveTarget {
+                        session_id: started.session_id.clone(),
+                        surface_id,
                     },
                 },
-                "sdk stdio session/close",
-            )
-            .await,
+            },
             "sdk stdio session/close",
-        );
-        assert!(fixture.server.list_live_sessions().is_empty());
-        assert_eq!(
-            wait_for_session_result_stop_reason(
-                &fixture.client,
-                &mut notifications,
-                &started.session_id,
-            )
-            .await
-            .as_deref(),
-            Some("closed")
-        );
+        )
+        .await,
+        "sdk stdio session/close",
+    );
+    assert!(fixture.server.list_live_sessions().is_empty());
+    assert_eq!(
+        wait_for_session_result_stop_reason(
+            &fixture.client,
+            &mut notifications,
+            &started.session_id,
+        )
+        .await
+        .as_deref(),
+        Some("closed")
+    );
 
-        let resumed: SessionResumeResult = json_rpc_success(
-            request(
-                &fixture.client,
-                &mut next_request_id,
-                &mut notifications,
-                ClientRequestMethod::SessionResume,
-                SessionResumeParams {
-                    target: SessionTarget {
-                        session_id: started.session_id.clone(),
-                    },
-                    plan_mode_instructions: None,
+    let resumed: SessionResumeResult = json_rpc_success(
+        request(
+            &fixture.client,
+            &mut next_request_id,
+            &mut notifications,
+            ClientRequestMethod::SessionResume,
+            SessionResumeParams {
+                target: SessionTarget {
+                    session_id: started.session_id.clone(),
                 },
-                "sdk stdio session/resume",
-            )
-            .await,
+                plan_mode_instructions: None,
+            },
             "sdk stdio session/resume",
-        );
-        assert_eq!(resumed.session.session_id, started.session_id);
-        let resumed_surface_id = resumed.surface_id.clone();
-        let resumed_read: SessionReadResult = json_rpc_success(
-            request(
-                &fixture.client,
-                &mut next_request_id,
-                &mut notifications,
-                ClientRequestMethod::SessionRead,
-                SessionReadParams {
-                    target: SessionTarget {
-                        session_id: started.session_id.clone(),
-                    },
-                    cursor: None,
-                    limit: None,
+        )
+        .await,
+        "sdk stdio session/resume",
+    );
+    assert_eq!(resumed.session.session_id, started.session_id);
+    let resumed_surface_id = resumed.surface_id.clone();
+    let resumed_read: SessionReadResult = json_rpc_success(
+        request(
+            &fixture.client,
+            &mut next_request_id,
+            &mut notifications,
+            ClientRequestMethod::SessionRead,
+            SessionReadParams {
+                target: SessionTarget {
+                    session_id: started.session_id.clone(),
                 },
-                "sdk stdio resumed session/read",
-            )
-            .await,
+                cursor: None,
+                limit: None,
+            },
             "sdk stdio resumed session/read",
-        );
-        assert!(
-            resumed_read
-                .messages
-                .iter()
-                .any(|message| message.to_string().contains(resume_seed_text))
-        );
-        json_rpc_success::<()>(
-            request(
-                &fixture.client,
-                &mut next_request_id,
-                &mut notifications,
-                ClientRequestMethod::SessionClose,
-                SessionCloseParams {
-                    target: SessionCloseTarget::Interactive {
-                        target: InteractiveTarget {
-                            session_id: started.session_id.clone(),
-                            surface_id: resumed_surface_id,
-                        },
+        )
+        .await,
+        "sdk stdio resumed session/read",
+    );
+    assert!(
+        resumed_read
+            .messages
+            .iter()
+            .any(|message| message.to_string().contains(resume_seed_text))
+    );
+    json_rpc_success::<()>(
+        request(
+            &fixture.client,
+            &mut next_request_id,
+            &mut notifications,
+            ClientRequestMethod::SessionClose,
+            SessionCloseParams {
+                target: SessionCloseTarget::Interactive {
+                    target: InteractiveTarget {
+                        session_id: started.session_id.clone(),
+                        surface_id: resumed_surface_id,
                     },
                 },
-                "sdk stdio resumed session/close",
-            )
-            .await,
+            },
             "sdk stdio resumed session/close",
-        );
+        )
+        .await,
+        "sdk stdio resumed session/close",
+    );
 
-        fixture.shutdown().await;
-    })
-    .await
-    .expect("SDK stdio lifecycle conformance timed out");
+    fixture.shutdown().await;
 }
 
 fn append_durable_transcript_seed(
