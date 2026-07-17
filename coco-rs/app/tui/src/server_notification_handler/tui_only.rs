@@ -593,6 +593,40 @@ pub(super) fn handle(
             }
             true
         }
+        // `/journey` — open the learning-timeline overlay, or refresh an
+        // already-open one in place (preserving selection by node id) after a
+        // mutation round-trip.
+        TuiOnlyEvent::OpenJourneyDialog { payload } => {
+            if let Some(ModalState::Journey(existing)) = state.ui.modal.as_mut() {
+                existing.refresh_from_wire(payload);
+            } else {
+                state
+                    .ui
+                    .show_modal(ModalState::Journey(crate::state::JourneyState::from_wire(
+                        payload,
+                    )));
+            }
+            true
+        }
+        // A `/journey` mutation failed. The refreshed overlay still shows the
+        // pre-mutation state, so without this toast the user reads it as a
+        // dropped keypress.
+        TuiOnlyEvent::JourneyMutationFailed { failure } => {
+            let key = match failure.kind {
+                coco_types::JourneyMutationKind::RetireSkill => "toast.journey_retire_failed",
+                coco_types::JourneyMutationKind::RestoreSkill => "toast.journey_restore_failed",
+                coco_types::JourneyMutationKind::DeleteMemory => "toast.journey_delete_failed",
+            };
+            state.ui.add_toast(Toast::error(
+                t!(
+                    key,
+                    target = failure.target.as_str(),
+                    error = failure.message.as_str()
+                )
+                .to_string(),
+            ));
+            true
+        }
         // `/add-dir` (no-arg) — open the interactive directory-input overlay.
         // An already-open instance is left as-is (the user is mid-edit).
         TuiOnlyEvent::OpenAddDirectory => {

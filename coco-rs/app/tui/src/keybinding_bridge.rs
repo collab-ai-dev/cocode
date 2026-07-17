@@ -47,6 +47,10 @@ pub enum KeybindingContext {
     /// the keys map to input-style commands the editor's `intercept`
     /// consumes (Cursor* / InsertChar / SubmitInput).
     PermissionsEditor,
+    /// `/journey` learning-timeline overlay. Dedicated context (same rationale
+    /// as [`Self::PermissionsEditor`]) so `j`/`k`/`e`/`d` reach the overlay's
+    /// `intercept` instead of being eaten by the generic picker filter.
+    Journey,
     /// `/add-dir` (no-arg) directory-input overlay. Dedicated context (same
     /// shape as [`Self::PermissionsEditor`]): a single-line text field whose
     /// keys map to `Cursor* / InsertChar / SubmitInput / Cancel` for
@@ -119,6 +123,10 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
             // `/permissions` editor — dedicated context for text input +
             // distinct nav (see the enum-variant doc).
             ModalState::PermissionsEditor(_) => KeybindingContext::PermissionsEditor,
+
+            // `/journey` overlay — dedicated nav context so `j`/`k`/`e`/`d`
+            // reach the overlay's intercept (see the enum-variant doc).
+            ModalState::Journey(_) => KeybindingContext::Journey,
 
             // `/add-dir` overlay — dedicated single-text-input context (see the
             // enum-variant doc); routes to `add_directory::map_key`.
@@ -358,6 +366,7 @@ fn resolve_key(
             crate::modal_pane::settings::map_key(key)
         }
         KeybindingContext::PermissionsEditor => crate::modal_pane::permissions_editor::map_key(key),
+        KeybindingContext::Journey => crate::modal_pane::journey::map_key(key),
         KeybindingContext::AddDirectory => crate::modal_pane::add_directory::map_key(key),
         KeybindingContext::PermissionPrefixEdit => permission_prefix_edit_map_key(key),
         KeybindingContext::ExitPlanFeedbackInput => exit_plan_feedback_input_map_key(key),

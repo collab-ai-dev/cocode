@@ -4,6 +4,7 @@
 //! layer routes bottom-pane prompts first where required and falls through here.
 
 pub(crate) mod add_directory;
+pub(crate) mod journey;
 pub(crate) mod login_picker;
 pub(crate) mod model_picker;
 pub(crate) mod permissions_editor;
@@ -208,6 +209,10 @@ fn picker_dismiss(modal: &ModalState) -> Option<PickerDismiss> {
         M::AgentsDialog(_) => Slash {
             name: "agents",
             message: "Agents dialog dismissed",
+        },
+        M::Journey(_) => Slash {
+            name: "journey",
+            message: "Journey dialog dismissed",
         },
         M::PermissionsEditor(_) => Slash {
             name: "permissions",

@@ -24,10 +24,13 @@
 
 pub mod curator;
 pub mod fence;
+pub mod journal;
+pub mod notice;
 pub mod review;
 pub mod runtime;
 mod stamp;
 
 pub use curator::{CuratorOutcome, SkillCurator};
+pub use notice::{SkillLearnInbox, SkillLearnNotice, SkillLearnVerb};
 pub use review::{AgentSlot, SkillReviewOutcome, SkillReviewService};
-pub use runtime::{ReviewTrigger, SkillReviewRuntime};
+pub use runtime::{ReviewSignal, ReviewTrigger, SkillReviewRuntime};

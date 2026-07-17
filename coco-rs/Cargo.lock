@@ -1150,9 +1150,11 @@ dependencies = [
  "coco-hooks",
  "coco-hub-connector",
  "coco-inference",
+ "coco-journey",
  "coco-keybindings",
  "coco-llm-types",
  "coco-lsp",
+ "coco-maintenance",
  "coco-mcp",
  "coco-mcp-skills",
  "coco-memory",
@@ -1380,6 +1382,7 @@ dependencies = [
  "coco-sdk-server",
  "coco-session",
  "coco-shell",
+ "coco-skill-learn",
  "coco-skills",
  "coco-subagent",
  "coco-system-reminder",
@@ -1852,6 +1855,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "coco-journey"
+version = "0.1.1"
+dependencies = [
+ "chrono",
+ "coco-maintenance",
+ "coco-memory",
+ "coco-skills",
+ "coco-types",
+ "coco-utils-string",
+ "pretty_assertions",
+ "serde",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "coco-keybindings"
 version = "0.1.1"
 dependencies = [
@@ -1918,8 +1937,10 @@ dependencies = [
  "filetime",
  "libc",
  "pretty_assertions",
+ "serde",
  "serde_json",
  "tempfile",
+ "tracing",
 ]
 
 [[package]]
@@ -2502,6 +2523,7 @@ version = "0.1.1"
 dependencies = [
  "async-trait",
  "chrono",
+ "coco-config",
  "coco-frontmatter",
  "coco-maintenance",
  "coco-shell-parser",
@@ -2510,6 +2532,7 @@ dependencies = [
  "coco-types",
  "coco-utils-absolute-path",
  "coco-utils-common",
+ "coco-utils-string",
  "pretty_assertions",
  "serde_json",
  "tempfile",
@@ -2870,6 +2893,7 @@ dependencies = [
  "sha2",
  "similar",
  "tempfile",
+ "textwrap",
  "tokio",
  "tokio-stream",
  "tracing",

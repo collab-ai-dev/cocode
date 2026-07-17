@@ -166,6 +166,52 @@ pub fn count_tool_calls_in_last_assistant_turn<M: std::borrow::Borrow<Message>>(
     0
 }
 
+/// The slice of `messages` belonging to the most recent **user cycle**:
+/// everything after the last real user prompt. Virtual and compact-summary user
+/// messages are engine bookkeeping rather than prompts, so they don't open a
+/// cycle. Returns the whole slice when no prompt is present.
+///
+/// A "turn" (one assistant round) is the wrong unit for anything reasoning about
+/// what the *user* asked for: a single prompt routinely spans many tool rounds
+/// and ends on a text-only reply, so tail-anchored predicates see only that last
+/// empty round.
+pub fn messages_since_last_user_prompt<M: std::borrow::Borrow<Message>>(messages: &[M]) -> &[M] {
+    for (idx, m) in messages.iter().enumerate().rev() {
+        let msg = m.borrow();
+        if matches!(msg, Message::User(_)) && !is_virtual_message(msg) && !is_compact_summary(msg) {
+            return &messages[idx + 1..];
+        }
+    }
+    messages
+}
+
+/// Total tool calls across every assistant message in `messages`.
+pub fn count_tool_calls_in<M: std::borrow::Borrow<Message>>(messages: &[M]) -> i32 {
+    messages
+        .iter()
+        .map(|m| tool_call_count(m.borrow()) as i32)
+        .sum()
+}
+
+/// Whether any assistant message in `messages` invoked the Skill tool. Feeds the
+/// skill-learning review signal: a skill that ran is strong evidence the session
+/// did class-level work worth capturing.
+pub fn skill_invoked_in<M: std::borrow::Borrow<Message>>(messages: &[M]) -> bool {
+    messages.iter().any(|m| match m.borrow() {
+        Message::Assistant(a) => match &a.message {
+            LlmMessage::Assistant { content, .. } => content.iter().any(|c| {
+                matches!(
+                    c,
+                    AssistantContent::ToolCall(tc)
+                        if tc.tool_name == coco_types::ToolName::Skill.as_str()
+                )
+            }),
+            _ => false,
+        },
+        _ => false,
+    })
+}
+
 /// Return the slice of `messages` that follows the most recent compact
 /// boundary (either a `SystemMessage::CompactBoundary` or a synthesized
 /// `is_compact_summary` user message). When no boundary exists, the

@@ -110,6 +110,10 @@ pub fn build_dialog_payload(
 ) -> SkillsDialogPayload {
     let manager = build_manager(config_home, cwd);
     let skills = manager.all_including_conditional();
+    // One telemetry read for the whole payload: quarantined agent skills show
+    // their promotion progress so the user knows invoking them is what
+    // advances the gate.
+    let telemetry = coco_skills::telemetry::load_all(config_home);
 
     let entries: Vec<SkillsDialogEntry> = skills
         .iter()
@@ -119,6 +123,18 @@ pub fn build_dialog_payload(
             let baseline = resolve_skill_baseline(&s.name, tiers);
             let current_local = tiers.local.get(&s.name).copied();
             let lock = resolve_skill_override_lock(s, tiers);
+            // `required` is a placeholder: the `CommandHandler` trait carries no
+            // `RuntimeConfig`, so the host stamps the resolved threshold in
+            // `enrich_payload_with_tiers` (same reason `tiers` arrives empty).
+            // The default comes from the config type rather than a local const,
+            // so the two cannot drift apart.
+            let quarantine = s.is_quarantined().then(|| coco_types::SkillQuarantineWire {
+                invocations: telemetry
+                    .get(&s.name)
+                    .map(coco_skills::telemetry::SkillTelemetryStats::total_invocations)
+                    .unwrap_or(0),
+                required: coco_config::SkillLearnConfig::default().promote_min_invocations,
+            });
             SkillsDialogEntry {
                 name: s.name.clone(),
                 source,
@@ -128,6 +144,7 @@ pub fn build_dialog_payload(
                 current_local,
                 baseline,
                 lock,
+                quarantine,
             }
         })
         .collect();
@@ -201,12 +218,20 @@ fn project_skills_paths(cwd: &Path) -> Vec<String> {
 /// builder) re-resolve overrides against the live `RuntimeConfig`
 /// tiers when the handler couldn't (the handler runs without a
 /// `RuntimeConfig` in scope today).
+/// `promote_min_invocations` comes from the caller's resolved
+/// `SkillLearnConfig` and replaces the placeholder threshold the handler had to
+/// guess — the curator enforces the configured value, so the dialog must show
+/// that one and not a constant.
 pub fn enrich_payload_with_tiers(
     payload: &mut SkillsDialogPayload,
     tiers: &SkillOverrideTiers,
     skills: &SkillManager,
+    promote_min_invocations: i64,
 ) {
     for entry in payload.entries.iter_mut() {
+        if let Some(quarantine) = entry.quarantine.as_mut() {
+            quarantine.required = promote_min_invocations;
+        }
         let Some(skill) = skills.get(&entry.name) else {
             continue;
         };

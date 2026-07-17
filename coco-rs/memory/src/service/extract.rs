@@ -654,7 +654,10 @@ impl ExtractService {
 
     async fn run(&self, message_count: i32, fork_context: Vec<Arc<Message>>) -> ExtractOutcome {
         let start = Instant::now();
-        let manifest = scan::format_memory_manifest(&scan::scan_memory_files(&self.memory_dir));
+        let manifest = scan::format_memory_manifest(&scan::scan_memory_files(
+            &self.memory_dir,
+            scan::MAX_SCANNED_FILES,
+        ));
         let prompt = build_extract_prompt(
             message_count,
             &manifest,
@@ -799,6 +802,30 @@ impl ExtractService {
                     files_written,
                     duration_ms,
                 });
+                // Journal the memdir-relative topic files (host-side, best-effort).
+                let rel_files: Vec<String> = response
+                    .paths_written
+                    .iter()
+                    .filter(|p| {
+                        p.file_name()
+                            .and_then(|n| n.to_str())
+                            .is_some_and(|n| n != entrypoint)
+                    })
+                    .map(|p| {
+                        p.strip_prefix(&self.memory_dir)
+                            .unwrap_or(p)
+                            .to_string_lossy()
+                            .replace('\\', "/")
+                    })
+                    .collect();
+                if !rel_files.is_empty() {
+                    let sid = (**self.session_id.load()).as_str().to_string();
+                    crate::journal::append_event(
+                        &self.memory_dir,
+                        Some(&sid),
+                        coco_types::JourneyEvent::MemoryWritten { files: rel_files },
+                    );
+                }
                 // Only push a user-visible notice when at least one
                 // topic file was written (the index doesn't count).
                 if !topic_paths.is_empty() {

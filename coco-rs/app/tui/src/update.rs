@@ -138,6 +138,14 @@ pub async fn handle_command(
         return changed;
     }
 
+    // The `/journey` overlay owns its own `j`/`k` nav, detail toggle, and
+    // (with mutations) edit/retire/delete + memory-delete confirm.
+    if let crate::modal_pane::journey::Handled::Yes(changed) =
+        crate::modal_pane::journey::intercept(state, &cmd, command_tx).await
+    {
+        return changed;
+    }
+
     // The `/add-dir` overlay is a single directory-path text input with inline
     // validation — same dedicated text-input routing as the permissions editor.
     if let crate::modal_pane::add_directory::Handled::Yes(changed) =

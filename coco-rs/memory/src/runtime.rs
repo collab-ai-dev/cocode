@@ -1175,7 +1175,7 @@ impl MemoryRuntime {
         // on `MEMORY.md`'s presence. A user who has topic files but
         // deleted (or never had) the `MEMORY.md` index still has
         // memories worth surfacing.
-        let scanned = scan_memory_files(&self.directories.personal);
+        let scanned = scan_memory_files(&self.directories.personal, crate::scan::MAX_SCANNED_FILES);
         if scanned.is_empty() {
             return Vec::new();
         }

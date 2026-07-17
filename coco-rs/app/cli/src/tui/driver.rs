@@ -439,6 +439,10 @@ pub(super) async fn run_agent_driver(
                     PendingEditorRequest::Agent { path } => {
                         run_open_agent_file(session.clone(), path, event_tx.clone()).await;
                     }
+                    PendingEditorRequest::Journey { path } => {
+                        run_open_memory_file(path, event_tx.clone()).await;
+                        refresh_journey_dialog(&session, &event_tx).await;
+                    }
                 }
             }
 
@@ -1345,6 +1349,52 @@ pub(super) async fn run_agent_driver(
                 )
                 .await;
                 refresh_permissions_editor(&session, &event_tx).await;
+            }
+            UserCommand::ApplyJourneyAction { action } => {
+                // `/journey` mutation. Editor launch MUST go through the shared
+                // external-editor handshake (prepare → TerminalReady) so the TUI
+                // leaves raw mode + the alt screen before `$EDITOR` takes the
+                // terminal; the refresh then happens on editor exit, not here.
+                // Retire/restore/delete execute host-side (+ manual journal
+                // event) and refresh the overlay inline.
+                match action {
+                    coco_types::JourneyAction::OpenInEditor { id } => {
+                        let path = match id {
+                            coco_types::JourneyNodeId::Skill { path } => Some(path),
+                            coco_types::JourneyNodeId::Memory { filename } => session
+                                .memory_runtime()
+                                .map(|rt| rt.personal_dir().join(&filename)),
+                        };
+                        match path {
+                            Some(path) => {
+                                prepare_external_editor_request(
+                                    &mut pending_editor_requests,
+                                    PendingEditorRequest::Journey { path },
+                                    &event_tx,
+                                )
+                                .await;
+                            }
+                            None => warn!(
+                                "journey: cannot edit memory node without a MemoryRuntime \
+                                 (Feature::AutoMemory off)"
+                            ),
+                        }
+                    }
+                    other => {
+                        let failure = coco_agent_host::session_dialogs::apply_journey_mutation(
+                            &session, other,
+                        )
+                        .await;
+                        if let Some(failure) = failure {
+                            let _ = event_tx
+                                .send(CoreEvent::Tui(TuiOnlyEvent::JourneyMutationFailed {
+                                    failure,
+                                }))
+                                .await;
+                        }
+                        refresh_journey_dialog(&session, &event_tx).await;
+                    }
+                }
             }
 
             UserCommand::Shutdown { reason } => {

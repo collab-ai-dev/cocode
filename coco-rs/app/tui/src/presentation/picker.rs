@@ -527,6 +527,14 @@ fn render_skill_row(row: &SkillRow, focused: bool, bytes_per_token: i64) -> Stri
             source = lock_source_label(lock.source)
         ));
     }
+    // Quarantined agent skill: surface the promotion gate. The gate is on
+    // *invocation*, so showing the progress is what lets a user advance it.
+    if let Some(q) = &row.quarantine {
+        line.push_str(" · ");
+        line.push_str(&crate::presentation::journey::quarantine_progress_label(*q));
+        line.push_str(" · ");
+        line.push_str(&t!("dialog.skills_try_it"));
+    }
     line
 }
 

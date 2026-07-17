@@ -25,6 +25,7 @@ mod fork_label;
 mod goal;
 mod hook;
 mod id;
+pub mod journey;
 mod jsonrpc;
 mod log;
 pub mod messages;
@@ -99,14 +100,16 @@ pub use apply_patch_preview::{
 
 // Event types (three-layer CoreEvent system; see event-system-design.md)
 pub use event::{
-    AgentInfo, AgentStreamEvent, AgentsDialogEntry, AgentsDialogPayload, AgentsKilledParams,
-    CompactionFailedParams, CompactionHookType, CompactionPhase, CompactionPhaseParams,
-    ContentDeltaParams, ContextClearedParams, ContextCompactedParams, ContextUsageWarningParams,
-    CoreEvent, CostWarningParams, ElicitationCompleteParams, ErrorCode, ErrorParams, ErrorPayload,
-    EventLayer, EventReplayPolicy, FastModeState, FileChangeInfo, FileChangeKind,
-    FilesPersistedParams, HistoryReplaceReason, HookOutcomeStatus, HookProgressParams,
-    HookResponseParams, HookStartedParams, IdeDiagnosticsUpdatedParams, IdeSelectionChangedParams,
-    ItemStatus, LocalCommandOutputParams, McpServerInit, McpStartupCompleteParams,
+    AgentInfo, AgentSkillLifecycleWire, AgentStreamEvent, AgentsDialogEntry, AgentsDialogPayload,
+    AgentsKilledParams, CompactionFailedParams, CompactionHookType, CompactionPhase,
+    CompactionPhaseParams, ContentDeltaParams, ContextClearedParams, ContextCompactedParams,
+    ContextUsageWarningParams, CoreEvent, CostWarningParams, ElicitationCompleteParams, ErrorCode,
+    ErrorParams, ErrorPayload, EventLayer, EventReplayPolicy, FastModeState, FileChangeInfo,
+    FileChangeKind, FilesPersistedParams, HistoryReplaceReason, HookOutcomeStatus,
+    HookProgressParams, HookResponseParams, HookStartedParams, IdeDiagnosticsUpdatedParams,
+    IdeSelectionChangedParams, ItemStatus, JourneyBusiestDayWire, JourneyDialogPayload,
+    JourneyMutationFailed, JourneyMutationKind, JourneyNodeBodyWire, JourneyNodeWire,
+    JourneyStatsWire, LocalCommandOutputParams, McpServerInit, McpStartupCompleteParams,
     McpStartupStatusParams, MemoryDialogEntry, MemoryDialogRowKind, MemoryDialogScope,
     MoaAggregatingParams, MoaReferenceParams, ModelFallbackParams, ModelRoleChangedParams,
     NotificationMethod, PermissionDenialInfo, PermissionDisplayInput, PermissionModeChangedParams,
@@ -120,12 +123,13 @@ pub use event::{
     ServerNotification, ServerNotificationIdentity, SessionEndedParams, SessionEnvelope,
     SessionModelUsage, SessionResultParams, SessionStartedParams, SessionState, SkillLock,
     SkillLockSource, SkillOverrideState, SkillOverridesSaveErrorKind, SkillOverridesSaveResult,
-    SkillsDialogEntry, SkillsDialogPayload, SkillsDialogSource, SlashCommandStatusKind,
-    SummarizeCompletedParams, TaskCompletedParams, TaskCompletionStatus, TaskPanelChangedParams,
-    TaskProgressParams, TaskStartedParams, TaskUsage, ThreadItem, ThreadItemDetails,
-    ToolAbortReasonPayload, ToolProgressParams, ToolUseSummaryParams, TuiOnlyEvent,
-    TurnAbortReason, TurnEndedParams, TurnOutcome, TurnStartedParams, WorkflowDialogEntry,
-    WorkflowDialogPayload, WorktreeEnteredParams, WorktreeExitedParams,
+    SkillQuarantineWire, SkillTelemetryWire, SkillsDialogEntry, SkillsDialogPayload,
+    SkillsDialogSource, SlashCommandStatusKind, SummarizeCompletedParams, TaskCompletedParams,
+    TaskCompletionStatus, TaskPanelChangedParams, TaskProgressParams, TaskStartedParams, TaskUsage,
+    ThreadItem, ThreadItemDetails, TimelineBucketWire, ToolAbortReasonPayload, ToolProgressParams,
+    ToolUseSummaryParams, TuiOnlyEvent, TurnAbortReason, TurnEndedParams, TurnOutcome,
+    TurnStartedParams, WorkflowDialogEntry, WorkflowDialogPayload, WorktreeEnteredParams,
+    WorktreeExitedParams,
 };
 pub use stream_accumulator::StreamAccumulator;
 
@@ -200,6 +204,9 @@ pub use hook::{HookEventType, HookOutcome, HookScope};
 
 // ID types
 pub use id::{AgentId, SessionId, SurfaceId, TaskId, TurnId};
+
+// Journey (learning-timeline) event schema + node addressing
+pub use journey::{JourneyAction, JourneyEvent, JourneyNodeId, JourneyRecord, SkillRetireReason};
 
 // Log types
 pub use log::{Entrypoint, LogOption, UserType};

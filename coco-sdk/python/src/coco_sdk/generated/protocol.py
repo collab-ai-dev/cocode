@@ -140,6 +140,7 @@ class AttachmentKind(str, Enum):
     critical_system_reminder = "critical_system_reminder"
     memory_index_warning = "memory_index_warning"
     memory_update_reminder = "memory_update_reminder"
+    skill_learned_reminder = "skill_learned_reminder"
     slash_command_metadata = "slash_command_metadata"
     user_context = "user_context"
     tool_search_usage_reminder = "tool_search_usage_reminder"
@@ -377,6 +378,12 @@ class ItemStatus(str, Enum):
     completed = "completed"
     failed = "failed"
     declined = "declined"
+
+
+class JourneyMutationKind(str, Enum):
+    retire_skill = "retire_skill"
+    restore_skill = "restore_skill"
+    delete_memory = "delete_memory"
 
 
 class McpConnectionStatus(str, Enum):
@@ -784,6 +791,32 @@ UserContentPart = Union["TextPart", "FilePart"]
 # ---------------------------------------------------------------------------
 # Tagged discriminated unions
 # ---------------------------------------------------------------------------
+
+
+class AgentSkillLifecycleWireLearning(BaseModel):
+    model_config = {"populate_by_name": True}
+    state: Literal["learning"] = Field(default="learning", alias="state")
+    progress: SkillQuarantineWire
+
+
+class AgentSkillLifecycleWireLearned(BaseModel):
+    model_config = {"populate_by_name": True}
+    state: Literal["learned"] = Field(default="learned", alias="state")
+
+
+class AgentSkillLifecycleWireRetired(BaseModel):
+    model_config = {"populate_by_name": True}
+    state: Literal["retired"] = Field(default="retired", alias="state")
+
+
+AgentSkillLifecycleWire = Annotated[
+    Union[
+        AgentSkillLifecycleWireLearning,
+        AgentSkillLifecycleWireLearned,
+        AgentSkillLifecycleWireRetired,
+    ],
+    Field(discriminator="state"),
+]
 
 
 class AgentStreamEventTextDelta(BaseModel):
@@ -1526,6 +1559,37 @@ HookSpecificOutput = Annotated[
         HookSpecificOutputWorktreeCreate,
     ],
     Field(discriminator="hook_event_name"),
+]
+
+
+class JourneyNodeBodyWireAgentSkill(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal["agent_skill"] = Field(default="agent_skill", alias="kind")
+    lifecycle: AgentSkillLifecycleWire
+    path: str
+    telemetry: SkillTelemetryWire
+
+
+class JourneyNodeBodyWireUserSkill(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal["user_skill"] = Field(default="user_skill", alias="kind")
+    path: str
+    telemetry: SkillTelemetryWire
+
+
+class JourneyNodeBodyWireMemory(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal["memory"] = Field(default="memory", alias="kind")
+    filename: str
+
+
+JourneyNodeBodyWire = Annotated[
+    Union[
+        JourneyNodeBodyWireAgentSkill,
+        JourneyNodeBodyWireUserSkill,
+        JourneyNodeBodyWireMemory,
+    ],
+    Field(discriminator="kind"),
 ]
 
 
@@ -3300,6 +3364,22 @@ class TuiOnlyEventSkillOverridesSaved(BaseModel):
     result: SkillOverridesSaveResult
 
 
+class TuiOnlyEventOpenJourneyDialog(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal["open_journey_dialog"] = Field(
+        default="open_journey_dialog", alias="type"
+    )
+    payload: JourneyDialogPayload
+
+
+class TuiOnlyEventJourneyMutationFailed(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal["journey_mutation_failed"] = Field(
+        default="journey_mutation_failed", alias="type"
+    )
+    failure: JourneyMutationFailed
+
+
 TuiOnlyEvent = Annotated[
     Union[
         TuiOnlyEventApprovalRequired,
@@ -3366,6 +3446,8 @@ TuiOnlyEvent = Annotated[
         TuiOnlyEventOpenAddDirectory,
         TuiOnlyEventOpenExport,
         TuiOnlyEventSkillOverridesSaved,
+        TuiOnlyEventOpenJourneyDialog,
+        TuiOnlyEventJourneyMutationFailed,
     ],
     Field(discriminator="type_"),
 ]
@@ -5681,6 +5763,42 @@ class InterruptedOutcome(BaseModel):
     abort_reason: TurnAbortReason
 
 
+class JourneyBusiestDayWire(BaseModel):
+    count: int
+    label: str
+
+
+class JourneyDialogPayload(BaseModel):
+    stats: JourneyStatsWire
+    buckets: list[TimelineBucketWire] | None = None
+    nodes: list[JourneyNodeWire] | None = None
+
+
+class JourneyMutationFailed(BaseModel):
+    kind: JourneyMutationKind
+    message: str
+    target: str
+
+
+class JourneyNodeWire(BaseModel):
+    body: JourneyNodeBodyWire
+    description: str
+    first_seen_ms: int
+    last_activity_ms: int
+    title: str
+    date_label: str = ""
+    history: list[Any] | None = None
+
+
+class JourneyStatsWire(BaseModel):
+    busiest_day: JourneyBusiestDayWire | None = None
+    learned: int = 0
+    learning: int = 0
+    memories: int = 0
+    retired: int = 0
+    user_skills: int = 0
+
+
 class JsonRpcError(BaseModel):
     error: JsonRpcErrorObject
     id: RequestId
@@ -6281,6 +6399,20 @@ class SkillLock(BaseModel):
     source: SkillLockSource
 
 
+class SkillQuarantineWire(BaseModel):
+    invocations: int
+    required: int
+
+
+class SkillTelemetryWire(BaseModel):
+    failure_count: int = 0
+    last_patched_at_ms: int = 0
+    last_status: str | None = None
+    last_used_at_ms: int = 0
+    patch_count: int = 0
+    success_count: int = 0
+
+
 class SkillsDialogEntry(BaseModel):
     baseline: SkillOverrideState
     description: str
@@ -6290,6 +6422,7 @@ class SkillsDialogEntry(BaseModel):
     current_local: SkillOverrideState | None = None
     lock: SkillLock | None = None
     plugin_name: str | None = None
+    quarantine: SkillQuarantineWire | None = None
 
 
 class SkillsDialogPayload(BaseModel):
@@ -6559,6 +6692,14 @@ class ThinkingLevel(BaseModel):
     effort: ReasoningEffort
     budget_tokens: int | None = None
     options: dict[str, Any] | None = None
+
+
+class TimelineBucketWire(BaseModel):
+    label: str
+    memories: int
+    recency: float
+    skills: int
+    start_ms: int
 
 
 class TodoRecord(BaseModel):

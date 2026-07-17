@@ -2801,6 +2801,15 @@ pub enum TuiOnlyEvent {
     /// `Updated N / No changes / Failed: …` toast — keeping all
     /// user-visible text generation on the UI side.
     SkillOverridesSaved { result: SkillOverridesSaveResult },
+    /// `/journey` overlay — opens the learning timeline (skills + memories over
+    /// time). The payload is a CLI/host-assembled snapshot (`coco-journey`
+    /// `build_journey` + `bucketize`) since the TUI cannot reach the skill /
+    /// memory stores directly. Re-emitted after each edit so the open overlay
+    /// refreshes in place.
+    OpenJourneyDialog { payload: JourneyDialogPayload },
+    /// A `/journey` mutation failed (read-only file, vanished entry, …). Success
+    /// needs no event — the refreshed overlay IS the confirmation.
+    JourneyMutationFailed { failure: JourneyMutationFailed },
 }
 
 /// Image payload paired with a queued command edit restore.
@@ -2809,6 +2818,158 @@ pub enum TuiOnlyEvent {
 pub struct QueuedCommandEditImage {
     pub media_type: String,
     pub data_base64: String,
+}
+
+/// `/journey` overlay payload: the assembled learning timeline. Wire mirror of
+/// `coco_journey::JourneySnapshot` + the pre-computed timeline buckets. Uses
+/// `String` paths + snake_case + `tag = "kind"` per the wire convention (the
+/// in-process domain types carry `PathBuf` instead).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JourneyDialogPayload {
+    /// List rows, ascending `last_activity_ms`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nodes: Vec<JourneyNodeWire>,
+    /// Pre-computed timeline rows (host does not re-bucket on resize in v1).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub buckets: Vec<TimelineBucketWire>,
+    pub stats: JourneyStatsWire,
+}
+
+/// Wire mirror of one learning-timeline node.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JourneyNodeWire {
+    pub title: String,
+    pub description: String,
+    pub first_seen_ms: i64,
+    pub last_activity_ms: i64,
+    /// Host-formatted day label for `last_activity_ms` (e.g. `"15 Jul"`), so the
+    /// TUI needs no date math / `chrono` dependency.
+    #[serde(default)]
+    pub date_label: String,
+    pub body: JourneyNodeBodyWire,
+    /// Newest-first journal history (capped host-side). Opaque to the schema —
+    /// `JourneyRecord` intentionally does not derive `JsonSchema`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<serde_json::Value>"))]
+    pub history: Vec<crate::JourneyRecord>,
+}
+
+/// Wire mirror of the node kind + kind-specific data (`tag = "kind"`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum JourneyNodeBodyWire {
+    AgentSkill {
+        path: String,
+        lifecycle: AgentSkillLifecycleWire,
+        telemetry: SkillTelemetryWire,
+    },
+    UserSkill {
+        path: String,
+        telemetry: SkillTelemetryWire,
+    },
+    Memory {
+        filename: String,
+    },
+}
+
+/// Wire mirror of an agent skill's lifecycle.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum AgentSkillLifecycleWire {
+    /// Quarantined, with host-resolved progress toward the invocation gate.
+    /// See [`SkillQuarantineWire`] for why the pair travels with the state.
+    Learning {
+        progress: SkillQuarantineWire,
+    },
+    Learned,
+    Retired,
+}
+
+/// Wire mirror of `coco_skills::telemetry::SkillTelemetryStats` (coco-types
+/// cannot depend on coco-skills, so the fields are mirrored here).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillTelemetryWire {
+    #[serde(default)]
+    pub success_count: i64,
+    #[serde(default)]
+    pub failure_count: i64,
+    #[serde(default)]
+    pub patch_count: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_status: Option<String>,
+    #[serde(default)]
+    pub last_used_at_ms: i64,
+    #[serde(default)]
+    pub last_patched_at_ms: i64,
+}
+
+/// Wire mirror of one timeline bucket (row).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TimelineBucketWire {
+    pub start_ms: i64,
+    pub label: String,
+    pub skills: i32,
+    pub memories: i32,
+    pub recency: f32,
+}
+
+/// Wire mirror of the aggregate journey stats.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JourneyStatsWire {
+    #[serde(default)]
+    pub learning: i32,
+    #[serde(default)]
+    pub learned: i32,
+    #[serde(default)]
+    pub retired: i32,
+    #[serde(default)]
+    pub user_skills: i32,
+    #[serde(default)]
+    pub memories: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub busiest_day: Option<JourneyBusiestDayWire>,
+}
+
+/// Busiest-day summary (label + node count).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JourneyBusiestDayWire {
+    pub label: String,
+    pub count: i32,
+}
+
+/// Outcome of a `/journey` mutation (retire / restore / delete). Emitted only
+/// on failure — a success is already visible as the refreshed timeline, whereas
+/// a swallowed failure is indistinguishable from "the key didn't register".
+///
+/// Carries **no display text**, matching [`SkillOverridesSaveResult`]: the TUI
+/// owns wording and severity.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JourneyMutationFailed {
+    /// What the user tried to do.
+    pub kind: JourneyMutationKind,
+    /// Skill or memory-entry name, for the toast body.
+    pub target: String,
+    /// Underlying error's display text.
+    pub message: String,
+}
+
+/// Which `/journey` mutation failed.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JourneyMutationKind {
+    RetireSkill,
+    RestoreSkill,
+    DeleteMemory,
 }
 
 /// Outcome of a `/skills` dialog save dispatch. CLI bridge populates
@@ -3204,6 +3365,34 @@ pub struct SkillsDialogEntry {
     /// dialog renders `🔒 <label>` and no-ops on Space.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lock: Option<SkillLock>,
+    /// Present only for agent-created skills still in quarantine (the
+    /// skill-learning loop). Drives the dialog's `learning n/5 · try it`
+    /// row hint — the gate is on *invocation*, so making it visible is what
+    /// lets a user push a quarantined skill toward promotion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quarantine: Option<SkillQuarantineWire>,
+}
+
+/// Quarantine progress for an agent-created skill, measured against the
+/// curator's **invocation** gate (`total_invocations >= promote_min_invocations`).
+///
+/// Deliberately counts invocations, not successes: the curator's first gate is
+/// `total_invocations()` (successes + failures), so a success-only bar
+/// under-reports real progress. It is also only *half* the promotion rule — the
+/// curator additionally requires `success_rate >= promote_success_rate`. That
+/// half is not a countable bar and is not modelled here, because invoking the
+/// skill is the only thing the user can do to advance it; the rate is quality,
+/// not progress. Reaching `required` therefore means "eligible", not "promoted".
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillQuarantineWire {
+    /// Invocations so far (successes + failures).
+    pub invocations: i64,
+    /// Invocations required before the promotion gates apply. Resolved from
+    /// `SkillLearnConfig::promote_min_invocations` — never a UI-side constant,
+    /// or an operator who raises the threshold gets a bar that fills early and
+    /// then stalls with no explanation.
+    pub required: i64,
 }
 
 /// Source group for a skill dialog entry. Collapsed from

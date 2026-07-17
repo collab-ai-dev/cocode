@@ -292,6 +292,134 @@ impl AgentTeamsConfig {
     }
 }
 
+/// Settings overlay for the autonomous skill-learning loop
+/// (`Feature::SkillLearning`). All fields optional; unset ⇒ the built-in
+/// defaults (identical to the historical hardcoded constants).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PartialSkillLearnSettings {
+    pub enabled: Option<bool>,
+    pub review_throttle: Option<i64>,
+    pub review_max_turns: Option<i64>,
+    pub review_min_tool_calls: Option<i64>,
+    pub curator_enabled: Option<bool>,
+    pub curator_min_hours: Option<i64>,
+    pub promote_min_invocations: Option<i64>,
+    pub promote_success_rate: Option<f64>,
+    pub retire_success_rate: Option<f64>,
+    pub retire_inactive_days: Option<i64>,
+    pub journal_enabled: Option<bool>,
+}
+
+/// Resolved skill-learning knobs. Defaults equal the historical constants, so
+/// behavior is unchanged unless a setting or env override is present.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkillLearnConfig {
+    /// Coarse on/off *within* the feature gate (the Feature stays the gate).
+    pub enabled: bool,
+    /// Eligible user-prompt cycles between review forks.
+    pub review_throttle: i32,
+    /// Per-fork turn cap for a skill review.
+    pub review_max_turns: i32,
+    /// Minimum tool calls in a turn for the review signal to fire (B4).
+    pub review_min_tool_calls: i32,
+    pub curator_enabled: bool,
+    pub curator_min_hours: i64,
+    /// Invocations required before the promote/retire rate gates apply.
+    pub promote_min_invocations: i64,
+    /// Promote at or above this success rate.
+    pub promote_success_rate: f64,
+    /// Retire **below** this success rate. Deliberately a success floor, not a
+    /// failure ceiling: the curator compares `stats.success_rate() < this`, so
+    /// naming it after failures would invert the meaning of every override.
+    pub retire_success_rate: f64,
+    pub retire_inactive_days: i64,
+    /// Whether the learning journal is written.
+    pub journal_enabled: bool,
+}
+
+impl Default for SkillLearnConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            review_throttle: 5,
+            review_max_turns: 6,
+            review_min_tool_calls: 3,
+            curator_enabled: true,
+            curator_min_hours: 24,
+            promote_min_invocations: 5,
+            promote_success_rate: 0.8,
+            retire_success_rate: 0.34,
+            retire_inactive_days: 90,
+            journal_enabled: true,
+        }
+    }
+}
+
+/// Clamp an i64 setting into a positive i32. A plain `as i32` would WRAP a
+/// large configured value into a negative one (e.g. 2^31 → i32::MIN → 1),
+/// silently inverting the operator's intent.
+fn clamp_i32(value: i64, min: i32) -> i32 {
+    value.clamp(i64::from(min), i64::from(i32::MAX)) as i32
+}
+
+impl SkillLearnConfig {
+    pub fn resolve(settings: &Settings, env: &EnvSnapshot) -> Self {
+        let mut config = Self::default();
+        let s = &settings.skill_learn;
+        if let Some(v) = s.enabled {
+            config.enabled = v;
+        }
+        if let Some(v) = s.review_throttle {
+            config.review_throttle = clamp_i32(v, 1);
+        }
+        if let Some(v) = s.review_max_turns {
+            config.review_max_turns = clamp_i32(v, 1);
+        }
+        if let Some(v) = s.review_min_tool_calls {
+            config.review_min_tool_calls = clamp_i32(v, 0);
+        }
+        if let Some(v) = s.curator_enabled {
+            config.curator_enabled = v;
+        }
+        if let Some(v) = s.curator_min_hours {
+            config.curator_min_hours = v.max(0);
+        }
+        if let Some(v) = s.promote_min_invocations {
+            config.promote_min_invocations = v.max(1);
+        }
+        if let Some(v) = s.promote_success_rate {
+            config.promote_success_rate = v.clamp(0.0, 1.0);
+        }
+        if let Some(v) = s.retire_success_rate {
+            config.retire_success_rate = v.clamp(0.0, 1.0);
+        }
+        if let Some(v) = s.retire_inactive_days {
+            config.retire_inactive_days = v.max(0);
+        }
+        if let Some(v) = s.journal_enabled {
+            config.journal_enabled = v;
+        }
+        // Env overrides (highest precedence within resolution).
+        if env_truthy(env, EnvKey::CocoSkillLearnDisable) {
+            config.enabled = false;
+        }
+        if let Some(v) = env.get_i64(EnvKey::CocoSkillLearnReviewThrottle) {
+            config.review_throttle = clamp_i32(v, 1);
+        }
+        if env_truthy(env, EnvKey::CocoSkillLearnCuratorDisable) {
+            config.curator_enabled = false;
+        }
+        config
+    }
+}
+
+/// A disable-style env flag: present and truthy (`1`/`true`/`yes`).
+fn env_truthy(env: &EnvSnapshot, key: EnvKey) -> bool {
+    env.get_string(key)
+        .is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PartialToolSettings {

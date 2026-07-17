@@ -30,10 +30,12 @@ pub struct ScannedMemory {
 
 /// Scan a directory for memory files (`*.md` excluding `MEMORY.md`).
 ///
-/// Sorted newest-first by mtime, capped at 200. Errors (unreadable
-/// directory, broken symlinks) are swallowed — return an empty vec.
-pub fn scan_memory_files(dir: &Path) -> Vec<ScannedMemory> {
-    scan_memory_files_with_cancel(dir, None)
+/// Sorted newest-first by mtime, capped at `max_files`. Errors (unreadable
+/// directory, broken symlinks) are swallowed — return an empty vec. Callers
+/// that want the default recall cap pass [`MAX_SCANNED_FILES`]; `/journey`
+/// passes a relaxed cap so the timeline sees the whole library.
+pub fn scan_memory_files(dir: &Path, max_files: usize) -> Vec<ScannedMemory> {
+    scan_memory_files_with_cancel(dir, max_files, None)
 }
 
 /// Cancellable variant — bails early when `cancel` flips. A long
@@ -57,6 +59,7 @@ pub fn scan_memory_files(dir: &Path) -> Vec<ScannedMemory> {
 ///   distinction the system prompt sets up.
 pub fn scan_memory_files_with_cancel(
     dir: &Path,
+    max_files: usize,
     cancel: Option<&tokio_util::sync::CancellationToken>,
 ) -> Vec<ScannedMemory> {
     let mut out = Vec::new();
@@ -129,7 +132,7 @@ pub fn scan_memory_files_with_cancel(
         });
     }
     out.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
-    out.truncate(MAX_SCANNED_FILES);
+    out.truncate(max_files);
     out
 }
 

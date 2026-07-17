@@ -1,0 +1,16 @@
+---
+source: app/tui/src/presentation/journey.test.rs
+expression: body(&sample_state())
+---
+● skills 2   ◆ memories 1   ★ promoted 1   ✕ retired 1
+
+   4 Jul │━━━━━━━◆◆  7+2
+  15 Jul │━━━━━◆◆◆  5+3
+  oldest ──────────→ now
+──────────────────────────────────────────────
+❯ ● fix-nextest-filter   learning 2/5   15 Jul
+  ● wt-rebase-conflicts   learned ★   14 Jul
+  ◆ coco-voice-and-disk-gotcha   12 Jul
+  ✕ parse-log-format   retired   30 Jun
+
+j/k select · enter detail · e edit · d retire/delete · esc close

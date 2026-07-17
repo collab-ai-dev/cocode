@@ -610,6 +610,17 @@ impl DreamService {
                     output_tokens: resp.output_tokens,
                     duration_ms,
                 });
+                // Journal the aggregate consolidation fact (host-side, best-effort).
+                if files_touched_count > 0 {
+                    let sid = (**self.session_id.load()).as_str().to_string();
+                    crate::journal::append_event(
+                        &self.memory_dir,
+                        Some(&sid),
+                        coco_types::JourneyEvent::MemoryConsolidated {
+                            files_touched: files_touched_count,
+                        },
+                    );
+                }
                 if !topic_paths.is_empty() {
                     let count = topic_paths.len();
                     let noun = if count == 1 {

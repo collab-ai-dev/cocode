@@ -108,10 +108,12 @@ pub(super) async fn emit_editor_prepare_failed(
             }
         }
         PendingEditorRequest::Prompt { .. } => TuiOnlyEvent::PromptEditorFailed { error: message },
-        // Agent editor preparation failure is surfaced via the
+        // Agent / journey editor preparation failure is surfaced via the
         // generic prompt-editor channel (no dedicated wire event).
         // The user still sees a toast and the dialog stays mounted.
-        PendingEditorRequest::Agent { .. } => TuiOnlyEvent::PromptEditorFailed { error: message },
+        PendingEditorRequest::Agent { .. } | PendingEditorRequest::Journey { .. } => {
+            TuiOnlyEvent::PromptEditorFailed { error: message }
+        }
     };
     let _ = event_tx.send(CoreEvent::Tui(event)).await;
 }
@@ -193,6 +195,18 @@ pub(super) async fn refresh_agents_dialog(
     let payload = coco_agent_host::session_dialogs::build_agents_dialog_payload(session).await;
     let _ = event_tx
         .send(CoreEvent::Tui(TuiOnlyEvent::OpenAgentsDialog { payload }))
+        .await;
+}
+
+/// Re-emit `OpenJourneyDialog` with a freshly assembled snapshot so the open
+/// overlay refreshes in place after a mutation.
+pub(super) async fn refresh_journey_dialog(
+    session: &crate::session_runtime::SessionHandle,
+    event_tx: &mpsc::Sender<CoreEvent>,
+) {
+    let payload = coco_agent_host::session_dialogs::build_journey_dialog_payload(session).await;
+    let _ = event_tx
+        .send(CoreEvent::Tui(TuiOnlyEvent::OpenJourneyDialog { payload }))
         .await;
 }
 

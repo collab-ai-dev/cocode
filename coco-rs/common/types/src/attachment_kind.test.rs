@@ -7,10 +7,10 @@ use std::collections::HashSet;
 /// continuing. Update both the constant and the TS `Attachment` union
 /// size in the README.
 #[test]
-fn attachment_kind_all_has_67_variants() {
+fn attachment_kind_all_has_68_variants() {
     assert_eq!(
         AttachmentKind::all().len(),
-        67,
+        68,
         "61 TS Attachment union members + coco-rs-synthetic user_context, slash_command_metadata, workflow_keyword_request, tool_search_usage_reminder, memory_index_warning, and memory_update_reminder"
     );
 }
@@ -74,13 +74,16 @@ fn coverage_distribution_matches_readme_snapshot() {
         "in-crate reminders (incl. synthetic user_context + tool_search_usage_reminder)"
     );
     assert_eq!(silent_reminder, 2, "in-crate silent reminders");
-    assert_eq!(outside, 10, "owned by sister crates");
+    assert_eq!(
+        outside, 11,
+        "owned by sister crates (incl. skill_learned_reminder)"
+    );
     assert_eq!(silent_event, 10, "typed API-hidden events");
     assert_eq!(feature_gated, 1, "HISTORY_SNIP intentionally unported");
     assert_eq!(runtime, 3, "inactive runtime bookkeeping");
     assert_eq!(
         reminder + silent_reminder + outside + silent_event + feature_gated + runtime,
-        67,
+        68,
         "total must match union size + synthetic user_context + slash_command_metadata + workflow_keyword_request + tool_search_usage_reminder + memory reminders"
     );
 }
