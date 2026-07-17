@@ -11,7 +11,7 @@ Context compaction strategies: full LLM-summarized, micro (tool-result clearing)
   `coco-tool-runtime::{tool_result_storage,tool_result_offload}` (Level 1 +
   windowed offload) and `coco-query` (Level 2 wiring + window scaling). Over-cap
   results are windowed (head+tail) with a recoverable `<persisted-output>`
-  pointer. See `docs/coco-rs/tool-result-offload-v2-design.md`.
+  pointer. See `docs/internal/tool-result-offload-v2-design.md`.
 - `HISTORY_SNIP` — no runtime caller reads `compact.experimental.history_snip.enabled`;
   the field is staged for a future implementation.
 - `CONTEXT_COLLAPSE` (`marble_origami`) — data types in `staged.rs` (kept for
@@ -131,7 +131,7 @@ Implemented behaviors:
   `coco-messages::wrapping::wrap_in_system_reminder`, keeping the wrapper
   format canonical.
 
-P0–P1 normalization ports (see `docs/coco-rs/audit-gaps.md`):
+P0–P1 normalization ports (see `docs/internal/audit-gaps.md`):
 - `sanitize_error_tool_result_content`, `smoosh_system_reminder_into_tool_result`,
   `filter_orphaned_thinking_only_messages`, `filter_trailing_thinking_from_last_assistant`,
   `filter_whitespace_only_assistant_messages`, `ensure_non_empty_assistant_content`
@@ -350,6 +350,6 @@ re-wraps as Arc-vec. The per-message rewrite helper
 legacy owned-input `strip_images_from_messages` (used by tests +
 backward-compat) and the `StripImages` pass body.
 
-See [docs/coco-rs/message-pipeline.md](../../docs/coco-rs/message-pipeline.md)
+See [docs/internal/message-pipeline.md](../../docs/internal/message-pipeline.md)
 for the cross-crate design (also drives the 7 normalize passes in
 `coco-messages`).

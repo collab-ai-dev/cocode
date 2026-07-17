@@ -565,7 +565,7 @@ pub trait Tool: Send + Sync + 'static {
     /// Default returns `true` — most tools are always available. Override
     /// to gate the tool on `ctx.features.enabled(Feature::X)` (token-economy
     /// or experimental gates), an OS check, or a runtime resource probe.
-    /// See `docs/coco-rs/feature-gates-and-tool-filtering.md` for the
+    /// See `docs/internal/feature-gates-and-tool-filtering.md` for the
     /// design and the multi-layer filter pipeline this hook is the
     /// first layer of.
     fn is_enabled(&self, _ctx: &crate::context::ToolUseContext) -> bool {

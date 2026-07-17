@@ -67,12 +67,28 @@ fn grok_flow_is_wired_for_device_code_and_rotating_refresh() {
 }
 
 #[test]
-fn build_is_signed_release_is_false_in_test_builds() {
-    // Test binaries compile with debug_assertions on, so they must classify as
-    // *unsigned* — this is exactly what keeps `with_config_dir` on the file
-    // backend and off the OS keychain, so headless PTY e2e tests never block on
-    // a macOS "allow access" prompt. Guards against inverting the gate.
-    assert!(!build_is_signed_release());
+fn build_is_official_distribution_is_false_in_test_builds() {
+    // No local build sets COCO_BUILD_OFFICIAL, so a test binary must classify as
+    // unofficial — this is what keeps `with_config_dir` on the file backend and
+    // off the OS keychain, so headless PTY e2e tests never block on a macOS
+    // "allow access" prompt. Guards against inverting the gate.
+    assert!(!build_is_official_distribution());
+}
+
+#[test]
+fn official_build_flag_accepts_only_exact_one() {
+    // The predicate behind `build_is_official_distribution`, tested at both
+    // polarities — the compile-time env var it reads is fixed for any given
+    // build, so this is the only place the `true` branch is reachable.
+    //
+    // Everything but "1" must stay unofficial: this gate previously keyed on
+    // `!cfg!(debug_assertions)`, which silently classified every local
+    // `cargo build --release` as an official artifact and sent it to the
+    // keychain. Opt-in and exact is what makes that unrepresentable.
+    assert!(official_build_flag("1"));
+    for raw in ["", "0", "true", "TRUE", "yes", "2", " 1"] {
+        assert!(!official_build_flag(raw), "{raw:?} must not be official");
+    }
 }
 
 #[tokio::test]

@@ -1,4 +1,4 @@
-//! The TUI v2 transcript pipeline (`docs/coco-rs/ui/tui-v2-design.md` §6.4):
+//! The TUI v2 transcript pipeline (`docs/internal/ui/tui-v2-design.md` §6.4):
 //!
 //! - `cells` — engine-message grouping and the tool-commit boundary over
 //!   derived `RenderedCell`s.

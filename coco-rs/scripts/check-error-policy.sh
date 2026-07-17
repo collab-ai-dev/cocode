@@ -48,7 +48,10 @@ ALLOWLIST_FILE="scripts/error-policy-allowlist.txt"
 
 is_tier1_terminal() {
     case "$1" in
-        app/cli|app/agent-host|app/tui|exec/*|tests/*) return 0 ;;
+        # `xtask` is dev-only automation that never ships in the binary; its
+        # errors are printed to a developer's terminal, so it is application
+        # tier like the other terminals here.
+        app/cli|app/agent-host|app/tui|exec/*|tests/*|xtask) return 0 ;;
         *) return 1 ;;
     esac
 }

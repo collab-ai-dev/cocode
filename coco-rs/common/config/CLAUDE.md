@@ -20,11 +20,11 @@ Layered config resolution: settings files, model/provider selection, effort/thin
 
 **Owned here**: `~/.coco.json`, `~/.coco/settings.json`, `.coco/settings.json`, `.coco/settings.local.json`, managed/enterprise settings, model capabilities cache, effort/fast-mode state.
 
-**NOT owned**: CLAUDE.md (coco-context), .mcp.json (coco-mcp), skills/commands/hooks files (their respective crates). See `docs/coco-rs/config-file-map.md`.
+**NOT owned**: CLAUDE.md (coco-context), .mcp.json (coco-mcp), skills/commands/hooks files (their respective crates). See `docs/internal/config-file-map.md`.
 
 ## Conventions
 
 - `Settings.hooks` is `serde_json::Value` (deserialized by `coco-hooks`) — avoids L1→L4 dependency on feature crates.
-- Per-setting source tracking via `SettingsWithSource` enforces security rules (e.g. project settings cannot set `api_key_helper`, auto-mode config, bypass mode).
+- Per-setting source tracking via `SettingsWithSource` enforces security rules. `Project` (and `Plugin`) settings arrive with the checked-out repository, so they are **not** trusted for anything that can execute code or disarm the permission system. Enforced today via per-source accessors that exclude `Project` (all reading `TRUSTED_SETTING_SOURCES`): `api_key_helper()` (runs via `sh -c`), `startup_permission_mode()` and `disable_bypass_mode_enabled()` (bypass posture), `auto_mode_classify_all_shell_enabled()` and `use_auto_mode_during_plan_enabled()` (auto-mode). **A restriction only exists where such an accessor exists** — reading the same field off `Settings.merged` silently re-grants the project layer, so add the accessor before trusting a new high-risk field.
 - Multi-provider API key resolution via `ProviderConfig.env_key` (each provider owns its env var); `EnvOnlyConfig` handles Anthropic-specific Bedrock/Vertex/Foundry routing only.
 - Env vars are a **separate override layer**, not merged into `Settings`.

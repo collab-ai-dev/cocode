@@ -11,7 +11,7 @@
 //! so a broken / missing / slow rtk can never fail a Bash call — it only
 //! declines to compress. No error type crosses the crate boundary.
 //!
-//! Design: `docs/coco-rs/rtk-integration-design.md`.
+//! Design: `docs/internal/rtk-integration-design.md`.
 
 mod detect;
 mod filter;

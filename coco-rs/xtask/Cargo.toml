@@ -1,0 +1,26 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+similar = { workspace = true }
+
+coco-cli = { workspace = true }
+coco-config = { workspace = true }
+coco-provider-auth = { workspace = true }
+coco-types = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

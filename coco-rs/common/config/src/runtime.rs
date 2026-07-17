@@ -114,14 +114,14 @@ pub struct RuntimeConfig {
     /// Provider-agnostic prompt-cache settings (1h-TTL allowlist).
     /// Adapter (`vercel-ai-anthropic`) reads `allowlist` via
     /// `AnthropicConfig.prompt_cache_allowlist` (set by `build_anthropic`).
-    /// See `docs/coco-rs/prompt-cache-design.md` §16a.
+    /// See `docs/internal/prompt-cache-design.md` §16a.
     pub prompt_cache: PromptCacheRuntimeConfig,
     /// Account / billing identity (api_key vs subscriber, in-overage
     /// flag). Drives 1h-TTL eligibility latch + OAuth beta in the
     /// Anthropic adapter. **Session-stable** (R3-F3).
     pub account: AccountConfig,
     /// Coarse-grained capability gates. See
-    /// `docs/coco-rs/feature-gates-and-tool-filtering.md`.
+    /// `docs/internal/feature-gates-and-tool-filtering.md`.
     pub features: Features,
     /// Per-tier `skill_overrides` map preserved without merging.
     /// Drives the 4-state Skill tool gate, listing filters, and the

@@ -27,7 +27,7 @@
 //!
 //! Windows: no `SIGTSTP`; all entry points become no-ops.
 //!
-//! Design notes live in `docs/coco-rs/ui/rendering-hardening-and-rollback.md`.
+//! Design notes live in `docs/internal/ui/rendering-hardening-and-rollback.md`.
 
 #[cfg(unix)]
 use std::io;

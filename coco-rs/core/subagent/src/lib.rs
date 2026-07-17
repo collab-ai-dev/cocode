@@ -6,7 +6,7 @@
 //!
 //! This crate has no tokio, no app state, no QueryEngine. All side effects
 //! are synchronous `std::fs` reads triggered by an explicit `load()` call.
-//! See `docs/coco-rs/subagent-refactor-plan.md` § D8 for ownership boundary.
+//! See `docs/internal/subagent-refactor-plan.md` § D8 for ownership boundary.
 
 pub mod builtin_prompts;
 pub mod builtins;

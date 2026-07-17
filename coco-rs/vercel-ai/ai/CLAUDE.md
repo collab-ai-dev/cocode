@@ -41,7 +41,7 @@ Errors: `AIError`, `RetryError`, `NoObjectGeneratedError`, `NoImageGeneratedErro
 
 ## Callbacks vs CoreEvent
 
-Callbacks in `generate_text/callback.rs` fire at the **provider boundary** and are NOT bridged into `coco_types::CoreEvent`. The agent loop (`QueryEngine`) consumes them internally and re-emits `AgentStreamEvent` / `ServerNotification`. Trace correlation uses shared `session_id` / `turn_id` context. See `docs/coco-rs/event-system-design.md` §1.7 and plan WS-9.
+Callbacks in `generate_text/callback.rs` fire at the **provider boundary** and are NOT bridged into `coco_types::CoreEvent`. The agent loop (`QueryEngine`) consumes them internally and re-emits `AgentStreamEvent` / `ServerNotification`. Trace correlation uses shared `session_id` / `turn_id` context. See `docs/internal/event-system-design.md` §1.7 and plan WS-9.
 
 ## Idiom Mapping
 

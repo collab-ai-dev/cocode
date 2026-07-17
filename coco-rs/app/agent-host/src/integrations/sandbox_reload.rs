@@ -5,7 +5,7 @@
 //! into the live [`SandboxState`] via [`SandboxState::update_config`] without
 //! restarting the session.
 //!
-//! Closes the gap documented in `docs/coco-rs/audit-gaps.md` Round 13:
+//! Closes the gap documented in `docs/internal/audit-gaps.md` Round 13:
 //! "Sandbox hot-reload subscriber — wiring is not installed".
 //!
 //! # Lifecycle

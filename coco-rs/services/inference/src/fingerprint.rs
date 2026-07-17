@@ -61,7 +61,7 @@ pub struct ProviderClientFingerprint {
     /// picks up the new `AnthropicConfig`. Per-provider scoping
     /// (rather than a workspace-wide knob hash) means a settings
     /// flip on one Anthropic instance doesn't churn an unrelated
-    /// instance's client. See `docs/coco-rs/prompt-cache-design.md`
+    /// instance's client. See `docs/internal/prompt-cache-design.md`
     /// §19.3 attack γ.
     pub runtime_state_digest: [u8; 32],
 }

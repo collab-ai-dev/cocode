@@ -601,7 +601,7 @@ async fn snapshot_preserves_text_tool_text_interleaving() {
 // ───────────────────────────────────────────────────────────────────────────
 // Source-contract pin (tui-v2 §8 / §10.1 Stage 0).
 //
-// The TUI v2 anchored finalize (`docs/coco-rs/ui/tui-v2-design.md` §6.2) drops
+// The TUI v2 anchored finalize (`docs/internal/ui/tui-v2-design.md` §6.2) drops
 // the rasterized row-fingerprint re-verification and instead anchors the
 // streamed scrollback rows against the canonical message at the SOURCE level
 // (`AssistantText.text.starts_with(emitted_source_prefix)`). That is sound only

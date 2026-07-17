@@ -138,7 +138,7 @@ pub struct PartialDisplayCollapseSettings {
 /// Level 2 enable + per-message char cap. Level 1 (per-tool
 /// `<persisted-output>` persistence) is driven by each tool's
 /// `max_result_size_bound()` declaration rather than this config. See
-/// [`docs/coco-rs/tool-result-budget-plan.md`].
+/// [`docs/internal/tool-result-budget-plan.md`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PartialToolResultBudgetSettings {

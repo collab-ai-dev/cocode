@@ -23,7 +23,7 @@ use crate::traits::DynTool;
 /// model needs to make progress in plan mode (ExitPlanMode,
 /// AskUserQuestion, writing the plan file) and double-enforce a policy
 /// the permission layer already owns. See `core/permissions/src/evaluate.rs`
-/// and `docs/coco-rs/feature-gates-and-tool-filtering.md` §7/§9.
+/// and `docs/internal/feature-gates-and-tool-filtering.md` §7/§9.
 ///
 /// MCP server reachability is likewise not checked here; MCP tools whose
 /// backing server disconnects are removed from the registry via
@@ -339,7 +339,7 @@ impl ToolRegistry {
     /// Get enabled tools after running the schema-time filter pipeline
     /// (`is_enabled` × `ToolOverrides` × `ToolFilter`). Plan-mode
     /// read-only is a call-time permission concern, not a filter here.
-    /// See `docs/coco-rs/feature-gates-and-tool-filtering.md` §7.
+    /// See `docs/internal/feature-gates-and-tool-filtering.md` §7.
     pub fn enabled(&self, ctx: &ToolUseContext) -> Vec<Arc<dyn DynTool>> {
         let inner = self
             .inner

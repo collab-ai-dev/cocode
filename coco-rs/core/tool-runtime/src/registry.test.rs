@@ -218,7 +218,7 @@ fn test_qualified_name_format() {
 }
 
 // ---------------------------------------------------------------------------
-// Schema-time filter pipeline (docs/coco-rs/feature-gates-and-tool-filtering.md §7)
+// Schema-time filter pipeline (docs/internal/feature-gates-and-tool-filtering.md §7)
 // ---------------------------------------------------------------------------
 
 /// Stub variant that supports per-instance read-only and feature-gate

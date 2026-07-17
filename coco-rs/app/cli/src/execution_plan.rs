@@ -76,9 +76,15 @@ pub fn build_execution_plan(
     Ok(plan)
 }
 
-pub fn classify_execution_plan(cli: &Cli, io: IoCapabilities) -> ExecutionPlan {
-    if let Some(command) = &cli.command {
-        let (mode, reason) = match command {
+impl Commands {
+    /// The mode this subcommand selects, independent of IO capabilities and
+    /// flags. The single source of truth for the subcommand→mode mapping —
+    /// [`classify_execution_plan`] and `xtask docs-gen` (the `cli-subcommands`
+    /// table in `docs/cli-reference.md`) both read it, so the docs cannot
+    /// drift from the dispatch. The exhaustive match forces a new variant to
+    /// pick a mode here.
+    pub fn execution_mode(&self) -> (ExecutionMode, ExecutionReason) {
+        match self {
             Commands::Chat { .. } | Commands::Review { .. } => {
                 (ExecutionMode::Headless, ExecutionReason::HeadlessCommand)
             }
@@ -99,7 +105,13 @@ pub fn classify_execution_plan(cli: &Cli, io: IoCapabilities) -> ExecutionPlan {
             | Commands::ExecServer { .. }
             | Commands::Ps { .. }
             | Commands::ReleaseNotes => (ExecutionMode::Skip, ExecutionReason::ShortCommand),
-        };
+        }
+    }
+}
+
+pub fn classify_execution_plan(cli: &Cli, io: IoCapabilities) -> ExecutionPlan {
+    if let Some(command) = &cli.command {
+        let (mode, reason) = command.execution_mode();
         return ExecutionPlan { mode, reason, io };
     }
 

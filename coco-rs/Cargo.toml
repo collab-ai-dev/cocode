@@ -136,6 +136,9 @@ members = [
     "tui-ui",
     "tui-markdown",
     "tui-mermaid",
+
+    # ─── xtask (1) ── dev-only automation; kept out of `default-members` ───
+    "xtask",
 ]
 resolver = "2"
 

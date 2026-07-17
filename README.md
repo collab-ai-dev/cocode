@@ -1,519 +1,345 @@
+<div align="center">
+
 # cocode
 
-cocode is a multi-provider AI coding agent. The main implementation lives in the
-`coco-rs/` Rust workspace and includes the CLI, TUI, model providers, tool
-runtime, permissions, MCP support, memory, plugins, and SDK protocol.
+**A fast, multi-provider AI coding agent for your terminal.**
 
-## Quick Start
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
+[![npm](https://img.shields.io/npm/v/@cocode-cli/cocode-cli?style=flat-square)](https://www.npmjs.com/package/@cocode-cli/cocode-cli)
+[![Rust](https://img.shields.io/badge/rust-1.93.1-orange?style=flat-square&logo=rust)](coco-rs/rust-toolchain.toml)
+[![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS-lightgrey?style=flat-square)](#install)
 
-Run from source during local development:
+**English** · [简体中文](README.zh-CN.md)
 
-```bash
-cd coco-rs
-just coco
-```
+[Quick start](#quick-start) · [Performance](#performance) · [Providers](#providers-and-authentication) · [Mixture of Agents](#mixture-of-agents) · [Docs](docs/) · [Changelog](CHANGELOG.md)
 
-Send a one-shot prompt:
+</div>
 
-```bash
-cd coco-rs
-just coco -p "Summarize this repository"
-```
+---
 
-Run without the TUI:
+cocode is a terminal-first coding agent written in Rust. It reads and edits your
+code, runs shell commands, searches the web, talks to MCP servers, spawns
+subagents, and remembers what matters across sessions.
 
-```bash
-cd coco-rs
-just coco --no-tui -p "List the available commands"
-```
-
-Temporarily override the main model:
+It ships as **one native binary** with no Node runtime, no Electron, and no
+sidecar process. It is **not tied to one model vendor**: point it at Anthropic,
+OpenAI, Google, xAI, DeepSeek, Groq, Z.ai, Volcengine, or anything that speaks
+the OpenAI-compatible API — with an API key, or with a subscription you already
+pay for.
 
 ```bash
-cd coco-rs
-just coco --models.main deepseek-openai/deepseek-v4-flash
+npm install -g @cocode-cli/cocode-cli
+export DEEPSEEK_API_KEY="sk-..."
+cocode-cli --models.main deepseek-openai/deepseek-v4-flash
 ```
 
-Install the published npm package:
+## Why cocode
+
+- **One native binary.** Rust, single process per session, statically linked on
+  Linux. Nothing to install alongside it — not even `ripgrep`.
+- **Bring your own model.** 12 built-in provider instances across 7 provider
+  APIs, plus a generic OpenAI-compatible path for everything else. Model
+  references are always explicit: `<provider>/<model_id>`.
+- **API key *or* subscription.** Log in to a ChatGPT, Gemini Code Assist, or
+  Grok subscription over OAuth, or just export an API key. Both work; pick per
+  provider.
+- **Eight model roles, not one model.** Route planning, exploration, review,
+  memory, and subagents to different models — each with its own fallback chain,
+  retry policy, and reasoning effort.
+- **Mixture of Agents.** Fan a turn out to several models in parallel, then let
+  an aggregator model do the work with their advice in hand. Bind it to any
+  role.
+- **Permissions you can actually reason about.** Explicit modes, scoped
+  allow/deny rules, and an optional OS-level sandbox.
+- **Extensible.** MCP servers, skills, plugins, hooks, custom subagents, and
+  TypeScript + Python SDKs over a JSON-RPC protocol.
+
+## Performance
+
+cocode is a single native process. There is no Node runtime to boot, no
+JavaScript to parse, and no server to attach to before the first frame renders.
+
+<!-- BEGIN MEASURED -->
+| Metric — one idle session | cocode |
+| --- | --- |
+| Memory, physical footprint | **37 MB** |
+| Memory, resident set size (RSS) | **60 MB** |
+
+Measured on an Apple M3 (macOS 15.7.3, 24 GB) against commit `88d1477`, using a
+release build with jemalloc — the same flags the published binaries use. Six PTY
+launches of the TUI in a clean project directory with default settings; the
+median is reported. Physical footprint is what macOS Activity Monitor calls
+"Memory"; RSS additionally counts shared pages.
+
+Reproduce it yourself — the harness is in the repo, not a screenshot:
+
+```bash
+python3 scripts/bench-startup.py ./coco-rs/target/release/coco 6
+```
+<!-- END MEASURED -->
+
+What makes it lean, concretely:
+
+- **No managed runtime.** The npm package ships a small JavaScript launcher that
+  `exec`s the native binary; the agent itself is Rust. Nothing about the agent
+  runs on Node.
+- **Tuned allocator.** Shipped builds link jemalloc configured for a short-lived
+  interactive process (1s dirty/muzzy decay, 4-arena cap) and purge the arenas at
+  the end of every turn, returning freed pages to the OS instead of sitting on
+  them.
+- **Native terminal scrollback.** The TUI paints into your terminal's own
+  scrollback with cell-level diffing, rather than owning an alternate screen and
+  re-rendering a scroll buffer. Your terminal's native selection and scrolling
+  keep working.
+- **Optimized release builds.** Thin LTO, one codegen unit, symbols stripped;
+  statically linked against musl on Linux.
+
+## Install
+
+**npm** (recommended):
 
 ```bash
 npm install -g @cocode-cli/cocode-cli
 cocode-cli --version
-cocode-cli --help
 ```
 
-Package page:
+The package installs a JavaScript launcher plus the native `coco` binary for
+your platform.
 
-https://www.npmjs.com/package/@cocode-cli/cocode-cli
-
-The npm package installs a small JavaScript launcher plus the native `coco`
-binary for your platform. Supported published builds are Linux x64, Linux
-arm64, and macOS Apple Silicon.
-
-Upgrade to the latest published version:
-
-```bash
-npm install -g @cocode-cli/cocode-cli@latest
-```
-
-Uninstall:
-
-```bash
-npm uninstall -g @cocode-cli/cocode-cli
-```
-
-## Configuration Files
-
-cocode reads user configuration from `~/.cocode/` by default. The most important
-files are:
-
-| File | Purpose |
+| Platform | Supported |
 | --- | --- |
-| `~/.cocode/settings.json` | Runtime settings: selected models, TUI, permissions, diagnostics, tools |
-| `~/.cocode/providers.json` | Provider catalog: API type, auth env var, base URL, model list |
-| `~/.cocode/models.json` | Model catalog or overrides: context window, output limits, capabilities |
+| Linux x86_64 | ✅ `x86_64-unknown-linux-musl` |
+| Linux aarch64 | ✅ `aarch64-unknown-linux-musl` |
+| macOS Apple Silicon | ✅ `aarch64-apple-darwin` |
+| macOS Intel | ❌ not published |
+| Windows | ❌ not published |
 
-Provider configuration can be written inline in `settings.json`, but the
-recommended shape is to keep provider and model catalogs in
-`providers.json` / `models.json`, then keep `settings.json` focused on the
-active model selection and user preferences.
-
-Do not commit real API keys. Prefer `env_key`, which points cocode at an
-environment variable. For a local-only workstation config, providers also
-accept `api_key` directly in `~/.cocode/providers.json`; if both are present,
-the environment variable wins.
-
-## Model Selection
-
-`settings.json` selects models under the `models` object. The minimum useful
-configuration sets `main`:
-
-```json
-{
-  "models": {
-    "main": "deepseek-openai/deepseek-v4-flash"
-  }
-}
-```
-
-Model references use this format:
-
-```text
-<provider>/<model_id>
-```
-
-Common model roles:
-
-| Role | Purpose |
-| --- | --- |
-| `main` | Default conversation and primary coding agent |
-| `fast` | Fast helper calls, such as title generation |
-| `plan` | Plan mode |
-| `explore` | Exploratory subtask work |
-| `review` | Review-oriented subtask work |
-| `hook_agent` | Agent invoked by hooks |
-| `memory` | Memory-related calls |
-| `subagent` | Generic spawned subagent |
-
-Only `models.main` is required. If `fast`, `plan`, `explore`, `review`,
-`hook_agent`, `memory`, or `subagent` is not configured, cocode defaults that
-role to the resolved `main` model, including its fallback chain and fallback
-policy.
-
-`settings.json` accepts JSONC-style comments, so a fully annotated model-role
-configuration can look like this:
-
-```jsonc
-{
-  "diagnostics": {
-    // "all" is useful while debugging provider wire format. Remove this block
-    // for normal usage if you do not want verbose request/response dumps.
-    "wire_dump": "all"
-  },
-  "models": {
-    // Required. Every unconfigured role below falls back to this role.
-    "main": {
-      "primary": "deepseek-openai/deepseek-v4-flash",
-      "fallbacks": [
-        "deepseek-openai/deepseek-v4-pro"
-      ],
-      "policy": {
-        "exhausted_retry": {
-          "max_cycles": 2,
-          "initial_backoff_secs": 2,
-          "max_backoff_secs": 30
-        },
-        "recovery": {
-          "initial_backoff_secs": 60,
-          "max_backoff_secs": 1800,
-          "max_attempts": 10
-        }
-      }
-    },
-
-    // Optional. Fast helper calls such as title generation.
-    // Remove this key to use models.main.
-    "fast": "deepseek-openai/deepseek-v4-flash",
-
-    // Optional. Plan mode.
-    // Remove this key to use models.main.
-    "plan": "deepseek-openai/deepseek-v4-flash",
-
-    // Optional. Exploratory background/subtask work.
-    // Remove this key to use models.main.
-    "explore": "deepseek-openai/deepseek-v4-flash",
-
-    // Optional. Review-oriented subtask work.
-    // Remove this key to use models.main.
-    "review": "deepseek-openai/deepseek-v4-flash",
-
-    // Optional. Hook-triggered agent calls.
-    // Remove this key to use models.main.
-    "hook_agent": "deepseek-openai/deepseek-v4-flash",
-
-    // Optional. Memory extraction and memory-related model calls.
-    // Remove this key to use models.main.
-    "memory": "deepseek-openai/deepseek-v4-flash",
-
-    // Optional. Generic spawned subagents from agent/skill dispatch.
-    // Remove this key to use models.main.
-    "subagent": "deepseek-openai/deepseek-v4-flash"
-  }
-}
-```
-
-Fallback chains can be configured with a nested object:
-
-```json
-{
-  "models": {
-    "main": {
-      "primary": "deepseek-openai/deepseek-v4-flash",
-      "fallbacks": [
-        "deepseek-openai/deepseek-v4-pro"
-      ],
-      "policy": {
-        "exhausted_retry": {
-          "max_cycles": 2,
-          "initial_backoff_secs": 2,
-          "max_backoff_secs": 30
-        },
-        "recovery": {
-          "initial_backoff_secs": 60,
-          "max_backoff_secs": 1800,
-          "max_attempts": 10
-        }
-      }
-    }
-  }
-}
-```
-
-You can also override the main model for one run:
+**From source** (Rust 1.93.1, pinned by `rust-toolchain.toml`):
 
 ```bash
-cocode-cli --models.main deepseek-openai/deepseek-v4-pro
+git clone https://github.com/collab-ai-dev/cocode.git
+cd cocode/coco-rs
+just coco                      # build and launch the TUI
 ```
 
-## DeepSeek Configuration
+> **A note on names.** The binary is `coco`. The npm launcher is `cocode-cli`.
+> `--help` prints `cocode`. They are the same program.
 
-cocode includes built-in DeepSeek providers and DeepSeek V4 model metadata:
+## Quick start
 
-| Provider | Compatibility layer | Models |
-| --- | --- | --- |
-| `deepseek-openai` | OpenAI-compatible chat API | `deepseek-v4-flash`, `deepseek-v4-pro` |
-| `deepseek-anthropic` | Anthropic-compatible API | `deepseek-v4-flash`, `deepseek-v4-pro` |
-
-The recommended default is:
-
-```text
-deepseek-openai/deepseek-v4-flash
-```
-
-### Minimal DeepSeek Setup
-
-1. Export your DeepSeek API key:
+cocode has no default model — you must choose one. The shortest path:
 
 ```bash
 export DEEPSEEK_API_KEY="sk-..."
+cocode-cli --models.main deepseek-openai/deepseek-v4-flash
 ```
 
-To keep it across new shells, add it to your shell profile:
-
-```bash
-echo 'export DEEPSEEK_API_KEY="sk-..."' >> ~/.bashrc
-source ~/.bashrc
-```
-
-2. Create or update `~/.cocode/settings.json`:
-
-```bash
-mkdir -p ~/.cocode
-cat > ~/.cocode/settings.json <<'JSON'
-{
-  "diagnostics": {
-    "wire_dump": "all"
-  },
-  "models": {
-    "main": "deepseek-openai/deepseek-v4-flash"
-  }
-}
-JSON
-```
-
-The same file should look like this:
-
-```json
-{
-  "diagnostics": {
-    "wire_dump": "all"
-  },
-  "models": {
-    "main": "deepseek-openai/deepseek-v4-flash"
-  }
-}
-```
-
-`wire_dump = "all"` writes provider request/response wire dumps for debugging.
-Remove the `diagnostics` block for normal daily use if you do not need verbose
-logs.
-
-3. Start cocode:
-
-```bash
-cocode-cli
-```
-
-From source:
-
-```bash
-cd coco-rs
-just coco
-```
-
-### Explicit Provider Catalog
-
-The local reference setup under `/root/.cocode` uses this split:
-
-- `settings.json` selects the main model:
-  `models.main = "deepseek-openai/deepseek-v4-flash"`
-- `providers.json` defines the `deepseek-openai` provider.
-- `models.json` contains a `deepseek-v4-flash` model entry.
-
-The example below follows that split with an environment variable. This is the
-recommended shape for checked-in or shared configs.
-
-Create `~/.cocode/providers.json`:
-
-```json
-{
-  "deepseek-openai": {
-    "api": "openai_compat",
-    "env_key": "DEEPSEEK_API_KEY",
-    "base_url": "https://api.deepseek.com/v1",
-    "wire_api": "chat",
-    "models": {
-      "deepseek-v4-flash": {},
-      "deepseek-v4-pro": {}
-    }
-  }
-}
-```
-
-For a local-only machine config, you can put the DeepSeek key directly in
-`~/.cocode/providers.json`. Keep this file private and do not commit it:
-
-```json
-{
-  "deepseek-openai": {
-    "api": "openai_compat",
-    "env_key": "DEEPSEEK_API_KEY",
-    "api_key": "sk-...",
-    "base_url": "https://api.deepseek.com/v1",
-    "wire_api": "chat",
-    "models": {
-      "deepseek-v4-flash": {},
-      "deepseek-v4-pro": {}
-    }
-  }
-}
-```
-
-If `DEEPSEEK_API_KEY` is exported in the environment, it overrides the
-`api_key` value from the file. Unset the environment variable when you want to
-force cocode to use the file value:
-
-```bash
-unset DEEPSEEK_API_KEY
-```
-
-Keep `~/.cocode/settings.json` focused on model selection:
+To make it permanent, write `~/.cocode/settings.json`:
 
 ```jsonc
 {
-  "diagnostics": {
-    "wire_dump": "all"
-  },
   "models": {
-    // Required. Other roles can be omitted; they fall back to main.
-    "main": "deepseek-openai/deepseek-v4-flash",
-
-    // Optional examples. Delete any role you do not need to customize.
-    "fast": "deepseek-openai/deepseek-v4-flash",
-    "plan": "deepseek-openai/deepseek-v4-flash",
-    "explore": "deepseek-openai/deepseek-v4-flash",
-    "review": "deepseek-openai/deepseek-v4-flash",
-    "hook_agent": "deepseek-openai/deepseek-v4-flash",
-    "memory": "deepseek-openai/deepseek-v4-flash",
-    "subagent": "deepseek-openai/deepseek-v4-flash"
-  }
-}
-```
-
-You usually do not need `~/.cocode/models.json` for DeepSeek V4 because cocode
-already includes these model definitions. If you need to add a custom model,
-add metadata like this:
-
-```json
-{
-  "deepseek-custom": {
-    "display_name": "DeepSeek Custom",
-    "context_window": 1000000,
-    "max_output_tokens": 12288,
-    "capabilities": [
-      "text_generation",
-      "streaming",
-      "tool_calling",
-      "parallel_tool_calls"
-    ]
-  }
-}
-```
-
-Then add `deepseek-custom` to the provider's `models` map and select
-`deepseek-openai/deepseek-custom`.
-
-## Common Settings
-
-Enable wire dump diagnostics:
-
-```json
-{
-  "diagnostics": {
-    "wire_dump": "all"
-  },
-  "models": {
+    // Required. Every other role falls back to this one.
     "main": "deepseek-openai/deepseek-v4-flash"
   }
 }
 ```
 
-Limit max tokens and max turns for one run:
+Then:
 
 ```bash
-cocode-cli --max-tokens 4096 --max-turns 8
+cocode-cli                                  # interactive TUI
+cocode-cli -p "Summarize this repository"   # one-shot, non-interactive
+cocode-cli -C /path/to/project              # run against another directory
+cocode-cli --continue                       # resume the last conversation
 ```
 
-Set the working directory:
+`-p` implies non-interactive mode; so does a non-TTY stdin or stdout, which is
+what makes cocode scriptable in CI.
+
+See [getting started](docs/getting-started.md) for a guided tour.
+
+## Providers and authentication
+
+Every model is addressed as `<provider>/<model_id>`. Providers come from a
+built-in catalog, and you can add your own in
+[`~/.cocode/providers.json`](docs/providers-and-auth.md).
+
+Built-in providers:
+
+| Provider | Auth | Notes |
+| --- | --- | --- |
+| `anthropic` | `ANTHROPIC_API_KEY` | Claude models |
+| `openai` | `OPENAI_API_KEY` | GPT-5 family, Responses API |
+| `openai-chatgpt` | **subscription login** | Your ChatGPT plan |
+| `google` | `GOOGLE_API_KEY` | Gemini |
+| `gemini-code-assist` | **subscription login** | Gemini Code Assist |
+| `xai` | `XAI_API_KEY` | Grok models |
+| `grok` | **subscription login** | Your Grok plan |
+| `deepseek-openai` | `DEEPSEEK_API_KEY` | DeepSeek, OpenAI-compatible |
+| `deepseek-anthropic` | `DEEPSEEK_API_KEY` | DeepSeek, Anthropic-compatible |
+| `groq` | `GROQ_API_KEY` | |
+| `zai` | `ZAI_API_KEY` | |
+| `volcengine` | `ARK_API_KEY` | |
+
+Anything else that speaks the OpenAI-compatible API works too — add it with the
+`/provider` wizard or by hand.
+
+**Subscription login** uses OAuth and stores credentials outside your shell
+history:
 
 ```bash
-cocode-cli -C /path/to/project
+coco login openai     # ChatGPT subscription
+coco login gemini     # Gemini Code Assist
+coco login grok       # Grok subscription (device code — works over SSH)
 ```
 
-Use a separate settings file:
+`coco login grok` uses a device-code flow, so it works on a headless box with no
+browser. Inside a session, bare `/login` opens a picker and completes the flow
+without a restart.
 
-```bash
-cocode-cli --settings /path/to/settings.json
-```
+**API keys** are read from the environment variable each provider declares
+(`env_key`), which always wins over an `api_key` written into `providers.json`.
+Keep keys in your environment or a secret manager.
 
-## Troubleshooting
+Full details: [providers and authentication](docs/providers-and-auth.md).
 
-**`no Main model configured`**
+## Models and roles
 
-Set `models.main` in `settings.json`:
+cocode routes different work to different models. Only `main` is required;
+everything else falls back to it.
 
-```json
+| Role | Used for |
+| --- | --- |
+| `main` | The primary conversation and coding agent |
+| `plan` | Plan mode |
+| `fast` | Cheap helper calls, like title generation |
+| `explore` | Read-only codebase exploration |
+| `review` | Review-oriented subagent work |
+| `subagent` | Generic spawned subagents |
+| `memory` | Memory extraction and recall |
+| `hook_agent` | Agents invoked by hooks |
+
+Each role takes a fallback chain, a retry/recovery policy, and per-slot
+reasoning effort — so a fallback can think harder than the primary:
+
+```jsonc
 {
   "models": {
-    "main": "deepseek-openai/deepseek-v4-flash"
+    "main": {
+      "primary": { "provider": "anthropic", "model_id": "claude-sonnet-4-6" },
+      "fallbacks": [
+        { "provider": "deepseek-openai", "model_id": "deepseek-v4-pro", "effort": "high" }
+      ]
+    },
+    "fast": "groq/llama-3.3-70b-versatile"
   }
 }
 ```
 
-**Provider is missing an API key**
+Full details: [models and MoA](docs/models-and-moa.md).
 
-Check that the environment variable exists:
+## Mixture of Agents
+
+MoA is a virtual provider. Bind a role to `moa/<preset>` and every call on that
+role becomes: **fan out to N reference models in parallel → hand their combined
+advice to an aggregator model → the aggregator does the real work and owns every
+tool call.**
 
 ```bash
-echo "$DEEPSEEK_API_KEY"
+coco moa configure default \
+  --aggregator anthropic/claude-sonnet-4-6 \
+  --reference openai/gpt-5-5 \
+  --reference deepseek-openai/deepseek-v4-pro \
+  --default
+
+coco moa list
 ```
 
-If you use `providers.json`, make sure the provider points at that variable:
+Then use it anywhere a model is selected:
 
-```json
-{
-  "env_key": "DEEPSEEK_API_KEY"
-}
+```
+/model moa/default          # bind the main role to the preset
+/model plan moa/default     # or just plan mode
+/moa <prompt>               # or run one prompt through it, changing nothing
 ```
 
-**`unknown model`**
+Reference models are advisors: they never execute tools, and a reference that
+fails or times out degrades to an inline note instead of failing your turn. You
+can point references at up to 8 models, and choose whether they re-run every
+loop iteration (`per_iteration`) or once per user turn (`user_turn`).
 
-A selected model must be one of:
+If you never configure a preset, cocode synthesizes a `default` one from your
+existing roles — `main` aggregates, `review` and `fast` advise.
 
-- a built-in model, such as `deepseek-v4-flash`
-- an entry in `~/.cocode/models.json`
-- an entry in `providers.<name>.models`
+Full details: [Mixture of Agents](docs/models-and-moa.md#mixture-of-agents).
 
-For built-in DeepSeek V4, check the spelling:
+## What else is in the box
 
-```text
-deepseek-openai/deepseek-v4-flash
-deepseek-openai/deepseek-v4-pro
-```
+- **Plan mode** — the agent researches and proposes before it is allowed to
+  edit, and can swap to a different model for the duration.
+- **Goals** — `/goal <condition>` sets a condition the agent checks before it is
+  allowed to stop, with an autonomous supervisor and explicit turn budgets.
+- **Subagents** — built-in `Explore`, `Plan`, and `general-purpose` agents, plus
+  your own as markdown files in `.cocode/agents/`.
+- **Workflows** — deterministic multi-agent orchestration scripts in JavaScript,
+  run on an embedded QuickJS engine.
+- **MCP** — stdio and HTTP/SSE servers, with OAuth for the ones that need it.
+- **Skills, plugins, hooks** — bundled/project/user skills, `PLUGIN.toml`
+  plugins with marketplaces, and Pre/PostToolUse hooks.
+- **Memory** — `CLAUDE.md` / `AGENTS.md` discovery up the directory tree, plus
+  `.cocode/rules/`.
+- **SDKs** — TypeScript and Python clients over a JSON-RPC 2.0 protocol.
+- **Sandbox** — optional OS-level enforcement (Seatbelt / bubblewrap) around
+  shell commands.
+- **Voice input** — speech-to-text dictation, remote or on-device Whisper.
 
-**Plaintext `api_key` in config files**
+Some of these are experimental or off by default. The
+[configuration guide](docs/configuration.md#feature-gates) lists every feature
+gate with its real default.
 
-`providers.json` supports an `api_key` field for local-only configs:
+## Documentation
 
-```json
-{
-  "api_key": "sk-..."
-}
-```
+| Guide | What's in it |
+| --- | --- |
+| [Getting started](docs/getting-started.md) | Install, first run, first real task |
+| [Configuration](docs/configuration.md) | Config files, settings, feature gates |
+| [Providers and auth](docs/providers-and-auth.md) | Every provider, API keys, OAuth login |
+| [Models and MoA](docs/models-and-moa.md) | Roles, fallbacks, effort, Mixture of Agents |
+| [CLI reference](docs/cli-reference.md) | Every flag and subcommand |
+| [Slash commands](docs/slash-commands.md) | Every in-session command |
+| [Tools](docs/tools.md) | What the model can call |
+| [Permissions](docs/permissions.md) | Modes, rules, bypass |
+| [Sandbox](docs/sandbox.md) | OS-level command isolation |
+| [MCP](docs/mcp.md) | Model Context Protocol servers |
+| [Memory](docs/memory.md) | CLAUDE.md, rules, session memory |
+| [Extending](docs/extending.md) | Skills, plugins, hooks |
+| [Subagents and teams](docs/subagents-and-teams.md) | Built-in and custom agents |
+| [SDK](docs/sdk.md) | TypeScript and Python clients |
+| [Troubleshooting](docs/troubleshooting.md) | When something goes wrong |
 
-For shared configs, prefer:
+## Repository layout
 
-```json
-{
-  "env_key": "DEEPSEEK_API_KEY"
-}
-```
-
-That keeps secrets in the environment or your secret manager instead of in
-dotfiles or git. If both `env_key` and `api_key` are set, the environment
-variable wins.
-
-## Repository Layout
-
-- `coco-rs/`: Rust workspace for the CLI, TUI, providers, services, tools, and shared crates.
-- `coco-cli/`: npm package wrapper for the prebuilt `coco` binary.
-- `coco-sdk/`: SDK schemas and language bindings.
-- `docs/`: Architecture, design, and development notes.
-- `.claude/` and `.codex/`: Project-local agent instructions, scripts, and skills.
+| Path | Contents |
+| --- | --- |
+| `coco-rs/` | The Rust workspace: CLI, TUI, providers, tools, services |
+| `coco-cli/` | npm packaging wrapper for the native binary |
+| `coco-sdk/` | Protocol schemas and the TypeScript / Python SDKs |
+| `docs/` | User documentation |
+| `docs/internal/` | Internal design notes — historical, may be stale |
 
 ## Development
 
-Most Rust development happens in `coco-rs/`:
-
 ```bash
 cd coco-rs
-just fmt
-just quick-check
-just pre-commit
+just quick-check    # fmt + lints + type check — use this while iterating
+just pre-commit     # the full gate, including the test suite — run once, before committing
 ```
 
-`just pre-commit` runs the full nextest suite and is expensive. Use
-`just quick-check` while iterating, then run `just pre-commit` before a commit.
+`just pre-commit` compiles every test binary in the workspace and is much slower
+than `quick-check`. Read [`CLAUDE.md`](CLAUDE.md) before making changes; each
+crate has its own `CLAUDE.md` with local invariants.
 
-Read the root `CLAUDE.md` before code changes. If the crate you are editing
-has its own `CLAUDE.md`, follow that file as well.
+## License
+
+[Apache-2.0](LICENSE).

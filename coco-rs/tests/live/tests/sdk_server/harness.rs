@@ -236,8 +236,7 @@ pub async fn build_live_server_with_options(
     );
     let session_manager = Arc::new(SessionManager::new(sessions_dir.path().to_path_buf()));
 
-    let startup =
-        headless::resolve_startup_permission_state(&cli, &runtime_config.settings.merged)?;
+    let startup = headless::resolve_startup_permission_state(&cli, &runtime_config.settings)?;
 
     let provider_name = main_model.provider.clone();
 

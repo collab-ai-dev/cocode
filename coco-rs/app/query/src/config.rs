@@ -328,7 +328,7 @@ pub struct QueryEngineConfig {
     /// Carries the per-query file-size gate; future fields land here.
     pub lsp_config: coco_config::LspConfig,
     /// Centralized feature gates (Layer 1 of the tool filter pipeline).
-    /// See `docs/coco-rs/feature-gates-and-tool-filtering.md`.
+    /// See `docs/internal/feature-gates-and-tool-filtering.md`.
     pub features: Arc<Features>,
     /// Per-tier `skill_overrides` map preserved without merging.
     /// Threaded through the per-turn reminder pipeline and the

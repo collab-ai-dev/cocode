@@ -1,4 +1,4 @@
-//! L2 of the agent-teams E2E plan (`docs/coco-rs/agentteam-e2e-test-design.md`):
+//! L2 of the agent-teams E2E plan (`docs/internal/agentteam-e2e-test-design.md`):
 //! spawn the REAL `coco` binary as a cross-process teammate inside a PTY,
 //! pointed at a local `wiremock` model, and assert the teammate boots from
 //! `COCO_AGENT_*` env, the inbox→turn pump consumes its file mailbox, and it

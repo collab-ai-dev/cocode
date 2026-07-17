@@ -17,7 +17,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 COCO_CLI_ROOT = SCRIPT_DIR.parent
 # Optional: set to a known-good Actions run URL so callers can omit --workflow-url.
 DEFAULT_WORKFLOW_URL = ""
-GITHUB_REPO = "coco-collab-dev/cocode"
+GITHUB_REPO = "collab-ai-dev/cocode"
 PRODUCT_NAME = "cocode"
 VENDOR_DIR_NAME = "vendor"
 BINARY_TARGETS = (

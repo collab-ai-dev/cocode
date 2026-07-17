@@ -1,6 +1,6 @@
 //! The transcript cell model plus the tool-commit boundary for the native
 //! finalize — the transcript-owner half of
-//! `docs/coco-rs/ui/tui-v2-design.md` §6.4 / §6.5.
+//! `docs/internal/ui/tui-v2-design.md` §6.4 / §6.5.
 //!
 //! [`RenderedCell`] / [`CellKind`] / [`SystemCellKind`] are the units every
 //! renderer consumes; the `Message` -> cells derivation is

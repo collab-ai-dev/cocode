@@ -3,7 +3,7 @@
 //! The pre-refactor version of this file exercised a parallel
 //! `InProcessTeammateTaskState` mirror that the coordinator used to
 //! double-write alongside the canonical `TaskManager` row. The
-//! task-storage unification (see `docs/coco-rs/task-storage-refactor.md`)
+//! task-storage unification (see `docs/internal/task-storage-refactor.md`)
 //! deleted that mirror — the runner now writes only via the
 //! `TaskHandle::update_teammate_task` registry path.
 //!

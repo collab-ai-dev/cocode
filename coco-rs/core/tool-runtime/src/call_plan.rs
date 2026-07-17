@@ -1,7 +1,7 @@
 //! Scheduler DTOs for the `ToolCallRunner` / `ToolExecutor`
 //! boundary.
 //!
-//! I12 of `docs/coco-rs/agent-loop-refactor-plan.md`. The
+//! I12 of `docs/internal/agent-loop-refactor-plan.md`. The
 //! runner returns an **unstamped** outcome carrying everything except
 //! `completion_seq`; the executor stamps the completion sequence at
 //! surface time — the moment the `run_one` future resolves for a

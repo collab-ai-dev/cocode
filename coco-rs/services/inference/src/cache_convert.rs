@@ -17,7 +17,7 @@
 //! `in_overage`) is **NOT** emitted here — those values reach the
 //! Anthropic adapter via `AnthropicConfig` (set by `build_anthropic`
 //! from `RuntimeConfig.account.*` at provider construction). See
-//! `docs/coco-rs/prompt-cache-design.md` §9.2 / R3-F3.
+//! `docs/internal/prompt-cache-design.md` §9.2 / R3-F3.
 
 use coco_types::PromptCacheConfig;
 use coco_types::PromptCacheMode;

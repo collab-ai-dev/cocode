@@ -1,7 +1,7 @@
 # coco-goals
 
 Pure domain layer for the first-class session goal runtime
-(`docs/coco-rs/goal-architecture-redesign.md`). **No** Tokio, model-client,
+(`docs/internal/goal-architecture-redesign.md`). **No** Tokio, model-client,
 filesystem, protocol, or UI dependency — only `coco-types` (shared ids),
 `coco-utils-string` (bounded text), serde, strum, thiserror. The host
 (`GoalRuntimeHandle` in the session runtime) does all I/O; this crate only

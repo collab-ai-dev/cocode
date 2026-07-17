@@ -190,7 +190,7 @@ pub struct ToolUseContext {
     /// struct only carries cross-server tool-side knobs.
     pub lsp_config: coco_config::LspConfig,
     /// Centralized feature gates. See
-    /// `docs/coco-rs/feature-gates-and-tool-filtering.md`.
+    /// `docs/internal/feature-gates-and-tool-filtering.md`.
     pub features: Arc<Features>,
     /// Per-tier `skill_overrides` map preserved without merging. Read
     /// by the SkillTool gate and by listing-budget filters so the

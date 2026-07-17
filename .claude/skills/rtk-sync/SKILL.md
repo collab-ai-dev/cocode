@@ -192,5 +192,5 @@ ending the body with the repo's required `Co-Authored-By` trailer.
 - **Why rebase, not merge?** Keeps `develop` = "upstream + our small additive
   delta", linear. Cost is the gated force-push. Non-destructive alternative:
   `git -C "$FORK" merge upstream/develop`.
-- Related: `docs/coco-rs/rtk-integration-design.md` §3.2; memory
+- Related: `docs/internal/rtk-integration-design.md` §3.2; memory
   `rtk-fork-lib-target`.

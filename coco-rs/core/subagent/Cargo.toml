@@ -12,7 +12,7 @@ workspace = true
 #
 # DO NOT ADD tokio, mpsc, watcher, cancellation, or any agent-host, app/query,
 # coco-tool, coco-tools deps. Background tasks, file watchers, and runtime
-# execution belong in app/agent-host or coordinator — see docs/coco-rs/subagent-refactor-plan.md
+# execution belong in app/agent-host or coordinator — see docs/internal/subagent-refactor-plan.md
 # § "Avoid dependencies".
 
 [dependencies]

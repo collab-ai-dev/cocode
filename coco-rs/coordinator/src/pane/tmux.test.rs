@@ -105,7 +105,7 @@ fn test_assert_no_control_chars_accepts_teammate_one_liner() {
         .expect("printable one-liner must pass");
 }
 
-/// L3 of the agent-teams E2E plan (`docs/coco-rs/agentteam-e2e-test-design.md`):
+/// L3 of the agent-teams E2E plan (`docs/internal/agentteam-e2e-test-design.md`):
 /// validate the full external-mode tmux pane lifecycle against REAL tmux —
 /// `create_teammate_pane` (gap-1 spawn) AND `kill_pane` (gap-6 teardown), both
 /// of which must target the SAME server. Runs on the PID-scoped swarm socket

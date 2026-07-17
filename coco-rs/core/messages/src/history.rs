@@ -71,7 +71,7 @@ pub struct LastUsageMarker {
 /// and emit `MessageTruncated`/`MessageAppended` events).
 ///
 /// Restricting direct field access enforces I-1 from
-/// `docs/coco-rs/engine-tui-unified-transcript-plan.md`: every
+/// `docs/internal/engine-tui-unified-transcript-plan.md`: every
 /// transcript mutation must be observable via the wire-level event
 /// stream so TUI / SDK consumers stay coherent with engine state.
 #[derive(Debug, Default)]

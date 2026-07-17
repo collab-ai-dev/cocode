@@ -1564,6 +1564,26 @@ pub fn load_hooks_from_config_with_policy(
     Ok(definitions)
 }
 
+/// Explain a missing `command` field, naming the likely cause.
+///
+/// A hook entry carrying its own nested `hooks` array is Claude Code's shape,
+/// where the matcher wraps a list of handlers. This loader is flat — the entry
+/// *is* the handler — so that config parses as a handler with no command. It is
+/// worth detecting because the consequence is disproportionate: one bad entry
+/// fails the whole source, and every other hook in that file silently stops
+/// firing. Someone porting a config deserves to be told the shape, not just
+/// that a field is missing.
+fn missing_command_message(obj: &serde_json::Map<String, serde_json::Value>) -> String {
+    if obj.get("hooks").is_some_and(serde_json::Value::is_array) {
+        return "command hook requires a 'command' field. This entry has a nested \
+                'hooks' array, which is Claude Code's format; cocode expects the \
+                handler inline, e.g. { \"matcher\": \"Bash\", \"type\": \"command\", \
+                \"command\": \"echo hi\" }"
+            .to_string();
+    }
+    "command hook requires a 'command' field".to_string()
+}
+
 /// Parse a hook handler from a raw JSON object.
 fn parse_hook_handler(
     obj: &serde_json::Map<String, serde_json::Value>,
@@ -1578,9 +1598,7 @@ fn parse_hook_handler(
             let command = obj
                 .get("command")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    crate::HooksError::invalid_config("command hook requires a 'command' field")
-                })?
+                .ok_or_else(|| crate::HooksError::invalid_config(missing_command_message(obj)))?
                 .to_string();
             let timeout_ms = obj.get("timeout_ms").and_then(serde_json::Value::as_i64);
             let shell = obj.get("shell").and_then(|v| v.as_str()).map(String::from);

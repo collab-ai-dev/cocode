@@ -1812,3 +1812,42 @@ async fn test_powershell_hook_returns_helpful_error_when_pwsh_missing() {
         "expected error to mention PowerShell, got: {msg}",
     );
 }
+
+#[test]
+fn test_nested_claude_code_shape_names_the_real_problem() {
+    // Claude Code nests handlers under a matcher object; this loader takes the
+    // handler inline. The old error ("requires a 'command' field") described the
+    // symptom and left the reader to guess the cause — expensive, because one
+    // bad entry fails the whole settings source and silently kills every other
+    // hook in the file.
+    let nested = serde_json::json!({
+        "PreToolUse": [
+            { "matcher": "Bash", "hooks": [ { "type": "command", "command": "echo hi" } ] }
+        ]
+    });
+
+    let err = load_hooks_from_config(&nested, HookScope::User)
+        .expect_err("the nested shape does not parse");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Claude Code's format"),
+        "error should name the cause, got: {msg}"
+    );
+    assert!(
+        msg.contains("\"command\": \"echo hi\"") || msg.contains("handler inline"),
+        "error should show the shape that works, got: {msg}"
+    );
+}
+
+#[test]
+fn test_missing_command_without_nested_hooks_stays_terse() {
+    // No nested array means it is a plain typo, not a ported config — don't
+    // lecture about Claude Code.
+    let flat = serde_json::json!({ "PreToolUse": [ { "matcher": "Bash", "type": "command" } ] });
+
+    let err =
+        load_hooks_from_config(&flat, HookScope::User).expect_err("a command hook needs a command");
+    let msg = err.to_string();
+    assert!(msg.contains("requires a 'command' field"), "got: {msg}");
+    assert!(!msg.contains("Claude Code"), "got: {msg}");
+}

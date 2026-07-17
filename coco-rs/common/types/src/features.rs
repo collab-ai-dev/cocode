@@ -1,6 +1,6 @@
 //! Centralized feature gates.
 //!
-//! See `docs/coco-rs/feature-gates-and-tool-filtering.md` for the design.
+//! See `docs/internal/feature-gates-and-tool-filtering.md` for the design.
 //!
 //! Each `Feature` is a coarse-grained capability gate. Sub-toggles (e.g.
 //! `MemoryConfig.extraction_enabled`, `RetrievalConfig.reranker.enabled`) live
