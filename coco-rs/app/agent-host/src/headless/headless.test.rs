@@ -69,6 +69,7 @@ fn run_chat_with_options_requires_explicit_cwd_without_cli_cwd() {
 }
 
 #[test]
+#[serial_test::serial(config_env)]
 fn local_goal_print_run_writes_resumable_zero_turn_transcript() {
     let _lock = crate::test_support::CONFIG_ENV_LOCK.blocking_lock();
     let config_home = tempfile::tempdir().expect("config home");

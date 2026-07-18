@@ -1,5 +1,6 @@
-use coco_types::MCP_TOOL_PREFIX;
 use coco_types::ToolId;
+use coco_types::ToolName;
+use coco_types::WireToolName;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -61,13 +62,46 @@ impl RegisteredTool {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct RegistryInner {
     /// Primary lookup: canonical name → tool.
     tools: HashMap<String, RegisteredTool>,
     /// Alias lookup: alias → canonical name.
     aliases: HashMap<String, String>,
+    /// Provider-facing wire name → canonical name. Registration owns this
+    /// index and rejects collisions before publishing a tool.
+    wire_names: HashMap<WireToolName, String>,
     next_registration_id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ToolRegistrationError {
+    #[error("MCP {component} component must not be empty")]
+    EmptyMcpIdentityComponent { component: &'static str },
+    #[error("MCP metadata identifies {expected}, but the tool id is {tool_id}")]
+    InvalidMcpIdentity { tool_id: ToolId, expected: ToolId },
+    #[error(
+        "server replacement for {expected_server} contains tool {tool_id} owned by {actual_server:?}"
+    )]
+    ServerOwnershipMismatch {
+        expected_server: String,
+        actual_server: Option<String>,
+        tool_id: ToolId,
+    },
+    #[error("tool canonical name already registered: {canonical_name}")]
+    CanonicalCollision { canonical_name: String },
+    #[error("tool wire name {wire_name} collides between {existing} and {incoming}")]
+    WireNameCollision {
+        wire_name: WireToolName,
+        existing: String,
+        incoming: String,
+    },
+    #[error("tool alias {alias} collides between {existing} and {incoming}")]
+    AliasCollision {
+        alias: String,
+        existing: String,
+        incoming: String,
+    },
 }
 
 impl RegistryInner {
@@ -81,31 +115,75 @@ impl RegistryInner {
     /// `mcp__srv__Read`, never shadowing the built-in). Shared by
     /// [`ToolRegistry::register`] and [`ToolRegistry::replace_server_tools`]
     /// so the namespacing is identical on both paths.
-    fn register_with_aliases(&mut self, tool: Arc<dyn DynTool>) {
-        let native_name = tool.name().to_string();
-        let canonical = if let Some(info) = tool.mcp_info() {
-            let qualified = info.qualified_name();
-            if native_name == qualified || native_name.starts_with(MCP_TOOL_PREFIX) {
-                native_name
-            } else {
-                self.aliases.insert(native_name, qualified.clone());
-                qualified
+    fn register_with_aliases(
+        &mut self,
+        tool: Arc<dyn DynTool>,
+    ) -> Result<ToolRegistrationId, ToolRegistrationError> {
+        let tool_id = tool.id();
+        if let Some(info) = tool.mcp_info() {
+            if info.server_name.is_empty() {
+                return Err(ToolRegistrationError::EmptyMcpIdentityComponent {
+                    component: "server",
+                });
             }
-        } else {
-            native_name
-        };
+            if info.tool_name.is_empty() {
+                return Err(ToolRegistrationError::EmptyMcpIdentityComponent { component: "tool" });
+            }
+            let expected = ToolId::Mcp {
+                server: info.server_name.clone(),
+                tool: info.tool_name.clone(),
+            };
+            if tool_id != expected {
+                return Err(ToolRegistrationError::InvalidMcpIdentity { tool_id, expected });
+            }
+        }
+        let canonical = tool_id.to_string();
+        if self.tools.contains_key(&canonical) {
+            return Err(ToolRegistrationError::CanonicalCollision {
+                canonical_name: canonical,
+            });
+        }
+        let wire_name = WireToolName::for_tool_id(&tool_id);
+        if let Some(existing) = self.wire_names.get(&wire_name)
+            && existing != &canonical
+        {
+            return Err(ToolRegistrationError::WireNameCollision {
+                wire_name,
+                existing: existing.clone(),
+                incoming: canonical,
+            });
+        }
+        for alias in tool.aliases() {
+            let alias = *alias;
+            let existing = self
+                .tools
+                .contains_key(alias)
+                .then(|| alias.to_string())
+                .or_else(|| self.aliases.get(alias).cloned());
+            if let Some(existing) = existing.filter(|existing| existing != &canonical) {
+                return Err(ToolRegistrationError::AliasCollision {
+                    alias: alias.to_string(),
+                    existing,
+                    incoming: canonical,
+                });
+            }
+        }
         for alias in tool.aliases() {
             self.aliases.insert(alias.to_string(), canonical.clone());
         }
         let registration_id = self.next_registration_id();
+        self.wire_names.insert(wire_name, canonical.clone());
         self.tools
             .insert(canonical, RegisteredTool::new(registration_id, tool));
+        Ok(registration_id)
     }
 
     /// Remove a tool by `ToolId` (canonical name is `id.to_string()`). Does
     /// NOT touch aliases — callers wipe aliases separately.
     fn remove_tool_by_id(&mut self, id: &ToolId) {
-        self.tools.remove(&id.to_string());
+        let canonical = id.to_string();
+        self.tools.remove(&canonical);
+        self.wire_names.retain(|_, value| value != &canonical);
     }
 }
 
@@ -122,20 +200,52 @@ pub struct ToolRegistry {
     inner: RwLock<RegistryInner>,
 }
 
+/// Where a materialized tool sits in the model-facing surface for one request.
+///
+/// Assigned exactly once during [`ToolRegistry::materialize`], making
+/// contradictory membership (loaded *and* deferred) unrepresentable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ToolPlacement {
+    /// Schema is in the model's direct tool list.
+    Loaded,
+    /// Registered and searchable, but withheld until ToolSearch discovers it.
+    Deferred,
+    /// Discoverable by ToolSearch and callable only through `use_tool`.
+    UseTool,
+}
+
 #[derive(Clone)]
 pub struct MaterializedTool {
     pub tool_id: ToolId,
     pub canonical_name: String,
+    /// Provider-facing name the model sees and calls. Derived from `tool_id`;
+    /// equals `canonical_name` for built-ins and in-budget MCP names.
+    pub wire_name: WireToolName,
     pub registration_id: ToolRegistrationId,
+    pub placement: ToolPlacement,
+    /// Eligible for ToolSearch in this request. This remains true after a
+    /// deferred tool has been promoted to `Loaded`, making re-selection an
+    /// idempotent operation without consulting the live registry.
+    pub discoverable: bool,
     pub tool: Arc<dyn DynTool>,
 }
 
 impl MaterializedTool {
-    fn from_registered(canonical_name: String, registered: &RegisteredTool) -> Self {
+    fn from_registered(
+        canonical_name: String,
+        registered: &RegisteredTool,
+        placement: ToolPlacement,
+        discoverable: bool,
+    ) -> Self {
+        let tool_id = registered.tool.id();
+        let wire_name = WireToolName::for_tool_id(&tool_id);
         Self {
-            tool_id: registered.tool.id(),
+            tool_id,
             canonical_name,
+            wire_name,
             registration_id: registered.registration_id,
+            placement,
+            discoverable,
             tool: registered.tool.clone(),
         }
     }
@@ -143,34 +253,93 @@ impl MaterializedTool {
 
 #[derive(Clone)]
 pub struct ToolMaterialization {
-    loaded: Vec<MaterializedTool>,
-    deferred: Vec<MaterializedTool>,
+    /// One entry per tool that survived the filter pipeline, each tagged with
+    /// its [`ToolPlacement`]. Single source of truth for the request surface.
+    tools: Vec<MaterializedTool>,
     aliases: HashMap<String, String>,
+    by_wire_name: HashMap<WireToolName, usize>,
+    by_tool_id: HashMap<ToolId, usize>,
+    tool_search_strategy: crate::ToolSearchStrategy,
 }
 
 impl ToolMaterialization {
+    /// Discovery transport captured with this request snapshot.
+    pub fn tool_search_strategy(&self) -> crate::ToolSearchStrategy {
+        self.tool_search_strategy
+    }
+
+    /// Tools whose schema is in the model's direct tool list.
+    pub fn loaded(&self) -> impl Iterator<Item = &MaterializedTool> {
+        self.tools
+            .iter()
+            .filter(|t| t.placement == ToolPlacement::Loaded)
+    }
+
+    /// Tools withheld until ToolSearch discovers them.
+    pub fn deferred(&self) -> impl Iterator<Item = &MaterializedTool> {
+        self.tools
+            .iter()
+            .filter(|t| t.placement == ToolPlacement::Deferred)
+    }
+
+    /// Tools reachable only through `use_tool`.
+    pub fn use_tool_targets(&self) -> impl Iterator<Item = &MaterializedTool> {
+        self.tools
+            .iter()
+            .filter(|t| t.placement == ToolPlacement::UseTool)
+    }
+
+    /// Every materialized tool, regardless of placement.
+    pub fn all_materialized(&self) -> &[MaterializedTool] {
+        &self.tools
+    }
+
+    /// Request-snapshot-scoped ToolSearch corpus. Transport carriers are never
+    /// included.
+    pub fn searchable(&self) -> impl Iterator<Item = &MaterializedTool> {
+        self.tools.iter().filter(|tool| tool.discoverable)
+    }
+
+    /// Resolve a provider-supplied wire name to its materialized tool. The
+    /// `use_tool` preparer uses this to unwrap a `use_tool { name }`
+    /// call — the registry owns the `WireToolName <-> ToolId` mapping, so no
+    /// execution path parses a wire name back into a `ToolId`.
+    pub fn lookup_by_wire_name(&self, wire_name: &str) -> Option<&MaterializedTool> {
+        self.by_wire_name
+            .get(wire_name)
+            .and_then(|index| self.tools.get(*index))
+    }
+
+    /// Classify a provider call against this request's wire-name index.
+    pub fn lookup_wire(&self, registry: &ToolRegistry, wire_name: &str) -> MaterializedToolLookup {
+        self.lookup_by_wire_name(wire_name)
+            .map_or(MaterializedToolLookup::Unavailable, |tool| {
+                self.classify_lookup(registry, tool)
+            })
+    }
+
+    /// The `Arc`s whose schema is in the model's direct tool list.
     pub fn loaded_tools(&self) -> Vec<Arc<dyn DynTool>> {
-        self.loaded.iter().map(|t| t.tool.clone()).collect()
+        self.loaded().map(|t| t.tool.clone()).collect()
     }
 
+    /// The deferred `Arc`s (see [`Self::deferred`]).
     pub fn deferred_tools(&self) -> Vec<Arc<dyn DynTool>> {
-        self.deferred.iter().map(|t| t.tool.clone()).collect()
-    }
-
-    pub fn loaded_materialized(&self) -> &[MaterializedTool] {
-        &self.loaded
-    }
-
-    pub fn deferred_materialized(&self) -> &[MaterializedTool] {
-        &self.deferred
+        self.deferred().map(|t| t.tool.clone()).collect()
     }
 
     pub fn lookup(&self, registry: &ToolRegistry, id: &ToolId) -> MaterializedToolLookup {
-        let requested_name = id.to_string();
-        let direct = self.lookup_canonical(registry, &requested_name);
+        let direct = self
+            .by_tool_id
+            .get(id)
+            .and_then(|index| self.tools.get(*index))
+            .map_or(MaterializedToolLookup::Unavailable, |tool| {
+                self.classify_lookup(registry, tool)
+            });
         if !matches!(direct, MaterializedToolLookup::Unavailable) {
             return direct;
         }
+        let requested_name = id.to_string();
         let Some(canonical_name) = self.aliases.get(&requested_name) else {
             return MaterializedToolLookup::Unavailable;
         };
@@ -182,42 +351,89 @@ impl ToolMaterialization {
         registry: &ToolRegistry,
         canonical_name: &str,
     ) -> MaterializedToolLookup {
-        if let Some(tool) = self
-            .loaded
+        self.tools
             .iter()
             .find(|tool| tool.canonical_name == canonical_name)
-        {
-            return match registry.current_registration_id(&tool.canonical_name) {
+            .map_or(MaterializedToolLookup::Unavailable, |tool| {
+                self.classify_lookup(registry, tool)
+            })
+    }
+
+    fn classify_lookup(
+        &self,
+        registry: &ToolRegistry,
+        tool: &MaterializedTool,
+    ) -> MaterializedToolLookup {
+        match tool.placement {
+            ToolPlacement::Loaded => match registry.current_registration_id(&tool.canonical_name) {
                 Some(current) if current == tool.registration_id => {
                     MaterializedToolLookup::Loaded(tool.clone())
                 }
                 Some(_) | None => MaterializedToolLookup::Stale {
                     name: tool.canonical_name.clone(),
                 },
-            };
-        }
-        if let Some(tool) = self
-            .deferred
-            .iter()
-            .find(|tool| tool.canonical_name == canonical_name)
-        {
-            return MaterializedToolLookup::Deferred {
+            },
+            ToolPlacement::Deferred if self.tool_search_strategy.uses_server_side_expansion() => {
+                match registry.current_registration_id(&tool.canonical_name) {
+                    Some(current) if current == tool.registration_id => {
+                        // Native discovery providers authorize the eventual
+                        // direct call server-side. The client intentionally
+                        // does not promote these tools into `Loaded`, because
+                        // doing so would invalidate the stable tools-array
+                        // prefix after every search.
+                        MaterializedToolLookup::Loaded(tool.clone())
+                    }
+                    Some(_) | None => MaterializedToolLookup::Stale {
+                        name: tool.canonical_name.clone(),
+                    },
+                }
+            }
+            ToolPlacement::Deferred => MaterializedToolLookup::Deferred {
                 name: tool.canonical_name.clone(),
                 tool: tool.tool.clone(),
-            };
+            },
+            ToolPlacement::UseTool => MaterializedToolLookup::Unavailable,
         }
-        MaterializedToolLookup::Unavailable
     }
+}
+
+fn build_materialization(
+    tools: Vec<MaterializedTool>,
+    aliases: HashMap<String, String>,
+    tool_search_strategy: crate::ToolSearchStrategy,
+) -> ToolMaterialization {
+    let by_wire_name = tools
+        .iter()
+        .enumerate()
+        .map(|(index, tool)| (tool.wire_name.clone(), index))
+        .collect();
+    let by_tool_id = tools
+        .iter()
+        .enumerate()
+        .map(|(index, tool)| (tool.tool_id.clone(), index))
+        .collect();
+    ToolMaterialization {
+        tools,
+        aliases,
+        by_wire_name,
+        by_tool_id,
+        tool_search_strategy,
+    }
+}
+
+fn is_transport_carrier(id: &ToolId) -> bool {
+    matches!(
+        id,
+        ToolId::Builtin(ToolName::ToolSearch | ToolName::UseTool)
+    )
 }
 
 fn visible_aliases_for(
     inner: &RegistryInner,
-    loaded: &[MaterializedTool],
-    deferred: &[MaterializedTool],
+    tools: &[MaterializedTool],
 ) -> HashMap<String, String> {
-    let visible_canonicals: HashSet<&str> = loaded
+    let visible_canonicals: HashSet<&str> = tools
         .iter()
-        .chain(deferred.iter())
         .map(|tool| tool.canonical_name.as_str())
         .collect();
     inner
@@ -269,19 +485,27 @@ impl ToolRegistry {
 
     /// Register a tool. Also registers all its aliases.
     ///
-    /// **MCP naming convention** (B3.3): tools that report `mcp_info()`
-    /// are normalized to their `qualified_name()` form
-    /// `mcp__<server>__<tool>` if their primary name doesn't already
-    /// follow that convention. This prevents hostile MCP servers
-    ///   from shadowing built-in tools (e.g. an MCP server advertising a
-    ///   tool named "Read" is registered as "mcp__foo__Read" rather than
-    ///   overwriting the real Read tool).
+    /// Static/trusted registration. Canonical identity always comes from
+    /// `Tool::id()`; MCP metadata must match that structured `ToolId` exactly,
+    /// so an MCP tool can neither shadow a built-in nor smuggle a second
+    /// server/tool identity through its display name.
     pub fn register(&self, tool: Arc<dyn DynTool>) {
+        if let Err(error) = self.try_register(tool) {
+            panic!("invalid static tool registration: {error}");
+        }
+    }
+
+    /// Fallible registration for dynamic tools. Collision checks complete
+    /// before the tool becomes visible.
+    pub fn try_register(
+        &self,
+        tool: Arc<dyn DynTool>,
+    ) -> Result<ToolRegistrationId, ToolRegistrationError> {
         let mut inner = self
             .inner
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.register_with_aliases(tool);
+        inner.register_with_aliases(tool)
     }
 
     /// Look up a tool by ToolId.
@@ -319,7 +543,10 @@ impl ToolRegistry {
         })
     }
 
-    fn current_registration_id(&self, canonical_name: &str) -> Option<ToolRegistrationId> {
+    /// Current registration id for a canonical name, or `None` if the tool was
+    /// deregistered. Used to detect a stale materialization entry (the `use_tool`
+    /// resolver and `MaterializedToolLookup` both fail closed on a mismatch).
+    pub fn current_registration_id(&self, canonical_name: &str) -> Option<ToolRegistrationId> {
         let inner = self
             .inner
             .read()
@@ -375,30 +602,87 @@ impl ToolRegistry {
             .inner
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let tool_search_active = ctx.tool_search_active();
-        let mut loaded = Vec::new();
-        let mut deferred = Vec::new();
+        let builtin_tool_search_active = ctx.tool_search_supported();
+        let mut tools = Vec::new();
         for (canonical, registered) in &inner.tools {
+            if is_transport_carrier(&registered.tool.id()) {
+                continue;
+            }
             if !passes_filter_pipeline(registered.tool.as_ref(), ctx) {
                 continue;
             }
-            let should_defer = tool_search_active
-                && registered.tool.should_defer()
-                && !registered.tool.always_load()
-                && !ctx.discovered_tool_names.contains(registered.tool.name());
-            let tool = MaterializedTool::from_registered(canonical.clone(), registered);
-            if should_defer {
-                deferred.push(tool);
+            // Discovery is keyed on canonical identity (`id.to_string()`, which
+            // is the loop `canonical`), never bare `name()`: two servers with
+            // the same bare tool name must not both count as discovered when
+            // only one was selected.
+            let discovered = ctx.discovered_tool_names.contains(canonical.as_str());
+            let (placement, discoverable) = if let Some(info) = registered.tool.mcp_info() {
+                match ctx.mcp_tool_exposure_for(&info.server_name) {
+                    coco_types::McpToolExposure::Load => (ToolPlacement::Loaded, false),
+                    // Explicit server policy wins over a tool's `alwaysLoad`
+                    // hint: `use_tool` never injects target schemas directly.
+                    coco_types::McpToolExposure::UseTool => (ToolPlacement::UseTool, true),
+                    coco_types::McpToolExposure::Defer
+                        if registered.tool.always_load() || !registered.tool.should_defer() =>
+                    {
+                        (ToolPlacement::Loaded, false)
+                    }
+                    coco_types::McpToolExposure::Defer
+                        if ctx.tool_search_strategy.is_supported() && discovered =>
+                    {
+                        (ToolPlacement::Loaded, true)
+                    }
+                    coco_types::McpToolExposure::Defer
+                        if ctx.tool_search_strategy.is_supported() =>
+                    {
+                        (ToolPlacement::Deferred, true)
+                    }
+                    // A model without a schema-promotion strategy cannot
+                    // implement `defer`; retain lazy exposure through
+                    // `use_tool` instead of eagerly loading every MCP schema.
+                    coco_types::McpToolExposure::Defer => (ToolPlacement::UseTool, true),
+                }
             } else {
-                loaded.push(tool);
+                let should_defer = builtin_tool_search_active
+                    && registered.tool.should_defer()
+                    && !registered.tool.always_load()
+                    && !discovered;
+                let discoverable = builtin_tool_search_active
+                    && registered.tool.should_defer()
+                    && !registered.tool.always_load();
+                let placement = if should_defer {
+                    ToolPlacement::Deferred
+                } else {
+                    ToolPlacement::Loaded
+                };
+                (placement, discoverable)
+            };
+            tools.push(MaterializedTool::from_registered(
+                canonical.clone(),
+                registered,
+                placement,
+                discoverable,
+            ));
+        }
+        // Transport closure: carriers are derived after ordinary target
+        // filtering. Agent/model allowlists may narrow targets but cannot make
+        // surviving deferred or `use_tool` targets unreachable.
+        for carrier in [ToolName::ToolSearch, ToolName::UseTool] {
+            let canonical = carrier.as_str();
+            let Some(registered) = inner.tools.get(canonical) else {
+                continue;
+            };
+            if registered.tool.is_enabled(ctx) {
+                tools.push(MaterializedTool::from_registered(
+                    canonical.to_string(),
+                    registered,
+                    ToolPlacement::Loaded,
+                    false,
+                ));
             }
         }
-        let aliases = visible_aliases_for(&inner, &loaded, &deferred);
-        ToolMaterialization {
-            loaded,
-            deferred,
-            aliases,
-        }
+        let aliases = visible_aliases_for(&inner, &tools);
+        build_materialization(tools, aliases, ctx.tool_search_strategy)
     }
 
     /// Materialize every enabled tool while separately marking the tools that
@@ -408,43 +692,18 @@ impl ToolRegistry {
         &self,
         ctx: &ToolUseContext,
     ) -> (ToolMaterialization, HashSet<String>) {
-        let inner = self
-            .inner
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut loaded = Vec::new();
-        let mut deferred_marker = HashSet::new();
-        for (canonical, registered) in &inner.tools {
-            if !passes_filter_pipeline(registered.tool.as_ref(), ctx) {
-                continue;
-            }
-            if ctx.tool_search_active()
-                && registered.tool.should_defer()
-                && !registered.tool.always_load()
-                && !ctx.discovered_tool_names.contains(registered.tool.name())
-            {
-                deferred_marker.insert(registered.tool.name().to_string());
-            }
-            loaded.push(MaterializedTool::from_registered(
-                canonical.clone(),
-                registered,
-            ));
-        }
-        (
-            ToolMaterialization {
-                aliases: visible_aliases_for(&inner, &loaded, &[]),
-                loaded,
-                deferred: Vec::new(),
-            },
-            deferred_marker,
-        )
+        let materialization = self.materialize(ctx);
+        let deferred_marker = materialization
+            .deferred()
+            .map(|tool| tool.canonical_name.clone())
+            .collect();
+        (materialization, deferred_marker)
     }
 
     pub fn deferred_tool_names(&self, ctx: &ToolUseContext) -> HashSet<String> {
         self.materialize(ctx)
-            .deferred_materialized()
-            .iter()
-            .map(|t| t.tool.name().to_string())
+            .deferred()
+            .map(|t| t.canonical_name.clone())
             .collect()
     }
 
@@ -472,19 +731,9 @@ impl ToolRegistry {
     /// names: re-selecting a discovered tool is an idempotent no-op
     /// (`select:` semantics: re-selecting a discovered tool is idempotent).
     pub fn searchable_deferred(&self, ctx: &ToolUseContext) -> Vec<Arc<dyn DynTool>> {
-        let inner = self
-            .inner
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner
-            .tools
-            .values()
-            .filter(|t| {
-                passes_filter_pipeline(t.tool.as_ref(), ctx)
-                    && t.tool.should_defer()
-                    && !t.tool.always_load()
-            })
-            .map(|t| t.tool.clone())
+        self.materialize(ctx)
+            .searchable()
+            .map(|tool| tool.tool.clone())
             .collect()
     }
 
@@ -514,6 +763,9 @@ impl ToolRegistry {
         for name in &to_remove {
             inner.tools.remove(name);
         }
+        inner
+            .wire_names
+            .retain(|_, canonical| !to_remove.contains(canonical));
 
         // Also remove aliases that point to removed tools
         inner
@@ -534,14 +786,26 @@ impl ToolRegistry {
         &self,
         server_name: &str,
         new_tools: Vec<Arc<dyn DynTool>>,
-    ) -> Vec<ToolId> {
+    ) -> Result<Vec<ToolId>, ToolRegistrationError> {
+        for tool in &new_tools {
+            let tool_id = tool.id();
+            let actual_server = tool.mcp_info().map(|info| info.server_name.clone());
+            if actual_server.as_deref() != Some(server_name) {
+                return Err(ToolRegistrationError::ServerOwnershipMismatch {
+                    expected_server: server_name.to_string(),
+                    actual_server,
+                    tool_id,
+                });
+            }
+        }
         let mut inner = self
             .inner
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut next = inner.clone();
 
         // 1. Snapshot the server's current canonical names + ToolIds.
-        let owned: Vec<(String, ToolId)> = inner
+        let owned: Vec<(String, ToolId)> = next
             .tools
             .iter()
             .filter(|(_, t)| {
@@ -556,25 +820,27 @@ impl ToolRegistry {
         let old_ids: std::collections::HashSet<ToolId> =
             owned.into_iter().map(|(_, id)| id).collect();
         let new_ids: std::collections::HashSet<ToolId> = new_tools.iter().map(|t| t.id()).collect();
-        let tombstones: Vec<ToolId> = old_ids.difference(&new_ids).cloned().collect();
+        let mut tombstones: Vec<ToolId> = old_ids.difference(&new_ids).cloned().collect();
+        tombstones.sort_by_key(std::string::ToString::to_string);
 
         // 2. Wipe ALL server-owned aliases (full membership, not just tombstones).
-        inner
-            .aliases
+        next.aliases
             .retain(|_, canonical| !owned_names.contains(canonical.as_str()));
 
-        // 3. Drop tombstoned tools (their aliases already gone via step 2).
-        for id in &tombstones {
-            inner.remove_tool_by_id(id);
+        // 3. Remove the entire previous server batch from the staging copy.
+        // Retained tools are reinserted below with fresh registration ids.
+        for id in &old_ids {
+            next.remove_tool_by_id(id);
         }
 
         // 4. Re-register the new batch — re-establishes aliases fresh and
         //    overwrites retained tools with their new (reconnect) instance.
         for tool in new_tools {
-            inner.register_with_aliases(tool);
+            next.register_with_aliases(tool)?;
         }
 
-        tombstones
+        *inner = next;
+        Ok(tombstones)
     }
 
     pub fn len(&self) -> usize {

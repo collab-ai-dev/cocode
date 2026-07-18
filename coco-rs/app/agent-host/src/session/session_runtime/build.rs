@@ -542,6 +542,8 @@ impl SessionRuntime {
             memory_config: runtime_config.memory.clone(),
             shell_config: runtime_config.shell.clone(),
             active_shell_tool,
+            mcp_tool_exposure: runtime_config.mcp.tool_exposure,
+            mcp_server_tool_exposure: Arc::new(runtime_config.mcp.server_tool_exposure.clone()),
             shell_provider,
             output_rewriter,
             original_cwd: Some(session_original_cwd.clone()),

@@ -444,7 +444,7 @@ impl QueryEngine {
                                     event_tx,
                                     crate::AgentStreamEvent::ToolUseStarted {
                                         call_id: pending.tool_use_id.clone(),
-                                        name: pending.tool.name().to_string(),
+                                        name: ctx.semantic_tool_name.clone(),
                                         batch_id: None,
                                     },
                                 )
@@ -455,6 +455,7 @@ impl QueryEngine {
                                     PreparedToolCall {
                                         tool_use_id: pending.tool_use_id,
                                         tool_id: pending.tool.id(),
+                                        provider_tool_name: ctx.provider_tool_name,
                                         tool: pending.tool,
                                         parsed_input: pending.input,
                                         is_concurrency_safe: pending.is_concurrency_safe,

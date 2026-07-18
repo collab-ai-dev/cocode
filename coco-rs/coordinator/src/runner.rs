@@ -62,6 +62,8 @@ pub struct AgentContext {
     pub memory_scope: Option<MemoryScope>,
     /// Per-agent MCP server names.
     pub mcp_servers: Vec<String>,
+    pub mcp_tool_exposure: coco_types::McpToolExposure,
+    pub mcp_server_tool_exposure: std::collections::HashMap<String, coco_types::McpToolExposure>,
     /// Tools this agent is not allowed to use.
     pub disallowed_tools: Vec<String>,
     /// Maximum turns before the agent should stop.
@@ -116,6 +118,8 @@ pub struct SpawnConfig {
     pub memory_scope: Option<MemoryScope>,
     /// Per-agent MCP server names.
     pub mcp_servers: Vec<String>,
+    pub mcp_tool_exposure: coco_types::McpToolExposure,
+    pub mcp_server_tool_exposure: std::collections::HashMap<String, coco_types::McpToolExposure>,
     /// Tools this agent is not allowed to use.
     pub disallowed_tools: Vec<String>,
     /// Maximum turns before the agent should stop.
@@ -251,6 +255,8 @@ impl InProcessAgentRunner {
             isolation: config.isolation,
             memory_scope: config.memory_scope,
             mcp_servers: config.mcp_servers,
+            mcp_tool_exposure: config.mcp_tool_exposure,
+            mcp_server_tool_exposure: config.mcp_server_tool_exposure,
             disallowed_tools: config.disallowed_tools,
             max_turns: config.max_turns,
         };

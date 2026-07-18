@@ -254,6 +254,38 @@ fn test_load_conversation_for_resume_basic_round_trip() {
     // No sidechain in this transcript.
     assert!(!conversation.has_sidechain);
     assert!(conversation.plan_slug.is_none());
+    assert_eq!(conversation.mcp_tool_exposure, None);
+}
+
+#[test]
+fn test_load_conversation_for_resume_uses_latest_mcp_exposure() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mcp-exposure.jsonl");
+    let body = format!(
+        "{}\n{}\n{}\n{}\n",
+        user_line("u1", "prompt"),
+        serde_json::to_string(&json!({
+            "type": "mcp-tool-exposure",
+            "session_id": "mcp-exposure",
+            "exposure": "defer",
+        }))
+        .unwrap(),
+        assistant_line("a1", "u1", "reply", "claude-sonnet-4-6", None),
+        serde_json::to_string(&json!({
+            "type": "mcp-tool-exposure",
+            "session_id": "mcp-exposure",
+            "exposure": "use_tool",
+        }))
+        .unwrap(),
+    );
+    std::fs::write(&path, body).unwrap();
+
+    let conversation = load_conversation_for_resume(&path).expect("resume loads");
+
+    assert_eq!(
+        conversation.mcp_tool_exposure,
+        Some(coco_types::McpToolExposure::UseTool)
+    );
 }
 
 #[test]

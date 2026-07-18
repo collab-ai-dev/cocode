@@ -52,7 +52,8 @@ use crate::tool_runner::prepare_committed_tool_call;
 /// through this struct.
 #[derive(Debug, Clone)]
 pub(crate) struct ToolResultContext {
-    pub tool_name: String,
+    pub provider_tool_name: coco_types::WireToolName,
+    pub semantic_tool_name: String,
     pub effective_input: ValidatedInput,
     pub approval_feedback: Option<String>,
     pub permission_resolution_detail: Option<coco_types::PermissionResolutionDetail>,
@@ -161,6 +162,8 @@ pub(crate) async fn prepare_one_pending_tool_call(
     let tool_id = prepared.tool_id;
     let tool = prepared.tool;
     let validated_input = prepared.input;
+    let semantic_call = prepared.semantic_call;
+    let provider_tool_name = prepared.provider_tool_name;
 
     // schema validation already ran inside
     // `prepare_committed_tool_call` (tool_runner.rs:82-123) — it
@@ -171,8 +174,8 @@ pub(crate) async fn prepare_one_pending_tool_call(
     // wire parsing set `invalid=true` AFTER `prepare_committed_tool_call`
     // returned (cannot happen in current code paths, but keeps the
     // invariant local).
-    if tc.invalid {
-        let message = match &tc.invalid_reason {
+    if semantic_call.invalid {
+        let message = match &semantic_call.invalid_reason {
             Some(ToolInputInvalidReason::SchemaViolation { message }) => {
                 format!("<tool_use_error>InputValidationError: {message}</tool_use_error>")
             }
@@ -195,8 +198,8 @@ pub(crate) async fn prepare_one_pending_tool_call(
         crate::helpers::complete_tool_call_with_error_mode(
             args.event_tx,
             args.history,
-            &tc.tool_call_id,
-            &tc.tool_name,
+            &semantic_call.tool_call_id,
+            provider_tool_name.as_str(),
             &tool_id,
             &message,
             coco_tool_runtime::ToolCallErrorKind::SchemaFailed,
@@ -211,12 +214,15 @@ pub(crate) async fn prepare_one_pending_tool_call(
             .with_policy(args.hook_execution_policy);
     let pre_tool_outcome = hook_controller
         .run_pre_tool_use(
-            args.event_tx,
-            args.history,
-            tc,
-            &tool_id,
-            args.completion_event_mode,
-            args.deferred_tool_completions.as_deref_mut(),
+            &semantic_call,
+            crate::hook_controller::PreToolUseSettlement {
+                event_tx: args.event_tx,
+                history: args.history,
+                provider_tool_name: provider_tool_name.as_str(),
+                tool_id: &tool_id,
+                completion_event_mode: args.completion_event_mode,
+                deferred_tool_completions: args.deferred_tool_completions.as_deref_mut(),
+            },
         )
         .await;
 
@@ -225,7 +231,8 @@ pub(crate) async fn prepare_one_pending_tool_call(
             args.event_tx,
             args.history,
             args.ctx,
-            tc,
+            &semantic_call,
+            provider_tool_name.as_str(),
             &tool_id,
             &tool,
             validated_input,
@@ -236,7 +243,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
         .await?;
 
     let decision = resolve_permission_decision(
-        tc,
+        &semantic_call,
         &tool,
         effective_input.as_value(),
         args.ctx,
@@ -257,7 +264,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
     // controller path stays unchanged.
     let decision = maybe_fire_permission_denied_hook(
         &hook_controller,
-        tc,
+        &semantic_call,
         effective_input.as_value(),
         decision,
     )
@@ -285,7 +292,13 @@ pub(crate) async fn prepare_one_pending_tool_call(
         args.ctx.avoid_permission_prompts,
         args.deferred_tool_completions.as_deref_mut(),
     )
-    .resolve(decision, tc, effective_input.as_value(), &tool_id)
+    .resolve(
+        decision,
+        &semantic_call,
+        provider_tool_name.as_str(),
+        effective_input.as_value(),
+        &tool_id,
+    )
     .await;
     if matches!(permission_outcome, PermissionOutcome::Aborted) {
         *permission_aborted = true;
@@ -301,7 +314,8 @@ pub(crate) async fn prepare_one_pending_tool_call(
         args.event_tx,
         args.history,
         args.ctx,
-        tc,
+        &semantic_call,
+        provider_tool_name.as_str(),
         &tool_id,
         &tool,
         permission_outcome,
@@ -313,7 +327,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
 
     Some((
         PendingToolCall {
-            tool_use_id: tc.tool_call_id.clone(),
+            tool_use_id: semantic_call.tool_call_id.clone(),
             tool: tool.clone(),
             input: effective_input.clone(),
             is_concurrency_safe: dynamic_concurrency_safe(
@@ -325,7 +339,8 @@ pub(crate) async fn prepare_one_pending_tool_call(
             .await,
         },
         ToolResultContext {
-            tool_name: tc.tool_name.clone(),
+            provider_tool_name,
+            semantic_tool_name: tool_id.to_string(),
             effective_input,
             approval_feedback,
             permission_resolution_detail,
@@ -340,6 +355,7 @@ async fn resolve_effective_input_from_pre_hook(
     history: &mut MessageHistory,
     ctx: &ToolUseContext,
     tool_call: &ToolCallPart,
+    provider_tool_name: &str,
     tool_id: &ToolId,
     tool: &Arc<dyn DynTool>,
     validated_input: ValidatedInput,
@@ -364,6 +380,7 @@ async fn resolve_effective_input_from_pre_hook(
                     history,
                     ctx,
                     tool_call,
+                    provider_tool_name,
                     tool_id,
                     tool,
                     updated_input,
@@ -1032,6 +1049,7 @@ async fn resolve_effective_input_from_permission(
     history: &mut MessageHistory,
     ctx: &ToolUseContext,
     tool_call: &ToolCallPart,
+    provider_tool_name: &str,
     tool_id: &ToolId,
     tool: &Arc<dyn DynTool>,
     permission_outcome: PermissionOutcome,
@@ -1060,6 +1078,7 @@ async fn resolve_effective_input_from_permission(
                     history,
                     ctx,
                     tool_call,
+                    provider_tool_name,
                     tool_id,
                     tool,
                     updated_input,
@@ -1134,6 +1153,7 @@ async fn validate_effective_input_or_complete_error(
     history: &mut MessageHistory,
     ctx: &ToolUseContext,
     tool_call: &ToolCallPart,
+    provider_tool_name: &str,
     tool_id: &ToolId,
     tool: &Arc<dyn DynTool>,
     input: Value,
@@ -1167,7 +1187,7 @@ async fn validate_effective_input_or_complete_error(
                 event_tx,
                 history,
                 &tool_call.tool_call_id,
-                &tool_call.tool_name,
+                provider_tool_name,
                 tool_id,
                 &message,
                 coco_tool_runtime::ToolCallErrorKind::SchemaFailed,
@@ -1194,7 +1214,7 @@ async fn validate_effective_input_or_complete_error(
         event_tx,
         history,
         &tool_call.tool_call_id,
-        &tool_call.tool_name,
+        provider_tool_name,
         tool_id,
         &message,
         coco_tool_runtime::ToolCallErrorKind::ValidationFailed,

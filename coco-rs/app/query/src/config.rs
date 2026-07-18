@@ -298,6 +298,12 @@ pub struct QueryEngineConfig {
     pub shell_config: ShellConfig,
     /// Model-facing shell tool selected for this session.
     pub active_shell_tool: ActiveShellTool,
+    /// Default MCP server exposure (`load` / `defer` / `use_tool`).
+    pub mcp_tool_exposure: coco_types::McpToolExposure,
+    /// Per-server MCP exposure overrides. The request materializer resolves
+    /// each MCP tool against this map using its semantic server identity.
+    pub mcp_server_tool_exposure:
+        Arc<std::collections::HashMap<String, coco_types::McpToolExposure>>,
     /// Session-scoped shell command assembler. Constructed once at
     /// session bootstrap (with the live snapshot watch + session-env
     /// reader + `/env` store) and threaded onto every
@@ -466,6 +472,8 @@ impl Default for QueryEngineConfig {
             // visibility for those callers; fork/spawn request DTOs still
             // default to Disabled until a parent explicitly threads a value.
             active_shell_tool: ActiveShellTool::Bash,
+            mcp_tool_exposure: coco_types::McpToolExposure::Defer,
+            mcp_server_tool_exposure: Arc::new(std::collections::HashMap::new()),
             shell_provider: None,
             output_rewriter: None,
             original_cwd: None,

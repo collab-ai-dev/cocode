@@ -90,6 +90,34 @@ fn test_tool_id_mcp() {
 }
 
 #[test]
+fn test_tool_id_mcp_delimiter_components_round_trip_unambiguously() {
+    let server_delimiter = ToolId::Mcp {
+        server: "a__b".into(),
+        tool: "c".into(),
+    };
+    let tool_delimiter = ToolId::Mcp {
+        server: "a".into(),
+        tool: "b__c".into(),
+    };
+
+    assert_ne!(server_delimiter.to_string(), tool_delimiter.to_string());
+    for id in [server_delimiter, tool_delimiter] {
+        let wire = id.to_string();
+        assert_eq!(wire.parse::<ToolId>().unwrap(), id);
+    }
+}
+
+#[test]
+fn test_tool_id_mcp_percent_escape_round_trips() {
+    let id = ToolId::Mcp {
+        server: "percent%5Fserver".into(),
+        tool: "tool__name%".into(),
+    };
+
+    assert_eq!(id.to_string().parse::<ToolId>().unwrap(), id);
+}
+
+#[test]
 fn test_tool_id_custom() {
     let id: ToolId = "my_plugin_tool".parse().unwrap();
     assert_eq!(id, ToolId::Custom("my_plugin_tool".into()));

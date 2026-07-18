@@ -217,6 +217,7 @@ pub fn fold_transcript_metadata(entries: &[Entry], session_id: &SessionId) -> Tr
                 | MetadataEntry::PrLink { .. }
                 | MetadataEntry::WorktreeState { .. }
                 | MetadataEntry::Mode { .. }
+                | MetadataEntry::McpToolExposure { .. }
                 | MetadataEntry::GoalSnapshot { .. }
                 | MetadataEntry::GoalCleared { .. }
                 | MetadataEntry::SessionSeqWatermark { .. } => {}

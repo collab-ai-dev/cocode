@@ -95,6 +95,7 @@ class AttachmentKind(str, Enum):
     deferred_tools_delta = "deferred_tools_delta"
     agent_listing_delta = "agent_listing_delta"
     mcp_instructions_delta = "mcp_instructions_delta"
+    mcp_servers_delta = "mcp_servers_delta"
     hook_success = "hook_success"
     hook_blocking_error = "hook_blocking_error"
     hook_additional_context = "hook_additional_context"

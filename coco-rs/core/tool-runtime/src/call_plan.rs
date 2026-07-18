@@ -20,6 +20,7 @@ use coco_types::PermissionDenialInfo;
 use coco_types::PermissionResolutionDetail;
 use coco_types::PermissionUpdate;
 use coco_types::ToolId;
+use coco_types::WireToolName;
 use std::sync::Arc;
 
 use crate::cancellation::ToolAbortSignal;
@@ -63,6 +64,9 @@ pub struct PreparedToolCall {
     /// Downstream uses this for permission / hook / audit / event
     /// routing — never re-parses a name string.
     pub tool_id: ToolId,
+    /// Provider-facing name of the original call. Tool results must use this
+    /// name even when `tool_id` is a `use_tool`-resolved semantic target.
+    pub provider_tool_name: WireToolName,
     /// The resolved tool. The runner already holds an `Arc`, so this
     /// is the single cheap clone across the scheduler boundary.
     pub tool: Arc<dyn DynTool>,

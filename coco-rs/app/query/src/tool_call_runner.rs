@@ -163,9 +163,14 @@ impl<'a> ToolCallRunner<'a> {
         let mut plans: Vec<ToolCallPlan> = Vec::with_capacity(pending.len());
         for (idx, pending_call) in pending.into_iter().enumerate() {
             let tool_id = pending_call.tool.id();
+            let provider_tool_name = tool_result_contexts
+                .get(&pending_call.tool_use_id)
+                .map(|ctx| ctx.provider_tool_name.clone())
+                .unwrap_or_else(|| coco_types::WireToolName::for_tool_id(&tool_id));
             plans.push(ToolCallPlan::Runnable(Box::new(PreparedToolCall {
                 tool_use_id: pending_call.tool_use_id,
                 tool_id,
+                provider_tool_name,
                 tool: pending_call.tool,
                 parsed_input: pending_call.input,
                 is_concurrency_safe: pending_call.is_concurrency_safe,
@@ -187,7 +192,7 @@ impl<'a> ToolCallRunner<'a> {
             if let ToolCallPlan::Runnable(prepared) = plan {
                 let tool_name = tool_result_contexts
                     .get(&prepared.tool_use_id)
-                    .map(|c| c.tool_name.clone())
+                    .map(|c| c.semantic_tool_name.clone())
                     .unwrap_or_else(|| prepared.tool.name().to_string());
                 let _delivered = emit_stream(
                     self.event_tx,
@@ -236,9 +241,12 @@ impl<'a> ToolCallRunner<'a> {
                     let orchestration_ctx = orchestration_ctx.clone();
                     async move {
                         let ctx_entry = contexts.get(&prepared.tool_use_id);
-                        let tool_name = ctx_entry
-                            .map(|c| c.tool_name.clone())
+                        let semantic_tool_name = ctx_entry
+                            .map(|c| c.semantic_tool_name.clone())
                             .unwrap_or_else(|| prepared.tool.name().to_string());
+                        let provider_tool_name = ctx_entry
+                            .map(|c| c.provider_tool_name.clone())
+                            .unwrap_or_else(|| prepared.provider_tool_name.clone());
                         let effective_input = ctx_entry
                             .map(|c| c.effective_input.clone())
                             .unwrap_or_else(|| prepared.parsed_input.clone());
@@ -268,7 +276,7 @@ impl<'a> ToolCallRunner<'a> {
                             return crate::tool_outcome_builder::build_early_outcome(
                                 prepared.tool_use_id.clone(),
                                 prepared.tool_id.clone(),
-                                &tool_name,
+                                provider_tool_name.as_str(),
                                 prepared.model_index,
                                 coco_tool_runtime::ToolCallErrorKind::PreExecutionCancelled,
                                 coco_messages::CANCEL_MESSAGE,
@@ -285,7 +293,8 @@ impl<'a> ToolCallRunner<'a> {
                         build_outcome_from_execution(RunOneTail {
                             tool_use_id: prepared.tool_use_id.clone(),
                             tool_id: prepared.tool_id.clone(),
-                            tool_name,
+                            semantic_tool_name,
+                            provider_tool_name,
                             model_index: prepared.model_index,
                             tool: prepared.tool,
                             effective_input: effective_input.into_value(),
@@ -302,7 +311,10 @@ impl<'a> ToolCallRunner<'a> {
                 |outcome| {
                     let ctx_entry = contexts.get(outcome.tool_use_id());
                     let (tool_name, is_error) = match (ctx_entry, outcome.error_kind()) {
-                        (Some(c), _) => (c.tool_name.clone(), outcome.error_kind().is_some()),
+                        (Some(c), _) => (
+                            c.semantic_tool_name.clone(),
+                            outcome.error_kind().is_some(),
+                        ),
                         (None, _) => (
                             outcome.tool_id().to_string(),
                             outcome.error_kind().is_some(),

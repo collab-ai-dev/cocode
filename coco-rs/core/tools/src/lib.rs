@@ -61,6 +61,9 @@ pub fn register_all_tools(registry: &coco_tool_runtime::ToolRegistry) {
     // Utility (5)
     registry.register(Arc::new(AskUserQuestionTool));
     registry.register(Arc::new(ToolSearchTool));
+    // Registered unconditionally; `is_enabled` gates it to `use_tool` exposure
+    // mode only (plan §4.4 — register once, project at read time).
+    registry.register(Arc::new(UseToolTool));
     registry.register(Arc::new(ConfigTool));
     registry.register(Arc::new(SendUserMessageTool));
     registry.register(Arc::new(LspTool));
@@ -133,6 +136,9 @@ pub struct RegisterMcpToolsReport {
     pub registered: Vec<coco_types::ToolId>,
     pub skipped: Vec<SkippedMcpTool>,
     pub tombstones: Vec<coco_types::ToolId>,
+    /// Atomic registry publication failure (canonical/wire collision). When
+    /// present, no tool from this server batch was published.
+    pub registration_error: Option<coco_tool_runtime::ToolRegistrationError>,
 }
 
 /// An MCP tool dropped at registration because its wire schema was rejected.
@@ -192,12 +198,24 @@ pub fn register_mcp_tools(
         }
     }
 
-    let registered: Vec<coco_types::ToolId> = valid.iter().map(|t| t.id()).collect();
-    let tombstones = registry.replace_server_tools(server_name, valid);
+    let candidate_ids: Vec<coco_types::ToolId> = valid.iter().map(|t| t.id()).collect();
+    let (registered, tombstones, registration_error) =
+        match registry.replace_server_tools(server_name, valid) {
+            Ok(tombstones) => (candidate_ids, tombstones, None),
+            Err(error) => {
+                tracing::warn!(
+                    server = %server_name,
+                    error = %error,
+                    "rejecting MCP tool batch: registry identity collision"
+                );
+                (Vec::new(), Vec::new(), Some(error))
+            }
+        };
     RegisterMcpToolsReport {
         registered,
         skipped,
         tombstones,
+        registration_error,
     }
 }
 
@@ -229,7 +247,9 @@ pub fn register_mcp_auth_tool(
         transport,
         url,
     ));
-    registry.replace_server_tools(server_name, vec![tool]);
+    if let Err(error) = registry.replace_server_tools(server_name, vec![tool]) {
+        tracing::warn!(server = %server_name, error = %error, "failed to register MCP auth tool");
+    }
 }
 
 /// Record a Read-tool file read in FileReadState for @mention dedup,

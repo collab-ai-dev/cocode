@@ -1,11 +1,14 @@
 # ToolSearch — TS-parity port
 
-`ToolSearch` is the lazy schema loader: tools marked `should_defer() ==
-true` are sent to the model name-only, with no JSON Schema. The model
-calls `ToolSearch` with a query — `select:Name1,Name2` or
-`+required keyword optional` — and the tool returns the matched names.
-On the next turn, the deferred tools' full schemas appear in the
-request, so the model can invoke them.
+`ToolSearch` is the bounded lazy schema loader. The model calls it with a
+query — `select:Name1,Name2` or `+required keyword optional` — and receives
+only complete schemas that fit the per-entry and aggregate budgets. Matches
+come from the exact immutable `ToolMaterialization` used to build the current
+provider request; canonical `ToolId` / `WireToolName` identity prevents equal
+bare names on different MCP servers from colliding.
+
+For the MCP exposure policy, `use_tool` invocation, and dual provider/semantic
+identity rules, see [`mcp-tool-exposure-design.md`](mcp-tool-exposure-design.md).
 
 This doc captures the **TS-parity port** in `coco-rs`. TS source:
 `tools/ToolSearchTool/{ToolSearchTool,prompt,constants}.ts` and
@@ -14,17 +17,16 @@ This doc captures the **TS-parity port** in `coco-rs`. TS source:
 
 ## Multi-provider divergence
 
-TS routes the matched names through Anthropic's beta `tool_reference`
-content block. The Anthropic API server expands each
-`{type: "tool_reference", tool_name: "X"}` block into the equivalent
-`<functions>{...}</functions>` markup before the prompt reaches the
-model. This is **Anthropic-only**; OpenAI, Google, DeepSeek, etc. have
-no equivalent.
+TS routes matched names through Anthropic's `tool_reference` expansion.
+coco-rs supports three schema-discovery transports plus a provider-neutral
+`use_tool` floor:
 
-coco-rs targets every major provider through `vercel-ai-*`, so we
-cannot depend on server-side reference expansion. The port instead
-performs the promotion **client-side** by maintaining a typed
-discovery set on the shared cross-turn state:
+- Anthropic `tool_reference` expansion;
+- OpenAI Responses client-executed native `tool_search`;
+- client-side promotion through the cross-turn discovery set;
+- bounded client JSON followed by `use_tool` for `UseTool` placement.
+
+Only the client-promotion transport mutates the shared discovery set:
 
 ```rust
 // common/types/src/app_state.rs
@@ -45,18 +47,16 @@ pub struct ToolUseContext {
 }
 ```
 
-`ToolRegistry::loaded_tools` upgrades any deferred tool whose name is
-in `ctx.discovered_tool_names` into the loaded pool (alongside the
-existing `always_load()` opt-out):
+`ToolMaterialization` upgrades a `Deferred` tool whose canonical name is in
+`ctx.discovered_tool_names` into `Loaded` placement. MCP `alwaysLoad` may also
+produce `Loaded`, but only under server exposure `defer`. `UseTool` targets are
+never promoted:
 
 ```rust
-// core/tool-runtime/src/registry.rs
-.filter(|t| {
-    passes_filter_pipeline(t.as_ref(), ctx)
-        && (!t.should_defer()
-            || t.always_load()
-            || ctx.discovered_tool_names.contains(t.name()))
-})
+// Conceptual placement rule in core/tool-runtime/src/registry.rs
+Deferred if tool.should_defer()
+         && !tool.always_load()
+         && !ctx.discovered_tool_names.contains(canonical_name)
 ```
 
 ## Promotion flow
@@ -157,9 +157,9 @@ Tools that override `should_defer() -> true` (and a matching
 | Shell (internal) | `PowerShell`, `Sleep`, `SyntheticOutput` |
 
 Plus every MCP tool: `McpTool::should_defer() = true` mirrors TS
-`Tool.isMcp = true`. The `anthropic/alwaysLoad` `_meta` opt-out is
-**not yet plumbed**; when an MCP server advertises that flag, the
-hook point is `McpToolAnnotations`.
+`Tool.isMcp = true`. The `anthropic/alwaysLoad` and provider-neutral
+`alwaysLoad` `_meta` opt-outs are parsed into `McpToolAnnotations` and apply
+only to `defer` exposure; they cannot override explicit `use_tool`.
 
 **Eager-loaded divergence:** `TaskCreate`, `TaskGet`, `TaskList`,
 `TaskUpdate`, `TaskStop`, and `TodoWrite` intentionally stay loaded in
@@ -168,10 +168,16 @@ plan/todo tools need to work on the first call across weaker non-Anthropic
 providers without a ToolSearch round-trip. `TaskOutput` remains deferred
 because it is deprecated and low-frequency.
 
-## What this port intentionally skips
+## Bounds and intentional differences
 
-- **`tool_reference` content blocks** — Anthropic-only; not applicable
-  to the multi-provider design above.
+- Results are capped at five; queries at 512 UTF-8 bytes; descriptions at 512
+  bytes; each complete projected schema at 4 KiB; and the fully wrapped result
+  at 8 KiB. Oversized schemas are omitted, never truncated or promoted.
+- Server-controlled JSON embedded in `<function>` framing escapes `<`, `>`,
+  and `&`; pending-server retry hints are independently count/byte bounded.
+- Native provider expansion is used only for `Deferred` placement.
+  `UseTool` placement always renders bounded client JSON and directs the model
+  to `use_tool`.
 - **Per-call `<available-deferred-tools>` legacy meta-message** — TS
   Path B prepends this on every request. coco-rs only implements the
   delta-attachment Path A — the `DeferredToolsDeltaGenerator`

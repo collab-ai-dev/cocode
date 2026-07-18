@@ -171,6 +171,10 @@ pub struct McpCapabilities {
 #[derive(Debug, Clone)]
 pub struct ConnectedMcpServer {
     pub name: String,
+    /// Bounded human-readable server metadata from `serverInfo.description`
+    /// or `serverInfo.title`. This is untrusted display data; MCP
+    /// `instructions` remain a separate instruction-bearing channel.
+    pub description: Option<String>,
     pub capabilities: McpCapabilities,
     pub instructions: Option<String>,
     pub tools: Vec<McpToolDefinition>,

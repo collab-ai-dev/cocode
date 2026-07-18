@@ -45,6 +45,24 @@ impl SessionRuntime {
             )
         })
         .await;
+        self.persist_mcp_tool_exposure().await;
+    }
+
+    pub async fn persist_mcp_tool_exposure(&self) {
+        if !self.persist_session() {
+            return;
+        }
+        let session_id = self.current_typed_session_id().await;
+        let exposure = self.current_engine_config().await.mcp_tool_exposure;
+        if let Err(error) = self.transcript_store().append_metadata(
+            session_id.as_str(),
+            &coco_session::storage::MetadataEntry::McpToolExposure {
+                session_id: session_id.clone(),
+                exposure,
+            },
+        ) {
+            tracing::warn!(%error, "failed to persist MCP tool exposure ceiling");
+        }
     }
     pub fn reconcile_session_mode_on_resume(
         &self,

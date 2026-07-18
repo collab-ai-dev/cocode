@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use coco_app_server::AppServer;
-use coco_types::SessionId;
+use coco_types::{McpToolExposure, SessionId};
 use tracing::warn;
 
 use crate::app_session::AppSessionHandle;
@@ -63,6 +63,7 @@ pub(crate) async fn build_connection_runtime_for_start(
     // item 5). apply_session_start_config merges (Option/true-gated), so this
     // does not clobber the profile-applied structured-output/plan-mode state.
     crate::session_start::apply_prepared_session_start(&prepared, &session).await;
+    session.persist_mcp_tool_exposure().await;
     // Structured output requested per session: register the StructuredOutput
     // tool and require a structured final result. An invalid schema fails the
     // start (the load factory returns Result) rather than silently ignoring it.
@@ -84,6 +85,7 @@ pub(crate) async fn build_connection_runtime_for_resume(
     cwd: std::path::PathBuf,
     prior_messages: Vec<coco_messages::Message>,
     plan_mode_instructions: Option<String>,
+    persisted_mcp_tool_exposure: Option<McpToolExposure>,
     app_server: Arc<AppServer<AppSessionHandle>>,
 ) -> anyhow::Result<crate::session_runtime::SessionHandle> {
     let binding = runtime_binding_from_replacement(&replacement);
@@ -94,6 +96,7 @@ pub(crate) async fn build_connection_runtime_for_resume(
     );
     let session =
         build_app_session_runtime_for_resume(&binding, &profile, session_id.clone(), cwd).await?;
+    restrict_session_mcp_tool_exposure(&session, persisted_mcp_tool_exposure).await;
     install_connection_runtime_callbacks(&connection_profile, &session, app_server);
     install_app_session_integrations(&binding, session.clone()).await?;
     hydrate_app_session_history(&session, &session_id, &prior_messages).await;
@@ -101,6 +104,25 @@ pub(crate) async fn build_connection_runtime_for_resume(
         .fire_session_start_hooks(coco_hooks::orchestration::SessionStartSource::Resume)
         .await;
     Ok(session)
+}
+
+async fn restrict_session_mcp_tool_exposure(
+    session: &crate::session_runtime::SessionHandle,
+    persisted: Option<McpToolExposure>,
+) {
+    let current = session.current_engine_config().await.mcp_tool_exposure;
+    let effective = effective_mcp_tool_exposure_on_resume(persisted, current);
+    session
+        .update_engine_config(move |config| config.mcp_tool_exposure = effective)
+        .await;
+    session.persist_mcp_tool_exposure().await;
+}
+
+fn effective_mcp_tool_exposure_on_resume(
+    persisted: Option<McpToolExposure>,
+    current: McpToolExposure,
+) -> McpToolExposure {
+    McpToolExposure::restrict(persisted.unwrap_or(McpToolExposure::UseTool), current)
 }
 
 pub(crate) async fn build_connection_runtime_for_clear(
@@ -220,4 +242,39 @@ pub(crate) fn touch_runtime_backed_resumed_session_activity(
     session_id: SessionId,
 ) {
     state.touch_session_activity(session_id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resumed_mcp_exposure_uses_use_tool_floor_and_never_widens() {
+        use McpToolExposure::{Defer, Load, UseTool};
+
+        assert_eq!(
+            effective_mcp_tool_exposure_on_resume(Option::None, Defer),
+            UseTool
+        );
+        assert_eq!(
+            effective_mcp_tool_exposure_on_resume(Some(Load), Defer),
+            Defer
+        );
+        assert_eq!(
+            effective_mcp_tool_exposure_on_resume(Some(UseTool), Defer),
+            UseTool
+        );
+        assert_eq!(
+            effective_mcp_tool_exposure_on_resume(Some(Defer), UseTool),
+            UseTool
+        );
+        assert_eq!(
+            effective_mcp_tool_exposure_on_resume(Some(Defer), Defer),
+            Defer
+        );
+        assert_eq!(
+            effective_mcp_tool_exposure_on_resume(Some(Defer), Load),
+            Defer
+        );
+    }
 }

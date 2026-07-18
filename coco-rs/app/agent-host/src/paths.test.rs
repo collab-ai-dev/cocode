@@ -40,6 +40,7 @@ fn session_workspace_uses_git_root_as_project_root() {
 }
 
 #[test]
+#[serial_test::serial(config_env)]
 fn runtime_paths_uses_remote_memory_dir_for_project_scoped_paths() {
     let _guard = crate::test_support::CONFIG_ENV_LOCK.blocking_lock();
     let config_home =

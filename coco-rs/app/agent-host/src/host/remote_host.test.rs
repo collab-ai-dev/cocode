@@ -162,6 +162,7 @@ fn assert_live_membership(
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[serial_test::serial(config_env)]
 async fn host_builder_starts_without_placeholder_session() {
     let _lock = crate::test_support::CONFIG_ENV_LOCK.lock().await;
     let config_home = tempfile::TempDir::new().expect("config home tempdir");
@@ -228,6 +229,7 @@ async fn host_builder_starts_without_placeholder_session() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[serial_test::serial(config_env)]
 async fn host_builder_updates_event_hub_membership_from_registry() {
     let _lock = crate::test_support::CONFIG_ENV_LOCK.lock().await;
     let (hub_url, mut announces) = spawn_announce_hub_server().await;
@@ -343,6 +345,7 @@ async fn host_builder_updates_event_hub_membership_from_registry() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[serial_test::serial(config_env)]
 async fn max_sessions_one_allows_first_real_session_without_placeholder() {
     let _lock = crate::test_support::CONFIG_ENV_LOCK.lock().await;
     let config_home = tempfile::TempDir::new().expect("config home tempdir");

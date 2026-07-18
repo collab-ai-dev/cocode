@@ -11,6 +11,30 @@ fn noop_elicitation() -> SendElicitation {
 }
 
 #[test]
+fn server_description_prefers_description_then_title_and_is_byte_bounded() {
+    let info = coco_mcp_types::Implementation {
+        name: "server".into(),
+        title: Some("fallback title".into()),
+        version: "1".into(),
+        description: Some(format!("  {}  ", "危险".repeat(100))),
+        user_agent: None,
+    };
+    let description = bounded_server_description(&info).expect("description");
+    assert!(description.len() <= MAX_SERVER_DESCRIPTION_BYTES);
+    assert!(description.is_char_boundary(description.len()));
+    assert!(!description.starts_with(char::is_whitespace));
+
+    let title_only = coco_mcp_types::Implementation {
+        description: None,
+        ..info
+    };
+    assert_eq!(
+        bounded_server_description(&title_only).as_deref(),
+        Some("fallback title")
+    );
+}
+
+#[test]
 fn headers_helper_output_must_be_string_map() {
     let ok = parse_headers_helper_output("srv", r#"{"Authorization":"Bearer x"}"#).unwrap();
     assert_eq!(ok.get("Authorization").unwrap(), "Bearer x");
@@ -233,6 +257,8 @@ fn tool_idle_timeout_is_remote_only_and_clamped_to_overall_timeout() {
         tool_timeout_ms: Some(2_000),
         tool_idle_timeout_ms: Some(10_000),
         policy: Default::default(),
+        tool_exposure: Default::default(),
+        server_tool_exposure: Default::default(),
     };
     let manager = McpConnectionManager::new_with_runtime_config(std::env::temp_dir(), &runtime);
 
@@ -265,6 +291,8 @@ fn tool_idle_timeout_zero_disables_remote_idle_watchdog() {
         tool_timeout_ms: Some(2_000),
         tool_idle_timeout_ms: Some(0),
         policy: Default::default(),
+        tool_exposure: Default::default(),
+        server_tool_exposure: Default::default(),
     };
     let manager = McpConnectionManager::new_with_runtime_config(std::env::temp_dir(), &runtime);
     let http = crate::types::McpServerConfig::Http(crate::types::McpHttpConfig {

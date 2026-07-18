@@ -188,6 +188,8 @@ impl Tool for SkillTool {
             // A fork-mode skill subagent is a sibling — it runs at the
             // invoker's depth, not one level deeper.
             parent_query_depth: ctx.query_depth,
+            mcp_tool_exposure: ctx.mcp_tool_exposure,
+            mcp_server_tool_exposure: ctx.mcp_server_tool_exposure.as_ref().clone(),
         };
         // `gate` carries the inputs `QuerySkillRuntime` needs to enforce
         // the 4-state Skill tool gate. With default-empty `skill_overrides`

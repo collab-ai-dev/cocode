@@ -1532,6 +1532,11 @@ fn validate_memory_dir_override(
 pub struct PartialMcpRuntimeSettings {
     pub tool_timeout_ms: Option<i32>,
     pub tool_idle_timeout_ms: Option<i32>,
+    /// Default for how MCP tool schemas reach the model:
+    /// `load` / `defer` / `use_tool`.
+    pub tool_exposure: Option<coco_types::McpToolExposure>,
+    /// Per-server overrides keyed by MCP server name.
+    pub server_tool_exposure: HashMap<String, coco_types::McpToolExposure>,
 }
 
 /// Settings-derived MCP server activation policy, resolved once at the
@@ -1558,6 +1563,10 @@ pub struct McpRuntimeConfig {
     /// Server activation policy (trust gate + deny list). Enforced by
     /// `coco-mcp::McpActivationPolicy` at registration time.
     pub policy: McpPolicyConfig,
+    /// Default MCP tool exposure: `load` / `defer` (default) / `use_tool`.
+    pub tool_exposure: coco_types::McpToolExposure,
+    /// Per-server exposure overrides keyed by MCP server name.
+    pub server_tool_exposure: HashMap<String, coco_types::McpToolExposure>,
 }
 
 impl McpRuntimeConfig {
@@ -1584,6 +1593,27 @@ impl McpRuntimeConfig {
         }
         if let Some(v) = env.get_i32(EnvKey::CocoMcpToolIdleTimeoutMs) {
             config.tool_idle_timeout_ms = Some(v);
+        }
+        if let Some(v) = settings.merged.mcp_runtime.tool_exposure {
+            config.tool_exposure = v;
+        }
+        config.server_tool_exposure = settings.merged.mcp_runtime.server_tool_exposure.clone();
+        if let Some(raw) = env.get_string(EnvKey::CocoMcpToolExposure) {
+            match raw.parse::<coco_types::McpToolExposure>() {
+                Ok(value) => config.tool_exposure = value,
+                Err(reason) => {
+                    // A malformed boundary must not silently load schemas.
+                    // `use_tool` is the least schema-exposing valid mode.
+                    tracing::warn!(
+                        target: "coco::config",
+                        env = %EnvKey::CocoMcpToolExposure,
+                        value = raw,
+                        %reason,
+                        "invalid MCP tool exposure; falling back to use_tool"
+                    );
+                    config.tool_exposure = coco_types::McpToolExposure::UseTool;
+                }
+            }
         }
         if let Some(v) = config.tool_timeout_ms {
             config.tool_timeout_ms = Some(v.max(1));

@@ -11,7 +11,7 @@ use std::sync::Arc;
 fn test_register_all_tools_count() {
     let registry = ToolRegistry::new();
     crate::register_all_tools(&registry);
-    // 46 statically-registered built-ins. Registration is universal; the
+    // 47 statically-registered built-ins. Registration is universal; the
     // 5-layer filter gates per-tool visibility by feature/model/context
     // (e.g. ApplyPatch by ToolOverrides, Workflow by Feature::Workflow, the
     // scheduling tools by Feature::AgentTriggers, the goal tools by a live
@@ -19,14 +19,14 @@ fn test_register_all_tools_count() {
     //   8 file (Bash/Read/Write/Edit/Glob/Grep/NotebookEdit/ApplyPatch)
     // + 2 web + 4 agent/orchestration (Agent/Workflow/Skill/SendMessage)
     // + 7 task/todo + 4 plan/worktree
-    // + 5 util (AskUserQuestion/ToolSearch/Config/SendUserMessage/Lsp)
+    // + 6 util (AskUserQuestion/ToolSearch/UseTool/Config/SendUserMessage/Lsp)
     // + 4 mcp + 6 scheduling (Cron{Create,Delete,List}/ScheduleWakeup/
     //   Monitor/RemoteTrigger) + 3 shell/repl (PowerShell/Repl/Sleep)
     // + 3 goals (GetGoal/ReportGoalTurn/CreateGoal).
     // `StructuredOutputTool` (conditionally injected via
     // `register_structured_output_tool` when `--json-schema` is parsed) and
     // dynamic `McpTool`s are intentionally excluded from this baseline.
-    assert_eq!(registry.len(), 46, "expected 46 tools registered");
+    assert_eq!(registry.len(), 47, "expected 47 tools registered");
 }
 
 #[test]
@@ -261,8 +261,7 @@ fn task_tools_loaded_except_task_output() {
     let registry = ToolRegistry::new();
     crate::register_all_tools(&registry);
     let ctx = ToolUseContext::test_default()
-        .with_tool_search_strategy(coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion)
-        .with_tool_search_candidates(true);
+        .with_tool_search_strategy(coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion);
 
     let loaded: HashSet<String> = registry
         .loaded_tools(&ctx)
@@ -296,14 +295,32 @@ fn task_tools_loaded_except_task_output() {
 }
 
 #[test]
+fn use_tool_transport_pair_is_stable_without_mcp_candidates() {
+    let registry = ToolRegistry::new();
+    crate::register_all_tools(&registry);
+    let ctx = ToolUseContext::test_default().with_mcp_tool_exposure(
+        coco_types::McpToolExposure::UseTool,
+        Arc::new(Default::default()),
+    );
+
+    let loaded: HashSet<String> = registry
+        .materialize(&ctx)
+        .loaded()
+        .map(|tool| tool.canonical_name.clone())
+        .collect();
+
+    assert!(loaded.contains(ToolName::ToolSearch.as_str()));
+    assert!(loaded.contains(ToolName::UseTool.as_str()));
+}
+
+#[test]
 fn todo_write_loaded_in_v1_mode() {
     let registry = ToolRegistry::new();
     crate::register_all_tools(&registry);
     let mut features = Features::with_defaults();
     features.disable(Feature::TaskV2);
     let ctx = ToolUseContext::test_default()
-        .with_tool_search_strategy(coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion)
-        .with_tool_search_candidates(true);
+        .with_tool_search_strategy(coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion);
     let mut ctx = ctx;
     ctx.features = Arc::new(features);
 

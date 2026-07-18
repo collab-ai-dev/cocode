@@ -139,6 +139,7 @@ impl SwarmAgentHandle {
             },
             inheritance: AgentSpawnInheritance {
                 features,
+                mcp_tool_exposure: meta.mcp_tool_exposure,
                 ..Default::default()
             },
             routing: AgentSpawnRouting {

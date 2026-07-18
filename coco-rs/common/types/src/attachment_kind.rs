@@ -23,7 +23,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// Every `AttachmentKind` discriminator, plus coco-rs-synthetic
-/// reminder kinds. 68 variants.
+/// reminder kinds. 69 variants.
 /// Wire format is snake_case via `#[serde(rename_all = "snake_case")]`
 /// to match `AttachmentKind` exactly, so transcripts round-trip.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -83,6 +83,7 @@ pub enum AttachmentKind {
     ToolSearchUsageReminder,
     AgentListingDelta,
     McpInstructionsDelta,
+    McpServersDelta,
     HookSuccess,
     HookBlockingError,
     HookAdditionalContext,
@@ -169,6 +170,7 @@ impl AttachmentKind {
             Self::ToolSearchUsageReminder => "tool_search_usage_reminder",
             Self::AgentListingDelta => "agent_listing_delta",
             Self::McpInstructionsDelta => "mcp_instructions_delta",
+            Self::McpServersDelta => "mcp_servers_delta",
             Self::HookSuccess => "hook_success",
             Self::HookBlockingError => "hook_blocking_error",
             Self::HookAdditionalContext => "hook_additional_context",
@@ -253,6 +255,7 @@ impl AttachmentKind {
             | ToolSearchUsageReminder
             | AgentListingDelta
             | McpInstructionsDelta
+            | McpServersDelta
             | HookSuccess
             | HookBlockingError
             | HookAdditionalContext
@@ -356,6 +359,7 @@ impl AttachmentKind {
             | DeferredToolsDelta
             | ToolSearchUsageReminder
             | McpInstructionsDelta
+            | McpServersDelta
             | CompanionIntro
             | TokenUsage
             | UltrathinkEffort
@@ -431,7 +435,7 @@ impl AttachmentKind {
         }
     }
 
-    /// Every variant in declaration order. Length must equal 68 (61 TS
+    /// Every variant in declaration order. Length must equal 69 (61 TS
     /// `Attachment` union members + coco-rs-synthetic `UserContext`,
     /// `SlashCommandMetadata`, `WorkflowKeywordRequest`, and
     /// memory reminder kinds, and `SkillLearnedReminder`) — enforced by the parity test.
@@ -463,6 +467,7 @@ impl AttachmentKind {
             Self::ToolSearchUsageReminder,
             Self::AgentListingDelta,
             Self::McpInstructionsDelta,
+            Self::McpServersDelta,
             Self::HookSuccess,
             Self::HookBlockingError,
             Self::HookAdditionalContext,
@@ -677,6 +682,9 @@ pub const fn coverage_of(kind: AttachmentKind) -> Coverage {
         },
         McpInstructionsDelta => Coverage::Reminder {
             generator: "McpInstructionsDeltaGenerator",
+        },
+        McpServersDelta => Coverage::Reminder {
+            generator: "McpServersDeltaGenerator",
         },
         HookSuccess => Coverage::Reminder {
             generator: "HookSuccessGenerator",

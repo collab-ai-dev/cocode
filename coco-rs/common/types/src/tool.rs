@@ -12,6 +12,56 @@ pub const MCP_TOOL_PREFIX: &str = "mcp__";
 /// Separator between server and tool in MCP qualified names.
 pub const MCP_TOOL_SEPARATOR: &str = "__";
 
+/// Escape the reserved MCP component delimiter without rewriting ordinary
+/// snake_case names. Percent signs are escaped first, then every underscore in
+/// a run of two or more is encoded. This makes the flat canonical spelling
+/// injective while preserving familiar names such as `create_issue`.
+fn encode_mcp_component(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '%' => output.push_str("%25"),
+            '_' => {
+                let mut count = 1;
+                while chars.next_if_eq(&'_').is_some() {
+                    count += 1;
+                }
+                if count == 1 {
+                    output.push('_');
+                } else {
+                    for _ in 0..count {
+                        output.push_str("%5F");
+                    }
+                }
+            }
+            _ => output.push(ch),
+        }
+    }
+    output
+}
+
+fn decode_mcp_component(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(index) = rest.find('%') {
+        output.push_str(&rest[..index]);
+        rest = &rest[index..];
+        if let Some(tail) = rest.strip_prefix("%25") {
+            output.push('%');
+            rest = tail;
+        } else if let Some(tail) = rest.strip_prefix("%5F") {
+            output.push('_');
+            rest = tail;
+        } else {
+            output.push('%');
+            rest = &rest[1..];
+        }
+    }
+    output.push_str(rest);
+    output
+}
+
 /// Branch prefix for agent worktrees created by `EnterWorktree`.
 pub const AGENT_WORKTREE_BRANCH_PREFIX: &str = "agent/task-";
 
@@ -60,6 +110,12 @@ pub enum ToolName {
     // Utility (5)
     AskUserQuestion,
     ToolSearch,
+    /// Source-neutral carrier: the model calls `use_tool { name, arguments }`
+    /// and the query preparer unwraps it to the real target before validation,
+    /// permissions, hooks, and execution. Wire name is snake_case `use_tool`
+    /// (matches the `mcp.tool_exposure = "use_tool"` mode).
+    #[serde(rename = "use_tool")]
+    UseTool,
     Config,
     /// TS wire name `SendUserMessage`.
     SendUserMessage,
@@ -134,6 +190,7 @@ impl ToolName {
             Self::ExitWorktree => "ExitWorktree",
             Self::AskUserQuestion => "AskUserQuestion",
             Self::ToolSearch => "ToolSearch",
+            Self::UseTool => "use_tool",
             Self::Config => "Config",
             Self::SendUserMessage => "SendUserMessage",
             Self::Lsp => "LSP",
@@ -253,6 +310,7 @@ impl FromStr for ToolName {
             "ExitWorktree" => Ok(Self::ExitWorktree),
             "AskUserQuestion" => Ok(Self::AskUserQuestion),
             "ToolSearch" => Ok(Self::ToolSearch),
+            "use_tool" => Ok(Self::UseTool),
             "Config" => Ok(Self::Config),
             "SendUserMessage" => Ok(Self::SendUserMessage),
             "LSP" => Ok(Self::Lsp),
@@ -354,7 +412,12 @@ impl fmt::Display for ToolId {
         match self {
             Self::Builtin(name) => f.write_str(name.as_str()),
             Self::Mcp { server, tool } => {
-                write!(f, "{MCP_TOOL_PREFIX}{server}{MCP_TOOL_SEPARATOR}{tool}")
+                write!(
+                    f,
+                    "{MCP_TOOL_PREFIX}{}{MCP_TOOL_SEPARATOR}{}",
+                    encode_mcp_component(server),
+                    encode_mcp_component(tool),
+                )
             }
             Self::Custom(name) => f.write_str(name),
         }
@@ -370,8 +433,8 @@ impl FromStr for ToolId {
             && let Some((server, tool)) = rest.split_once(MCP_TOOL_SEPARATOR)
         {
             return Ok(Self::Mcp {
-                server: server.into(),
-                tool: tool.into(),
+                server: decode_mcp_component(server),
+                tool: decode_mcp_component(tool),
             });
         }
         Ok(ToolName::from_str(s)

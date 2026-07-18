@@ -26,6 +26,16 @@ pub(crate) enum PreToolUseOutcome {
     Blocked,
 }
 
+/// State needed to settle a tool call when a pre-tool hook blocks it.
+pub(crate) struct PreToolUseSettlement<'a> {
+    pub event_tx: &'a Option<mpsc::Sender<CoreEvent>>,
+    pub history: &'a mut MessageHistory,
+    pub provider_tool_name: &'a str,
+    pub tool_id: &'a ToolId,
+    pub completion_event_mode: ToolCompletionEventMode,
+    pub deferred_tool_completions: Option<&'a mut crate::helpers::DeferredToolCompletionBuffer>,
+}
+
 #[derive(Default)]
 pub(crate) struct PostToolUseOutcome {
     pub additional_contexts: Vec<String>,
@@ -67,12 +77,8 @@ impl<'a> HookController<'a> {
 
     pub(crate) async fn run_pre_tool_use(
         &self,
-        event_tx: &Option<mpsc::Sender<CoreEvent>>,
-        history: &mut MessageHistory,
         tool_call: &ToolCallPart,
-        tool_id: &ToolId,
-        completion_event_mode: ToolCompletionEventMode,
-        deferred_tool_completions: Option<&mut crate::helpers::DeferredToolCompletionBuffer>,
+        settlement: PreToolUseSettlement<'_>,
     ) -> PreToolUseOutcome {
         let Some(hooks) = self.hooks else {
             return PreToolUseOutcome::Continue {
@@ -103,15 +109,15 @@ impl<'a> HookController<'a> {
                     "PreToolUse hook blocked tool execution"
                 );
                 complete_tool_call_with_error_mode(
-                    event_tx,
-                    history,
+                    settlement.event_tx,
+                    settlement.history,
                     &tool_call.tool_call_id,
-                    &tool_call.tool_name,
-                    tool_id,
+                    settlement.provider_tool_name,
+                    settlement.tool_id,
                     &output,
                     coco_tool_runtime::ToolCallErrorKind::HookBlocked,
-                    completion_event_mode,
-                    deferred_tool_completions,
+                    settlement.completion_event_mode,
+                    settlement.deferred_tool_completions,
                 )
                 .await;
                 PreToolUseOutcome::Blocked

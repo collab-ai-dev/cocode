@@ -589,6 +589,8 @@ pub(super) struct PostCompactDeltaState {
     pub(super) agent_id: Option<String>,
     pub(super) current_agents: Vec<String>,
     pub(super) current_mcp_instructions: HashMap<String, String>,
+    pub(super) current_mcp_servers:
+        std::collections::BTreeMap<String, coco_types::McpServerAnnouncementState>,
 }
 
 pub(super) fn preserved_contains_attachment_kind<M: std::borrow::Borrow<Message>>(

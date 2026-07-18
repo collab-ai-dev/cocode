@@ -4,6 +4,7 @@
 //! Here we cover the small pure helpers that downstream code relies on.
 
 use super::most_recent_assistant_exceeds;
+use crate::engine_helpers::compute_mcp_servers_delta;
 use crate::engine_helpers::compute_tools_delta;
 use coco_messages::AssistantContent;
 use coco_messages::Message;
@@ -11,6 +12,7 @@ use coco_messages::create_assistant_message;
 use coco_messages::create_user_message;
 use coco_types::TokenUsage;
 use coco_types::ToolAppState;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 
 fn assistant_with_total(total: i64) -> Message {
@@ -112,5 +114,50 @@ fn scoped_announced_tools_prevent_subagent_false_removal() {
     assert!(
         compute_tools_delta(&[], &[], &agent_baseline).is_none(),
         "subagent first turn must not inherit main-session deferred tools"
+    );
+}
+
+#[test]
+fn mcp_server_delta_tracks_count_changes_and_disconnects() {
+    let previous = BTreeMap::from([(
+        "github".to_string(),
+        coco_types::McpServerAnnouncementState {
+            tool_count: 1,
+            description: None,
+        },
+    )]);
+    let current = vec![coco_system_reminder::McpServerSummary {
+        name: "github".into(),
+        tool_count: 2,
+        description: None,
+    }];
+
+    let changed =
+        compute_mcp_servers_delta(&current, &previous).expect("tool-count change must emit");
+    assert_eq!(changed.servers[0].tool_count, 2);
+
+    let disconnected = compute_mcp_servers_delta(&[], &previous).expect("disconnect must emit");
+    assert!(disconnected.servers.is_empty());
+    assert_eq!(disconnected.removed_names, vec!["github"]);
+}
+
+#[test]
+fn mcp_server_baselines_are_agent_scoped() {
+    let mut state = ToolAppState::default();
+    state.set_last_announced_mcp_servers_for_scope(
+        None,
+        BTreeMap::from([(
+            "github".to_string(),
+            coco_types::McpServerAnnouncementState {
+                tool_count: 1,
+                description: None,
+            },
+        )]),
+    );
+
+    assert!(
+        state
+            .last_announced_mcp_servers_for_scope(Some("agent-a"))
+            .is_empty()
     );
 }

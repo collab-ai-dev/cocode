@@ -2059,7 +2059,7 @@
       ]
     },
     "AttachmentKind": {
-      "description": "Every `AttachmentKind` discriminator, plus coco-rs-synthetic\nreminder kinds. 68 variants.\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]`\nto match `AttachmentKind` exactly, so transcripts round-trip.",
+      "description": "Every `AttachmentKind` discriminator, plus coco-rs-synthetic\nreminder kinds. 69 variants.\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]`\nto match `AttachmentKind` exactly, so transcripts round-trip.",
       "oneOf": [
         {
           "type": "string",
@@ -2083,6 +2083,7 @@
             "deferred_tools_delta",
             "agent_listing_delta",
             "mcp_instructions_delta",
+            "mcp_servers_delta",
             "hook_success",
             "hook_blocking_error",
             "hook_additional_context",

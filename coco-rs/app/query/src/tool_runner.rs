@@ -6,11 +6,13 @@ use coco_tool_runtime::DynTool;
 use coco_tool_runtime::MaterializedToolLookup;
 use coco_tool_runtime::ToolCallErrorKind;
 use coco_tool_runtime::ToolMaterialization;
+use coco_tool_runtime::ToolPlacement;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::CoreEvent;
 use coco_types::ToolId;
 use coco_types::ToolName;
+use coco_types::WireToolName;
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tracing::warn;
@@ -32,10 +34,14 @@ pub(crate) struct ToolSettlement<'a> {
 /// the wire shape for history/provider round-trips; everything downstream
 /// of preparation — permission evaluation, hooks, execution — must consume
 /// this value instead.
-pub(crate) struct PreparedToolCall {
+pub(crate) struct ResolvedToolCall {
     pub tool_id: ToolId,
     pub tool: Arc<dyn DynTool>,
     pub input: coco_tool_runtime::ValidatedInput,
+    /// Canonical semantic call consumed by hooks, permissions and audit.
+    pub semantic_call: ToolCallPart,
+    /// Provider call name used only when constructing the paired tool result.
+    pub provider_tool_name: WireToolName,
 }
 
 /// Prepare one committed assistant tool call.
@@ -58,12 +64,9 @@ pub(crate) async fn prepare_committed_tool_call(
     tool_call: &ToolCallPart,
     completion_event_mode: ToolCompletionEventMode,
     deferred_tool_completions: Option<&mut crate::helpers::DeferredToolCompletionBuffer>,
-) -> Option<PreparedToolCall> {
+) -> Option<ResolvedToolCall> {
     let mut deferred_tool_completions = deferred_tool_completions;
-    let tool_id: ToolId = tool_call
-        .tool_name
-        .parse()
-        .unwrap_or_else(|_| ToolId::Custom(tool_call.tool_name.clone()));
+    let unknown_tool_id = ToolId::Custom(tool_call.tool_name.clone());
 
     let _delivered = emit_stream(
         event_tx,
@@ -75,35 +78,49 @@ pub(crate) async fn prepare_committed_tool_call(
     )
     .await;
 
-    let tool = match settlement
+    // Carrier calls (`use_tool { name, arguments }`) resolve to their real
+    // target here, before the normal lookup/validation. The wire identity
+    // (`use_tool` + call id) is preserved by the caller's `ToolResultContext`
+    // for provider result pairing; the returned `ResolvedToolCall` carries the
+    // resolved target so permissions/hooks/execution key on the real tool.
+    if tool_call.tool_name == ToolName::UseTool.as_str() {
+        return prepare_use_tool_call(
+            event_tx,
+            history,
+            &settlement,
+            ctx,
+            tool_call,
+            completion_event_mode,
+            deferred_tool_completions.take(),
+        )
+        .await;
+    }
+
+    let (tool_id, tool, provider_tool_name) = match settlement
         .materialization
-        .lookup(settlement.registry, &tool_id)
+        .lookup_wire(settlement.registry, &tool_call.tool_name)
     {
-        MaterializedToolLookup::Loaded(materialized) => materialized.tool,
-        MaterializedToolLookup::Deferred { name, tool } => {
+        MaterializedToolLookup::Loaded(materialized) => (
+            materialized.tool_id,
+            materialized.tool,
+            materialized.wire_name,
+        ),
+        MaterializedToolLookup::Deferred { name, tool: _ } => {
             warn!(
                 tool = tool_call.tool_name,
                 resolved_tool = name,
                 "deferred tool called before ToolSearch discovery"
             );
-            // Append the deferred tool's input schema so the model can call it
-            // correctly on the next turn (after ToolSearch loads it) instead of
-            // a second round-trip just to discover the argument shape. The tool
-            // is registered — only absent from this turn's loaded set — so the
-            // registry still resolves it.
-            let schema_hint = serde_json::to_string(tool.runtime_validation_schema().as_value())
-                .map(|s| format!(" For reference, this tool's input schema is: {s}"))
-                .unwrap_or_default();
             let output = format!(
-                "<tool_use_error>No such tool available: {}. It is a deferred tool that has not been loaded yet; use ToolSearch with query \"select:{}\" first.{}</tool_use_error>",
-                tool_call.tool_name, name, schema_hint
+                "<tool_use_error>No such tool available: {}. It is deferred; use ToolSearch with query \"select:{}\" to obtain its bounded schema first.</tool_use_error>",
+                tool_call.tool_name, name
             );
             complete_tool_call_with_error_mode(
                 event_tx,
                 history,
                 &tool_call.tool_call_id,
                 &tool_call.tool_name,
-                &tool_id,
+                &unknown_tool_id,
                 &output,
                 ToolCallErrorKind::UnknownTool,
                 completion_event_mode,
@@ -127,7 +144,7 @@ pub(crate) async fn prepare_committed_tool_call(
                 history,
                 &tool_call.tool_call_id,
                 &tool_call.tool_name,
-                &tool_id,
+                &unknown_tool_id,
                 &output,
                 ToolCallErrorKind::UnknownTool,
                 completion_event_mode,
@@ -155,7 +172,7 @@ pub(crate) async fn prepare_committed_tool_call(
                 history,
                 &tool_call.tool_call_id,
                 &tool_call.tool_name,
-                &tool_id,
+                &unknown_tool_id,
                 &output,
                 ToolCallErrorKind::UnknownTool,
                 completion_event_mode,
@@ -178,7 +195,7 @@ pub(crate) async fn prepare_committed_tool_call(
     // committed `tool_call` keeps its wire-shape input for the provider
     // round-trip. The coerced, schema-validated input it returns is the
     // value every downstream consumer (permission evaluation, hooks,
-    // execution) sees — threading it through `PreparedToolCall` is what
+    // execution) sees — threading it through `ResolvedToolCall` is what
     // keeps the serde-backed validators and `T::Input` deserialization
     // from ever meeting a raw freeform string.
     let mut validated = tool_call.clone();
@@ -266,10 +283,223 @@ pub(crate) async fn prepare_committed_tool_call(
         return None;
     }
 
-    Some(PreparedToolCall {
+    let mut semantic_call = tool_call.clone();
+    semantic_call.tool_name = tool_id.to_string();
+    Some(ResolvedToolCall {
         tool_id,
         tool,
         input: validated_input,
+        semantic_call,
+        provider_tool_name,
+    })
+}
+
+/// Resolve a `use_tool` carrier call to its real target.
+///
+/// The provider wire call keeps the `use_tool` name + call id — the caller's
+/// `ToolResultContext` pairs the result on it (Google pairs a function response
+/// by name) — while the returned [`ResolvedToolCall`] carries the resolved
+/// TARGET so validation, permissions, hooks, and execution all key on the real
+/// tool. Every failure completes exactly one model-visible error under the WIRE
+/// identity, preserving the tool-result pairing invariant.
+///
+/// Only targets materialized as [`ToolPlacement::UseTool`] can use this path;
+/// loaded and deferred targets return a placement-specific steering error.
+async fn prepare_use_tool_call(
+    event_tx: &Option<mpsc::Sender<CoreEvent>>,
+    history: &mut MessageHistory,
+    settlement: &ToolSettlement<'_>,
+    ctx: &ToolUseContext,
+    tool_call: &ToolCallPart,
+    completion_event_mode: ToolCompletionEventMode,
+    deferred_tool_completions: Option<&mut crate::helpers::DeferredToolCompletionBuffer>,
+) -> Option<ResolvedToolCall> {
+    let mut deferred_tool_completions = deferred_tool_completions;
+    let wire_id = &tool_call.tool_call_id;
+    let wire_name = &tool_call.tool_name; // always "use_tool"
+    let carrier_id = ToolId::Builtin(ToolName::UseTool);
+
+    // 1. Parse the carrier `{ name, arguments }`. Parsed inline: app/query must
+    //    not depend on coco-tools, where `UseToolInput` lives.
+    let target_name = match tool_call.input.get("name").and_then(Value::as_str) {
+        Some(name) if !name.is_empty() => name.to_string(),
+        _ => {
+            let msg = "<tool_use_error>use_tool requires a non-empty `name` naming the tool to \
+                 invoke, exactly as ToolSearch returned it.</tool_use_error>"
+                .to_string();
+            complete_tool_call_with_error_mode(
+                event_tx,
+                history,
+                wire_id,
+                wire_name,
+                &carrier_id,
+                &msg,
+                ToolCallErrorKind::ValidationFailed,
+                completion_event_mode,
+                deferred_tool_completions.take(),
+            )
+            .await;
+            return None;
+        }
+    };
+    let arguments = tool_call
+        .input
+        .get("arguments")
+        .cloned()
+        .unwrap_or(Value::Null);
+
+    // 2. Resolve the target by wire name (registry owns the map; no parsing)
+    //    and apply placement-aware steering. Clone the fields we need so the
+    //    materialization borrow ends before the registry staleness check.
+    let (target_tool, target_id, target_canonical, target_reg, steering) =
+        match settlement.materialization.lookup_by_wire_name(&target_name) {
+            None => {
+                let msg = format!(
+                    "<tool_use_error>No such tool available: {target_name}</tool_use_error>"
+                );
+                complete_tool_call_with_error_mode(
+                    event_tx,
+                    history,
+                    wire_id,
+                    wire_name,
+                    &carrier_id,
+                    &msg,
+                    ToolCallErrorKind::UnknownTool,
+                    completion_event_mode,
+                    deferred_tool_completions.take(),
+                )
+                .await;
+                return None;
+            }
+            Some(t) => {
+                let steering = match t.placement {
+                    ToolPlacement::UseTool => None,
+                    ToolPlacement::Loaded => Some(format!(
+                        "<tool_use_error>{target_name} is already in your tool list — call it \
+                         directly, not through use_tool.</tool_use_error>"
+                    )),
+                    ToolPlacement::Deferred => Some(format!(
+                        "<tool_use_error>{target_name} is not loaded yet — use ToolSearch with \
+                         query \"select:{target_name}\" first, then call it.</tool_use_error>"
+                    )),
+                };
+                (
+                    t.tool.clone(),
+                    t.tool_id.clone(),
+                    t.canonical_name.clone(),
+                    t.registration_id,
+                    steering,
+                )
+            }
+        };
+    if let Some(msg) = steering {
+        complete_tool_call_with_error_mode(
+            event_tx,
+            history,
+            wire_id,
+            wire_name,
+            &carrier_id,
+            &msg,
+            ToolCallErrorKind::UnknownTool,
+            completion_event_mode,
+            deferred_tool_completions.take(),
+        )
+        .await;
+        return None;
+    }
+
+    // 3. Stale check against the live registry — fail closed on a
+    //    replaced/removed registration.
+    if settlement
+        .registry
+        .current_registration_id(&target_canonical)
+        != Some(target_reg)
+    {
+        let msg = format!(
+            "<tool_use_error>No such tool available: {target_name}. Its registration changed \
+             after this turn's tool list was sent; retry the request.</tool_use_error>"
+        );
+        complete_tool_call_with_error_mode(
+            event_tx,
+            history,
+            wire_id,
+            wire_name,
+            &carrier_id,
+            &msg,
+            ToolCallErrorKind::UnknownTool,
+            completion_event_mode,
+            deferred_tool_completions.take(),
+        )
+        .await;
+        return None;
+    }
+
+    // 4. Validate `arguments` against the TARGET schema via the normal
+    //    pipeline. Error results keep the WIRE identity so pairing holds.
+    let mut synthetic = tool_call.clone();
+    synthetic.tool_name = target_id.to_string();
+    synthetic.input = arguments;
+    let Some(validated_input) =
+        crate::tool_input_pipeline::validate_tool_call(&mut synthetic, Some(&target_tool))
+    else {
+        let message = match synthetic.invalid_reason {
+            Some(coco_llm_types::ToolInputInvalidReason::SchemaViolation { message }) => {
+                format!("<tool_use_error>InputValidationError: {message}</tool_use_error>")
+            }
+            Some(coco_llm_types::ToolInputInvalidReason::NoSuchTool { tool_name }) => {
+                format!("<tool_use_error>No such tool available: {tool_name}</tool_use_error>")
+            }
+            Some(coco_llm_types::ToolInputInvalidReason::JsonParseFailed { error, .. }) => {
+                format!(
+                    "<tool_use_error>The target tool's arguments could not be parsed as JSON: \
+                     {error}. Please retry with valid JSON.</tool_use_error>"
+                )
+            }
+            None => "<tool_use_error>Invalid tool call</tool_use_error>".to_string(),
+        };
+        complete_tool_call_with_error_mode(
+            event_tx,
+            history,
+            wire_id,
+            wire_name,
+            &target_id,
+            &message,
+            ToolCallErrorKind::SchemaFailed,
+            completion_event_mode,
+            deferred_tool_completions.take(),
+        )
+        .await;
+        return None;
+    };
+    let validation = target_tool.validate_input(validated_input.as_value(), ctx);
+    if !validation.is_valid() {
+        let message = match validation {
+            coco_tool_runtime::ValidationResult::Invalid { message, .. } => {
+                format!("Invalid input: {message}")
+            }
+            coco_tool_runtime::ValidationResult::Valid => "Invalid input".to_string(),
+        };
+        complete_tool_call_with_error_mode(
+            event_tx,
+            history,
+            wire_id,
+            wire_name,
+            &target_id,
+            &message,
+            ToolCallErrorKind::ValidationFailed,
+            completion_event_mode,
+            deferred_tool_completions.take(),
+        )
+        .await;
+        return None;
+    }
+
+    Some(ResolvedToolCall {
+        tool_id: target_id,
+        tool: target_tool,
+        input: validated_input,
+        semantic_call: synthetic,
+        provider_tool_name: WireToolName::for_tool_id(&carrier_id),
     })
 }
 

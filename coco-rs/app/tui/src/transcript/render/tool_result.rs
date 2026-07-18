@@ -196,7 +196,9 @@ fn render_known(
         | ExitWorktree | ToolSearch | Config | SendUserMessage | Lsp | McpAuth
         | ListMcpResources | ReadMcpResourceDir | ReadMcpResource | CronCreate | CronDelete
         | CronList | ScheduleWakeup | Monitor | RemoteTrigger | Sleep | StructuredOutput
-        | GetGoal | ReportGoalTurn | CreateGoal => render_structured_default(cx, output, lines),
+        | UseTool | GetGoal | ReportGoalTurn | CreateGoal => {
+            render_structured_default(cx, output, lines)
+        }
     }
 }
 

@@ -117,6 +117,13 @@ pub struct AgentQueryConfig {
     /// `createSubagentContext` cwd + `additionalWorkingDirectories` parity).
     #[serde(default)]
     pub inherited_read_dirs: Vec<String>,
+    /// Parent's resolved MCP exposure, inherited so the child never widens
+    /// (plan §4.3). The child resolves its own effective placement from this
+    /// against its own model.
+    pub mcp_tool_exposure: coco_types::McpToolExposure,
+    /// Per-server exposure overrides inherited from the parent runtime.
+    #[serde(default)]
+    pub mcp_server_tool_exposure: std::collections::HashMap<String, coco_types::McpToolExposure>,
     /// Optional cancellation token for this agent query turn. In-process
     /// teammates use a fresh token per prompt so interrupting current
     /// work does not kill the teammate lifecycle.
@@ -383,6 +390,8 @@ impl Default for AgentQueryConfig {
             permission_mode: coco_types::PermissionMode::Default,
             permission_prompt_policy: PermissionPromptPolicy::FailClosed,
             inherited_read_dirs: Vec::new(),
+            mcp_tool_exposure: coco_types::McpToolExposure::UseTool,
+            mcp_server_tool_exposure: std::collections::HashMap::new(),
             cancel: None,
             child_query_depth: 0,
             max_turns: None,

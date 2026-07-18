@@ -305,6 +305,7 @@ pub struct GeneratorContext<'a> {
     /// `McpInstructionsDelta` attachments and diffs current server
     /// instructions (from `services/mcp`) against them.
     pub mcp_instructions_delta: Option<McpInstructionsDeltaInfo>,
+    pub mcp_servers_delta: Option<McpServersDeltaInfo>,
 
     // ── Phase 3 cross-crate snapshots ──
     /// Hook events collected from the async hook registry this turn.
@@ -471,6 +472,7 @@ pub struct GeneratorContextBuilder<'a> {
     deferred_tools_delta: Option<DeferredToolsDeltaInfo>,
     agent_listing_delta: Option<AgentListingDeltaInfo>,
     mcp_instructions_delta: Option<McpInstructionsDeltaInfo>,
+    mcp_servers_delta: Option<McpServersDeltaInfo>,
     hook_events: Vec<HookEvent>,
     diagnostics: Vec<DiagnosticFileSummary>,
     output_style: Option<OutputStyleSnapshot>,
@@ -555,6 +557,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             deferred_tools_delta: None,
             agent_listing_delta: None,
             mcp_instructions_delta: None,
+            mcp_servers_delta: None,
             hook_events: Vec::new(),
             diagnostics: Vec::new(),
             output_style: None,
@@ -843,6 +846,11 @@ impl<'a> GeneratorContextBuilder<'a> {
         self
     }
 
+    pub fn mcp_servers_delta(mut self, info: Option<McpServersDeltaInfo>) -> Self {
+        self.mcp_servers_delta = info;
+        self
+    }
+
     pub fn hook_events(mut self, events: Vec<HookEvent>) -> Self {
         self.hook_events = events;
         self
@@ -1037,6 +1045,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             deferred_tools_delta: self.deferred_tools_delta,
             agent_listing_delta: self.agent_listing_delta,
             mcp_instructions_delta: self.mcp_instructions_delta,
+            mcp_servers_delta: self.mcp_servers_delta,
             hook_events: self.hook_events,
             diagnostics: self.diagnostics,
             output_style: self.output_style,
@@ -1107,6 +1116,33 @@ pub struct McpInstructionsDeltaInfo {
 impl McpInstructionsDeltaInfo {
     pub fn is_empty(&self) -> bool {
         self.added_blocks.is_empty() && self.removed_names.is_empty()
+    }
+}
+
+/// Bounded snapshot of the MCP servers discoverable this turn (name +
+/// discoverable tool count + optional description). The engine pre-computes it
+/// from the connected servers joined with the current materialization, capped
+/// and sorted; the generator fires only on a real change (plan §8).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct McpServersDeltaInfo {
+    pub servers: Vec<McpServerSummary>,
+    /// Servers that were previously discoverable in this scope but are no
+    /// longer present. Kept separate so a final disconnect is observable.
+    pub removed_names: Vec<String>,
+    /// Count dropped by the announcement cap (rendered as a trailing note).
+    pub omitted: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpServerSummary {
+    pub name: String,
+    pub tool_count: usize,
+    pub description: Option<String>,
+}
+
+impl McpServersDeltaInfo {
+    pub fn is_empty(&self) -> bool {
+        self.servers.is_empty() && self.removed_names.is_empty()
     }
 }
 

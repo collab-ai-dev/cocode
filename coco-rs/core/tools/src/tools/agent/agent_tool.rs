@@ -1061,6 +1061,8 @@ impl Tool for AgentTool {
                 active_shell_tool: ctx.active_shell_tool,
                 use_auto_mode_during_plan: ctx.use_auto_mode_during_plan,
                 parent_tool_filter: Some(ctx.tool_filter.clone()),
+                mcp_tool_exposure: ctx.mcp_tool_exposure,
+                mcp_server_tool_exposure: ctx.mcp_server_tool_exposure.as_ref().clone(),
             },
             routing: AgentSpawnRouting {
                 session_id,

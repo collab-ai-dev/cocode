@@ -33,6 +33,8 @@ fn spawn_config(name: &str, team: &str) -> TeammateSpawnConfig {
         effort: None,
         use_exact_tools: false,
         mcp_servers: Vec::new(),
+        mcp_tool_exposure: coco_types::McpToolExposure::UseTool,
+        mcp_server_tool_exposure: Default::default(),
         disallowed_tools: Vec::new(),
         max_turns: None,
     }

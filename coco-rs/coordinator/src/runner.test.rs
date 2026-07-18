@@ -21,6 +21,8 @@ fn make_spawn_config(name: &str, team: &str) -> SpawnConfig {
         isolation: coco_types::AgentIsolation::None,
         memory_scope: None,
         mcp_servers: vec![],
+        mcp_tool_exposure: coco_types::McpToolExposure::UseTool,
+        mcp_server_tool_exposure: Default::default(),
         disallowed_tools: vec![],
         max_turns: None,
     }
@@ -199,6 +201,8 @@ async fn test_get_context() {
             isolation: coco_types::AgentIsolation::Worktree,
             memory_scope: Some(coco_types::MemoryScope::Project),
             mcp_servers: vec!["github".into()],
+            mcp_tool_exposure: coco_types::McpToolExposure::UseTool,
+            mcp_server_tool_exposure: Default::default(),
             disallowed_tools: vec!["Bash".into()],
             max_turns: Some(15),
         })

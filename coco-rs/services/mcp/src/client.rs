@@ -17,6 +17,7 @@ use std::time::Duration;
 use coco_error::BoxedError;
 use coco_mcp_types::CallToolRequestParams;
 use coco_mcp_types::CallToolResult;
+use coco_mcp_types::Implementation;
 use coco_mcp_types::InitializeResult;
 use coco_mcp_types::JSONRPC_VERSION;
 use coco_mcp_types::ListPromptsResult;
@@ -41,7 +42,6 @@ use tokio::time::timeout;
 use tracing::info;
 use tracing::warn;
 
-use crate::naming;
 use crate::types::ConnectedMcpServer;
 use crate::types::McpCapabilities;
 use crate::types::McpConnectionState;
@@ -68,6 +68,20 @@ const SESSION_INGRESS_MCP_PATHS: [&str; 4] = [
 ];
 const MCP_SKILLS_EXTENSION: &str = "io.modelcontextprotocol/skills";
 const MAX_DIRECTORY_READ_PAGES: usize = 20;
+const MAX_SERVER_DESCRIPTION_BYTES: usize = 256;
+
+fn bounded_server_description(info: &Implementation) -> Option<String> {
+    let value = info
+        .description
+        .as_deref()
+        .or(info.title.as_deref())?
+        .trim();
+    if value.is_empty() {
+        return None;
+    }
+    let end = value.floor_char_boundary(value.len().min(MAX_SERVER_DESCRIPTION_BYTES));
+    Some(value[..end].to_string())
+}
 
 pub type ClientRouteFuture =
     Pin<Box<dyn Future<Output = std::result::Result<serde_json::Value, String>> + Send>>;
@@ -463,6 +477,7 @@ impl McpConnectionManager {
                 name: "coco".to_string(),
                 title: None,
                 version: env!("CARGO_PKG_VERSION").to_string(),
+                description: None,
                 user_agent: None,
             },
             protocol_version: "2024-11-05".to_string(),
@@ -533,6 +548,7 @@ impl McpConnectionManager {
 
         Ok(ConnectedMcpServer {
             name: server_name.to_string(),
+            description: bounded_server_description(&init_result.server_info),
             capabilities,
             // Server instructions are capped at 2048 chars (same limit as tool
             // descriptions) because they reach the model via a <system-reminder>.
@@ -845,6 +861,7 @@ impl McpConnectionManager {
 
         Ok(ConnectedMcpServer {
             name: server_name.to_string(),
+            description: bounded_server_description(&init_result.server_info),
             capabilities,
             // Server instructions are capped at 2048 chars (same limit as tool
             // descriptions) because they reach the model via a <system-reminder>.
@@ -1205,19 +1222,6 @@ impl McpConnectionManager {
             }
             manager.notify_reconnect(&server_name);
         });
-    }
-
-    /// Call an MCP tool using its full wire name (mcp__server__tool).
-    pub async fn call_tool_by_wire_name(
-        &self,
-        wire_name: &str,
-        arguments: Option<serde_json::Value>,
-    ) -> Result<CallToolResult, McpClientError> {
-        let (server, tool) =
-            naming::parse_mcp_tool_id(wire_name).ok_or_else(|| McpClientError::ToolCallFailed {
-                message: format!("invalid MCP tool name: {wire_name}"),
-            })?;
-        self.call_tool(&server, &tool, arguments).await
     }
 
     /// Get the current state of a server connection.

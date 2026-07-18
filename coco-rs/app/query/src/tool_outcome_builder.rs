@@ -42,7 +42,10 @@ use crate::tool_message::ToolMessagePath as RunnerMessagePath;
 pub(crate) struct RunOneTail<'a> {
     pub tool_use_id: String,
     pub tool_id: ToolId,
-    pub tool_name: String,
+    /// Canonical target identity for hooks, audit and UI events.
+    pub semantic_tool_name: String,
+    /// Original provider call name for tool-result pairing.
+    pub provider_tool_name: coco_types::WireToolName,
     pub model_index: usize,
     pub tool: Arc<dyn DynTool>,
     pub effective_input: Value,
@@ -225,7 +228,8 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
     let RunOneTail {
         tool_use_id,
         tool_id,
-        tool_name,
+        semantic_tool_name,
+        provider_tool_name,
         model_index,
         tool,
         effective_input,
@@ -266,7 +270,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
             };
             let post = HookController::new(hooks, orchestration_ctx, hook_tx)
                 .run_post_tool_use(
-                    &tool_name,
+                    &semantic_tool_name,
                     &tool_use_id,
                     &effective_input,
                     hook_output.as_ref().unwrap_or(&output_data),
@@ -308,7 +312,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                 Some(rendered_text) => {
                     let rendered_output_raw = if rendered_text.trim().is_empty() {
                         coco_tool_runtime::tool_result_storage::empty_tool_result_message(
-                            &tool_name,
+                            &semantic_tool_name,
                         )
                     } else {
                         rendered_text
@@ -327,7 +331,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
 
                     create_tool_result_message(
                         &tool_use_id,
-                        &tool_name,
+                        provider_tool_name.as_str(),
                         tool_id.clone(),
                         &rendered_output,
                         tool_result_is_error,
@@ -345,7 +349,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                     .await;
                     create_tool_result_message_with_parts(
                         &tool_use_id,
-                        &tool_name,
+                        provider_tool_name.as_str(),
                         tool_id.clone(),
                         parts,
                         tool_result_is_error,
@@ -363,7 +367,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
             // attachment kind + format match the legacy
             // `tool_result_processor` path.
             let post_hook_msgs = render_hook_context_messages(
-                &tool_name,
+                &semantic_tool_name,
                 &post.additional_contexts,
                 ReminderAttachmentType::HookAdditionalContext,
             );
@@ -373,7 +377,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                     .stop_reason
                     .clone()
                     .unwrap_or_else(|| "PostToolUse hook stopped continuation".into());
-                render_hook_stopped_continuation_message(&tool_name, &reason)
+                render_hook_stopped_continuation_message(&semantic_tool_name, &reason)
             } else {
                 None
             };
@@ -431,11 +435,11 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
             } else {
                 format!("Error: {error_message}")
             };
-            warn!(tool = %tool_name, error = %error, "tool execution failed");
+            warn!(tool = %semantic_tool_name, error = %error, "tool execution failed");
 
             let post = HookController::new(hooks, orchestration_ctx, hook_tx)
                 .run_post_tool_use_failure(
-                    &tool_name,
+                    &semantic_tool_name,
                     &tool_use_id,
                     &effective_input,
                     &error_message,
@@ -445,7 +449,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
 
             let mut tool_result_msg = create_error_tool_result(
                 &tool_use_id,
-                &tool_name,
+                provider_tool_name.as_str(),
                 tool_id.clone(),
                 &rendered_error,
             );
@@ -456,7 +460,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                 tr.display_data = Some(display_data);
             }
             let post_hook_msgs = render_hook_context_messages(
-                &tool_name,
+                &semantic_tool_name,
                 &post.additional_contexts,
                 ReminderAttachmentType::HookAdditionalContext,
             );

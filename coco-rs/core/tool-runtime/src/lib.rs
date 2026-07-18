@@ -145,6 +145,8 @@ pub use registry::MaterializedTool;
 pub use registry::MaterializedToolLookup;
 pub use registry::ToolLookup;
 pub use registry::ToolMaterialization;
+pub use registry::ToolPlacement;
+pub use registry::ToolRegistrationError;
 pub use registry::ToolRegistrationId;
 pub use registry::ToolRegistry;
 pub use schedule_store::CronTask;

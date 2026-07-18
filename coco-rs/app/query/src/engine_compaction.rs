@@ -934,9 +934,18 @@ impl QueryEngine {
             None => coco_types::ToolAppState::default(),
         };
 
-        let (current_loaded_tools, current_deferred_tools) = self
-            .current_tool_search_partitions(&app_state_snapshot)
-            .await;
+        let current_tool_materialization =
+            self.current_tool_materialization(&app_state_snapshot).await;
+        let mut current_loaded_tools: Vec<String> = current_tool_materialization
+            .loaded()
+            .map(|tool| tool.wire_name.as_str().to_string())
+            .collect();
+        current_loaded_tools.sort();
+        let mut current_deferred_tools: Vec<String> = current_tool_materialization
+            .deferred()
+            .map(|tool| tool.wire_name.as_str().to_string())
+            .collect();
+        current_deferred_tools.sort();
         let current_agents = self.current_agent_types();
         let source_timeout =
             std::time::Duration::from_millis(if self.config.system_reminder.timeout_ms > 0 {
@@ -958,6 +967,40 @@ impl QueryEngine {
                 skill_tool_loaded: false,
             })
             .await;
+        let mut visible_mcp_tool_counts = std::collections::BTreeMap::<String, usize>::new();
+        for tool in current_tool_materialization.searchable() {
+            if let Some(info) = tool.tool.mcp_info() {
+                *visible_mcp_tool_counts
+                    .entry(info.server_name.clone())
+                    .or_default() += 1;
+            }
+        }
+        let current_mcp_servers: Vec<_> = materialized
+            .mcp_server_summaries
+            .iter()
+            .filter_map(|server| {
+                visible_mcp_tool_counts
+                    .get(&server.name)
+                    .copied()
+                    .map(|tool_count| coco_system_reminder::McpServerSummary {
+                        name: server.name.clone(),
+                        tool_count,
+                        description: server.description.clone(),
+                    })
+            })
+            .collect();
+        let current_mcp_server_state: std::collections::BTreeMap<_, _> = current_mcp_servers
+            .iter()
+            .map(|server| {
+                (
+                    server.name.clone(),
+                    coco_types::McpServerAnnouncementState {
+                        tool_count: server.tool_count,
+                        description: server.description.clone(),
+                    },
+                )
+            })
+            .collect();
         let current_mcp_instructions = materialized.mcp_instructions_current;
 
         let baseline_tools = if preserved_contains_attachment_kind(
@@ -984,6 +1027,14 @@ impl QueryEngine {
         } else {
             HashMap::new()
         };
+        let baseline_mcp_servers = if preserved_contains_attachment_kind(
+            preserved_history,
+            coco_types::AttachmentKind::McpServersDelta,
+        ) {
+            app_state_snapshot.last_announced_mcp_servers_for_scope(self.config.agent_id_str())
+        } else {
+            std::collections::BTreeMap::new()
+        };
 
         let deferred_delta = crate::engine_helpers::compute_tools_delta(
             &current_deferred_tools,
@@ -996,11 +1047,16 @@ impl QueryEngine {
             &current_mcp_instructions,
             &baseline_mcp,
         );
+        let mcp_servers_delta = crate::engine_helpers::compute_mcp_servers_delta(
+            &current_mcp_servers,
+            &baseline_mcp_servers,
+        );
 
         let ctx = coco_system_reminder::GeneratorContextBuilder::new(&self.config.system_reminder)
             .deferred_tools_delta(deferred_delta)
             .agent_listing_delta(agent_delta)
             .mcp_instructions_delta(mcp_delta)
+            .mcp_servers_delta(mcp_servers_delta)
             .build();
         let mut reminders = Vec::new();
         for generated in [
@@ -1016,6 +1072,11 @@ impl QueryEngine {
             .await,
             coco_system_reminder::AttachmentGenerator::generate(
                 &coco_system_reminder::McpInstructionsDeltaGenerator,
+                &ctx,
+            )
+            .await,
+            coco_system_reminder::AttachmentGenerator::generate(
+                &coco_system_reminder::McpServersDeltaGenerator,
                 &ctx,
             )
             .await,
@@ -1040,6 +1101,7 @@ impl QueryEngine {
             agent_id: self.config.agent_id_string(),
             current_agents,
             current_mcp_instructions,
+            current_mcp_servers: current_mcp_server_state,
         };
         (attachments, state)
     }
@@ -1048,6 +1110,24 @@ impl QueryEngine {
         &self,
         app_state: &coco_types::ToolAppState,
     ) -> (Vec<String>, Vec<String>) {
+        let materialization = self.current_tool_materialization(app_state).await;
+        let mut loaded: Vec<String> = materialization
+            .loaded()
+            .map(|tool| tool.wire_name.as_str().to_string())
+            .collect();
+        loaded.sort();
+        let mut deferred: Vec<String> = materialization
+            .deferred()
+            .map(|tool| tool.wire_name.as_str().to_string())
+            .collect();
+        deferred.sort();
+        (loaded, deferred)
+    }
+
+    async fn current_tool_materialization(
+        &self,
+        app_state: &coco_types::ToolAppState,
+    ) -> coco_tool_runtime::ToolMaterialization {
         let discovered = std::sync::Arc::new(app_state.discovered_tool_names.clone());
         let snapshot = self.runtime_snapshot();
         let tool_search_strategy =
@@ -1060,23 +1140,12 @@ impl QueryEngine {
         )
         .with_discovered_tool_names(discovered)
         .with_tool_search_strategy(tool_search_strategy)
+        .with_mcp_tool_exposure(
+            self.config.mcp_tool_exposure,
+            self.config.mcp_server_tool_exposure.clone(),
+        )
         .with_active_shell_tool(self.config.active_shell_tool);
-        let stub_ctx = self.with_current_tool_search_candidates(stub_ctx).await;
-        let mut loaded: Vec<String> = self
-            .tools
-            .loaded_tools(&stub_ctx)
-            .iter()
-            .map(|t| t.name().to_string())
-            .collect();
-        loaded.sort();
-        let mut deferred: Vec<String> = self
-            .tools
-            .deferred_tools(&stub_ctx)
-            .iter()
-            .map(|t| t.name().to_string())
-            .collect();
-        deferred.sort();
-        (loaded, deferred)
+        self.tools.materialize(&stub_ctx)
     }
 
     async fn update_post_compact_delta_state(&self, delta_state: PostCompactDeltaState) {
@@ -1090,6 +1159,10 @@ impl QueryEngine {
         );
         guard.last_announced_agents = delta_state.current_agents.into_iter().collect();
         guard.last_announced_mcp_instructions = delta_state.current_mcp_instructions;
+        guard.set_last_announced_mcp_servers_for_scope(
+            delta_state.agent_id.as_deref(),
+            delta_state.current_mcp_servers,
+        );
     }
 
     fn create_current_plan_attachment(&self) -> Option<coco_messages::AttachmentMessage> {

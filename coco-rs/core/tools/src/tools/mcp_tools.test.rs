@@ -32,6 +32,25 @@ fn make_mcp_tool() -> McpTool {
     )
 }
 
+#[test]
+fn mcp_tool_bounds_untrusted_description_once_at_construction() {
+    let tool = mcp_tool(
+        "server".into(),
+        "tool".into(),
+        format!("{}危险", "a".repeat(1_000_000)),
+        json!({"properties": {}}),
+        McpToolAnnotations::default(),
+    );
+    let description = <McpTool as DynTool>::description(
+        &tool,
+        &Value::Null,
+        &coco_tool_runtime::DescriptionOptions::default(),
+    );
+
+    assert!(description.len() <= MAX_MCP_DESCRIPTION_BYTES + "… [truncated]".len());
+    assert!(description.ends_with("… [truncated]"));
+}
+
 // ---------------------------------------------------------------------------
 // alwaysLoad — isDeferredTool opt-out
 // ---------------------------------------------------------------------------
@@ -362,8 +381,7 @@ fn mcp_auth_server_tool_is_searchable_by_qualified_name() {
         None,
     )));
     let ctx = coco_tool_runtime::ToolUseContext::test_default()
-        .with_tool_search_strategy(coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion)
-        .with_tool_search_candidates(true);
+        .with_tool_search_strategy(coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion);
 
     let names: Vec<String> = registry
         .searchable_deferred(&ctx)

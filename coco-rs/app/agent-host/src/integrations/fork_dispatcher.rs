@@ -126,6 +126,8 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             features: Arc::new(runtime_config.features.clone()),
             skill_overrides: Arc::new(runtime_config.skill_overrides.clone()),
             tool_overrides: runtime_config.tool_overrides.clone(),
+            mcp_tool_exposure: parent_engine_config.mcp_tool_exposure,
+            mcp_server_tool_exposure: parent_engine_config.mcp_server_tool_exposure.clone(),
             is_non_interactive: true,
             log_assistant_responses: parent_engine_config.log_assistant_responses,
             // Forks are fire-and-forget — no UI to prompt, so a residual `Ask`
@@ -253,6 +255,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
                 agent_id,
                 options.fork_label.as_str(),
                 &result.final_messages,
+                parent_engine_config.mcp_tool_exposure,
             )
             .await;
         }
@@ -278,6 +281,7 @@ impl SessionRuntimeForkDispatcher {
         agent_id: &str,
         fork_label: &str,
         messages: &[std::sync::Arc<coco_messages::Message>],
+        mcp_tool_exposure: coco_types::McpToolExposure,
     ) {
         if messages.is_empty() {
             return;
@@ -293,6 +297,7 @@ impl SessionRuntimeForkDispatcher {
             killed_by: None,
             mode: None,
             isolation: None,
+            mcp_tool_exposure,
         };
         if let Err(e) = store
             .write_agent_metadata(session_id.as_str(), agent_id, &metadata)

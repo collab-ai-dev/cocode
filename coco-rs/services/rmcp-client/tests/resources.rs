@@ -36,6 +36,7 @@ fn init_params() -> InitializeRequestParams {
             name: "codex-test".into(),
             version: "0.0.0-test".into(),
             title: Some("Codex rmcp resource test".into()),
+            description: None,
             user_agent: None,
         },
         protocol_version: coco_mcp_types::MCP_SCHEMA_VERSION.to_string(),

@@ -194,13 +194,11 @@ impl McpToolInfo {
     /// if the upstream MCP server uses characters that would break the
     /// delimiter; most servers already use snake_case.
     pub fn qualified_name(&self) -> String {
-        use coco_types::MCP_TOOL_PREFIX;
-        use coco_types::MCP_TOOL_SEPARATOR;
-        format!(
-            "{MCP_TOOL_PREFIX}{server}{MCP_TOOL_SEPARATOR}{tool}",
-            server = self.server_name,
-            tool = self.tool_name,
-        )
+        coco_types::ToolId::Mcp {
+            server: self.server_name.clone(),
+            tool: self.tool_name.clone(),
+        }
+        .to_string()
     }
 }
 

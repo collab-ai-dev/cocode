@@ -13,8 +13,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
-/// Max chars of an MCP server-supplied tool description surfaced to the model.
-const MAX_MCP_DESCRIPTION_LENGTH: usize = 2048;
+/// Max bytes retained from an MCP server-supplied tool description.
+const MAX_MCP_DESCRIPTION_BYTES: usize = 2048;
 
 const MCP_AUTH_PROMPT: &str = "Authenticate with an MCP server by name to enable its tools and resources. Prefer a server's own `mcp__<server>__authenticate` tool when one is offered — use this generic tool only as a fallback for a server that needs authentication but is not already surfacing its own authenticate tool. Call with the server name to start the OAuth flow — you'll receive an authorization URL to share with the user; once the user authorizes in their browser, the server's real tools become available automatically.";
 
@@ -639,12 +639,19 @@ impl McpTool {
             _ => serde_json::json!({ "properties": {} }),
         };
         let schema = coco_tool_runtime::ToolInputSchema::from_value(raw)?;
+        let truncated =
+            coco_utils_string::take_bytes_at_char_boundary(&description, MAX_MCP_DESCRIPTION_BYTES);
+        let tool_description = if truncated.len() < description.len() {
+            format!("{truncated}… [truncated]")
+        } else {
+            description
+        };
         Ok(Self {
             info: McpToolInfo {
                 server_name,
                 tool_name,
             },
-            tool_description: description,
+            tool_description,
             schema,
             annotations,
         })
@@ -683,19 +690,10 @@ impl Tool for McpTool {
         self.tool_description.clone()
     }
 
-    /// Model-facing description = the server-supplied tool description,
-    /// truncated to [`MAX_MCP_DESCRIPTION_LENGTH`].
+    /// Model-facing description. Server text was bounded once at construction
+    /// so every description/search/prompt consumer sees the same safe value.
     async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
-        if self.tool_description.chars().count() > MAX_MCP_DESCRIPTION_LENGTH {
-            let truncated: String = self
-                .tool_description
-                .chars()
-                .take(MAX_MCP_DESCRIPTION_LENGTH)
-                .collect();
-            format!("{truncated}… [truncated]")
-        } else {
-            self.tool_description.clone()
-        }
+        self.tool_description.clone()
     }
 
     fn mcp_info(&self) -> Option<&McpToolInfo> {

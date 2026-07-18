@@ -92,6 +92,7 @@ fn prepared(
     PreparedToolCall {
         tool_use_id: name.into(),
         tool_id: ToolId::Custom(name.into()),
+        provider_tool_name: coco_types::WireToolName::for_tool_id(&ToolId::Custom(name.into())),
         parsed_input: crate::ValidatedInput::validate(tool.as_ref(), json!({}))
             .expect("test input must validate"),
         is_concurrency_safe: safe,
@@ -463,6 +464,9 @@ async fn test_streaming_shell_failure_aborts_concurrent_sibling() {
     let bash = PreparedToolCall {
         tool_use_id: "bash-call".into(),
         tool_id: ToolId::Builtin(coco_types::ToolName::Bash),
+        provider_tool_name: coco_types::WireToolName::for_tool_id(&ToolId::Builtin(
+            coco_types::ToolName::Bash,
+        )),
         parsed_input: crate::ValidatedInput::validate(bash_tool.as_ref(), json!({}))
             .expect("test input must validate"),
         is_concurrency_safe: true,

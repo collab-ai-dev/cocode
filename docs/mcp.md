@@ -126,6 +126,32 @@ Two runtime knobs live in `settings.json` under the `mcp` key rather than in the
 
 Both can be overridden by environment variable: `COCO_MCP_TOOL_TIMEOUT_MS` and `COCO_MCP_TOOL_IDLE_TIMEOUT_MS`.
 
+### Tool exposure
+
+MCP exposure is a server-level policy. `mcp.tool_exposure` supplies the default,
+and `mcp.server_tool_exposure` overrides individual server names:
+
+```jsonc
+{
+  "mcp": {
+    // "load", "defer" (default), or "use_tool"
+    "tool_exposure": "defer",
+    "server_tool_exposure": {
+      "memory": "load",
+      "slack": "use_tool"
+    }
+  }
+}
+```
+
+- `load` places every surviving tool schema from that server in the provider tool list.
+- `defer` uses provider-native or client-side deferred discovery when the active model supports it. Otherwise it falls back to `ToolSearch` + `use_tool`. A tool's MCP `_meta.alwaysLoad` hint loads that high-frequency tool immediately only in this mode.
+- `use_tool` keeps target schemas out of the provider tool list. The model discovers a bounded schema with `ToolSearch`, then invokes it through the stable `use_tool` carrier. Explicit `use_tool` overrides `alwaysLoad`.
+
+`COCO_MCP_TOOL_EXPOSURE` overrides the global default. An invalid value logs a warning and falls back to `use_tool`; accepted values are exactly `load`, `defer`, and `use_tool`. Child agents inherit the default and per-server overrides and cannot widen either.
+
+To disable MCP completely, turn off `features.mcp`, disable/deny the server, or filter its tools. Exposure controls placement of surviving tools; it is not an activation switch.
+
 ## Which servers actually run
 
 Defining a server and running it are separate decisions with separate owners. The config files above say *what* a server is; whether a defined server connects in a given project is resolved at session start from three inputs, strongest first:
@@ -181,9 +207,22 @@ Every tool an MCP server exposes reaches the model under a namespaced name:
 mcp__<server>__<tool>
 ```
 
-A server named `github` exposing a `create_issue` tool becomes `mcp__github__create_issue`. Server and tool names are normalized on the way in: any character outside `[a-zA-Z0-9_-]` is replaced with an underscore, so a server named `my server` yields the prefix `mcp__my_server__`.
+A server named `github` exposing a `create_issue` tool normally becomes
+`mcp__github__create_issue`. The canonical identity escapes percent signs and
+reserved double-underscore runs inside each component, so two different
+server/tool pairs cannot collapse to the same flat name. Ordinary snake_case
+names remain unchanged.
 
-This naming is what you match against in permission rules, so an allow rule for a whole server is a prefix match on `mcp__github__`. See [configuration](configuration.md) for permission rule syntax.
+Provider function names are limited to 64 safe ASCII bytes. When a canonical
+identity is too long or contains unsupported characters, the model receives a
+deterministic bounded `mcp__...__<sha256-prefix>` handle; the registry maps that
+handle back to the canonical identity and rejects collisions. Permissions,
+hooks, logs, and execution continue to use the semantic canonical identity,
+not the shortened provider handle.
+
+For ordinary names, an allow rule for a whole server is a prefix match on
+`mcp__github__`. See [configuration](configuration.md) for permission rule
+syntax.
 
 ## OAuth
 

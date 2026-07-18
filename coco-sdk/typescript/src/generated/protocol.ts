@@ -23,6 +23,11 @@ export const ClientRequestMethod = {
   SESSION_TOGGLE_TAG: "session/toggleTag",
   SESSION_COST: "session/cost",
   SESSION_STATUS: "session/status",
+  SESSION_GOAL_CREATE: "session/goal/create",
+  SESSION_GOAL_GET: "session/goal/get",
+  SESSION_GOAL_EDIT: "session/goal/edit",
+  SESSION_GOAL_SET_STATUS: "session/goal/setStatus",
+  SESSION_GOAL_CLEAR: "session/goal/clear",
   TURN_START: "turn/start",
   TURN_INTERRUPT: "turn/interrupt",
   TASK_LIST: "task/list",
@@ -67,7 +72,7 @@ export const NotificationMethod = {
   HISTORY_RESET_FOR_RESUME: "history/resetForResume",
   HISTORY_REPLACED: "history/replaced",
   HISTORY_REASONING_METADATA_ATTACHED: "history/reasoningMetadataAttached",
-  GOAL_ACTIVE_CHANGED: "goal/activeChanged",
+  GOAL_SNAPSHOT_CHANGED: "goal/snapshotChanged",
   TURN_STARTED: "turn/started",
   TURN_ENDED: "turn/ended",
   ITEM_STARTED: "item/started",
@@ -144,28 +149,6 @@ export const ServerRequestMethod = {
 export type ServerRequestMethod = (typeof ServerRequestMethod)[keyof typeof ServerRequestMethod];
 
 /**
- * Session-scoped goal metadata for `/goal`.
- */
-export interface ActiveGoal {
-  condition: string;
-  iterations: number;
-  last_reason?: string | null;
-  set_at_ms: number;
-  tokens_at_start: number;
-}
-
-/**
- * Active `/goal` snapshot.
- *
- * `goal = None` means no active goal. Terminal goal_status attachments
- * still carry achieved / failed details; this event is only the live-state
- * mirror.
- */
-export interface ActiveGoalChangedParams {
-  goal?: ActiveGoal | null;
-}
-
-/**
  * `AgentColorName`. Validated set; unknown values are dropped at parse
  * time with a warning so the runtime never sees an invalid color.
  */
@@ -197,6 +180,18 @@ export interface AgentInterruptCurrentWorkParams {
  * `coco-types`); keeping it as opaque JSON avoids a back-edge.
  */
 export type AgentMcpServerSpec = string | { [key: string]: unknown; };
+
+/**
+ * Wire mirror of an agent skill's lifecycle.
+ */
+export type AgentSkillLifecycleWire = {
+  progress: SkillQuarantineWire;
+  state: "learning";
+} | {
+  state: "learned";
+} | {
+  state: "retired";
+};
 
 /**
  * Where an agent definition came from. Drives precedence when the same
@@ -437,11 +432,11 @@ export type AttachmentExtras = SkillDiscoveryPayload | CompactFileReferencePaylo
 
 /**
  * Every `AttachmentKind` discriminator, plus coco-rs-synthetic
- * reminder kinds. 67 variants.
+ * reminder kinds. 69 variants.
  * Wire format is snake_case via `#[serde(rename_all = "snake_case")]`
  * to match `AttachmentKind` exactly, so transcripts round-trip.
  */
-export type AttachmentKind = "plan_mode" | "plan_mode_reentry" | "plan_mode_exit" | "auto_mode" | "auto_mode_exit" | "todo_reminder" | "task_reminder" | "compaction_reminder" | "date_change" | "verify_plan_reminder" | "ultrathink_effort" | "workflow_keyword_request" | "token_usage" | "budget_usd" | "output_token_usage" | "companion_intro" | "deferred_tools_delta" | "agent_listing_delta" | "mcp_instructions_delta" | "hook_success" | "hook_blocking_error" | "hook_additional_context" | "hook_stopped_continuation" | "async_hook_response" | "diagnostics" | "output_style" | "queued_command" | "task_status" | "skill_listing" | "invoked_skills" | "teammate_mailbox" | "team_context" | "mcp_resource" | "agent_mention" | "selected_lines_in_ide" | "opened_file_in_ide" | "nested_memory" | "relevant_memories" | "already_read_file" | "edited_image_file" | "file" | "directory" | "pdf_reference" | "compact_file_reference" | "plan_file_reference" | "edited_text_file" | "command_permissions" | "hook_cancelled" | "hook_error_during_execution" | "hook_non_blocking_error" | "hook_permission_decision" | "hook_system_message" | "goal_status" | "structured_output" | "dynamic_skill" | "skill_discovery" | "context_efficiency" | "max_turns_reached" | "current_session_memory" | "teammate_shutdown_batch" | "bagel_console" | "critical_system_reminder" | "memory_index_warning" | "memory_update_reminder" | "slash_command_metadata" | "user_context" | "tool_search_usage_reminder";
+export type AttachmentKind = "plan_mode" | "plan_mode_reentry" | "plan_mode_exit" | "auto_mode" | "auto_mode_exit" | "todo_reminder" | "task_reminder" | "compaction_reminder" | "date_change" | "verify_plan_reminder" | "ultrathink_effort" | "workflow_keyword_request" | "token_usage" | "budget_usd" | "output_token_usage" | "companion_intro" | "deferred_tools_delta" | "agent_listing_delta" | "mcp_instructions_delta" | "mcp_servers_delta" | "hook_success" | "hook_blocking_error" | "hook_additional_context" | "hook_stopped_continuation" | "async_hook_response" | "diagnostics" | "output_style" | "queued_command" | "task_status" | "skill_listing" | "invoked_skills" | "teammate_mailbox" | "team_context" | "mcp_resource" | "agent_mention" | "selected_lines_in_ide" | "opened_file_in_ide" | "nested_memory" | "relevant_memories" | "already_read_file" | "edited_image_file" | "file" | "directory" | "pdf_reference" | "compact_file_reference" | "plan_file_reference" | "edited_text_file" | "command_permissions" | "hook_cancelled" | "hook_error_during_execution" | "hook_non_blocking_error" | "hook_permission_decision" | "hook_system_message" | "goal_status" | "structured_output" | "dynamic_skill" | "skill_discovery" | "context_efficiency" | "max_turns_reached" | "current_session_memory" | "teammate_shutdown_batch" | "bagel_console" | "critical_system_reminder" | "memory_index_warning" | "memory_update_reminder" | "skill_learned_reminder" | "slash_command_metadata" | "user_context" | "tool_search_usage_reminder";
 
 /**
  * Attachment message: `kind` carries the discriminant (60 variants),
@@ -1029,6 +1024,74 @@ export interface FilesPersistedParams {
 }
 
 /**
+ * `session/goal/create` parameters. Minimal control-plane surface; contract and
+ * rich budget authoring beyond the autonomous-turn cap are future extensions.
+ */
+export interface GoalCreateParams {
+  max_autonomous_turns?: number | null;
+  objective: string;
+  target: SessionTarget;
+}
+
+/**
+ * `session/goal/edit` parameters. `expected_spec_revision` is the optimistic
+ * concurrency guard (design §9.1 invariant 2): the edit is rejected when it does
+ * not match the current spec revision.
+ */
+export interface GoalEditParams {
+  expected_spec_revision: number;
+  max_autonomous_turns?: number | null;
+  objective?: string | null;
+  target: SessionTarget;
+}
+
+/**
+ * `session/goal/setStatus` parameters.
+ */
+export interface GoalSetStatusParams {
+  status: GoalStatusRequest;
+  target: SessionTarget;
+}
+
+/**
+ * Full-snapshot goal event payload (design §8.1). Session routing rides the
+ * `SessionEnvelope` the emit site stamps, so there is no payload session id.
+ */
+export interface GoalSnapshotChangedParams {
+  snapshot?: GoalSnapshotView | null;
+}
+
+/**
+ * Bounded wire projection of a durable goal snapshot for protocol and TUI
+ * consumers. Never reconstructed from transcript messages (design §9.1).
+ */
+export interface GoalSnapshotView {
+  autonomous_turns: number;
+  created_at_ms: number;
+  goal_id: string;
+  input_tokens: number;
+  last_rejection?: string | null;
+  max_autonomous_turns: number;
+  objective: string;
+  output_tokens: number;
+  plan_digest?: string | null;
+  progress_summary?: string | null;
+  spec_revision: number;
+  state_version: number;
+  status: GoalStatusKind;
+  status_detail?: string | null;
+  total_turns: number;
+  updated_at_ms: number;
+}
+
+/**
+ * Wire status of a goal, mirroring `coco_goals::GoalStatus`. A cleared goal is
+ * represented by a `None` snapshot on [`GoalSnapshotChangedParams`], so there is
+ * no `Cleared` variant here.
+ */
+export type GoalStatusKind = "active" | "waiting" | "paused" | "blocked" | "usage_limited" | "budget_limited" | "completed";
+
+/**
  * `/goal` status attachment (`goal_status`).
  * Sentinels (`sentinel: true`) are emitted by `/goal` set/clear and are
  * ignored by "last achieved goal" lookup. Non-sentinel payloads are emitted
@@ -1044,6 +1107,13 @@ export interface GoalStatusPayload {
   sentinel?: boolean;
   tokens?: number | null;
 }
+
+/**
+ * The controlled status transition a `session/goal/setStatus` requests. Only
+ * user-drivable transitions are exposed; terminal and verifier-owned statuses
+ * are not (design §6, §11.3).
+ */
+export type GoalStatusRequest = "pause" | "resume";
 
 /**
  * Why the engine replaced the transcript wholesale
@@ -1478,6 +1548,87 @@ export interface InterruptedOutcome {
 }
 
 export type ItemStatus = "in_progress" | "completed" | "failed" | "declined";
+
+/**
+ * Busiest-day summary (label + node count).
+ */
+export interface JourneyBusiestDayWire {
+  count: number;
+  label: string;
+}
+
+/**
+ * `/journey` overlay payload: the assembled learning timeline. Wire mirror of
+ * `coco_journey::JourneySnapshot` + the pre-computed timeline buckets. Uses
+ * `String` paths + snake_case + `tag = "kind"` per the wire convention (the
+ * in-process domain types carry `PathBuf` instead).
+ */
+export interface JourneyDialogPayload {
+  buckets?: Array<TimelineBucketWire>;
+  nodes?: Array<JourneyNodeWire>;
+  stats: JourneyStatsWire;
+}
+
+/**
+ * Outcome of a `/journey` mutation (retire / restore / delete). Emitted only
+ * on failure — a success is already visible as the refreshed timeline, whereas
+ * a swallowed failure is indistinguishable from "the key didn't register".
+ *
+ * Carries **no display text**, matching [`SkillOverridesSaveResult`]: the TUI
+ * owns wording and severity.
+ */
+export interface JourneyMutationFailed {
+  kind: JourneyMutationKind;
+  message: string;
+  target: string;
+}
+
+/**
+ * Which `/journey` mutation failed.
+ */
+export type JourneyMutationKind = "retire_skill" | "restore_skill" | "delete_memory";
+
+/**
+ * Wire mirror of the node kind + kind-specific data (`tag = "kind"`).
+ */
+export type JourneyNodeBodyWire = {
+  kind: "agent_skill";
+  lifecycle: AgentSkillLifecycleWire;
+  path: string;
+  telemetry: SkillTelemetryWire;
+} | {
+  kind: "user_skill";
+  path: string;
+  telemetry: SkillTelemetryWire;
+} | {
+  filename: string;
+  kind: "memory";
+};
+
+/**
+ * Wire mirror of one learning-timeline node.
+ */
+export interface JourneyNodeWire {
+  body: JourneyNodeBodyWire;
+  date_label?: string;
+  description: string;
+  first_seen_ms: number;
+  history?: Array<unknown>;
+  last_activity_ms: number;
+  title: string;
+}
+
+/**
+ * Wire mirror of the aggregate journey stats.
+ */
+export interface JourneyStatsWire {
+  busiest_day?: JourneyBusiestDayWire | null;
+  learned?: number;
+  learning?: number;
+  memories?: number;
+  retired?: number;
+  user_skills?: number;
+}
 
 /**
  * Error response payload. Mirrors JSON-RPC 2.0 error structure.
@@ -2393,7 +2544,7 @@ export interface ProgressMessage {
  * Which LLM provider implementation to use.
  * Consumed by coco-config (ProviderInfo) and coco-inference (ProviderFactory).
  */
-export type ProviderApi = "anthropic" | "openai" | "gemini" | "volcengine" | "zai" | "openai_compat";
+export type ProviderApi = "anthropic" | "openai" | "gemini" | "volcengine" | "zai" | "openai_compat" | "xai";
 
 /**
  * Provider-specific metadata attached to responses or stream events.
@@ -3174,6 +3325,36 @@ export type SkillOverridesSaveResult = {
 export type SkillProvenanceBadge = "learning" | "learned";
 
 /**
+ * Quarantine progress for an agent-created skill, measured against the
+ * curator's **invocation** gate (`total_invocations >= promote_min_invocations`).
+ *
+ * Deliberately counts invocations, not successes: the curator's first gate is
+ * `total_invocations()` (successes + failures), so a success-only bar
+ * under-reports real progress. It is also only *half* the promotion rule — the
+ * curator additionally requires `success_rate >= promote_success_rate`. That
+ * half is not a countable bar and is not modelled here, because invoking the
+ * skill is the only thing the user can do to advance it; the rate is quality,
+ * not progress. Reaching `required` therefore means "eligible", not "promoted".
+ */
+export interface SkillQuarantineWire {
+  invocations: number;
+  required: number;
+}
+
+/**
+ * Wire mirror of `coco_skills::telemetry::SkillTelemetryStats` (coco-types
+ * cannot depend on coco-skills, so the fields are mirrored here).
+ */
+export interface SkillTelemetryWire {
+  failure_count?: number;
+  last_patched_at_ms?: number;
+  last_status?: string | null;
+  last_used_at_ms?: number;
+  patch_count?: number;
+  success_count?: number;
+}
+
+/**
  * One row in the `/skills` dialog. Every field is required so the dialog
  * never has to fabricate defaults for `baseline` / `lock` / etc.
  */
@@ -3185,6 +3366,7 @@ export interface SkillsDialogEntry {
   lock?: SkillLock | null;
   name: string;
   plugin_name?: string | null;
+  quarantine?: SkillQuarantineWire | null;
   source: SkillsDialogSource;
 }
 
@@ -3830,6 +4012,17 @@ export type ThreadItemDetails = {
 };
 
 /**
+ * Wire mirror of one timeline bucket (row).
+ */
+export interface TimelineBucketWire {
+  label: string;
+  memories: number;
+  recency: number;
+  skills: number;
+  start_ms: number;
+}
+
+/**
  * A TodoWrite item (no `id` field, positional identity).
  */
 export interface TodoRecord {
@@ -4319,6 +4512,12 @@ export type TuiOnlyEvent = {
 } | {
   result: SkillOverridesSaveResult;
   type: "skill_overrides_saved";
+} | {
+  payload: JourneyDialogPayload;
+  type: "open_journey_dialog";
+} | {
+  failure: JourneyMutationFailed;
+  type: "journey_mutation_failed";
 };
 
 /**
@@ -4668,6 +4867,31 @@ export type SessionStatusRequest = {
   params: SessionTarget;
 };
 
+export type SessionGoalCreateRequest = {
+  method: "session/goal/create";
+  params: GoalCreateParams;
+};
+
+export type SessionGoalGetRequest = {
+  method: "session/goal/get";
+  params: SessionTarget;
+};
+
+export type SessionGoalEditRequest = {
+  method: "session/goal/edit";
+  params: GoalEditParams;
+};
+
+export type SessionGoalSetStatusRequest = {
+  method: "session/goal/setStatus";
+  params: GoalSetStatusParams;
+};
+
+export type SessionGoalClearRequest = {
+  method: "session/goal/clear";
+  params: SessionTarget;
+};
+
 export type TurnStartRequest = {
   method: "turn/start";
   params: TurnStartParams;
@@ -4856,7 +5080,7 @@ export type ConfigApplyFlagsRequest = {
   params: ConfigApplyFlagsParams;
 };
 
-export type ClientRequest = InitializeRequest | SessionStartRequest | SessionResumeRequest | SessionReplaceRequest | SessionListRequest | SessionReadRequest | SessionTurnsListRequest | SessionSubscribeRequest | SessionCloseRequest | SessionDeleteRequest | SessionRenameRequest | SessionToggleTagRequest | SessionCostRequest | SessionStatusRequest | TurnStartRequest | TurnInterruptRequest | TaskListRequest | TaskDetailRequest | ApprovalResolveRequest | InputResolveUserInputRequest | ElicitationResolveRequest | ControlSetModelRequest | ControlSetModelRoleRequest | ControlSetPermissionModeRequest | ControlSetThinkingRequest | ControlSetAgentColorRequest | ControlApplyPermissionUpdateRequest | ControlResetSessionPermissionRulesRequest | ControlStopTaskRequest | ControlRewindFilesRequest | ControlUpdateEnvRequest | ControlBackgroundAllTasksRequest | ControlKeepAliveRequest | ControlCancelRequestRequest | AgentInterruptCurrentWorkRequest | ConfigReadRequest | ConfigValueWriteRequest | McpStatusRequest | ContextUsageRequest | McpSetServersRequest | McpReconnectRequest | McpToggleRequest | PluginReloadRequest | HookReloadRequest | ConfigApplyFlagsRequest;
+export type ClientRequest = InitializeRequest | SessionStartRequest | SessionResumeRequest | SessionReplaceRequest | SessionListRequest | SessionReadRequest | SessionTurnsListRequest | SessionSubscribeRequest | SessionCloseRequest | SessionDeleteRequest | SessionRenameRequest | SessionToggleTagRequest | SessionCostRequest | SessionStatusRequest | SessionGoalCreateRequest | SessionGoalGetRequest | SessionGoalEditRequest | SessionGoalSetStatusRequest | SessionGoalClearRequest | TurnStartRequest | TurnInterruptRequest | TaskListRequest | TaskDetailRequest | ApprovalResolveRequest | InputResolveUserInputRequest | ElicitationResolveRequest | ControlSetModelRequest | ControlSetModelRoleRequest | ControlSetPermissionModeRequest | ControlSetThinkingRequest | ControlSetAgentColorRequest | ControlApplyPermissionUpdateRequest | ControlResetSessionPermissionRulesRequest | ControlStopTaskRequest | ControlRewindFilesRequest | ControlUpdateEnvRequest | ControlBackgroundAllTasksRequest | ControlKeepAliveRequest | ControlCancelRequestRequest | AgentInterruptCurrentWorkRequest | ConfigReadRequest | ConfigValueWriteRequest | McpStatusRequest | ContextUsageRequest | McpSetServersRequest | McpReconnectRequest | McpToggleRequest | PluginReloadRequest | HookReloadRequest | ConfigApplyFlagsRequest;
 
 /**
  * New session started.
@@ -4969,15 +5193,14 @@ export type HistoryReasoningMetadataAttachedNotification = {
 };
 
 /**
- * Active `/goal` state changed.
- *
- * Mirrors the engine's `ToolAppState.active_goal` so consumers can
- * render live footer/status affordances without reverse-engineering
- * the silent `goal_status` transcript attachments.
+ * First-class goal snapshot changed (design §8.1). Carries a bounded
+ * projection of the durable `GoalSnapshot` (status, budget/usage, progress,
+ * blocker/wait detail), so surfaces render the real goal runtime state —
+ * detail view, composed footer, resume prompts.
  */
-export type GoalActiveChangedNotification = {
-  method: "goal/activeChanged";
-  params: ActiveGoalChangedParams;
+export type GoalSnapshotChangedNotification = {
+  method: "goal/snapshotChanged";
+  params: GoalSnapshotChangedParams;
 };
 
 /**
@@ -5547,7 +5770,7 @@ export type PluginsChangedNotification = {
 };
 };
 
-export type ServerNotification = SessionStartedNotification | SessionResultNotification | SessionEndedNotification | SessionUsageUpdatedNotification | HistoryMessageAppendedNotification | HistoryMessageTruncatedNotification | HistoryResetForResumeNotification | HistoryReplacedNotification | HistoryReasoningMetadataAttachedNotification | GoalActiveChangedNotification | TurnStartedNotification | TurnEndedNotification | ItemStartedNotification | ItemUpdatedNotification | ItemCompletedNotification | AgentMessageDeltaNotification | ReasoningDeltaNotification | McpStartupStatusNotification | McpStartupCompleteNotification | LspPrewarmCompleteNotification | ContextCompactedNotification | ContextUsageWarningNotification | ContextCompactionStartedNotification | ContextCompactionPhaseNotification | ContextCompactionFailedNotification | ContextClearedNotification | TaskStartedNotification | TaskCompletedNotification | TaskProgressNotification | TaskPanelChangedNotification | PlanApprovalRequestedNotification | AgentsKilledNotification | ModelFallbackStartedNotification | ModelFallbackCompletedNotification | ModelFastModeChangedNotification | ModelRoleChangedNotification | ModelMoaReferenceStartedNotification | ModelMoaReferenceCompletedNotification | ModelMoaAggregatingNotification | PermissionModeChangedNotification | PromptSuggestionNotification | ErrorNotification | RateLimitNotification | KeepAliveNotification | IdeSelectionChangedNotification | IdeDiagnosticsUpdatedNotification | QueueStateChangedNotification | QueueCommandQueuedNotification | QueueCommandDequeuedNotification | RewindCompletedNotification | RewindFailedNotification | CostWarningNotification | SandboxStateChangedNotification | SandboxViolationsDetectedNotification | AgentsRegisteredNotification | HookStartedNotification | HookProgressNotification | HookResponseNotification | WorktreeEnteredNotification | WorktreeExitedNotification | SummarizeCompletedNotification | SummarizeFailedNotification | StreamStallDetectedNotification | StreamWatchdogWarningNotification | StreamRequestEndNotification | SessionStateChangedNotification | LocalCommandOutputNotification | FilesPersistedNotification | ElicitationCompleteNotification | ToolUseSummaryNotification | ToolProgressNotification | PluginsChangedNotification;
+export type ServerNotification = SessionStartedNotification | SessionResultNotification | SessionEndedNotification | SessionUsageUpdatedNotification | HistoryMessageAppendedNotification | HistoryMessageTruncatedNotification | HistoryResetForResumeNotification | HistoryReplacedNotification | HistoryReasoningMetadataAttachedNotification | GoalSnapshotChangedNotification | TurnStartedNotification | TurnEndedNotification | ItemStartedNotification | ItemUpdatedNotification | ItemCompletedNotification | AgentMessageDeltaNotification | ReasoningDeltaNotification | McpStartupStatusNotification | McpStartupCompleteNotification | LspPrewarmCompleteNotification | ContextCompactedNotification | ContextUsageWarningNotification | ContextCompactionStartedNotification | ContextCompactionPhaseNotification | ContextCompactionFailedNotification | ContextClearedNotification | TaskStartedNotification | TaskCompletedNotification | TaskProgressNotification | TaskPanelChangedNotification | PlanApprovalRequestedNotification | AgentsKilledNotification | ModelFallbackStartedNotification | ModelFallbackCompletedNotification | ModelFastModeChangedNotification | ModelRoleChangedNotification | ModelMoaReferenceStartedNotification | ModelMoaReferenceCompletedNotification | ModelMoaAggregatingNotification | PermissionModeChangedNotification | PromptSuggestionNotification | ErrorNotification | RateLimitNotification | KeepAliveNotification | IdeSelectionChangedNotification | IdeDiagnosticsUpdatedNotification | QueueStateChangedNotification | QueueCommandQueuedNotification | QueueCommandDequeuedNotification | RewindCompletedNotification | RewindFailedNotification | CostWarningNotification | SandboxStateChangedNotification | SandboxViolationsDetectedNotification | AgentsRegisteredNotification | HookStartedNotification | HookProgressNotification | HookResponseNotification | WorktreeEnteredNotification | WorktreeExitedNotification | SummarizeCompletedNotification | SummarizeFailedNotification | StreamStallDetectedNotification | StreamWatchdogWarningNotification | StreamRequestEndNotification | SessionStateChangedNotification | LocalCommandOutputNotification | FilesPersistedNotification | ElicitationCompleteNotification | ToolUseSummaryNotification | ToolProgressNotification | PluginsChangedNotification;
 
 /**
  * Ask the SDK client to approve or deny a tool use.

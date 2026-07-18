@@ -127,6 +127,7 @@ impl<'a> PermissionController<'a> {
         &mut self,
         decision: PermissionDecision,
         tool_call: &ToolCallPart,
+        provider_tool_name: &str,
         tool_input: &serde_json::Value,
         tool_id: &ToolId,
     ) -> PermissionOutcome {
@@ -154,7 +155,7 @@ impl<'a> PermissionController<'a> {
                     self.event_tx,
                     self.history,
                     &tool_call.tool_call_id,
-                    &tool_call.tool_name,
+                    provider_tool_name,
                     tool_id,
                     &output,
                     coco_tool_runtime::ToolCallErrorKind::PermissionDenied,
@@ -171,7 +172,7 @@ impl<'a> PermissionController<'a> {
                     self.event_tx,
                     self.history,
                     &tool_call.tool_call_id,
-                    &tool_call.tool_name,
+                    provider_tool_name,
                     tool_id,
                     &output,
                     coco_tool_runtime::ToolCallErrorKind::PermissionBridgeFailed,
@@ -190,6 +191,7 @@ impl<'a> PermissionController<'a> {
             } => {
                 self.resolve_ask(
                     tool_call,
+                    provider_tool_name,
                     tool_input,
                     tool_id,
                     PermissionAskPayload {
@@ -207,6 +209,7 @@ impl<'a> PermissionController<'a> {
     async fn resolve_ask(
         &mut self,
         tool_call: &ToolCallPart,
+        provider_tool_name: &str,
         tool_input: &serde_json::Value,
         tool_id: &ToolId,
         ask: PermissionAskPayload,
@@ -257,7 +260,7 @@ impl<'a> PermissionController<'a> {
                                     self.event_tx,
                                     self.history,
                                     &tool_call.tool_call_id,
-                                    &tool_call.tool_name,
+                                    provider_tool_name,
                                     tool_id,
                                     &output,
                                     coco_tool_runtime::ToolCallErrorKind::PermissionDenied,
@@ -306,7 +309,7 @@ impl<'a> PermissionController<'a> {
                     self.event_tx,
                     self.history,
                     &tool_call.tool_call_id,
-                    &tool_call.tool_name,
+                    provider_tool_name,
                     tool_id,
                     &output,
                     coco_tool_runtime::ToolCallErrorKind::PermissionDenied,
@@ -429,7 +432,7 @@ impl<'a> PermissionController<'a> {
                         let output = format!("Permission denied: {feedback}");
                         let mut messages = vec![coco_messages::create_error_tool_result(
                             &tool_call.tool_call_id,
-                            &tool_call.tool_name,
+                            provider_tool_name,
                             tool_id.clone(),
                             &output,
                         )];
@@ -440,7 +443,7 @@ impl<'a> PermissionController<'a> {
                             self.event_tx,
                             self.history,
                             &tool_call.tool_call_id,
-                            &tool_call.tool_name,
+                            provider_tool_name,
                             tool_id,
                             &output,
                             coco_tool_runtime::ToolCallErrorKind::PermissionDenied,
@@ -463,7 +466,7 @@ impl<'a> PermissionController<'a> {
                             self.event_tx,
                             self.history,
                             &tool_call.tool_call_id,
-                            &tool_call.tool_name,
+                            provider_tool_name,
                             tool_id,
                             &output,
                             coco_tool_runtime::ToolCallErrorKind::PermissionBridgeFailed,
@@ -489,7 +492,7 @@ impl<'a> PermissionController<'a> {
                     self.event_tx,
                     self.history,
                     &tool_call.tool_call_id,
-                    &tool_call.tool_name,
+                    provider_tool_name,
                     tool_id,
                     &output,
                     coco_tool_runtime::ToolCallErrorKind::PermissionBridgeFailed,

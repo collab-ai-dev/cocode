@@ -166,6 +166,11 @@ pub enum AttachmentType {
     /// instructions against prior announcements in history.
     McpInstructionsDelta,
 
+    /// Announces which MCP servers are available to search this turn (name +
+    /// discoverable tool count + description). Fires on a real change to the
+    /// visible server set.
+    McpServersDelta,
+
     /// Standing nudge that undiscovered deferred tools can be loaded via
     /// ToolSearch — distinct from the one-shot [`DeferredToolsDelta`](Self::DeferredToolsDelta)
     /// change-announcer. Fires whenever `ctx.deferred_tools` is non-empty.
@@ -283,6 +288,7 @@ impl AttachmentType {
             | Self::DeferredToolsDelta
             | Self::AgentListingDelta
             | Self::McpInstructionsDelta
+            | Self::McpServersDelta
             | Self::ToolSearchUsageReminder
             | Self::QueuedCommand
             | Self::SkillListing
@@ -347,6 +353,7 @@ impl AttachmentType {
             | Self::DeferredToolsDelta
             | Self::AgentListingDelta
             | Self::McpInstructionsDelta
+            | Self::McpServersDelta
             | Self::ToolSearchUsageReminder
             | Self::HookSuccess
             | Self::HookBlockingError
@@ -406,6 +413,7 @@ impl AttachmentType {
             Self::DeferredToolsDelta => "deferred_tools_delta",
             Self::AgentListingDelta => "agent_listing_delta",
             Self::McpInstructionsDelta => "mcp_instructions_delta",
+            Self::McpServersDelta => "mcp_servers_delta",
             Self::ToolSearchUsageReminder => "tool_search_usage_reminder",
             Self::HookSuccess => "hook_success",
             Self::HookBlockingError => "hook_blocking_error",
@@ -460,6 +468,7 @@ impl AttachmentType {
             Self::DeferredToolsDelta,
             Self::AgentListingDelta,
             Self::McpInstructionsDelta,
+            Self::McpServersDelta,
             Self::ToolSearchUsageReminder,
             Self::HookSuccess,
             Self::HookBlockingError,
@@ -536,6 +545,7 @@ impl From<AttachmentType> for coco_types::AttachmentKind {
             AttachmentType::DeferredToolsDelta => K::DeferredToolsDelta,
             AttachmentType::AgentListingDelta => K::AgentListingDelta,
             AttachmentType::McpInstructionsDelta => K::McpInstructionsDelta,
+            AttachmentType::McpServersDelta => K::McpServersDelta,
             AttachmentType::ToolSearchUsageReminder => K::ToolSearchUsageReminder,
             AttachmentType::HookSuccess => K::HookSuccess,
             AttachmentType::HookBlockingError => K::HookBlockingError,

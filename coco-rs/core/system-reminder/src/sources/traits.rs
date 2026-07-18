@@ -125,6 +125,15 @@ pub trait McpSource: Send + Sync + Debug {
     async fn instructions(&self, agent_id: Option<&str>) -> HashMap<String, String>;
     async fn resolve_resources(&self, agent_id: Option<&str>, input: &str)
     -> Vec<McpResourceEntry>;
+    /// Connected MCP servers with their discoverable tool count + optional
+    /// description, for the `mcp_servers_delta` announcement (plan §8). Default
+    /// empty so non-MCP sources need no change.
+    async fn connected_server_summaries(
+        &self,
+        _agent_id: Option<&str>,
+    ) -> Vec<crate::generator::McpServerSummary> {
+        Vec::new()
+    }
 }
 
 /// Source of swarm / team state.

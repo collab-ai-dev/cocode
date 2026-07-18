@@ -1118,6 +1118,8 @@ fn test_mcp_runtime_config_json_first_env_override() {
         mcp_runtime: PartialMcpRuntimeSettings {
             tool_timeout_ms: Some(5_000),
             tool_idle_timeout_ms: Some(4_000),
+            tool_exposure: None,
+            ..Default::default()
         },
         ..Default::default()
     });
@@ -1133,6 +1135,48 @@ fn test_mcp_runtime_config_json_first_env_override() {
     // Native COCO spelling beats the Claude Code compatibility env, and
     // positive idle values are floored to 1s; 0 still disables when selected.
     assert_eq!(config.tool_idle_timeout_ms, Some(1_000));
+}
+
+#[test]
+fn test_mcp_runtime_config_invalid_exposure_uses_least_schema_exposing_mode() {
+    let settings = settings_with_sources(Settings {
+        mcp_runtime: PartialMcpRuntimeSettings {
+            tool_exposure: Some(coco_types::McpToolExposure::Defer),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoMcpToolExposure, "surprise")]);
+
+    let config = McpRuntimeConfig::resolve(&settings, &env);
+
+    assert_eq!(config.tool_exposure, coco_types::McpToolExposure::UseTool);
+}
+
+#[test]
+fn test_mcp_runtime_config_resolves_server_exposure_overrides() {
+    let settings = settings_with_sources(Settings {
+        mcp_runtime: PartialMcpRuntimeSettings {
+            tool_exposure: Some(coco_types::McpToolExposure::Defer),
+            server_tool_exposure: HashMap::from([
+                ("memory".into(), coco_types::McpToolExposure::Load),
+                ("slack".into(), coco_types::McpToolExposure::UseTool),
+            ]),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+
+    let config = McpRuntimeConfig::resolve(&settings, &EnvSnapshot::default());
+
+    assert_eq!(
+        config.server_tool_exposure.get("memory"),
+        Some(&coco_types::McpToolExposure::Load)
+    );
+    assert_eq!(
+        config.server_tool_exposure.get("slack"),
+        Some(&coco_types::McpToolExposure::UseTool)
+    );
 }
 
 #[test]

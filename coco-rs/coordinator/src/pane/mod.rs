@@ -121,6 +121,8 @@ pub struct TeammateSpawnConfig {
     pub use_exact_tools: bool,
     /// Per-agent MCP server allow-list.
     pub mcp_servers: Vec<String>,
+    pub mcp_tool_exposure: coco_types::McpToolExposure,
+    pub mcp_server_tool_exposure: std::collections::HashMap<String, coco_types::McpToolExposure>,
     /// Per-agent tool deny-list.
     pub disallowed_tools: Vec<String>,
     /// Hard cap on agent turns.
@@ -149,6 +151,8 @@ impl Default for TeammateSpawnConfig {
             effort: None,
             use_exact_tools: false,
             mcp_servers: Vec::new(),
+            mcp_tool_exposure: coco_types::McpToolExposure::UseTool,
+            mcp_server_tool_exposure: std::collections::HashMap::new(),
             disallowed_tools: Vec::new(),
             max_turns: None,
         }

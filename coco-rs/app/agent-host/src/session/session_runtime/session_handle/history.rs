@@ -126,6 +126,10 @@ impl SessionHandle {
         self.runtime.persist_session_mode().await;
     }
 
+    pub async fn persist_mcp_tool_exposure(&self) {
+        self.runtime.persist_mcp_tool_exposure().await;
+    }
+
     pub fn reconcile_session_mode_on_resume(
         &self,
         stored_mode: Option<&str>,

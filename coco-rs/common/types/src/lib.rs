@@ -28,6 +28,7 @@ mod id;
 pub mod journey;
 mod jsonrpc;
 mod log;
+mod mcp_exposure;
 pub mod messages;
 // Flat re-export at the crate root: `coco_types::Message` reads better
 // than `coco_types::messages::Message`, and mirrors how every other
@@ -55,6 +56,7 @@ mod token;
 mod tool;
 mod tool_filter;
 pub mod tool_summary;
+mod tool_wire_name;
 mod wire_tagged;
 
 // === Re-exports ===
@@ -62,7 +64,8 @@ mod wire_tagged;
 // App-state (cross-turn shared state carried on ToolUseContext)
 pub use app_state::{
     ActiveWorktreeState, AppStatePatch, AppStateReadHandle, ElicitationGuard,
-    LiveToolPermissionState, PendingPermissionGuard, PendingPlanVerificationState, ToolAppState,
+    LiveToolPermissionState, McpServerAnnouncementState, PendingPermissionGuard,
+    PendingPlanVerificationState, ToolAppState,
 };
 
 // Per-provider rate-limit state (lives on `ToolAppState.rate_limits`).
@@ -307,10 +310,12 @@ pub use token::{
 };
 
 // Tool types (ToolResult moved to coco-messages because new_messages: Vec<Message>)
+pub use mcp_exposure::McpToolExposure;
 pub use tool::{
     AGENT_WORKTREE_BRANCH_PREFIX, MCP_TOOL_PREFIX, MCP_TOOL_SEPARATOR, ToolId, ToolName,
     ToolProgress, legacy_tool_name_aliases_of, normalize_legacy_tool_name,
 };
+pub use tool_wire_name::{MAX_WIRE_TOOL_NAME_BYTES, WireToolName};
 
 // Extended types (ported from TS hooks.ts, command.ts, permissions.ts, logs.ts)
 pub use extended::{

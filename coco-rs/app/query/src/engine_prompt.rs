@@ -401,15 +401,39 @@ impl QueryEngine {
         &self,
         app_state: &ToolAppState,
     ) -> BuiltToolDefinitions {
+        self.build_tool_definitions_from_snapshot(app_state, None)
+            .await
+    }
+
+    /// Project provider definitions from an already captured request
+    /// materialization. This is the turn-loop path: reminders, provider tools,
+    /// ToolSearch, and execution all share the same immutable registry view.
+    pub(crate) async fn build_tool_definitions_from_materialization(
+        &self,
+        app_state: &ToolAppState,
+        materialization: coco_tool_runtime::ToolMaterialization,
+    ) -> BuiltToolDefinitions {
+        self.build_tool_definitions_from_snapshot(app_state, Some(materialization))
+            .await
+    }
+
+    async fn build_tool_definitions_from_snapshot(
+        &self,
+        app_state: &ToolAppState,
+        supplied_materialization: Option<coco_tool_runtime::ToolMaterialization>,
+    ) -> BuiltToolDefinitions {
         // Carry the `ToolSearch` discovery set into the filter pipeline
         // so deferred tools the model has unlocked get their schema in
         // this turn's request.
         let discovered = std::sync::Arc::new(app_state.discovered_tool_names.clone());
 
         let snapshot = self.runtime_snapshot();
-        let tool_search_strategy =
-            crate::tool_context::resolve_tool_search_strategy(snapshot.as_ref());
-
+        let tool_search_strategy = supplied_materialization
+            .as_ref()
+            .map(coco_tool_runtime::ToolMaterialization::tool_search_strategy)
+            .unwrap_or_else(|| {
+                crate::tool_context::resolve_tool_search_strategy(snapshot.as_ref())
+            });
         let stub_ctx = coco_tool_runtime::ToolUseContext::stub_for_filtering(
             self.config.features.clone(),
             self.config.tool_overrides.clone(),
@@ -418,8 +442,11 @@ impl QueryEngine {
         )
         .with_discovered_tool_names(discovered.clone())
         .with_tool_search_strategy(tool_search_strategy)
+        .with_mcp_tool_exposure(
+            self.config.mcp_tool_exposure,
+            self.config.mcp_server_tool_exposure.clone(),
+        )
         .with_active_shell_tool(self.config.active_shell_tool);
-        let stub_ctx = self.with_current_tool_search_candidates(stub_ctx).await;
 
         // The tool list sent to the model. When Anthropic tool-reference
         // expansion is live (capability declared AND `Feature::ToolSearch` on),
@@ -431,21 +458,29 @@ impl QueryEngine {
         // capability-missing case automatically.
         let use_anthropic_tool_reference =
             tool_search_strategy.uses_anthropic_tool_reference() && stub_ctx.tool_search_active();
-        let materialization = self.tools.materialize(&stub_ctx);
+        // Single snapshot for the whole request: model tools,
+        // deferred markers, and (below) the returned materialization all derive
+        // from this one `materialize`. Re-calling `enabled()` / `deferred_tools()`
+        // / `loaded_tools()` here would re-materialize and could disagree with
+        // the snapshot mid-build.
+        let materialization =
+            supplied_materialization.unwrap_or_else(|| self.tools.materialize(&stub_ctx));
         let (mut model_tools, deferred_marker): (Vec<_>, std::collections::HashSet<String>) =
             if use_anthropic_tool_reference {
-                let enabled = self.tools.enabled(&stub_ctx);
-                let deferred: std::collections::HashSet<String> = self
-                    .tools
-                    .deferred_tools(&stub_ctx)
-                    .iter()
-                    .map(|t| t.name().to_string())
+                let enabled = materialization
+                    .loaded()
+                    .chain(materialization.deferred())
+                    .cloned()
+                    .collect();
+                let deferred = materialization
+                    .deferred()
+                    .map(|tool| tool.canonical_name.clone())
                     .collect();
                 (enabled, deferred)
             } else {
                 (
-                    self.tools.loaded_tools(&stub_ctx),
-                    std::collections::HashSet::new(),
+                    materialization.loaded().cloned().collect(),
+                    Default::default(),
                 )
             };
         // Deterministic tool order for prompt-cache stability. The registry is a
@@ -460,8 +495,15 @@ impl QueryEngine {
         // ties broken by wire name. NB: keyed on `is_mcp()` (not a name prefix) —
         // MCP `name()` is the bare tool name, so a case/name coincidence cannot be
         // relied on to keep MCP out of the built-in prefix.
-        model_tools.sort_by(|a, b| (a.is_mcp(), a.name()).cmp(&(b.is_mcp(), b.name())));
-        let tool_names: Vec<String> = model_tools.iter().map(|t| t.name().to_string()).collect();
+        // Tie-break on canonical id (not bare `name()`) so two servers exposing
+        // the same bare tool name get a deterministic, stable order.
+        model_tools.sort_by(|a, b| {
+            (a.tool.is_mcp(), &a.canonical_name).cmp(&(b.tool.is_mcp(), &b.canonical_name))
+        });
+        let tool_names: Vec<String> = model_tools
+            .iter()
+            .map(|tool| tool.wire_name.as_str().to_string())
+            .collect();
 
         let skill_names: Vec<String> = {
             let mut names = self
@@ -594,11 +636,12 @@ impl QueryEngine {
         // being active, and counting it against the 4-breakpoint budget. Other
         // providers ignore the `anthropic` namespace; OpenAI-family auto
         // prefix-caching already benefits from the built-ins-first ordering.
-        let builtin_count = model_tools.iter().filter(|t| !t.is_mcp()).count();
+        let builtin_count = model_tools.iter().filter(|t| !t.tool.is_mcp()).count();
         let cache_boundary_idx = builtin_mcp_boundary_idx(builtin_count, model_tools.len());
 
         let mut out = Vec::with_capacity(model_tools.len());
-        for (idx, tool) in model_tools.into_iter().enumerate() {
+        for (idx, materialized_tool) in model_tools.into_iter().enumerate() {
+            let tool = &materialized_tool.tool;
             // `tool_spec(ctx)` is the single source of truth for the tool's
             // model-facing wire shape (description + parameters/grammar). The
             // default builds a JSON `Function` from `prompt()` + the runtime
@@ -612,16 +655,16 @@ impl QueryEngine {
             // `cacheBoundary: true` flags the built-in/MCP boundary tool for the
             // adapter's prefix-cache breakpoint. Other providers ignore the
             // `anthropic` namespace.
-            let tool_name = tool.name();
+            let tool_name = materialized_tool.wire_name.as_str();
             let mut anthropic: std::collections::HashMap<String, serde_json::Value> =
                 std::collections::HashMap::new();
-            if deferred_marker.contains(tool_name) {
+            if deferred_marker.contains(&materialized_tool.canonical_name) {
                 anthropic.insert("deferLoading".to_string(), serde_json::Value::Bool(true));
             }
             if Some(idx) == cache_boundary_idx {
                 anthropic.insert("cacheBoundary".to_string(), serde_json::Value::Bool(true));
             }
-            let deferred = deferred_marker.contains(tool_name);
+            let deferred = deferred_marker.contains(&materialized_tool.canonical_name);
             let source = if let Some(info) = tool.mcp_info() {
                 ModelToolSource::Mcp {
                     server_name: info.server_name.clone(),
@@ -641,6 +684,7 @@ impl QueryEngine {
                 Some(coco_llm_types::ProviderOptions(po_map))
             };
             if tool_search_strategy.uses_openai_native_client()
+                && !stub_ctx.use_tool_active()
                 && tool_name == coco_types::ToolName::ToolSearch.as_str()
             {
                 let parameters = serde_json::json!({
@@ -653,6 +697,7 @@ impl QueryEngine {
                         "max_results": {
                             "type": "integer",
                             "minimum": 1,
+                            "maximum": 5,
                             "default": 5
                         }
                     },
@@ -680,8 +725,19 @@ impl QueryEngine {
             // `deferred_marker`).
             let wire = match spec {
                 coco_tool_runtime::ToolSpec::Function(f) => {
+                    // MCP tools are presented under their canonical qualified
+                    // name (`mcp__server__tool`) so two servers with the same
+                    // bare tool name are distinguishable and unambiguous to
+                    // call; this also matches what ToolSearch returns and what
+                    // `discovered_tool_names` records. Built-ins /
+                    // custom keep the exact `tool_spec` name.
+                    let name = if tool.is_mcp() {
+                        materialized_tool.wire_name.into_inner()
+                    } else {
+                        f.name
+                    };
                     LanguageModelTool::Function(LanguageModelFunctionTool {
-                        name: f.name,
+                        name,
                         description: Some(f.description),
                         input_schema: coco_tool_runtime::canonicalize_model_tool_schema(
                             &f.parameters,
@@ -762,23 +818,6 @@ impl QueryEngine {
             .as_ref()
             .map(|catalog| catalog.active().map(|def| def.name.clone()).collect())
             .unwrap_or_default()
-    }
-
-    pub(crate) async fn with_current_tool_search_candidates(
-        &self,
-        mut ctx: coco_tool_runtime::ToolUseContext,
-    ) -> coco_tool_runtime::ToolUseContext {
-        if !ctx.tool_search_supported() {
-            return ctx;
-        }
-        ctx.tool_search_has_candidates = true;
-        let has_deferred = !self.tools.deferred_tools(&ctx).is_empty();
-        let has_pending_mcp = match self.mcp_handle.as_ref() {
-            Some(handle) => !handle.pending_server_names().await.is_empty(),
-            None => false,
-        };
-        ctx.tool_search_has_candidates = has_deferred || has_pending_mcp;
-        ctx
     }
 
     pub(crate) fn tool_context_factory(

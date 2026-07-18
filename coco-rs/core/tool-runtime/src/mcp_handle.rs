@@ -4,6 +4,27 @@
 //! implementation in the MCP service layer, injected via `ToolUseContext`.
 
 use serde_json::Value;
+
+const MAX_MCP_SEARCH_HINT_BYTES: usize = 512;
+
+fn normalize_search_hint(value: &str) -> Option<String> {
+    let mut output = String::with_capacity(value.len().min(MAX_MCP_SEARCH_HINT_BYTES));
+    'words: for word in value.split_whitespace() {
+        if !output.is_empty() {
+            if output.len() == MAX_MCP_SEARCH_HINT_BYTES {
+                break;
+            }
+            output.push(' ');
+        }
+        for ch in word.chars() {
+            if output.len() + ch.len_utf8() > MAX_MCP_SEARCH_HINT_BYTES {
+                break 'words;
+            }
+            output.push(ch);
+        }
+    }
+    (!output.is_empty()).then_some(output)
+}
 use std::sync::Arc;
 
 /// A resource from an MCP server.
@@ -105,8 +126,7 @@ impl McpToolAnnotations {
                     .or_else(|| m.get("searchHint"))
             })
             .and_then(Value::as_str)
-            .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
-            .filter(|s| !s.is_empty());
+            .and_then(normalize_search_hint);
         Self {
             always_load,
             search_hint,

@@ -224,6 +224,7 @@ fn test_runnable_plan_carries_prepared_call() {
     let prepared = PreparedToolCall {
         tool_use_id: "tu-1".into(),
         tool_id: ToolId::Custom("dummy".into()),
+        provider_tool_name: coco_types::WireToolName::for_tool_id(&ToolId::Custom("dummy".into())),
         tool: std::sync::Arc::new(DummyTool),
         parsed_input: crate::ValidatedInput::validate(&DummyTool, json!({"x": 1}))
             .expect("test input must validate"),

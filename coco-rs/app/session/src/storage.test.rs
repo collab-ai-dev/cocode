@@ -1017,6 +1017,28 @@ fn test_metadata_entry_serializes_with_snake_case_payload() {
 }
 
 #[test]
+fn test_mcp_tool_exposure_metadata_round_trips() {
+    let metadata = MetadataEntry::McpToolExposure {
+        session_id: test_session_id("ss"),
+        exposure: coco_types::McpToolExposure::UseTool,
+    };
+
+    let value = serde_json::to_value(&metadata).unwrap();
+    assert_eq!(
+        value.get("type").and_then(|value| value.as_str()),
+        Some("mcp-tool-exposure")
+    );
+    assert_eq!(
+        value.get("exposure").and_then(|value| value.as_str()),
+        Some("use_tool")
+    );
+    assert_eq!(
+        serde_json::from_value::<MetadataEntry>(value).unwrap(),
+        metadata
+    );
+}
+
+#[test]
 fn test_content_replacement_serializes_ts_shape() {
     // Three fields per record — `kind`, `tool_use_id`, `replacement`.
     // No `message_uuid` — records are matched on `tool_use_id` only.
