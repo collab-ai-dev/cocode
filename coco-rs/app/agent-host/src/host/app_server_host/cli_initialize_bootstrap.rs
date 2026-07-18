@@ -194,7 +194,7 @@ impl InitializeBootstrap for CliInitializeBootstrap {
         // flagged as sensitive (even though local TUI completions
         // may show them).
         registry
-            .client_visible()
+            .remote_client_visible()
             .iter()
             .map(|cmd| SessionInitializeCommand {
                 name: cmd.base.name.clone(),

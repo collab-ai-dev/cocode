@@ -173,13 +173,38 @@ pub use ui::Toast;
 pub use ui::ToastSeverity;
 pub use ui::UiState;
 
-use coco_types::PermissionMode;
+use std::collections::HashMap;
+
+use coco_types::{PermissionMode, SessionId};
+
+#[derive(Debug)]
+struct SessionProjection {
+    session: SessionState,
+    ui: ui::SessionUiProjection,
+}
+
+/// Which session projection is currently rendered by the TUI.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ViewMode {
+    #[default]
+    Primary,
+    SideChat {
+        parent_id: SessionId,
+        child_id: SessionId,
+    },
+}
 
 /// Complete TUI application state.
 #[derive(Debug)]
 pub struct AppState {
-    /// Agent-synchronized state.
+    /// Agent-synchronized state for the active [`Self::view_mode`].
     pub session: SessionState,
+    /// Explicit identity of the rendered projection.
+    pub view_mode: ViewMode,
+    /// Non-rendered projections continue folding tagged events while another
+    /// session is active. Sidechat currently permits one parent entry, but a
+    /// map keeps routing keyed by identity instead of by positional meaning.
+    inactive_sessions: HashMap<SessionId, SessionProjection>,
     /// UI-only local state.
     pub ui: UiState,
     /// Application lifecycle.
@@ -234,6 +259,8 @@ impl AppState {
     pub fn with_clock(clock: std::sync::Arc<dyn coco_tui_ui::clock::Clock>) -> Self {
         Self {
             session: SessionState::default(),
+            view_mode: ViewMode::Primary,
+            inactive_sessions: HashMap::new(),
             ui: UiState::new(),
             running: RunningState::Running,
             clock,
@@ -243,6 +270,85 @@ impl AppState {
     /// Whether the app should exit.
     pub fn should_exit(&self) -> bool {
         self.running == RunningState::Done
+    }
+
+    /// True when the active view is a sidechat child (primary view stashed).
+    pub fn is_viewing_side_chat(&self) -> bool {
+        matches!(self.view_mode, ViewMode::SideChat { .. })
+    }
+
+    /// Enter a sidechat only from the matching primary projection.
+    pub fn enter_side_chat(&mut self, parent_id: SessionId, child_id: SessionId) -> bool {
+        if !matches!(self.view_mode, ViewMode::Primary)
+            || self
+                .session
+                .session_id
+                .as_deref()
+                .is_some_and(|active| active != parent_id.as_str())
+        {
+            return false;
+        }
+        let primary = SessionProjection {
+            session: std::mem::take(&mut self.session),
+            ui: self.ui.take_session_projection(),
+        };
+        self.inactive_sessions.insert(parent_id.clone(), primary);
+        self.session.session_id = Some(child_id.as_str().to_string());
+        self.view_mode = ViewMode::SideChat {
+            parent_id,
+            child_id,
+        };
+        true
+    }
+
+    /// Exit only the sidechat identified by the lifecycle event. Stale close
+    /// notifications cannot tear down a newer view.
+    pub fn exit_side_chat(&mut self, parent_id: &SessionId, child_id: &SessionId) -> bool {
+        if !matches!(
+            &self.view_mode,
+            ViewMode::SideChat {
+                parent_id: active_parent,
+                child_id: active_child,
+            } if active_parent == parent_id && active_child == child_id
+        ) {
+            return false;
+        }
+        let Some(mut primary) = self.inactive_sessions.remove(parent_id) else {
+            return false;
+        };
+        std::mem::swap(&mut self.session, &mut primary.session);
+        self.ui.swap_session_projection(&mut primary.ui);
+        self.view_mode = ViewMode::Primary;
+        true
+    }
+
+    /// Fold one explicitly-tagged event into its matching projection.
+    /// Unknown or stale session ids are dropped.
+    pub(crate) fn with_session_projection<R>(
+        &mut self,
+        session_id: &SessionId,
+        fold: impl FnOnce(&mut Self) -> R,
+    ) -> Option<R> {
+        let active = match &self.view_mode {
+            ViewMode::Primary => self
+                .session
+                .session_id
+                .as_deref()
+                .is_none_or(|active| active == session_id.as_str()),
+            ViewMode::SideChat { child_id, .. } => child_id == session_id,
+        };
+        if active {
+            return Some(fold(self));
+        }
+
+        let mut inactive = self.inactive_sessions.remove(session_id)?;
+        std::mem::swap(&mut self.session, &mut inactive.session);
+        self.ui.swap_session_projection(&mut inactive.ui);
+        let result = fold(self);
+        self.ui.swap_session_projection(&mut inactive.ui);
+        std::mem::swap(&mut self.session, &mut inactive.session);
+        self.inactive_sessions.insert(session_id.clone(), inactive);
+        Some(result)
     }
 
     /// Signal the app to exit.

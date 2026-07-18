@@ -57,6 +57,16 @@ pub fn handle_core_event(
     event: CoreEvent,
     command_tx: &Sender<UserCommand>,
 ) -> bool {
+    let event = match event {
+        CoreEvent::Tui(coco_types::TuiOnlyEvent::SessionScoped { session_id, event }) => {
+            return state
+                .with_session_projection(&session_id, |state| {
+                    handle_core_event(state, (*event).into(), command_tx)
+                })
+                .unwrap_or(false);
+        }
+        event => event,
+    };
     // Top-level breadcrumb. Per-arm handlers in `protocol.rs` / `tui_only.rs`
     // emit richer logs for the variants that matter; this one is the
     // "did we even receive the event" hook for forensics. Stream deltas
@@ -217,6 +227,9 @@ fn tui_event_variant(t: &coco_types::TuiOnlyEvent) -> &'static str {
         E::OpenJourneyDialog { .. } => "OpenJourneyDialog",
         E::JourneyMutationFailed { .. } => "JourneyMutationFailed",
         E::SlashCommandStatus { .. } => "SlashCommandStatus",
+        E::SessionScoped { .. } => "SessionScoped",
+        E::SideChatEntered { .. } => "SideChatEntered",
+        E::SideChatExited { .. } => "SideChatExited",
     }
 }
 

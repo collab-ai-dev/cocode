@@ -2,6 +2,81 @@
 
 use std::time::Instant;
 
+#[test]
+fn side_chat_view_swap_stashes_and_restores_primary() {
+    let mut state = AppState::new();
+    let parent_id = coco_types::SessionId::try_new("parent").unwrap();
+    let child_id = coco_types::SessionId::try_new("child").unwrap();
+    assert!(!state.is_viewing_side_chat());
+    state.session.session_id = Some(parent_id.as_str().to_string());
+    state.session.model = "primary-model".to_string();
+    state.ui.streaming = Some(StreamingState::new());
+    state.ui.streaming.as_mut().unwrap().content = "primary stream".to_string();
+    state.ui.scroll_offset = 7;
+
+    // Entering swaps the active view to a fresh child and stashes the primary.
+    assert!(state.enter_side_chat(parent_id.clone(), child_id.clone()));
+    assert!(state.is_viewing_side_chat());
+    assert_ne!(state.session.model, "primary-model");
+    assert_eq!(state.session.session_id.as_deref(), Some(child_id.as_str()));
+    assert!(state.ui.streaming.is_none());
+    assert_eq!(state.ui.scroll_offset, 0);
+
+    // A second enter is rejected — it must not clobber the stashed primary.
+    state.session.model = "child-model".to_string();
+    state.ui.streaming = Some(StreamingState::new());
+    state.ui.streaming.as_mut().unwrap().content = "child stream".to_string();
+    assert!(!state.enter_side_chat(parent_id.clone(), child_id.clone()));
+    assert!(state.is_viewing_side_chat());
+    assert_eq!(state.session.model, "child-model");
+
+    // Tagged parent events fold into the hidden projection.
+    state
+        .with_session_projection(&parent_id, |state| {
+            state.session.model = "updated-primary".to_string();
+            assert_eq!(
+                state
+                    .ui
+                    .streaming
+                    .as_ref()
+                    .map(|stream| stream.content.as_str()),
+                Some("primary stream")
+            );
+            state.ui.streaming.as_mut().unwrap().content = "updated primary stream".to_string();
+        })
+        .expect("parent projection");
+    assert_eq!(state.session.model, "child-model");
+    assert_eq!(
+        state
+            .ui
+            .streaming
+            .as_ref()
+            .map(|stream| stream.content.as_str()),
+        Some("child stream")
+    );
+
+    // Exiting discards the child view and restores the primary verbatim.
+    let stale_child = coco_types::SessionId::try_new("stale").unwrap();
+    assert!(!state.exit_side_chat(&parent_id, &stale_child));
+    assert!(state.exit_side_chat(&parent_id, &child_id));
+    assert!(!state.is_viewing_side_chat());
+    assert_eq!(state.session.model, "updated-primary");
+    assert_eq!(
+        state
+            .ui
+            .streaming
+            .as_ref()
+            .map(|stream| stream.content.as_str()),
+        Some("updated primary stream")
+    );
+    assert_eq!(state.ui.scroll_offset, 7);
+
+    // Exit is idempotent.
+    assert!(!state.exit_side_chat(&parent_id, &child_id));
+    assert!(!state.is_viewing_side_chat());
+    assert_eq!(state.session.model, "updated-primary");
+}
+
 use coco_types::PermissionMode;
 
 use crate::state::AppState;

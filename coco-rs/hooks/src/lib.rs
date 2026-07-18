@@ -3,6 +3,7 @@
 
 pub mod async_registry;
 mod error;
+mod execution_policy;
 pub mod function_hook;
 pub mod inputs;
 pub mod llm_handle;
@@ -13,6 +14,7 @@ pub mod sync_hook_buffer;
 
 pub use error::HooksError;
 pub use error::Result;
+pub use execution_policy::HookExecutionPolicy;
 pub use function_hook::FUNCTION_HOOK_SUPPORTED_EVENTS;
 pub use function_hook::FunctionHook;
 pub use function_hook::FunctionHookPredicate;

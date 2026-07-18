@@ -34,7 +34,7 @@ fn register_writes_pid_file_with_expected_shape() {
     assert_eq!(on_disk.pid, pid);
     assert_eq!(on_disk.session_id, session_id);
     assert_eq!(on_disk.cwd, cwd.path());
-    assert_eq!(on_disk.kind, SessionKind::Interactive);
+    assert_eq!(on_disk.kind, ProcessSessionKind::Interactive);
     assert!(on_disk.bridge_session_id.is_none());
 
     // Drop removes the file.
@@ -202,7 +202,7 @@ fn count_sweeps_stale_files() {
             session_id: test_session_id("ghost"),
             cwd: dir.clone(),
             started_at: 0,
-            kind: SessionKind::Interactive,
+            kind: ProcessSessionKind::Interactive,
             entrypoint: None,
             name: None,
             bridge_session_id: None,
@@ -231,7 +231,7 @@ fn registration_json_wire_format_is_snake_case() {
         session_id: test_session_id("abc"),
         cwd: PathBuf::from("/tmp"),
         started_at: 123_456_789,
-        kind: SessionKind::DaemonWorker,
+        kind: ProcessSessionKind::DaemonWorker,
         entrypoint: Some("sdk-py".into()),
         name: Some("nightly-eval".into()),
         bridge_session_id: Some("bridge-7".into()),
@@ -264,7 +264,7 @@ fn reg(
         session_id: test_session_id(&format!("sid-{pid}")),
         cwd: PathBuf::from("/work"),
         started_at,
-        kind: SessionKind::Bg,
+        kind: ProcessSessionKind::Bg,
         entrypoint: None,
         name: None,
         bridge_session_id: None,

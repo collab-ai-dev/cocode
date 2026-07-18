@@ -314,6 +314,29 @@ pub(super) async fn dispatch_slash_command(
     runtime_reload_subscriptions: &Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
 ) -> SlashOutcome {
     let runtime = session;
+    if name == "btw" {
+        return match coco_commands::handlers::btw::BtwRequest::parse(args) {
+            Ok(request) => SlashOutcome::TriggerBtw { request },
+            Err(usage) => {
+                emit_slash_text(event_tx, name, args, usage).await;
+                SlashOutcome::Handled
+            }
+        };
+    }
+    if local_app_server_bridge
+        .child_interactive_session()
+        .is_some()
+        && name != "help"
+    {
+        emit_slash_text(
+            event_tx,
+            name,
+            args,
+            "Only /help and /btw --close are available while viewing a sidechat.",
+        )
+        .await;
+        return SlashOutcome::Handled;
+    }
     // Runtime-state-aware commands intercepted before registry lookup:
     // their behavior depends on per-session state (session_id, plan
     // file, app_state) that the static registry can't carry.
@@ -613,7 +636,6 @@ pub(super) async fn dispatch_slash_command(
                     SentinelTrigger::AddDir { path } => SlashOutcome::TriggerAddDir { path },
                     SentinelTrigger::ReloadPlugins => SlashOutcome::TriggerReloadPlugins,
                     SentinelTrigger::ReloadHooks => SlashOutcome::TriggerReloadHooks,
-                    SentinelTrigger::Btw { request } => SlashOutcome::TriggerBtw { request },
                 };
             }
             emit_slash_text(event_tx, name, args, &text).await;

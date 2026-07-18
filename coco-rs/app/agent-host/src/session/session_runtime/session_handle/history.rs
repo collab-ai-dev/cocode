@@ -28,6 +28,41 @@ impl SessionHandle {
         self.runtime.history_messages().await
     }
 
+    /// Capture committed parent context and clone the resolved runtime inputs
+    /// needed to construct a self-contained sidechat child.
+    ///
+    /// In-flight assistant/tool output is intentionally excluded. Unknown
+    /// model windows use the conservative minimum that still preserves the
+    /// required response reserve.
+    pub async fn capture_side_chat_seed(
+        &self,
+    ) -> Result<super::SideChatSeed, coco_context::ContextError> {
+        let engine_config = self.current_engine_config().await;
+        let context_window = self
+            .runtime
+            .model_role_change_snapshot(coco_types::ModelRole::Main, None)
+            .await
+            .and_then(|model| model.context_window)
+            .unwrap_or(coco_context::side_chat::MIN_RESERVED_TOKENS * 2);
+        let max_inherited_tokens = coco_context::side_chat::max_inherited_tokens(context_window);
+        let messages = self.history_messages().await;
+        let context =
+            coco_context::side_chat::capture_bounded_context(&messages, max_inherited_tokens)?;
+        let permissions = self.runtime.app_state().read().await.permissions.clone();
+        let command_registry = self.current_command_registry().await;
+        Ok(super::SideChatSeed {
+            context,
+            runtime_config: Arc::clone(self.runtime_config()),
+            engine_config,
+            permissions,
+            model_runtimes: self.model_runtimes(),
+            tools: Arc::clone(self.tools()),
+            command_registry,
+            skill_manager: self.skill_manager(),
+            project_services: Arc::clone(self.project_services()),
+        })
+    }
+
     pub async fn truncate_history_at_user_message(
         &self,
         message_id: &str,

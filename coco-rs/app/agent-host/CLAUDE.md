@@ -25,6 +25,7 @@ typed errors and adapters translate failures to protocol results.
 | `remote_host::HostBuilder` / `PreparedHost` | Remote AppServer host bootstrap for transport adapters; does not own SDK transport. |
 | `remote_host::RemoteAppServerBridgeHost` | Narrow remote transport-facing capability handle for opening JSON-RPC/AppServer bindings without exposing raw host state. |
 | `session_runtime::SessionRuntimeFactory` | Owned construction seam for building `SessionHandle`s from cloneable startup inputs and a target session id. |
+| `session_runtime::SessionExecutionProfile` (`Primary` / `SideChatReadOnly`) + `HookExecutionPolicy` | Construction-time capability decision table read by the runtime installers (predicate methods: `persists_history`, `registers_pid`, `runs_goals`, …). `SideChatReadOnly` disables durable/background ownership and restricts hooks to tool-lifecycle only. |
 | `session_controls::*` | Protocol-neutral runtime controls (tasks, status/cost, context usage); adapters map results to their surfaces. |
 | `headless` (`headless/run`, `headless/support`) | Print-mode orchestration plus goal/slash, transcript, tool-filter, and additional-directory helpers. |
 | `local_host::build_local_host` | Shared local AppServer host assembly for TUI + headless; local counterpart to `remote_host::HostBuilder`. |
@@ -108,7 +109,7 @@ reads process cwd. SDK mode installs the same startup cwd into
 2. `SessionTurnCoordinator` has a `closed` tombstone: the close cascade
    (`SessionHandle::close_turn_coordinator` in `close_runtime`) rejects turn
    admission after close and cancels a turn admitted in the drain→close race.
-3. Shortcuts (`/cost`, `/btw`, …) reserve the slot atomically via
+3. In-session shortcuts (`/cost`, `/summary`, …) reserve the slot atomically via
    `reserve_shortcut_turn` (`TurnLifecycleState::Reserved` + RAII guard), not a
    check-then-act probe, so a shortcut and a real `turn/start` cannot both be
    admitted.
@@ -167,7 +168,8 @@ mappings:
 | `/reload-plugins`, `/hooks reload` | `plugin_reload`, `hook_reload` |
 | `/context` | `context_usage` |
 | `/cost`, `/status` | `session_cost`, `session_status` |
-| `/compact`, `/dream`, `/summary`, `/btw` | `turn_start` (handler-intercepted sentinel; same for SDK) |
+| `/compact`, `/dream`, `/summary` | `turn_start` (handler-intercepted sentinel; same for SDK) |
+| `/btw` | local bridge child-session open/close; unavailable remotely |
 | `/model` picker | `set_model_role` |
 | Ctrl+T thinking / fast-mode toggle | `set_thinking` / `config_apply_flags` |
 | permission mode / `/permissions`, `/add-dir` | `set_permission_mode` / `apply_permission_update` (`reset` → `reset_session_permission_rules`) |
@@ -178,9 +180,9 @@ mappings:
 | `/clear` | factory build + AppServer replacement commit with `Clear` close reason |
 | `/rename`, `/tag` | `session_rename`, `session_toggle_tag` |
 
-SDK slash sentinels (`/cost`, `/status`, `/dream`, `/summary`, `/btw`,
-`/compact`, `/goal`, `/rename`) are intercepted in `turn/start` and reuse the
-same handlers before a normal runner task is spawned.
+SDK slash sentinels (`/cost`, `/status`, `/dream`, `/summary`, `/compact`,
+`/goal`, `/rename`) are intercepted in `turn/start` and reuse the same handlers
+before a normal runner task is spawned. Raw remote `/btw` input is rejected.
 
 ## Session Module Ownership (`src/session/`)
 
@@ -196,7 +198,6 @@ and surface event policy.
 | `session_dialogs` | Agents/permissions/workflow/skills dialog payload assembly |
 | `session_agents` | Agent-file create staging + template generation |
 | `session_queue` | Human command-queue entry construction and enqueue |
-| `side_question` | `/btw` side-question fork execution + prompt-cache selection |
 | `goal_command` | Goal command resolution, status transcript append, active-goal metadata persistence — enter here; no `SessionHandle` goal forwarders |
 | `session_compaction` | Manual compact turn execution |
 | `session_messages` | Meta/slash metadata message construction, slash history append |
@@ -228,10 +229,10 @@ owner structs directly.
 
 ## Stop Hooks (agent-host half)
 
-Post-turn forks (promptSuggestion, extractMemories, autoDream, `/btw`) dispatch
+Forked background work (promptSuggestion, extractMemories, autoDream) dispatches
 via `coco_query::forked_agent::ForkDispatcher`, whose production impl this
 crate installs at session bootstrap (`integrations/fork_dispatcher.rs`,
 `fork_dispatcher::install`). The dispatcher threads the parent's
-`CacheSafeParams` so the child's API request prefix matches byte-for-byte.
+`CacheSafeParams` so the fork request prefix matches byte-for-byte.
 Dispatch ordering/gating lives in `coco-query`; per-fork `canUseTool` policies
 live in `coco-memory`.

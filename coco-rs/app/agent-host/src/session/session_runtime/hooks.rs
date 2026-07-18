@@ -223,6 +223,13 @@ impl SessionRuntime {
         server_name: String,
         base: coco_mcp::SendElicitation,
     ) -> coco_mcp::SendElicitation {
+        if !self
+            .execution_profile()
+            .hook_policy()
+            .allows(coco_types::HookEventType::Elicitation)
+        {
+            return base;
+        }
         let elicit_counter = self
             .engine_state_resources
             .app_state()
@@ -248,6 +255,13 @@ impl SessionRuntime {
         &self,
         source: coco_hooks::orchestration::SessionStartSource,
     ) {
+        if !self
+            .execution_profile()
+            .hook_policy()
+            .allows(coco_types::HookEventType::SessionStart)
+        {
+            return;
+        }
         let cfg = self.current_engine_config().await;
         let session_id = self.current_typed_session_id().await;
         let ctx = coco_hooks::orchestration::OrchestrationContext {
@@ -301,6 +315,13 @@ impl SessionRuntime {
     }
 
     pub async fn fire_session_end_hooks(&self, reason: coco_hooks::orchestration::ExitReason) {
+        if !self
+            .execution_profile()
+            .hook_policy()
+            .allows(coco_types::HookEventType::SessionEnd)
+        {
+            return;
+        }
         let cur_session_id = self.current_typed_session_id().await;
         let cfg = self.current_engine_config().await;
         let ctx = coco_hooks::orchestration::OrchestrationContext {
@@ -335,6 +356,13 @@ impl SessionRuntime {
     /// Output is fire-and-forget — Setup is observability-only (no blocking,
     /// no continuation signals). Failure is logged.
     pub async fn fire_setup_hooks(&self, trigger: coco_hooks::orchestration::SetupTrigger) {
+        if !self
+            .execution_profile()
+            .hook_policy()
+            .allows(coco_types::HookEventType::Setup)
+        {
+            return;
+        }
         let cfg = self.current_engine_config().await;
         let session_id = self.current_typed_session_id().await;
         let ctx = coco_hooks::orchestration::OrchestrationContext {
@@ -374,6 +402,13 @@ impl SessionRuntime {
         &self,
         prompt: &str,
     ) -> coco_hooks::orchestration::AggregatedHookResult {
+        if !self
+            .execution_profile()
+            .hook_policy()
+            .allows(coco_types::HookEventType::UserPromptSubmit)
+        {
+            return coco_hooks::orchestration::AggregatedHookResult::default();
+        }
         let cfg = self.current_engine_config().await;
         let session_id = self.current_typed_session_id().await;
         let ctx = coco_hooks::orchestration::OrchestrationContext {
@@ -420,6 +455,13 @@ impl SessionRuntime {
         message: &str,
         title: Option<&str>,
     ) {
+        if !self
+            .execution_profile()
+            .hook_policy()
+            .allows(coco_types::HookEventType::Notification)
+        {
+            return;
+        }
         let cfg = self.current_engine_config().await;
         let session_id = self.current_typed_session_id().await;
         let ctx = coco_hooks::orchestration::OrchestrationContext {
@@ -476,7 +518,12 @@ impl SessionRuntime {
     /// Append paths to the `FileChanged` watcher, lazily constructing
     /// it on first call. Empty input is a no-op.
     pub async fn add_file_watch_paths(&self, paths: Vec<String>) {
-        if paths.is_empty() {
+        if paths.is_empty()
+            || !self
+                .execution_profile()
+                .hook_policy()
+                .allows(coco_types::HookEventType::FileChanged)
+        {
             return;
         }
         self.file_watch_registration_context()
@@ -490,6 +537,13 @@ impl SessionRuntime {
     /// cwd-mutating code paths (worktree exit, AppServer setCwd control) wire
     /// the hook without re-implementing the orchestration context build.
     pub async fn fire_cwd_changed_hooks(&self, old_cwd: &str, new_cwd: &str) {
+        if !self
+            .execution_profile()
+            .hook_policy()
+            .allows(coco_types::HookEventType::CwdChanged)
+        {
+            return;
+        }
         let cfg = self.current_engine_config().await;
         let session_id = self.current_typed_session_id().await;
         let ctx = coco_hooks::orchestration::OrchestrationContext {
@@ -536,6 +590,13 @@ impl SessionRuntime {
         source: coco_hooks::orchestration::ConfigChangeSource,
         file_path: Option<&str>,
     ) -> coco_hooks::orchestration::AggregatedHookResult {
+        if !self
+            .execution_profile()
+            .hook_policy()
+            .allows(coco_types::HookEventType::ConfigChange)
+        {
+            return coco_hooks::orchestration::AggregatedHookResult::default();
+        }
         let cfg = self.current_engine_config().await;
         let session_id = self.current_typed_session_id().await;
         let ctx = coco_hooks::orchestration::OrchestrationContext {

@@ -84,6 +84,11 @@ pub struct QueryParams {
     /// isolated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
+    /// Session-local cache detector namespace. This is intentionally separate
+    /// from `query_source` telemetry and from subagent identity: two sessions
+    /// may share one model runtime without sharing detector baselines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_scope: Option<String>,
     /// Wall-clock millis since the last assistant message. Used by the
     /// cache-break detector to attribute drops to TTL expiry (5min /
     /// 1h) when no client-side change is to blame. `None` skips TTL
@@ -337,17 +342,31 @@ impl ApiClient {
     /// Notify the detector that compaction occurred — resets the
     /// previous-cache-read baseline so the next call doesn't trigger
     /// a false-positive cache break.
-    pub(crate) async fn notify_compaction(&self, query_source: &str, agent_id: Option<&str>) {
+    pub(crate) async fn notify_compaction(
+        &self,
+        query_source: &str,
+        agent_id: Option<&str>,
+        cache_scope: Option<&str>,
+    ) {
         if let Some(d) = &self.cache_break_detector {
-            d.lock().await.notify_compaction(query_source, agent_id);
+            d.lock()
+                .await
+                .notify_compaction_scoped(query_source, agent_id, cache_scope);
         }
     }
 
     /// Notify the detector that a cache_edits deletion was issued —
     /// the next response's cache_read drop is expected, not a break.
-    pub(crate) async fn notify_cache_deletion(&self, query_source: &str, agent_id: Option<&str>) {
+    pub(crate) async fn notify_cache_deletion(
+        &self,
+        query_source: &str,
+        agent_id: Option<&str>,
+        cache_scope: Option<&str>,
+    ) {
         if let Some(d) = &self.cache_break_detector {
-            d.lock().await.notify_cache_deletion(query_source, agent_id);
+            d.lock()
+                .await
+                .notify_cache_deletion_scoped(query_source, agent_id, cache_scope);
         }
     }
 
@@ -599,12 +618,13 @@ impl ApiClient {
                     if let Some(detector) = &self.cache_break_detector
                         && let Some(query_source) = params.query_source.as_deref()
                     {
-                        let res = detector.lock().await.check_response_for_cache_break(
+                        let res = detector.lock().await.check_response_for_cache_break_scoped(
                             query_source,
                             result.usage.input_tokens.cache_read,
                             result.usage.input_tokens.cache_write,
                             params.time_since_last_assistant_ms,
                             params.agent_id.as_deref(),
+                            params.cache_scope.as_deref(),
                         );
                         if matches!(res.state, CacheState::Broken) {
                             warn!(
@@ -1228,6 +1248,7 @@ fn build_prompt_state_input(
             .is_some_and(|m| m.cache_break_detection_excluded),
         query_source: query_source.to_string(),
         agent_id: params.agent_id.clone(),
+        cache_scope: params.cache_scope.clone(),
         fast_mode: params.fast_mode,
         betas: Vec::new(),
         extra_body_hash,

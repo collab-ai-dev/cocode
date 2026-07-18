@@ -325,10 +325,8 @@ impl SideQueryResponse {
 /// **Runtime scope**: this is the cross-layer DTO. The slot itself
 /// lives on `coco_query::QueryEngine` (`last_cache_safe_params:
 /// Arc<RwLock<Option<CacheSafeParams>>>`) populated in
-/// `finalize_turn_post_tools`. Cleared on `/clear`. Fork features such
-/// as `/btw` read it via `engine.last_cache_safe_params()` and may
-/// rebuild equivalent params from the current transcript before the
-/// first saved parent request exists.
+/// `finalize_turn_post_tools`. Engine-owned fork features read it via
+/// `engine.last_cache_safe_params()`.
 /// **Cache-key fields included here**: rendered system prompt, model
 /// id, parent message history. **Excluded**: the live `ToolUseContext`
 /// (non-serializable) — fork callers reconstruct it; tool schema

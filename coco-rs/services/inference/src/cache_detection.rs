@@ -315,23 +315,37 @@ fn signed_delta(delta: i64) -> String {
     }
 }
 
+/// Collision-free detector identity for one logical cache lineage.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CacheTrackingKey {
+    query_source: String,
+    agent_id: Option<String>,
+    cache_scope: Option<String>,
+}
+
 /// Tracking key for a query source.
 ///
 /// - `compact` shares `repl_main_thread`'s key.
-/// - `agent_id` (when supplied for a tracked prefix) takes precedence over
-///   `query_source` so concurrent agents of the same type don't collide.
+/// - session and agent identities are independent key dimensions; neither is
+///   allowed to erase the other.
 /// - Untracked sources return `None` (silent no-op).
-fn tracking_key(query_source: &str, agent_id: Option<&str>) -> Option<String> {
-    if query_source == "compact" {
-        return Some("repl_main_thread".to_string());
-    }
+fn tracking_key(
+    query_source: &str,
+    agent_id: Option<&str>,
+    cache_scope: Option<&str>,
+) -> Option<CacheTrackingKey> {
+    let normalized_source = if query_source == "compact" {
+        "repl_main_thread"
+    } else {
+        query_source
+    };
     for prefix in TRACKED_SOURCE_PREFIXES {
-        if query_source.starts_with(prefix) {
-            return Some(
-                agent_id
-                    .map(String::from)
-                    .unwrap_or_else(|| query_source.to_string()),
-            );
+        if normalized_source.starts_with(prefix) {
+            return Some(CacheTrackingKey {
+                query_source: normalized_source.to_string(),
+                agent_id: agent_id.map(String::from),
+                cache_scope: cache_scope.map(String::from),
+            });
         }
     }
     None
@@ -368,6 +382,8 @@ pub struct PromptStateInput {
     pub query_source: String,
     /// Optional agent id for per-instance subagent isolation.
     pub agent_id: Option<String>,
+    /// Optional session namespace for main-loop detector isolation.
+    pub cache_scope: Option<String>,
     /// Whether fast mode is active.
     pub fast_mode: bool,
     /// Sorted beta header list. Anthropic-only; empty for other providers.
@@ -391,8 +407,8 @@ pub struct PromptStateInput {
 /// Tracks prompt cache state across calls to detect cache breaks.
 /// Uses a per-source map with two-phase (pre-call / post-call) API.
 pub struct CacheBreakDetector {
-    states: HashMap<String, PromptSnapshot>,
-    pending_changes: HashMap<String, PendingChanges>,
+    states: HashMap<CacheTrackingKey, PromptSnapshot>,
+    pending_changes: HashMap<CacheTrackingKey, PendingChanges>,
 }
 
 impl CacheBreakDetector {
@@ -416,7 +432,11 @@ impl CacheBreakDetector {
         // snapshot on the previous model and resurrect the very false positive
         // the exclusion exists to suppress. Matches the TS detector, which
         // also records all models and gates exclusively in phase 2.
-        let key = match tracking_key(&input.query_source, input.agent_id.as_deref()) {
+        let key = match tracking_key(
+            &input.query_source,
+            input.agent_id.as_deref(),
+            input.cache_scope.as_deref(),
+        ) {
             Some(k) => k,
             None => return,
         };
@@ -623,7 +643,26 @@ impl CacheBreakDetector {
         time_since_last_assistant_ms: Option<i64>,
         agent_id: Option<&str>,
     ) -> CacheBreakResult {
-        let key = match tracking_key(query_source, agent_id) {
+        self.check_response_for_cache_break_scoped(
+            query_source,
+            cache_read_tokens,
+            cache_creation_tokens,
+            time_since_last_assistant_ms,
+            agent_id,
+            None,
+        )
+    }
+
+    pub fn check_response_for_cache_break_scoped(
+        &mut self,
+        query_source: &str,
+        cache_read_tokens: i64,
+        cache_creation_tokens: i64,
+        time_since_last_assistant_ms: Option<i64>,
+        agent_id: Option<&str>,
+        cache_scope: Option<&str>,
+    ) -> CacheBreakResult {
+        let key = match tracking_key(query_source, agent_id, cache_scope) {
             Some(k) => k,
             None => {
                 return CacheBreakResult {
@@ -739,7 +778,16 @@ impl CacheBreakDetector {
     /// Notify that a cache deletion (e.g. cached microcompact) occurred.
     /// The next response will legitimately have lower cache read tokens.
     pub fn notify_cache_deletion(&mut self, query_source: &str, agent_id: Option<&str>) {
-        if let Some(key) = tracking_key(query_source, agent_id)
+        self.notify_cache_deletion_scoped(query_source, agent_id, None);
+    }
+
+    pub fn notify_cache_deletion_scoped(
+        &mut self,
+        query_source: &str,
+        agent_id: Option<&str>,
+        cache_scope: Option<&str>,
+    ) {
+        if let Some(key) = tracking_key(query_source, agent_id, cache_scope)
             && let Some(snapshot) = self.states.get_mut(&key)
         {
             snapshot.cache_deletion_pending = true;
@@ -749,7 +797,16 @@ impl CacheBreakDetector {
     /// Notify that compaction occurred. Reset the baseline so the expected
     /// drop in cache tokens doesn't trigger a false positive.
     pub fn notify_compaction(&mut self, query_source: &str, agent_id: Option<&str>) {
-        if let Some(key) = tracking_key(query_source, agent_id)
+        self.notify_compaction_scoped(query_source, agent_id, None);
+    }
+
+    pub fn notify_compaction_scoped(
+        &mut self,
+        query_source: &str,
+        agent_id: Option<&str>,
+        cache_scope: Option<&str>,
+    ) {
+        if let Some(key) = tracking_key(query_source, agent_id, cache_scope)
             && let Some(snapshot) = self.states.get_mut(&key)
         {
             snapshot.prev_cache_read_tokens = None;
@@ -758,8 +815,16 @@ impl CacheBreakDetector {
 
     /// Clean up tracking state for a specific agent.
     pub fn cleanup_agent(&mut self, agent_id: &str) {
-        self.states.remove(agent_id);
-        self.pending_changes.remove(agent_id);
+        let removed = self
+            .states
+            .keys()
+            .filter(|key| key.agent_id.as_deref() == Some(agent_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        for key in removed {
+            self.states.remove(&key);
+            self.pending_changes.remove(&key);
+        }
     }
 
     /// Reset all tracking state.
@@ -786,7 +851,7 @@ impl CacheBreakDetector {
         query_source: &str,
         agent_id: Option<&str>,
     ) -> Option<String> {
-        let key = tracking_key(query_source, agent_id)?;
+        let key = tracking_key(query_source, agent_id, None)?;
         self.states
             .get(&key)
             .and_then(|s| s.last_extra_body_serialized.clone())

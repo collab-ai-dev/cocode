@@ -23,8 +23,8 @@ fn test_session_id() -> coco_types::SessionId {
 
 #[test]
 fn test_for_label_is_cache_safe() {
-    // The cache-safe defaults are what `/btw` / promptSuggestion /
-    // session_memory expect: 1 turn, skip transcript, skip cache
+    // The cache-safe defaults are what promptSuggestion / session_memory
+    // expect: 1 turn, skip transcript, skip cache
     // write, no effort override (PR #18143 cache-bust risk).
     let opts = ForkedAgentOptions::for_label(ForkLabel::PromptSuggestion);
     assert_eq!(opts.max_turns, Some(1));
@@ -45,7 +45,6 @@ fn test_for_label_query_source_matches_label_str() {
     // string drift.
     let cases = [
         (ForkLabel::PromptSuggestion, "prompt_suggestion"),
-        (ForkLabel::SideQuestion, "side_question"),
         (ForkLabel::Compact, "compact"),
         (ForkLabel::ExtractMemories, "extract_memories"),
         (ForkLabel::SessionMemoryAuto, "session_memory_auto"),
@@ -164,7 +163,14 @@ async fn test_deny_all_handle_round_trip() {
         require_can_use_tool: false,
         messages: Arc::new(Vec::<Arc<Message>>::new()),
     };
-    let decision = handle.check("Bash", &json!({"command": "ls"}), &ctx).await;
+    let decision = handle
+        .check(
+            &"Bash".parse::<coco_types::ToolId>().unwrap(),
+            "Bash",
+            &json!({"command": "ls"}),
+            &ctx,
+        )
+        .await;
     match decision {
         CanUseToolDecision::Deny { message, .. } => {
             assert!(

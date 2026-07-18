@@ -52,6 +52,7 @@ pub async fn single_turn_query(
             context_management: None,
             query_source: None,
             agent_id: None,
+            cache_scope: None,
             time_since_last_assistant_ms: None,
             // One-shot helper call: not part of an agent loop, no cache
             // strategy plumbed at this layer.

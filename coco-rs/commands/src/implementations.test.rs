@@ -37,6 +37,25 @@ fn btw_registration_matches_upstream_command_metadata() {
     assert_eq!(btw.base.safety, coco_types::CommandSafety::AlwaysSafe);
 }
 
+#[test]
+fn remote_command_catalog_omits_local_sidechat() {
+    let mut registry = CommandRegistry::new();
+    register_extended_builtins(&mut registry);
+
+    assert!(
+        registry
+            .client_visible()
+            .iter()
+            .any(|command| command.base.name == names::BTW)
+    );
+    assert!(
+        registry
+            .remote_client_visible()
+            .iter()
+            .all(|command| command.base.name != names::BTW)
+    );
+}
+
 #[tokio::test]
 async fn add_dir_success_message_matches_upstream_wording() {
     let tmp = tempfile::tempdir().expect("tempdir");

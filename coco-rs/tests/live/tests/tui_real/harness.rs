@@ -355,6 +355,7 @@ impl RealTuiHarness {
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
             session_id_override: None,
             is_non_interactive: false,
+            execution_profile: coco_agent_host::session_runtime::SessionExecutionProfile::Primary,
             callback_requirements: Default::default(),
         })
         .await

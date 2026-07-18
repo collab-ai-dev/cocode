@@ -15,6 +15,7 @@ use coco_config::Settings;
 use coco_config::SettingsWithSource;
 use coco_types::ProviderModelSelection;
 use tempfile::TempDir;
+use tokio_util::sync::CancellationToken;
 
 use crate::AgentHostOptions;
 use crate::session_bootstrap::install_session_late_binds;
@@ -90,6 +91,7 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         session_id_override: None,
         is_non_interactive: false,
+        execution_profile: crate::session_runtime::SessionExecutionProfile::Primary,
         callback_requirements: Default::default(),
     })
     .await
@@ -120,9 +122,10 @@ async fn install_session_late_binds_populates_every_slot_without_mcp() {
         runtime.current_agent_transcript_store().await.is_some(),
         "agent_transcript_store slot must be populated"
     );
+    let engine = runtime.build_engine(CancellationToken::new()).await;
     assert!(
-        runtime.current_fork_dispatcher().await.is_some(),
-        "fork_dispatcher slot must be populated"
+        engine.fork_dispatcher().is_some(),
+        "engine must receive fork dispatcher"
     );
     assert!(
         runtime.current_mcp_handle().await.is_none(),

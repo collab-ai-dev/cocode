@@ -42,6 +42,7 @@ struct AlwaysDenyHandle;
 impl CanUseToolHandle for AlwaysDenyHandle {
     async fn check(
         &self,
+        _tool_id: &coco_types::ToolId,
         _tool_name: &str,
         _input: &serde_json::Value,
         _ctx: &CanUseToolCallContext,
@@ -62,6 +63,7 @@ struct AlwaysAllowRewriteHandle;
 impl CanUseToolHandle for AlwaysAllowRewriteHandle {
     async fn check(
         &self,
+        _tool_id: &coco_types::ToolId,
         _tool_name: &str,
         _input: &serde_json::Value,
         _ctx: &CanUseToolCallContext,
@@ -93,6 +95,7 @@ async fn test_can_use_tool_deny_becomes_permission_deny_in_preparer() {
     ctx.can_use_tool = Some(Arc::new(AlwaysDenyHandle));
 
     let resolution = resolve_can_use_tool_decision(
+        &"Read".parse::<coco_types::ToolId>().unwrap(),
         &tool_call(),
         &json!({"file_path": "/main/foo.txt"}),
         &ctx,
@@ -124,6 +127,7 @@ async fn test_can_use_tool_allow_rewrite_becomes_permission_allow() {
     ctx.can_use_tool = Some(Arc::new(AlwaysAllowRewriteHandle));
 
     let resolution = resolve_can_use_tool_decision(
+        &"Read".parse::<coco_types::ToolId>().unwrap(),
         &tool_call(),
         &json!({"file_path": "/main/foo.txt"}),
         &ctx,
@@ -156,6 +160,7 @@ async fn test_hook_allow_bypasses_can_use_tool_unless_required() {
     ctx.can_use_tool = Some(Arc::new(AlwaysDenyHandle));
 
     let skipped = resolve_can_use_tool_decision(
+        &"Read".parse::<coco_types::ToolId>().unwrap(),
         &tool_call(),
         &json!({"file_path": "/main/foo.txt"}),
         &ctx,
@@ -169,6 +174,7 @@ async fn test_hook_allow_bypasses_can_use_tool_unless_required() {
 
     ctx.require_can_use_tool = true;
     let enforced = resolve_can_use_tool_decision(
+        &"Read".parse::<coco_types::ToolId>().unwrap(),
         &tool_call(),
         &json!({"file_path": "/main/foo.txt"}),
         &ctx,

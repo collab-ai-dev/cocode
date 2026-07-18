@@ -136,6 +136,39 @@ pub enum CoreEvent {
     Tui(TuiOnlyEvent),
 }
 
+/// A protocol or stream [`CoreEvent`] payload carrying explicit session
+/// identity through a local TUI event pump.
+///
+/// TUI-only events are deliberately excluded: AppServer surfaces do not carry
+/// them, and accepting them here would make the public JSON schema recursive
+/// through [`TuiOnlyEvent::SessionScoped`].
+#[derive(Debug, Clone)]
+pub enum SessionScopedEvent {
+    Protocol(Box<ServerNotification>),
+    Stream(AgentStreamEvent),
+}
+
+impl TryFrom<CoreEvent> for SessionScopedEvent {
+    type Error = TuiOnlyEvent;
+
+    fn try_from(event: CoreEvent) -> Result<Self, Self::Error> {
+        match event {
+            CoreEvent::Protocol(event) => Ok(Self::Protocol(Box::new(event))),
+            CoreEvent::Stream(event) => Ok(Self::Stream(event)),
+            CoreEvent::Tui(event) => Err(event),
+        }
+    }
+}
+
+impl From<SessionScopedEvent> for CoreEvent {
+    fn from(event: SessionScopedEvent) -> Self {
+        match event {
+            SessionScopedEvent::Protocol(event) => Self::Protocol(*event),
+            SessionScopedEvent::Stream(event) => Self::Stream(event),
+        }
+    }
+}
+
 /// Replay behavior assigned by the AppServer stamping seam.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventReplayPolicy {
@@ -2356,6 +2389,15 @@ impl PermissionDisplayInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TuiOnlyEvent {
+    /// A local session event tagged at the bridge boundary. The TUI routes it
+    /// to the matching active or inactive session projection; it must never be
+    /// emitted by remote transports.
+    #[serde(skip)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    SessionScoped {
+        session_id: crate::SessionId,
+        event: Box<SessionScopedEvent>,
+    },
     // === Permission / Question overlays (4) ===
     /// Permission approval overlay needed.
     ///
@@ -2810,6 +2852,19 @@ pub enum TuiOnlyEvent {
     /// A `/journey` mutation failed (read-only file, vanished entry, …). Success
     /// needs no event — the refreshed overlay IS the confirmation.
     JourneyMutationFailed { failure: JourneyMutationFailed },
+    /// A sidechat child opened: the TUI swaps the active view to a fresh child
+    /// transcript, stashing the primary view. Emitted before the child's first
+    /// turn events so they render in the child view. See
+    /// `docs/internal/sidechat-architecture.md`.
+    SideChatEntered {
+        parent_id: crate::SessionId,
+        child_id: crate::SessionId,
+    },
+    /// The sidechat child closed: the TUI restores the stashed primary view.
+    SideChatExited {
+        parent_id: crate::SessionId,
+        child_id: crate::SessionId,
+    },
 }
 
 /// Image payload paired with a queued command edit restore.

@@ -255,6 +255,7 @@ pub async fn generate_tool_use_summary(
                 context_management: None,
                 query_source: Some("tool_use_summary_generation".into()),
                 agent_id: None,
+                cache_scope: None,
                 time_since_last_assistant_ms: None,
                 cache: None,
                 agentic: false,

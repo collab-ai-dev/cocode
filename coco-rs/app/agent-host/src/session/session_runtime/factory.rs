@@ -214,6 +214,95 @@ impl SessionRuntimeFactory {
         cwd: PathBuf,
         callback_requirements: coco_types::SessionCallbackRequirements,
     ) -> Result<SessionHandle> {
+        self.build_with_profile(
+            session_id_override,
+            cwd,
+            callback_requirements,
+            super::SessionExecutionProfile::Primary,
+        )
+        .await
+    }
+
+    /// Build an ephemeral, read-only sidechat child runtime. Same construction
+    /// path as [`Self::build_for_cwd`], but with the `SideChatReadOnly`
+    /// execution profile: no durable/background ownership, and the structural
+    /// read-only tool boundary installed on every turn.
+    ///
+    /// The child's initial history is seeded with `inherited` bounded parent
+    /// context followed by the read-only boundary fragment, so the model sees
+    /// the parent conversation as reference material immediately before the
+    /// first question. The seed is appended silently (no UI emit); the child's
+    /// visual scrollback starts at the boundary.
+    pub async fn build_side_chat(
+        &self,
+        session_id_override: Option<SessionId>,
+        cwd: PathBuf,
+        callback_requirements: coco_types::SessionCallbackRequirements,
+        seed: super::SideChatSeed,
+    ) -> Result<SessionHandle> {
+        use coco_context::side_chat::ContextualUserFragment;
+
+        let super::SideChatSeed {
+            context,
+            runtime_config,
+            engine_config,
+            permissions,
+            model_runtimes,
+            tools,
+            command_registry,
+            skill_manager,
+            project_services,
+        } = seed;
+        let opts = self.opts.as_ref();
+        let handle = SessionHandle::build(SessionRuntimeBuildOpts {
+            cli: opts.cli.as_ref(),
+            runtime_config,
+            // A sidechat is a point-in-time child. It must not drift away from
+            // the captured parent through a separate settings watcher.
+            config_reloader: None,
+            cwd,
+            model_id: engine_config.model_id.clone(),
+            system_prompt: engine_config.system_prompt.clone().unwrap_or_default(),
+            permission_mode_availability: engine_config.permission_mode_availability,
+            permission_mode: engine_config.permission_mode,
+            model_runtimes: Some(model_runtimes),
+            tools,
+            session_manager: Arc::clone(&opts.session_manager),
+            fast_model_spec: opts.fast_model_spec.clone(),
+            permission_bridge: opts.permission_bridge.clone(),
+            command_registry: Arc::new(tokio::sync::RwLock::new(command_registry)),
+            skill_manager,
+            project_services,
+            process_runtime: Arc::clone(&opts.process_runtime),
+            agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
+            builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::noninteractive(),
+            session_id_override,
+            is_non_interactive: opts.is_non_interactive,
+            execution_profile: super::SessionExecutionProfile::SideChatReadOnly,
+            callback_requirements,
+        })
+        .await?;
+        handle
+            .apply_side_chat_parent_state(engine_config, permissions)
+            .await;
+
+        let mut inherited_messages = context.into_messages();
+        inherited_messages.push(std::sync::Arc::new(coco_messages::create_meta_message(
+            &coco_context::side_chat::SideChatBoundaryFragment.render(),
+        )));
+        handle
+            .append_arc_messages_to_history_and_snapshot(inherited_messages)
+            .await;
+        Ok(handle)
+    }
+
+    async fn build_with_profile(
+        &self,
+        session_id_override: Option<SessionId>,
+        cwd: PathBuf,
+        callback_requirements: coco_types::SessionCallbackRequirements,
+        execution_profile: super::SessionExecutionProfile,
+    ) -> Result<SessionHandle> {
         let opts = self.opts.as_ref();
         // Run the disk-heavy per-session fold (settings reads + plugin scan)
         // off the async runtime so it can't stall other tasks.
@@ -252,6 +341,7 @@ impl SessionRuntimeFactory {
             builtin_agent_catalog: opts.builtin_agent_catalog,
             session_id_override,
             is_non_interactive: opts.is_non_interactive,
+            execution_profile,
             callback_requirements,
         })
         .await

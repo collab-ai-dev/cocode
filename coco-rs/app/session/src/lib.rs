@@ -9,9 +9,9 @@ pub mod storage;
 pub mod store;
 pub mod title_generator;
 
+pub use concurrent_sessions::ProcessSessionKind;
 pub use concurrent_sessions::PsEntry;
 pub use concurrent_sessions::PsViewState;
-pub use concurrent_sessions::SessionKind;
 pub use concurrent_sessions::SessionRegistration;
 pub use concurrent_sessions::SessionRegistry;
 pub use concurrent_sessions::SessionStatus;

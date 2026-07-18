@@ -174,6 +174,8 @@ pub enum UserCommand {
     PersistPromptHistory { display: String },
     /// Interrupt current operation (Ctrl+C).
     Interrupt(coco_types::TurnAbortReason),
+    /// Close an idle sidechat and return to the primary projection.
+    CloseSideChat,
     /// Interrupt a teammate's active turn without killing the teammate.
     InterruptAgentCurrentWork { agent_id: String },
     /// Cancel a running subagent / background task. Fires the task's

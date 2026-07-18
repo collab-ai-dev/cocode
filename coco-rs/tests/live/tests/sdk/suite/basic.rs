@@ -27,6 +27,7 @@ fn params_for(prompt: Vec<LlmMessage>, source: &str) -> QueryParams {
         context_management: None,
         query_source: Some(source.to_string()),
         agent_id: None,
+        cache_scope: None,
         time_since_last_assistant_ms: None,
         agentic: false,
         cache: None,

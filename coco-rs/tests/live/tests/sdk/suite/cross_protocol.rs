@@ -34,6 +34,7 @@ fn factual_params(prompt: Vec<LlmMessage>, scenario: &str) -> QueryParams {
         context_management: None,
         query_source: Some(format!("coco-tests-live::sdk::cross_protocol::{scenario}")),
         agent_id: None,
+        cache_scope: None,
         time_since_last_assistant_ms: None,
         agentic: false,
         cache: None,

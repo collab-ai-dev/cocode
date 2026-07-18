@@ -76,6 +76,7 @@ pub struct QueryEngine {
     pub(crate) cancel: CancellationToken,
     pub(crate) turn_abort: TurnAbortSignal,
     pub(crate) hooks: Option<Arc<HookRegistry>>,
+    pub(crate) hook_execution_policy: coco_hooks::HookExecutionPolicy,
     /// Captures `is_async` hook output so the reminder pipeline can
     /// deliver it on later turns. Wired by `engine_builder` from the
     /// shared `SessionRuntime`-owned `AsyncHookRegistry`. `None` means
@@ -231,23 +232,14 @@ pub struct QueryEngine {
     /// through `AgentSpawnRequest.definition`. `None` ⇒ AgentTool
     /// falls back to subagent_type→role mapping alone.
     pub(crate) agent_catalog: Option<std::sync::Arc<coco_subagent::AgentCatalogSnapshot>>,
-    /// Post-turn cache-safe parameter slot (D8). Populated in
-    /// `finalize_turn_post_tools` with the parameters that drove the
-    /// turn's last request, so post-turn forks (`/btw`,
-    /// `promptSuggestion`, `postTurnSummary`) can share the parent's
-    /// prompt cache by sending byte-identical request prefixes. Read
-    /// via [`Self::last_cache_safe_params`]. The slot lives and dies with
-    /// the per-turn engine; `/clear` drops the observing handle at the
-    /// runtime layer (see `SessionRuntime::clear_conversation`).
-    /// `Arc<RwLock<...>>` so observers (TUI status, transcript recorder)
-    /// can read the slot without contending with the engine's writer side.
-    pub(crate) last_cache_safe_params:
-        std::sync::Arc<tokio::sync::RwLock<Option<coco_types::CacheSafeParams>>>,
+    /// Post-turn cache-safe parameters used by engine-owned fork operations
+    /// such as prompt suggestion and compaction. This state is deliberately
+    /// private to the per-turn engine; independent sessions do not borrow it.
+    pub(crate) last_cache_safe_params: tokio::sync::RwLock<Option<coco_types::CacheSafeParams>>,
     /// Optional dispatcher for one-shot forked queries (D1/D2). When
-    /// installed, post-turn forks (`/btw`, `promptSuggestion`,
-    /// `postTurnSummary`) drive a *fresh* engine via this dispatcher
-    /// rather than mutating the parent. Built and installed by the
-    /// CLI bootstrap — TUI/SDK runners share the same instance.
+    /// installed, prompt suggestion and compaction drive a *fresh* engine via
+    /// this dispatcher rather than mutating the parent. Built and installed by
+    /// session bootstrap.
     /// `None` ⇒ post-turn forks degrade to no-op (a placeholder is
     /// surfaced where appropriate; the parent loop continues).
     pub(crate) fork_dispatcher: Option<crate::forked_agent::ForkDispatcherRef>,

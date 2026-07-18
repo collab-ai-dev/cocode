@@ -41,7 +41,14 @@ fn handle() -> coco_tool_runtime::CanUseToolHandleRef {
 async fn allows_read_glob_grep() {
     let h = handle();
     for tool in ["Read", "Glob", "Grep"] {
-        let d = h.check(tool, &json!({}), &ctx()).await;
+        let d = h
+            .check(
+                &tool.parse::<coco_types::ToolId>().unwrap(),
+                tool,
+                &json!({}),
+                &ctx(),
+            )
+            .await;
         assert_allowed(&d, tool);
     }
 }
@@ -50,7 +57,12 @@ async fn allows_read_glob_grep() {
 async fn allows_read_only_bash() {
     let h = handle();
     let d = h
-        .check("Bash", &json!({"command": "git status"}), &ctx())
+        .check(
+            &"Bash".parse::<coco_types::ToolId>().unwrap(),
+            "Bash",
+            &json!({"command": "git status"}),
+            &ctx(),
+        )
         .await;
     assert_allowed(&d, "read-only bash");
 }
@@ -59,7 +71,12 @@ async fn allows_read_only_bash() {
 async fn denies_mutating_bash() {
     let h = handle();
     let d = h
-        .check("Bash", &json!({"command": "rm -rf /"}), &ctx())
+        .check(
+            &"Bash".parse::<coco_types::ToolId>().unwrap(),
+            "Bash",
+            &json!({"command": "rm -rf /"}),
+            &ctx(),
+        )
         .await;
     assert_denied(&d, "mutating bash");
 }
@@ -68,7 +85,12 @@ async fn denies_mutating_bash() {
 async fn denies_redirection_bash() {
     let h = handle();
     let d = h
-        .check("Bash", &json!({"command": "echo x > /agent/f"}), &ctx())
+        .check(
+            &"Bash".parse::<coco_types::ToolId>().unwrap(),
+            "Bash",
+            &json!({"command": "echo x > /agent/f"}),
+            &ctx(),
+        )
         .await;
     assert_denied(&d, "redirection bash");
 }
@@ -78,6 +100,7 @@ async fn allows_write_under_root() {
     let h = handle();
     let d = h
         .check(
+            &"Write".parse::<coco_types::ToolId>().unwrap(),
             "Write",
             &json!({"file_path": "/agent/my-skill/SKILL.md"}),
             &ctx(),
@@ -90,7 +113,12 @@ async fn allows_write_under_root() {
 async fn allows_edit_relative_resolved_against_cwd() {
     let h = handle();
     let d = h
-        .check("Edit", &json!({"file_path": "my-skill/SKILL.md"}), &ctx())
+        .check(
+            &"Edit".parse::<coco_types::ToolId>().unwrap(),
+            "Edit",
+            &json!({"file_path": "my-skill/SKILL.md"}),
+            &ctx(),
+        )
         .await;
     assert_allowed(&d, "relative edit under cwd (agent root)");
 }
@@ -99,7 +127,12 @@ async fn allows_edit_relative_resolved_against_cwd() {
 async fn denies_write_outside_root() {
     let h = handle();
     let d = h
-        .check("Write", &json!({"file_path": "/etc/passwd"}), &ctx())
+        .check(
+            &"Write".parse::<coco_types::ToolId>().unwrap(),
+            "Write",
+            &json!({"file_path": "/etc/passwd"}),
+            &ctx(),
+        )
         .await;
     assert_denied(&d, "write outside agent root");
 }
@@ -112,6 +145,7 @@ async fn denies_hidden_path_components() {
     // containment passes.
     let d = h
         .check(
+            &"Write".parse::<coco_types::ToolId>().unwrap(),
             "Write",
             &json!({"file_path": "/agent/.sneaky/SKILL.md"}),
             &ctx(),
@@ -120,6 +154,7 @@ async fn denies_hidden_path_components() {
     assert_denied(&d, "hidden directory component");
     let d = h
         .check(
+            &"Write".parse::<coco_types::ToolId>().unwrap(),
             "Write",
             &json!({"file_path": "/agent/my-skill/.lock.md"}),
             &ctx(),
@@ -136,12 +171,20 @@ async fn denies_disallowed_extensions() {
         "/agent/my-skill/payload.py",
         "/agent/my-skill/SKILL", // no extension
     ] {
-        let d = h.check("Write", &json!({"file_path": path}), &ctx()).await;
+        let d = h
+            .check(
+                &"Write".parse::<coco_types::ToolId>().unwrap(),
+                "Write",
+                &json!({"file_path": path}),
+                &ctx(),
+            )
+            .await;
         assert_denied(&d, path);
     }
     // Documentation-class support files stay allowed.
     let d = h
         .check(
+            &"Write".parse::<coco_types::ToolId>().unwrap(),
             "Write",
             &json!({"file_path": "/agent/my-skill/notes.txt"}),
             &ctx(),
@@ -155,6 +198,7 @@ async fn denies_traversal_escape() {
     let h = handle();
     let d = h
         .check(
+            &"Edit".parse::<coco_types::ToolId>().unwrap(),
             "Edit",
             &json!({"file_path": "/agent/../etc/passwd"}),
             &ctx(),
@@ -168,7 +212,12 @@ async fn allows_apply_patch_under_root() {
     let h = handle();
     let patch = "*** Begin Patch\n*** Add File: my-skill/SKILL.md\n+hello\n*** End Patch\n";
     let d = h
-        .check("apply_patch", &json!({"patch": patch}), &ctx())
+        .check(
+            &"apply_patch".parse::<coco_types::ToolId>().unwrap(),
+            "apply_patch",
+            &json!({"patch": patch}),
+            &ctx(),
+        )
         .await;
     assert_allowed(&d, "apply_patch under root");
 }
@@ -178,7 +227,12 @@ async fn denies_apply_patch_escape() {
     let h = handle();
     let patch = "*** Begin Patch\n*** Add File: ok.md\n+hello\n*** Add File: ../outside.md\n+bad\n*** End Patch\n";
     let d = h
-        .check("apply_patch", &json!({"patch": patch}), &ctx())
+        .check(
+            &"apply_patch".parse::<coco_types::ToolId>().unwrap(),
+            "apply_patch",
+            &json!({"patch": patch}),
+            &ctx(),
+        )
         .await;
     assert_denied(&d, "apply_patch escape");
 }
@@ -186,6 +240,13 @@ async fn denies_apply_patch_escape() {
 #[tokio::test]
 async fn denies_unknown_tool() {
     let h = handle();
-    let d = h.check("WebFetch", &json!({}), &ctx()).await;
+    let d = h
+        .check(
+            &"WebFetch".parse::<coco_types::ToolId>().unwrap(),
+            "WebFetch",
+            &json!({}),
+            &ctx(),
+        )
+        .await;
     assert_denied(&d, "unknown tool");
 }

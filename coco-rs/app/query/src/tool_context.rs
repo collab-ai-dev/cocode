@@ -594,12 +594,13 @@ impl ToolContextFactory {
             // Fork isolation honors `require_can_use_tool` flag —
             // speculation needs this so overlay path-rewrites always
             // run regardless of hook auto-approve config.
-            require_can_use_tool: self
-                .config
-                .fork_isolation
-                .as_ref()
-                .map(|iso| iso.require_can_use_tool)
-                .unwrap_or(false),
+            require_can_use_tool: self.config.require_can_use_tool
+                || self
+                    .config
+                    .fork_isolation
+                    .as_ref()
+                    .map(|iso| iso.require_can_use_tool)
+                    .unwrap_or(false),
             preserve_tool_use_results: false,
             rendered_system_prompt: None,
             critical_system_reminder: None,

@@ -92,7 +92,7 @@ pub enum EnvKey {
     /// Optional auto-archive timeout for a session with zero surfaces and no
     /// active/queued turn, in seconds. Unset or non-positive = off.
     CocoServerIdleSessionTimeoutSecs,
-    /// SessionKind override for the concurrent-sessions PID registry.
+    /// ProcessSessionKind override for the concurrent-sessions PID registry.
     /// Accepted values: `bg`, `daemon`, `daemon-worker`. Anything else
     /// (or unset) means the session registers as `interactive`.
     CocoSessionKind,

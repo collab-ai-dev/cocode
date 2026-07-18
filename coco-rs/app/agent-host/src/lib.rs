@@ -18,6 +18,9 @@ pub mod headless;
 mod options;
 pub mod paths;
 
+#[cfg(test)]
+mod test_support;
+
 pub use options::AgentHostOptions;
 
 // Facade re-exports: preserve crate-root paths after grouping flat modules
@@ -39,7 +42,7 @@ pub use integrations::{
 pub use lifecycle::{live_permission_mode, resume_hint, resume_resolver, runtime_resume, shutdown};
 pub(crate) use session::{
     at_mention_turn, session_close, session_data, session_mcp, session_memory, session_resume,
-    session_start, side_question,
+    session_start,
 };
 pub use session::{
     conversation_export, goal_command, session_agents, session_bootstrap, session_compaction,

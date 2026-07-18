@@ -21,7 +21,7 @@ use crate::{
     ServerRequestSender, SessionActivityTracker, SessionSurfaceCounts, SubscribeReplay,
     SurfaceAttachment, SurfaceCapability, SurfaceLifecycleSender, SurfaceLimits, SurfaceRole,
     SurfaceState,
-    registry::{CloseState, ClosingState, RegistryError, SessionSlot},
+    registry::{CloseState, ClosingState, RegistryError, SessionSlot, begin_close_locked},
 };
 
 /// App-server state holder for registry + routing lock ordering.
@@ -119,7 +119,7 @@ impl<H: Clone> AppServer<H> {
             }
             .fail();
         }
-        let handle = match sessions.get(&target.session_id) {
+        let handle = match sessions.slots.get(&target.session_id) {
             Some(SessionSlot::Live(handle)) => handle.clone(),
             Some(SessionSlot::Loading(_)) => {
                 return TargetSessionNotLiveSnafu {
@@ -168,7 +168,7 @@ impl<H: Clone> AppServer<H> {
             }
             .fail();
         }
-        match sessions.get(session_id) {
+        match sessions.slots.get(session_id) {
             Some(SessionSlot::Live(handle)) => Ok(handle.clone()),
             Some(SessionSlot::Loading(_)) => TargetSessionNotLiveSnafu {
                 session_id: session_id.clone(),
@@ -209,7 +209,7 @@ impl<H: Clone> AppServer<H> {
         // teardown — dropping it here would leak the fully-constructed runtime
         // (SessionEnd hooks never fire, its shutdown token never cancels, and
         // its session tasks never exit → an unbounded runtime/task leak).
-        let old_handle = match sessions.get(old_session_id) {
+        let old_handle = match sessions.slots.get(old_session_id) {
             Some(SessionSlot::Live(handle)) => handle.clone(),
             _ => {
                 let error = RegistrySnafu.into_error(
@@ -221,7 +221,10 @@ impl<H: Clone> AppServer<H> {
                 return Err(ReplaceCommitFailure::new(error, new_handle));
             }
         };
-        if !matches!(sessions.get(new_session_id), Some(SessionSlot::Loading(_))) {
+        if !matches!(
+            sessions.slots.get(new_session_id),
+            Some(SessionSlot::Loading(_))
+        ) {
             let error = RegistrySnafu.into_error(
                 crate::registry::SlotConflictSnafu {
                     session_id: new_session_id.clone(),
@@ -259,11 +262,13 @@ impl<H: Clone> AppServer<H> {
         // Consume the new reservation so a close-after-load recorded on it is
         // honored: the slot promotes to `Live`, or straight to `Closing`
         // if a shutdown raced the replace.
-        let Some(SessionSlot::Loading(new_load)) = sessions.remove(new_session_id) else {
+        let Some(SessionSlot::Loading(new_load)) = sessions.slots.remove(new_session_id) else {
             unreachable!("new slot was matched as Loading above");
         };
-        sessions.insert(new_session_id.clone(), new_load.promote(new_handle));
-        sessions.insert(
+        sessions
+            .slots
+            .insert(new_session_id.clone(), new_load.promote(new_handle));
+        sessions.slots.insert(
             old_session_id.clone(),
             SessionSlot::Closing(ClosingState {
                 handle: old_handle.clone(),
@@ -305,7 +310,7 @@ impl<H: Clone> AppServer<H> {
             .sessions
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let old_handle = match sessions.get(old_session_id) {
+        let old_handle = match sessions.slots.get(old_session_id) {
             Some(SessionSlot::Live(handle)) => handle.clone(),
             _ => {
                 return crate::registry::OldNotReadySnafu {
@@ -315,7 +320,10 @@ impl<H: Clone> AppServer<H> {
                 .context(RegistrySnafu);
             }
         };
-        if !matches!(sessions.get(new_session_id), Some(SessionSlot::Live(_))) {
+        if !matches!(
+            sessions.slots.get(new_session_id),
+            Some(SessionSlot::Live(_))
+        ) {
             return crate::registry::SlotConflictSnafu {
                 session_id: new_session_id.clone(),
                 expected: "Live",
@@ -351,7 +359,7 @@ impl<H: Clone> AppServer<H> {
 
         let old_close = CloseState::new();
         let old_close_completion = old_close.completion();
-        sessions.insert(
+        sessions.slots.insert(
             old_session_id.clone(),
             SessionSlot::Closing(ClosingState {
                 handle: old_handle.clone(),
@@ -386,7 +394,7 @@ impl<H: Clone> AppServer<H> {
             .sessions
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let close_sender = match sessions.get(session_id) {
+        let close_sender = match sessions.slots.get(session_id) {
             Some(SessionSlot::Closing(closing)) => closing.close.sender.clone(),
             _ => {
                 return crate::registry::SlotConflictSnafu {
@@ -406,7 +414,9 @@ impl<H: Clone> AppServer<H> {
         self.cancel_server_request_waiters(&routing_outcome.cancelled_requests);
         let lifecycle_effects = close_lifecycle_effects(session_id, &routing_outcome);
         let _ = close_sender.send(Some(close_result));
-        sessions.remove(session_id);
+        // Terminal removal: drop the slot plus its policy and, if this was a
+        // sidechat child, its parent→child index entry.
+        sessions.forget(session_id);
         self.activity.forget(session_id);
 
         Ok(AppCloseCommit {
@@ -552,10 +562,10 @@ impl<H: Clone> AppServer<H> {
 
     /// Registry-slot guard shared by the live attach/subscribe paths.
     fn ensure_live_slot(
-        sessions: &std::collections::HashMap<SessionId, SessionSlot<H>>,
+        inner: &crate::registry::RegistryInner<H>,
         session_id: &SessionId,
     ) -> Result<(), AttachError> {
-        match sessions.get(session_id) {
+        match inner.slots.get(session_id) {
             Some(SessionSlot::Live(_)) => Ok(()),
             Some(SessionSlot::Closing(_)) => crate::SessionClosingSnafu {
                 session_id: session_id.clone(),
@@ -716,8 +726,17 @@ impl<H: Clone> AppServer<H> {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut summaries = sessions
+            .slots
             .iter()
             .filter(|&(_, slot)| matches!(slot, SessionSlot::Live(_)))
+            // Internal slots (sidechat children) never appear in the public
+            // `session/list` catalog.
+            .filter(|&(id, _)| {
+                sessions
+                    .policies
+                    .get(id)
+                    .is_none_or(|policy| !policy.is_internal())
+            })
             .map(|(session_id, _)| AppLiveSessionSummary {
                 session_id: session_id.clone(),
                 surface_counts: routing.surface_counts_for_session(session_id),
@@ -732,6 +751,7 @@ impl<H: Clone> AppServer<H> {
             .sessions
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .slots
             .contains_key(session_id)
     }
 
@@ -952,20 +972,97 @@ where
         }
     }
 
+    /// Reserve and load a sidechat child of a live `parent`, enforcing the
+    /// one-child-per-parent invariant atomically via `begin_child_load` (the
+    /// child slot is stamped `Child/Internal/LocalOnly`). Otherwise identical to
+    /// [`Self::spawn_load`].
+    pub fn spawn_child_load<F>(
+        self: &Arc<Self>,
+        parent: SessionId,
+        child: SessionId,
+        factory: F,
+    ) -> Result<AppLoadStart<H>, AppServerError>
+    where
+        F: Future<Output = Result<H, RegistryError>> + Send + 'static,
+    {
+        match self
+            .registry
+            .begin_child_load(&parent, child.clone())
+            .context(RegistrySnafu)?
+        {
+            LoadStart::Reserved => {
+                let LoadStart::Loading(completion) = self
+                    .registry
+                    .begin_load(child.clone())
+                    .context(RegistrySnafu)?
+                else {
+                    unreachable!("reserved child load must be observable as Loading");
+                };
+                let server = Arc::clone(self);
+                self.spawn_tracked(async move {
+                    let mut guard = OwnerGuard::new(
+                        Arc::clone(&server),
+                        OwnerGuardAction::FailLoad(child.clone()),
+                    );
+                    match factory.await {
+                        Ok(handle) => {
+                            if server
+                                .registry
+                                .complete_load_success(&child, handle)
+                                .is_ok()
+                            {
+                                server.activity.touch(child.clone());
+                            }
+                        }
+                        Err(error) => {
+                            let _ = server.registry.complete_load_failure(&child, error);
+                        }
+                    }
+                    guard.disarm();
+                });
+                Ok(AppLoadStart::Started { completion })
+            }
+            LoadStart::Live(handle) => {
+                self.activity.touch(child);
+                Ok(AppLoadStart::Live(handle))
+            }
+            LoadStart::Loading(completion) => Ok(AppLoadStart::Loading(completion)),
+            LoadStart::Closing(completion) => Ok(AppLoadStart::Closing(completion)),
+        }
+    }
+
     pub fn spawn_close<C, Fut>(
         self: &Arc<Self>,
         session_id: SessionId,
         close: C,
     ) -> Result<AppCloseStart, AppServerError>
     where
-        C: FnOnce(H) -> Fut + Send + 'static,
+        C: Fn(H) -> Fut + Clone + Send + Sync + 'static,
         Fut: Future<Output = Result<(), RegistryError>> + Send + 'static,
     {
-        match self
+        let cascade = self
             .registry
-            .begin_close(&session_id)
-            .context(RegistrySnafu)?
-        {
+            .begin_close_cascade(&session_id)
+            .context(RegistrySnafu)?;
+        let child_completion = cascade.child.map(|(child_id, child_start)| {
+            self.spawn_close_from_start(child_id, child_start, close.clone(), None)
+                .completion()
+        });
+        Ok(self.spawn_close_from_start(session_id, cascade.parent, close, child_completion))
+    }
+
+    fn spawn_close_from_start<C, Fut>(
+        self: &Arc<Self>,
+        session_id: SessionId,
+        start: CloseStart<H>,
+        close: C,
+        mut prerequisite: Option<CloseCompletion>,
+    ) -> AppCloseStart
+    where
+        C: Fn(H) -> Fut + Clone + Send + Sync + 'static,
+        Fut: Future<Output = Result<(), RegistryError>> + Send + 'static,
+    {
+        match start {
             CloseStart::Started { handle, completion } => {
                 let server = Arc::clone(self);
                 self.spawn_tracked(async move {
@@ -973,13 +1070,16 @@ where
                         Arc::clone(&server),
                         OwnerGuardAction::Close(session_id.clone()),
                     );
+                    if let Some(prerequisite) = prerequisite.as_mut() {
+                        let _ = prerequisite.wait().await;
+                    }
                     let close_result = close(handle).await;
                     if let Ok(commit) = server.complete_session_close(&session_id, close_result) {
                         server.route_lifecycle_effects(commit.lifecycle_effects);
                     }
                     guard.disarm();
                 });
-                Ok(AppCloseStart::Started { completion })
+                AppCloseStart::Started { completion }
             }
             CloseStart::Loading {
                 mut load_completion,
@@ -988,7 +1088,7 @@ where
             } => {
                 if should_spawn {
                     let server = Arc::clone(self);
-                    let close_session_id = session_id.clone();
+                    let close_session_id = session_id;
                     self.spawn_tracked(async move {
                         // Not guarded during the load wait: a load failure fires
                         // the close signal and removes the slot (there is nothing
@@ -998,6 +1098,9 @@ where
                                 Arc::clone(&server),
                                 OwnerGuardAction::Close(close_session_id.clone()),
                             );
+                            if let Some(prerequisite) = prerequisite.as_mut() {
+                                let _ = prerequisite.wait().await;
+                            }
                             let close_result = close(handle).await;
                             if let Ok(commit) =
                                 server.complete_session_close(&close_session_id, close_result)
@@ -1008,9 +1111,9 @@ where
                         }
                     });
                 }
-                Ok(AppCloseStart::Loading(close_completion))
+                AppCloseStart::Loading(close_completion)
             }
-            CloseStart::Closing { completion, .. } => Ok(AppCloseStart::Closing(completion)),
+            CloseStart::Closing { completion, .. } => AppCloseStart::Closing(completion),
         }
     }
 
@@ -1020,10 +1123,10 @@ where
         close: C,
     ) -> Result<AppCloseStart, AppServerError>
     where
-        C: FnOnce(H) -> Fut + Send + 'static,
+        C: Fn(H) -> Fut + Clone + Send + Sync + 'static,
         Fut: Future<Output = Result<(), RegistryError>> + Send + 'static,
     {
-        let (handle, completion) = {
+        let (child, parent) = {
             let mut sessions = self
                 .registry
                 .sessions
@@ -1036,10 +1139,9 @@ where
             if routing.interactive_owner(&session_id).is_some() {
                 return InteractiveOwnerConflictSnafu { session_id }.fail();
             }
-            let handle = match sessions.remove(&session_id) {
-                Some(SessionSlot::Live(handle)) => handle,
-                Some(slot) => {
-                    sessions.insert(session_id.clone(), slot);
+            match sessions.slots.get(&session_id) {
+                Some(SessionSlot::Live(_)) => {}
+                Some(_) => {
                     return TargetSessionNotLiveSnafu {
                         session_id: session_id.clone(),
                         state: "not_live",
@@ -1053,32 +1155,31 @@ where
                     }
                     .fail();
                 }
-            };
-            let close_state = CloseState::new();
-            let completion = close_state.completion();
-            sessions.insert(
-                session_id.clone(),
-                SessionSlot::Closing(ClosingState {
-                    handle: handle.clone(),
-                    close: close_state,
-                }),
-            );
-            (handle, completion)
+            }
+
+            // Orphan close has the same ownership semantics as every other
+            // parent transition: close child admission atomically, then drain
+            // the current child before its parent. Keeping the routing read
+            // lock in this commit section preserves the orphan-owner check.
+            let child = sessions
+                .children
+                .get(&session_id)
+                .cloned()
+                .map(|child_id| {
+                    begin_close_locked(&mut sessions, &child_id).map(|start| (child_id, start))
+                })
+                .transpose()
+                .context(RegistrySnafu)?;
+            let parent = begin_close_locked(&mut sessions, &session_id).context(RegistrySnafu)?;
+            sessions.blocked_parents.insert(session_id.clone());
+            (child, parent)
         };
 
-        let server = Arc::clone(self);
-        self.spawn_tracked(async move {
-            let mut guard = OwnerGuard::new(
-                Arc::clone(&server),
-                OwnerGuardAction::Close(session_id.clone()),
-            );
-            let close_result = close(handle).await;
-            if let Ok(commit) = server.complete_session_close(&session_id, close_result) {
-                server.route_lifecycle_effects(commit.lifecycle_effects);
-            }
-            guard.disarm();
+        let child_completion = child.map(|(child_id, child_start)| {
+            self.spawn_close_from_start(child_id, child_start, close.clone(), None)
+                .completion()
         });
-        Ok(AppCloseStart::Started { completion })
+        Ok(self.spawn_close_from_start(session_id, parent, close, child_completion))
     }
 
     pub fn spawn_replace<F, Close, CloseFut>(
@@ -1094,13 +1195,21 @@ where
     ) -> Result<AppReplaceStart<H>, AppServerError>
     where
         F: Future<Output = Result<H, RegistryError>> + Send + 'static,
-        Close: FnOnce(H) -> CloseFut + Send + 'static,
+        Close: Fn(H) -> CloseFut + Clone + Send + Sync + 'static,
         CloseFut: Future<Output = Result<(), RegistryError>> + Send + 'static,
     {
-        let ReplaceStart::Reserved { new_completion, .. } = self
+        let ReplaceStart::Reserved {
+            new_completion,
+            child,
+            ..
+        } = self
             .registry
             .begin_replace(&old_session_id, new_session_id.clone())
             .context(RegistrySnafu)?;
+        let child_completion = child.map(|(child_id, child_start)| {
+            self.spawn_close_from_start(child_id, child_start, close_handle.clone(), None)
+                .completion()
+        });
         let server = Arc::clone(self);
         self.spawn_tracked(async move {
             let mut guard = OwnerGuard::new(
@@ -1109,6 +1218,9 @@ where
             );
             match factory.await {
                 Ok(new_handle) => {
+                    if let Some(mut child_completion) = child_completion {
+                        let _ = child_completion.wait().await;
+                    }
                     match server.commit_replace_for_surface(
                         &old_session_id,
                         &new_session_id,
@@ -1120,7 +1232,7 @@ where
                             // now is a panic in the old close cascade wedging old.
                             guard.arm_close(old_session_id.clone());
                             server.route_lifecycle_effects(commit.lifecycle_effects);
-                            let close_result = close_handle(commit.old_handle).await;
+                            let close_result = close_handle.clone()(commit.old_handle).await;
                             if let Ok(close_commit) =
                                 server.complete_session_close(&old_session_id, close_result)
                             {
@@ -1141,8 +1253,9 @@ where
                                 new_session_id = %new_session_id,
                                 "replace commit failed; tearing down the constructed runtime"
                             );
-                            let _ = close_handle(failure.handle).await;
+                            let _ = close_handle.clone()(failure.handle).await;
                             let _ = server.registry.complete_replace_failure(
+                                &old_session_id,
                                 &new_session_id,
                                 crate::registry::SlotConflictSnafu {
                                     session_id: new_session_id.clone(),
@@ -1155,9 +1268,11 @@ where
                     }
                 }
                 Err(error) => {
-                    let _ = server
-                        .registry
-                        .complete_replace_failure(&new_session_id, error);
+                    let _ = server.registry.complete_replace_failure(
+                        &old_session_id,
+                        &new_session_id,
+                        error,
+                    );
                     guard.disarm();
                 }
             }
@@ -1186,14 +1301,28 @@ where
         close_old: Close,
     ) -> Result<CloseCompletion, AppServerError>
     where
-        Close: FnOnce(H) -> CloseFut + Send + 'static,
+        Close: Fn(H) -> CloseFut + Clone + Send + Sync + 'static,
         CloseFut: Future<Output = Result<(), RegistryError>> + Send + 'static,
     {
-        let commit = self.commit_replace_to_live_for_surface(
+        let child = self
+            .registry
+            .begin_parent_transition(&old_session_id)
+            .context(RegistrySnafu)?;
+        let child_completion = child.map(|(child_id, child_start)| {
+            self.spawn_close_from_start(child_id, child_start, close_old.clone(), None)
+                .completion()
+        });
+        let commit = match self.commit_replace_to_live_for_surface(
             &old_session_id,
             &new_session_id,
             &calling_surface,
-        )?;
+        ) {
+            Ok(commit) => commit,
+            Err(error) => {
+                self.registry.unblock_child_admission(&old_session_id);
+                return Err(error);
+            }
+        };
         let completion = commit.old_close_completion.clone();
         // Emit session/started (caller) + session/replaced (old peers) before
         // the source close cascade runs.
@@ -1205,6 +1334,9 @@ where
                 Arc::clone(&server),
                 OwnerGuardAction::Close(old_session_id.clone()),
             );
+            if let Some(mut child_completion) = child_completion {
+                let _ = child_completion.wait().await;
+            }
             let close_result = close_old(old_handle).await;
             if let Ok(close_commit) = server.complete_session_close(&old_session_id, close_result) {
                 server.route_lifecycle_effects(close_commit.lifecycle_effects);

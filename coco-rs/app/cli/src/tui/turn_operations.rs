@@ -427,35 +427,116 @@ pub(super) async fn run_session_memory_force(
     .await;
 }
 
-/// `/btw <question>` runner — routes the existing sentinel through local
-/// AppServer `turn/start`, matching SDK behavior and keeping the fork+answer
-/// logic in the handler shortcut. The shortcut appends model-invisible slash
-/// messages and emits a synthetic turn lifecycle for the TUI completion
-/// monitor.
-pub(super) async fn run_side_question(
+/// `/btw <question>` runner — creates an ephemeral, read-only sidechat child
+/// session and starts its first turn (`docs/internal/sidechat-architecture.md`).
+///
+/// The child is a distinct session with its own turn coordinator, so it runs
+/// concurrently with the parent and never touches the parent transcript. Its
+/// turn events stream into the view through the child event pump. At most one
+/// child exists per parent (I-2); a second `/btw` is rejected until the current
+/// child is explicitly closed.
+pub(super) async fn run_side_chat(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
-    active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
-    turn_done_tx: &mpsc::Sender<uuid::Uuid>,
+    _active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
+    _turn_done_tx: &mpsc::Sender<uuid::Uuid>,
     request: coco_commands::handlers::btw::BtwRequest,
 ) {
-    drain_active_turn(active_turn, ActiveTurnDrain::Wait).await;
-    let prompt = coco_commands::handlers::btw::handler(&request.question);
-    if coco_commands::handlers::btw::parse_btw_sentinel(&prompt).is_none() {
-        warn!("TUI /btw handler returned a non-sentinel prompt");
+    // `/btw --close` closes the sidechat and returns to the primary view.
+    if request.is_close() {
+        let parent_id = session.session_id().clone();
+        match local_app_server_bridge.close_child().await {
+            Ok(Some(child_id)) => {
+                let _ = event_tx
+                    .send(CoreEvent::Tui(coco_types::TuiOnlyEvent::SideChatExited {
+                        parent_id,
+                        child_id,
+                    }))
+                    .await;
+            }
+            Ok(None) => {
+                emit_slash_text(event_tx, "btw", "--close", "No sidechat is open.").await;
+            }
+            Err(error) => {
+                warn!(%error, "TUI /btw --close failed");
+                emit_slash_text(
+                    event_tx,
+                    "btw",
+                    "--close",
+                    &format!("Couldn't close the sidechat: {error}"),
+                )
+                .await;
+            }
+        }
         return;
     }
-    run_local_app_server_shortcut_turn(
-        session,
-        event_tx,
-        local_app_server_bridge,
-        active_turn,
-        turn_done_tx,
-        prompt,
-        "TUI /btw",
-    )
-    .await;
+
+    if local_app_server_bridge
+        .child_interactive_session()
+        .is_some()
+    {
+        emit_slash_text(
+            event_tx,
+            "btw",
+            &request.question,
+            "A sidechat is already open. Continue it with plain input, or run /btw --close first.",
+        )
+        .await;
+        return;
+    }
+
+    let parent_id = session.session_id().clone();
+    let binding = match local_app_server_bridge
+        .open_side_chat(parent_id.clone(), Some(event_tx.clone()))
+        .await
+    {
+        Ok(binding) => binding,
+        Err(error) => {
+            emit_slash_text(
+                event_tx,
+                "btw",
+                &request.question,
+                &format!("Couldn't start the sidechat: {error}"),
+            )
+            .await;
+            return;
+        }
+    };
+    let child_id = binding.session.session_id().clone();
+    let _ = event_tx
+        .send(CoreEvent::Tui(coco_types::TuiOnlyEvent::SideChatEntered {
+            parent_id: parent_id.clone(),
+            child_id: child_id.clone(),
+        }))
+        .await;
+    let params = coco_types::TurnStartParams {
+        target: binding.surface.interactive_target(),
+        prompt: request.question.clone(),
+        history_override: Vec::new(),
+        images: Vec::new(),
+        slash_metadata: None,
+        model_selection: None,
+        permission_mode: None,
+        thinking_level: None,
+        goal_continuation: false,
+    };
+    if let Err(error) = local_app_server_bridge.start_child_turn(params).await {
+        let _ = local_app_server_bridge.close_child().await;
+        let _ = event_tx
+            .send(CoreEvent::Tui(coco_types::TuiOnlyEvent::SideChatExited {
+                parent_id,
+                child_id,
+            }))
+            .await;
+        emit_slash_text(
+            event_tx,
+            "btw",
+            &request.question,
+            &format!("Couldn't start the sidechat turn: {error}"),
+        )
+        .await;
+    }
 }
 
 /// `/export <filename>` runner — renders the live conversation `MessageHistory`

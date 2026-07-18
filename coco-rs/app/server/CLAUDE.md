@@ -13,6 +13,7 @@ live beside their modules (`routing.test.rs`, `app_server.test.rs`,
 | `AppServer` | Owns registry + routing locks and combined no-await commit sections |
 | `SessionSeqAllocator` | Process-shared durable `session_seq` allocator: strictly monotonic per session across every forwarder path; watermark persist hook + `initialize_after_watermark` skip-ahead for cross-restart continuity |
 | `LiveSessionRegistry` | Slot-state registry for root sessions: `Loading` / `Live` / `Closing` |
+| `SessionRegistrationPolicy` (`SessionTopology` / `SessionVisibility` / `SessionEgress`) | Product-neutral immutable per-slot metadata fixed at reservation (`root()` → Root/Public/DurableHub; `side_chat_child(parent)` → Child/Internal/LocalOnly). This is the authoritative AppServer topology model. |
 | `RoutingState` | Single-lock state for connection/surface indexes and per-session durable rings |
 | `SurfaceAttachment`, `SurfaceRole` | Attachment metadata (role, capabilities, notification prefs, delivery cursor, state); `Interactive` or `Passive`, at most one interactive owner per session |
 | `AttachError` | Snafu-backed attach failure (`InteractiveOwnerConflict`, `SurfaceLimit`, `SessionClosing`, `SessionNotFound`) |

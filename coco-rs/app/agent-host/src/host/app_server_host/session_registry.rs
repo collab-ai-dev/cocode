@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use coco_app_server::{AppLoadStart, AppServer, JsonRpcDispatchError};
 use coco_types::SessionId;
@@ -48,5 +48,38 @@ pub(crate) async fn register_local_app_server_session(
             Ok(())
         }
         AppLoadStart::Closing(_) => Ok(()),
+    }
+}
+
+/// Reserve and construct an ephemeral sidechat child under a live `parent`.
+///
+/// The registry reservation happens synchronously before `factory` is polled,
+/// so parent close/replace and competing child creation cannot race an
+/// unowned, fully-built runtime into existence.
+pub(crate) async fn load_local_app_server_child_session<F>(
+    app_server: &Arc<AppServer<AppSessionHandle>>,
+    parent: SessionId,
+    child_id: SessionId,
+    factory: F,
+) -> Result<AppSessionHandle, JsonRpcDispatchError>
+where
+    F: Future<Output = Result<AppSessionHandle, coco_app_server::RegistryError>> + Send + 'static,
+{
+    match app_server
+        .spawn_child_load(parent, child_id, factory)
+        .map_err(|error| local_lifecycle_error("load sidechat child", error))?
+    {
+        AppLoadStart::Started { mut completion } | AppLoadStart::Loading(mut completion) => {
+            completion
+                .wait()
+                .await
+                .map_err(|error| local_lifecycle_error("load sidechat child", error))
+        }
+        AppLoadStart::Live(handle) => Ok(handle),
+        AppLoadStart::Closing(_) => Err(JsonRpcDispatchError {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "sidechat child is closing".to_string(),
+            data: Some(serde_json::json!({ "kind": "sidechat_child_closing" })),
+        }),
     }
 }

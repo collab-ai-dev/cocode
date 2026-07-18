@@ -48,6 +48,7 @@ pub async fn run(target: &LiveTarget) -> Result<()> {
         context_management: None,
         query_source: Some("coco-tests-live::sdk::tools::run".into()),
         agent_id: None,
+        cache_scope: None,
         time_since_last_assistant_ms: None,
         agentic: false,
         cache: None,

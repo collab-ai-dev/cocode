@@ -40,6 +40,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use coco_messages::Message;
+use coco_types::ToolId;
 use serde_json::Value;
 
 use crate::cancellation::TurnAbortSignal;
@@ -153,8 +154,8 @@ impl std::fmt::Debug for CanUseToolCallContext {
 /// - `coco-memory` provides `create_auto_mem_handle` and
 ///   `create_session_mem_handle`.
 /// - `coco-query::speculation` provides `create_speculation_handle`.
-/// - `deny_all_handle` lives here for the four deny-all callers
-///   (prompt_suggestion / side_question / compact / agent_summary).
+/// - `deny_all_handle` lives here for the text-only deny-all callers
+///   (prompt_suggestion / compact / agent_summary).
 ///
 /// All implementations must be `Send + Sync` because the executor's
 /// `clone_for_concurrent` shares the `Arc` across worker tasks.
@@ -167,11 +168,17 @@ impl std::fmt::Debug for CanUseToolCallContext {
 pub trait CanUseToolHandle: std::fmt::Debug + Send + Sync {
     /// Decide whether the tool call may proceed.
     ///
+    /// `tool_id` is the resolved identity of the tool actually looked up in
+    /// the registry — authoritative for security decisions, since it reflects
+    /// the real tool rather than the possibly-aliased wire `tool_name`. A
+    /// read-only boundary MUST key off `tool_id`, never the string.
+    ///
     /// Implementations MUST honor `ctx.abort` for any async work
     /// they do — the executor passes the parent's cancellation
     /// token through.
     async fn check(
         &self,
+        tool_id: &ToolId,
         tool_name: &str,
         input: &Value,
         ctx: &CanUseToolCallContext,
@@ -191,6 +198,7 @@ pub struct NoOpCanUseToolHandle;
 impl CanUseToolHandle for NoOpCanUseToolHandle {
     async fn check(
         &self,
+        _tool_id: &ToolId,
         _tool_name: &str,
         _input: &Value,
         _ctx: &CanUseToolCallContext,
@@ -203,9 +211,8 @@ impl CanUseToolHandle for NoOpCanUseToolHandle {
     }
 }
 
-/// Deny every tool call. Used by `prompt_suggestion`, `side_question`,
-/// `compact`, `agent_summary` — text-only forks where any tool
-/// invocation is wasteful.
+/// Deny every tool call. Used by `prompt_suggestion`, `compact`, and
+/// `agent_summary` — text-only forks where any tool invocation is wasteful.
 ///
 /// `reason` surfaces in `DecisionReason::Other` for telemetry.
 pub fn deny_all_handle(reason: &'static str) -> CanUseToolHandleRef {
@@ -221,6 +228,7 @@ struct DenyAllHandle {
 impl CanUseToolHandle for DenyAllHandle {
     async fn check(
         &self,
+        _tool_id: &ToolId,
         _tool_name: &str,
         _input: &Value,
         _ctx: &CanUseToolCallContext,

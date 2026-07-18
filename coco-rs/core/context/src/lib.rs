@@ -25,6 +25,7 @@ pub mod plan_mode;
 pub mod prompt;
 pub mod prompt_context;
 pub mod prompt_suggestion;
+pub mod side_chat;
 pub mod suggestions;
 pub mod user_input;
 

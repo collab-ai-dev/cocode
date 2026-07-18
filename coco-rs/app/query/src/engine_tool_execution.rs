@@ -231,6 +231,7 @@ impl QueryEngine {
             tools: &self.tools,
             tool_materialization,
             hooks: self.hooks.as_ref(),
+            hook_execution_policy: self.hook_execution_policy,
             orchestration_ctx: self.orchestration_ctx(),
             hook_tx_opt,
             permission_denials: &mut acc.permission_denials,

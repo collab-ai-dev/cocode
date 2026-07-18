@@ -21,6 +21,8 @@ System context assembly: environment info, memory-file discovery (`CLAUDE.md` / 
 
 Also: `memory` (legacy `MemoryFileInfo` / `MemoryType`), `git_operations` / `git_utils`, `suggestions` / `prompt_suggestion`, `error` (`ContextError`). Token estimation does **not** live here — see `core/messages::token_estimation`.
 
+Sidechat contracts (`side_chat`): `ContextualUserFragment`, `SideChatBoundaryFragment` (the read-only boundary text placed between inherited context and the first question), `BoundedContext` + `ContextFidelity` (full-prefix vs bounded-fallback), and the inheritance budgets (`MAX_TOKENS_PER_INHERITED_FRAGMENT`, `max_inherited_tokens(window)`, `MIN_RESERVED_TOKENS`). `capture_bounded_context` retains complete semantic user-turn groups and `ContextError::SideChatContextTooLarge` reports an oversized required group. See `docs/internal/sidechat-architecture.md`.
+
 > Git worktree *creation* for agent isolation lives in `coco_coordinator::worktree` (`AgentWorktreeManager`), not here — this crate only *reads* the filesystem during memory discovery.
 
 ## Architecture

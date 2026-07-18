@@ -320,6 +320,7 @@ fn replace_reserves_new_loading_slot_bypassing_max_sessions_by_one() {
     let ReplaceStart::Reserved {
         old_handle,
         new_completion,
+        ..
     } = registry
         .begin_replace(&old_session_id, new_session_id.clone())
         .expect("begin replace");
@@ -361,7 +362,7 @@ fn replace_construct_failure_removes_new_and_keeps_old_live() {
     .build();
 
     registry
-        .complete_replace_failure(&new_session_id, error)
+        .complete_replace_failure(&old_session_id, &new_session_id, error)
         .expect("replace failure");
 
     let Err(ready_error) = new_completion.ready().expect("new completion ready") else {
@@ -479,4 +480,138 @@ fn announced_membership_retains_closing_slots_while_live_only_excludes_them() {
     // drops it immediately.
     assert_eq!(sorted(registry.list_announced()), both);
     assert_eq!(registry.list_live(), vec![live]);
+}
+
+fn sorted_ids(mut ids: Vec<SessionId>) -> Vec<SessionId> {
+    ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    ids
+}
+
+#[test]
+fn begin_child_load_reserves_internal_local_only_child() {
+    let registry = LiveSessionRegistry::new(2);
+    let parent = test_session_id("parent");
+    let child = test_session_id("child");
+    registry.begin_load(parent.clone()).expect("reserve parent");
+    registry
+        .complete_load_success(&parent, TestHandle("p"))
+        .expect("parent live");
+
+    assert!(matches!(
+        registry
+            .begin_child_load(&parent, child.clone())
+            .expect("reserve child"),
+        LoadStart::Reserved
+    ));
+    registry
+        .complete_load_success(&child, TestHandle("c"))
+        .expect("child live");
+
+    assert_eq!(registry.child_of(&parent), Some(child.clone()));
+    let policy = registry.policy(&child).expect("child policy");
+    assert!(policy.is_internal());
+    assert!(policy.is_local_only());
+    assert_eq!(policy.parent(), Some(&parent));
+    // Public visibility: parent yes, child no.
+    assert!(registry.is_public(&parent));
+    assert!(!registry.is_public(&child));
+    // Public/live and announced projections exclude the internal child; the
+    // raw list_live keeps it (internal routing needs the handle).
+    assert_eq!(registry.list_public_live(), vec![parent.clone()]);
+    assert_eq!(registry.list_announced(), vec![parent.clone()]);
+    assert_eq!(
+        sorted_ids(registry.list_live()),
+        sorted_ids(vec![child, parent])
+    );
+}
+
+#[test]
+fn begin_child_load_rejects_second_child_and_requires_live_parent() {
+    let registry = LiveSessionRegistry::new(4);
+    let parent = test_session_id("parent");
+    let loading_parent = test_session_id("loading-parent");
+    let child1 = test_session_id("child-1");
+    let child2 = test_session_id("child-2");
+
+    // Parent must be live to own a child.
+    registry
+        .begin_load(loading_parent.clone())
+        .expect("reserve loading parent");
+    assert!(matches!(
+        registry.begin_child_load(&loading_parent, child1.clone()),
+        Err(RegistryError::OldNotReady { .. })
+    ));
+
+    registry.begin_load(parent.clone()).expect("reserve parent");
+    registry
+        .complete_load_success(&parent, TestHandle("p"))
+        .expect("parent live");
+    registry
+        .begin_child_load(&parent, child1)
+        .expect("reserve first child");
+    // A second child while the first is still loading is rejected.
+    assert!(matches!(
+        registry.begin_child_load(&parent, child2),
+        Err(RegistryError::ChildExists { .. })
+    ));
+}
+
+#[test]
+fn child_close_clears_index_and_allows_a_new_child() {
+    let registry = LiveSessionRegistry::new(2);
+    let parent = test_session_id("parent");
+    let child = test_session_id("child");
+    let child2 = test_session_id("child-2");
+    registry.begin_load(parent.clone()).expect("reserve parent");
+    registry
+        .complete_load_success(&parent, TestHandle("p"))
+        .expect("parent live");
+    registry
+        .begin_child_load(&parent, child.clone())
+        .expect("reserve child");
+    registry
+        .complete_load_success(&child, TestHandle("c"))
+        .expect("child live");
+
+    registry.begin_close(&child).expect("begin child close");
+    registry.complete_close(&child).expect("finish child close");
+
+    // Terminal close cleared the slot, policy, and parent→child index.
+    assert_eq!(registry.child_of(&parent), None);
+    assert!(registry.policy(&child).is_none());
+    assert_eq!(registry.slot_count(), 1);
+    // A replacement child may now be reserved.
+    assert!(matches!(
+        registry
+            .begin_child_load(&parent, child2.clone())
+            .expect("reserve replacement child"),
+        LoadStart::Reserved
+    ));
+    assert_eq!(registry.child_of(&parent), Some(child2));
+}
+
+#[test]
+fn child_load_failure_clears_index() {
+    let registry = LiveSessionRegistry::<TestHandle>::new(2);
+    let parent = test_session_id("parent");
+    let child = test_session_id("child");
+    registry.begin_load(parent.clone()).expect("reserve parent");
+    registry
+        .complete_load_success(&parent, TestHandle("p"))
+        .expect("parent live");
+    registry
+        .begin_child_load(&parent, child.clone())
+        .expect("reserve child");
+    let error = NotFoundSnafu {
+        session_id: child.clone(),
+    }
+    .build();
+
+    registry
+        .complete_load_failure(&child, error)
+        .expect("child load failure");
+
+    assert_eq!(registry.child_of(&parent), None);
+    assert!(registry.policy(&child).is_none());
+    assert_eq!(registry.slot_count(), 1);
 }

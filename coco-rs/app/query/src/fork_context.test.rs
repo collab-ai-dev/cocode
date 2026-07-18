@@ -48,7 +48,6 @@ fn test_auto_agent_id_format_and_uniqueness() {
 fn test_for_label_query_source_matches_label() {
     let cases = [
         (ForkLabel::PromptSuggestion, "prompt_suggestion"),
-        (ForkLabel::SideQuestion, "side_question"),
         (ForkLabel::Compact, "compact"),
         (ForkLabel::ExtractMemories, "extract_memories"),
         (ForkLabel::SessionMemoryAuto, "session_memory_auto"),

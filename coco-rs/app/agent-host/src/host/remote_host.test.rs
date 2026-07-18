@@ -18,8 +18,6 @@ use crate::app_server_host::request_handlers::APP_SERVER_PROTOCOL_VERSION;
 
 use super::*;
 
-static CONFIG_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 struct EnvVarGuard {
     key: &'static str,
     previous: Option<OsString>,
@@ -28,14 +26,14 @@ struct EnvVarGuard {
 impl EnvVarGuard {
     fn set_path(key: &'static str, path: &std::path::Path) -> Self {
         let previous = std::env::var_os(key);
-        // SAFETY: this test holds CONFIG_ENV_LOCK for the guard's lifetime.
+        // SAFETY: this test holds the crate-wide config env lock.
         unsafe { std::env::set_var(key, path.as_os_str()) };
         Self { key, previous }
     }
 
     fn set_str(key: &'static str, value: &str) -> Self {
         let previous = std::env::var_os(key);
-        // SAFETY: this test holds CONFIG_ENV_LOCK for the guard's lifetime.
+        // SAFETY: this test holds the crate-wide config env lock.
         unsafe { std::env::set_var(key, value) };
         Self { key, previous }
     }
@@ -45,11 +43,11 @@ impl Drop for EnvVarGuard {
     fn drop(&mut self) {
         match &self.previous {
             Some(value) => {
-                // SAFETY: this test holds CONFIG_ENV_LOCK for the guard's lifetime.
+                // SAFETY: this test holds the crate-wide config env lock.
                 unsafe { std::env::set_var(self.key, value) };
             }
             None => {
-                // SAFETY: this test holds CONFIG_ENV_LOCK for the guard's lifetime.
+                // SAFETY: this test holds the crate-wide config env lock.
                 unsafe { std::env::remove_var(self.key) };
             }
         }
@@ -165,7 +163,7 @@ fn assert_live_membership(
 
 #[tokio::test(flavor = "current_thread")]
 async fn host_builder_starts_without_placeholder_session() {
-    let _lock = CONFIG_ENV_LOCK.lock().await;
+    let _lock = crate::test_support::CONFIG_ENV_LOCK.lock().await;
     let config_home = tempfile::TempDir::new().expect("config home tempdir");
     let cwd = tempfile::TempDir::new().expect("cwd tempdir");
     let _guard = EnvVarGuard::set_path(coco_utils_common::COCO_CONFIG_DIR_ENV, config_home.path());
@@ -231,7 +229,7 @@ async fn host_builder_starts_without_placeholder_session() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn host_builder_updates_event_hub_membership_from_registry() {
-    let _lock = CONFIG_ENV_LOCK.lock().await;
+    let _lock = crate::test_support::CONFIG_ENV_LOCK.lock().await;
     let (hub_url, mut announces) = spawn_announce_hub_server().await;
     let config_home = tempfile::TempDir::new().expect("config home tempdir");
     let cwd = tempfile::TempDir::new().expect("cwd tempdir");
@@ -346,7 +344,7 @@ async fn host_builder_updates_event_hub_membership_from_registry() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn max_sessions_one_allows_first_real_session_without_placeholder() {
-    let _lock = CONFIG_ENV_LOCK.lock().await;
+    let _lock = crate::test_support::CONFIG_ENV_LOCK.lock().await;
     let config_home = tempfile::TempDir::new().expect("config home tempdir");
     let cwd = tempfile::TempDir::new().expect("cwd tempdir");
     let _config_guard =

@@ -97,7 +97,7 @@ impl QueryEngine {
         //    for the TUI.
         let mut effective_instructions = custom_instructions.clone();
         let mut pre_display: Option<String> = None;
-        if let Some(registry) = self.hooks.as_ref() {
+        if let Some(registry) = self.hooks_for(coco_types::HookEventType::PreCompact) {
             let ctx = self.orchestration_ctx();
             match coco_hooks::orchestration::execute_pre_compact(
                 registry,
@@ -420,7 +420,7 @@ impl QueryEngine {
                     }),
                 )
                 .await;
-                if let Some(registry) = self.hooks.as_ref() {
+                if let Some(registry) = self.hooks_for(coco_types::HookEventType::PostCompact) {
                     let ctx = self.orchestration_ctx();
                     match coco_hooks::orchestration::execute_post_compact(
                         registry,
@@ -447,7 +447,7 @@ impl QueryEngine {
                 // Render those hook events into the rewritten history
                 // directly so they are not also emitted by the next-turn
                 // sync reminder buffer.
-                if let Some(registry) = self.hooks.as_ref() {
+                if let Some(registry) = self.hooks_for(coco_types::HookEventType::SessionStart) {
                     let _ = emit_protocol(
                         event_tx,
                         ServerNotification::CompactionPhase(coco_types::CompactionPhaseParams {
@@ -784,6 +784,7 @@ pub(super) fn compact_summary_query_params(
     prompt: Vec<LlmMessage>,
     max_summary_tokens: i64,
     fallback_min_context_window: Option<i64>,
+    cache_scope: Option<&coco_types::SessionId>,
 ) -> QueryParams {
     QueryParams {
         prompt,
@@ -801,6 +802,7 @@ pub(super) fn compact_summary_query_params(
         context_management: None,
         query_source: Some(COMPACT_QUERY_SOURCE.to_string()),
         agent_id: None,
+        cache_scope: cache_scope.map(|session_id| session_id.as_str().to_string()),
         time_since_last_assistant_ms: None,
         agentic: false,
         cache: None,

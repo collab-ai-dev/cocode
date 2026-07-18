@@ -385,6 +385,16 @@ impl CommandRegistry {
             .collect()
     }
 
+    /// Commands safe and executable through a remote client surface.
+    /// Local-runtime-only commands remain available to TUI completion but are
+    /// not advertised as protocol capabilities.
+    pub fn remote_client_visible(&self) -> Vec<&RegisteredCommand> {
+        self.client_visible()
+            .into_iter()
+            .filter(|command| command.base.name != "btw")
+            .collect()
+    }
+
     /// Commands safe for the given safety level.
     pub fn safe_for(&self, safety: CommandSafety) -> Vec<&RegisteredCommand> {
         self.commands

@@ -47,7 +47,7 @@ boundary is separate from disk wire.
 | `recovery::*` | Crash recovery — partial transcript repair + last-good-state detection |
 | `storage::*` | Low-level JSON / JSONL IO. `storage_chain` owns agent-parent chain selection/parsing; `storage_metadata` owns lite metadata scans, path resolution, and cross-project enumeration. |
 | `title_generator::*` | Auto-titling via `ModelRole::Fast` (short session label after first turn) |
-| `SessionRegistry`, `SessionRegistration`, `SessionKind`, `SessionStatus` | PID-file registry for `coco ps` — drop the guard to deregister, write-lock-serialized live patches |
+| `SessionRegistry`, `SessionRegistration`, `ProcessSessionKind`, `SessionStatus` | PID-file registry for `coco ps` — drop the guard to deregister, write-lock-serialized live patches. `ProcessSessionKind` (`Interactive`/`Bg`/`Daemon`/`DaemonWorker`) is strictly the process launch dimension; AppServer slot topology is owned separately by `SessionRegistrationPolicy` |
 | `count_concurrent_sessions`, `is_bg_session`, `read_session_registration` | Cross-process enumeration helpers |
 
 ## Layout

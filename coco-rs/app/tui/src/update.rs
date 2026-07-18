@@ -405,6 +405,15 @@ pub async fn handle_command(
         }
         TuiCommand::QueueInput => queue_current_input(state, command_tx).await,
         TuiCommand::Interrupt => {
+            if state.is_viewing_side_chat()
+                && !state.has_interruptible_work()
+                && state.ui.input.is_empty()
+                && !state.ui.has_blocking_interaction()
+            {
+                state.ui.ctrl_c_tracker.reset();
+                let _ = command_tx.send(UserCommand::CloseSideChat).await;
+                return true;
+            }
             let now = std::time::Instant::now();
             let timing =
                 ExitTiming::from_pending_until(state.ui.ctrl_c_tracker.pending_until(), now);

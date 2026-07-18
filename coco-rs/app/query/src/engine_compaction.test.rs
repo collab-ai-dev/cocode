@@ -457,6 +457,7 @@ fn compact_summary_query_params_are_tagged_as_compact() {
         vec![LlmMessage::user_text("summarize")],
         /*max_summary_tokens*/ 123,
         Some(200_000),
+        None,
     );
 
     assert_eq!(params.query_source.as_deref(), Some("compact"));

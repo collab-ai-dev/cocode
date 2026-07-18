@@ -24,7 +24,6 @@ const FOREGROUND_529_RETRY_SOURCES: &[&str] = &[
     "hook_agent",
     "hook_prompt",
     "verification_agent",
-    "side_question",
     "auto_mode",
 ];
 

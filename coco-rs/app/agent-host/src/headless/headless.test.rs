@@ -1,11 +1,7 @@
-use std::sync::Mutex;
-
 use super::RunChatOptions;
 use super::parse_headless_goal_slash;
 use super::run_chat_with_options;
 use crate::AgentHostOptions;
-
-static CONFIG_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 struct ConfigDirGuard {
     previous: Option<std::ffi::OsString>,
@@ -14,8 +10,8 @@ struct ConfigDirGuard {
 impl ConfigDirGuard {
     fn set(path: &std::path::Path) -> Self {
         let previous = std::env::var_os(coco_utils_common::COCO_CONFIG_DIR_ENV);
-        // SAFETY: tests using this helper hold CONFIG_ENV_LOCK for the
-        // guard's lifetime.
+        // SAFETY: tests using this helper hold the crate-wide config env lock
+        // for the guard's lifetime.
         unsafe { std::env::set_var(coco_utils_common::COCO_CONFIG_DIR_ENV, path) };
         Self { previous }
     }
@@ -25,11 +21,11 @@ impl Drop for ConfigDirGuard {
     fn drop(&mut self) {
         match &self.previous {
             Some(value) => {
-                // SAFETY: tests using this helper hold CONFIG_ENV_LOCK.
+                // SAFETY: the crate-wide config env lock is held.
                 unsafe { std::env::set_var(coco_utils_common::COCO_CONFIG_DIR_ENV, value) };
             }
             None => {
-                // SAFETY: tests using this helper hold CONFIG_ENV_LOCK.
+                // SAFETY: the crate-wide config env lock is held.
                 unsafe { std::env::remove_var(coco_utils_common::COCO_CONFIG_DIR_ENV) };
             }
         }
@@ -74,7 +70,7 @@ fn run_chat_with_options_requires_explicit_cwd_without_cli_cwd() {
 
 #[test]
 fn local_goal_print_run_writes_resumable_zero_turn_transcript() {
-    let _lock = CONFIG_ENV_LOCK.lock().expect("config env lock");
+    let _lock = crate::test_support::CONFIG_ENV_LOCK.blocking_lock();
     let config_home = tempfile::tempdir().expect("config home");
     let cwd = tempfile::tempdir().expect("cwd");
     let _guard = ConfigDirGuard::set(config_home.path());

@@ -361,6 +361,13 @@ pub struct QueryEngineConfig {
     /// behavior.
     pub can_use_tool: Option<coco_tool_runtime::CanUseToolHandleRef>,
 
+    /// Session-level `require_can_use_tool`: when `true`, a `PreToolUse` hook
+    /// that auto-approved cannot bypass [`Self::can_use_tool`]. Forks express
+    /// this through [`Self::fork_isolation`]; a sidechat session sets this flag
+    /// directly so its structural read-only boundary always runs. `false`
+    /// preserves pre-sidechat behavior.
+    pub require_can_use_tool: bool,
+
     /// Override label returned by [`crate::engine_builder::query_source_label`].
     /// When `Some`, the engine reports this string instead of the
     /// agent_id / non-interactive / repl_main_thread default. Forks
@@ -473,6 +480,7 @@ impl Default for QueryEngineConfig {
             allowed_write_roots: Vec::new(),
             include_hook_events: false,
             can_use_tool: None,
+            require_can_use_tool: false,
             query_source_override: None,
             fork_label: None,
             fork_isolation: None,

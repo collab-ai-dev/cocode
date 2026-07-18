@@ -160,6 +160,7 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         session_id_override: None,
         is_non_interactive: false,
+        execution_profile: crate::session_runtime::SessionExecutionProfile::Primary,
         callback_requirements: Default::default(),
     })
     .await
@@ -170,25 +171,6 @@ fn temp_transcript_store(home: &TempDir) -> Arc<coco_session::TranscriptStore> {
     Arc::new(coco_session::TranscriptStore::new(Arc::new(
         coco_paths::ProjectPaths::new(home.path().join("coco-home"), home.path()),
     )))
-}
-
-#[tokio::test]
-async fn runtime_fallback_cache_params_use_current_transcript() {
-    let home = TempDir::new().expect("home tempdir");
-    let runtime = build_runtime(&home).await;
-    {
-        let mut history = runtime.history().lock().await;
-        history.push(coco_messages::create_user_message("fresh transcript"));
-    }
-
-    let cache = runtime.fallback_cache_safe_params().await;
-
-    assert_eq!(cache.rendered_system_prompt, "test");
-    assert_eq!(cache.model_id, "mock-model");
-    assert_eq!(cache.provider, "mock");
-    assert_eq!(cache.fork_context_messages.len(), 1);
-    let text = coco_messages::wrapping::extract_text_from_message(&cache.fork_context_messages[0]);
-    assert!(text.contains("fresh transcript"));
 }
 
 #[tokio::test]
