@@ -7,6 +7,7 @@ use crate::widgets::suggestion_popup::SuggestionItem;
 
 fn item(label: &str) -> SuggestionItem {
     SuggestionItem {
+        highlight_indices: Vec::new(),
         label: label.into(),
         description: None,
         metadata: None,
@@ -38,6 +39,7 @@ fn inline_popup_view_filters_command_palette_items() {
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::SlashCommand,
         items: vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "/clear".into(),
             description: Some("Clear chat".into()),
             metadata: None,

@@ -8,13 +8,23 @@ use super::ColorCapability;
 use super::ColorEnv;
 use super::adapt_color;
 use super::detect_from_env;
+use super::rgb_to_ansi16;
 use super::rgb_to_xterm256;
+use super::xterm256_to_rgb;
 use ratatui::style::Color;
 
 /// Build a `ColorEnv` carrying only `COLORTERM`, for the canonical-signal tests.
 fn colorterm(value: Option<&str>) -> ColorEnv<'_> {
     ColorEnv {
         colorterm: value,
+        ..Default::default()
+    }
+}
+
+/// Build a `ColorEnv` carrying only `TERM`.
+fn term_env(term: &str) -> ColorEnv<'_> {
+    ColorEnv {
+        term: Some(term),
         ..Default::default()
     }
 }
@@ -158,4 +168,107 @@ fn test_detect_from_env_matches_truecolor_term_substring() {
         }),
         ColorCapability::Ansi256
     );
+}
+
+// ── G4: Basic / None degradation tiers ──────────────────────────────
+
+#[test]
+fn no_color_forces_none_over_truecolor() {
+    // NO_COLOR wins even when COLORTERM advertises truecolor.
+    let env = ColorEnv {
+        no_color: true,
+        colorterm: Some("truecolor"),
+        ..Default::default()
+    };
+    assert_eq!(detect_from_env(env), ColorCapability::None);
+}
+
+#[test]
+fn dumb_term_is_none() {
+    assert_eq!(detect_from_env(term_env("dumb")), ColorCapability::None);
+}
+
+#[test]
+fn classic_terminals_are_basic() {
+    for term in ["ansi", "linux", "vt100", "vt220", "cons25"] {
+        assert_eq!(
+            detect_from_env(term_env(term)),
+            ColorCapability::Basic,
+            "{term} should be Basic"
+        );
+    }
+}
+
+#[test]
+fn bare_xterm_stays_ansi256() {
+    // Not in the 16-color allow-list — most such terminals do 256 colors.
+    assert_eq!(detect_from_env(term_env("xterm")), ColorCapability::Ansi256);
+}
+
+#[test]
+fn adapt_color_basic_quantizes_to_sixteen() {
+    assert!(matches!(
+        adapt_color(Color::Rgb(255, 0, 0), ColorCapability::Basic),
+        Color::Red | Color::LightRed
+    ));
+    // A 256-cube index downsamples through RGB.
+    assert!(matches!(
+        adapt_color(Color::Indexed(196), ColorCapability::Basic),
+        Color::Red | Color::LightRed
+    ));
+    // An already-ANSI index is normalized to the named equivalent so the
+    // backend never emits a 256-color escape for a Basic terminal.
+    assert_eq!(
+        adapt_color(Color::Indexed(9), ColorCapability::Basic),
+        Color::LightRed
+    );
+}
+
+#[test]
+fn adapt_color_none_is_monochrome() {
+    assert_eq!(
+        adapt_color(Color::Rgb(1, 2, 3), ColorCapability::None),
+        Color::Reset
+    );
+    assert_eq!(adapt_color(Color::Red, ColorCapability::None), Color::Reset);
+    assert_eq!(
+        adapt_color(Color::Indexed(5), ColorCapability::None),
+        Color::Reset
+    );
+}
+
+#[test]
+fn rgb_to_ansi16_maps_primaries() {
+    assert!(matches!(
+        rgb_to_ansi16(255, 0, 0),
+        Color::Red | Color::LightRed
+    ));
+    assert_eq!(rgb_to_ansi16(0, 0, 0), Color::Black);
+    assert!(matches!(
+        rgb_to_ansi16(255, 255, 255),
+        Color::Gray | Color::White
+    ));
+}
+
+#[test]
+fn xterm256_to_rgb_covers_all_ranges() {
+    assert_eq!(xterm256_to_rgb(16), (0, 0, 0)); // cube origin
+    assert_eq!(xterm256_to_rgb(231), (255, 255, 255)); // cube max
+    assert_eq!(xterm256_to_rgb(244), (128, 128, 128)); // mid grayscale
+    assert_eq!(xterm256_to_rgb(0), (0, 0, 0)); // ANSI black
+}
+
+#[test]
+fn empty_term_does_not_preempt_colorterm() {
+    // TERM="" is treated like unset — it must not force None ahead of COLORTERM.
+    assert_eq!(
+        detect_from_env(ColorEnv {
+            term: Some(""),
+            colorterm: Some("truecolor"),
+            ..Default::default()
+        }),
+        ColorCapability::TrueColor
+    );
+    // With nothing else, empty TERM defaults to Ansi256 like an unset TERM.
+    assert_eq!(detect_from_env(term_env("")), ColorCapability::Ansi256);
 }

@@ -1,11 +1,14 @@
 use super::StatusIndicator;
 use super::StatusIndicatorView;
+use super::build_line;
 use super::fmt_elapsed_compact;
 use crate::style::UiStyles;
 use crate::theme::Theme;
+use crate::theme::ThemeName;
 use pretty_assertions::assert_eq;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use ratatui::style::Modifier;
 use ratatui::widgets::Widget;
 
 #[test]
@@ -41,6 +44,34 @@ fn spinner_frame_is_deterministic_in_time() {
 fn spinner_frame_never_panics_on_negative() {
     let _ = StatusIndicator::spinner_frame(-5);
     let _ = StatusIndicator::spinner_frame(i64::MIN);
+}
+
+#[test]
+fn terminal_theme_secondary_status_text_emits_dim_modifier() {
+    let theme = Theme::from_name(ThemeName::Terminal);
+    let view = StatusIndicatorView::for_verb("Working");
+    let line = build_line(&view, UiStyles::new(&theme), "⠋", "0s", true, false, false);
+    let secondary = line
+        .spans
+        .iter()
+        .find(|span| span.content.as_ref() == "(0s)")
+        .expect("elapsed span");
+    assert_eq!(secondary.style.fg, Some(ratatui::style::Color::Reset));
+    assert!(secondary.style.add_modifier.contains(Modifier::DIM));
+}
+
+#[test]
+fn palette_theme_secondary_status_text_is_not_double_dimmed() {
+    let theme = Theme::default();
+    let view = StatusIndicatorView::for_verb("Working");
+    let line = build_line(&view, UiStyles::new(&theme), "⠋", "0s", true, false, false);
+    let secondary = line
+        .spans
+        .iter()
+        .find(|span| span.content.as_ref() == "(0s)")
+        .expect("elapsed span");
+    assert_eq!(secondary.style.fg, Some(theme.text_dim));
+    assert!(!secondary.style.add_modifier.contains(Modifier::DIM));
 }
 
 fn render(view: StatusIndicatorView<'_>, w: u16, h: u16) -> String {

@@ -181,6 +181,8 @@ async fn paste_image_on_exit_plan_no_row_inserts_feedback_pill() {
             explanation_visible: false,
             explanation: crate::state::ExplainerFetch::NotFetched,
             prefix_input: None,
+            mcp_allow_scope: Default::default(),
+            deny_reason_input: None,
         }));
 
     paste_from_clipboard_with(&mut state, || async {

@@ -468,12 +468,16 @@ struct LinkRender {
     text: String,
 }
 
+/// One table cell holds its styled inline content (bold / italic / code /
+/// link spans preserved), not a flattened string.
+type TableCell = Vec<Span<'static>>;
+
 struct TableBuilder {
     aligns: Vec<Alignment>,
-    header: Vec<String>,
-    rows: Vec<Vec<String>>,
-    cur_row: Vec<String>,
-    cur_cell: String,
+    header: Vec<TableCell>,
+    rows: Vec<Vec<TableCell>>,
+    cur_row: Vec<TableCell>,
+    cur_cell: TableCell,
     in_head: bool,
 }
 
@@ -794,7 +798,7 @@ impl<'a> Writer<'a> {
                     header: Vec::new(),
                     rows: Vec::new(),
                     cur_row: Vec::new(),
-                    cur_cell: String::new(),
+                    cur_cell: Vec::new(),
                     in_head: false,
                 });
             }
@@ -913,18 +917,20 @@ impl<'a> Writer<'a> {
             self.code_buf.push_str(text);
             return;
         }
-        if let Some(t) = self.table.as_mut() {
-            t.cur_cell.push_str(text);
-            return;
-        }
         if text.is_empty() {
             return;
         }
         if let Some(link) = self.link.as_mut() {
             link.text.push_str(text);
         }
-        self.spans
-            .push(Span::styled(text.to_string(), self.cur_style));
+        // Table cells keep their styled spans so bold/italic/code/link styling
+        // survives into the grid (the old path flattened to a plain string).
+        let style = self.cur_style;
+        if let Some(t) = self.table.as_mut() {
+            t.cur_cell.push(Span::styled(text.to_string(), style));
+            return;
+        }
+        self.spans.push(Span::styled(text.to_string(), style));
     }
 
     /// Append the link destination inline at `TagEnd::Link` so the URL is not
@@ -954,25 +960,35 @@ impl<'a> Writer<'a> {
         } else {
             format!(" ({display_dest})")
         };
-        self.spans.push(Span::styled(
-            suffix,
-            Style::default().fg(self.styles.hyperlink()),
-        ));
+        let span = Span::styled(suffix, Style::default().fg(self.styles.hyperlink()));
+        // Inside a table the suffix belongs to the cell, not the main line
+        // buffer (otherwise the URL leaks out below the grid).
+        if let Some(t) = self.table.as_mut() {
+            t.cur_cell.push(span);
+        } else {
+            self.spans.push(span);
+        }
     }
 
     fn on_inline_code(&mut self, code: &str) {
-        if let Some(t) = self.table.as_mut() {
-            t.cur_cell.push_str(code);
-            return;
-        }
         // Inline code uses the dedicated `code_inline` token (decoupled from
         // `accent`, which also drives chips/alerts) but preserves surrounding
         // inline modifiers (bold/italic/strikethrough/link) via patch.
-        self.spans.push(Span::styled(
-            code.to_string(),
-            self.cur_style
-                .patch(Style::default().fg(self.styles.code_inline())),
-        ));
+        let style = self
+            .cur_style
+            .patch(Style::default().fg(self.styles.code_inline()));
+        // Feed the link-text accumulator like `on_text` does, so a link whose
+        // display text is (or contains) inline code — `` [`api`](url) `` — is
+        // not mis-detected as empty in `finish_link` (which would drop the
+        // ` (url)` separator or defeat autolink de-duplication).
+        if let Some(link) = self.link.as_mut() {
+            link.text.push_str(code);
+        }
+        if let Some(t) = self.table.as_mut() {
+            t.cur_cell.push(Span::styled(code.to_string(), style));
+            return;
+        }
+        self.spans.push(Span::styled(code.to_string(), style));
     }
 
     fn on_task_marker(&mut self, checked: bool) {
@@ -1110,21 +1126,13 @@ impl<'a> Writer<'a> {
         if col_count == 0 {
             return;
         }
-        // Column widths capped so the whole grid fits the body width budget.
-        let budget = (self.width as usize).saturating_sub(self.left_margin_cols() + col_count + 1);
-        let max_col = (budget / col_count).clamp(3, 40);
-        let mut widths = vec![0usize; col_count];
-        let measure = |cells: &[String], widths: &mut Vec<usize>| {
-            for (i, cell) in cells.iter().enumerate() {
-                if i < widths.len() {
-                    widths[i] = widths[i].max(cell.width().min(max_col));
-                }
-            }
-        };
-        measure(&table.header, &mut widths);
-        for row in &table.rows {
-            measure(row, &mut widths);
-        }
+        // Budget for the sum of column *content* widths: total width minus the
+        // left margin, the `col_count + 1` vertical borders, and the two padding
+        // spaces per column.
+        let budget = (self.width as usize)
+            .saturating_sub(self.left_margin_cols() + 3 * col_count + 1)
+            .max(col_count);
+        let widths = column_widths(&table.header, &table.rows, col_count, budget);
 
         let border = Style::default().fg(self.styles.table_border());
         self.emit_raw_line(vec![Span::styled(
@@ -1150,32 +1158,44 @@ impl<'a> Writer<'a> {
 
     fn emit_table_row(
         &mut self,
-        cells: &[String],
+        cells: &[TableCell],
         widths: &[usize],
         aligns: &[Alignment],
         header: bool,
     ) {
         let border = Style::default().fg(self.styles.table_border());
-        // TS does not color table headers (header cells are plain formatted
-        // inline tokens); keep a bold weight for scanability but drop the brand
-        // tint so the header doesn't read as orange/red.
-        let text_style = if header {
-            Style::default().add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-        let mut spans = vec![Span::styled("│".to_string(), border)];
-        for (i, width) in widths.iter().enumerate() {
-            let raw = cells.get(i).map(String::as_str).unwrap_or("");
-            let cell = pad_cell(
-                raw,
-                *width,
-                aligns.get(i).copied().unwrap_or(Alignment::None),
-            );
-            spans.push(Span::styled(format!(" {cell} "), text_style));
-            spans.push(Span::styled("│".to_string(), border));
+        // Wrap each cell to its column width; the row is as tall as its tallest
+        // cell and shorter cells pad with blank visual lines.
+        let wrapped: Vec<Vec<Vec<Span<'static>>>> = (0..widths.len())
+            .map(|i| {
+                let cell: &[Span<'static>] = cells.get(i).map(Vec::as_slice).unwrap_or(&[]);
+                let mut lines = wrap_styled_cell(cell, widths[i]);
+                // Headers read bold but keep the terminal foreground (TS does not
+                // brand-tint header cells).
+                if header {
+                    for line in &mut lines {
+                        for span in line {
+                            span.style = span.style.add_modifier(Modifier::BOLD);
+                        }
+                    }
+                }
+                lines
+            })
+            .collect();
+
+        let height = wrapped.iter().map(Vec::len).max().unwrap_or(1).max(1);
+        for row_idx in 0..height {
+            let mut spans = vec![Span::styled("│".to_string(), border)];
+            for (i, width) in widths.iter().enumerate() {
+                let line = wrapped[i].get(row_idx).cloned().unwrap_or_default();
+                let align = aligns.get(i).copied().unwrap_or(Alignment::None);
+                spans.push(Span::raw(" "));
+                spans.extend(pad_spans(line, *width, align));
+                spans.push(Span::raw(" "));
+                spans.push(Span::styled("│".to_string(), border));
+            }
+            self.emit_raw_line(spans);
         }
-        self.emit_raw_line(spans);
     }
 }
 
@@ -1278,28 +1298,233 @@ fn table_rule(widths: &[usize], left: char, mid: char, right: char) -> String {
     s
 }
 
-fn pad_cell(text: &str, width: usize, align: Alignment) -> String {
-    // Truncate via the canonical width-aware helper (one source of truth), then
-    // ALWAYS re-pad to exactly `width` columns: truncation can land at width-1
-    // for wide (CJK/emoji) graphemes, which would otherwise leave one row a
-    // column short and misalign the table's right border.
-    let truncated;
-    let text = if text.width() > width {
-        truncated = coco_tui_ui::truncate::truncate_to_width(text, width);
-        truncated.as_str()
-    } else {
-        text
-    };
-    let pad = width.saturating_sub(text.width());
-    match align {
-        Alignment::Right => format!("{}{text}", " ".repeat(pad)),
-        Alignment::Center => {
-            let left = pad / 2;
-            let right = pad - left;
-            format!("{}{text}{}", " ".repeat(left), " ".repeat(right))
+/// Total display width of a cell's spans.
+fn cell_width(cell: &[Span<'static>]) -> usize {
+    cell.iter()
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .sum()
+}
+
+/// Width of the widest glyph in a cell. A column may hard-wrap a long word, but
+/// it must never be narrower than a glyph or the glyph would be dropped.
+fn widest_glyph_width(cell: &[Span<'static>]) -> usize {
+    cell.iter()
+        .flat_map(|span| span.content.chars())
+        .filter_map(UnicodeWidthChar::width)
+        .max()
+        .unwrap_or(0)
+}
+
+/// Distribute `budget` columns across `col_count` columns: prefer natural
+/// (unwrapped) widths, and when they overflow, give every column its
+/// widest-glyph floor first, then share the remainder proportionally to how
+/// much more each column "wants" (natural − floor). No column is capped at a
+/// fixed maximum, so wide cells wrap rather than silently truncate.
+fn column_widths(
+    header: &[TableCell],
+    rows: &[Vec<TableCell>],
+    col_count: usize,
+    budget: usize,
+) -> Vec<usize> {
+    let mut natural = vec![0usize; col_count];
+    let mut floor = vec![1usize; col_count];
+    let mut consider = |cells: &[TableCell]| {
+        for (i, cell) in cells.iter().enumerate().take(col_count) {
+            natural[i] = natural[i].max(cell_width(cell));
+            floor[i] = floor[i].max(widest_glyph_width(cell));
         }
-        _ => format!("{text}{}", " ".repeat(pad)),
+    };
+    consider(header);
+    for row in rows {
+        consider(row);
     }
+    // A floor can never exceed the natural width, and every column is ≥ 1.
+    for i in 0..col_count {
+        natural[i] = natural[i].max(1);
+        floor[i] = floor[i].clamp(1, natural[i]);
+    }
+
+    let total_natural: usize = natural.iter().sum();
+    if total_natural <= budget {
+        return natural;
+    }
+
+    let total_floor: usize = floor.iter().sum();
+    if total_floor >= budget {
+        // A grid cannot represent a glyph in fewer columns than the glyph
+        // itself occupies. Preserve the per-column floors even when a very
+        // narrow viewport cannot contain the complete rule; the terminal may
+        // clip the far edge, but the renderer must never delete cell content.
+        return floor;
+    }
+
+    let want: Vec<usize> = (0..col_count).map(|i| natural[i] - floor[i]).collect();
+    let total_want: usize = want.iter().sum();
+    let mut widths = floor.clone();
+    if total_want > 0 {
+        let remaining = budget - total_floor;
+        for i in 0..col_count {
+            let add = remaining * want[i] / total_want;
+            widths[i] = (floor[i] + add).min(natural[i]);
+        }
+        // Hand any rounding leftover to columns that still want more, widest
+        // want first, so the grid uses its full budget.
+        let mut order: Vec<usize> = (0..col_count).collect();
+        order.sort_by_key(|&i| std::cmp::Reverse(want[i]));
+        let mut leftover = budget.saturating_sub(widths.iter().sum());
+        for &i in &order {
+            if leftover == 0 {
+                break;
+            }
+            let room = natural[i] - widths[i];
+            let give = room.min(leftover);
+            widths[i] += give;
+            leftover -= give;
+        }
+    }
+    widths
+}
+
+/// Wrap a styled cell to `width` columns at word boundaries, returning one span
+/// vector per visual line. Word styling (bold/italic/code/link) is preserved;
+/// words wider than the column are hard-broken by character so nothing is lost.
+fn wrap_styled_cell(cell: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
+    let width = width.max(1);
+    let chars: Vec<(char, Style)> = cell
+        .iter()
+        .flat_map(|span| {
+            let style = span.style;
+            span.content.chars().map(move |ch| (ch, style))
+        })
+        .collect();
+    if chars.is_empty() {
+        return vec![Vec::new()];
+    }
+
+    let mut rows: Vec<Vec<(char, Style)>> = Vec::new();
+    let mut cur: Vec<(char, Style)> = Vec::new();
+    let mut cur_w = 0usize;
+    let char_w = |ch: char| UnicodeWidthChar::width(ch).unwrap_or(0);
+    let trim_trailing = |row: &mut Vec<(char, Style)>| {
+        while row.last().is_some_and(|(c, _)| *c == ' ') {
+            row.pop();
+        }
+    };
+
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].0 == ' ' {
+            let start = i;
+            while i < chars.len() && chars[i].0 == ' ' {
+                i += 1;
+            }
+            if cur_w == 0 {
+                continue; // drop leading spaces on a wrapped row
+            }
+            let run = &chars[start..i];
+            if cur_w + run.len() <= width {
+                cur.extend_from_slice(run);
+                cur_w += run.len();
+            } else {
+                rows.push(std::mem::take(&mut cur));
+                cur_w = 0;
+            }
+            continue;
+        }
+
+        let start = i;
+        while i < chars.len() && chars[i].0 != ' ' {
+            i += 1;
+        }
+        let word = &chars[start..i];
+        let word_w: usize = word.iter().map(|(c, _)| char_w(*c)).sum();
+
+        if cur_w + word_w <= width {
+            cur.extend_from_slice(word);
+            cur_w += word_w;
+        } else if word_w <= width {
+            trim_trailing(&mut cur);
+            if !cur.is_empty() {
+                rows.push(std::mem::take(&mut cur));
+            }
+            cur_w = word_w;
+            cur.extend_from_slice(word);
+        } else {
+            trim_trailing(&mut cur);
+            if !cur.is_empty() {
+                rows.push(std::mem::take(&mut cur));
+                cur_w = 0;
+            }
+            for &(c, st) in word {
+                let cw = char_w(c);
+                if cur_w > 0 && cur_w + cw > width {
+                    rows.push(std::mem::take(&mut cur));
+                    cur_w = 0;
+                }
+                // This only occurs for a direct width-1 call: table column
+                // allocation keeps a glyph-width floor. Retain the glyph on
+                // its own visual row instead of silently deleting it.
+                if cur_w == 0 && cw > width {
+                    cur.push((c, st));
+                    cur_w = cw;
+                    continue;
+                }
+                cur.push((c, st));
+                cur_w += cw;
+            }
+        }
+    }
+    trim_trailing(&mut cur);
+    rows.push(cur);
+
+    rows.iter().map(|row| group_chars(row)).collect()
+}
+
+/// Coalesce a run of `(char, style)` into the minimal set of styled spans.
+fn group_chars(row: &[(char, Style)]) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut buf = String::new();
+    let mut cur_style: Option<Style> = None;
+    for &(ch, style) in row {
+        if cur_style == Some(style) {
+            buf.push(ch);
+        } else {
+            if let Some(st) = cur_style {
+                spans.push(Span::styled(std::mem::take(&mut buf), st));
+            }
+            buf.push(ch);
+            cur_style = Some(style);
+        }
+    }
+    if let Some(st) = cur_style
+        && !buf.is_empty()
+    {
+        spans.push(Span::styled(buf, st));
+    }
+    spans
+}
+
+/// Pad an already-wrapped cell line to exactly `width` columns per `align`.
+fn pad_spans(line: Vec<Span<'static>>, width: usize, align: Alignment) -> Vec<Span<'static>> {
+    let content: usize = line
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .sum();
+    let pad = width.saturating_sub(content);
+    let (left, right) = match align {
+        Alignment::Right => (pad, 0),
+        Alignment::Center => (pad / 2, pad - pad / 2),
+        _ => (0, pad),
+    };
+    let mut out = Vec::with_capacity(line.len() + 2);
+    if left > 0 {
+        out.push(Span::raw(" ".repeat(left)));
+    }
+    out.extend(line);
+    if right > 0 {
+        out.push(Span::raw(" ".repeat(right)));
+    }
+    out
 }
 
 #[cfg(test)]

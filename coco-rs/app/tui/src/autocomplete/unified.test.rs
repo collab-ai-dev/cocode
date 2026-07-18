@@ -13,6 +13,7 @@ fn agent(name: &str, color: Option<AgentColorName>) -> AgentInfo {
 
 fn file_item(path: &str) -> SuggestionItem {
     SuggestionItem {
+        highlight_indices: Vec::new(),
         label: path.into(),
         description: None,
         metadata: Some(SuggestionMeta::Path {
@@ -49,6 +50,7 @@ fn seed_agent_items_substring_filters_case_insensitively() {
 fn merge_keeps_agents_before_files_and_caps_at_max() {
     let agents: Vec<SuggestionItem> = (0..5)
         .map(|i| SuggestionItem {
+            highlight_indices: Vec::new(),
             label: format!("a{i} (agent)"),
             description: None,
             metadata: Some(SuggestionMeta::Agent { color: None }),
@@ -79,12 +81,14 @@ fn seeded_provider_merge_reserves_room_for_mcp_when_agents_fill_cap() {
     // Enough agents to fill the cap so the MCP-reserve branch triggers.
     let agents: Vec<SuggestionItem> = (0..MAX_UNIFIED + 10)
         .map(|i| SuggestionItem {
+            highlight_indices: Vec::new(),
             label: format!("a{i} (agent)"),
             description: None,
             metadata: Some(SuggestionMeta::Agent { color: None }),
         })
         .collect();
     let resources = vec![SuggestionItem {
+        highlight_indices: Vec::new(),
         label: "Guide".into(),
         description: None,
         metadata: Some(SuggestionMeta::McpResource {

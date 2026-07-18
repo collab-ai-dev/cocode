@@ -222,7 +222,7 @@ fn build_line<'a>(
     spans.push(Span::raw(" "));
     spans.push(Span::raw(view.verb).fg(styles.text()));
     if include_effort && let Some(effort) = view.effort_level {
-        spans.push(Span::raw(format!(" with {effort} effort")).fg(styles.dim()));
+        spans.push(Span::raw(format!(" with {effort} effort")).style(styles.dim_style()));
     }
     spans.push(Span::raw("… "));
     let paren = if include_tokens {
@@ -238,11 +238,11 @@ fn build_line<'a>(
     } else {
         format!("({elapsed})")
     };
-    spans.push(Span::raw(paren).fg(styles.dim()));
+    spans.push(Span::raw(paren).style(styles.dim_style()));
     if include_hint {
-        spans.push(Span::raw(" · ").fg(styles.dim()));
+        spans.push(Span::raw(" · ").style(styles.dim_style()));
         spans.push(Span::raw("esc").fg(styles.text()));
-        spans.push(Span::raw(" to interrupt").fg(styles.dim()));
+        spans.push(Span::raw(" to interrupt").style(styles.dim_style()));
     }
     Line::from(spans)
 }

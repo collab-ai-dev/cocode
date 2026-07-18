@@ -27,6 +27,8 @@ pub struct ThemeRuntimeState {
     pub config_path: PathBuf,
     pub setting: ThemeSetting,
     pub active_id: String,
+    /// Resolved palette polarity, including inherited custom themes.
+    pub is_light: bool,
     pub theme: Theme,
     pub registry: ThemeRegistry,
     pub choices: Vec<ThemeChoice>,
@@ -63,6 +65,7 @@ impl ThemeRuntimeState {
             config_path: path,
             setting,
             active_id: resolved.id,
+            is_light: resolved.is_light,
             theme: resolved.theme,
             registry,
             choices,
@@ -75,6 +78,7 @@ impl ThemeRuntimeState {
         let mut next = self.clone();
         next.setting = setting;
         next.active_id = resolved.id;
+        next.is_light = resolved.is_light;
         next.theme = resolved.theme;
         Ok(next)
     }
@@ -88,6 +92,7 @@ impl Default for ThemeRuntimeState {
             config_path: theme_config_path(),
             setting,
             active_id: ThemeName::Dark.id().to_string(),
+            is_light: false,
             theme: Theme::from_name(ThemeName::Dark),
             choices: registry.choices(),
             registry,
@@ -224,6 +229,7 @@ pub struct ThemeRegistry {
 struct ResolvedTheme {
     id: String,
     theme: Theme,
+    is_light: bool,
 }
 
 impl ThemeRegistry {
@@ -262,6 +268,10 @@ impl ThemeRegistry {
             return Ok(ResolvedTheme {
                 id: name.id().to_string(),
                 theme: Theme::from_name(name),
+                is_light: matches!(
+                    name,
+                    ThemeName::Light | ThemeName::LightDaltonized | ThemeName::LightAnsi
+                ),
             });
         }
 
@@ -292,6 +302,11 @@ impl ThemeRegistry {
         stack.pop();
         apply_colors(&mut resolved.theme, &definition.colors)
             .with_context(|| format!("failed to apply colors for theme `{id}`"))?;
+        match definition.mode {
+            Some(ThemeMode::Light) => resolved.is_light = true,
+            Some(ThemeMode::Dark) => resolved.is_light = false,
+            Some(ThemeMode::Ansi) | None => {}
+        }
         resolved.id = id.to_string();
         Ok(resolved)
     }

@@ -35,6 +35,8 @@ fn permission_prompt_with_id(request_id: &str) -> PermissionPromptState {
         explanation_visible: false,
         explanation: crate::state::ExplainerFetch::NotFetched,
         prefix_input: None,
+        mcp_allow_scope: Default::default(),
+        deny_reason_input: None,
     }
 }
 

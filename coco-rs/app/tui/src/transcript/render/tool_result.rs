@@ -214,12 +214,36 @@ fn render_edit_diff(
         if old != new {
             let diff = unified_diff_text(&old, &new);
             let width = cx.width.saturating_sub(2);
+            // Highlight each side as a block (the shell owns syntect); the widget
+            // indexes token spans by source line number and tints them.
+            let lang = str_field(input, field::FILE_PATH)
+                .map(|p| file_ext(&p))
+                .unwrap_or_default();
+            let old_hl = coco_tui_markdown::highlight_code_lines(
+                &old,
+                &lang,
+                cx.styles,
+                cx.syntax_highlighting,
+            );
+            let new_hl = coco_tui_markdown::highlight_code_lines(
+                &new,
+                &lang,
+                cx.styles,
+                cx.syntax_highlighting,
+            );
+            let hl = coco_tui_ui::widgets::diff_display::DiffHighlight {
+                old: old_hl.as_deref().map(Vec::as_slice).unwrap_or(&[]),
+                new: new_hl.as_deref().map(Vec::as_slice).unwrap_or(&[]),
+            };
             let rendered = coco_tui_ui::widgets::diff_display::render_diff_preview_lines(
                 &diff,
                 cx.styles,
                 width,
                 cx.rows(DIFF_PREVIEW_ROWS),
-                |omitted| Line::from(Span::raw(cx.truncation_text(omitted)).fg(cx.styles.dim())),
+                hl,
+                |omitted| {
+                    Line::from(Span::raw(cx.truncation_text(omitted)).style(cx.styles.dim_style()))
+                },
             );
             lines.extend(indent2(rendered));
             return;
@@ -230,7 +254,7 @@ fn render_edit_diff(
     // a rich diff folded away by /compact isn't mistaken for a tiny edit, then
     // show whatever the tool reported.
     lines.push(Line::from(
-        Span::raw("  … diff unavailable (input not in context)").fg(cx.styles.dim()),
+        Span::raw("  … diff unavailable (input not in context)").style(cx.styles.dim_style()),
     ));
     render_output_preview(cx, output, lines);
 }
@@ -258,30 +282,31 @@ fn push_apply_patch_signed_row(
     cx: &ToolResultRenderCtx<'_>,
     sign: char,
     content: &str,
+    language: &str,
     lines: &mut Vec<Line<'static>>,
 ) {
-    let color = match sign {
-        '+' => cx.styles.diff_added(),
-        '-' => cx.styles.diff_removed(),
-        _ => cx.styles.dim(),
-    };
     let content = transcript_safe_line(content);
-    let prefix_cols = 5usize;
-    let content_width = (cx.width as usize).saturating_sub(prefix_cols).max(1);
-    let chunks = wrap_plain_text(&content, content_width);
-
-    for (index, chunk) in chunks.into_iter().enumerate() {
-        let mut spans = if index == 0 {
-            vec![
-                Span::raw("    ").fg(cx.styles.dim()),
-                Span::raw(sign.to_string()).fg(color),
-            ]
-        } else {
-            vec![Span::raw(" ".repeat(prefix_cols)).fg(cx.styles.dim())]
-        };
-        spans.push(Span::raw(chunk).fg(color));
-        lines.push(Line::from(spans));
-    }
+    let highlighted = coco_tui_markdown::highlight_code_lines(
+        &content,
+        language,
+        cx.styles,
+        cx.syntax_highlighting,
+    );
+    let empty = &[][..];
+    let highlighted = highlighted.as_deref().map(Vec::as_slice).unwrap_or(empty);
+    let (old, new) = match sign {
+        '-' => (highlighted, empty),
+        '+' => (empty, highlighted),
+        _ => (empty, empty),
+    };
+    let diff = format!("{sign}{content}");
+    let rendered = coco_tui_ui::widgets::diff_display::render_diff_lines(
+        &diff,
+        cx.styles,
+        cx.width.saturating_sub(2),
+        coco_tui_ui::widgets::diff_display::DiffHighlight { old, new },
+    );
+    lines.extend(indent2(rendered));
 }
 
 fn push_apply_patch_raw_row(
@@ -297,10 +322,94 @@ fn render_apply_patch_preview(
     preview: &ApplyPatchPreview,
 ) -> Vec<Line<'static>> {
     let mut rendered = Vec::new();
-    for row in &preview.rows {
-        push_apply_patch_preview_row(cx, row, &mut rendered);
+    let mut language = String::new();
+    let mut index = 0usize;
+    while index < preview.rows.len() {
+        match &preview.rows[index] {
+            ApplyPatchPreviewRow::Header { target, .. } => {
+                language = file_ext(target);
+                push_apply_patch_preview_row(cx, &preview.rows[index], &language, &mut rendered);
+                index += 1;
+            }
+            ApplyPatchPreviewRow::Line { .. } => {
+                let start = index;
+                while matches!(
+                    preview.rows.get(index),
+                    Some(ApplyPatchPreviewRow::Line { .. })
+                ) {
+                    index += 1;
+                }
+                push_apply_patch_signed_rows(
+                    cx,
+                    &preview.rows[start..index],
+                    &language,
+                    &mut rendered,
+                );
+            }
+            ApplyPatchPreviewRow::Raw { .. } | ApplyPatchPreviewRow::Omitted { .. } => {
+                push_apply_patch_preview_row(cx, &preview.rows[index], &language, &mut rendered);
+                index += 1;
+            }
+        }
     }
     rendered
+}
+
+/// Render adjacent patch rows as one diff block. Keeping the removed and added
+/// rows together lets the shared diff widget pair them for word-level emphasis;
+/// rendering one row at a time loses that relationship.
+fn push_apply_patch_signed_rows(
+    cx: &ToolResultRenderCtx<'_>,
+    rows: &[ApplyPatchPreviewRow],
+    language: &str,
+    lines: &mut Vec<Line<'static>>,
+) {
+    let mut diff = String::new();
+    let mut old_source = Vec::new();
+    let mut new_source = Vec::new();
+
+    for row in rows {
+        let ApplyPatchPreviewRow::Line { sign, content } = row else {
+            continue;
+        };
+        let content = transcript_safe_line(content);
+        diff.push(sign.as_char());
+        diff.push_str(&content);
+        diff.push('\n');
+        match sign {
+            coco_types::ApplyPatchPreviewSign::Added => new_source.push(content),
+            coco_types::ApplyPatchPreviewSign::Removed => old_source.push(content),
+            coco_types::ApplyPatchPreviewSign::Context => {
+                old_source.push(content.clone());
+                new_source.push(content);
+            }
+        }
+    }
+
+    let old_source = old_source.join("\n");
+    let new_source = new_source.join("\n");
+    let old_hl = coco_tui_markdown::highlight_code_lines(
+        &old_source,
+        language,
+        cx.styles,
+        cx.syntax_highlighting,
+    );
+    let new_hl = coco_tui_markdown::highlight_code_lines(
+        &new_source,
+        language,
+        cx.styles,
+        cx.syntax_highlighting,
+    );
+    let rendered = coco_tui_ui::widgets::diff_display::render_diff_lines(
+        diff.trim_end_matches('\n'),
+        cx.styles,
+        cx.width.saturating_sub(2),
+        coco_tui_ui::widgets::diff_display::DiffHighlight {
+            old: old_hl.as_deref().map(Vec::as_slice).unwrap_or(&[]),
+            new: new_hl.as_deref().map(Vec::as_slice).unwrap_or(&[]),
+        },
+    );
+    lines.extend(indent2(rendered));
 }
 
 fn render_capped_apply_patch_preview(
@@ -335,9 +444,9 @@ fn render_ask_user_question(
         .count();
     // Header: "Questions N/total answered".
     lines.push(Line::from(vec![
-        Span::raw("    ").fg(cx.styles.dim()),
+        Span::raw("    ").style(cx.styles.dim_style()),
         Span::raw("Questions ").fg(cx.styles.text()).bold(),
-        Span::raw(format!("{answered}/{total} answered")).fg(cx.styles.dim()),
+        Span::raw(format!("{answered}/{total} answered")).style(cx.styles.dim_style()),
     ]));
     for q in &result.questions {
         let unanswered = q.answers.is_empty() && q.note.is_none();
@@ -463,6 +572,7 @@ fn apply_patch_preview(display_data: Option<&ToolDisplayData>) -> Option<&ApplyP
 fn push_apply_patch_preview_row(
     cx: &ToolResultRenderCtx<'_>,
     row: &ApplyPatchPreviewRow,
+    language: &str,
     lines: &mut Vec<Line<'static>>,
 ) {
     match row {
@@ -474,7 +584,7 @@ fn push_apply_patch_preview_row(
             ));
         }
         ApplyPatchPreviewRow::Line { sign, content } => {
-            push_apply_patch_signed_row(cx, sign.as_char(), content, lines);
+            push_apply_patch_signed_row(cx, sign.as_char(), content, language, lines);
         }
         ApplyPatchPreviewRow::Raw { content } => {
             push_apply_patch_raw_row(cx, content, lines);
@@ -498,11 +608,15 @@ fn cap_apply_patch_preview_rows(
         return Vec::new();
     }
 
+    let mut language = String::new();
     let row_counts: Vec<usize> = rows
         .iter()
         .map(|row| {
+            if let ApplyPatchPreviewRow::Header { target, .. } = row {
+                language = file_ext(target);
+            }
             let mut rendered = Vec::new();
-            push_apply_patch_preview_row(cx, row, &mut rendered);
+            push_apply_patch_preview_row(cx, row, &language, &mut rendered);
             rendered_line_count(cx, &rendered)
         })
         .collect();
@@ -634,7 +748,7 @@ fn push_wrapped_prefixed_row(
             continuation.clone()
         };
         lines.push(Line::from(vec![
-            Span::raw(row_prefix).fg(cx.styles.dim()),
+            Span::raw(row_prefix).style(cx.styles.dim_style()),
             Span::raw(chunk).fg(color),
         ]));
     }
@@ -886,9 +1000,9 @@ fn render_highlighted_rows(
     let mut rendered = Vec::with_capacity(visible.len() + 1);
     for (index, (num, text)) in visible.iter().enumerate() {
         let prefix = if index == 0 { "  └ " } else { "    " };
-        let mut spans = vec![Span::raw(prefix).fg(cx.styles.dim())];
+        let mut spans = vec![Span::raw(prefix).style(cx.styles.dim_style())];
         if gutter_width > 0 {
-            spans.push(Span::raw(format!("{num:>gutter_width$}  ")).fg(cx.styles.dim()));
+            spans.push(Span::raw(format!("{num:>gutter_width$}  ")).style(cx.styles.dim_style()));
         }
         match highlighted.as_ref().and_then(|h| h.get(index)) {
             Some(line_spans) if !line_spans.is_empty() => {

@@ -115,6 +115,11 @@ impl Drop for ProcessRuntimeShutdownGuard {
 }
 
 fn main() -> Result<()> {
+    // Tier 1 of the fault handler: snapshot the cooked termios and install
+    // async-signal-safe SIGSEGV/SIGBUS/… handlers before anything else runs, so
+    // even an early-startup hard fault leaves the terminal usable. The TUI later
+    // arms the full RESTORE_SEQ write via `arm_tui_restore`.
+    coco_utils_crash_handler::install_terminal_restore_only();
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(TOKIO_THREAD_STACK_BYTES)

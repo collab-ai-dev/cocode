@@ -1,6 +1,7 @@
 //! Surface terminal substrate for the native-scrollback TUI.
 
 use crossterm::cursor::SetCursorStyle;
+use crossterm::cursor::Show;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
 use crossterm::queue;
@@ -14,6 +15,8 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::buffer::Cell;
+use ratatui::buffer::CellDiffOption;
+use ratatui::buffer::CellWidth;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
 use ratatui::layout::Size;
@@ -23,7 +26,6 @@ use ratatui::widgets::Widget;
 use std::io::Write;
 use std::time::Duration;
 use std::time::Instant;
-use unicode_width::UnicodeWidthStr;
 
 use super::CursorClaim;
 use super::history_insert::HistoryRows;
@@ -74,7 +76,11 @@ pub trait SurfaceBackend: Backend {
     /// emits its own reset to global stdout, where no backend is reachable
     /// (`coco_tui`'s `leave_tui_modes`). Default no-op for backends that do
     /// not model terminal modes.
-    fn leave_terminal_modes(&mut self) -> Result<(), Self::Error> {
+    fn begin_terminal_restore(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn finish_terminal_restore(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
 
@@ -130,14 +136,14 @@ where
         Write::flush(self)
     }
 
-    fn leave_terminal_modes(&mut self) -> Result<(), Self::Error> {
-        // Disable alternate scroll + bracketed paste + focus reporting. The
-        // alternate screen is intentionally NOT left here (see the trait
-        // doc): the main session never enters it, so an unpaired `?1049l`
-        // would DECRC the cursor to a stale saved position and the resume
-        // hint would overprint the transcript.
-        write!(self, "\x1b[?1007l")?;
+    fn begin_terminal_restore(&mut self) -> Result<(), Self::Error> {
+        self.write_all(crate::engine::restore_seq::RESTORE_PREFIX)
+    }
+
+    fn finish_terminal_restore(&mut self) -> Result<(), Self::Error> {
         queue!(self, DisableBracketedPaste, DisableFocusChange)?;
+        write!(self, "\x1b[?1007l\x1b[>4;0m")?;
+        queue!(self, Show)?;
         Write::flush(self)
     }
 
@@ -175,7 +181,7 @@ where
             for x in 0..rendered.area.width {
                 let index = rendered.index_of(x, source_y);
                 let cell = &rendered.content[index];
-                if !cell.skip && to_skip == 0 {
+                if !matches!(cell.diff_option, CellDiffOption::Skip) && to_skip == 0 {
                     let next_style = CellStyleKey::from(cell);
                     if current_style != Some(next_style) {
                         push_ansi_style_prefix(scratch, next_style);
@@ -183,7 +189,7 @@ where
                     }
                     scratch.push_str(cell.symbol());
                 }
-                to_skip = display_width(cell.symbol()).saturating_sub(1);
+                to_skip = usize::from(cell.cell_width().max(1)).saturating_sub(1);
             }
         }
         scratch.push_str("\x1b[0m");
@@ -222,11 +228,39 @@ pub struct SurfaceTerminal<B: SurfaceBackend> {
     /// DECSC/DECRC save register, which is shared, hidden state with
     /// per-terminal semantics.
     last_parked_cursor: Position,
+    /// What the terminal's cursor was last driven to, while that is still
+    /// trustworthy — `None` means trust is lost and the next claim re-emits in
+    /// full. Compared against each frame's claim so an unchanged cursor emits
+    /// nothing: terminals restart the blink timer on every `Show`/`MoveTo`, so
+    /// re-asserting at spinner cadence pins the composer cursor permanently
+    /// solid. Cleared by [`Self::forget_cursor`] wherever the engine writes raw
+    /// VT outside the diff.
+    last_cursor: Option<AppliedCursor>,
     invalidated: bool,
+    /// A requested synchronized-update window is opened lazily on the first
+    /// terminal write. A completely unchanged frame therefore emits neither
+    /// BSU nor ESU instead of waking the terminal for an empty transaction.
+    sync_update_requested: bool,
+    sync_update_started: bool,
     perf_stats_enabled: bool,
     history_row_scratch: String,
+    update_index_scratch: Vec<usize>,
+    skipped_frames_total: u64,
     last_viewport_draw_stats: ViewportDrawStats,
     last_history_insert_stats: HistoryInsertStats,
+}
+
+/// The cursor state the engine has driven the terminal to. Models exactly what
+/// [`SurfaceTerminal::apply_cursor_claim`] emits, so a field-wise comparison
+/// against the next frame's claim yields the minimal escape set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AppliedCursor {
+    /// Last style pushed to the terminal. Deliberately survives a hide: the
+    /// hide path never touches the style, so a later re-show at the same style
+    /// must not re-emit it.
+    style: Option<SetCursorStyle>,
+    visible: bool,
+    position: Position,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -239,6 +273,11 @@ pub enum ViewportResizePolicy {
 pub struct ViewportDrawStats {
     pub buffer_updates: usize,
     pub invalidated: bool,
+    /// The frame painted identically to the one already on screen and claimed
+    /// the same cursor, so nothing was written: no cell draw, no cursor escape,
+    /// no flush. The observable for A1's idle-frame elision.
+    pub frame_skipped: bool,
+    pub skipped_frames_total: u64,
     /// Time spent in the caller's render closure (widget paint into the back
     /// buffer) — separates "building the frame" from the diff/draw/flush
     /// pipeline below it.
@@ -301,9 +340,14 @@ where
             visible_history_rows: 0,
             history_bottom_y: viewport_area.top(),
             last_parked_cursor: Position { x: 0, y: 0 },
+            last_cursor: None,
             invalidated: true,
+            sync_update_requested: false,
+            sync_update_started: false,
             perf_stats_enabled: false,
             history_row_scratch: String::new(),
+            update_index_scratch: Vec::new(),
+            skipped_frames_total: 0,
             last_viewport_draw_stats: ViewportDrawStats::default(),
             last_history_insert_stats: HistoryInsertStats::default(),
         })
@@ -410,6 +454,7 @@ where
         if previous == area {
             return Ok(());
         }
+        self.ensure_synchronized_update_started()?;
 
         let size = self.size()?;
         let initial_fullscreen = previous.x == 0
@@ -456,6 +501,18 @@ where
     pub fn invalidate_viewport(&mut self) {
         self.invalidated = true;
         self.previous_buffer_mut().reset();
+        // Every caller either wrote raw VT itself (clear, scroll, alt-screen) or
+        // observed the screen change underneath us, so the cursor's whereabouts
+        // are no longer ours to assume.
+        self.forget_cursor();
+    }
+
+    /// Drop the engine's cursor belief without forcing a repaint — for tty
+    /// handoffs where another process (a suspend/resume cycle, `$EDITOR`, a
+    /// shell job) may have moved the cursor while coco's viewport content is
+    /// still valid.
+    pub fn note_external_cursor_move(&mut self) {
+        self.forget_cursor();
     }
 
     /// Record history rows inserted above the retained viewport.
@@ -474,6 +531,7 @@ where
     /// accounting.
     pub fn clear_owned_scrollback(&mut self) -> Result<(), B::Error> {
         let previous = self.viewport_area;
+        self.ensure_synchronized_update_started()?;
         self.backend.clear_scrollback_and_screen()?;
         // The clear escape ends with the cursor homed.
         self.last_parked_cursor = Position { x: 0, y: 0 };
@@ -525,6 +583,8 @@ where
         self.backend.show_cursor()?;
         self.backend.set_cursor_position(prompt)?;
         self.last_parked_cursor = prompt;
+        // The shell owns the cursor from here on.
+        self.forget_cursor();
         self.backend.flush()
     }
 
@@ -541,6 +601,7 @@ where
     /// Teardown callers that run OUTSIDE a draw frame (e.g.
     /// [`Self::prepare_shell_prompt_after_exit`]) already issue their own flush.
     pub fn clear_after_position(&mut self, position: Position) -> Result<(), B::Error> {
+        self.ensure_synchronized_update_started()?;
         self.backend.set_cursor_position(position)?;
         self.backend.clear_region(ClearType::CurrentLine)?;
         self.backend.clear_region(ClearType::AfterCursor)?;
@@ -569,6 +630,7 @@ where
         let mut buffer_updates = 0usize;
         let mut bytes_written = 0usize;
         let mut draw_elapsed = Duration::default();
+        self.ensure_synchronized_update_started()?;
         self.move_viewport_down_for_history(rows)?;
 
         let viewport_top = self.viewport_area.top();
@@ -615,6 +677,9 @@ where
         // instead of a DECSC/DECRC bracket keeps the terminal's shared save
         // register untouched and the restore deterministic across terminals.
         self.backend.set_cursor_position(self.last_parked_cursor)?;
+        // Those writes bypassed the diff and the scrolls moved rows under the
+        // viewport, so the next frame must re-assert its claim in full.
+        self.forget_cursor();
         let flush_start = self.perf_stats_enabled.then(Instant::now);
         self.backend.flush()?;
         let flush_elapsed = flush_start.map(|start| start.elapsed()).unwrap_or_default();
@@ -711,11 +776,48 @@ where
     }
 
     pub fn begin_synchronized_update(&mut self) -> Result<(), B::Error> {
-        self.backend.begin_synchronized_update()
+        debug_assert!(!self.sync_update_requested, "nested synchronized update");
+        self.sync_update_requested = true;
+        self.sync_update_started = false;
+        Ok(())
     }
 
     pub fn end_synchronized_update(&mut self) -> Result<(), B::Error> {
-        self.backend.end_synchronized_update()
+        let started = self.sync_update_started;
+        self.sync_update_requested = false;
+        self.sync_update_started = false;
+        if started {
+            self.backend.end_synchronized_update()
+        } else {
+            Ok(())
+        }
+    }
+
+    fn ensure_synchronized_update_started(&mut self) -> Result<(), B::Error> {
+        if self.sync_update_requested && !self.sync_update_started {
+            self.backend.begin_synchronized_update()?;
+            self.sync_update_started = true;
+        }
+        Ok(())
+    }
+
+    /// Enter a modal alternate screen inside the current lazy synchronized
+    /// update transaction.
+    pub fn enter_modal_alt_screen(&mut self) -> Result<(), B::Error> {
+        self.ensure_synchronized_update_started()?;
+        self.backend.enter_modal_alt_screen()
+    }
+
+    /// Leave a modal alternate screen inside the current lazy synchronized
+    /// update transaction.
+    pub fn leave_modal_alt_screen(&mut self) -> Result<(), B::Error> {
+        self.ensure_synchronized_update_started()?;
+        self.backend.leave_modal_alt_screen()
+    }
+
+    pub fn clear_region(&mut self, clear_type: ClearType) -> Result<(), B::Error> {
+        self.ensure_synchronized_update_started()?;
+        self.backend.clear_region(clear_type)
     }
 
     /// Draw one retained viewport frame and apply the frame's cursor claim.
@@ -741,19 +843,64 @@ where
 
         let was_invalidated = self.invalidated;
         let diff_start = self.perf_stats_enabled.then(Instant::now);
-        let updates = self.buffer_updates();
+        self.collect_update_indices();
         let diff_elapsed = diff_start.map(|start| start.elapsed()).unwrap_or_default();
+
+        // Decide before writing: an animation frame whose viewport painted
+        // identically and whose cursor claim is unchanged has nothing to draw,
+        // and re-emitting the cursor claim anyway restarts the terminal's blink
+        // timer (the visible "repainting at me" tell). Skip the viewport draw,
+        // cursor escapes, and flush. Synchronized update starts lazily on the
+        // first real write, so the outer frame emits neither BSU nor ESU here.
+        if !was_invalidated
+            && self.update_index_scratch.is_empty()
+            && !self.cursor_claim_differs(cursor_claim)
+        {
+            self.skipped_frames_total = self.skipped_frames_total.saturating_add(1);
+            self.last_viewport_draw_stats = ViewportDrawStats {
+                buffer_updates: 0,
+                invalidated: false,
+                frame_skipped: true,
+                skipped_frames_total: self.skipped_frames_total,
+                render_elapsed,
+                diff_elapsed,
+                draw_elapsed: Duration::default(),
+                flush_elapsed: Duration::default(),
+            };
+            // Both buffers hold identical content (that is what an empty diff
+            // means), so the swap keeps the usual "previous == what is on
+            // screen" invariant without any write.
+            self.swap_buffers();
+            return Ok(());
+        }
+
+        self.ensure_synchronized_update_started()?;
         let draw_start = self.perf_stats_enabled.then(Instant::now);
-        self.backend
-            .draw(updates.iter().map(|(x, y, cell)| (*x, *y, cell)))?;
+        let buffer_updates = self.update_index_scratch.len();
+        {
+            let Self {
+                backend,
+                buffers,
+                current,
+                update_index_scratch,
+                ..
+            } = self;
+            let buffer = &buffers[*current];
+            backend.draw(update_index_scratch.iter().map(|&index| {
+                let (x, y) = buffer.pos_of(index);
+                (x, y, &buffer.content[index])
+            }))?;
+        }
         let draw_elapsed = draw_start.map(|start| start.elapsed()).unwrap_or_default();
         self.apply_cursor_claim(cursor_claim)?;
         let flush_start = self.perf_stats_enabled.then(Instant::now);
         self.backend.flush()?;
         let flush_elapsed = flush_start.map(|start| start.elapsed()).unwrap_or_default();
         self.last_viewport_draw_stats = ViewportDrawStats {
-            buffer_updates: updates.len(),
+            buffer_updates,
             invalidated: was_invalidated,
+            frame_skipped: false,
+            skipped_frames_total: self.skipped_frames_total,
             render_elapsed,
             diff_elapsed,
             draw_elapsed,
@@ -777,25 +924,83 @@ where
         }
     }
 
-    fn apply_cursor_claim(&mut self, claim: Option<CursorClaim>) -> Result<(), B::Error> {
-        if let Some(claim) = claim {
-            self.backend.set_cursor_style(claim.style)?;
-            self.backend.show_cursor()?;
-            self.backend.set_cursor_position(claim.position)?;
-            self.last_parked_cursor = claim.position;
-        } else {
-            self.backend.hide_cursor()?;
-            let park = Position { x: 0, y: 0 };
-            self.backend.set_cursor_position(park)?;
-            self.last_parked_cursor = park;
+    /// The cursor state `claim` would drive the terminal to, given what it
+    /// currently shows. Pure — [`Self::apply_cursor_claim`] emits the delta
+    /// between [`Self::last_cursor`] and this.
+    fn resolve_cursor_claim(&self, claim: Option<CursorClaim>) -> AppliedCursor {
+        match claim {
+            Some(claim) => AppliedCursor {
+                style: Some(claim.style),
+                visible: true,
+                position: claim.position,
+            },
+            // The hide path emits no style, so the terminal keeps whichever one
+            // it already had.
+            None => AppliedCursor {
+                style: self.last_cursor.and_then(|applied| applied.style),
+                visible: false,
+                position: Position { x: 0, y: 0 },
+            },
         }
+    }
+
+    /// Whether applying `claim` would emit any escape at all.
+    fn cursor_claim_differs(&self, claim: Option<CursorClaim>) -> bool {
+        self.last_cursor != Some(self.resolve_cursor_claim(claim))
+    }
+
+    /// Drop the engine's belief about where the terminal's cursor is, forcing
+    /// the next claim to re-emit in full.
+    ///
+    /// Call this from every path that writes raw VT outside the cell diff —
+    /// history-insert re-parks, viewport invalidation, teardown, and any handoff
+    /// of the tty to another process (suspend/resume, `$EDITOR`). Skipping one
+    /// leaves a stale belief and a cursor that never gets corrected.
+    fn forget_cursor(&mut self) {
+        self.last_cursor = None;
+    }
+
+    fn apply_cursor_claim(&mut self, claim: Option<CursorClaim>) -> Result<(), B::Error> {
+        let previous = self.last_cursor;
+        let next = self.resolve_cursor_claim(claim);
+        // Emit only what changed, in the original order: style, visibility,
+        // position. An unknown previous state (`None`) differs from everything,
+        // so a full claim is re-emitted after any `forget_cursor`.
+        if next.style != previous.and_then(|applied| applied.style)
+            && let Some(style) = next.style
+        {
+            self.backend.set_cursor_style(style)?;
+        }
+        if previous.map(|applied| applied.visible) != Some(next.visible) {
+            if next.visible {
+                self.backend.show_cursor()?;
+            } else {
+                self.backend.hide_cursor()?;
+            }
+        }
+        if previous.map(|applied| applied.position) != Some(next.position) {
+            self.backend.set_cursor_position(next.position)?;
+        }
+        self.last_cursor = Some(next);
+        self.last_parked_cursor = next.position;
         Ok(())
     }
 
-    fn buffer_updates(&self) -> Vec<(u16, u16, Cell)> {
-        let current = self.current_buffer();
-        let previous = self.previous_buffer();
-        let mut updates = Vec::new();
+    /// Populate the reusable update-index scratch with the cells that must be
+    /// written for the current prepared buffer. The scratch avoids cloning
+    /// `Cell`s and implements ratatui 0.30.2's diff directives.
+    fn collect_update_indices(&mut self) {
+        let Self {
+            buffers,
+            current,
+            invalidated: all_invalidated,
+            update_index_scratch,
+            ..
+        } = self;
+        let current_index = *current;
+        let current = &buffers[current_index];
+        let previous = &buffers[1 - current_index];
+        update_index_scratch.clear();
         for y in current.area.y..current.area.bottom() {
             let mut invalidated = 0usize;
             let mut to_skip = 0usize;
@@ -803,32 +1008,40 @@ where
                 let index = current.index_of(x, y);
                 let next = &current.content[index];
                 let prev = &previous.content[index];
-                if !next.skip
+                if !matches!(next.diff_option, CellDiffOption::Skip)
                     && to_skip == 0
-                    && (self.invalidated || next != prev || invalidated > 0)
+                    && (*all_invalidated
+                        || matches!(next.diff_option, CellDiffOption::AlwaysUpdate)
+                        || next != prev
+                        || invalidated > 0)
                 {
-                    let (x, y) = current.pos_of(index);
-                    updates.push((x, y, next.clone()));
+                    update_index_scratch.push(index);
                 }
 
-                to_skip = display_width(next.symbol()).saturating_sub(1);
-                let affected_width = display_width(next.symbol()).max(display_width(prev.symbol()));
+                let next_width = usize::from(next.cell_width().max(1));
+                let previous_width = usize::from(prev.cell_width().max(1));
+                to_skip = next_width.saturating_sub(1);
+                let affected_width = next_width.max(previous_width);
                 invalidated = affected_width.max(invalidated).saturating_sub(1);
             }
         }
-        updates
     }
 
-    fn current_buffer(&self) -> &Buffer {
-        &self.buffers[self.current]
+    #[cfg(test)]
+    fn buffer_updates(&mut self) -> Vec<(u16, u16, Cell)> {
+        self.collect_update_indices();
+        let buffer = &self.buffers[self.current];
+        self.update_index_scratch
+            .iter()
+            .map(|&index| {
+                let (x, y) = buffer.pos_of(index);
+                (x, y, buffer.content[index].clone())
+            })
+            .collect()
     }
 
     fn current_buffer_mut(&mut self) -> &mut Buffer {
         &mut self.buffers[self.current]
-    }
-
-    fn previous_buffer(&self) -> &Buffer {
-        &self.buffers[1 - self.current]
     }
 
     fn previous_buffer_mut(&mut self) -> &mut Buffer {
@@ -855,17 +1068,13 @@ fn drawable_cell_indices(buffer: &Buffer) -> Vec<usize> {
         for x in buffer.area.x..buffer.area.right() {
             let index = buffer.index_of(x, y);
             let cell = &buffer.content[index];
-            if !cell.skip && to_skip == 0 {
+            if !matches!(cell.diff_option, CellDiffOption::Skip) && to_skip == 0 {
                 indices.push(index);
             }
-            to_skip = display_width(cell.symbol()).saturating_sub(1);
+            to_skip = usize::from(cell.cell_width().max(1)).saturating_sub(1);
         }
     }
     indices
-}
-
-fn display_width(symbol: &str) -> usize {
-    UnicodeWidthStr::width(symbol).max(1)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

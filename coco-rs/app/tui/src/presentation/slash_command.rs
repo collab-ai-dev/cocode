@@ -78,7 +78,7 @@ fn render_command_output(text: &str, opts: SlashCommandRenderOptions<'_>) -> Vec
         .map(|(index, mut line)| {
             let prefix = if index == 0 { "  └ " } else { "    " };
             line.spans
-                .insert(0, Span::raw(prefix).fg(opts.styles.dim()));
+                .insert(0, Span::raw(prefix).style(opts.styles.dim_style()));
             line
         })
         .collect()

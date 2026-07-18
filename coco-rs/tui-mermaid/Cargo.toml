@@ -17,4 +17,5 @@ unicode-width.workspace = true
 mermaid-rs-renderer.workspace = true
 
 [dev-dependencies]
+insta.workspace = true
 pretty_assertions.workspace = true

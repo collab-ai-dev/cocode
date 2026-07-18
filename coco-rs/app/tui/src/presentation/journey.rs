@@ -88,7 +88,7 @@ pub(crate) fn journey_lines(
 }
 
 fn dim_line(text: impl Into<String>, styles: UiStyles<'_>) -> Line<'static> {
-    Line::from(Span::styled(text.into(), Style::default().fg(styles.dim())))
+    Line::from(Span::styled(text.into(), styles.dim_style()))
 }
 
 fn legend_line(j: &JourneyState, styles: UiStyles<'_>) -> Line<'static> {
@@ -122,10 +122,7 @@ fn legend_line(j: &JourneyState, styles: UiStyles<'_>) -> Line<'static> {
             Style::default().fg(styles.text()),
         ),
         Span::raw("   "),
-        Span::styled(
-            format!("{RETIRED_BADGE} "),
-            Style::default().fg(styles.dim()),
-        ),
+        Span::styled(format!("{RETIRED_BADGE} "), styles.dim_style()),
         Span::styled(
             t!("dialog.journey_legend_retired", count = s.retired).to_string(),
             Style::default().fg(styles.text()),
@@ -164,14 +161,11 @@ fn timeline_bars(j: &JourneyState, styles: UiStyles<'_>) -> Vec<Line<'static>> {
                         "{:>BUCKET_LABEL_WIDTH$} ",
                         truncate_to_width(&b.label, BUCKET_LABEL_WIDTH)
                     ),
-                    Style::default().fg(styles.dim()),
+                    styles.dim_style(),
                 ),
-                Span::styled("│".to_string(), Style::default().fg(styles.dim())),
+                Span::styled("│".to_string(), styles.dim_style()),
                 Span::styled(bar, Style::default().fg(recency_color(b.recency))),
-                Span::styled(
-                    format!("  {}+{}", b.skills, b.memories),
-                    Style::default().fg(styles.dim()),
-                ),
+                Span::styled(format!("  {}+{}", b.skills, b.memories), styles.dim_style()),
             ])
         })
         .collect()
@@ -240,7 +234,7 @@ fn detail_panel(j: &JourneyState, styles: UiStyles<'_>) -> Vec<Line<'static>> {
         Span::styled(format!("{badge} "), Style::default().fg(styles.accent())),
         Span::styled(node.title.clone(), Style::default().fg(styles.text())),
         Span::raw("  "),
-        Span::styled(status, Style::default().fg(styles.dim())),
+        Span::styled(status, styles.dim_style()),
     ]));
     if !node.description.is_empty() {
         lines.push(Line::default());
@@ -271,7 +265,7 @@ fn detail_panel(j: &JourneyState, styles: UiStyles<'_>) -> Vec<Line<'static>> {
         for record in &node.history {
             lines.push(Line::from(Span::styled(
                 format!("  • {}", event_label(&record.event)),
-                Style::default().fg(styles.dim()),
+                styles.dim_style(),
             )));
         }
     }
@@ -292,14 +286,14 @@ fn confirm_panel(j: &JourneyState, yes_selected: bool, styles: UiStyles<'_>) -> 
     ];
     // No (default) on the left, Yes on the right; the selected one is accented.
     let no_style = if yes_selected {
-        Style::default().fg(styles.dim())
+        styles.dim_style()
     } else {
         Style::default().fg(styles.accent())
     };
     let yes_style = if yes_selected {
         Style::default().fg(styles.accent())
     } else {
-        Style::default().fg(styles.dim())
+        styles.dim_style()
     };
     lines.push(Line::from(vec![
         Span::styled(t!("dialog.journey_confirm_no").to_string(), no_style),

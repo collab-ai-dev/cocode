@@ -77,6 +77,9 @@ pub(crate) fn transcript_map_key(key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::PageDown => Some(TuiCommand::TranscriptPage(1)),
         KeyCode::Tab => Some(TuiCommand::TranscriptSelectNext),
         KeyCode::Enter => Some(TuiCommand::TranscriptToggleCell),
+        // E3: copy the selected cell — `y` its text, `Y` its command/path/url.
+        KeyCode::Char('y') => Some(TuiCommand::TranscriptCopyCellText),
+        KeyCode::Char('Y') => Some(TuiCommand::TranscriptCopyCellMeta),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(TuiCommand::Cancel)
         }

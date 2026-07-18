@@ -26,6 +26,8 @@ fn permission_prompt() -> PermissionPromptState {
         explanation_visible: false,
         explanation: crate::state::ExplainerFetch::NotFetched,
         prefix_input: None,
+        mcp_allow_scope: Default::default(),
+        deny_reason_input: None,
     }
 }
 

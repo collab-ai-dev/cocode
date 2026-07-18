@@ -183,7 +183,7 @@ impl QuestionView {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 self.preview_label.clone(),
-                Style::default().fg(styles.dim()),
+                styles.dim_style(),
             )));
             for l in wrap(preview, w) {
                 lines.push(Line::from(l));
@@ -215,7 +215,7 @@ impl QuestionView {
         };
         let mut lines = vec![Line::from(Span::styled(
             self.preview_label.clone(),
-            Style::default().fg(styles.dim()),
+            styles.dim_style(),
         ))];
         for l in wrap(preview, width.max(1) as usize) {
             lines.push(Line::from(l));
@@ -370,7 +370,7 @@ fn render_footer(view: &QuestionView, styles: UiStyles<'_>, area: Rect, buf: &mu
         buf.set_line(
             area.x,
             y,
-            &Line::from(Span::styled(line, Style::default().fg(styles.dim()))),
+            &Line::from(Span::styled(line, styles.dim_style())),
             area.width,
         );
         y += 1;
@@ -401,7 +401,7 @@ fn render_question_row(
                 if !d.is_empty() {
                     lines.push(Line::from(Span::styled(
                         format!("    {d}"),
-                        Style::default().fg(styles.dim()),
+                        styles.dim_style(),
                     )));
                 }
             }
@@ -451,7 +451,7 @@ fn render_input_row(
         let line_prefix = if first {
             vec![
                 Span::styled(cursor, Style::default().fg(styles.accent())),
-                Span::styled(number.clone(), Style::default().fg(styles.dim())),
+                Span::styled(number.clone(), styles.dim_style()),
             ]
         } else {
             vec![Span::raw(" ".repeat(prefix_width))]
@@ -491,7 +491,7 @@ fn render_action_row(
         Span::styled(cursor, Style::default().fg(styles.accent())),
         Span::styled(
             format!("{:>number_width$}. ", action.number),
-            Style::default().fg(styles.dim()),
+            styles.dim_style(),
         ),
         Span::styled(action.label.clone(), Style::default().fg(color)),
     ]));
@@ -509,7 +509,7 @@ fn choice_line(row: &ChoiceRow, styles: UiStyles<'_>, number_width: usize) -> Li
         Span::styled(cursor, Style::default().fg(styles.accent())),
         Span::styled(
             format!("{:>number_width$}. ", row.number),
-            Style::default().fg(styles.dim()),
+            styles.dim_style(),
         ),
     ];
     if let RowMark::Check { checked, .. } = row.mark {

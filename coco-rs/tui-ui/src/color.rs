@@ -18,6 +18,12 @@ pub enum ColorCapability {
     TrueColor,
     /// 256-color palette (`Color::Rgb` is downsampled to `Color::Indexed`).
     Ansi256,
+    /// 16-color ANSI palette (`Color::Rgb` / `Color::Indexed` quantize to the
+    /// nearest of the 16 system colors; `TERM=ansi`, `linux`, classic VTs).
+    Basic,
+    /// No color: `NO_COLOR` is set or `TERM=dumb`. Every color collapses to
+    /// `Color::Reset` (terminal default); text modifiers still apply.
+    None,
 }
 
 /// Environment signals consulted when detecting terminal color capability.
@@ -36,6 +42,8 @@ struct ColorEnv<'a> {
     /// Set when a terminal-specific env var implying truecolor is present
     /// (`GHOSTTY_*`, `WEZTERM_*`, `KITTY_WINDOW_ID`).
     truecolor_env_marker: bool,
+    /// `NO_COLOR` is present and non-empty (per no-color.org): disable color.
+    no_color: bool,
 }
 
 /// Detected color capability, cached for the process lifetime.
@@ -50,16 +58,28 @@ pub fn color_capability() -> ColorCapability {
             || std::env::var_os("WEZTERM_EXECUTABLE").is_some()
             || std::env::var_os("WEZTERM_PANE").is_some()
             || std::env::var_os("KITTY_WINDOW_ID").is_some();
+        let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
         detect_from_env(ColorEnv {
             colorterm: colorterm.as_deref(),
             term_program: term_program.as_deref(),
             term: term.as_deref(),
             truecolor_env_marker,
+            no_color,
         })
     })
 }
 
 fn detect_from_env(env: ColorEnv<'_>) -> ColorCapability {
+    // 0. Hard overrides: NO_COLOR and a dumb terminal disable color entirely,
+    //    ahead of every truecolor heuristic. An *empty* TERM is NOT treated as
+    //    no-color — it falls through exactly like an unset TERM (to COLORTERM /
+    //    the Ansi256 default), so `TERM="" COLORTERM=truecolor` stays truecolor.
+    if env.no_color {
+        return ColorCapability::None;
+    }
+    if env.term.is_some_and(|t| t.eq_ignore_ascii_case("dumb")) {
+        return ColorCapability::None;
+    }
     // 1. COLORTERM is the canonical signal when present.
     if let Some(value) = env.colorterm {
         let value = value.to_ascii_lowercase();
@@ -94,6 +114,15 @@ fn detect_from_env(env: ColorEnv<'_>) -> ColorCapability {
         if TRUECOLOR_TERMS.iter().any(|t| term.contains(t)) {
             return ColorCapability::TrueColor;
         }
+        // 5. Classic 16-color terminals that advertise no 256-color support.
+        //    Conservative allow-list — a bare `TERM=xterm` still leans on
+        //    COLORTERM/`Ansi256` above, since most such terminals do 256 colors.
+        const BASIC_TERMS: [&str; 7] = [
+            "ansi", "linux", "vt100", "vt220", "vt320", "cons25", "wsvt25",
+        ];
+        if BASIC_TERMS.contains(&term.as_str()) {
+            return ColorCapability::Basic;
+        }
     }
     ColorCapability::Ansi256
 }
@@ -103,9 +132,25 @@ fn detect_from_env(env: ColorEnv<'_>) -> ColorCapability {
 /// (named, already-indexed, reset) are returned unchanged.
 #[allow(clippy::disallowed_methods)] // this IS the downsampler that produces palette indices
 pub fn adapt_color(color: Color, capability: ColorCapability) -> Color {
-    match (capability, color) {
-        (ColorCapability::Ansi256, Color::Rgb(r, g, b)) => Color::Indexed(rgb_to_xterm256(r, g, b)),
-        _ => color,
+    match capability {
+        ColorCapability::TrueColor => color,
+        ColorCapability::Ansi256 => match color {
+            Color::Rgb(r, g, b) => Color::Indexed(rgb_to_xterm256(r, g, b)),
+            _ => color,
+        },
+        ColorCapability::Basic => match color {
+            Color::Rgb(r, g, b) => rgb_to_ansi16(r, g, b),
+            // Downsample a 256-color index (only 16..=255 need it; 0..=15 are
+            // already ANSI-16) back through RGB to the nearest of the 16.
+            Color::Indexed(i) if i >= 16 => {
+                let (r, g, b) = xterm256_to_rgb(i);
+                rgb_to_ansi16(r, g, b)
+            }
+            Color::Indexed(i) => ansi16_color(i),
+            _ => color,
+        },
+        // Monochrome: drop all color, keeping text modifiers (bold/dim/…).
+        ColorCapability::None => Color::Reset,
     }
 }
 
@@ -175,6 +220,92 @@ pub fn rgb_to_xterm256(r: u8, g: u8, b: u8) -> u8 {
         gray_index as u8
     } else {
         cube_index as u8
+    }
+}
+
+/// Standard xterm RGB values for the 16 ANSI system colors (indices 0–15).
+const ANSI16_RGB: [(i32, i32, i32); 16] = [
+    (0, 0, 0),
+    (205, 0, 0),
+    (0, 205, 0),
+    (205, 205, 0),
+    (0, 0, 238),
+    (205, 0, 205),
+    (0, 205, 205),
+    (229, 229, 229),
+    (127, 127, 127),
+    (255, 0, 0),
+    (0, 255, 0),
+    (255, 255, 0),
+    (92, 92, 255),
+    (255, 0, 255),
+    (0, 255, 255),
+    (255, 255, 255),
+];
+
+/// Map a 24-bit RGB triple to the nearest of the 16 ANSI system colors under a
+/// green-weighted squared distance, returned as a named ANSI color. Named
+/// colors serialize as the portable 30–37/90–97 SGR forms rather than the
+/// 256-color `38;5;n` sequence that a Basic terminal may not understand.
+pub fn rgb_to_ansi16(r: u8, g: u8, b: u8) -> Color {
+    let target = (r as i32, g as i32, b as i32);
+    let mut best = 0usize;
+    let mut best_dist = i32::MAX;
+    for (i, &c) in ANSI16_RGB.iter().enumerate() {
+        let dist =
+            2 * (target.0 - c.0).pow(2) + 4 * (target.1 - c.1).pow(2) + 3 * (target.2 - c.2).pow(2);
+        if dist < best_dist {
+            best_dist = dist;
+            best = i;
+        }
+    }
+    ansi16_color(best as u8)
+}
+
+fn ansi16_color(index: u8) -> Color {
+    const COLORS: [Color; 16] = [
+        Color::Black,
+        Color::Red,
+        Color::Green,
+        Color::Yellow,
+        Color::Blue,
+        Color::Magenta,
+        Color::Cyan,
+        Color::Gray,
+        Color::DarkGray,
+        Color::LightRed,
+        Color::LightGreen,
+        Color::LightYellow,
+        Color::LightBlue,
+        Color::LightMagenta,
+        Color::LightCyan,
+        Color::White,
+    ];
+    COLORS[index.min(15) as usize]
+}
+
+/// Expand an xterm-256 palette index back to its RGB value: system colors
+/// (0–15) via [`ANSI16_RGB`], the 6×6×6 cube (16–231), and the grayscale ramp
+/// (232–255).
+pub fn xterm256_to_rgb(i: u8) -> (u8, u8, u8) {
+    match i {
+        0..=15 => {
+            let (r, g, b) = ANSI16_RGB[i as usize];
+            (r as u8, g as u8, b as u8)
+        }
+        16..=231 => {
+            const CUBE_STEPS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+            let i = i - 16;
+            (
+                CUBE_STEPS[(i / 36) as usize],
+                CUBE_STEPS[((i / 6) % 6) as usize],
+                CUBE_STEPS[(i % 6) as usize],
+            )
+        }
+        232..=255 => {
+            let v = 8 + 10 * (i - 232);
+            (v, v, v)
+        }
     }
 }
 

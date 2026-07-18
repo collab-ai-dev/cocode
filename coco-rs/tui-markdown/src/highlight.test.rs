@@ -1,13 +1,54 @@
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::MutexGuard;
 
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::style::UiStyles;
 use coco_tui_ui::theme::Theme;
 use coco_tui_ui::theme::ThemeName;
 
+use super::ClosedFenceMemo;
 use super::HighlightMode;
+use super::Highlighted;
 use super::highlight_code;
 use super::prewarm_highlighting;
+
+/// The streaming fence slot and its memo are process-global, so tests that
+/// assert on *which* fence owns the slot cannot interleave with each other.
+/// Every test that renders in [`HighlightMode::Streaming`] takes this first.
+/// Poisoning is ignored: a panicking sibling says nothing about slot validity,
+/// and the slot is reset below anyway.
+fn streaming_test_lock() -> MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Force the shared slot to a known-empty state so a test's first streaming
+/// call is deterministically a rebuild (and therefore a memo insert), whatever
+/// a previously-run test left behind.
+fn reset_streaming_slot() {
+    *super::streaming_fence_slot().lock().expect("slot lock") = None;
+}
+
+/// Which fence currently owns the slot, by language tag.
+fn slot_owner() -> Option<String> {
+    super::streaming_fence_slot()
+        .lock()
+        .expect("slot lock")
+        .as_ref()
+        .map(|slot| slot.lang.clone())
+}
+
+fn stream(code: &str, lang: &str, styles: UiStyles<'_>) -> Option<Highlighted> {
+    highlight_code(
+        code,
+        lang,
+        styles,
+        SyntaxHighlighting::Full,
+        HighlightMode::Streaming,
+    )
+}
 
 #[test]
 fn highlights_known_language() {
@@ -124,6 +165,7 @@ fn test_streaming_checkpoint_matches_fresh_tokenize() {
     // state between lines would color the continuation as code, not string.
     // Feed the block in growing prefixes — including partial lines — and pin
     // every streaming snapshot to a fresh committed tokenize of that prefix.
+    let _serial = streaming_test_lock();
     let theme = Theme::default();
     let styles = UiStyles::new(&theme);
     let code = "let s = \"first\nsecond line\nthird\";\nfn after() {}\nlet t = 1;\n";
@@ -147,6 +189,7 @@ fn test_streaming_checkpoint_matches_fresh_tokenize() {
 
 #[test]
 fn test_streaming_mode_does_not_pollute_committed_lru() {
+    let _serial = streaming_test_lock();
     let theme = Theme::default();
     let styles = UiStyles::new(&theme);
     // Prime the committed LRU with a block, then run streaming snapshots of a
@@ -176,6 +219,130 @@ fn test_streaming_mode_does_not_pollute_committed_lru() {
     assert!(
         std::sync::Arc::ptr_eq(&committed, &again),
         "committed LRU entry must survive streaming renders"
+    );
+}
+
+#[test]
+fn test_streaming_multi_fence_tail_serves_closed_fence_from_memo() {
+    // The multi-fence tail — a CLOSED fence rendered every frame beside a still
+    // growing OPEN one — is the shape the single slot cannot hold: the two calls
+    // alternate and each steals the slot, so before the memo BOTH re-tokenized
+    // in full every frame. The closed fence's content never changes, so from its
+    // second frame on it must come back memoized: an `Arc::ptr_eq` result is
+    // proof no re-tokenize happened.
+    let _serial = streaming_test_lock();
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let closed = "fn multi_fence_closed_probe() { let a = 1; }\n";
+    reset_streaming_slot();
+
+    // Frame 1: closed fence tokenizes and memoizes, then the open fence takes
+    // the slot away from it.
+    let first = stream(closed, "rust", styles).expect("rust grammar");
+    let _ = stream("open_a = 1\n", "python", styles).expect("python grammar");
+    // Frame 2: same closed content → memo.
+    let second = stream(closed, "rust", styles).expect("rust grammar");
+
+    assert!(
+        Arc::ptr_eq(&first, &second),
+        "a closed fence sharing the tail must be served from the memo, not re-tokenized"
+    );
+    // Memoized spans must still be the spans a fresh tokenize would produce.
+    let fresh = super::highlight_uncached(closed, "rust", styles).expect("rust grammar");
+    assert_eq!(second.as_ref(), &fresh);
+}
+
+#[test]
+fn test_streaming_memo_hit_leaves_slot_with_open_fence() {
+    // The load-bearing property: a memo hit must not touch the slot. That is
+    // what lets the open fence keep its checkpoint (and extend O(delta)) while a
+    // closed sibling renders between its frames.
+    let _serial = streaming_test_lock();
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let closed = "fn slot_ownership_probe() { let b = 2; }\n";
+    reset_streaming_slot();
+
+    // Prime the memo with the closed fence, then hand the slot to the open one.
+    let _ = stream(closed, "rust", styles).expect("rust grammar");
+    let _ = stream("open_b = 1\n", "python", styles).expect("python grammar");
+    assert_eq!(
+        slot_owner().as_deref(),
+        Some("python"),
+        "the most recent rebuild should own the slot"
+    );
+
+    // This call is served from the memo and must leave the slot alone.
+    let _ = stream(closed, "rust", styles).expect("rust grammar");
+    assert_eq!(
+        slot_owner().as_deref(),
+        Some("python"),
+        "a memo hit must not steal the slot from the open fence"
+    );
+
+    // And the open fence therefore still extends its checkpoint rather than
+    // rebuilding: its next snapshot is a prefix-extension of the slot content.
+    let grown = stream("open_b = 1\nopen_b += 2\n", "python", styles).expect("python grammar");
+    assert_eq!(
+        slot_owner().as_deref(),
+        Some("python"),
+        "the open fence must still hold the slot after growing"
+    );
+    let fresh = super::highlight_uncached("open_b = 1\nopen_b += 2\n", "python", styles)
+        .expect("python grammar");
+    assert_eq!(
+        grown.as_ref(),
+        &fresh,
+        "the extended checkpoint must match a fresh tokenize"
+    );
+}
+
+#[test]
+fn test_streaming_memo_key_includes_theme() {
+    // Same fence, different palette: serving theme A's spans under theme B would
+    // paint stale colors after a live theme switch.
+    let _serial = streaming_test_lock();
+    let code = "fn streaming_memo_theme_probe() {}\n";
+    let dark = Theme::from_name(ThemeName::Dark);
+    let light = Theme::from_name(ThemeName::Light);
+    reset_streaming_slot();
+
+    let a = stream(code, "rust", UiStyles::new(&dark)).expect("dark");
+    // Same content and language, so this rebuilds via `theme_changed` — the memo
+    // must miss on the new theme's key rather than serve `a`.
+    let b = stream(code, "rust", UiStyles::new(&light)).expect("light");
+    assert!(
+        !Arc::ptr_eq(&a, &b),
+        "a theme change must not serve another theme's memoized spans"
+    );
+}
+
+#[test]
+fn test_closed_fence_memo_evicts_least_recently_used_over_byte_budget() {
+    let mut memo = ClosedFenceMemo::default();
+    let empty = || -> Highlighted { Arc::new(Vec::new()) };
+    // Three entries at just over a third of the budget: the third insert must
+    // push the total past the cap and force exactly one eviction.
+    let third = super::CLOSED_MEMO_CAP_BYTES / 3 + 1;
+    memo.put(1, empty(), third);
+    memo.put(2, empty(), third);
+    // Touch 1 so 2 is now the least-recently-used entry.
+    assert!(memo.get(1).is_some());
+    memo.put(3, empty(), third);
+
+    assert!(
+        memo.get(2).is_none(),
+        "the least-recently-used entry must be evicted once the byte budget is exceeded"
+    );
+    assert!(
+        memo.get(1).is_some(),
+        "a touched entry must outlive an untouched one"
+    );
+    assert!(memo.get(3).is_some(), "the new entry must be retained");
+    assert!(
+        memo.bytes <= super::CLOSED_MEMO_CAP_BYTES,
+        "accounting must stay within the budget, got {}",
+        memo.bytes
     );
 }
 

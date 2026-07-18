@@ -70,6 +70,9 @@ impl FileSearchManager {
                     .get_suggestions(&query, MAX_SUGGESTIONS)
                     .into_iter()
                     .map(|s| SuggestionItem {
+                        // The index matches over the path itself, so its char
+                        // indices land on `label` unshifted.
+                        highlight_indices: s.match_indices,
                         label: s.path,
                         description: None,
                         metadata: Some(SuggestionMeta::Path {

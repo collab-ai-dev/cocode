@@ -181,7 +181,7 @@ impl<'a> AgentSwitcher<'a> {
                 .saturating_sub(1);
             if pad > 0 {
                 spans.push(Span::raw(" ".repeat(pad)));
-                spans.push(Span::styled(hint, Style::default().fg(self.styles.dim())));
+                spans.push(Span::styled(hint, self.styles.dim_style()));
             }
         }
         Line::from(spans)

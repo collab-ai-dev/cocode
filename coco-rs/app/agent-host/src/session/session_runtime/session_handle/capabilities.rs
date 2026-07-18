@@ -57,17 +57,18 @@ impl SessionHandle {
         self.runtime.config_home()
     }
 
-    pub async fn prompt_history_texts(&self, project: String) -> Vec<String> {
-        self.runtime.prompt_history_texts(project).await
+    pub async fn prompt_history_entries(&self, project: String) -> Vec<coco_session::HistoryEntry> {
+        self.runtime.prompt_history_entries(project).await
     }
 
     pub async fn persist_prompt_history_entry(
         &self,
         project: String,
         display: String,
+        pasted_contents: std::collections::HashMap<i32, String>,
     ) -> anyhow::Result<()> {
         self.runtime
-            .persist_prompt_history_entry(project, display)
+            .persist_prompt_history_entry(project, display, pasted_contents)
             .await
     }
 

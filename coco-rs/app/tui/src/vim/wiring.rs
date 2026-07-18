@@ -24,21 +24,22 @@ use coco_tui_ui::widgets::TextArea;
 /// mode. In Insert mode the call is a no-op (`VimAction::Unhandled`) — the
 /// caller falls through to `textarea.insert_str` so typing works normally.
 ///
-/// Captures a pre-dispatch snapshot and commits it to the undo stack
-/// ONLY when the dispatched key actually mutated the buffer (and it
-/// wasn't `u` itself, which would otherwise turn undo into a redo-flip).
+/// One vim key is ONE undo step. A normal-mode operator (`dw`, `x`, `p`, `cc`)
+/// drives several TextArea verbs, and each of those now checkpoints itself, so
+/// the dispatch runs inside an `undo_group` to collapse them — otherwise a
+/// single `dw` would take several `u` presses to reverse. The group also drops
+/// itself when the key changed nothing, so navigation keys leave no entry.
 pub fn dispatch_vim_key(ch: char, textarea: &mut TextArea, vim: &mut VimRuntime) -> VimAction {
     let VimState::Normal { command } = &mut vim.state else {
         return VimAction::Unhandled;
     };
-    let snap = textarea.snapshot();
-    let action = transitions::process_normal_key(ch, textarea, command, &mut vim.persistent);
-    // `u` consumes the undo stack itself; don't push a redo-target snapshot
-    // (we have no redo stack and this would just oscillate).
-    if ch != 'u' && textarea.text() != snap.text() {
-        textarea.commit_undo(snap);
+    let persistent = &mut vim.persistent;
+    if ch == 'u' {
+        // `u` drives the undo stack itself. Wrapping it would push the
+        // pre-undo text back on as a fresh entry and oscillate.
+        return transitions::process_normal_key(ch, textarea, command, persistent);
     }
-    action
+    textarea.undo_group(|ta| transitions::process_normal_key(ch, ta, command, persistent))
 }
 
 /// Apply a `VimAction` returned by `dispatch_vim_key`. Handles the mode

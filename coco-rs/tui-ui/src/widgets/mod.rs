@@ -29,3 +29,4 @@ pub use status_indicator::StatusIndicatorView;
 pub use textarea::BolBehavior;
 pub use textarea::EolBehavior;
 pub use textarea::TextArea;
+pub use textarea::wrap_ranges;

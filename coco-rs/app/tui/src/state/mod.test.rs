@@ -513,6 +513,19 @@ fn test_hydrate_history_dedups_newest_first() {
 }
 
 #[test]
+fn test_persisted_history_rehydrates_exact_paste_pill() {
+    let entry = crate::state::HistoryEntry::persisted(
+        "review [Pasted text #7 +3 lines]".to_string(),
+        123,
+        std::collections::HashMap::from([(7, "full payload".to_string())]),
+    );
+    assert_eq!(entry.timestamp_ms, Some(123));
+    assert_eq!(entry.pastes.len(), 1);
+    assert_eq!(entry.pastes[0].pill, "[Pasted text #7 +3 lines]");
+    assert_eq!(entry.pastes[0].content, "full payload");
+}
+
+#[test]
 fn test_permission_prompt() {
     let mut state = AppState::new();
 
@@ -541,6 +554,8 @@ fn test_permission_prompt() {
             explanation_visible: false,
             explanation: crate::state::ExplainerFetch::NotFetched,
             prefix_input: None,
+            mcp_allow_scope: Default::default(),
+            deny_reason_input: None,
         }));
 
     assert!(state.has_active_surface());

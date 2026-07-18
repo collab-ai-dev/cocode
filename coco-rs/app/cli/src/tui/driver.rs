@@ -380,7 +380,10 @@ pub(super) async fn run_agent_driver(
                 });
             }
 
-            UserCommand::PersistPromptHistory { display } => {
+            UserCommand::PersistPromptHistory {
+                display,
+                pasted_contents,
+            } => {
                 // Append to the cross-session composer history off the
                 // dispatch thread — the JSONL append takes an advisory file
                 // lock.
@@ -388,7 +391,7 @@ pub(super) async fn run_agent_driver(
                 let project = cwd.to_string_lossy().to_string();
                 tokio::spawn(async move {
                     if let Err(e) = runtime_t
-                        .persist_prompt_history_entry(project, display)
+                        .persist_prompt_history_entry(project, display, pasted_contents)
                         .await
                     {
                         warn!(target: "coco_agent_host::history", error = %e,

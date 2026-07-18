@@ -30,6 +30,8 @@ fn prompt_text_surface_skips_exit_plan_mode_permission() {
         explanation_visible: false,
         explanation: crate::state::ExplainerFetch::NotFetched,
         prefix_input: None,
+        mcp_allow_scope: Default::default(),
+        deny_reason_input: None,
     });
 
     assert!(prompt_text_surface(&prompt).is_none());

@@ -33,6 +33,17 @@ use coco_tui_ui::style::UiStyles;
 /// A suggestion item for the popup.
 #[derive(Debug, Clone)]
 pub struct SuggestionItem {
+    /// Char positions in `label` that the fuzzy match hit, for per-character
+    /// highlighting. Empty when the producer has no match information (a
+    /// context-free listing, or a source whose matcher does not report them).
+    ///
+    /// Char — not byte — positions, so a matcher's own indices over a
+    /// non-ASCII label need no conversion, and the renderer's truncation
+    /// filter is a plain count comparison. `i32` to match
+    /// `coco_file_search::FileSuggestion::match_indices`, which feeds it
+    /// directly; the renderer ignores out-of-range values rather than trusting
+    /// matchers it does not own.
+    pub highlight_indices: Vec<i32>,
     /// Display text — for slash commands this already includes the
     /// leading `/`; for agents in the unified popup it already includes
     /// the `" (agent)"` suffix (see `super::unified::seed_agent_items`).
@@ -160,7 +171,7 @@ impl Widget for SuggestionPopup<'_> {
                 &format!("  {}", t!("suggestion_popup.no_matches")),
                 popup_width as usize,
             );
-            let line = Line::from(Span::styled(text, Style::default().fg(self.styles.dim())));
+            let line = Line::from(Span::styled(text, self.styles.dim_style()));
             Paragraph::new(line).render(area, buf);
             return;
         }
@@ -274,17 +285,17 @@ fn build_row(
         (true, Some(c)) => Style::default().fg(c).bold(),
         (true, None) => Style::default().fg(styles.primary()).bold(),
         (false, Some(c)) => Style::default().fg(c),
-        (false, None) => Style::default().fg(styles.dim()),
+        (false, None) => styles.dim_style(),
     };
     let marker_style = if is_selected {
         Style::default().fg(styles.primary()).bold()
     } else {
-        Style::default().fg(styles.dim())
+        styles.dim_style()
     };
     let desc_style = if is_selected {
         Style::default().fg(styles.text())
     } else {
-        Style::default().fg(styles.dim())
+        styles.dim_style()
     };
 
     let label_target = name_col_width.saturating_sub(NAME_COLUMN_PADDING);
@@ -296,11 +307,14 @@ fn build_row(
     let label_used = UnicodeWidthStr::width(label_text.as_str());
     let pad = " ".repeat(name_col_width.saturating_sub(label_used));
 
-    let mut spans: Vec<Span<'static>> = vec![
-        Span::styled(marker_text, marker_style),
-        Span::styled(label_text, label_style),
-        Span::raw(pad),
-    ];
+    let mut spans: Vec<Span<'static>> = vec![Span::styled(marker_text, marker_style)];
+    spans.extend(highlighted_label_spans(
+        &label_text,
+        &item.highlight_indices,
+        label_style,
+        highlight_style(is_selected, styles),
+    ));
+    spans.push(Span::raw(pad));
 
     if let Some(desc) = item.description.as_ref() {
         let remaining = popup_width.saturating_sub(marker_width + name_col_width);
@@ -312,6 +326,65 @@ fn build_row(
     }
 
     Line::from(spans)
+}
+
+/// Style for the characters a fuzzy match hit.
+///
+/// Bold + primary on both selected and unselected rows: the highlight's job is
+/// to show *why* a row matched, which is most useful on the rows the user has
+/// not landed on yet. On the selected row the label is already primary+bold, so
+/// the run is separated by dropping the surrounding text to plain instead.
+fn highlight_style(is_selected: bool, styles: UiStyles<'_>) -> Style {
+    if is_selected {
+        Style::default().fg(styles.primary()).bold().underlined()
+    } else {
+        Style::default().fg(styles.primary()).bold()
+    }
+}
+
+/// Split `label` into alternating matched / unmatched spans.
+///
+/// `indices` are char positions **into the untruncated label**, so they are
+/// filtered against the truncated text rather than trusted: truncate first,
+/// then drop the indices that fell off the end. Doing it the other way round
+/// (shifting indices onto a shorter string) is how off-by-one highlight drift
+/// gets in. Out-of-range and duplicate indices are ignored rather than
+/// panicking — they come from matchers this widget does not control.
+fn highlighted_label_spans(
+    label: &str,
+    indices: &[i32],
+    base: Style,
+    highlight: Style,
+) -> Vec<Span<'static>> {
+    if indices.is_empty() {
+        return vec![Span::styled(label.to_string(), base)];
+    }
+    let matched: std::collections::HashSet<usize> = indices
+        .iter()
+        .filter_map(|index| usize::try_from(*index).ok())
+        .collect();
+
+    let mut spans = Vec::new();
+    let mut run = String::new();
+    let mut run_matched = false;
+    for (position, ch) in label.chars().enumerate() {
+        let is_match = matched.contains(&position);
+        if !run.is_empty() && is_match != run_matched {
+            spans.push(Span::styled(
+                std::mem::take(&mut run),
+                if run_matched { highlight } else { base },
+            ));
+        }
+        run_matched = is_match;
+        run.push(ch);
+    }
+    if !run.is_empty() {
+        spans.push(Span::styled(
+            run,
+            if run_matched { highlight } else { base },
+        ));
+    }
+    spans
 }
 
 /// Dim trailing row shown when the result list is taller than the popup slot.
@@ -326,7 +399,7 @@ fn build_overflow_hint(
 ) -> Line<'static> {
     let text = format!("  {}/{}  ↑↓ more", selected + 1, total);
     let truncated = truncate_to_width(&text, popup_width);
-    Line::from(Span::styled(truncated, Style::default().fg(styles.dim())))
+    Line::from(Span::styled(truncated, styles.dim_style()))
 }
 
 /// Map `AgentColorName` onto ratatui terminal colors. Indexed colors keep

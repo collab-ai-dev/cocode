@@ -21,7 +21,6 @@ use std::io::stdout;
 use coco_config::env::EnvKey;
 use crossterm::Command;
 use crossterm::event::KeyboardEnhancementFlags;
-use crossterm::event::PopKeyboardEnhancementFlags;
 use crossterm::event::PushKeyboardEnhancementFlags;
 use crossterm::execute;
 
@@ -201,30 +200,11 @@ fn read_tmux_extended_keys_format() -> Option<String> {
     None
 }
 
-/// Stack-respecting teardown for suspend/external-process windows — the
-/// matching `enable_keyboard_enhancement` re-arms on resume.
-pub(crate) fn restore_keyboard_enhancement_stack() {
-    let _ = execute!(
-        stdout(),
-        PopKeyboardEnhancementFlags,
-        DisableModifyOtherKeys
-    );
-}
-
-/// Hard teardown for process exit/panic: pop, then `CSI < u` (clears every
-/// pushed level) so the parent shell cannot inherit enhanced reporting.
-pub(crate) fn reset_keyboard_reporting_after_exit() {
-    let _ = execute!(
-        stdout(),
-        PopKeyboardEnhancementFlags,
-        ResetKeyboardEnhancementFlags,
-        DisableModifyOtherKeys
-    );
-}
-
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ResetKeyboardEnhancementFlags;
+pub(crate) struct ResetKeyboardEnhancementFlags;
 
+#[cfg(test)]
 impl Command for ResetKeyboardEnhancementFlags {
     fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
         f.write_str("\x1b[<u")
@@ -267,7 +247,7 @@ impl Command for EnableModifyOtherKeys {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DisableModifyOtherKeys;
+pub(crate) struct DisableModifyOtherKeys;
 
 impl Command for DisableModifyOtherKeys {
     fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {

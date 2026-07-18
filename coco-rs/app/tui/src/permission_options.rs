@@ -5,6 +5,7 @@
 
 use std::str::FromStr;
 
+use crate::state::McpAllowScope;
 use crate::state::PermissionPromptState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,10 +104,46 @@ fn edited_prefix_rule(
     scoped_allow_rule_is_safe(&rule).then_some(rule)
 }
 
+/// When the user explicitly widened an MCP grant to the whole server, that
+/// intent supersedes any narrower per-tool suggestion core may have supplied —
+/// otherwise the toggle would be a silent no-op on exactly the MCP prompts that
+/// arrive with a suggestion. `None` on the default Tool scope or a non-MCP tool,
+/// leaving the normal suggestion/derivation path in charge.
+fn explicit_server_allow(
+    p: &PermissionPromptState,
+    source: coco_types::PermissionRuleSource,
+    destination: coco_types::PermissionUpdateDestination,
+) -> Option<coco_types::PermissionUpdate> {
+    if p.mcp_allow_scope != McpAllowScope::Server {
+        return None;
+    }
+    // Guard on a real MCP tool so a stray Server scope on a builtin never
+    // widens anything; `allow_pattern` is the single source of the rule string.
+    crate::state::mcp_server_of(&p.tool_name)?;
+    Some(coco_types::PermissionUpdate::AddRules {
+        rules: vec![coco_types::PermissionRule {
+            source,
+            behavior: coco_types::PermissionBehavior::Allow,
+            value: coco_types::PermissionRuleValue {
+                tool_pattern: allow_pattern(&p.tool_name, p.mcp_allow_scope),
+                rule_content: None,
+            },
+        }],
+        destination,
+    })
+}
+
 pub(crate) fn session_allow_updates(
     p: &PermissionPromptState,
     current_mode: coco_types::PermissionMode,
 ) -> Vec<coco_types::PermissionUpdate> {
+    // An explicit "allow the whole server" wins over everything below: the user
+    // widened the scope on purpose, and the per-tool suggestion is narrower.
+    if let Some(update) = explicit_server_allow(p, coco_types::PermissionRuleSource::Session, {
+        coco_types::PermissionUpdateDestination::Session
+    }) {
+        return vec![update];
+    }
     // Shell tools with an editable prefix: the edited value is authoritative
     // (replaces the engine suggestion). An empty / unsafe value yields no
     // rule → commit allows once.
@@ -179,6 +216,7 @@ pub(crate) fn session_allow_updates(
     if updates.is_empty()
         && let Some(update) = tool_wide_allow_update(
             &p.tool_name,
+            p.mcp_allow_scope,
             coco_types::PermissionRuleSource::Session,
             coco_types::PermissionUpdateDestination::Session,
         )
@@ -189,6 +227,15 @@ pub(crate) fn session_allow_updates(
 }
 
 pub(crate) fn local_allow_updates(p: &PermissionPromptState) -> Vec<coco_types::PermissionUpdate> {
+    // An explicit server widening supersedes everything below (see
+    // `session_allow_updates`), so the persisted grant matches the session one.
+    if let Some(update) = explicit_server_allow(
+        p,
+        coco_types::PermissionRuleSource::LocalSettings,
+        coco_types::PermissionUpdateDestination::LocalSettings,
+    ) {
+        return vec![update];
+    }
     // Shell editable prefix is authoritative (see `session_allow_updates`).
     if p.prefix_input.is_some() {
         return edited_prefix_rule(p, coco_types::PermissionRuleSource::LocalSettings)
@@ -266,6 +313,7 @@ pub(crate) fn local_allow_updates(p: &PermissionPromptState) -> Vec<coco_types::
         // tool-name allow (MCP tools etc.); filtered out for file/shell tools.
         tool_wide_allow_update(
             &p.tool_name,
+            p.mcp_allow_scope,
             coco_types::PermissionRuleSource::LocalSettings,
             coco_types::PermissionUpdateDestination::LocalSettings,
         )
@@ -343,11 +391,16 @@ fn tool_requires_scoped_allow(tool_name: &str) -> bool {
     )
 }
 
-/// Exact-tool-name allow rule (`mcp__server__tool`, `WebFetch`, …) for tools
-/// that produced no scoped suggestion. Returns `None` for the dangerous
-/// tool-wide set and for empty / wildcard tool names.
+/// Allow rule for tools that produced no scoped suggestion — an exact tool name
+/// (`mcp__server__tool`, `WebFetch`, …), or the whole MCP server
+/// (`mcp__server`) when the user widened the scope.
+///
+/// Returns `None` for the dangerous tool-wide set and for empty / wildcard tool
+/// names. The server-level pattern needs no engine change: `rule_compiler`
+/// already matches `mcp__server` against `mcp__server__tool`.
 fn tool_wide_allow_update(
     tool_name: &str,
+    scope: McpAllowScope,
     source: coco_types::PermissionRuleSource,
     destination: coco_types::PermissionUpdateDestination,
 ) -> Option<coco_types::PermissionUpdate> {
@@ -360,12 +413,41 @@ fn tool_wide_allow_update(
             source,
             behavior: coco_types::PermissionBehavior::Allow,
             value: coco_types::PermissionRuleValue {
-                tool_pattern: tool_name.to_string(),
+                tool_pattern: allow_pattern(tool_name, scope),
                 rule_content: None,
             },
         }],
         destination,
     })
+}
+
+/// The rule pattern an "always allow" will grant: the exact tool, or the whole
+/// MCP server once the user widened the scope.
+///
+/// Shared with the renderer ([`allow_grant_target`]) so the row's label states
+/// exactly what the rule will say — the breadth of a grant must never be a
+/// surprise.
+fn allow_pattern(tool_name: &str, scope: McpAllowScope) -> String {
+    match (scope, crate::state::mcp_server_of(tool_name)) {
+        (McpAllowScope::Server, Some(server)) => {
+            format!("{}{server}", coco_types::MCP_TOOL_PREFIX)
+        }
+        // Server scope on a non-MCP tool is unreachable through the UI (the
+        // toggle is inert there); fall back to the exact name rather than
+        // inventing a broader grant.
+        (McpAllowScope::Server, None) | (McpAllowScope::Tool, _) => tool_name.to_string(),
+    }
+}
+
+/// What the prompt's "always allow" rows will actually grant, for their labels.
+pub(crate) fn allow_grant_target(p: &PermissionPromptState) -> String {
+    allow_pattern(&p.tool_name, p.mcp_allow_scope)
+}
+
+/// Whether this prompt can widen its grant to a whole MCP server — i.e. whether
+/// the scope toggle does anything and should be advertised.
+pub(crate) fn can_widen_to_server(p: &PermissionPromptState) -> bool {
+    p.show_always_allow && crate::state::mcp_server_of(&p.tool_name).is_some()
 }
 
 /// Directory-scoped `Edit(dir/**)` allow rule for write-capable tools.

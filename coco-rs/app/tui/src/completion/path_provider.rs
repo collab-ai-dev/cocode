@@ -150,6 +150,7 @@ fn path_items(query: &str, mode: PathMode) -> Vec<SuggestionItem> {
             continue;
         }
         items.push(SuggestionItem {
+            highlight_indices: Vec::new(),
             label: format!("{}{}", parsed.display_dir, name),
             description: Some(if is_directory { "directory" } else { "file" }.to_string()),
             metadata: Some(SuggestionMeta::Path { is_directory }),

@@ -91,11 +91,12 @@ impl SkillSearchManager {
     /// with weighted keys (name: 3, parts: 2, aliases: 2, description: 0.5).
     pub fn search(&self, query: &str) -> Vec<SuggestionItem> {
         if query.is_empty() {
+            // A context-free listing: nothing matched, so nothing to highlight.
             return self
                 .skills
                 .iter()
                 .take(MAX_SUGGESTIONS)
-                .map(to_suggestion)
+                .map(|skill| to_suggestion(skill, Vec::new()))
                 .collect();
         }
 
@@ -131,9 +132,37 @@ impl SkillSearchManager {
         matches
             .into_iter()
             .take(MAX_SUGGESTIONS)
-            .map(|m| to_suggestion(&self.skills[m.info_idx]))
+            .map(|m| {
+                let skill = &self.skills[m.info_idx];
+                to_suggestion(skill, name_match_indices(&pattern, &mut matcher, skill))
+            })
             .collect()
     }
+}
+
+/// Char indices of the query's match against the skill NAME, mapped onto the
+/// rendered label.
+///
+/// Only the name is highlighted. `best_match_score` also scores aliases and the
+/// description, but the label renders `/{name}` — a hit that landed only on
+/// those has nothing to mark there, and returning empty is the honest answer.
+fn name_match_indices(pattern: &Pattern, matcher: &mut Matcher, skill: &SkillInfo) -> Vec<i32> {
+    let haystack = Utf32String::from(skill.name.as_str());
+    let mut indices = Vec::<u32>::new();
+    if pattern
+        .indices(haystack.slice(..), matcher, &mut indices)
+        .is_none()
+    {
+        return Vec::new();
+    }
+    indices.sort_unstable();
+    indices.dedup();
+    // The label is `/{name}`, so every name index shifts one char right.
+    indices
+        .into_iter()
+        .filter_map(|index| i32::try_from(index).ok())
+        .map(|index| index.saturating_add(1))
+        .collect()
 }
 
 impl Default for SkillSearchManager {
@@ -180,7 +209,10 @@ fn best_match_score(pattern: &Pattern, matcher: &mut Matcher, skill: &SkillInfo)
 }
 
 /// Convert a SkillInfo into a SuggestionItem for display.
-fn to_suggestion(skill: &SkillInfo) -> SuggestionItem {
+///
+/// `highlight_indices` are char positions into the rendered label (see
+/// [`name_match_indices`]); empty for a context-free listing.
+fn to_suggestion(skill: &SkillInfo, highlight_indices: Vec<i32>) -> SuggestionItem {
     let mut label = format!("/{}", skill.name);
     if let Some(hint) = &skill.argument_hint {
         label.push_str(&format!(" {hint}"));
@@ -195,6 +227,7 @@ fn to_suggestion(skill: &SkillInfo) -> SuggestionItem {
     }
 
     SuggestionItem {
+        highlight_indices,
         label,
         description: if desc_parts.is_empty() {
             None

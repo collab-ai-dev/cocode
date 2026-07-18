@@ -1,0 +1,23 @@
+---
+source: tui-ui/src/widgets/diff_display.test.rs
+expression: lines
+---
+[
+    Line::from(Span::from("  ╶╴ @@ -1 +1 @@").fg(Color::Rgb(215, 119, 87)).dim()),
+    Line::from_iter([
+        Span::from("  1   ").fg(Color::Rgb(153, 153, 153)),
+        Span::from("│ ").fg(Color::Rgb(255, 107, 128)).bg(Color::Rgb(65, 25, 30)),
+        Span::from("-").fg(Color::Rgb(255, 107, 128)).bg(Color::Rgb(65, 25, 30)),
+        Span::from("let value = ").blue().bg(Color::Rgb(65, 25, 30)),
+        Span::from("old").magenta().bg(Color::Rgb(65, 25, 30)).reversed(),
+        Span::from(";").yellow().bg(Color::Rgb(65, 25, 30)),
+    ]),
+    Line::from_iter([
+        Span::from("    1 ").fg(Color::Rgb(153, 153, 153)),
+        Span::from("│ ").fg(Color::Rgb(78, 186, 101)).bg(Color::Rgb(20, 55, 30)),
+        Span::from("+").fg(Color::Rgb(78, 186, 101)).bg(Color::Rgb(20, 55, 30)),
+        Span::from("let value = ").blue().bg(Color::Rgb(20, 55, 30)),
+        Span::from("new").cyan().bg(Color::Rgb(20, 55, 30)).reversed(),
+        Span::from(";").yellow().bg(Color::Rgb(20, 55, 30)),
+    ]),
+]

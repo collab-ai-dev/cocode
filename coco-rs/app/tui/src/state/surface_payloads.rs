@@ -62,6 +62,44 @@ pub struct PermissionPromptState {
     /// the field becomes editable; committing that row writes `Bash(<value>)`
     /// instead of the engine-suggested rule.
     pub prefix_input: Option<PrefixInputState>,
+    /// Breadth of an "always allow" grant. Only meaningful for MCP tools —
+    /// [`mcp_server_of`] returns `None` for everything else, and the toggle is
+    /// inert there.
+    pub mcp_allow_scope: McpAllowScope,
+    /// Deny-reason field. `Some` once the user opens it; the text ships as
+    /// `ApprovalResponse.feedback` so the model learns WHY it was denied
+    /// instead of blindly retrying the same call.
+    pub deny_reason_input: Option<PrefixInputState>,
+}
+
+/// The MCP server a tool belongs to, from an `mcp__<server>__<tool>` name.
+///
+/// `None` for a builtin tool, and for a malformed name — a server-wide grant
+/// derived from a name we could not parse would be a grant the user never
+/// meant to give. Uses the canonical wire-format constants rather than literals,
+/// and is deliberately stricter than [`coco_types::ToolId::mcp_server`] (which
+/// accepts an empty server or tool segment): a borrow, no allocation, no empty
+/// segments.
+pub fn mcp_server_of(tool_name: &str) -> Option<&str> {
+    let rest = tool_name.strip_prefix(coco_types::MCP_TOOL_PREFIX)?;
+    let (server, tool) = rest.split_once(coco_types::MCP_TOOL_SEPARATOR)?;
+    (!server.is_empty() && !tool.is_empty()).then_some(server)
+}
+
+/// Breadth of an "always allow" grant for an MCP tool.
+///
+/// A server that exposes twenty tools otherwise costs twenty prompts, one per
+/// tool, even though the user's decision was about the server. The permission
+/// engine has always matched server-level rules
+/// (`core/permissions/src/rule_compiler.rs`); only the UI to ask for one was
+/// missing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum McpAllowScope {
+    /// Just this tool (`mcp__server__tool`).
+    #[default]
+    Tool,
+    /// Every tool the server exposes (`mcp__server`).
+    Server,
 }
 
 /// A single-line editable text field for the permission dialog's "always
@@ -76,13 +114,18 @@ pub struct PrefixInputState {
 
 impl PrefixInputState {
     /// Seed the field with `value`, cursor at the end.
-    pub fn new(value: String) -> Self {
+    pub fn new(mut value: String) -> Self {
+        value.truncate(value.floor_char_boundary(coco_types::MAX_PERMISSION_FEEDBACK_BYTES));
         let cursor = value.len();
         Self { value, cursor }
     }
 
     /// Insert `c` at the cursor.
     pub fn insert(&mut self, c: char) {
+        if self.value.len().saturating_add(c.len_utf8()) > coco_types::MAX_PERMISSION_FEEDBACK_BYTES
+        {
+            return;
+        }
         self.value.insert(self.cursor, c);
         self.cursor += c.len_utf8();
     }

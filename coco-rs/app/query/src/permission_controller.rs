@@ -355,64 +355,95 @@ impl<'a> PermissionController<'a> {
         };
 
         match bridge_result {
-            Ok(resolution) => match resolution.decision {
-                coco_tool_runtime::ToolPermissionDecision::Approved => {
-                    self.state_tracker
-                        .transition_to(SessionState::Running, self.event_tx)
-                        .await;
-                    // Forward `updated_input` from the bridge so
-                    // `tool_call_preparer::resolve_effective_input_from_permission`
-                    // can substitute it for the original tool input. Used
-                    // by `AskUserQuestion` to splice user-selected
-                    // `answers` into the tool's data envelope.
-                    allow_outcome(
-                        resolution.updated_input,
-                        resolution.feedback,
-                        resolution.detail,
-                        content_blocks_to_user_message(resolution.content_blocks.as_deref()),
-                    )
-                }
-                coco_tool_runtime::ToolPermissionDecision::Rejected => {
-                    let feedback = resolution
-                        .feedback
-                        .unwrap_or_else(|| "Permission denied by client".into());
-                    let content_blocks_message =
-                        content_blocks_to_user_message(resolution.content_blocks.as_deref());
-                    // AskUserQuestion's "Chat about this" / "Skip interview"
-                    // and EnterPlanMode's "No" are deliberate user redirects,
-                    // not security denials. ExitPlanMode rejection is also a
-                    // deliberate plan-mode continuation: the model must see
-                    // the rejected plan and feedback, not a generic permission
-                    // error that implies an unavailable tool.
-                    let neutral_feedback =
-                        if tool_call.tool_name == ToolName::AskUserQuestion.as_str() {
-                            Some(feedback.clone())
-                        } else if tool_call.tool_name == ToolName::EnterPlanMode.as_str() {
-                            Some("User declined to enter plan mode".to_string())
-                        } else if tool_call.tool_name == ToolName::ExitPlanMode.as_str() {
-                            exit_plan_rejection_feedback(&request_detail, &feedback)
-                        } else {
-                            None
-                        };
-                    if let Some(neutral_feedback) = neutral_feedback {
-                        warn!(tool = tool_call.tool_name, "approval bridge: redirected");
-                        let mut messages = vec![coco_messages::create_tool_result_message(
+            Ok(resolution) => {
+                let feedback = bounded_permission_feedback(resolution.feedback);
+                match resolution.decision {
+                    coco_tool_runtime::ToolPermissionDecision::Approved => {
+                        self.state_tracker
+                            .transition_to(SessionState::Running, self.event_tx)
+                            .await;
+                        // Forward `updated_input` from the bridge so
+                        // `tool_call_preparer::resolve_effective_input_from_permission`
+                        // can substitute it for the original tool input. Used
+                        // by `AskUserQuestion` to splice user-selected
+                        // `answers` into the tool's data envelope.
+                        allow_outcome(
+                            resolution.updated_input,
+                            feedback,
+                            resolution.detail,
+                            content_blocks_to_user_message(resolution.content_blocks.as_deref()),
+                        )
+                    }
+                    coco_tool_runtime::ToolPermissionDecision::Rejected => {
+                        let feedback =
+                            feedback.unwrap_or_else(|| "Permission denied by client".into());
+                        let content_blocks_message =
+                            content_blocks_to_user_message(resolution.content_blocks.as_deref());
+                        // AskUserQuestion's "Chat about this" / "Skip interview"
+                        // and EnterPlanMode's "No" are deliberate user redirects,
+                        // not security denials. ExitPlanMode rejection is also a
+                        // deliberate plan-mode continuation: the model must see
+                        // the rejected plan and feedback, not a generic permission
+                        // error that implies an unavailable tool.
+                        let neutral_feedback =
+                            if tool_call.tool_name == ToolName::AskUserQuestion.as_str() {
+                                Some(feedback.clone())
+                            } else if tool_call.tool_name == ToolName::EnterPlanMode.as_str() {
+                                Some("User declined to enter plan mode".to_string())
+                            } else if tool_call.tool_name == ToolName::ExitPlanMode.as_str() {
+                                exit_plan_rejection_feedback(&request_detail, &feedback)
+                            } else {
+                                None
+                            };
+                        if let Some(neutral_feedback) = neutral_feedback {
+                            warn!(tool = tool_call.tool_name, "approval bridge: redirected");
+                            let mut messages = vec![coco_messages::create_tool_result_message(
+                                &tool_call.tool_call_id,
+                                &tool_call.tool_name,
+                                tool_id.clone(),
+                                &neutral_feedback,
+                                /*is_error*/ false,
+                            )];
+                            if let Some(message) = content_blocks_message {
+                                messages.push(message);
+                            }
+                            complete_tool_call_clarification_messages(
+                                self.event_tx,
+                                self.history,
+                                &tool_call.tool_call_id,
+                                &tool_call.tool_name,
+                                tool_id,
+                                &neutral_feedback,
+                                self.completion_event_mode,
+                                self.deferred_tool_completions.as_deref_mut(),
+                                messages,
+                            )
+                            .await;
+                            self.state_tracker
+                                .transition_to(SessionState::Running, self.event_tx)
+                                .await;
+                            return PermissionOutcome::Denied;
+                        }
+                        warn!(tool = tool_call.tool_name, "approval bridge: rejected");
+                        self.record_denial(tool_call, tool_input);
+                        let output = format!("Permission denied: {feedback}");
+                        let mut messages = vec![coco_messages::create_error_tool_result(
                             &tool_call.tool_call_id,
                             &tool_call.tool_name,
                             tool_id.clone(),
-                            &neutral_feedback,
-                            /*is_error*/ false,
+                            &output,
                         )];
                         if let Some(message) = content_blocks_message {
                             messages.push(message);
                         }
-                        complete_tool_call_clarification_messages(
+                        complete_tool_call_with_error_messages_mode(
                             self.event_tx,
                             self.history,
                             &tool_call.tool_call_id,
                             &tool_call.tool_name,
                             tool_id,
-                            &neutral_feedback,
+                            &output,
+                            coco_tool_runtime::ToolCallErrorKind::PermissionDenied,
                             self.completion_event_mode,
                             self.deferred_tool_completions.as_deref_mut(),
                             messages,
@@ -421,62 +452,32 @@ impl<'a> PermissionController<'a> {
                         self.state_tracker
                             .transition_to(SessionState::Running, self.event_tx)
                             .await;
-                        return PermissionOutcome::Denied;
+                        PermissionOutcome::Denied
                     }
-                    warn!(tool = tool_call.tool_name, "approval bridge: rejected");
-                    self.record_denial(tool_call, tool_input);
-                    let output = format!("Permission denied: {feedback}");
-                    let mut messages = vec![coco_messages::create_error_tool_result(
-                        &tool_call.tool_call_id,
-                        &tool_call.tool_name,
-                        tool_id.clone(),
-                        &output,
-                    )];
-                    if let Some(message) = content_blocks_message {
-                        messages.push(message);
+                    coco_tool_runtime::ToolPermissionDecision::Aborted => {
+                        let feedback = feedback
+                            .unwrap_or_else(|| "Permission request aborted by client".into());
+                        warn!(tool = tool_call.tool_name, "approval bridge: aborted");
+                        let output = format!("Permission aborted: {feedback}");
+                        complete_tool_call_with_error_mode(
+                            self.event_tx,
+                            self.history,
+                            &tool_call.tool_call_id,
+                            &tool_call.tool_name,
+                            tool_id,
+                            &output,
+                            coco_tool_runtime::ToolCallErrorKind::PermissionBridgeFailed,
+                            self.completion_event_mode,
+                            self.deferred_tool_completions.as_deref_mut(),
+                        )
+                        .await;
+                        self.state_tracker
+                            .transition_to(SessionState::Running, self.event_tx)
+                            .await;
+                        PermissionOutcome::Aborted
                     }
-                    complete_tool_call_with_error_messages_mode(
-                        self.event_tx,
-                        self.history,
-                        &tool_call.tool_call_id,
-                        &tool_call.tool_name,
-                        tool_id,
-                        &output,
-                        coco_tool_runtime::ToolCallErrorKind::PermissionDenied,
-                        self.completion_event_mode,
-                        self.deferred_tool_completions.as_deref_mut(),
-                        messages,
-                    )
-                    .await;
-                    self.state_tracker
-                        .transition_to(SessionState::Running, self.event_tx)
-                        .await;
-                    PermissionOutcome::Denied
                 }
-                coco_tool_runtime::ToolPermissionDecision::Aborted => {
-                    let feedback = resolution
-                        .feedback
-                        .unwrap_or_else(|| "Permission request aborted by client".into());
-                    warn!(tool = tool_call.tool_name, "approval bridge: aborted");
-                    let output = format!("Permission aborted: {feedback}");
-                    complete_tool_call_with_error_mode(
-                        self.event_tx,
-                        self.history,
-                        &tool_call.tool_call_id,
-                        &tool_call.tool_name,
-                        tool_id,
-                        &output,
-                        coco_tool_runtime::ToolCallErrorKind::PermissionBridgeFailed,
-                        self.completion_event_mode,
-                        self.deferred_tool_completions.as_deref_mut(),
-                    )
-                    .await;
-                    self.state_tracker
-                        .transition_to(SessionState::Running, self.event_tx)
-                        .await;
-                    PermissionOutcome::Aborted
-                }
-            },
+            }
             Err(e) => {
                 warn!(
                     error = %e,
@@ -592,6 +593,16 @@ fn is_auto_mode_classifier_denial(reason: &PermissionDecisionReason) -> bool {
     )
 }
 
+fn bounded_permission_feedback(feedback: Option<String>) -> Option<String> {
+    feedback.map(|feedback| {
+        coco_utils_string::take_bytes_at_char_boundary(
+            &feedback,
+            coco_types::MAX_PERMISSION_FEEDBACK_BYTES,
+        )
+        .to_string()
+    })
+}
+
 fn recent_denial_display(tool_name: &str, tool_input: &serde_json::Value) -> String {
     let summary = coco_types::tool_summary::tool_input_summary(tool_name, tool_input);
     if summary.is_empty() {
@@ -632,5 +643,14 @@ mod tests {
             "rm -rf /tmp/build"
         );
         assert_eq!(recent_denial_display("Bash", &json!({})), "Bash");
+    }
+
+    #[test]
+    fn permission_feedback_is_bounded_at_a_utf8_boundary() {
+        let feedback = "🙂".repeat(coco_types::MAX_PERMISSION_FEEDBACK_BYTES);
+        let bounded = bounded_permission_feedback(Some(feedback)).expect("feedback");
+
+        assert!(bounded.len() <= coco_types::MAX_PERMISSION_FEEDBACK_BYTES);
+        assert!(bounded.chars().all(|ch| ch == '🙂'));
     }
 }

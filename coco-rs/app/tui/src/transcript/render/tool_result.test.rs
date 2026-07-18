@@ -627,6 +627,47 @@ fn apply_patch_update_file_renders_diff_not_raw_patch_markers() {
 }
 
 #[test]
+fn apply_patch_signed_rows_use_diff_background_and_syntax_styles() {
+    let lines = render_apply_patch(
+        vec![
+            ApplyPatchPreviewRow::Header {
+                action: ApplyPatchPreviewAction::Update,
+                target: "src/lib.rs".to_string(),
+            },
+            ApplyPatchPreviewRow::Line {
+                sign: ApplyPatchPreviewSign::Removed,
+                content: "pub fn value() -> u32 { 1 }".to_string(),
+            },
+            ApplyPatchPreviewRow::Line {
+                sign: ApplyPatchPreviewSign::Added,
+                content: "pub fn value() -> u32 { 2 }".to_string(),
+            },
+        ],
+        false,
+    );
+    let theme = Theme::default();
+    let mut styled = lines.iter().flat_map(|line| line.spans.iter());
+    assert!(
+        styled
+            .clone()
+            .any(|span| span.style.bg == theme.diff_added_bg),
+        "apply_patch additions must use the shared diff background"
+    );
+    assert!(
+        styled.any(|span| span.style.fg == Some(theme.code_keyword)),
+        "Rust tokens must keep syntax highlighting in apply_patch previews"
+    );
+    assert!(
+        lines.iter().flat_map(|line| &line.spans).any(|span| span
+            .style
+            .add_modifier
+            .contains(ratatui::style::Modifier::REVERSED)),
+        "paired apply_patch rows must retain word-level emphasis"
+    );
+    insta::assert_debug_snapshot!("apply_patch_diff_and_syntax_styles", lines);
+}
+
+#[test]
 fn apply_patch_move_file_shows_source_and_destination() {
     let out = text_of(&render_apply_patch(
         vec![

@@ -44,11 +44,13 @@ use crate::state::AppState;
 use crate::state::SuggestionKind;
 use crate::state::Toast;
 use crate::state::UiAnimation;
+use crate::terminal::TerminalBackend;
 use crate::terminal::Tui;
 use crate::update::handle_command;
 pub(crate) use app_events::auto_mode_denied_toast_message;
 use app_events::*;
 use coco_tui_ui::constants;
+use coco_tui_ui::engine::terminal::SurfaceBackend;
 
 use coco_types::AgentStreamEvent;
 use coco_types::CoreEvent;
@@ -62,6 +64,17 @@ use crate::server_notification_handler;
 /// Default: 60 s. Wire to `settings.json` later if the cadence proves wrong.
 const IDLE_PROMPT_THRESHOLD: Duration = Duration::from_secs(60);
 const DEFERRED_CORE_EVENT_LIMIT: usize = 256;
+
+/// Cap on CoreEvents folded into state per `select!` iteration.
+///
+/// Starvation invariant: terminal input and CoreEvents share one unbiased
+/// `select!`, so a `try_recv` drain with no bound lets a hot stream process the
+/// channel's whole 256-event backlog before input is polled again — worst-case
+/// keystroke latency becomes a full 256-handler burst. Bounding the batch hands
+/// control back to `select!`, which then re-polls input fairly between batches.
+/// Coalescing still works: whatever is left is drained by the next iteration,
+/// and the FrameRequester collapses the batch into a single paint either way.
+const CORE_EVENT_DRAIN_BATCH_MAX: usize = 32;
 
 /// Create the TUI ↔ Core communication channels.
 ///
@@ -80,8 +93,8 @@ pub fn create_channels() -> (
 }
 
 /// Main TUI application.
-pub struct App {
-    tui: Tui,
+pub struct App<B: SurfaceBackend<Error = io::Error> = TerminalBackend> {
+    tui: Tui<B>,
     state: AppState,
     command_tx: mpsc::Sender<UserCommand>,
     /// Schedules redraws through a coalescing, 120 FPS-capped actor
@@ -95,6 +108,9 @@ pub struct App {
     /// Companion of [`Self::frame_requester`]. The scheduler task
     /// broadcasts `()` here when it is time to paint.
     draw_rx: tokio::sync::broadcast::Receiver<()>,
+    /// Holds an in-flight resize drag so the viewport is painted once, at the
+    /// width the drag settles on, instead of once per intermediate width.
+    resize_debounce: crate::resize_debounce::ResizeDebounce,
     /// Receives CoreEvent (3-layer: Protocol/Stream/Tui) from the agent loop.
     notification_rx: mpsc::Receiver<CoreEvent>,
     file_search: FileSearchManager,
@@ -135,7 +151,7 @@ pub struct App {
     voice_rx: Option<mpsc::Receiver<coco_voice::VoiceEvent>>,
 }
 
-impl App {
+impl App<TerminalBackend> {
     /// Create a new TUI application.
     pub fn new(
         command_tx: mpsc::Sender<UserCommand>,
@@ -173,6 +189,7 @@ impl App {
             command_tx,
             frame_requester,
             draw_rx,
+            resize_debounce: crate::resize_debounce::ResizeDebounce::default(),
             notification_rx,
             file_search: FileSearchManager::new(index, file_tx),
             file_search_rx: file_rx,
@@ -195,10 +212,15 @@ impl App {
             voice_rx: None,
         })
     }
+}
 
+impl<B> App<B>
+where
+    B: SurfaceBackend<Error = io::Error>,
+{
     /// Create with an existing terminal (for testing).
     pub fn with_terminal(
-        tui: Tui,
+        tui: Tui<B>,
         command_tx: mpsc::Sender<UserCommand>,
         notification_rx: mpsc::Receiver<CoreEvent>,
         cwd: PathBuf,
@@ -218,6 +240,7 @@ impl App {
             command_tx,
             frame_requester,
             draw_rx,
+            resize_debounce: crate::resize_debounce::ResizeDebounce::default(),
             notification_rx,
             file_search: FileSearchManager::new(index, file_tx),
             file_search_rx: file_rx,
@@ -520,20 +543,7 @@ impl App {
                 // Under high throughput (e.g. 100+ TextDeltas/sec) this avoids
                 // one redraw per token by draining all ready events first.
                 Some(event) = self.notification_rx.recv() => {
-                    let memory_phase = crate::perf::memory_phase_for_core_event(&event);
-                    self.pending_frame_inputs.record_core_event(&event);
-                    needs_redraw = self.handle_core_event(event).await?;
-                    if let Some(phase) = memory_phase {
-                        self.note_lifecycle_memory_phase(phase);
-                    }
-                    while let Ok(next) = self.notification_rx.try_recv() {
-                        let memory_phase = crate::perf::memory_phase_for_core_event(&next);
-                        self.pending_frame_inputs.record_core_event(&next);
-                        needs_redraw |= self.handle_core_event(next).await?;
-                        if let Some(phase) = memory_phase {
-                            self.note_lifecycle_memory_phase(phase);
-                        }
-                    }
+                    needs_redraw = self.handle_core_event_batch(event).await?;
                 }
                 // Async file-search results (from @path triggers).
                 Some(evt) = self.file_search_rx.recv() => {
@@ -635,6 +645,30 @@ impl App {
         Ok(())
     }
 
+    /// Fold one ready CoreEvent batch, then yield back to the unbiased
+    /// `select!` so terminal input is polled between hot-stream batches.
+    async fn handle_core_event_batch(&mut self, first: CoreEvent) -> io::Result<bool> {
+        let mut needs_redraw = false;
+        let mut first = Some(first);
+        for _ in 0..CORE_EVENT_DRAIN_BATCH_MAX {
+            let event = if let Some(first) = first.take() {
+                first
+            } else {
+                let Ok(next) = self.notification_rx.try_recv() else {
+                    break;
+                };
+                next
+            };
+            let memory_phase = crate::perf::memory_phase_for_core_event(&event);
+            self.pending_frame_inputs.record_core_event(&event);
+            needs_redraw |= self.handle_core_event(event).await?;
+            if let Some(phase) = memory_phase {
+                self.note_lifecycle_memory_phase(phase);
+            }
+        }
+        Ok(needs_redraw)
+    }
+
     fn log_memory_sample(
         &mut self,
         phase: crate::perf::MemoryPhase,
@@ -649,18 +683,22 @@ impl App {
             .maybe_log(config, phase, sample_kind, retained);
     }
 
-    /// Handle a lifecycle-driven memory phase: log the sample, then — at the
-    /// end of a turn — reclaim jemalloc's decayed pages. `TurnEnded` is the
-    /// natural quiet point to purge (the turn's transient allocations are
-    /// freed and the process is about to idle), and on macOS it's the only
-    /// thing that advances page decay, since those builds have no
-    /// `background_thread`. The same boundary also writes a heap-profile dump
-    /// when `tui.performance.heap_profile_enabled` is on. No-op when the
-    /// `jemalloc` feature is off.
+    /// Handle a lifecycle-driven memory phase: log the sample, then — at a
+    /// memory cliff — reclaim jemalloc's decayed pages.
+    ///
+    /// On macOS an explicit purge is the only thing that advances page decay
+    /// (no `background_thread`), so every phase that drops a large graph at
+    /// once earns one, not just turn end: waiting for the next `TurnEnded`
+    /// after a resume or a `/clear` can mean minutes of stale resident pages,
+    /// or forever if the user never sends another turn. The purge carries its
+    /// reason so per-site reclaim is measurable. Cliffs also write a
+    /// heap-profile dump when `tui.performance.heap_profile_enabled` is on.
+    /// No-op when the `jemalloc` feature is off.
     fn note_lifecycle_memory_phase(&mut self, phase: crate::perf::MemoryPhase) {
         self.log_memory_sample(phase, crate::perf::MemorySampleKind::Lifecycle);
-        if phase == crate::perf::MemoryPhase::TurnEnded {
-            crate::jemalloc_purge::spawn_turn_ended_purge(
+        if phase.is_memory_cliff() {
+            crate::jemalloc_purge::spawn_purge(
+                phase,
                 self.state
                     .ui
                     .display_settings
@@ -686,6 +724,20 @@ impl App {
     /// self-perpetuates without an unconditional timer, and a blocked or
     /// idle TUI re-arms nothing.
     fn redraw(&mut self) -> io::Result<()> {
+        // A resize drag suppresses painting until it settles (A2). Re-arm and
+        // bail before any frame bookkeeping so an intermediate width never
+        // reaches the viewport; the re-arm bounds the delay at one quiet period
+        // and cannot strand a frame requested for another reason.
+        match self.resize_debounce.poll(Instant::now()) {
+            crate::resize_debounce::ResizeAction::Idle => {}
+            crate::resize_debounce::ResizeAction::Apply(size) => {
+                self.state.ui.terminal_size = size;
+            }
+            crate::resize_debounce::ResizeAction::Wait { after } => {
+                self.frame_requester.schedule_frame_in(after);
+                return Ok(());
+            }
+        }
         self.frame_index = self.frame_index.saturating_add(1);
         let frame_index = self.frame_index;
         let perf_config = self.state.ui.display_settings.performance;
@@ -1076,6 +1128,12 @@ impl App {
                     return false;
                 }
                 tracing::info!(target: "coco_tui::app", "TUI resumed after SIGCONT");
+                // The terminal may have been resized while we were stopped, and
+                // the resume force-repaints regardless: adopt any held size now
+                // rather than making the repaint wait out a quiet period.
+                if let Some(size) = self.resize_debounce.flush() {
+                    self.state.ui.terminal_size = size;
+                }
                 true
             }
             TuiEvent::Resize { width, height } => {
@@ -1085,8 +1143,16 @@ impl App {
                     height,
                     "terminal resized",
                 );
-                self.state.ui.terminal_size = ratatui::layout::Size::new(width, height);
-                true
+                // Arm a deadline instead of painting. A drag emits an event per
+                // intermediate width, and painting each one re-wraps the live
+                // tail at a width that is about to be replaced — every frame of
+                // the drag misses the width-keyed wrap cache. `redraw` adopts
+                // the size and paints once the drag stops moving.
+                let after = self
+                    .resize_debounce
+                    .observe(ratatui::layout::Size::new(width, height), Instant::now());
+                self.frame_requester.schedule_frame_in(after);
+                false
             }
             TuiEvent::FocusChanged { focused } => {
                 tracing::trace!(
@@ -1098,13 +1164,36 @@ impl App {
                 self.state.ui.terminal_focused = focused;
                 if focused {
                     self.state.ui.request_surface_visibility_confirmation();
+                    // Terminals like iTerm2 / Terminal.app re-show the cursor at
+                    // the last write position (status-bar end) on focus-gain.
+                    // Drop the engine's cursor belief so the forced redraw below
+                    // re-asserts the pin in full — otherwise that redraw paints
+                    // an identical frame and the idle-frame skip (A1) elides the
+                    // cursor claim, leaving it stranded. Unconditional: this is
+                    // the plain-terminal case, distinct from the multiplexer
+                    // viewport heal below.
+                    self.tui.note_external_cursor_move();
+                    // A3: under a multiplexer or an embedded-editor terminal,
+                    // another writer may have painted over our viewport while we
+                    // were unfocused. The cell diff's previous buffer still
+                    // believes those cells are intact, so the stranded content
+                    // survives until some unrelated invalidation. Heal by
+                    // forcing one full repaint.
+                    //
+                    // Honest limit: only the owned viewport can be healed. Rows
+                    // already in native scrollback belong to the terminal — that
+                    // is correct, not a gap.
+                    if self.tui.repaints_pane_out_of_band() {
+                        // Force-repaint paths bypass the resize quiet period so
+                        // the heal is not delayed behind an in-flight drag.
+                        if let Some(size) = self.resize_debounce.flush() {
+                            self.state.ui.terminal_size = size;
+                        }
+                        self.tui.invalidate_viewport();
+                    }
                 } else {
                     self.state.ui.clear_surface_visibility_confirmation();
                 }
-                // Force a redraw so the post-draw cursor pin re-asserts
-                // the cursor position. Without this, terminals like
-                // iTerm2 / Terminal.app re-show the cursor at the last
-                // write position (status bar end) on focus-gained.
                 true
             }
             TuiEvent::Draw => true,
@@ -1240,3 +1329,7 @@ impl App {
 #[cfg(test)]
 #[path = "app.test.rs"]
 mod tests;
+
+#[cfg(all(test, unix))]
+#[path = "app_pty.test.rs"]
+mod pty_tests;

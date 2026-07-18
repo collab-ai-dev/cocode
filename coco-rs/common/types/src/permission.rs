@@ -574,3 +574,9 @@ pub struct ToolPermissionContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_plan_file: Option<std::path::PathBuf>,
 }
+/// Maximum UTF-8 byte length of permission feedback that may enter conversation history.
+///
+/// The TUI enforces this while editing and the query layer enforces it again at
+/// the model-context boundary so non-TUI permission bridges cannot inject an
+/// unbounded fragment.
+pub const MAX_PERMISSION_FEEDBACK_BYTES: usize = 1024;

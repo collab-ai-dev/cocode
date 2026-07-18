@@ -125,6 +125,8 @@ fn install_permission_prompt(state: &mut AppState) {
             explanation_visible: false,
             explanation: crate::state::ExplainerFetch::NotFetched,
             prefix_input: None,
+            mcp_allow_scope: Default::default(),
+            deny_reason_input: None,
         },
     ));
 }
@@ -168,6 +170,8 @@ fn install_exit_plan_prompt_on_no(state: &mut AppState) {
             explanation_visible: false,
             explanation: crate::state::ExplainerFetch::NotFetched,
             prefix_input: None,
+            mcp_allow_scope: Default::default(),
+            deny_reason_input: None,
         },
     ));
 }
@@ -885,6 +889,7 @@ fn test_autocomplete_context_when_suggestions_active() {
     state.ui.completion.active = Some(crate::state::ActiveSuggestions {
         kind: crate::state::SuggestionKind::SlashCommand,
         items: vec![crate::widgets::suggestion_popup::SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "/help".into(),
             description: None,
             metadata: None,

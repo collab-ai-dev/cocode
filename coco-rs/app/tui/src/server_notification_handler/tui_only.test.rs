@@ -840,6 +840,8 @@ fn exit_plan_prompt_editor_completed_updates_active_prompt_plan() {
             explanation_visible: false,
             explanation: crate::state::ExplainerFetch::NotFetched,
             prefix_input: None,
+            mcp_allow_scope: Default::default(),
+            deny_reason_input: None,
         }));
     let (tx, _rx) = channel();
 
@@ -936,6 +938,8 @@ fn explainer_prompt(request_id: &str) -> crate::state::PermissionPromptState {
         explanation_visible: true,
         explanation: crate::state::ExplainerFetch::Loading,
         prefix_input: None,
+        mcp_allow_scope: Default::default(),
+        deny_reason_input: None,
     }
 }
 

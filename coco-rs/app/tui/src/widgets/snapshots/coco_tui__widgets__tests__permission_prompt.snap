@@ -1,5 +1,6 @@
 ---
 source: app/tui/src/widgets/mod.test.rs
+assertion_line: 522
 expression: output
 ---
  ╭─╮ ╭─╮  COCODE v0.1.1                                                         
@@ -12,7 +13,7 @@ expression: output
 │Actions:                                                                      │
 │▸ 1/y · Yes, approve once ◂                                                   │
 │  2/n · No, deny                                                              │
-│↑/↓ Navigate  Enter Select  1-2 or Y/N shortcuts                              │
+│↑/↓ Navigate  Enter Select  1-2 or Y/N shortcuts  ^r Deny with reason         │
 └──────────────────────────────────────────────────────────────────────────────┘
 ────────────────────────────────────────────────────────────────────────────────
 ❯                                                                               

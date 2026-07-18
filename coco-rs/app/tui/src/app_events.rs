@@ -24,7 +24,10 @@ pub(super) fn resolve_pending_plugin_hint(
     coco_plugins::resolve_plugin_hint(hint, &manager)
 }
 
-pub(super) fn apply_terminal_compatibility_status(state: &mut AppState, tui: &Tui) {
+pub(super) fn apply_terminal_compatibility_status<B>(state: &mut AppState, tui: &Tui<B>)
+where
+    B: SurfaceBackend,
+{
     if let Some(message) = tui.native_scrollback_status_message() {
         let message = message.to_string();
         state.ui.terminal_compatibility_warning = Some(message.clone());

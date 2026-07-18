@@ -99,7 +99,7 @@ pub fn render_select_list(
             if style.numbered {
                 spans.push(Span::styled(
                     format!("{:>width$}. ", i + 1, width = number_width),
-                    Style::default().fg(styles.dim()),
+                    styles.dim_style(),
                 ));
             }
 
@@ -128,10 +128,7 @@ pub fn render_select_list(
 
             if let Some(secondary) = &item.secondary {
                 spans.push(Span::raw("  "));
-                spans.push(Span::styled(
-                    secondary.clone(),
-                    Style::default().fg(styles.dim()),
-                ));
+                spans.push(Span::styled(secondary.clone(), styles.dim_style()));
             }
 
             Line::from(spans)

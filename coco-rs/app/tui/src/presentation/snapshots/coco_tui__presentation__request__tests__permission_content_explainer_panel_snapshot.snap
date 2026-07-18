@@ -1,6 +1,6 @@
 ---
 source: app/tui/src/presentation/request.test.rs
-assertion_line: 882
+assertion_line: 1338
 expression: body
 ---
 Allow this operation?
@@ -15,7 +15,7 @@ Directory: /repo
 Actions:
 ▸ 1/y · Yes, approve once ◂
   2/n · No, deny
-↑/↓ Navigate  Enter Select  1-2 or Y/N shortcuts
+↑/↓ Navigate  Enter Select  1-2 or Y/N shortcuts  ^r Deny with reason
 
 Risk: HIGH — data loss
 This removes the build cache directory.

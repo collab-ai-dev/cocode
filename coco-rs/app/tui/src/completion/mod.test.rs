@@ -5,6 +5,7 @@ use crate::widgets::suggestion_popup::SuggestionItem;
 
 fn item(label: &str) -> SuggestionItem {
     SuggestionItem {
+        highlight_indices: Vec::new(),
         label: label.into(),
         description: None,
         metadata: None,
@@ -111,6 +112,7 @@ fn test_accept_directory_drill_keeps_had_items() {
         ActiveSuggestions {
             kind: SuggestionKind::At,
             items: vec![SuggestionItem {
+                highlight_indices: Vec::new(),
                 label: "src/".into(),
                 description: None,
                 metadata: Some(SuggestionMeta::Path { is_directory: true }),

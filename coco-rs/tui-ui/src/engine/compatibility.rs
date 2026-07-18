@@ -10,14 +10,43 @@ pub enum TerminalCompatibility {
     ZellijNativeScrollbackDisabled,
 }
 
+/// Read a non-empty environment variable. The injectable seam every detection
+/// below is written against, so they are testable without mutating process env.
+fn env_lookup(name: &str) -> Option<String> {
+    std::env::var_os(name).and_then(|value| {
+        let text = value.to_string_lossy();
+        (!text.is_empty()).then(|| text.into_owned())
+    })
+}
+
+/// Whether another writer may repaint coco's pane out of band — a multiplexer
+/// (tmux, screen, Zellij) or an embedded-editor terminal.
+///
+/// Such a writer can paint over the retained viewport while coco is unfocused.
+/// The cell diff's previous buffer still believes those cells are intact, so the
+/// stranded content survives until some unrelated invalidation; the shell heals
+/// it by forcing one full repaint on focus-gain.
+///
+/// Env-sniffing is deliberately the whole implementation for now — it folds into
+/// the terminal capability model (plan item G3) when that lands.
+pub fn repaints_pane_out_of_band() -> bool {
+    repaints_pane_out_of_band_with(env_lookup)
+}
+
+pub fn repaints_pane_out_of_band_with<F>(get_env: F) -> bool
+where
+    F: Fn(&str) -> Option<String>,
+{
+    // TMUX: tmux. STY: GNU screen. ZELLIJ*: Zellij (the same vars the
+    // native-scrollback decision above keys on).
+    ["TMUX", "STY", "ZELLIJ", "ZELLIJ_SESSION_NAME"]
+        .into_iter()
+        .any(|name| get_env(name).is_some_and(|value| !value.is_empty()))
+}
+
 impl TerminalCompatibility {
     pub fn detect() -> Self {
-        Self::detect_with(|name| {
-            std::env::var_os(name).and_then(|value| {
-                let text = value.to_string_lossy();
-                (!text.is_empty()).then(|| text.into_owned())
-            })
-        })
+        Self::detect_with(env_lookup)
     }
 
     pub fn detect_with<F>(get_env: F) -> Self

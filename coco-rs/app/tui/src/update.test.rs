@@ -185,6 +185,38 @@ async fn submit_slash_dispatches_typed_command_without_chat_echo() {
 }
 
 #[tokio::test]
+async fn submit_bash_resolves_and_persists_referenced_paste_pills() {
+    let mut state = AppState::new();
+    let pill = state
+        .ui
+        .paste_manager
+        .add_text("echo from paste".to_string());
+    state.ui.input.textarea.set_text(&format!("!{pill}"));
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
+
+    match rx.try_recv() {
+        Ok(UserCommand::PersistPromptHistory {
+            display,
+            pasted_contents,
+        }) => {
+            assert_eq!(display, format!("!{pill}"));
+            assert_eq!(
+                pasted_contents.get(&1).map(String::as_str),
+                Some("echo from paste")
+            );
+        }
+        other => panic!("expected persisted bash history, got {other:?}"),
+    }
+    match rx.try_recv() {
+        Ok(UserCommand::SubmitBash { command, .. }) => assert_eq!(command, "echo from paste"),
+        other => panic!("expected resolved SubmitBash, got {other:?}"),
+    }
+    assert_eq!(state.ui.input.history[0].pastes.len(), 1);
+}
+
+#[tokio::test]
 async fn submit_workflows_alias_dispatches_workflow_command_args() {
     let mut state = AppState::new();
     state.ui.input.textarea.set_text("/workflows build release");
@@ -271,6 +303,7 @@ async fn autocomplete_tab_completes_selected_slash_without_submitting() {
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::SlashCommand,
         items: vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "/clear".into(),
             description: None,
             metadata: None,
@@ -302,6 +335,7 @@ async fn autocomplete_enter_completes_and_submits_no_arg_slash_command() {
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::SlashCommand,
         items: vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "/clear".into(),
             description: None,
             metadata: None,
@@ -341,6 +375,7 @@ async fn autocomplete_enter_completes_arg_slash_command_without_submitting() {
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::SlashCommand,
         items: vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "/add-dir".into(),
             description: None,
             metadata: None,
@@ -377,6 +412,7 @@ async fn autocomplete_enter_completes_workflow_without_submitting() {
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::SlashCommand,
         items: vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "/workflow".into(),
             description: None,
             metadata: None,
@@ -420,6 +456,7 @@ async fn autocomplete_enter_submits_overlay_command_despite_optional_arg_hint() 
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::SlashCommand,
         items: vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "/model".into(),
             description: None,
             metadata: None,
@@ -459,6 +496,7 @@ async fn typing_after_arg_slash_completion_clears_inline_hint() {
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::SlashCommand,
         items: vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "/add-dir".into(),
             description: None,
             metadata: None,
@@ -552,6 +590,7 @@ async fn autocomplete_tab_completes_common_file_prefix() {
         kind: SuggestionKind::At,
         items: vec![
             SuggestionItem {
+                highlight_indices: Vec::new(),
                 label: "src/lib.rs".into(),
                 description: None,
                 metadata: Some(SuggestionMeta::Path {
@@ -559,6 +598,7 @@ async fn autocomplete_tab_completes_common_file_prefix() {
                 }),
             },
             SuggestionItem {
+                highlight_indices: Vec::new(),
                 label: "src/main.rs".into(),
                 description: None,
                 metadata: Some(SuggestionMeta::Path {
@@ -587,6 +627,7 @@ async fn autocomplete_tab_does_not_invent_slash_for_partial_common_prefix() {
         kind: SuggestionKind::At,
         items: vec![
             SuggestionItem {
+                highlight_indices: Vec::new(),
                 label: "src/main.rs".into(),
                 description: None,
                 metadata: Some(SuggestionMeta::Path {
@@ -594,6 +635,7 @@ async fn autocomplete_tab_does_not_invent_slash_for_partial_common_prefix() {
                 }),
             },
             SuggestionItem {
+                highlight_indices: Vec::new(),
                 label: "src/match.rs".into(),
                 description: None,
                 metadata: Some(SuggestionMeta::Path {
@@ -626,6 +668,7 @@ async fn autocomplete_tab_completes_common_quoted_file_prefix() {
         kind: SuggestionKind::Path,
         items: vec![
             SuggestionItem {
+                highlight_indices: Vec::new(),
                 label: "/tmp/my project/src/lib.rs".into(),
                 description: None,
                 metadata: Some(SuggestionMeta::Path {
@@ -633,6 +676,7 @@ async fn autocomplete_tab_completes_common_quoted_file_prefix() {
                 }),
             },
             SuggestionItem {
+                highlight_indices: Vec::new(),
                 label: "/tmp/my project/src/main.rs".into(),
                 description: None,
                 metadata: Some(SuggestionMeta::Path {
@@ -669,6 +713,7 @@ async fn autocomplete_tab_keeps_directory_common_prefix_slash_inside_quotes() {
         kind: SuggestionKind::Path,
         items: vec![
             SuggestionItem {
+                highlight_indices: Vec::new(),
                 label: "/tmp/my project/api/lib".into(),
                 description: None,
                 metadata: Some(SuggestionMeta::Path {
@@ -676,6 +721,7 @@ async fn autocomplete_tab_keeps_directory_common_prefix_slash_inside_quotes() {
                 }),
             },
             SuggestionItem {
+                highlight_indices: Vec::new(),
                 label: "/tmp/my project/api/main".into(),
                 description: None,
                 metadata: Some(SuggestionMeta::Path {
@@ -707,6 +753,7 @@ async fn autocomplete_enter_accepts_selected_path_not_common_prefix() {
         kind: SuggestionKind::At,
         items: vec![
             SuggestionItem {
+                highlight_indices: Vec::new(),
                 label: "src/lib.rs".into(),
                 description: None,
                 metadata: Some(SuggestionMeta::Path {
@@ -714,6 +761,7 @@ async fn autocomplete_enter_accepts_selected_path_not_common_prefix() {
                 }),
             },
             SuggestionItem {
+                highlight_indices: Vec::new(),
                 label: "src/main.rs".into(),
                 description: None,
                 metadata: Some(SuggestionMeta::Path {
@@ -740,6 +788,7 @@ async fn autocomplete_accepts_at_directory_and_keeps_completion_active() {
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::At,
         items: vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "src/".into(),
             description: None,
             metadata: Some(SuggestionMeta::Path { is_directory: true }),
@@ -769,6 +818,7 @@ async fn autocomplete_submit_at_directory_finalizes_mention() {
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::At,
         items: vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "app/cli/".into(),
             description: None,
             metadata: Some(SuggestionMeta::Path { is_directory: true }),
@@ -801,6 +851,7 @@ async fn autocomplete_submit_at_directory_does_not_loop_on_identical_token() {
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::At,
         items: vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "app/cli/".into(),
             description: None,
             metadata: Some(SuggestionMeta::Path { is_directory: true }),
@@ -830,6 +881,7 @@ async fn autocomplete_submit_path_directory_drills_into_contents() {
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::Path,
         items: vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "./src".into(),
             description: None,
             metadata: Some(SuggestionMeta::Path { is_directory: true }),
@@ -857,6 +909,7 @@ async fn autocomplete_submit_bash_path_directory_drills_without_at_prefix() {
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::BashPath,
         items: vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "./src".into(),
             description: None,
             metadata: Some(SuggestionMeta::Path { is_directory: true }),
@@ -884,6 +937,7 @@ async fn autocomplete_submit_bash_path_file_appends_space_and_closes() {
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::BashPath,
         items: vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "src/main.rs".into(),
             description: None,
             metadata: Some(SuggestionMeta::Path {
@@ -914,6 +968,7 @@ async fn final_quoted_file_accept_closes_quote_and_appends_space() {
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::Path,
         items: vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "/tmp/my project/main.rs".into(),
             description: None,
             metadata: Some(SuggestionMeta::Path {
@@ -947,6 +1002,7 @@ async fn final_quoted_file_accept_replaces_drilldown_closing_quote() {
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::Path,
         items: vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "/tmp/my project/main.rs".into(),
             description: None,
             metadata: Some(SuggestionMeta::Path {
@@ -976,6 +1032,7 @@ async fn quoted_path_accept_escapes_quote_and_backslash() {
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::Path,
         items: vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "/tmp/a\"b\\c.txt".into(),
             description: None,
             metadata: Some(SuggestionMeta::Path {
@@ -1005,6 +1062,7 @@ async fn directory_command_enter_submits_current_input() {
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::Directory,
         items: vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "./src".into(),
             description: None,
             metadata: Some(SuggestionMeta::Path { is_directory: true }),
@@ -1038,6 +1096,7 @@ async fn resume_completion_inserts_session_id_and_submits() {
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::CustomTitle,
         items: vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "session-123".into(),
             description: Some("Auth refactor".into()),
             metadata: None,
@@ -1071,6 +1130,7 @@ async fn mcp_resource_completion_preserves_server_name_on_insert() {
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::At,
         items: vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "Guide".into(),
             description: Some("Project guide".into()),
             metadata: Some(SuggestionMeta::McpResource {
@@ -1101,6 +1161,7 @@ async fn directory_insertion_quotes_trailing_slash_inside_quotes() {
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::Path,
         items: vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "/tmp/my project".into(),
             description: None,
             metadata: Some(SuggestionMeta::Path { is_directory: true }),
@@ -1468,13 +1529,57 @@ async fn ctrl_r_reverse_search_previews_match_and_accepts() {
     for c in "git".chars() {
         handle_command(&mut state, TuiCommand::HistorySearchInput(c), &tx).await;
     }
-    // "git" matches the older entry; it previews in the composer.
+    // "git" fuzzy-ranks the older entry first; it previews in the composer.
     assert_eq!(state.ui.input.text(), "git status");
-    assert_eq!(state.ui.history_search.as_ref().unwrap().matched, Some(1));
+    assert_eq!(
+        state
+            .ui
+            .history_search
+            .as_ref()
+            .unwrap()
+            .selected_history_index(),
+        Some(1)
+    );
 
     handle_command(&mut state, TuiCommand::HistorySearchAccept, &tx).await;
     assert!(state.ui.history_search.is_none());
     assert_eq!(state.ui.input.text(), "git status");
+}
+
+#[tokio::test]
+async fn plain_up_opens_bottom_anchored_history_browse_then_typing_reanchors() {
+    let mut state = AppState::new();
+    state.ui.input.add_to_history("oldest command".to_string());
+    state.ui.input.add_to_history("newest command".to_string());
+    let (tx, _rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::CursorUp, &tx).await;
+    let browse = state.ui.history_search.as_ref().expect("browse overlay");
+    assert!(browse.browse);
+    assert_eq!(browse.selected, browse.results.len() - 1);
+    assert_eq!(browse.results[0].label, "oldest command");
+    assert_eq!(state.ui.input.text(), "newest command");
+
+    handle_command(&mut state, TuiCommand::HistorySearchInput('o'), &tx).await;
+    let ranked = state.ui.history_search.as_ref().expect("ranked overlay");
+    assert!(!ranked.browse);
+    assert_eq!(ranked.selected, 0, "typing re-anchors to the best match");
+}
+
+#[tokio::test]
+async fn history_browse_down_from_newest_restores_live_draft() {
+    let mut state = AppState::new();
+    state.ui.input.add_to_history("oldest command".to_string());
+    state.ui.input.add_to_history("newest command".to_string());
+    state.ui.input.textarea.set_text("unfinished draft");
+    let (tx, _rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::CursorUp, &tx).await;
+    assert_eq!(state.ui.input.text(), "newest command");
+
+    handle_command(&mut state, TuiCommand::HistorySearchOlder, &tx).await;
+    assert!(state.ui.history_search.is_none());
+    assert_eq!(state.ui.input.text(), "unfinished draft");
 }
 
 #[tokio::test]
@@ -2172,6 +2277,174 @@ async fn open_plan_editor_sends_plan_editor_command() {
     assert!(state.ui.toasts.is_empty());
 }
 
+// ─── C9: deny-with-reason + MCP scope toggle ──────────────────────────────
+
+/// A classic (non-choice) tool-permission prompt for `tool_name`.
+fn push_tool_permission_prompt(state: &mut AppState, tool_name: &str) {
+    state
+        .ui
+        .push_prompt(PanePromptState::Permission(PermissionPromptState {
+            request_id: "perm-c9".into(),
+            tool_name: tool_name.into(),
+            description: "Allow this operation?".into(),
+            detail: PermissionDetail::Generic {
+                input_preview: tool_name.into(),
+            },
+            risk_level: None,
+            show_always_allow: true,
+            classifier_checking: false,
+            classifier_auto_approved: None,
+            choices: None,
+            selected_choice: 0,
+            display_input: coco_types::PermissionDisplayInput::Empty,
+            original_input: None,
+            cwd: None,
+            permission_suggestions: vec![],
+            worker_badge: None,
+            explanation_visible: false,
+            explanation: crate::state::ExplainerFetch::NotFetched,
+            prefix_input: None,
+            mcp_allow_scope: Default::default(),
+            deny_reason_input: None,
+        }));
+}
+
+#[tokio::test]
+async fn denying_with_a_reason_ships_it_as_feedback() {
+    // The gap: denying was silent, so the model retried the same call blind.
+    // ApprovalResponse.feedback existed the whole time and was hardcoded None.
+    //
+    // Drive the REAL keystrokes: `n` is swallowed by the field once it is open,
+    // so the only submit is Enter (SurfaceConfirm). Opening the field must
+    // therefore select the Deny row — otherwise Enter confirms the default
+    // (ApproveOnce) and this approves.
+    let mut state = AppState::new();
+    push_tool_permission_prompt(&mut state, "mcp__slack__send");
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::DenyPermissionWithReason, &tx).await;
+    for c in "wrong channel".chars() {
+        handle_command(&mut state, TuiCommand::InsertChar(c), &tx).await;
+    }
+    handle_command(&mut state, TuiCommand::SurfaceConfirm, &tx).await;
+
+    let UserCommand::ApprovalResponse {
+        approved, feedback, ..
+    } = next_user_command(&mut rx).expect("approval response sent")
+    else {
+        panic!("expected ApprovalResponse")
+    };
+    assert!(
+        !approved,
+        "Enter after opening the reason field must DENY, not approve"
+    );
+    assert_eq!(feedback.as_deref(), Some("wrong channel"));
+}
+
+#[tokio::test]
+async fn the_deny_reason_field_swallows_the_hotkeys() {
+    // Typing prose must not resolve the prompt: an `n` in "won't work" would
+    // otherwise fire the deny hotkey mid-sentence.
+    let mut state = AppState::new();
+    push_tool_permission_prompt(&mut state, "mcp__slack__send");
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::DenyPermissionWithReason, &tx).await;
+    for c in "no way".chars() {
+        handle_command(&mut state, TuiCommand::InsertChar(c), &tx).await;
+    }
+
+    assert!(
+        next_user_command(&mut rx).is_err(),
+        "typing a reason must not resolve the prompt"
+    );
+    let Some(PanePromptState::Permission(p)) = state.ui.interaction.active_prompt.as_ref() else {
+        panic!("the prompt must still be open")
+    };
+    assert_eq!(
+        p.deny_reason_input
+            .as_ref()
+            .map(|input| input.value.as_str()),
+        Some("no way"),
+        "the keystrokes must land in the field, not the composer"
+    );
+    assert!(
+        state.ui.input.is_empty(),
+        "the reason must not leak into the chat composer"
+    );
+}
+
+#[tokio::test]
+async fn denying_without_opening_the_field_sends_no_feedback() {
+    let mut state = AppState::new();
+    push_tool_permission_prompt(&mut state, "mcp__slack__send");
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::Deny, &tx).await;
+
+    let UserCommand::ApprovalResponse { feedback, .. } =
+        next_user_command(&mut rx).expect("approval response sent")
+    else {
+        panic!("expected ApprovalResponse")
+    };
+    assert_eq!(feedback, None);
+}
+
+#[tokio::test]
+async fn an_empty_deny_reason_sends_no_feedback() {
+    // Opening the field and typing nothing must not ship an empty string —
+    // that would read to the model as a reason it failed to understand.
+    let mut state = AppState::new();
+    push_tool_permission_prompt(&mut state, "mcp__slack__send");
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::DenyPermissionWithReason, &tx).await;
+    handle_command(&mut state, TuiCommand::InsertChar(' '), &tx).await;
+    handle_command(&mut state, TuiCommand::Deny, &tx).await;
+
+    let UserCommand::ApprovalResponse { feedback, .. } =
+        next_user_command(&mut rx).expect("approval response sent")
+    else {
+        panic!("expected ApprovalResponse")
+    };
+    assert_eq!(feedback, None);
+}
+
+#[tokio::test]
+async fn the_scope_toggle_widens_an_mcp_grant_to_the_server() {
+    let mut state = AppState::new();
+    push_tool_permission_prompt(&mut state, "mcp__slack__send");
+    let (tx, _rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::TogglePermissionAllowScope, &tx).await;
+    let Some(PanePromptState::Permission(p)) = state.ui.interaction.active_prompt.as_ref() else {
+        panic!("prompt open")
+    };
+    assert_eq!(p.mcp_allow_scope, crate::state::McpAllowScope::Server);
+
+    // And back — the toggle is reversible, not a one-way widening.
+    handle_command(&mut state, TuiCommand::TogglePermissionAllowScope, &tx).await;
+    let Some(PanePromptState::Permission(p)) = state.ui.interaction.active_prompt.as_ref() else {
+        panic!("prompt open")
+    };
+    assert_eq!(p.mcp_allow_scope, crate::state::McpAllowScope::Tool);
+}
+
+#[tokio::test]
+async fn the_scope_toggle_is_inert_for_a_builtin_tool() {
+    // There is no server to widen to; silently granting something broader
+    // would be the worst possible outcome of a stray keypress.
+    let mut state = AppState::new();
+    push_tool_permission_prompt(&mut state, "WebFetch");
+    let (tx, _rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::TogglePermissionAllowScope, &tx).await;
+    let Some(PanePromptState::Permission(p)) = state.ui.interaction.active_prompt.as_ref() else {
+        panic!("prompt open")
+    };
+    assert_eq!(p.mcp_allow_scope, crate::state::McpAllowScope::Tool);
+}
+
 #[tokio::test]
 async fn open_plan_editor_in_exit_plan_prompt_sends_prompt_editor_command() {
     let mut state = AppState::new();
@@ -2203,6 +2476,8 @@ async fn open_plan_editor_in_exit_plan_prompt_sends_prompt_editor_command() {
             explanation_visible: false,
             explanation: crate::state::ExplainerFetch::NotFetched,
             prefix_input: None,
+            mcp_allow_scope: Default::default(),
+            deny_reason_input: None,
         }));
     let (tx, mut rx) = drained_channel();
 
@@ -2266,6 +2541,8 @@ async fn exit_plan_no_feedback_editing_does_not_touch_composer() {
             explanation_visible: false,
             explanation: crate::state::ExplainerFetch::NotFetched,
             prefix_input: None,
+            mcp_allow_scope: Default::default(),
+            deny_reason_input: None,
         }));
     let (tx, _rx) = drained_channel();
 
@@ -2320,6 +2597,8 @@ fn toggle_test_prompt(request_id: &str) -> crate::state::PermissionPromptState {
         explanation_visible: false,
         explanation: crate::state::ExplainerFetch::NotFetched,
         prefix_input: None,
+        mcp_allow_scope: Default::default(),
+        deny_reason_input: None,
     }
 }
 

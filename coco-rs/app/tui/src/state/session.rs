@@ -812,7 +812,7 @@ impl ToolExecution {
 /// but must NOT count as a real pending tool for interrupt/foreground gating,
 /// and an un-upgraded `Streaming` orphan is dropped at turn end. `start_tool`
 /// transitions `Streaming → Queued` once the input finalizes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToolStatus {
     Streaming,
     Queued,

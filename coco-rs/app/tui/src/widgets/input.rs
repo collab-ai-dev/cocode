@@ -21,6 +21,20 @@ use crate::state::ui::InputState;
 use crate::state::ui::PromptMode;
 use coco_tui_ui::style::UiStyles;
 
+/// Columns the composer's gutter reserves: `❯ ` on the first row, a matching
+/// two-space indent on every continuation row.
+pub(crate) const INPUT_GUTTER_WIDTH: u16 = 2;
+
+/// Visual rows the composer's text occupies at `area_width`, as byte ranges.
+///
+/// The single wrap decision for the composer. The render, the cursor placement,
+/// and the height reservation all resolve rows through this, so they cannot
+/// disagree about where a line breaks — a disagreement is a misplaced cursor or
+/// a clipped row.
+pub(crate) fn composer_rows(text: &str, area_width: u16) -> Vec<std::ops::Range<usize>> {
+    coco_tui_ui::widgets::wrap_ranges(text, area_width.saturating_sub(INPUT_GUTTER_WIDTH))
+}
+
 /// Pure input presentation data shared by the input widget and cursor logic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InputRenderModel {
@@ -34,8 +48,8 @@ pub(crate) struct InputRenderModel {
     pub(crate) command_palette_filter: Option<String>,
     pub(crate) is_placeholder: bool,
     pub(crate) is_streaming: bool,
-    /// Cursor's display line within `display_text` (0-based; counts hard `\n`
-    /// breaks). Drives the multi-line composer's cursor row + scroll.
+    /// Cursor's visual row within `display_text` (0-based; counts soft wraps as
+    /// well as hard `\n` breaks). Drives the composer's cursor row + scroll.
     pub(crate) cursor_row: usize,
     /// Cursor's display column within its line (excludes the `❯ ` indicator).
     pub(crate) cursor_col: usize,
@@ -54,6 +68,9 @@ impl InputRenderModel {
         prompt_suggestion: Option<&str>,
         has_editable_queue: bool,
         command_palette_filter: Option<&str>,
+        // Total width of the composer's area, gutter included — the width its
+        // rows wrap at.
+        width: u16,
     ) -> Self {
         let prompt_mode = if is_streaming {
             PromptMode::Normal
@@ -142,10 +159,17 @@ impl InputRenderModel {
                 .cursor()
                 .saturating_sub(prefix_consumed)
                 .min(display_text.len());
-            let before = &display_text[..cursor_byte];
-            let row = before.matches('\n').count();
-            let line_start = before.rfind('\n').map_or(0, |i| i + 1);
-            let col = UnicodeWidthStr::width(&before[line_start..]);
+            let rows = composer_rows(&display_text, width);
+            // The last row starting at or before the cursor. At a soft-wrap
+            // boundary that is the continuation row (column 0); at a hard
+            // newline it is the row the cursor visually sits at the end of,
+            // since no row covers the `\n` itself.
+            let row = rows
+                .iter()
+                .rposition(|range| range.start <= cursor_byte)
+                .unwrap_or(0);
+            let start = rows.get(row).map_or(0, |range| range.start);
+            let col = UnicodeWidthStr::width(&display_text[start..cursor_byte.max(start)]);
             (row, col)
         };
 
@@ -231,20 +255,21 @@ impl<'a> InputWidget<'a> {
         self
     }
 
-    fn model(&self) -> InputRenderModel {
+    fn model(&self, width: u16) -> InputRenderModel {
         InputRenderModel::build(
             self.input,
             self.is_streaming,
             self.prompt_suggestion,
             self.has_editable_queue,
             self.command_palette_filter,
+            width,
         )
     }
 }
 
 impl Widget for InputWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let model = self.model();
+        let model = self.model(area.width);
         let border_color = if self.focused {
             self.styles.focused_border()
         } else {
@@ -261,31 +286,35 @@ impl Widget for InputWidget<'_> {
             }
         };
         let text_style = if model.is_placeholder {
-            Style::default().fg(self.styles.dim())
+            self.styles.dim_style()
         } else {
             Style::default().fg(self.styles.text())
         };
-        let lines: Vec<Line> = if model.display_text.contains('\n') {
-            // Multi-line composer: one row per hard line break, scrolled to keep
-            // the cursor visible (, whose TextInput grows with content
-            // so recalled multi-message edits show on separate rows). Row 0 wears
-            // the indicator; continuation rows align under it. Inline ghost/hint
-            // are single-line affordances and are omitted here.
+        let rows = composer_rows(&model.display_text, area.width);
+        let lines: Vec<Line> = if rows.len() > 1 {
+            // Multi-row composer: one row per visual line — hard `\n` breaks AND
+            // soft wraps — scrolled to keep the cursor visible. Wrapping here is
+            // what makes a long single-line prompt visible at all: the rich
+            // single-row path below renders an unwrapped `Paragraph`, which the
+            // terminal simply clips at the right edge. Row 0 wears the
+            // indicator; continuation rows align under it. Inline ghost/hint are
+            // single-row affordances and are omitted here.
             let content_rows = area.height.saturating_sub(2).max(1) as usize;
-            let segments: Vec<&str> = model.display_text.split('\n').collect();
-            let scroll = scroll_offset(model.cursor_row, segments.len(), content_rows);
-            segments
-                .iter()
+            let scroll = scroll_offset(model.cursor_row, rows.len(), content_rows);
+            rows.iter()
                 .enumerate()
                 .skip(scroll)
                 .take(content_rows)
-                .map(|(idx, seg)| {
+                .map(|(idx, range)| {
                     let gutter = if idx == 0 {
                         indicator.clone()
                     } else {
                         Span::raw("  ")
                     };
-                    Line::from(vec![gutter, Span::styled((*seg).to_string(), text_style)])
+                    Line::from(vec![
+                        gutter,
+                        Span::styled(model.display_text[range.clone()].to_string(), text_style),
+                    ])
                 })
                 .collect()
         } else {
@@ -296,7 +325,7 @@ impl Widget for InputWidget<'_> {
                         "suggestion ({}): ",
                         crate::keybinding_bridge::prompt_suggestion_hint_text()
                     ),
-                    Style::default().fg(self.styles.dim()),
+                    self.styles.dim_style(),
                 ));
             }
             if let Some(ghost) = model.inline_ghost.as_ref() {
@@ -304,10 +333,7 @@ impl Widget for InputWidget<'_> {
                 let before = model.display_text[..split].to_string();
                 let after = model.display_text[split..].to_string();
                 spans.extend(styled_display_text_spans(before, text_style, self.styles));
-                spans.push(Span::styled(
-                    ghost.text.clone(),
-                    Style::default().fg(self.styles.dim()),
-                ));
+                spans.push(Span::styled(ghost.text.clone(), self.styles.dim_style()));
                 spans.push(Span::styled(after, text_style));
             } else {
                 spans.extend(styled_display_text_spans(
@@ -317,10 +343,7 @@ impl Widget for InputWidget<'_> {
                 ));
             }
             if let Some(hint) = model.inline_hint.as_ref() {
-                spans.push(Span::styled(
-                    hint.clone(),
-                    Style::default().fg(self.styles.dim()),
-                ));
+                spans.push(Span::styled(hint.clone(), self.styles.dim_style()));
             }
             vec![Line::from(spans)]
         };
@@ -382,7 +405,7 @@ impl InputWidget<'_> {
         let mut spans = vec![
             Span::styled(
                 t!("input.reverse_search_label").to_string(),
-                Style::default().fg(self.styles.dim()),
+                self.styles.dim_style(),
             ),
             Span::styled(
                 view.query.to_string(),
@@ -392,7 +415,7 @@ impl InputWidget<'_> {
         if view.matched {
             spans.push(Span::styled(
                 format!("  {}", t!("input.reverse_search_hint")),
-                Style::default().fg(self.styles.dim()),
+                self.styles.dim_style(),
             ));
         } else if !view.query.is_empty() {
             spans.push(Span::styled(

@@ -48,7 +48,7 @@ pub(crate) fn active_field_caret(m: &ProviderWizardState) -> Option<(u16, u16)> 
 
 fn dim_line(text: impl Into<String>, styles: UiStyles<'_>, width: usize) -> Line<'static> {
     picker::pad_line(
-        Line::from(Span::styled(text.into(), Style::default().fg(styles.dim()))),
+        Line::from(Span::styled(text.into(), styles.dim_style())),
         width,
         None,
     )
@@ -66,15 +66,9 @@ fn field_line(
     mask: bool,
     placeholder: &str,
 ) -> Line<'static> {
-    let mut spans = vec![Span::styled(
-        format!("{label}  "),
-        Style::default().fg(styles.dim()),
-    )];
+    let mut spans = vec![Span::styled(format!("{label}  "), styles.dim_style())];
     if field.text.is_empty() {
-        spans.push(Span::styled(
-            placeholder.to_string(),
-            Style::default().fg(styles.dim()),
-        ));
+        spans.push(Span::styled(placeholder.to_string(), styles.dim_style()));
     } else {
         let shown = if mask {
             "•".repeat(field.text.chars().count())
@@ -232,7 +226,7 @@ fn confirm_summary(
     let row = |k: &str, v: String| -> Line<'static> {
         picker::pad_line(
             Line::from(vec![
-                Span::styled(format!("{k:<10}"), Style::default().fg(styles.dim())),
+                Span::styled(format!("{k:<10}"), styles.dim_style()),
                 Span::styled(v, Style::default().fg(styles.text())),
             ]),
             width,

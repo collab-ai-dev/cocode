@@ -119,7 +119,7 @@ fn rank_empty(commands: &[SlashCommandInfo]) -> Vec<SuggestionItem> {
     }
 
     let mut out: Vec<SuggestionItem> = Vec::with_capacity(commands.len());
-    out.extend(recent.iter().map(|c| to_item(c)));
+    out.extend(recent.iter().map(|c| to_item(c, Vec::new())));
     for bucket in [
         EmptyBucket::Builtin,
         EmptyBucket::User,
@@ -128,7 +128,7 @@ fn rank_empty(commands: &[SlashCommandInfo]) -> Vec<SuggestionItem> {
         EmptyBucket::Other,
     ] {
         if let Some(items) = by_bucket.get(&bucket) {
-            out.extend(items.iter().map(|c| to_item(c)));
+            out.extend(items.iter().map(|c| to_item(c, Vec::new())));
         }
     }
     out
@@ -158,15 +158,47 @@ fn rank_filtered(query: &str, commands: &[SlashCommandInfo]) -> Vec<SuggestionIt
             .then_with(|| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal))
             .then_with(|| a.2.name.cmp(&b.2.name))
     });
-    scored.into_iter().map(|(_, _, cmd)| to_item(cmd)).collect()
+    scored
+        .into_iter()
+        .map(|(_, _, cmd)| to_item(cmd, name_match_indices(&needle, cmd)))
+        .collect()
+}
+
+/// Char positions of `needle` inside the command's name, mapped onto the
+/// rendered `/name` label.
+///
+/// Always one contiguous run: [`classify`] ranks by exact / prefix / substring,
+/// so a name hit is a single span rather than scattered fuzzy characters. A hit
+/// that only landed on an alias (or on a loose subsequence) returns empty —
+/// there is nothing in the label to mark.
+///
+/// ASCII-only by construction: `classify` matches against `to_lowercase()`,
+/// which preserves char positions only for ASCII. A non-ASCII name renders
+/// unhighlighted rather than mis-highlighted.
+fn name_match_indices(needle: &str, cmd: &SlashCommandInfo) -> Vec<i32> {
+    if needle.is_empty() || !needle.is_ascii() || !cmd.name.is_ascii() {
+        return Vec::new();
+    }
+    let Some(start) = cmd.name.to_lowercase().find(needle) else {
+        return Vec::new();
+    };
+    // ASCII, so byte offsets are char offsets. +1 for the label's leading `/`.
+    let Ok(start) = i32::try_from(start + 1) else {
+        return Vec::new();
+    };
+    let Ok(len) = i32::try_from(needle.len()) else {
+        return Vec::new();
+    };
+    (start..start.saturating_add(len)).collect()
 }
 
 /// Build a popup row from a command snapshot. Description carries the
 /// optional `argument_hint` in front of the prose, and a source-tag suffix
 /// at the back so users can see provenance (plugin / user / project / policy
 /// / bundled).
-fn to_item(cmd: &SlashCommandInfo) -> SuggestionItem {
+fn to_item(cmd: &SlashCommandInfo, highlight_indices: Vec<i32>) -> SuggestionItem {
     SuggestionItem {
+        highlight_indices,
         label: format!("/{}", cmd.name),
         description: build_description(cmd),
         metadata: None,

@@ -1,0 +1,14 @@
+---
+source: app/tui/src/presentation/request.test.rs
+expression: body
+---
+Allow this operation?
+
+Send a message
+
+Actions:
+  1/y · Yes, approve once
+  2/s · Yes, allow mcp__slack__send_message for this session
+  3/a · Yes, always allow mcp__slack__send_message locally
+▸ 4/n · No, deny: wrong channel▏ ◂
+↑/↓ Navigate  Enter Select  Type a reason  Enter Submit  Esc Cancel

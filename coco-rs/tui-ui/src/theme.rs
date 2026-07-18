@@ -18,6 +18,7 @@ pub enum ThemeName {
     LightDaltonized,
     DarkAnsi,
     LightAnsi,
+    Terminal,
 }
 
 impl ThemeName {
@@ -29,6 +30,7 @@ impl ThemeName {
             Self::LightDaltonized,
             Self::DarkAnsi,
             Self::LightAnsi,
+            Self::Terminal,
         ]
     }
 
@@ -40,6 +42,7 @@ impl ThemeName {
             Self::LightDaltonized => "light_daltonized",
             Self::DarkAnsi => "dark_ansi",
             Self::LightAnsi => "light_ansi",
+            Self::Terminal => "terminal",
         }
     }
 
@@ -52,6 +55,7 @@ impl ThemeName {
             Self::LightDaltonized => "Light mode (colorblind-friendly)",
             Self::DarkAnsi => "Dark mode (ANSI colors only)",
             Self::LightAnsi => "Light mode (ANSI colors only)",
+            Self::Terminal => "Terminal (adapts to your palette)",
         }
     }
 
@@ -63,6 +67,7 @@ impl ThemeName {
             "light_daltonized" | "light-daltonized" => Some(Self::LightDaltonized),
             "dark_ansi" | "dark-ansi" => Some(Self::DarkAnsi),
             "light_ansi" | "light-ansi" => Some(Self::LightAnsi),
+            "terminal" => Some(Self::Terminal),
             _ => None,
         }
     }
@@ -119,6 +124,11 @@ pub struct Theme {
     // ── Diff ──
     pub diff_added: Color,
     pub diff_removed: Color,
+    /// Optional background tint behind added / removed diff rows. A subtle fill
+    /// so changed lines read as blocks under syntax-colored foregrounds. `None`
+    /// inherits the terminal background (ANSI themes fall back to fg-only).
+    pub diff_added_bg: Option<Color>,
+    pub diff_removed_bg: Option<Color>,
 
     // ── Code highlighting ──
     pub code_keyword: Color,
@@ -169,6 +179,7 @@ impl Theme {
             ThemeName::LightDaltonized => Self::light_daltonized_theme(),
             ThemeName::DarkAnsi => Self::dark_ansi_theme(),
             ThemeName::LightAnsi => Self::light_ansi_theme(),
+            ThemeName::Terminal => Self::terminal_theme(),
         }
     }
 
@@ -232,6 +243,8 @@ impl Theme {
 
             diff_added: Color::Rgb(78, 186, 101),
             diff_removed: Color::Rgb(255, 107, 128),
+            diff_added_bg: Some(Color::Rgb(20, 55, 30)),
+            diff_removed_bg: Some(Color::Rgb(65, 25, 30)),
 
             // One Dark soft code palette (fixed truecolor, keyword BOLD dropped).
             // TS's md fence uses cli-highlight (blue keyword); One Dark's soft
@@ -303,6 +316,8 @@ impl Theme {
 
             diff_added: Color::Rgb(44, 122, 57),
             diff_removed: Color::Rgb(171, 43, 63),
+            diff_added_bg: Some(Color::Rgb(225, 250, 230)),
+            diff_removed_bg: Some(Color::Rgb(255, 224, 228)),
 
             // GitHub-light syntax palette (see light_theme code_function above).
             code_keyword: Color::Rgb(167, 29, 93),
@@ -347,6 +362,9 @@ impl Theme {
         theme.error = Color::Rgb(255, 102, 102);
         theme.tool_error = Color::Rgb(255, 102, 102);
         theme.diff_removed = Color::Rgb(255, 102, 102);
+        // added family is blue (not green) for deuteranopia — tint the bg blue too.
+        theme.diff_added_bg = Some(Color::Rgb(20, 40, 60));
+        theme.diff_removed_bg = Some(Color::Rgb(65, 25, 30));
         theme.warning = Color::Rgb(255, 204, 0);
         theme.tool_running = Color::Rgb(255, 204, 0);
         theme.search_match = Color::Rgb(255, 204, 0);
@@ -378,6 +396,8 @@ impl Theme {
         theme.error = Color::Rgb(204, 0, 0);
         theme.tool_error = Color::Rgb(204, 0, 0);
         theme.diff_removed = Color::Rgb(204, 0, 0);
+        theme.diff_added_bg = Some(Color::Rgb(220, 235, 252));
+        theme.diff_removed_bg = Some(Color::Rgb(255, 224, 224));
         theme.warning = Color::Rgb(255, 153, 0);
         theme.tool_running = Color::Rgb(255, 153, 0);
         theme.search_match = Color::Rgb(255, 153, 0);
@@ -435,6 +455,9 @@ impl Theme {
 
             diff_added: Color::LightGreen,
             diff_removed: Color::LightRed,
+            // ANSI-strict: no RGB bg tint — foreground marker carries the diff.
+            diff_added_bg: None,
+            diff_removed_bg: None,
 
             code_keyword: Color::LightMagenta,
             code_string: Color::LightGreen,
@@ -501,6 +524,9 @@ impl Theme {
 
             diff_added: Color::Green,
             diff_removed: Color::Red,
+            // ANSI-strict: no RGB bg tint — foreground marker carries the diff.
+            diff_added_bg: None,
+            diff_removed_bg: None,
 
             // ANSI bright-palette syntax (see light_ansi code_function above).
             code_keyword: Color::LightMagenta,
@@ -517,15 +543,89 @@ impl Theme {
             context_free: Color::DarkGray,
         }
     }
+
+    /// Polarity-safe terminal-native theme (G6). Body and chrome inherit the
+    /// terminal's own foreground via [`Color::Reset`]; only semantic status
+    /// tokens use sparse ANSI-16 named colors, which the terminal maps to its
+    /// own palette. Secondary text relies on the DIM modifier renderers apply
+    /// (never a hardcoded gray that washes out on tuned dark/SSH/degraded
+    /// profiles), so the theme is legible by construction everywhere with zero
+    /// polarity detection.
+    fn terminal_theme() -> Self {
+        let reset = Color::Reset;
+        Self {
+            modal_border: reset,
+            panel_border: reset,
+            code_function: reset,
+            code_type: reset,
+            code_operator: reset,
+            code_inline: Color::Cyan,
+            code_bg: None,
+            blockquote: reset,
+            heading: reset,
+            hr: reset,
+            strikethrough: reset,
+            primary: reset,
+            secondary: reset,
+            accent: Color::Cyan,
+
+            text: reset,
+            // Secondary text is de-emphasized by the DIM modifier, not a color.
+            text_dim: reset,
+            text_bold: reset,
+
+            user_message: Color::Green,
+            user_message_bg: None,
+            assistant_message: reset,
+            thinking: reset,
+            system_message: reset,
+
+            tool_running: Color::Yellow,
+            tool_completed: Color::Green,
+            tool_error: Color::Red,
+            warning: Color::Yellow,
+            success: Color::Green,
+            error: Color::Red,
+
+            border: reset,
+            border_focused: Color::Cyan,
+            scrollbar: reset,
+            plan_mode: Color::Cyan,
+            // Selection needs a fixed contrasting pair (a `Reset` fg over a blue
+            // bg would be dark-on-dark on a light terminal). White-on-blue is
+            // legible under both polarities — a deliberate, localized exception
+            // to the "prefer Reset" rule that only applies to this one span.
+            selection_bg: Color::Blue,
+            selection_fg: Color::White,
+
+            diff_added: Color::Green,
+            diff_removed: Color::Red,
+            diff_added_bg: None,
+            diff_removed_bg: None,
+
+            code_keyword: Color::Magenta,
+            code_string: Color::Green,
+            code_comment: reset,
+            code_number: Color::Cyan,
+
+            hyperlink: Color::Cyan,
+            table_border: reset,
+            table_header: reset,
+            search_match: Color::Yellow,
+            progress_bar: Color::Cyan,
+            context_used: Color::Cyan,
+            context_free: reset,
+        }
+    }
 }
 
 impl Theme {
     /// Quantize every palette color to the terminal's color capability.
-    /// Under [`ColorCapability::Ansi256`], `Color::Rgb` fields are mapped to the
-    /// nearest xterm-256 palette index ([`adapt_color`]) so a 256-color terminal
-    /// gets a deterministic mapping instead of the emulator's (often poorer)
-    /// clamp. A no-op under `TrueColor` and for non-RGB colors. The shell calls
-    /// this once on the active theme at load / hot-reload.
+    /// Under [`ColorCapability::Ansi256`], `Color::Rgb` fields map to the nearest
+    /// xterm-256 index; under `Basic`, to the nearest of the 16 ANSI colors;
+    /// under `None`, every color collapses to `Color::Reset` (monochrome). A
+    /// no-op under `TrueColor` and for non-RGB colors (except `None`). The shell
+    /// calls this once on the active theme at load / hot-reload.
     pub fn downsample(&mut self, capability: ColorCapability) {
         macro_rules! adapt_fields {
             ($($field:ident),* $(,)?) => {
@@ -579,8 +679,20 @@ impl Theme {
             context_used,
             context_free,
         );
-        self.user_message_bg = self.user_message_bg.map(|c| adapt_color(c, capability));
-        self.code_bg = self.code_bg.map(|c| adapt_color(c, capability));
+        // Monochrome drops background tints entirely (inherit the terminal bg)
+        // rather than emitting `Some(Color::Reset)`, whose docs mean "inherit"
+        // but which renders as an explicit default-bg SGR.
+        if capability == ColorCapability::None {
+            self.user_message_bg = None;
+            self.code_bg = None;
+            self.diff_added_bg = None;
+            self.diff_removed_bg = None;
+        } else {
+            self.user_message_bg = self.user_message_bg.map(|c| adapt_color(c, capability));
+            self.code_bg = self.code_bg.map(|c| adapt_color(c, capability));
+            self.diff_added_bg = self.diff_added_bg.map(|c| adapt_color(c, capability));
+            self.diff_removed_bg = self.diff_removed_bg.map(|c| adapt_color(c, capability));
+        }
     }
 }
 

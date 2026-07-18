@@ -54,9 +54,9 @@ impl Widget for StashNotice<'_> {
         let preview = self.truncated_preview();
         let line = Line::from(vec![
             Span::raw(" ↺ ").fg(self.styles.accent()),
-            Span::raw(t!("input.stash_label").to_string()).fg(self.styles.dim()),
-            Span::raw(" ").fg(self.styles.dim()),
-            Span::raw(preview).fg(self.styles.dim()).italic(),
+            Span::raw(t!("input.stash_label").to_string()).style(self.styles.dim_style()),
+            Span::raw(" ").style(self.styles.dim_style()),
+            Span::raw(preview).style(self.styles.dim_style()).italic(),
         ]);
         Paragraph::new(line)
             .style(Style::default())

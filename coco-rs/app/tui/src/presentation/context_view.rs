@@ -38,7 +38,7 @@ pub(crate) fn report_lines(
     styles: UiStyles<'_>,
     cwd: Option<&str>,
 ) -> Vec<Line<'static>> {
-    let dim = Style::default().fg(styles.dim());
+    let dim = styles.dim_style();
     let max = report.raw_max_tokens.max(1);
     let mut lines: Vec<Line<'static>> = Vec::new();
 
@@ -180,7 +180,7 @@ fn legend_row(
     Line::from(vec![
         Span::styled(glyph.to_string(), Style::default().fg(color)),
         Span::raw(format!(" {label}: ")),
-        Span::styled(value, Style::default().fg(styles.dim())),
+        Span::styled(value, styles.dim_style()),
     ])
 }
 
@@ -190,15 +190,12 @@ fn section_heading(name: &str, hint: &str, styles: UiStyles<'_>) -> Line<'static
             name.to_string(),
             Style::default().add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!(" · {hint}"), Style::default().fg(styles.dim())),
+        Span::styled(format!(" · {hint}"), styles.dim_style()),
     ])
 }
 
 fn sub_heading(label: &str, styles: UiStyles<'_>) -> Line<'static> {
-    Line::from(Span::styled(
-        label.to_string(),
-        Style::default().fg(styles.dim()),
-    ))
+    Line::from(Span::styled(label.to_string(), styles.dim_style()))
 }
 
 /// Tree branch glyph: `├` for every item but the last, `└` for the last.
@@ -211,16 +208,13 @@ fn branch(idx: usize, len: usize) -> char {
 fn tree_row(branch: char, name: &str, value: String, styles: UiStyles<'_>) -> Line<'static> {
     Line::from(vec![
         Span::raw(format!("{branch} {name}: ")),
-        Span::styled(value, Style::default().fg(styles.dim())),
+        Span::styled(value, styles.dim_style()),
     ])
 }
 
 /// Name-only branch row (deferred MCP tools carry no token estimate).
 fn tree_row_name_only(branch: char, name: &str, styles: UiStyles<'_>) -> Line<'static> {
-    Line::from(Span::styled(
-        format!("{branch} {name}"),
-        Style::default().fg(styles.dim()),
-    ))
+    Line::from(Span::styled(format!("{branch} {name}"), styles.dim_style()))
 }
 
 /// Exact figure `N tok` via the compact (`7.5k`) formatter — memory files
@@ -387,13 +381,13 @@ fn append_suggestions(
         if let Some(t) = s.savings_tokens {
             spans.push(Span::styled(
                 format!(" → save ~{}", fmt_token_compact(t)),
-                Style::default().fg(styles.dim()),
+                styles.dim_style(),
             ));
         }
         lines.push(Line::from(spans));
         lines.push(Line::from(Span::styled(
             format!("  {}", s.detail),
-            Style::default().fg(styles.dim()),
+            styles.dim_style(),
         )));
     }
 }

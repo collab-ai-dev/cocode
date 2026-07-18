@@ -94,14 +94,11 @@ pub(crate) fn render_agent_view_overlay(
     } else {
         for act in &agent.recent_activities {
             let mut spans = vec![
-                Span::styled(" · ".to_string(), Style::default().fg(styles.dim())),
+                Span::styled(" · ".to_string(), styles.dim_style()),
                 Span::styled(act.tool_name.clone(), Style::default().fg(styles.text())),
             ];
             if let Some(summary) = &act.summary {
-                spans.push(Span::styled(
-                    format!("  {summary}"),
-                    Style::default().fg(styles.dim()),
-                ));
+                spans.push(Span::styled(format!("  {summary}"), styles.dim_style()));
             }
             lines.push(Line::from(spans));
         }
@@ -141,5 +138,5 @@ pub(crate) fn render_agent_view_overlay(
 }
 
 fn dim(text: String, styles: UiStyles<'_>) -> Line<'static> {
-    Line::from(Span::styled(text, Style::default().fg(styles.dim())))
+    Line::from(Span::styled(text, styles.dim_style()))
 }

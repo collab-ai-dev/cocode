@@ -25,10 +25,44 @@ pub(super) fn parse_slash_input(trimmed: &str) -> Option<(SlashCommandName, Stri
 /// store. The driver (`tui_runner`) owns the `coco_session::PromptHistory`
 /// file write; a closed channel just means shutdown is in progress, so the
 /// dropped persist is harmless.
-async fn persist_prompt_history(command_tx: &mpsc::Sender<UserCommand>, display: String) {
+async fn persist_prompt_history(
+    command_tx: &mpsc::Sender<UserCommand>,
+    display: String,
+    pastes: &[coco_tui_ui::paste::PasteEntry],
+) {
+    let pasted_contents = pastes
+        .iter()
+        .filter(|paste| !paste.is_image)
+        .filter_map(|paste| paste_id(&paste.pill).map(|id| (id, paste.content.clone())))
+        .collect();
     let _ = command_tx
-        .send(UserCommand::PersistPromptHistory { display })
+        .send(UserCommand::PersistPromptHistory {
+            display,
+            pasted_contents,
+        })
         .await;
+}
+
+fn paste_id(pill: &str) -> Option<i32> {
+    let digits = pill
+        .split_once('#')?
+        .1
+        .split(']')
+        .next()?
+        .split(' ')
+        .next()?;
+    digits.parse().ok()
+}
+
+fn referenced_pastes(state: &AppState, text: &str) -> Vec<coco_tui_ui::paste::PasteEntry> {
+    state
+        .ui
+        .paste_manager
+        .entries()
+        .iter()
+        .filter(|entry| text.contains(&entry.pill))
+        .cloned()
+        .collect()
 }
 
 /// Handle a submission whose leading character is a prompt-mode prefix
@@ -46,7 +80,8 @@ async fn submit_prefixed(
     text: &str,
 ) -> bool {
     debug_assert_eq!(mode, PromptMode::Bash);
-    let payload = mode.strip_prefix(text).to_string();
+    let resolved = state.ui.paste_manager.resolve_structured(text);
+    let payload = mode.strip_prefix(&resolved.text).to_string();
     if payload.is_empty() {
         // Empty body after stripping the prefix (e.g. user typed just
         // `!` and hit Enter). Don't echo or dispatch — drop silently.
@@ -56,8 +91,12 @@ async fn submit_prefixed(
     // Record the *full* prefixed text in history so up-arrow recall
     // returns the user to the same mode without forcing them to retype
     // the prefix character.
-    state.ui.input.add_to_history(text.to_string());
-    persist_prompt_history(command_tx, text.to_string()).await;
+    let pastes = referenced_pastes(state, text);
+    persist_prompt_history(command_tx, text.to_string(), &pastes).await;
+    state
+        .ui
+        .input
+        .add_to_history_with_pastes(text.to_string(), pastes);
 
     let user_message_id = uuid::Uuid::new_v4().to_string();
     tracing::info!(
@@ -115,8 +154,10 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
             args_chars = args.len(),
             "user submitted slash command",
         );
-        state.ui.input.add_to_history(text.clone());
-        persist_prompt_history(command_tx, text).await;
+        let pastes = referenced_pastes(state, &text);
+        persist_prompt_history(command_tx, text.clone(), &pastes).await;
+        state.ui.input.add_to_history_with_pastes(text, pastes);
+        state.ui.paste_manager.clear();
         // `/exit` (alias `/quit`) shuts down through the same path as the
         // Ctrl+C/Ctrl+D double-press exit, not the registry handler (which only
         // prints "Exiting…")., where /exit funnels into the shared
@@ -140,19 +181,12 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
 
     // Snapshot the paste payloads this text references BEFORE the manager
     // is cleared below, so recalling the entry rehydrates its pills.
-    let pastes: Vec<_> = state
-        .ui
-        .paste_manager
-        .entries()
-        .iter()
-        .filter(|e| text.contains(&e.pill))
-        .cloned()
-        .collect();
+    let pastes = referenced_pastes(state, &text);
+    persist_prompt_history(command_tx, text.clone(), &pastes).await;
     state
         .ui
         .input
         .add_to_history_with_pastes(text.clone(), pastes);
-    persist_prompt_history(command_tx, text.clone()).await;
     let resolved = state.ui.paste_manager.resolve_structured(&text);
 
     // Mint the user-message UUID once at submit time so the agent
@@ -246,7 +280,7 @@ fn cursor_on_last_line(input: &crate::state::InputState) -> bool {
 /// otherwise move the cursor up one line (multi-line draft editing).
 pub(super) fn history_up(state: &mut AppState) {
     if cursor_on_first_line(&state.ui.input) {
-        history_prev(state);
+        history_browse_start(state);
     } else {
         state.ui.input.textarea.move_cursor_up();
     }
@@ -274,40 +308,6 @@ pub(super) fn history_down(state: &mut AppState) {
     }
 }
 
-/// Up arrow: step to the previous (older) history entry. First Up surfaces
-/// the most recent submission; subsequent Ups walk toward older entries.
-pub(super) fn history_prev(state: &mut AppState) {
-    let len = state.ui.input.history.len();
-    if len == 0 {
-        return;
-    }
-    let new_idx = match state.ui.input.history_index {
-        None => 0,
-        Some(i) if i + 1 < len => i + 1,
-        Some(i) => i, // already at least-relevant tail; stay put
-    };
-    state.ui.input.history_index = Some(new_idx);
-    // After up-arrowing past the newest entry, surface the Ctrl+R search
-    // affordance once per session (matches TS PromptInput's hint).
-    if new_idx >= 1 && !state.ui.search_hint_shown {
-        state.ui.search_hint_shown = true;
-        state.ui.add_toast(crate::state::ui::Toast::info(
-            crate::i18n::t!("toast.ctrl_r_search_hint").to_string(),
-        ));
-    }
-    let entry = &state.ui.input.history[new_idx];
-    let text = entry.text.clone();
-    // Rehydrate the paste manager so any pills in the recalled text
-    // resolve to their original payloads at submit.
-    state.ui.paste_manager.replace_entries(entry.pastes.clone());
-    state.ui.input.textarea.set_text(&text);
-    state
-        .ui
-        .input
-        .textarea
-        .move_cursor_to_end_of_line(coco_tui_ui::widgets::EolBehavior::StayPut);
-}
-
 /// Down arrow: step back toward the most-relevant entry; leaving the list
 /// at index 0 clears the input (matches TS PromptInput behaviour).
 pub(super) fn history_next(state: &mut AppState) {
@@ -333,31 +333,7 @@ pub(super) fn history_next(state: &mut AppState) {
     }
 }
 
-// ───────────────────────── Ctrl+R reverse search ─────────────────────────
-
-/// First history index matching `query_lower` (case-insensitive substring;
-/// empty query matches everything), scanning from `start`. `older = true`
-/// scans toward higher indices (older entries); `older = false` scans toward
-/// index 0 (newer entries).
-fn search_find(
-    history: &[crate::state::HistoryEntry],
-    query_lower: &str,
-    start: usize,
-    older: bool,
-) -> Option<usize> {
-    if history.is_empty() {
-        return None;
-    }
-    let is_match =
-        |i: usize| query_lower.is_empty() || history[i].text.to_lowercase().contains(query_lower);
-    if older {
-        (start..history.len()).find(|&i| is_match(i))
-    } else {
-        (0..=start.min(history.len().saturating_sub(1)))
-            .rev()
-            .find(|&i| is_match(i))
-    }
-}
+// ─────────────────────── Ctrl+R fuzzy history search ───────────────────────
 
 /// Preview the matched history entry in the composer (text + pastes),
 /// cursor at end — mirrors up-arrow recall.
@@ -385,105 +361,136 @@ fn restore_search_draft(state: &mut AppState) {
     state.ui.input.textarea.set_text(&text);
 }
 
-/// Re-run the search from the newest entry after the query changed.
-fn refresh_search_from_newest(state: &mut AppState) {
-    let Some(search) = state.ui.history_search.as_ref() else {
+/// Re-rank results for the current query, reset the selection to the top match,
+/// and preview it (or restore the draft when nothing matches).
+fn refresh_results(state: &mut AppState) {
+    let Some((query, browse)) = state
+        .ui
+        .history_search
+        .as_ref()
+        .map(|s| (s.query.clone(), s.browse))
+    else {
         return;
     };
-    let query_lower = search.query.to_lowercase();
-    match search_find(
-        &state.ui.input.history,
-        &query_lower,
-        0,
-        /*older*/ true,
-    ) {
-        Some(i) => {
-            if let Some(s) = state.ui.history_search.as_mut() {
-                s.matched = Some(i);
-            }
-            apply_search_match(state, i);
-        }
-        None => {
-            if let Some(s) = state.ui.history_search.as_mut() {
-                s.matched = None;
-            }
-            restore_search_draft(state);
-        }
+    let mut results =
+        crate::autocomplete::history_search::search_history(&state.ui.input.history, &query);
+    if browse && query.is_empty() {
+        results.items.reverse();
+        results.indices.reverse();
+    }
+    let selected = if browse {
+        results.items.len().saturating_sub(1)
+    } else {
+        0
+    };
+    let preview = results.indices.get(selected).copied();
+    if let Some(s) = state.ui.history_search.as_mut() {
+        s.results = results.items;
+        s.result_indices = results.indices;
+        s.selected = selected;
+    }
+    match preview {
+        Some(idx) => apply_search_match(state, idx),
+        None => restore_search_draft(state),
+    }
+}
+
+/// Preview the currently selected match (or restore the draft if none).
+fn preview_selected(state: &mut AppState) {
+    let idx = state
+        .ui
+        .history_search
+        .as_ref()
+        .and_then(crate::state::HistorySearch::selected_history_index);
+    match idx {
+        Some(i) => apply_search_match(state, i),
+        None => restore_search_draft(state),
     }
 }
 
 /// Ctrl+R on an idle composer: snapshot the draft and enter search mode.
 pub(super) fn history_search_start(state: &mut AppState) {
+    start_history_search(state, false);
+}
+
+fn history_browse_start(state: &mut AppState) {
+    start_history_search(state, true);
+}
+
+fn start_history_search(state: &mut AppState, browse: bool) {
     if state.ui.history_search.is_some() {
         return;
     }
     state.ui.input.clear_inline_hint();
     let original_pastes = state.ui.paste_manager.entries().to_vec();
     state.ui.history_search = Some(crate::state::HistorySearch {
+        browse,
         query: String::new(),
-        matched: None,
+        results: Vec::new(),
+        result_indices: Vec::new(),
+        selected: 0,
         original_text: state.ui.input.text().to_string(),
         original_pastes,
         original_history_index: state.ui.input.history_index,
     });
+    refresh_results(state);
 }
 
-/// Append a character to the search query and re-match from the newest entry.
+/// Append a character to the query and re-rank from the top match.
 pub(super) fn history_search_input(state: &mut AppState, c: char) {
     if let Some(s) = state.ui.history_search.as_mut() {
+        s.browse = false;
         s.query.push(c);
     } else {
         return;
     }
-    refresh_search_from_newest(state);
+    refresh_results(state);
 }
 
-/// Delete the last query character and re-match from the newest entry.
+/// Delete the last query character and re-rank from the top match.
 pub(super) fn history_search_backspace(state: &mut AppState) {
     if let Some(s) = state.ui.history_search.as_mut() {
+        s.browse = false;
         s.query.pop();
     } else {
         return;
     }
-    refresh_search_from_newest(state);
+    refresh_results(state);
 }
 
-/// Step to the next older match (Ctrl+R / Up while searching).
+/// Move the selection one row DOWN the ranked list (↓ / Ctrl+R).
 pub(super) fn history_search_older(state: &mut AppState) {
-    let Some(search) = state.ui.history_search.as_ref() else {
-        return;
-    };
-    let query_lower = search.query.to_lowercase();
-    let start = search.matched.map_or(0, |i| i + 1);
-    if start >= state.ui.input.history.len() {
-        return; // no older match
-    }
-    if let Some(i) = search_find(&state.ui.input.history, &query_lower, start, true) {
-        if let Some(s) = state.ui.history_search.as_mut() {
-            s.matched = Some(i);
+    if let Some(s) = state.ui.history_search.as_mut() {
+        if s.results.is_empty() {
+            return;
         }
-        apply_search_match(state, i);
+        if s.browse && s.selected + 1 >= s.results.len() {
+            history_search_cancel(state);
+            return;
+        }
+        s.selected = (s.selected + 1).min(s.results.len() - 1);
+    } else {
+        return;
     }
+    preview_selected(state);
 }
 
-/// Step to the next newer match (Down while searching).
+/// Move the selection one row UP the ranked list (↑ / Ctrl+S).
 pub(super) fn history_search_newer(state: &mut AppState) {
-    let Some(search) = state.ui.history_search.as_ref() else {
+    let show_hint = if let Some(s) = state.ui.history_search.as_mut() {
+        let before = s.selected;
+        s.selected = s.selected.saturating_sub(1);
+        s.browse && s.selected < before && !state.ui.search_hint_shown
+    } else {
         return;
     };
-    let query_lower = search.query.to_lowercase();
-    let Some(cur) = search.matched else {
-        return;
-    };
-    let Some(start) = cur.checked_sub(1) else {
-        return; // already at the newest match
-    };
-    if let Some(i) = search_find(&state.ui.input.history, &query_lower, start, false) {
-        if let Some(s) = state.ui.history_search.as_mut() {
-            s.matched = Some(i);
-        }
-        apply_search_match(state, i);
+    if show_hint {
+        state.ui.search_hint_shown = true;
+        state.ui.add_toast(crate::state::ui::Toast::info(
+            crate::i18n::t!("toast.ctrl_r_search_hint").to_string(),
+        ));
     }
+    preview_selected(state);
 }
 
 /// Accept the previewed entry (already in the composer) as the live draft.

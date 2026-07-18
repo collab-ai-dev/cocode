@@ -1,5 +1,157 @@
+use super::*;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+
+// ─── C9: MCP server-scope allow ───────────────────────────────────────────
+
+/// The tool patterns an update set would add.
+fn allow_patterns(updates: &[coco_types::PermissionUpdate]) -> Vec<String> {
+    updates
+        .iter()
+        .flat_map(|update| match update {
+            coco_types::PermissionUpdate::AddRules { rules, .. } => rules
+                .iter()
+                .map(|rule| rule.value.tool_pattern.clone())
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
+#[test]
+fn mcp_server_of_extracts_the_server_segment() {
+    assert_eq!(
+        crate::state::mcp_server_of("mcp__slack__send"),
+        Some("slack")
+    );
+    // A tool name may itself contain the separator; only the FIRST split counts.
+    assert_eq!(
+        crate::state::mcp_server_of("mcp__slack__send__now"),
+        Some("slack")
+    );
+}
+
+#[test]
+fn mcp_server_of_rejects_non_mcp_and_malformed_names() {
+    // A server-wide grant derived from a name we could not parse would be a
+    // grant the user never meant to give.
+    for name in [
+        "Bash",
+        "",
+        "mcp__",
+        "mcp__slack",
+        "mcp____tool",
+        "mcp__slack__",
+    ] {
+        assert_eq!(
+            crate::state::mcp_server_of(name),
+            None,
+            "{name:?} must not yield a server"
+        );
+    }
+}
+
+#[test]
+fn tool_scope_grants_only_the_exact_mcp_tool() {
+    let p = prompt("mcp__slack__send", None, vec![]);
+    assert_eq!(
+        allow_patterns(&session_allow_updates(
+            &p,
+            coco_types::PermissionMode::Default
+        )),
+        vec!["mcp__slack__send".to_string()]
+    );
+}
+
+#[test]
+fn server_scope_grants_the_whole_mcp_server() {
+    // The engine already matches `mcp__slack` against `mcp__slack__*`
+    // (rule_compiler); this is the UI finally able to ask for it.
+    let mut p = prompt("mcp__slack__send", None, vec![]);
+    p.mcp_allow_scope = crate::state::McpAllowScope::Server;
+    assert_eq!(
+        allow_patterns(&session_allow_updates(
+            &p,
+            coco_types::PermissionMode::Default
+        )),
+        vec!["mcp__slack".to_string()]
+    );
+    assert_eq!(
+        allow_patterns(&local_allow_updates(&p)),
+        vec!["mcp__slack".to_string()],
+        "the persisted grant must widen too, not just the session one"
+    );
+}
+
+#[test]
+fn server_scope_supersedes_a_core_supplied_per_tool_suggestion() {
+    // Regression: the scope was only honored on the empty-fallback path, so an
+    // MCP request that arrived WITH a core AddRules suggestion ignored "widen to
+    // server" — a silent no-op on exactly the prompts most likely to have one.
+    let suggestion = coco_types::PermissionUpdate::AddRules {
+        rules: vec![coco_types::PermissionRule {
+            source: coco_types::PermissionRuleSource::Session,
+            behavior: coco_types::PermissionBehavior::Allow,
+            value: coco_types::PermissionRuleValue {
+                tool_pattern: "mcp__slack__send".to_string(),
+                rule_content: None,
+            },
+        }],
+        destination: coco_types::PermissionUpdateDestination::Session,
+    };
+    let mut p = prompt("mcp__slack__send", None, vec![suggestion]);
+    p.mcp_allow_scope = crate::state::McpAllowScope::Server;
+    assert_eq!(
+        allow_patterns(&session_allow_updates(
+            &p,
+            coco_types::PermissionMode::Default
+        )),
+        vec!["mcp__slack".to_string()],
+        "an explicit server widening must supersede the per-tool suggestion"
+    );
+}
+
+#[test]
+fn server_scope_on_a_builtin_tool_does_not_widen_anything() {
+    // Unreachable through the UI (the toggle is inert for builtins), but a
+    // widened grant here would be a tool-wide rule nobody asked for.
+    let mut p = prompt("WebFetch", None, vec![]);
+    p.mcp_allow_scope = crate::state::McpAllowScope::Server;
+    assert_eq!(
+        allow_patterns(&session_allow_updates(
+            &p,
+            coco_types::PermissionMode::Default
+        )),
+        vec!["WebFetch".to_string()]
+    );
+}
+
+#[test]
+fn the_allow_row_label_states_the_breadth_of_the_grant() {
+    // The label must track the rule: a user reading "always allow mcp__slack"
+    // is agreeing to the server, and must not be shown the tool name instead.
+    let mut p = prompt("mcp__slack__send", None, vec![]);
+    assert_eq!(allow_grant_target(&p), "mcp__slack__send");
+    p.mcp_allow_scope = crate::state::McpAllowScope::Server;
+    assert_eq!(allow_grant_target(&p), "mcp__slack");
+}
+
+#[test]
+fn only_mcp_prompts_advertise_the_scope_toggle() {
+    assert!(can_widen_to_server(&prompt(
+        "mcp__slack__send",
+        None,
+        vec![]
+    )));
+    assert!(!can_widen_to_server(&prompt("Bash", None, vec![])));
+
+    let mut gated = prompt("mcp__slack__send", None, vec![]);
+    gated.show_always_allow = false;
+    assert!(
+        !can_widen_to_server(&gated),
+        "no always-allow affordance means no scope to widen"
+    );
+}
 
 fn prompt(
     tool_name: &str,
@@ -27,6 +179,8 @@ fn prompt(
         explanation_visible: false,
         explanation: crate::state::ExplainerFetch::NotFetched,
         prefix_input: None,
+        mcp_allow_scope: Default::default(),
+        deny_reason_input: None,
     }
 }
 

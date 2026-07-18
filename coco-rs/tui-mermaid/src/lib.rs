@@ -7,17 +7,18 @@
 //! through coco's native-scrollback engine like any other text.
 //!
 //! Scope: box-and-arrow graphs (`flowchart` / `classDiagram` / `stateDiagram` /
-//! `erDiagram`, all `DiagramData::Graph`). Continuous-geometry diagrams (pie,
-//! gantt, sankey, sequence, …) and any layout too dense to read at the given
-//! width return `None`, signalling the caller to fall back to the verbatim code
-//! fence — never worse than today's behavior.
+//! `erDiagram`) plus sequence diagrams. Continuous-geometry diagrams (pie,
+//! gantt, sankey, …) and any layout too dense to read at the given width return
+//! `None`, signalling the caller to fall back to the verbatim code fence.
 
 use coco_tui_ui::style::UiStyles;
 use mermaid_rs_renderer::EdgeLayout;
 use mermaid_rs_renderer::Layout;
+use mermaid_rs_renderer::NodeLayout;
 use mermaid_rs_renderer::RenderOptions;
 use mermaid_rs_renderer::compute_layout;
 use mermaid_rs_renderer::layout::DiagramData;
+use mermaid_rs_renderer::layout::SequenceData;
 use mermaid_rs_renderer::parse_mermaid;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
@@ -57,6 +58,7 @@ pub fn mermaid_to_lines(src: &str, styles: UiStyles<'_>, width: u16) -> Option<V
         let layout = compute_layout(&parsed.graph, &opts.theme, &opts.layout);
         match &layout.diagram {
             DiagramData::Graph { .. } => render_graph(&layout, styles, cols),
+            DiagramData::Sequence(seq) => render_sequence(&layout, seq, styles, cols),
             // Continuous-geometry / error diagrams: keep the source verbatim.
             _ => None,
         }
@@ -133,56 +135,283 @@ fn render_graph(layout: &Layout, styles: UiStyles<'_>, cols: usize) -> Option<Ve
 
     // Nodes.
     for node in layout.nodes.values() {
-        if node.hidden {
-            continue;
-        }
-        let x = quantize(node.x, sx);
-        let y = quantize(node.y, sy);
-        let w = quantize(node.x + node.width, sx)
-            .saturating_sub(x)
-            .max(MIN_NODE_W);
-        let h = quantize(node.y + node.height, sy)
-            .saturating_sub(y)
-            .max(MIN_NODE_H);
-        grid.rect(x, y, w, h, border);
-
-        let inner_w = w.saturating_sub(2);
-        let inner_h = h.saturating_sub(2);
-        let shown = node.label.lines.len().min(inner_h);
-        let start = y + 1 + inner_h.saturating_sub(shown) / 2;
-        for (i, text) in node.label.lines.iter().take(inner_h).enumerate() {
-            grid.text_centered(x + 1, start + i, inner_w, text, label);
+        if !node.hidden {
+            draw_node_box(&mut grid, node, sx, sy, border, label);
         }
     }
 
     // Edges (routed polylines + arrowheads) last.
     for e in &layout.edges {
         draw_edge(&mut grid, e, sx, sy, edge, arrow);
-        if let (Some(text), Some((ax, ay))) = (e.label.as_ref(), e.label_anchor)
-            && let Some(first) = text.lines.first()
-        {
-            // Center the (truncated) label on the anchor and clamp to the grid
-            // so it straddles the edge instead of starting at the anchor column.
-            let gw = grid.width();
-            let truncated = truncate_to_width(first, gw);
-            let tw = coco_tui_ui::truncate::display_width(&truncated);
-            let cx = quantize(ax, sx);
-            let start = cx.saturating_sub(tw / 2).min(gw.saturating_sub(tw));
-            // Only stamp onto a blank run so the label never overwrites a node
-            // border or a box-interior label. Try the anchor row, then one row
-            // above/below; if no clear run exists, drop the label — preserving
-            // the diagram beats rendering an unreadable overlap.
-            let ay0 = quantize(ay, sy);
-            if let Some(row) = [ay0, ay0.saturating_sub(1), ay0 + 1]
-                .into_iter()
-                .find(|&r| grid.run_is_clear(start, r, tw))
-            {
-                grid.text(start, row, &truncated, label);
-            }
-        }
+        draw_edge_label(&mut grid, e, sx, sy, label);
     }
 
     Some(grid.into_lines())
+}
+
+/// Draw a node's rounded box + centered label. Shared by the graph and sequence
+/// projections (participant / footbox boxes).
+fn draw_node_box(
+    grid: &mut CellGrid,
+    node: &NodeLayout,
+    sx: f32,
+    sy: f32,
+    border: Style,
+    label: Style,
+) {
+    let x = quantize(node.x, sx);
+    let y = quantize(node.y, sy);
+    let w = quantize(node.x + node.width, sx)
+        .saturating_sub(x)
+        .max(MIN_NODE_W);
+    let h = quantize(node.y + node.height, sy)
+        .saturating_sub(y)
+        .max(MIN_NODE_H);
+    grid.rect(x, y, w, h, border);
+
+    let inner_w = w.saturating_sub(2);
+    let inner_h = h.saturating_sub(2);
+    let shown = node.label.lines.len().min(inner_h);
+    let start = y + 1 + inner_h.saturating_sub(shown) / 2;
+    for (i, text) in node.label.lines.iter().take(inner_h).enumerate() {
+        grid.text_centered(x + 1, start + i, inner_w, text, label);
+    }
+}
+
+/// Stamp an edge/message label onto a clear run near its anchor. Shared by the
+/// graph and sequence projections.
+fn draw_edge_label(grid: &mut CellGrid, e: &EdgeLayout, sx: f32, sy: f32, label: Style) {
+    let (Some(text), Some((ax, ay))) = (e.label.as_ref(), e.label_anchor) else {
+        return;
+    };
+    let Some(first) = text.lines.first() else {
+        return;
+    };
+    // Center the (truncated) label on the anchor and clamp to the grid so it
+    // straddles the edge instead of starting at the anchor column.
+    let gw = grid.width();
+    let truncated = truncate_to_width(first, gw);
+    let tw = coco_tui_ui::truncate::display_width(&truncated);
+    let cx = quantize(ax, sx);
+    let start = cx.saturating_sub(tw / 2).min(gw.saturating_sub(tw));
+    // Only stamp onto a blank run so the label never overwrites a node border or
+    // a box-interior label. Try the anchor row, then one row above/below; if no
+    // clear run exists, drop the label — preserving the diagram beats rendering
+    // an unreadable overlap.
+    let ay0 = quantize(ay, sy);
+    if let Some(row) = [ay0, ay0.saturating_sub(1), ay0 + 1]
+        .into_iter()
+        .find(|&r| grid.run_is_clear(start, r, tw))
+    {
+        grid.text(start, row, &truncated, label);
+    }
+}
+
+/// Project a sequence diagram onto the cell grid: participant boxes, vertical
+/// lifelines, activation bars, message arrows, and notes. Mirrors
+/// [`render_graph`]'s aspect-preserving scale, `MAX_ROWS` cap, and density
+/// guard, so an illegibly dense sequence falls back to the verbatim fence.
+fn render_sequence(
+    layout: &Layout,
+    seq: &SequenceData,
+    styles: UiStyles<'_>,
+    cols: usize,
+) -> Option<Vec<Line<'static>>> {
+    if layout.nodes.is_empty() && seq.footboxes.is_empty() {
+        return None;
+    }
+    let lw = layout.width.max(1.0);
+    let lh = layout.height.max(1.0);
+
+    let mut sx = cols as f32 / lw;
+    let mut sy = sx * CELL_ASPECT;
+    if lh * sy > MAX_ROWS as f32 {
+        sy = MAX_ROWS as f32 / lh;
+        sx = sy / CELL_ASPECT;
+    }
+
+    let grid_w = ((lw * sx).ceil() as usize + 1).min(cols);
+    let grid_h = ((lh * sy).ceil() as usize + 1).min(MAX_ROWS + 1);
+    if grid_w < 4 || grid_h < 3 {
+        return None;
+    }
+
+    // Density guard: participant / foot boxes must stay legible.
+    for node in layout.nodes.values().chain(seq.footboxes.iter()) {
+        if node.hidden {
+            continue;
+        }
+        let bw = quantize(node.x + node.width, sx).saturating_sub(quantize(node.x, sx));
+        let bh = quantize(node.y + node.height, sy).saturating_sub(quantize(node.y, sy));
+        if bw < MIN_NODE_W || bh < MIN_NODE_H {
+            return None;
+        }
+    }
+    for sequence_box in &seq.boxes {
+        let width = quantize(sequence_box.x + sequence_box.width, sx)
+            .saturating_sub(quantize(sequence_box.x, sx));
+        let height = quantize(sequence_box.y + sequence_box.height, sy)
+            .saturating_sub(quantize(sequence_box.y, sy));
+        if width < 4 || height < 3 {
+            return None;
+        }
+    }
+    for frame in &seq.frames {
+        let width = quantize(frame.x + frame.width, sx).saturating_sub(quantize(frame.x, sx));
+        let height = quantize(frame.y + frame.height, sy).saturating_sub(quantize(frame.y, sy));
+        if width < 6 || height < 3 {
+            return None;
+        }
+    }
+
+    let mut grid = CellGrid::new(grid_w, grid_h);
+    let border = Style::default().fg(styles.border());
+    let label = Style::default().fg(styles.text());
+    let edge = Style::default().fg(styles.dim());
+    let arrow = Style::default().fg(styles.primary());
+    let lifeline = Style::default()
+        .fg(styles.panel_border())
+        .add_modifier(Modifier::DIM);
+
+    // Participant groups and control frames sit behind lifelines/messages.
+    for sequence_box in &seq.boxes {
+        let x = quantize(sequence_box.x, sx);
+        let y = quantize(sequence_box.y, sy);
+        let w = quantize(sequence_box.x + sequence_box.width, sx)
+            .saturating_sub(x)
+            .max(2);
+        let h = quantize(sequence_box.y + sequence_box.height, sy)
+            .saturating_sub(y)
+            .max(2);
+        grid.rect(x, y, w, h, lifeline);
+        if let Some(text) = sequence_box
+            .label
+            .as_ref()
+            .and_then(|label| label.lines.first())
+        {
+            grid.text(
+                x + 1,
+                y,
+                &truncate_to_width(text, w.saturating_sub(2)),
+                lifeline,
+            );
+        }
+    }
+    for frame in &seq.frames {
+        let x = quantize(frame.x, sx);
+        let y = quantize(frame.y, sy);
+        let w = quantize(frame.x + frame.width, sx).saturating_sub(x).max(2);
+        let h = quantize(frame.y + frame.height, sy)
+            .saturating_sub(y)
+            .max(2);
+        grid.rect(x, y, w, h, lifeline);
+        for divider in &frame.dividers {
+            grid.hline(x, x.saturating_add(w), quantize(*divider, sy), lifeline);
+        }
+    }
+
+    // Lifelines first (vertical spines), so boxes and activations paint over.
+    for ll in &seq.lifelines {
+        let x = quantize(ll.x, sx);
+        let y1 = quantize(ll.y1, sy);
+        let y2 = quantize(ll.y2, sy);
+        if y2 > y1 {
+            grid.vline(x, y1, y2, lifeline);
+        }
+    }
+
+    // Activation bars: narrow boxes running along a lifeline.
+    for act in &seq.activations {
+        let x = quantize(act.x, sx);
+        let y = quantize(act.y, sy);
+        let w = quantize(act.x + act.width, sx).saturating_sub(x).max(1);
+        let h = quantize(act.y + act.height, sy).saturating_sub(y).max(2);
+        grid.rect(x, y, w, h, border);
+    }
+
+    // Participant boxes (top) and foot boxes (bottom).
+    for node in layout.nodes.values().chain(seq.footboxes.iter()) {
+        if !node.hidden {
+            draw_node_box(&mut grid, node, sx, sy, border, label);
+        }
+    }
+
+    // Notes: framed boxes with centered text.
+    for note in &seq.notes {
+        let x = quantize(note.x, sx);
+        let y = quantize(note.y, sy);
+        let w = quantize(note.x + note.width, sx).saturating_sub(x).max(2);
+        let h = quantize(note.y + note.height, sy).saturating_sub(y).max(2);
+        grid.rect(x, y, w, h, border);
+        let inner_w = w.saturating_sub(2);
+        for (i, text) in note
+            .label
+            .lines
+            .iter()
+            .take(h.saturating_sub(2))
+            .enumerate()
+        {
+            grid.text_centered(x + 1, y + 1 + i, inner_w, text, label);
+        }
+    }
+
+    // Messages (edges) last: arrows + labels.
+    for e in &layout.edges {
+        draw_edge(&mut grid, e, sx, sy, edge, arrow);
+        draw_edge_label(&mut grid, e, sx, sy, label);
+    }
+
+    // Sequence label coordinates are center anchors. Paint them after
+    // lifelines/messages so cell quantization cannot punch a vertical stroke
+    // through a section label.
+    for frame in &seq.frames {
+        draw_sequence_label(&mut grid, &frame.label, frame, sx, sy, label);
+        for section in &frame.section_labels {
+            draw_sequence_label(&mut grid, section, frame, sx, sy, label);
+        }
+    }
+
+    // Autonumber badges are semantic message labels and paint last so they
+    // remain readable where a lifeline or frame divider crosses their anchor.
+    for number in &seq.numbers {
+        grid.text(
+            quantize(number.x, sx),
+            quantize(number.y, sy),
+            &format!("{}.", number.value),
+            arrow,
+        );
+    }
+
+    Some(grid.into_lines())
+}
+
+fn draw_sequence_label(
+    grid: &mut CellGrid,
+    sequence_label: &mermaid_rs_renderer::layout::SequenceLabel,
+    frame: &mermaid_rs_renderer::layout::SequenceFrameLayout,
+    sx: f32,
+    sy: f32,
+    style: Style,
+) {
+    let Some(text) = sequence_label.text.lines.first() else {
+        return;
+    };
+    let frame_x = quantize(frame.x, sx);
+    let frame_w = quantize(frame.x + frame.width, sx)
+        .saturating_sub(frame_x)
+        .max(2);
+    let available = frame_w.saturating_sub(2);
+    let text = truncate_to_width(text, available);
+    let text_w = coco_tui_ui::truncate::display_width(&text);
+    let min_x = frame_x.saturating_add(1);
+    let max_x = frame_x
+        .saturating_add(frame_w)
+        .saturating_sub(1)
+        .saturating_sub(text_w);
+    let x = quantize(sequence_label.x, sx)
+        .saturating_sub(text_w / 2)
+        .clamp(min_x, max_x.max(min_x));
+    grid.text(x, quantize(sequence_label.y, sy), &text, style);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

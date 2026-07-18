@@ -288,6 +288,7 @@ fn resume_items(state: &AppState, query: &str) -> Vec<SuggestionItem> {
         })
         .take(15)
         .map(|session| SuggestionItem {
+            highlight_indices: Vec::new(),
             label: session.id.clone(),
             description: Some(session.label.clone()),
             metadata: Some(crate::widgets::suggestion_popup::SuggestionMeta::Session),

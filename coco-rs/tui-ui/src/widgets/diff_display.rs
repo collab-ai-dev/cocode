@@ -1,10 +1,12 @@
 //! Diff display widget — renders unified diff with color coding, line numbers,
 //! word-level highlighting, and box-drawing structure.
 
+use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use std::ops::Range;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
@@ -12,6 +14,49 @@ use crate::diff::DiffLineViewRef;
 use crate::diff::diff_line_view_refs;
 use crate::diff::diff_line_view_window;
 use crate::style::UiStyles;
+
+// ── Syntax-highlight injection (domain-free seam) ───────────────────
+
+/// Pre-highlighted diff content handed in by the shell, which owns syntect.
+///
+/// The shell highlights the old- and new-side content as blocks and passes the
+/// per-line token spans here, indexed by 1-based source line number. The widget
+/// looks each row up by its `old_line` / `new_line` and layers the diff
+/// background tint over the tokens. The default (both slices empty) means "no
+/// syntax highlighting" — the widget renders plain diff-colored text, so callers
+/// that have no source context just pass `DiffHighlight::default()`.
+#[derive(Clone, Copy, Default)]
+pub struct DiffHighlight<'a> {
+    /// Token spans for the old (removed / context) side, per source line.
+    pub old: &'a [Vec<Span<'static>>],
+    /// Token spans for the new (added / context) side, per source line.
+    pub new: &'a [Vec<Span<'static>>],
+}
+
+impl<'a> DiffHighlight<'a> {
+    fn line(rows: &'a [Vec<Span<'static>>], n: i32) -> Option<&'a [Span<'static>]> {
+        let idx = usize::try_from(n.checked_sub(1)?).ok()?;
+        rows.get(idx)
+            .map(Vec::as_slice)
+            .filter(|spans| !spans.is_empty())
+    }
+
+    fn old_line(&self, n: i32) -> Option<&'a [Span<'static>]> {
+        Self::line(self.old, n)
+    }
+
+    fn new_line(&self, n: i32) -> Option<&'a [Span<'static>]> {
+        Self::line(self.new, n)
+    }
+}
+
+/// Layer an optional background tint onto a style (no-op when `None`).
+fn bg_style(style: Style, bg: Option<Color>) -> Style {
+    match bg {
+        Some(bg) => style.bg(bg),
+        None => style,
+    }
+}
 
 // ── Box-drawing characters ──────────────────────────────────────────
 
@@ -34,41 +79,22 @@ fn word_diff_spans(
     added_style: Style,
     emphasis_style: Style,
 ) -> (Vec<Span<'static>>, Vec<Span<'static>>) {
+    let (old_changed, new_changed) = changed_char_ranges(old_text, new_text);
     let old_chars: Vec<char> = old_text.chars().collect();
     let new_chars: Vec<char> = new_text.chars().collect();
 
-    // Find common prefix length
-    let prefix_len = old_chars
-        .iter()
-        .zip(new_chars.iter())
-        .take_while(|(a, b)| a == b)
-        .count();
+    let old_prefix: String = old_chars[..old_changed.start].iter().collect();
+    let old_changed_text: String = old_chars[old_changed.clone()].iter().collect();
+    let old_suffix: String = old_chars[old_changed.end..].iter().collect();
 
-    // Find common suffix length (after prefix)
-    let old_remaining = &old_chars[prefix_len..];
-    let new_remaining = &new_chars[prefix_len..];
-    let suffix_len = old_remaining
-        .iter()
-        .rev()
-        .zip(new_remaining.iter().rev())
-        .take_while(|(a, b)| a == b)
-        .count();
-
-    let old_diff_end = old_chars.len().saturating_sub(suffix_len);
-    let new_diff_end = new_chars.len().saturating_sub(suffix_len);
-
-    let old_prefix: String = old_chars[..prefix_len].iter().collect();
-    let old_changed: String = old_chars[prefix_len..old_diff_end].iter().collect();
-    let old_suffix: String = old_chars[old_diff_end..].iter().collect();
-
-    let new_prefix: String = new_chars[..prefix_len].iter().collect();
-    let new_changed: String = new_chars[prefix_len..new_diff_end].iter().collect();
-    let new_suffix: String = new_chars[new_diff_end..].iter().collect();
+    let new_prefix: String = new_chars[..new_changed.start].iter().collect();
+    let new_changed_text: String = new_chars[new_changed.clone()].iter().collect();
+    let new_suffix: String = new_chars[new_changed.end..].iter().collect();
 
     let removed_spans = vec![
         Span::styled(old_prefix, removed_style),
         Span::styled(
-            old_changed,
+            old_changed_text,
             emphasis_style.fg(removed_style.fg.unwrap_or(ratatui::style::Color::Red)),
         ),
         Span::styled(old_suffix, removed_style),
@@ -77,13 +103,74 @@ fn word_diff_spans(
     let added_spans = vec![
         Span::styled(new_prefix, added_style),
         Span::styled(
-            new_changed,
+            new_changed_text,
             emphasis_style.fg(added_style.fg.unwrap_or(ratatui::style::Color::Green)),
         ),
         Span::styled(new_suffix, added_style),
     ];
 
     (removed_spans, added_spans)
+}
+
+/// Return the changed character range on each side of a paired diff row.
+/// Character indices keep the result safe for UTF-8 source text.
+fn changed_char_ranges(old_text: &str, new_text: &str) -> (Range<usize>, Range<usize>) {
+    let old_chars: Vec<char> = old_text.chars().collect();
+    let new_chars: Vec<char> = new_text.chars().collect();
+    let prefix_len = old_chars
+        .iter()
+        .zip(new_chars.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let suffix_len = old_chars[prefix_len..]
+        .iter()
+        .rev()
+        .zip(new_chars[prefix_len..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    (
+        prefix_len..old_chars.len().saturating_sub(suffix_len),
+        prefix_len..new_chars.len().saturating_sub(suffix_len),
+    )
+}
+
+/// Preserve syntax foregrounds while layering the diff background and the
+/// word-level emphasis over the changed character range.
+fn style_syntax_diff_spans(
+    spans: &[Span<'static>],
+    changed: Range<usize>,
+    bg: Option<Color>,
+    emphasis: Style,
+) -> Vec<Span<'static>> {
+    let mut result = Vec::with_capacity(spans.len() + 2);
+    let mut global_start = 0usize;
+
+    for span in spans {
+        let chars: Vec<char> = span.content.chars().collect();
+        let global_end = global_start + chars.len();
+        let local_changed_start = changed.start.saturating_sub(global_start).min(chars.len());
+        let local_changed_end = changed.end.saturating_sub(global_start).min(chars.len());
+        let base_style = bg_style(span.style, bg);
+
+        push_char_span(&mut result, &chars[..local_changed_start], base_style);
+        if local_changed_start < local_changed_end {
+            push_char_span(
+                &mut result,
+                &chars[local_changed_start..local_changed_end],
+                base_style.patch(emphasis),
+            );
+        }
+        push_char_span(&mut result, &chars[local_changed_end..], base_style);
+        global_start = global_end;
+    }
+
+    result
+}
+
+fn push_char_span(result: &mut Vec<Span<'static>>, chars: &[char], style: Style) {
+    if !chars.is_empty() {
+        result.push(Span::styled(chars.iter().collect::<String>(), style));
+    }
 }
 
 // ── Line number formatting ──────────────────────────────────────────
@@ -101,9 +188,14 @@ fn fmt_line_no(n: Option<i32>, width: usize) -> String {
 /// Render diff text as colored lines with line numbers and word-level
 /// highlighting.
 ///
-pub fn render_diff_lines(diff_text: &str, styles: UiStyles<'_>, width: u16) -> Vec<Line<'static>> {
+pub fn render_diff_lines(
+    diff_text: &str,
+    styles: UiStyles<'_>,
+    width: u16,
+    hl: DiffHighlight<'_>,
+) -> Vec<Line<'static>> {
     let rows = diff_line_view_refs(diff_text);
-    render_rows(&rows, styles, width)
+    render_rows(&rows, styles, width, hl)
 }
 
 /// Render a bounded diff preview without first styling the full diff.
@@ -116,6 +208,7 @@ pub fn render_diff_preview_lines<F>(
     styles: UiStyles<'_>,
     width: u16,
     max_rows: usize,
+    hl: DiffHighlight<'_>,
     truncation_line: F,
 ) -> Vec<Line<'static>>
 where
@@ -127,8 +220,8 @@ where
     let window = diff_line_view_window(diff_text, max_rows);
     let gutter_width =
         line_number_width_for_rows(window.head.iter().chain(window.tail.iter()).copied());
-    let head = render_rows_with_gutter(&window.head, gutter_width, styles, width);
-    let tail = render_rows_with_gutter(&window.tail, gutter_width, styles, width);
+    let head = render_rows_with_gutter(&window.head, gutter_width, styles, width, hl);
+    let tail = render_rows_with_gutter(&window.tail, gutter_width, styles, width, hl);
     combine_preview_lines(head, tail, window.omitted, max_rows, truncation_line)
 }
 
@@ -136,9 +229,10 @@ fn render_rows(
     rows: &[DiffLineViewRef<'_>],
     styles: UiStyles<'_>,
     width: u16,
+    hl: DiffHighlight<'_>,
 ) -> Vec<Line<'static>> {
     let gutter_width = line_number_width(rows);
-    render_rows_with_gutter(rows, gutter_width, styles, width)
+    render_rows_with_gutter(rows, gutter_width, styles, width, hl)
 }
 
 fn render_rows_with_gutter(
@@ -146,14 +240,45 @@ fn render_rows_with_gutter(
     gutter_width: usize,
     styles: UiStyles<'_>,
     width: u16,
+    hl: DiffHighlight<'_>,
 ) -> Vec<Line<'static>> {
     let mut result = Vec::new();
+    // Track the last new-file line number rendered so a hunk boundary can show
+    // how many unchanged lines were skipped. `None` at the start of a batch and
+    // after each file header means the gap is unknown (e.g. across the omitted
+    // middle of a preview window), so no separator is emitted there.
+    let mut prev_new_line: Option<i32> = None;
 
     for row in rows {
-        result.extend(render_row(*row, gutter_width, styles, width));
+        if let DiffLineViewRef::Hunk { new_start, .. } = row
+            && let Some(prev) = prev_new_line
+        {
+            // Saturating so a malformed hunk header (e.g. a negative parsed
+            // `new_start`) can never overflow the subtraction.
+            let skipped = new_start.saturating_sub(prev).saturating_sub(1);
+            if skipped >= 1 {
+                result.push(unchanged_separator(skipped, styles));
+            }
+        }
+        result.extend(render_row(*row, gutter_width, styles, width, hl));
+        match row {
+            DiffLineViewRef::FileHeader { .. } => prev_new_line = None,
+            DiffLineViewRef::Context { new_line, .. } | DiffLineViewRef::Added { new_line, .. } => {
+                prev_new_line = Some(*new_line);
+            }
+            DiffLineViewRef::Removed { .. }
+            | DiffLineViewRef::Hunk { .. }
+            | DiffLineViewRef::RawHunk { .. } => {}
+        }
     }
 
     result
+}
+
+/// A `⋯ N unchanged lines` separator shown at a hunk boundary.
+fn unchanged_separator(skipped: i32, styles: UiStyles<'_>) -> Line<'static> {
+    let plural = if skipped == 1 { "" } else { "s" };
+    Line::from(Span::raw(format!("  ⋯ {skipped} unchanged line{plural}")).style(styles.dim_style()))
 }
 
 fn render_row(
@@ -161,15 +286,18 @@ fn render_row(
     gutter_width: usize,
     styles: UiStyles<'_>,
     width: u16,
+    hl: DiffHighlight<'_>,
 ) -> Vec<Line<'static>> {
-    let removed_style = Style::new().fg(styles.diff_removed());
-    let added_style = Style::new().fg(styles.diff_added());
+    let removed_bg = styles.diff_removed_bg();
+    let added_bg = styles.diff_added_bg();
+    let removed_style = bg_style(Style::new().fg(styles.diff_removed()), removed_bg);
+    let added_style = bg_style(Style::new().fg(styles.diff_added()), added_bg);
     let emphasis = Style::new().reversed();
 
     match row {
         DiffLineViewRef::FileHeader { marker, path } => {
             vec![Line::from(vec![
-                Span::raw(format!("  {marker} ")).fg(styles.dim()),
+                Span::raw(format!("  {marker} ")).style(styles.dim_style()),
                 Span::raw(path.to_string()).fg(styles.primary()).bold(),
             ])]
         }
@@ -201,14 +329,18 @@ fn render_row(
         } => {
             let old_no = fmt_line_no(Some(old_line), gutter_width);
             let new_no = fmt_line_no(Some(new_line), gutter_width);
+            // Context is unchanged, so it takes syntax tokens (if any) but no
+            // diff background tint.
+            let content_spans = match hl.new_line(new_line).or_else(|| hl.old_line(old_line)) {
+                Some(spans) => spans.to_vec(),
+                None => vec![Span::raw(content.to_string()).style(styles.dim_style())],
+            };
             render_wrapped_content_line(
                 vec![
-                    Span::raw(format!("  {old_no} {new_no} "))
-                        .fg(styles.dim())
-                        .dim(),
+                    Span::raw(format!("  {old_no} {new_no} ")).style(styles.dim_style()),
                     Span::raw(format!("{BOX_VERTICAL} ")).fg(styles.border()),
                 ],
-                vec![Span::raw(content.to_string()).fg(styles.dim())],
+                content_spans,
                 width,
                 styles.dim(),
             )
@@ -221,15 +353,25 @@ fn render_row(
             let old_no = fmt_line_no(Some(old_line), gutter_width);
             let blank = fmt_line_no(None, gutter_width);
             let prefix = vec![
-                Span::raw(format!("  {old_no} {blank} "))
-                    .fg(styles.dim())
-                    .dim(),
+                Span::raw(format!("  {old_no} {blank} ")).style(styles.dim_style()),
                 Span::styled(
                     format!("{BOX_VERTICAL} "),
-                    Style::new().fg(styles.diff_removed()),
+                    bg_style(Style::new().fg(styles.diff_removed()), removed_bg),
                 ),
             ];
-            let content_spans = if let Some(compare_to) = compare_to {
+            let content_spans = if let Some(spans) = hl.old_line(old_line) {
+                // Syntax tokens carry the foreground; the diff tint is layered
+                // behind them; word emphasis is applied without replacing the
+                // token foreground.
+                let mut out = vec![Span::styled("-", removed_style)];
+                let changed = compare_to
+                    .map(|new_text| changed_char_ranges(content, new_text).0)
+                    .unwrap_or(0..0);
+                out.extend(style_syntax_diff_spans(
+                    spans, changed, removed_bg, emphasis,
+                ));
+                out
+            } else if let Some(compare_to) = compare_to {
                 let (rm_spans, _) =
                     word_diff_spans(content, compare_to, removed_style, added_style, emphasis);
                 let mut spans = vec![Span::styled("-", removed_style)];
@@ -248,15 +390,20 @@ fn render_row(
             let blank = fmt_line_no(None, gutter_width);
             let new_no = fmt_line_no(Some(new_line), gutter_width);
             let prefix = vec![
-                Span::raw(format!("  {blank} {new_no} "))
-                    .fg(styles.dim())
-                    .dim(),
+                Span::raw(format!("  {blank} {new_no} ")).style(styles.dim_style()),
                 Span::styled(
                     format!("{BOX_VERTICAL} "),
-                    Style::new().fg(styles.diff_added()),
+                    bg_style(Style::new().fg(styles.diff_added()), added_bg),
                 ),
             ];
-            let content_spans = if let Some(compare_to) = compare_to {
+            let content_spans = if let Some(spans) = hl.new_line(new_line) {
+                let mut out = vec![Span::styled("+", added_style)];
+                let changed = compare_to
+                    .map(|old_text| changed_char_ranges(old_text, content).1)
+                    .unwrap_or(0..0);
+                out.extend(style_syntax_diff_spans(spans, changed, added_bg, emphasis));
+                out
+            } else if let Some(compare_to) = compare_to {
                 let (_, add_spans) =
                     word_diff_spans(compare_to, content, removed_style, added_style, emphasis);
                 let mut spans = vec![Span::styled("+", added_style)];
@@ -500,7 +647,7 @@ pub fn render_structured_diff(
 
     // ── Diff content ────────────────────────────────────────────
     let content_width = width.saturating_sub(1).max(1);
-    let diff_lines = render_diff_lines(diff_text, styles, content_width);
+    let diff_lines = render_diff_lines(diff_text, styles, content_width, DiffHighlight::default());
     for line in diff_lines {
         // Re-wrap each line inside the box border
         let mut spans = vec![Span::raw(BOX_VERTICAL.to_string()).fg(styles.border())];
@@ -530,7 +677,13 @@ fn truncate_path(path: &str, max_len: usize) -> String {
         return "...".to_string();
     }
     let keep = max_len - 3;
-    format!("...{}", &path[path.len() - keep..])
+    // Snap the byte cut to a char boundary so a multi-byte (CJK/emoji) path
+    // never panics slicing mid-UTF-8-char (repo String-Slicing rule). Round UP
+    // (`ceil`) so the kept tail stays ≤ `keep` bytes and the result never
+    // exceeds `max_len`. `tui-ui` is domain-free, so use the std primitive
+    // rather than `coco_utils_string`.
+    let cut = path.ceil_char_boundary(path.len() - keep);
+    format!("...{}", &path[cut..])
 }
 
 #[cfg(test)]

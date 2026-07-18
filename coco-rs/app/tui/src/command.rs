@@ -171,7 +171,10 @@ pub enum UserCommand {
     /// the driver writes it off-thread via `coco_session::PromptHistory`.
     /// `display` carries any mode prefix (`!` / `/`) so recall returns to
     /// the same mode.
-    PersistPromptHistory { display: String },
+    PersistPromptHistory {
+        display: String,
+        pasted_contents: std::collections::HashMap<i32, String>,
+    },
     /// Interrupt current operation (Ctrl+C).
     Interrupt(coco_types::TurnAbortReason),
     /// Close an idle sidechat and return to the primary projection.

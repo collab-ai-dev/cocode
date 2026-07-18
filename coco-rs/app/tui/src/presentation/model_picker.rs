@@ -76,7 +76,9 @@ pub(crate) fn model_picker_lines(
     let list_start = lines.len();
     if view.list.rows.is_empty() {
         lines.push(picker::pad_line(
-            Line::from(Span::raw(t!("dialog.model_picker_empty").to_string()).fg(styles.dim())),
+            Line::from(
+                Span::raw(t!("dialog.model_picker_empty").to_string()).style(styles.dim_style()),
+            ),
             inner_width,
             None,
         ));
@@ -105,7 +107,7 @@ pub(crate) fn model_picker_lines(
     lines.push(picker::blank_line(inner_width));
     let hints = picker::collapse_hints(t!("dialog.model_picker_hints").as_ref(), inner_width);
     lines.push(picker::pad_line(
-        Line::from(Span::raw(hints).fg(styles.dim())),
+        Line::from(Span::raw(hints).style(styles.dim_style())),
         inner_width,
         None,
     ));
@@ -176,7 +178,7 @@ fn filtered_entries(m: &ModelPickerState) -> Vec<&ModelEntry> {
 /// `Role:  ▸Main◂  Fast  Plan  …` — the active role gets a reverse-video pill.
 fn render_role_tabs(active: ModelRole, styles: UiStyles<'_>) -> Line<'static> {
     let mut spans = vec![
-        Span::raw(t!("dialog.model_picker_role_label").to_string()).fg(styles.dim()),
+        Span::raw(t!("dialog.model_picker_role_label").to_string()).style(styles.dim_style()),
         Span::raw("  "),
     ];
     for (idx, role) in ROLE_ORDER.iter().enumerate() {
@@ -202,11 +204,11 @@ fn render_role_tabs(active: ModelRole, styles: UiStyles<'_>) -> Line<'static> {
 /// straight away (no need to select a row first). The terminal cursor is pinned
 /// to the caret by the modal renderer, so it reads as a live text field.
 fn render_filter_line(m: &ModelPickerState, styles: UiStyles<'_>) -> Line<'static> {
-    let icon = Span::raw("⌕ ").fg(styles.dim());
+    let icon = Span::raw("⌕ ").style(styles.dim_style());
     if m.filter.is_empty() {
         Line::from(vec![
             icon,
-            Span::raw(t!("dialog.model_picker_type_filter").to_string()).fg(styles.dim()),
+            Span::raw(t!("dialog.model_picker_type_filter").to_string()).style(styles.dim_style()),
         ])
     } else {
         Line::from(vec![icon, Span::raw(m.filter.clone()).fg(styles.text())])
@@ -313,7 +315,8 @@ fn render_effort_line(
         .and_then(|selected| view.filtered.get(selected))
     else {
         return Line::from(
-            Span::raw(t!("dialog.model_picker_thinking_label").to_string()).fg(styles.dim()),
+            Span::raw(t!("dialog.model_picker_thinking_label").to_string())
+                .style(styles.dim_style()),
         );
     };
     if let Some(summary) = unavailable_summary(&entry.unavailable_reasons) {
@@ -322,16 +325,17 @@ fn render_effort_line(
                 .fg(styles.warning())
                 .bold(),
             Span::raw("  "),
-            Span::raw(summary).fg(styles.dim()),
+            Span::raw(summary).style(styles.dim_style()),
         ]);
     }
     let mut spans = vec![
-        Span::raw(t!("dialog.model_picker_thinking_label").to_string()).fg(styles.dim()),
+        Span::raw(t!("dialog.model_picker_thinking_label").to_string()).style(styles.dim_style()),
         Span::raw("  "),
     ];
     if entry.supported_efforts.is_empty() {
         spans.push(
-            Span::raw(t!("dialog.model_picker_thinking_unavailable").to_string()).fg(styles.dim()),
+            Span::raw(t!("dialog.model_picker_thinking_unavailable").to_string())
+                .style(styles.dim_style()),
         );
         return Line::from(spans);
     }

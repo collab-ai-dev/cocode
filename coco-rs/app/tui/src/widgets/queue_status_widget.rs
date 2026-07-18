@@ -64,7 +64,7 @@ impl Widget for QueueStatusWidget<'_> {
         if area.height == 0 {
             return;
         }
-        let dim = Style::default().fg(self.styles.dim());
+        let dim = self.styles.dim_style();
         let chevron = Style::default().fg(self.styles.accent());
         let total = self.queued.len();
         let overflow = total > MAX_ROWS;

@@ -14,6 +14,56 @@ fn cmd(name: &str, aliases: &[&str], desc: Option<&str>, hint: Option<&str>) -> 
     }
 }
 
+#[test]
+fn ranked_rows_carry_highlight_indices_over_the_slash_label() {
+    // C6: `FileSuggestion::match_indices` was computed and documented "for
+    // highlighting" and every consumer dropped it. The ranker's own hits must
+    // reach the row too — mapped onto the rendered `/name`, so index 0 is the
+    // slash and the match starts at 1.
+    let commands = [cmd("clear", &[], None, None)];
+    let items = rank("cle", &commands);
+    assert_eq!(items[0].label, "/clear");
+    assert_eq!(
+        items[0].highlight_indices,
+        vec![1, 2, 3],
+        "a prefix hit must mark `cle` inside `/clear`"
+    );
+}
+
+#[test]
+fn a_mid_name_match_highlights_where_it_landed() {
+    let commands = [cmd("compact", &[], None, None)];
+    let items = rank("pac", &commands);
+    assert_eq!(items[0].label, "/compact");
+    // /compact → c(1)o(2)m(3)p(4)a(5)c(6)t(7)
+    assert_eq!(items[0].highlight_indices, vec![4, 5, 6]);
+}
+
+#[test]
+fn an_alias_only_hit_leaves_the_label_unhighlighted() {
+    // The row still ranks (the alias matched), but nothing in `/name` did —
+    // marking arbitrary chars there would be a lie.
+    let commands = [cmd("clear", &["reset"], None, None)];
+    let items = rank("rese", &commands);
+    assert_eq!(items[0].label, "/clear");
+    assert!(
+        items[0].highlight_indices.is_empty(),
+        "an alias hit has nothing to mark in the label"
+    );
+}
+
+#[test]
+fn the_empty_query_listing_has_no_highlights() {
+    let commands = [builtin("help", None), builtin("clear", None)];
+    for item in rank("", &commands) {
+        assert!(
+            item.highlight_indices.is_empty(),
+            "a context-free listing matched nothing: {}",
+            item.label
+        );
+    }
+}
+
 fn builtin(name: &str, desc: Option<&str>) -> SlashCommandInfo {
     // type=local commands always sit in the Builtin bucket of the
     // empty-query layout regardless of `source`.

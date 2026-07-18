@@ -3,6 +3,7 @@ use pretty_assertions::assert_eq;
 use ratatui::backend::Backend;
 use ratatui::backend::CrosstermBackend;
 use ratatui::backend::TestBackend;
+use ratatui::buffer::CellDiffOption;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
@@ -182,7 +183,11 @@ fn surface_terminal_skips_hidden_cells_after_wide_chars() {
 
     let updates = terminal.buffer_updates();
 
-    assert!(updates.iter().all(|(_, _, cell)| !cell.skip));
+    assert!(
+        updates
+            .iter()
+            .all(|(_, _, cell)| !matches!(cell.diff_option, CellDiffOption::Skip))
+    );
     let symbols = updates
         .iter()
         .map(|(_, _, cell)| cell.symbol())
@@ -573,8 +578,11 @@ fn crossterm_surface_backend_leave_modes_omits_alt_screen_leave() {
     let mut backend = CrosstermBackend::new(capture.clone());
 
     backend
-        .leave_terminal_modes()
-        .expect("leave terminal modes");
+        .begin_terminal_restore()
+        .expect("begin terminal restore");
+    backend
+        .finish_terminal_restore()
+        .expect("finish terminal restore");
 
     let bytes = capture.ansi_bytes();
     parse_with_vt100(&bytes);
@@ -911,6 +919,368 @@ fn vt100_backend_decodes_styled_cells_and_cursor() {
 
     // Cursor parked exactly where the claim asked (vt100 reports row, col).
     assert_eq!(screen.cursor_position(), (0, 7));
+}
+
+// ─── B8: upstream `Buffer::diff` regression classes ────────────────────────
+//
+// coco's paint engine does its own cell diff (`buffer_updates`) instead of
+// using stock `ratatui::Terminal`, so upstream's diff fixes do not flow in on
+// a version bump — but their BUG CLASSES still apply to our loop. The engine
+// was audited against all three; these tests pin the 0.30.2
+// `CellDiffOption` migration and its zero-clone index scratch.
+
+/// Stage `on_screen` as the painted state and `next` as the frame under test,
+/// then return exactly what the engine would emit for it.
+fn diff_between(
+    width: u16,
+    on_screen: impl FnOnce(&mut ratatui::buffer::Buffer),
+    next: impl FnOnce(&mut ratatui::buffer::Buffer),
+) -> Vec<(u16, u16, Cell)> {
+    let backend = TestBackend::new(width, 1);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, 1));
+    on_screen(terminal.current_buffer_mut());
+    // Promote the painted state to "what the terminal shows" and leave a clean
+    // current buffer behind, exactly as a completed frame would.
+    terminal.swap_buffers();
+    // A fresh terminal starts invalidated (everything emits); clear it so the
+    // diff itself is what is under test.
+    terminal.invalidated = false;
+    next(terminal.current_buffer_mut());
+    terminal.buffer_updates()
+}
+
+fn updated_columns(updates: &[(u16, u16, Cell)]) -> Vec<u16> {
+    updates.iter().map(|(x, _, _)| *x).collect()
+}
+
+#[test]
+fn diff_never_emits_a_wide_chars_trailing_cell() {
+    // Upstream #2308 class. A wide char's trailing cell is not addressable —
+    // writing it would print a stray blank over the glyph's right half. Here the
+    // trailing cell's content genuinely differs from what is on screen ("b"),
+    // and it must STILL be withheld: the `to_skip` gate, not cell equality, is
+    // what protects it.
+    let updates = diff_between(
+        8,
+        |buffer| buffer.set_string(0, 0, "ab", Style::default()),
+        |buffer| buffer.set_string(0, 0, "中", Style::default()),
+    );
+
+    assert_eq!(
+        updated_columns(&updates),
+        vec![0],
+        "only the wide char's leading cell may be emitted"
+    );
+    assert_eq!(updates[0].2.symbol(), "中");
+}
+
+#[test]
+fn diff_omits_style_only_change_in_a_wide_chars_trailing_cell() {
+    // Upstream #2308 class, style-only variant: the glyph is unchanged and only
+    // the trailing cell's style moved. Nothing is addressable, so nothing may be
+    // emitted — an emit here would blank the right half of the glyph.
+    let updates = diff_between(
+        8,
+        |buffer| buffer.set_string(0, 0, "中", Style::default()),
+        |buffer| {
+            buffer.set_string(0, 0, "中", Style::default());
+            buffer[(1, 0)].set_style(Style::default().add_modifier(Modifier::BOLD));
+        },
+    );
+
+    assert!(
+        updates.is_empty(),
+        "a style-only change confined to a trailing cell must emit nothing, got {:?}",
+        updated_columns(&updates)
+    );
+}
+
+#[test]
+fn diff_reemits_the_cell_uncovered_by_a_wide_to_narrow_replacement() {
+    // Upstream #2587 class. Replacing 中 with a narrow "a" leaves the glyph's
+    // right half on screen at x=1; that column must be re-addressed or the stale
+    // half survives. This is the realistic shape: the reset buffer puts a space
+    // at x=1, so plain inequality catches it.
+    let updates = diff_between(
+        8,
+        |buffer| buffer.set_string(0, 0, "中", Style::default()),
+        |buffer| buffer.set_string(0, 0, "a", Style::default()),
+    );
+
+    assert!(
+        updated_columns(&updates).contains(&1),
+        "the column uncovered by the wide→narrow replacement must be re-emitted, got {:?}",
+        updated_columns(&updates)
+    );
+}
+
+#[test]
+fn diff_reemits_an_uncovered_cell_even_when_it_compares_equal() {
+    // Upstream #2587 class, pinning coco's DIVERGENCE from the upstream fix.
+    // Here the uncovered cell compares byte-identical to what was on screen, so
+    // an equality-driven diff would skip it and leave 中's right half painted.
+    // coco propagates `invalidated` by `max(prev_width, next_width)`, which
+    // re-emits the cell regardless of equality — more conservative than
+    // upstream's style-filtered fix. Do not "optimize" this away.
+    let updates = diff_between(
+        8,
+        |buffer| buffer.set_string(0, 0, "中", Style::default()),
+        |buffer| {
+            buffer[(0, 0)].set_symbol("a");
+            // Byte-identical to the trailing cell 中 left behind.
+            buffer[(1, 0)].set_symbol("");
+        },
+    );
+
+    assert_eq!(
+        updated_columns(&updates),
+        vec![0, 1],
+        "the uncovered cell must be re-emitted even though it compares equal"
+    );
+}
+
+#[test]
+fn diff_honors_always_update_and_forced_width_without_overflow() {
+    use std::num::NonZeroU16;
+
+    let updates = diff_between(
+        3,
+        |buffer| buffer.set_string(0, 0, "abc", Style::default()),
+        |buffer| {
+            buffer.set_string(0, 0, "abc", Style::default());
+            buffer[(0, 0)].set_diff_option(CellDiffOption::AlwaysUpdate);
+            buffer[(1, 0)].set_diff_option(CellDiffOption::ForcedWidth(
+                NonZeroU16::new(u16::MAX).expect("non-zero"),
+            ));
+        },
+    );
+
+    assert_eq!(updated_columns(&updates), vec![0, 1]);
+}
+
+// ─── A1: cursor-escape dedup + zero-byte idle frames ───────────────────────
+
+/// A viewport frame claiming the cursor at `x`, with a fixed style.
+fn draw_claiming_cursor(
+    terminal: &mut SurfaceTerminal<CrosstermBackend<CapturedWriter>>,
+    x: u16,
+) -> Result<(), io::Error> {
+    terminal.draw_viewport(|frame| {
+        frame.set_cursor_claim(CursorClaim {
+            position: Position { x, y: 1 },
+            style: SetCursorStyle::SteadyBar,
+        });
+    })
+}
+
+fn draw_full_frame_claiming_cursor(
+    terminal: &mut SurfaceTerminal<CrosstermBackend<CapturedWriter>>,
+    x: u16,
+) -> Result<(), io::Error> {
+    terminal.begin_synchronized_update()?;
+    let draw = draw_claiming_cursor(terminal, x);
+    let end = terminal.end_synchronized_update();
+    match (draw, end) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(err), _) | (Ok(()), Err(err)) => Err(err),
+    }
+}
+
+fn cursor_test_terminal(
+    capture: &CapturedWriter,
+) -> SurfaceTerminal<CrosstermBackend<CapturedWriter>> {
+    let backend = CrosstermBackend::new(capture.clone());
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 1, 20, 1));
+    terminal
+}
+
+#[test]
+fn identical_frame_emits_no_cursor_escapes_and_no_buffer_writes() {
+    // The blink fix. Terminals restart the cursor-blink timer on every
+    // Show/MoveTo, so re-asserting an unchanged claim at spinner cadence pins
+    // the composer cursor permanently solid — a visible "the app is repainting
+    // at me" tell. A frame that paints the same cells and claims the same
+    // cursor must say nothing at all.
+    let capture = CapturedWriter::default();
+    let mut terminal = cursor_test_terminal(&capture);
+    draw_full_frame_claiming_cursor(&mut terminal, 3).expect("first frame");
+
+    capture.reset();
+    draw_full_frame_claiming_cursor(&mut terminal, 3).expect("second frame");
+
+    let bytes = capture.ansi_bytes();
+    assert_eq!(
+        bytes, "",
+        "an unchanged frame must emit zero bytes, got {bytes:?}"
+    );
+    assert!(
+        terminal.last_viewport_draw_stats().frame_skipped,
+        "the skip must be observable via frame_skipped"
+    );
+    assert_eq!(terminal.last_viewport_draw_stats().skipped_frames_total, 1);
+}
+
+#[test]
+fn repeated_spinner_frames_preserve_cursor_blink() {
+    // The realistic shape: the viewport keeps changing (a spinner glyph) while
+    // the cursor claim does not. Cells must repaint; the cursor must not be
+    // re-asserted, or the blink dies for the whole turn.
+    let capture = CapturedWriter::default();
+    let backend = CrosstermBackend::new(capture.clone());
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 1, 20, 1));
+    let claim = CursorClaim {
+        position: Position { x: 3, y: 1 },
+        style: SetCursorStyle::SteadyBar,
+    };
+    for glyph in ["|", "/", "-", "\\"] {
+        terminal
+            .draw_viewport(|frame| {
+                frame.render_widget(Paragraph::new(glyph), frame.area());
+                frame.set_cursor_claim(claim);
+            })
+            .expect("spinner frame");
+        if glyph == "|" {
+            // Drop the first frame: it legitimately emits the full claim.
+            capture.reset();
+        }
+    }
+
+    let bytes = capture.ansi_bytes();
+    assert!(
+        bytes.contains('/') && bytes.contains('-'),
+        "spinner cells must still repaint: {bytes:?}"
+    );
+    assert!(
+        !bytes.contains("\x1b[?25h"),
+        "an unchanged claim must not re-show the cursor: {bytes:?}"
+    );
+    assert!(
+        !bytes.contains("\x1b[6 q"),
+        "an unchanged claim must not re-set the cursor style: {bytes:?}"
+    );
+    assert!(
+        !bytes.contains("\x1b[2;4H"),
+        "an unchanged claim must not re-move the cursor: {bytes:?}"
+    );
+}
+
+#[test]
+fn cursor_claim_delta_emits_only_what_changed() {
+    // Position moved, style and visibility did not: exactly one MoveTo.
+    let capture = CapturedWriter::default();
+    let mut terminal = cursor_test_terminal(&capture);
+    draw_claiming_cursor(&mut terminal, 3).expect("first frame");
+
+    capture.reset();
+    draw_claiming_cursor(&mut terminal, 5).expect("moved frame");
+
+    let bytes = capture.ansi_bytes();
+    assert!(
+        bytes.contains("\x1b[2;6H"),
+        "the moved cursor must be re-positioned: {bytes:?}"
+    );
+    assert!(
+        !bytes.contains("\x1b[6 q"),
+        "an unchanged style must not be re-emitted: {bytes:?}"
+    );
+    assert!(
+        !bytes.contains("\x1b[?25h"),
+        "an already-visible cursor must not be re-shown: {bytes:?}"
+    );
+}
+
+#[test]
+fn invalidate_viewport_forces_a_full_cursor_claim() {
+    // Invalidation means the engine wrote raw VT outside the diff, so the
+    // cursor's whereabouts are no longer ours to assume: re-assert everything.
+    let capture = CapturedWriter::default();
+    let mut terminal = cursor_test_terminal(&capture);
+    draw_claiming_cursor(&mut terminal, 3).expect("first frame");
+
+    terminal.invalidate_viewport();
+    capture.reset();
+    draw_claiming_cursor(&mut terminal, 3).expect("frame after invalidation");
+
+    let bytes = capture.ansi_bytes();
+    assert!(
+        bytes.contains("\x1b[6 q"),
+        "style must be re-emitted after invalidation: {bytes:?}"
+    );
+    assert!(
+        bytes.contains("\x1b[?25h"),
+        "visibility must be re-emitted after invalidation: {bytes:?}"
+    );
+    assert!(
+        bytes.contains("\x1b[2;4H"),
+        "position must be re-emitted after invalidation: {bytes:?}"
+    );
+}
+
+#[test]
+fn history_insert_forces_a_full_cursor_claim_on_the_next_frame() {
+    // `insert_history_rows` re-parks with a raw absolute move and scrolls rows
+    // under the viewport, both outside the diff.
+    let capture = CapturedWriter::default();
+    let mut terminal = cursor_test_terminal(&capture);
+    draw_claiming_cursor(&mut terminal, 3).expect("first frame");
+
+    terminal
+        .insert_history_rows(&history_rows_width([Line::from("hello")], 20))
+        .expect("insert history");
+    capture.reset();
+    draw_claiming_cursor(&mut terminal, 3).expect("frame after history insert");
+
+    let bytes = capture.ansi_bytes();
+    assert!(
+        bytes.contains("\x1b[?25h") && bytes.contains("\x1b[6 q"),
+        "the cursor claim must be re-asserted after a history insert: {bytes:?}"
+    );
+}
+
+#[test]
+fn note_external_cursor_move_forces_a_full_cursor_claim() {
+    // The $EDITOR / suspend handoff: the viewport content is still valid (no
+    // invalidation), but another process owned the cursor.
+    let capture = CapturedWriter::default();
+    let mut terminal = cursor_test_terminal(&capture);
+    draw_claiming_cursor(&mut terminal, 3).expect("first frame");
+
+    terminal.note_external_cursor_move();
+    capture.reset();
+    draw_claiming_cursor(&mut terminal, 3).expect("frame after external move");
+
+    let bytes = capture.ansi_bytes();
+    assert!(
+        bytes.contains("\x1b[2;4H"),
+        "the cursor must be re-positioned after an external handoff: {bytes:?}"
+    );
+}
+
+#[test]
+fn hidden_then_reshown_cursor_does_not_re_emit_an_unchanged_style() {
+    // The hide path never touches the style, so the tracked style must survive
+    // a hide and a re-show at the same style must stay silent.
+    let capture = CapturedWriter::default();
+    let mut terminal = cursor_test_terminal(&capture);
+    draw_claiming_cursor(&mut terminal, 3).expect("visible frame");
+    // A frame with no claim hides and parks the cursor.
+    terminal.draw_viewport(|_| {}).expect("hidden frame");
+
+    capture.reset();
+    draw_claiming_cursor(&mut terminal, 3).expect("re-shown frame");
+
+    let bytes = capture.ansi_bytes();
+    assert!(
+        bytes.contains("\x1b[?25h"),
+        "the cursor must be re-shown: {bytes:?}"
+    );
+    assert!(
+        !bytes.contains("\x1b[6 q"),
+        "the style survived the hide and must not be re-emitted: {bytes:?}"
+    );
 }
 
 #[derive(Debug, Default, Clone)]

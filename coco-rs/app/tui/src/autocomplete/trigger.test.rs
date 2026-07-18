@@ -171,6 +171,7 @@ fn at_popup_retains_prior_items_across_keystroke_until_async_lands() {
             .as_mut()
             .expect("async @ popup installed");
         active.items = vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "src/foo.rs".to_string(),
             description: None,
             metadata: Some(SuggestionMeta::Path {
@@ -278,6 +279,7 @@ fn test_apply_async_result_merges_files_after_agents() {
 
     let file_results = vec![
         SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "src/lib.rs".into(),
             description: None,
             metadata: Some(SuggestionMeta::Path {
@@ -285,6 +287,7 @@ fn test_apply_async_result_merges_files_after_agents() {
             }),
         },
         SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "src/main.rs".into(),
             description: None,
             metadata: Some(SuggestionMeta::Path {
@@ -322,11 +325,13 @@ fn test_apply_async_result_merges_directory_rows_after_agents() {
 
     let file_results = vec![
         SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "src/".into(),
             description: None,
             metadata: Some(SuggestionMeta::Path { is_directory: true }),
         },
         SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "src/main.rs".into(),
             description: None,
             metadata: Some(SuggestionMeta::Path {
@@ -373,6 +378,7 @@ fn test_apply_async_result_drops_stale_query() {
         SuggestionKind::At,
         "src", // stale — user has moved to "docs"
         vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "src/lib.rs".into(),
             description: None,
             metadata: Some(SuggestionMeta::Path {
@@ -404,6 +410,7 @@ fn test_apply_async_result_drops_when_dismissed() {
         SuggestionKind::Symbol,
         "foo",
         vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "foo".into(),
             description: None,
             metadata: None,
@@ -434,6 +441,7 @@ fn test_explicit_at_path_uses_path_kind_and_drops_fuzzy_result() {
         SuggestionKind::At,
         &query,
         vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "fuzzy-result.rs".into(),
             description: None,
             metadata: Some(SuggestionMeta::Path {
@@ -502,6 +510,7 @@ fn test_bash_mode_plain_command_keeps_history_ghost_available() {
     let mut state = AppState::new();
     state.ui.input.history.push(crate::state::ui::HistoryEntry {
         text: "!cargo test --all".to_string(),
+        timestamp_ms: None,
         pastes: Vec::new(),
     });
     state.ui.input.textarea.set_text("!cargo");
@@ -531,6 +540,7 @@ fn test_bash_path_result_drops_stale_at_result() {
         SuggestionKind::At,
         "src/ma",
         vec![SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "src/main.rs".into(),
             description: None,
             metadata: Some(SuggestionMeta::Path {
@@ -596,6 +606,7 @@ fn test_keyed_async_result_drops_stale_same_query_different_range() {
         .expect("second request key");
 
     let stale = vec![SuggestionItem {
+        highlight_indices: Vec::new(),
         label: "first/src.rs".into(),
         description: None,
         metadata: Some(SuggestionMeta::Path {
@@ -605,6 +616,7 @@ fn test_keyed_async_result_drops_stale_same_query_different_range() {
     assert!(!apply_async_result_for_key(&mut state, &first, stale));
 
     let fresh = vec![SuggestionItem {
+        highlight_indices: Vec::new(),
         label: "second/src.rs".into(),
         description: None,
         metadata: Some(SuggestionMeta::Path {

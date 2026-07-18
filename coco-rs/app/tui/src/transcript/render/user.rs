@@ -33,10 +33,15 @@ pub(super) fn try_render(
             ) {
                 let mut spans = vec![
                     Span::raw("◇ ").fg(w.styles.accent()).dim(),
-                    Span::raw(t!("chat.implementing_approved_plan").to_string()).fg(w.styles.dim()),
+                    Span::raw(t!("chat.implementing_approved_plan").to_string())
+                        .style(w.styles.dim_style()),
                 ];
                 if let Some(file) = plan_implementation_chip_file(text) {
-                    spans.push(Span::raw(format!(" · {file}")).fg(w.styles.dim()).bold());
+                    spans.push(
+                        Span::raw(format!(" · {file}"))
+                            .style(w.styles.dim_style())
+                            .bold(),
+                    );
                 }
                 lines.push(Line::from(spans));
                 return Some(());
@@ -78,8 +83,8 @@ pub(super) fn try_render(
             // placeholder still reads as a distinct, attached artifact.
             for pill in image_pill_refs(text) {
                 lines.push(Line::from(vec![
-                    Span::raw("  ⎿ ").fg(w.styles.dim()),
-                    Span::raw(pill).fg(w.styles.dim()),
+                    Span::raw("  ⎿ ").style(w.styles.dim_style()),
+                    Span::raw(pill).style(w.styles.dim_style()),
                 ]));
             }
             Some(())
@@ -108,21 +113,21 @@ pub(super) fn try_render(
             {
                 lines.push(Line::from(vec![
                     Span::raw("◇ ").fg(w.styles.accent()).dim(),
-                    Span::raw("Referenced file ").fg(w.styles.dim()),
-                    Span::raw(path).fg(w.styles.dim()).bold(),
+                    Span::raw("Referenced file ").style(w.styles.dim_style()),
+                    Span::raw(path).style(w.styles.dim_style()).bold(),
                 ]));
             } else if let Some(path) = super::nested_memory_chip_path(cell.source.as_ref(), w.cwd) {
                 lines.push(Line::from(vec![
                     Span::raw("◆ ").fg(w.styles.accent()).dim(),
-                    Span::raw("memory · ").fg(w.styles.dim()),
-                    Span::raw(path).fg(w.styles.dim()),
+                    Span::raw("memory · ").style(w.styles.dim_style()),
+                    Span::raw(path).style(w.styles.dim_style()),
                 ]));
             } else if let Some(summary) = super::attachment_summary_text(cell.source.as_ref()) {
                 // Generic attachment: width-1 hollow `◇` (vs memory's filled `◆`)
                 // so injected context still aligns at the column-2 gutter.
                 lines.push(Line::from(vec![
                     Span::raw("◇ ").fg(w.styles.accent()).dim(),
-                    Span::raw(summary).fg(w.styles.dim()),
+                    Span::raw(summary).style(w.styles.dim_style()),
                 ]));
             }
             Some(())
@@ -140,7 +145,7 @@ pub(super) fn try_render(
                 "chat.interrupted_marker"
             };
             lines.push(Line::from(
-                Span::raw(t!(key).to_string()).fg(w.styles.dim()),
+                Span::raw(t!(key).to_string()).style(w.styles.dim_style()),
             ));
             Some(())
         }
@@ -163,13 +168,13 @@ pub(super) fn try_render(
             let mut iter = lc.output.lines();
             for line in iter.by_ref().take(20) {
                 lines.push(Line::from(
-                    Span::raw(format!("  {line}")).fg(w.styles.dim()),
+                    Span::raw(format!("  {line}")).style(w.styles.dim_style()),
                 ));
             }
             if iter.next().is_some() {
                 lines.push(Line::from(
                     Span::raw(t!("chat.truncated").to_string())
-                        .fg(w.styles.dim())
+                        .style(w.styles.dim_style())
                         .italic(),
                 ));
             }
