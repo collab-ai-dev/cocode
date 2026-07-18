@@ -298,6 +298,9 @@
       "description": "Queued command was removed from the engine queue and is ready to\nrestore into the composer for editing.",
       "type": "object",
       "properties": {
+        "composer": {
+          "$ref": "#/$defs/SubmittedComposer"
+        },
         "id": {
           "type": "string"
         },
@@ -318,17 +321,16 @@
       "required": [
         "type",
         "id",
-        "prompt"
+        "prompt",
+        "composer"
       ]
     },
     {
       "description": "Editable queued commands were removed from the engine queue and\ncombined with the current composer draft.",
       "type": "object",
       "properties": {
-        "cursor": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0
+        "composer": {
+          "$ref": "#/$defs/SubmittedComposer"
         },
         "ids": {
           "type": "array",
@@ -354,7 +356,7 @@
         "type",
         "ids",
         "prompt",
-        "cursor"
+        "composer"
       ]
     },
     {
@@ -396,6 +398,41 @@
       "required": [
         "type",
         "sessions"
+      ]
+    },
+    {
+      "description": "One streamed batch from the resume picker's transcript-content search.",
+      "type": "object",
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "hits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionSearchHit"
+          }
+        },
+        "query": {
+          "type": "string"
+        },
+        "request_id": {
+          "description": "Identity issued by the picker when this exact search began. The\nquery text alone is insufficient when a user types `a -> ab -> a`.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "type": {
+          "type": "string",
+          "const": "session_search_results"
+        }
+      },
+      "required": [
+        "type",
+        "query",
+        "request_id",
+        "hits",
+        "complete"
       ]
     },
     {
@@ -5012,6 +5049,12 @@
         "data_base64": {
           "type": "string"
         },
+        "insertion_offset": {
+          "description": "Byte position in `prompt` where the atomic image chip should be restored.",
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
         "media_type": {
           "type": "string"
         }
@@ -5159,6 +5202,22 @@
       "description": "Branded session identifier.",
       "type": "string"
     },
+    "SessionSearchHit": {
+      "description": "One content-search match streamed into the TUI session picker.",
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        },
+        "snippet": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "snippet"
+      ]
+    },
     "SessionSummary": {
       "description": "Minimal session metadata returned by `session/list` and `session/read`.",
       "type": "object",
@@ -5168,6 +5227,16 @@
         },
         "cwd": {
           "type": "string"
+        },
+        "first_prompt": {
+          "type": "string",
+          "default": ""
+        },
+        "last_message_preview": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "message_count": {
           "type": "integer",
@@ -6086,6 +6155,103 @@
       },
       "required": [
         "data"
+      ]
+    },
+    "SubmittedComposer": {
+      "description": "Lossless, payload-light description of a composer after it has been\nresolved into the model-facing prompt. Paste payloads are addressed by\nranges in that prompt; image bytes remain in typed file parts.",
+      "type": "object",
+      "properties": {
+        "elements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SubmittedComposerElement"
+          }
+        },
+        "next_attachment_label": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "next_attachment_label"
+      ]
+    },
+    "SubmittedComposerElement": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "end": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "kind": {
+              "type": "string",
+              "const": "paste"
+            },
+            "label": {
+              "type": "string"
+            },
+            "start": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "required": [
+            "kind",
+            "start",
+            "end",
+            "label"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "image_index": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "insertion_offset": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "kind": {
+              "type": "string",
+              "const": "image"
+            },
+            "label": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "insertion_offset",
+            "image_index",
+            "label"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "end": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "kind": {
+              "type": "string",
+              "const": "file_ref"
+            },
+            "start": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "required": [
+            "kind",
+            "start",
+            "end"
+          ]
+        }
       ]
     },
     "SuggestionSeverity": {

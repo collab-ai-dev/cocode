@@ -4,6 +4,7 @@ use serde::Serialize;
 use crate::GoalSnapshotChangedParams;
 use crate::TokenUsage;
 use crate::wire_tagged::wire_tagged_enum;
+use crate::{QueuedCommandEditImage, SubmittedComposer};
 
 fn empty_session_id_as_none<'de, D>(deserializer: D) -> Result<Option<crate::SessionId>, D::Error>
 where
@@ -2514,15 +2515,16 @@ pub enum TuiOnlyEvent {
         prompt: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<QueuedCommandEditImage>,
+        composer: SubmittedComposer,
     },
     /// Editable queued commands were removed from the engine queue and
     /// combined with the current composer draft.
     QueuedCommandsEditReady {
         ids: Vec<String>,
         prompt: String,
-        cursor: usize,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<QueuedCommandEditImage>,
+        composer: SubmittedComposer,
     },
     /// The requested queued command could not be restored.
     QueuedCommandEditUnavailable { id: String, reason: String },
@@ -2531,6 +2533,15 @@ pub enum TuiOnlyEvent {
     /// `/resume <id-or-name>` bypasses this and resumes directly.
     OpenSessionBrowser {
         sessions: Vec<crate::SessionSummary>,
+    },
+    /// One streamed batch from the resume picker's transcript-content search.
+    SessionSearchResults {
+        query: String,
+        /// Identity issued by the picker when this exact search began. The
+        /// query text alone is insufficient when a user types `a -> ab -> a`.
+        request_id: u64,
+        hits: Vec<crate::SessionSearchHit>,
+        complete: bool,
     },
     /// Rewind picker per-row metadata, emitted once on picker mount.
     ///
@@ -2872,14 +2883,6 @@ pub enum TuiOnlyEvent {
         parent_id: crate::SessionId,
         child_id: crate::SessionId,
     },
-}
-
-/// Image payload paired with a queued command edit restore.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct QueuedCommandEditImage {
-    pub media_type: String,
-    pub data_base64: String,
 }
 
 /// `/journey` overlay payload: the assembled learning timeline. Wire mirror of

@@ -62,6 +62,10 @@ pub struct CellsRenderer<'a> {
     show_system_reminders: bool,
     pub(crate) tool_executions: &'a [ToolExecution],
     collapsed_tools: Option<&'a HashSet<String>>,
+    expanded_tool_results: bool,
+    truncation_observed: std::cell::Cell<bool>,
+    history_links: std::cell::RefCell<Vec<coco_tui_markdown::LinkSpan>>,
+    history_link_sidecars: bool,
     /// Side-cache lookup for `AssistantThinking` cells.
     /// `None` ⇒ no reasoning badges (renderer falls back to header without metrics).
     pub(crate) reasoning_metadata:
@@ -95,6 +99,10 @@ impl<'a> CellsRenderer<'a> {
             show_system_reminders: false,
             tool_executions: &[],
             collapsed_tools: None,
+            expanded_tool_results: false,
+            truncation_observed: std::cell::Cell::new(false),
+            history_links: std::cell::RefCell::new(Vec::new()),
+            history_link_sidecars: false,
             reasoning_metadata: None,
             subagent_summaries: None,
             styles,
@@ -154,6 +162,10 @@ impl<'a> CellsRenderer<'a> {
         self.collapsed_tools = Some(collapsed);
         self
     }
+    pub(crate) fn expanded_tool_results(mut self) -> Self {
+        self.expanded_tool_results = true;
+        self
+    }
     pub fn width(mut self, w: u16) -> Self {
         self.width = w;
         self
@@ -162,13 +174,63 @@ impl<'a> CellsRenderer<'a> {
         self.syntax_highlighting = syntax_highlighting;
         self
     }
-    pub(crate) fn native_history_presentation(mut self) -> Self {
+    pub(crate) fn native_history_presentation(mut self, hyperlinks_enabled: bool) -> Self {
         self.assistant_presentation_order = AssistantPresentationOrder::TextBeforeLeadingThinking;
+        self.history_link_sidecars = hyperlinks_enabled;
         self
+    }
+
+    pub(super) fn history_link_sidecars(&self) -> bool {
+        self.history_link_sidecars
     }
     /// Build lines that own their text for native history emission.
     pub fn build_lines_owned(&self) -> Vec<Line<'static>> {
         self.build_lines()
+    }
+
+    pub(crate) fn build_history_document(&self) -> coco_tui_markdown::MarkdownRender {
+        self.history_links.borrow_mut().clear();
+        let lines = self.build_lines();
+        let links = self.history_links.take();
+        coco_tui_markdown::MarkdownRender { lines, links }
+    }
+
+    pub(super) fn record_history_links(
+        &self,
+        line_offset: usize,
+        links: &[coco_tui_markdown::LinkSpan],
+    ) {
+        self.history_links
+            .borrow_mut()
+            .extend(links.iter().cloned().map(|mut link| {
+                link.line = link.line.saturating_add(line_offset);
+                link
+            }));
+    }
+
+    pub(crate) fn render_tool_pair_lines(
+        &self,
+        invocation: usize,
+        result: usize,
+    ) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        self.render_tool_call(
+            self.cells,
+            Some(invocation),
+            Some(result),
+            /*expanded presentation*/ false,
+            &mut lines,
+        );
+        lines.push(Line::default());
+        lines
+    }
+
+    pub(crate) fn reset_truncation_observed(&self) {
+        self.truncation_observed.set(false);
+    }
+
+    pub(crate) fn truncation_observed(&self) -> bool {
+        self.truncation_observed.get()
     }
 
     fn build_lines(&self) -> Vec<Line<'static>> {
@@ -362,22 +424,7 @@ impl<'a> CellsRenderer<'a> {
             .map(|tool| format!(" ({})", format_duration_seconds(tool.elapsed())))
             .unwrap_or_default();
         let tone = tool_tone_color(tool_name_tone(tool_name), self.styles);
-        // Agent (subagent) headers lead with the subagent TYPE
-        // (`Explore` / `Plan` / custom) rather than the generic "Agent" — the
-        // type is the meaningful operation, and it no longer repeats in the
-        // run-summary line below. Pulled from the call's `subagent_type`
-        // input; falls back to the tool name when absent.
-        let header_name = if tool_name == coco_types::ToolName::Agent.as_str() {
-            crate::transcript::derive::extract_tool_call_input(source, call_id)
-                .as_ref()
-                .and_then(|input| input.get("subagent_type"))
-                .and_then(serde_json::Value::as_str)
-                .filter(|ty| !ty.is_empty())
-                .map(str::to_string)
-                .unwrap_or_else(|| tool_name.to_string())
-        } else {
-            tool_name.to_string()
-        };
+        let header_name = super::tool::tool_header_display_name(tool_name, source, call_id);
         let mut spans = vec![
             Span::raw("● ").fg(tone),
             Span::raw(header_name).fg(tone).bold(),
@@ -419,7 +466,7 @@ impl<'a> CellsRenderer<'a> {
         if projection.tool_name == coco_types::ToolName::Agent.as_str()
             && let Some(summary) = self.subagent_summaries.and_then(|m| m.get(&tr.tool_use_id))
         {
-            lines.push(self.agent_summary_line(summary));
+            lines.push(super::tool::agent_summary_line(self.styles, summary));
         }
         super::tool_result::render_tool_result_body(
             &self.tool_result_ctx(),
@@ -432,48 +479,6 @@ impl<'a> CellsRenderer<'a> {
         );
     }
 
-    /// `  └ ✓ 37 tools · 1m11s · ↑68.1k ↓468 · cache 95% · $0.18` — the
-    /// committed run summary for a finished subagent (type is in the header).
-    fn agent_summary_line(&self, s: &crate::state::session::SubagentRunSummary) -> Line<'static> {
-        use crate::presentation::activity::format_short_tokens;
-        let (glyph, tone) = if s.succeeded {
-            ("✓", self.styles.success())
-        } else {
-            ("✗", self.styles.error())
-        };
-        // The subagent type now leads the invocation header
-        // (`● Explore(...)`), so it's intentionally omitted here to avoid
-        // repeating it one line below.
-        let mut parts: Vec<String> = Vec::new();
-        if s.tool_count > 0 {
-            parts.push(format!("{} tools", s.tool_count));
-        }
-        if s.duration_ms > 0 {
-            parts.push(format_duration_seconds(std::time::Duration::from_millis(
-                s.duration_ms.max(0) as u64,
-            )));
-        }
-        if s.input_tokens > 0 || s.output_tokens > 0 {
-            parts.push(format!(
-                "↑{} ↓{}",
-                format_short_tokens(s.input_tokens),
-                format_short_tokens(s.output_tokens)
-            ));
-            if s.input_tokens > 0 && s.cache_read_tokens > 0 {
-                let pct = (s.cache_read_tokens * 100 / s.input_tokens).clamp(0, 100);
-                parts.push(format!("cache {pct}%"));
-            }
-        }
-        if s.cost_usd > 0.0 {
-            parts.push(format!("${:.2}", s.cost_usd));
-        }
-        Line::from(vec![
-            Span::raw("  └ ").fg(tone),
-            Span::raw(format!("{glyph} ")).fg(tone),
-            Span::raw(parts.join(" · ")).style(self.styles.dim_style()),
-        ])
-    }
-
     /// Build the surface context the per-tool renderers paint into. Inline chat
     /// is never the full-detail surface, so caps stay tight and the truncation
     /// hint points at the Ctrl+O reader (which renders the same body expanded).
@@ -483,8 +488,13 @@ impl<'a> CellsRenderer<'a> {
             width: self.width,
             syntax_highlighting: self.syntax_highlighting,
             plan_editor_hint: self.plan_editor_hint(),
-            expand_hint: self.expand_hint(),
-            expanded: false,
+            expand_hint: if self.expanded_tool_results {
+                String::new()
+            } else {
+                self.expand_hint()
+            },
+            expanded: self.expanded_tool_results,
+            truncation_observed: Some(&self.truncation_observed),
         }
     }
 

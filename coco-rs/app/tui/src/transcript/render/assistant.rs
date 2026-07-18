@@ -69,7 +69,7 @@ thread_local! {
     /// live tail is one monotonically growing document — remembering the last
     /// render is exactly enough to dedupe the measure-then-paint double call
     /// within a frame.
-    static IN_FLIGHT_MD_MEMO: RefCell<Option<(u64, Vec<Line<'static>>)>> =
+    static IN_FLIGHT_MD_MEMO: RefCell<Option<(u64, coco_tui_markdown::MarkdownRender)>> =
         const { RefCell::new(None) };
 }
 
@@ -83,7 +83,7 @@ const COMMITTED_MD_MEMO_MAX_BYTES: usize = 8 * 1024 * 1024;
 /// keeping).
 #[derive(Default)]
 struct MdMemo {
-    map: HashMap<u64, Vec<Line<'static>>>,
+    map: HashMap<u64, coco_tui_markdown::MarkdownRender>,
     lru: std::collections::VecDeque<u64>,
     bytes: usize,
 }
@@ -96,18 +96,18 @@ impl MdMemo {
         self.lru.push_back(key);
     }
 
-    fn get(&mut self, key: u64) -> Option<Vec<Line<'static>>> {
+    fn get(&mut self, key: u64) -> Option<coco_tui_markdown::MarkdownRender> {
         let hit = self.map.get(&key).cloned()?;
         self.touch(key);
         Some(hit)
     }
 
-    fn put(&mut self, key: u64, value: Vec<Line<'static>>) {
-        let value_bytes = super::estimate_lines_bytes(&value);
+    fn put(&mut self, key: u64, value: coco_tui_markdown::MarkdownRender) {
+        let value_bytes = estimate_markdown_bytes(&value);
         if let Some(previous) = self.map.insert(key, value) {
             self.bytes = self
                 .bytes
-                .saturating_sub(super::estimate_lines_bytes(&previous));
+                .saturating_sub(estimate_markdown_bytes(&previous));
         }
         self.bytes = self.bytes.saturating_add(value_bytes);
         self.touch(key);
@@ -116,9 +116,7 @@ impl MdMemo {
                 break;
             };
             if let Some(entry) = self.map.remove(&evicted) {
-                self.bytes = self
-                    .bytes
-                    .saturating_sub(super::estimate_lines_bytes(&entry));
+                self.bytes = self.bytes.saturating_sub(estimate_markdown_bytes(&entry));
             }
         }
     }
@@ -130,6 +128,16 @@ impl MdMemo {
         self.lru.clear();
         self.bytes = 0;
     }
+}
+
+fn estimate_markdown_bytes(rendered: &coco_tui_markdown::MarkdownRender) -> usize {
+    super::estimate_lines_bytes(&rendered.lines).saturating_add(
+        rendered
+            .links
+            .iter()
+            .map(|link| link.target.len() + 3 * std::mem::size_of::<usize>())
+            .sum::<usize>(),
+    )
 }
 
 #[cfg(any(test, feature = "testing"))]
@@ -151,7 +159,7 @@ pub(crate) fn committed_markdown_memo_estimated_bytes() -> usize {
     let in_flight = IN_FLIGHT_MD_MEMO.with(|m| {
         m.borrow()
             .as_ref()
-            .map_or(0, |(_, lines)| super::estimate_lines_bytes(lines))
+            .map_or(0, |(_, rendered)| estimate_markdown_bytes(rendered))
     });
     committed.saturating_add(in_flight)
 }
@@ -163,11 +171,8 @@ pub(crate) struct CommittedAssistantMarkdownOptions<'a> {
     pub(crate) syntax_highlighting: SyntaxHighlighting,
 }
 
-/// Which memo (if any) backs an assistant-markdown render, and whether mermaid
-/// diagrams are laid out. The three modes produce the same rows for the same
-/// source EXCEPT for the streaming mermaid-suppression — they differ only in
-/// caching, which is why `Committed` and `StreamStable` are row-identical (the
-/// soundness anchor for the mid-stream→finalize handoff).
+/// Which memo (if any) backs an assistant-markdown render, whether mermaid
+/// diagrams are laid out, and whether this region owns the turn marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RenderMode {
     /// Finalized cells / replay — mermaid laid out, shared content memo (absorbs
@@ -182,14 +187,25 @@ enum RenderMode {
     /// so routing them through the shared committed map would flood it with
     /// dead per-advance prefixes and force premature cap clears that evict
     /// legitimate committed-cell entries.
-    StreamStable,
+    StreamStableInitial,
+    /// Later append-only stable region. It must not repeat the assistant turn
+    /// marker; concatenating it after the initial region is row-identical to a
+    /// committed render of the combined source.
+    StreamStableContinuation,
 }
 
 pub(crate) fn render_committed_assistant_markdown(
     source: &str,
     options: CommittedAssistantMarkdownOptions<'_>,
 ) -> Vec<Line<'static>> {
-    render_assistant_markdown(source, options, RenderMode::Committed)
+    render_assistant_markdown(source, options, RenderMode::Committed, false).lines
+}
+
+pub(crate) fn render_committed_assistant_markdown_with_links(
+    source: &str,
+    options: CommittedAssistantMarkdownOptions<'_>,
+) -> coco_tui_markdown::MarkdownRender {
+    render_assistant_markdown(source, options, RenderMode::Committed, true)
 }
 
 /// Same renderer for IN-FLIGHT assistant text (the live tail), backed by the
@@ -201,24 +217,46 @@ pub(crate) fn render_in_flight_assistant_markdown(
     source: &str,
     options: CommittedAssistantMarkdownOptions<'_>,
 ) -> Vec<Line<'static>> {
-    render_assistant_markdown(source, options, RenderMode::InFlight)
+    render_assistant_markdown(source, options, RenderMode::InFlight, false).lines
 }
 
 /// Mid-stream STABLE region render: row-identical to the committed render (so the
 /// scrollback rows match the eventual finalize) but bypassing the shared memo —
 /// the `StreamRenderController` is the cache on this path.
-pub(crate) fn render_stream_stable_assistant_markdown(
+pub(crate) fn render_stream_stable_assistant_markdown_with_links(
     source: &str,
     options: CommittedAssistantMarkdownOptions<'_>,
-) -> Vec<Line<'static>> {
-    render_assistant_markdown(source, options, RenderMode::StreamStable)
+    link_sidecars: bool,
+) -> coco_tui_markdown::MarkdownRender {
+    render_assistant_markdown(
+        source,
+        options,
+        RenderMode::StreamStableInitial,
+        link_sidecars,
+    )
+}
+
+/// Render a stable source region that follows rows already emitted for the
+/// same assistant message. The region is memo-bypassed and has no lead marker.
+pub(crate) fn render_stream_stable_assistant_markdown_continuation_with_links(
+    source: &str,
+    options: CommittedAssistantMarkdownOptions<'_>,
+    link_sidecars: bool,
+) -> coco_tui_markdown::MarkdownRender {
+    render_assistant_markdown(
+        source,
+        options,
+        RenderMode::StreamStableContinuation,
+        link_sidecars,
+    )
 }
 
 fn render_assistant_markdown(
     source: &str,
     options: CommittedAssistantMarkdownOptions<'_>,
     mode: RenderMode,
-) -> Vec<Line<'static>> {
+    link_sidecars: bool,
+) -> coco_tui_markdown::MarkdownRender {
     let mut opts = coco_tui_markdown::MarkdownOptions::new(
         options.styles,
         options.width,
@@ -227,11 +265,15 @@ fn render_assistant_markdown(
     if mode == RenderMode::InFlight {
         opts = opts.streaming();
     }
-    let marker = assistant_lead_marker(options.styles.assistant_message());
+    let marker = (!matches!(mode, RenderMode::StreamStableContinuation))
+        .then(|| assistant_lead_marker(options.styles.assistant_message()));
 
     // Memo-bypass path: the stream controller owns this cache.
-    if mode == RenderMode::StreamStable {
-        return coco_tui_markdown::render_markdown(source, opts, Some(&marker));
+    if matches!(
+        mode,
+        RenderMode::StreamStableInitial | RenderMode::StreamStableContinuation
+    ) {
+        return render_markdown_link_mode(source, opts, marker.as_ref(), link_sidecars);
     }
 
     let key = {
@@ -241,6 +283,7 @@ fn render_assistant_markdown(
         opts.syntax.hash(&mut h);
         opts.body_indent.hash(&mut h);
         opts.streaming.hash(&mut h);
+        link_sidecars.hash(&mut h);
         options.styles.theme_hash().hash(&mut h);
         h.finish()
     };
@@ -256,13 +299,29 @@ fn render_assistant_markdown(
     if let Some(hit) = hit {
         return hit;
     }
-    let rendered = coco_tui_markdown::render_markdown(source, opts, Some(&marker));
+    let rendered = render_markdown_link_mode(source, opts, marker.as_ref(), link_sidecars);
     if mode == RenderMode::InFlight {
         IN_FLIGHT_MD_MEMO.with(|m| *m.borrow_mut() = Some((key, rendered.clone())));
     } else {
         COMMITTED_MD_MEMO.with(|m| m.borrow_mut().put(key, rendered.clone()));
     }
     rendered
+}
+
+fn render_markdown_link_mode(
+    source: &str,
+    options: coco_tui_markdown::MarkdownOptions<'_>,
+    marker: Option<&coco_tui_markdown::LeadMarker>,
+    link_sidecars: bool,
+) -> coco_tui_markdown::MarkdownRender {
+    if link_sidecars {
+        coco_tui_markdown::render_markdown_with_links(source, options, marker)
+    } else {
+        coco_tui_markdown::MarkdownRender {
+            lines: coco_tui_markdown::render_markdown(source, options, marker),
+            links: Vec::new(),
+        }
+    }
 }
 
 pub(super) fn try_render(
@@ -279,14 +338,18 @@ pub(super) fn try_render(
             // string-matching here. Empty responses still get a marker-only
             // line. Memoized by content (see COMMITTED_MD_MEMO) so repeated
             // history replays / fallback rebuilds don't re-run pulldown + syntect.
-            lines.extend(render_committed_assistant_markdown(
-                text,
-                CommittedAssistantMarkdownOptions {
-                    styles: w.styles,
-                    width: w.width,
-                    syntax_highlighting: w.syntax_highlighting,
-                },
-            ));
+            let options = CommittedAssistantMarkdownOptions {
+                styles: w.styles,
+                width: w.width,
+                syntax_highlighting: w.syntax_highlighting,
+            };
+            if w.history_link_sidecars() {
+                let rendered = render_committed_assistant_markdown_with_links(text, options);
+                w.record_history_links(lines.len(), &rendered.links);
+                lines.extend(rendered.lines);
+            } else {
+                lines.extend(render_committed_assistant_markdown(text, options));
+            }
             Some(())
         }
         CellKind::AssistantThinking {
@@ -383,23 +446,8 @@ pub(super) fn try_render(
             // (`🔧`) is width-2 and its cell width is font-dependent, so it
             // drifts the whole row out of the gutter.
             let tone = tool_tone_color(tool_name_tone(tool_name), w.styles);
-            // Agent (subagent) headers lead with the subagent TYPE
-            // (Explore / Plan / custom) rather than the generic "Agent" — the
-            // type is the meaningful operation, matching how other tool
-            // headers name what they do. Pulled from the call's
-            // `subagent_type` input; falls back to the tool name when absent
-            // (older transcripts, or any non-Agent tool).
-            let header_name = if tool_name.as_str() == coco_types::ToolName::Agent.as_str() {
-                crate::transcript::derive::extract_tool_call_input(&cell.source, call_id)
-                    .as_ref()
-                    .and_then(|input| input.get("subagent_type"))
-                    .and_then(serde_json::Value::as_str)
-                    .filter(|ty| !ty.is_empty())
-                    .map(str::to_string)
-                    .unwrap_or_else(|| tool_name.clone())
-            } else {
-                tool_name.clone()
-            };
+            let header_name =
+                super::tool::tool_header_display_name(tool_name, &cell.source, call_id);
             let mut spans = vec![
                 Span::raw("● ").fg(tone),
                 Span::raw(header_name).fg(tone).bold(),

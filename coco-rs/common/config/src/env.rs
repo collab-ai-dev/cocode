@@ -273,6 +273,10 @@ pub enum EnvKey {
     /// skip it, unset ⇒ auto: disabled only for VS Code terminals under
     /// WSL). Read by `coco_tui::keyboard_modes`.
     CocoTuiKeyboardEnhancementDisable,
+    /// Milliseconds of artificial latency before each terminal-frame write.
+    /// Test/diagnostic injection consumed by `coco_tui`; never read by the
+    /// domain-free `coco-tui-ui` writer itself.
+    CocoTuiTestWriteDelayMs,
     CocoVerifyPlan,
     /// Opt non-interactive sessions INTO file-history checkpointing.
     /// Non-interactive sessions default OFF; interactive defaults ON.
@@ -505,6 +509,7 @@ impl EnvKey {
             Self::CocoTeammateCommand => "COCO_TEAMMATE_COMMAND",
             Self::CocoTeamsDir => "COCO_TEAMS_DIR",
             Self::CocoTuiKeyboardEnhancementDisable => "COCO_TUI_KEYBOARD_ENHANCEMENT_DISABLE",
+            Self::CocoTuiTestWriteDelayMs => "COCO_TUI_TEST_WRITE_DELAY_MS",
             Self::CocoVerifyPlan => "COCO_VERIFY_PLAN",
             Self::CocoFileCheckpointingNoninteractiveEnable => {
                 "COCO_FILE_CHECKPOINTING_NONINTERACTIVE_ENABLE"

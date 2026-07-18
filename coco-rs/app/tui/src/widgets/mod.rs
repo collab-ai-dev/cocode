@@ -33,7 +33,6 @@ pub(crate) use input::HistorySearchView;
 pub(crate) use input::INPUT_GUTTER_WIDTH;
 pub(crate) use input::InputRenderModel;
 pub(crate) use input::InputWidget;
-pub(crate) use input::composer_rows;
 pub(crate) use input::scroll_offset;
 pub(crate) use queue_status_widget::QueueStatusWidget;
 pub(crate) use stash_notice::StashNotice;

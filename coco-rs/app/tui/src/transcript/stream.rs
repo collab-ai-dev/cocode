@@ -2,8 +2,8 @@
 //!
 //! Streaming deltas append raw source quickly, but repaint cadence can be much
 //! higher than semantic changes. This controller asks `coco-tui-markdown` for a
-//! conservative stable source prefix, renders that full prefix authoritatively,
-//! and only re-renders the mutable tail.
+//! conservative stable source prefix, appends newly stable regions to the
+//! cached rows, and only re-renders the mutable tail.
 
 use std::hash::Hash;
 use std::hash::Hasher;
@@ -15,8 +15,10 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
+use crate::transcript::render::assistant::ASSISTANT_DOT;
 use crate::transcript::render::assistant::CommittedAssistantMarkdownOptions;
-use crate::transcript::render::assistant::render_stream_stable_assistant_markdown;
+use crate::transcript::render::assistant::render_stream_stable_assistant_markdown_continuation_with_links;
+use crate::transcript::render::assistant::render_stream_stable_assistant_markdown_with_links;
 use crate::transcript::render::assistant_stream_lead_marker;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
@@ -33,10 +35,12 @@ impl StreamRenderKey {
         styles: UiStyles<'_>,
         width: u16,
         syntax_highlighting: SyntaxHighlighting,
+        hyperlinks_enabled: bool,
     ) -> Self {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         width.hash(&mut h);
         syntax_highlighting.hash(&mut h);
+        hyperlinks_enabled.hash(&mut h);
         styles.theme_hash().hash(&mut h);
         Self(h.finish())
     }
@@ -81,6 +85,7 @@ pub(crate) struct StreamRenderInput<'a> {
     pub(crate) styles: UiStyles<'a>,
     pub(crate) width: u16,
     pub(crate) syntax_highlighting: SyntaxHighlighting,
+    pub(crate) hyperlinks_enabled: bool,
 }
 
 /// One frame's view of the stream render state, borrowing the controller's
@@ -91,6 +96,7 @@ pub(crate) struct StreamRenderInput<'a> {
 #[derive(Debug)]
 pub(crate) struct StreamRenderProjection<'a> {
     pub(crate) stable_lines: &'a [Line<'static>],
+    pub(crate) stable_links: &'a [coco_tui_markdown::LinkSpan],
     pub(crate) tail_lines: &'a [Line<'static>],
     pub(crate) stable_source_len: usize,
     pub(crate) render_key: StreamRenderKey,
@@ -109,11 +115,15 @@ pub(crate) struct StreamRenderController {
     /// skips the `starts_with` memcmp and the `stable_prefix_end` scan.
     last_generation: Option<u64>,
     source: String,
+    stable_prefix_tracker: coco_tui_markdown::StablePrefixTracker,
     stable_prefix_end: usize,
     stable_lines: Vec<Line<'static>>,
+    stable_links: Vec<coco_tui_markdown::LinkSpan>,
     tail_source_start: usize,
     tail_source: String,
     tail_lines: Vec<Line<'static>>,
+    #[cfg(test)]
+    stable_rendered_source_bytes: usize,
 }
 
 impl StreamRenderController {
@@ -125,6 +135,7 @@ impl StreamRenderController {
             self.clear();
             return StreamRenderProjection {
                 stable_lines: &[],
+                stable_links: &[],
                 tail_lines: &[],
                 stable_source_len: 0,
                 render_key: StreamRenderKey::default(),
@@ -132,24 +143,81 @@ impl StreamRenderController {
             };
         }
 
-        let render_key =
-            StreamRenderKey::committed(input.styles, input.width, input.syntax_highlighting);
+        let render_key = StreamRenderKey::committed(
+            input.styles,
+            input.width,
+            input.syntax_highlighting,
+            input.hyperlinks_enabled,
+        );
         let cache_hit =
             self.last_generation == Some(input.generation) && self.render_key == Some(render_key);
         if !cache_hit {
             let render_reset =
                 self.render_key != Some(render_key) || !input.source.starts_with(&self.source);
-            if render_reset {
+            let stable_end = if render_reset {
                 self.reset_for_key(render_key, input.source);
+                self.stable_prefix_tracker.push(input.source)
             } else {
-                self.source.push_str(&input.source[self.source.len()..]);
-            }
+                let appended = &input.source[self.source.len()..];
+                self.source.push_str(appended);
+                self.stable_prefix_tracker.push(appended)
+            };
 
-            let stable_end = coco_tui_markdown::stable_prefix_end(&self.source);
             if stable_end > self.stable_prefix_end {
-                self.stable_lines =
-                    render_committed_stable_region(&self.source[..stable_end], input);
-                self.stable_prefix_end = stable_end;
+                let stable_start = self.stable_prefix_end;
+                let requires_full_render = self.stable_prefix_tracker.requires_document_context();
+                let (rendered, replace) = if requires_full_render {
+                    (
+                        render_committed_stable_region(
+                            &self.source[..stable_end],
+                            input,
+                            StableRegionPosition::Initial,
+                        ),
+                        true,
+                    )
+                } else {
+                    let position = if stable_start == 0 {
+                        StableRegionPosition::Initial
+                    } else {
+                        StableRegionPosition::Continuation
+                    };
+                    (
+                        render_committed_stable_region(
+                            &self.source[stable_start..stable_end],
+                            input,
+                            position,
+                        ),
+                        false,
+                    )
+                };
+                let marker_only =
+                    stable_start == 0 && stable_render_is_marker_only(&rendered.lines);
+                if !marker_only {
+                    if replace {
+                        self.stable_lines = rendered.lines;
+                        self.stable_links = rendered.links;
+                    } else {
+                        if stable_start > 0 && !rendered.lines.is_empty() {
+                            self.stable_lines.push(Line::default());
+                        }
+                        let line_offset = self.stable_lines.len();
+                        self.stable_lines.extend(rendered.lines);
+                        self.stable_links
+                            .extend(rendered.links.into_iter().map(|mut link| {
+                                link.line = link.line.saturating_add(line_offset);
+                                link
+                            }));
+                    }
+                    #[cfg(test)]
+                    {
+                        self.stable_rendered_source_bytes += if requires_full_render {
+                            stable_end
+                        } else {
+                            stable_end - stable_start
+                        };
+                    }
+                    self.stable_prefix_end = stable_end;
+                }
             }
 
             let tail_source = &self.source[self.stable_prefix_end..];
@@ -168,6 +236,7 @@ impl StreamRenderController {
 
         StreamRenderProjection {
             stable_lines: &self.stable_lines,
+            stable_links: &self.stable_links,
             tail_lines: &self.tail_lines,
             stable_source_len: self.stable_prefix_end,
             render_key,
@@ -179,55 +248,95 @@ impl StreamRenderController {
         self.render_key = Some(render_key);
         self.source.clear();
         self.source.push_str(source);
+        self.stable_prefix_tracker = coco_tui_markdown::StablePrefixTracker::default();
         self.stable_prefix_end = 0;
         self.stable_lines.clear();
+        self.stable_links.clear();
         self.tail_source_start = 0;
         self.tail_source.clear();
         self.tail_lines.clear();
+        #[cfg(test)]
+        {
+            self.stable_rendered_source_bytes = 0;
+        }
     }
 
     pub(crate) fn clear(&mut self) {
         self.render_key = None;
         self.last_generation = None;
         self.source.clear();
+        self.stable_prefix_tracker = coco_tui_markdown::StablePrefixTracker::default();
         self.stable_prefix_end = 0;
         self.stable_lines.clear();
+        self.stable_links.clear();
         self.tail_source_start = 0;
         self.tail_source.clear();
         self.tail_lines.clear();
+        #[cfg(test)]
+        {
+            self.stable_rendered_source_bytes = 0;
+        }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StableRegionPosition {
+    Initial,
+    Continuation,
+}
+
+fn stable_render_is_marker_only(lines: &[Line<'_>]) -> bool {
+    lines.len() == 1
+        && lines[0].spans.len() == 1
+        && lines[0].spans[0].content.as_ref() == ASSISTANT_DOT
 }
 
 fn render_committed_stable_region(
     source: &str,
     input: StreamRenderInput<'_>,
-) -> Vec<Line<'static>> {
+    position: StableRegionPosition,
+) -> coco_tui_markdown::MarkdownRender {
     if source.is_empty() {
-        return Vec::new();
+        return coco_tui_markdown::MarkdownRender {
+            lines: Vec::new(),
+            links: Vec::new(),
+        };
     }
     let started = Instant::now();
     // Memo-bypassed (the controller caches `stable_lines`); row-identical to the
     // committed finalize render, which is what makes the mid-stream→finalize
     // handoff sound (tui-v2 §6.2).
-    let lines = render_stream_stable_assistant_markdown(
-        source,
-        CommittedAssistantMarkdownOptions {
-            styles: input.styles,
-            width: input.width,
-            syntax_highlighting: input.syntax_highlighting,
-        },
-    );
+    let options = CommittedAssistantMarkdownOptions {
+        styles: input.styles,
+        width: input.width,
+        syntax_highlighting: input.syntax_highlighting,
+    };
+    let rendered = match position {
+        StableRegionPosition::Initial => render_stream_stable_assistant_markdown_with_links(
+            source,
+            options,
+            input.hyperlinks_enabled,
+        ),
+        StableRegionPosition::Continuation => {
+            render_stream_stable_assistant_markdown_continuation_with_links(
+                source,
+                options,
+                input.hyperlinks_enabled,
+            )
+        }
+    };
     let elapsed = started.elapsed();
     tracing::debug!(
         target: "tui::streaming",
-        region = "stable",
+        region = "stable_append",
+        position = ?position,
         source_bytes = source.len(),
-        lines = lines.len(),
+        lines = rendered.lines.len(),
         elapsed_us = elapsed.as_micros(),
         width = input.width,
         "render streaming markdown region",
     );
-    lines
+    rendered
 }
 
 fn render_mutable_tail_region(

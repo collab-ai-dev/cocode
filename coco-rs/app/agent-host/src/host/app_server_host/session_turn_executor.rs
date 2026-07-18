@@ -81,6 +81,7 @@ fn run_turn_with_session(
 ) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>> {
     let prompt = params.prompt;
     let images = params.images;
+    let composer = params.composer;
     let history_override = params.history_override;
     // A `GoalSupervisor`-driven autonomous continuation (§10.3): no user prompt,
     // the materialized goal context drives the turn, and the engine defers
@@ -270,6 +271,7 @@ fn run_turn_with_session(
             let inputs = crate::at_mention_turn::resolve_turn_inputs(
                 &prompt,
                 &images,
+                &composer,
                 &turn_cwd,
                 uuid::Uuid::new_v4(),
                 session.file_read_state(),

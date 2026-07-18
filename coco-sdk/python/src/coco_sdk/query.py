@@ -6,15 +6,17 @@ from typing import AsyncIterator
 
 from pydantic import TypeAdapter
 
+from coco_sdk._composer import build_plain_text_turn_start
 from coco_sdk._message_router import MessageRouter
 from coco_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
 from coco_sdk.generated.protocol import (
     InitializeRequest,
+    InteractiveTarget,
     NotificationMethod,
     PermissionMode,
     ServerNotification,
     SessionStartRequest,
-    TurnStartRequest,
+    SessionStartResult,
 )
 from coco_sdk.types import ModelSpec
 
@@ -91,20 +93,22 @@ async def query(
         #    on this request does NOT auto-run a turn (it's just a label
         #    for the first user message); turns are launched separately
         #    via `turn/start`.
-        await router.request(
-            SessionStartRequest(
-                params=SessionStartRequest.SessionStartRequestParams(
-                    model=models_main_str,
-                    max_turns=max_turns,
-                    cwd=cwd,
-                    append_system_prompt=append_system_prompt,
-                    system_prompt=system_prompt,
-                    permission_mode=(
-                        PermissionMode(permission_mode)
-                        if isinstance(permission_mode, str)
-                        else permission_mode
-                    ),
-                    max_budget_usd=max_budget_usd,
+        session = SessionStartResult.model_validate(
+            await router.request(
+                SessionStartRequest(
+                    params=SessionStartRequest.SessionStartRequestParams(
+                        model=models_main_str,
+                        max_turns=max_turns,
+                        cwd=cwd,
+                        append_system_prompt=append_system_prompt,
+                        system_prompt=system_prompt,
+                        permission_mode=(
+                            PermissionMode(permission_mode)
+                            if isinstance(permission_mode, str)
+                            else permission_mode
+                        ),
+                        max_budget_usd=max_budget_usd,
+                    )
                 )
             )
         )
@@ -112,8 +116,12 @@ async def query(
         # 3) turn/start — actually runs the prompt and produces the
         #    notification stream.
         await router.request(
-            TurnStartRequest(
-                params=TurnStartRequest.TurnStartRequestParams(prompt=prompt)
+            build_plain_text_turn_start(
+                InteractiveTarget(
+                    session_id=session.session_id,
+                    surface_id=session.surface_id,
+                ),
+                prompt,
             )
         )
 

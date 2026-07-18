@@ -36,6 +36,7 @@ mod model_controls;
 mod observability_commands;
 mod plugin_dialog;
 mod provider_commands;
+mod session_search;
 mod session_switching;
 mod slash_execution;
 mod slash_resolution;

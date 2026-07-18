@@ -91,6 +91,17 @@ fn task_notification_preview_does_not_parse_xml_without_typed_payload() {
     );
 }
 
+#[test]
+fn image_only_command_has_a_visible_preview() {
+    let cmd =
+        QueuedCommand::new(String::new(), QueuePriority::Next).with_images(vec![QueuedImage {
+            media_type: "image/png".into(),
+            data_base64: "bytes".into(),
+            insertion_offset: 0,
+        }]);
+    assert_eq!(cmd.preview(), "[Image]");
+}
+
 #[tokio::test]
 async fn test_agent_id_filtering() {
     let queue = CommandQueue::new();

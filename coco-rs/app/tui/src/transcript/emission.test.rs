@@ -217,6 +217,7 @@ fn emit_append_only_accepts_finalized_transcript_renderer() {
                     syntax_highlighting: SyntaxHighlighting::Off,
                     show_system_reminders: false,
                     show_thinking: false,
+                    hyperlinks_enabled: false,
                     cwd: None,
                     kb_handle: None,
                     replay_cache_policy: HistoryReplayCachePolicy::default(),

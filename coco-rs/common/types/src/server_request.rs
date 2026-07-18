@@ -577,9 +577,21 @@ pub struct SessionSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(default)]
+    pub first_prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_message_preview: Option<String>,
+    #[serde(default)]
     pub message_count: i32,
     #[serde(default)]
     pub total_tokens: i64,
+}
+
+/// One content-search match streamed into the TUI session picker.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSearchHit {
+    pub session_id: crate::SessionId,
+    pub snippet: String,
 }
 
 /// Response to `ClientRequest::SessionList`.

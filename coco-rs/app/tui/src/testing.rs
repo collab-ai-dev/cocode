@@ -34,6 +34,8 @@ use crate::transcript::render::HistoryReplayCache;
 use crate::transcript::render::HistoryReplayCachePolicy;
 use crate::transcript::render::render_replay_history_lines;
 use crate::transcript::render::render_replay_history_lines_cached;
+use crate::transcript::stream::StreamRenderController;
+use crate::transcript::stream::StreamRenderInput;
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::engine::compatibility::TerminalCompatibility;
 use coco_tui_ui::engine::terminal::SurfaceTerminal;
@@ -316,6 +318,54 @@ pub struct NativeSurfaceNormalBench {
     controller: NativeSurfaceController,
 }
 
+/// Benchmark harness for the real append-only streaming Markdown controller.
+pub struct StreamingMarkdownBench {
+    controller: StreamRenderController,
+    theme: Theme,
+    source: String,
+    width: u16,
+    generation: u64,
+}
+
+impl StreamingMarkdownBench {
+    pub fn new(width: u16) -> Self {
+        Self {
+            controller: StreamRenderController::default(),
+            theme: Theme::default(),
+            source: String::new(),
+            width,
+            generation: 0,
+        }
+    }
+
+    pub fn grow_blocks(&mut self, blocks: usize) -> usize {
+        let mut projected_lines = 0;
+        for index in 0..blocks {
+            self.source.push_str(&streaming_markdown_bench_block(index));
+            self.generation = self.generation.wrapping_add(1);
+            let projection = self.controller.render_projection(StreamRenderInput {
+                source: &self.source,
+                generation: self.generation,
+                styles: UiStyles::new(&self.theme),
+                width: self.width,
+                syntax_highlighting: SyntaxHighlighting::Off,
+                hyperlinks_enabled: false,
+            });
+            projected_lines = projection.stable_lines.len() + projection.tail_lines.len();
+        }
+        projected_lines
+    }
+}
+
+fn streaming_markdown_bench_block(index: usize) -> String {
+    format!(
+        "## Block {index}\n\nA representative paragraph for append-only streaming.\n\n\
+         ```rust\nfn block_{index}() {{}}\n```\n\n\
+         - stable list item one\n- stable list item two\n\n\
+         Closing paragraph for block {index}.\n\n"
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeSurfaceNormalBenchContent {
     Markdown,
@@ -375,7 +425,7 @@ impl NativeSurfaceNormalBench {
     }
 
     pub fn redraw_after_input_animation(&mut self) -> usize {
-        self.state.ui.input.textarea.insert_str("x");
+        self.state.ui.input.textarea_mut().insert_str("x");
         self.redraw_no_transcript_change()
     }
 
@@ -538,6 +588,7 @@ fn replay_options(
         syntax_highlighting,
         show_system_reminders: false,
         show_thinking: false,
+        hyperlinks_enabled: false,
         cwd: None,
         kb_handle: None,
         replay_cache_policy: HistoryReplayCachePolicy::default(),

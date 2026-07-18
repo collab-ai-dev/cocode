@@ -106,8 +106,8 @@ fn test_accept_directory_drill_keeps_had_items() {
     // at the same trigger position; the async re-search leaves items empty
     // for a moment, and the reserved popup slot must survive that gap.
     let mut state = crate::state::AppState::default();
-    state.ui.input.textarea.set_text("@sr");
-    state.ui.input.textarea.set_cursor(3);
+    state.ui.input.textarea_mut().set_text("@sr");
+    state.ui.input.textarea_mut().set_cursor(3);
     state.ui.completion.set_active(
         ActiveSuggestions {
             kind: SuggestionKind::At,
@@ -135,6 +135,46 @@ fn test_accept_directory_drill_keeps_had_items() {
         crate::presentation::input::inline_popup_view(&state).is_some(),
         "popup slot must stay reserved across the drill's async result gap"
     );
+}
+
+#[test]
+fn accepting_an_at_path_creates_an_atomic_file_ref() {
+    let mut state = crate::state::AppState::default();
+    state.ui.input.textarea_mut().set_text("@ma");
+    state.ui.input.textarea_mut().set_cursor(3);
+    state.ui.completion.set_active(
+        ActiveSuggestions {
+            kind: SuggestionKind::At,
+            items: vec![SuggestionItem {
+                highlight_indices: Vec::new(),
+                label: "main.rs".into(),
+                description: None,
+                metadata: Some(SuggestionMeta::Path {
+                    is_directory: false,
+                }),
+            }],
+            selected: 0,
+            query: "ma".into(),
+            trigger_pos: 0,
+        },
+        0..3,
+        "@ma".into(),
+    );
+
+    accept_suggestion(&mut state, AcceptMode::AcceptSelected).expect("accept file");
+
+    assert_eq!(state.ui.input.text(), "@main.rs ");
+    let element = &state.ui.input.textarea().elements()[0];
+    assert_eq!(element.kind(), coco_tui_ui::widgets::ElementKind::FileRef);
+    let range = element.range().clone();
+    assert_eq!(state.ui.input.text().get(range.clone()), Some("@main.rs"));
+    state.ui.input.textarea_mut().set_cursor(range.end);
+    state.ui.input.textarea_mut().move_cursor_left();
+    assert_eq!(state.ui.input.textarea().cursor(), range.start);
+
+    assert!(state.ui.input.textarea_mut().undo());
+    assert_eq!(state.ui.input.text(), "@ma");
+    assert!(state.ui.input.textarea().elements().is_empty());
 }
 
 #[test]

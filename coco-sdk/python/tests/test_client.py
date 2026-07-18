@@ -150,6 +150,7 @@ async def test_client_sends_initialize_session_start_turn_start() -> None:
     ]
     turn_start = json.loads(transport.sent_lines[2])
     assert turn_start["params"]["prompt"] == "hello"
+    assert turn_start["params"]["composer"] == {"next_attachment_label": 0}
 
     assert len(events) == 2
     assert events[0].method == NotificationMethod.SESSION_STARTED
@@ -177,6 +178,7 @@ async def test_client_send_follow_up() -> None:
     sent = json.loads(transport.sent_lines[0])
     assert sent["method"] == ClientRequestMethod.TURN_START
     assert sent["params"]["prompt"] == "follow up"
+    assert sent["params"]["composer"] == {"next_attachment_label": 0}
     assert len(events) == 1
 
 

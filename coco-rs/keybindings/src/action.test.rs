@@ -41,6 +41,7 @@ fn parse_known_actions_round_trip() {
         "app:settings",
         "app:sessionBrowser",
         "app:planEditor",
+        "app:expandCommittedTool",
         "chat:toggleSystemReminders",
         "chat:togglePlanMode",
     ];

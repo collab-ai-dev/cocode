@@ -71,6 +71,22 @@ pub fn stats_snapshot() -> Option<JemallocStats> {
     }
 }
 
+/// Render jemalloc's full `malloc_stats_print` report, or `None` when
+/// jemalloc control is unavailable or the report cannot be captured.
+///
+/// This is intentionally separate from [`stats_snapshot`]: the report is
+/// large and should only be requested at a diagnostic threshold crossing.
+pub fn stats_print() -> Option<String> {
+    #[cfg(all(feature = "jemalloc", not(target_os = "windows")))]
+    {
+        imp::stats_print()
+    }
+    #[cfg(not(all(feature = "jemalloc", not(target_os = "windows"))))]
+    {
+        None
+    }
+}
+
 /// Force every arena to return its dirty and muzzy pages to the OS
 /// (`arena.<MALLCTL_ARENAS_ALL>.purge`, i.e. an immediate MADV_DONTNEED sweep).
 ///

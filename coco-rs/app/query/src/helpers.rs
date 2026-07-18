@@ -154,12 +154,27 @@ pub fn queued_command_to_message(cmd: &QueuedCommand) -> Message {
 /// no `<system-reminder>` wrap). Tagged [`MessageOrigin::QueuedSteering`] so
 /// the prompt builder knows to apply the model-facing wrapper.
 pub fn queued_command_to_user_message(cmd: &QueuedCommand) -> Message {
-    let mut parts: Vec<UserContentPart> = vec![UserContentPart::text(cmd.prompt.clone())];
+    let mut text = coco_messages::TextContent::new(cmd.prompt.clone());
+    if cmd.editable_composer != coco_types::SubmittedComposer::default()
+        && cmd
+            .editable_composer
+            .is_valid_for(&cmd.prompt, cmd.images.len())
+        && let Ok(value) = serde_json::to_value(&cmd.editable_composer)
+    {
+        let mut metadata = coco_llm_types::ProviderMetadata::new();
+        metadata.set("coco_submitted_composer", value);
+        text.provider_metadata = Some(metadata);
+    }
+    let mut parts: Vec<UserContentPart> = vec![UserContentPart::Text(text)];
     for img in &cmd.images {
-        parts.push(UserContentPart::File(FilePart::image_base64(
-            img.data_base64.clone(),
-            img.media_type.clone(),
-        )));
+        let mut file = FilePart::image_base64(img.data_base64.clone(), img.media_type.clone());
+        let mut metadata = coco_llm_types::ProviderMetadata::new();
+        metadata.set(
+            "coco_composer_insertion_offset",
+            serde_json::json!(img.insertion_offset),
+        );
+        file.provider_metadata = Some(metadata);
+        parts.push(UserContentPart::File(file));
     }
     Message::User(UserMessage {
         message: LlmMessage::user(parts),

@@ -112,53 +112,43 @@ Verified head-to-head; these are listed so nobody "ports" a regression:
 
 ### 2.4 ratatui 0.30.1 / 0.30.2 upgrade note
 
-coco is pinned to ratatui 0.30.0 (ratatui-core 0.1.0). Upstream 0.30.1
-(2026-06) and 0.30.2 (2026-06) change the calculus for two items and add one
-migration chore; nothing in this plan is obsoleted, because coco's paint
-engine (`SurfaceTerminal`) does its own cell diff and does not use stock
-`ratatui::Terminal`.
+At plan time coco was pinned to ratatui 0.30.0 (ratatui-core 0.1.0).
+Phase 1 upgraded it to 0.30.2 and absorbed the custom-diff migration below;
+coco's paint engine (`SurfaceTerminal`) still does its own cell diff and does
+not use stock `ratatui::Terminal`.
 
 - **`CellDiffOption` (#1605, #2480; correctness follow-up #2587 in 0.30.2).**
-  `Cell::skip: bool` became an enum with `ForceWidth` (squeeze an escape
+  `Cell::skip: bool` became an enum with `ForcedWidth` (squeeze an escape
   sequence into a cell's symbol and force its diff width to the visible
   width) and `AlwaysUpdate` (image-protocol cells). This is the extension
   point grok forked ratatui to get, now upstream, with a reference
   implementation (`tui-link`). Impact: D3 Phase 2 should use this pattern
   instead of a bespoke link layer (see D3); C8's viewport-side objection is
   weakened (revisit trigger), though the history-reflow objection stands.
-- **Migration chore:** `buffer_updates()` and `drawable_cell_indices()`
-  (`tui-ui/src/engine/terminal.rs`) read the now-deprecated `cell.skip`
-  field. On upgrade, switch to `CellDiffOption` and teach the custom diff to
-  honor `ForceWidth`/`AlwaysUpdate` — this is D3's enabling step.
+- **Migration complete:** the custom diff uses `CellDiffOption`, including
+  `ForcedWidth`/`AlwaysUpdate`, and the upstream regression classes are pinned
+  in `terminal.test.rs`.
 - **Free wins on upgrade:** halfwidth dakuten/handakuten width fix (#2499)
   and the `CellWidth` trait (#2400) flow in via ratatui-core width
   computation (expect a few CJK insta snapshot updates).
-- **Absorbable technique, minor magnitude (deep-verified):** the *idea*
-  behind #2416 (`Terminal::flush` per-frame Vec allocation removal) applies
-  to coco's custom diff — `buffer_updates()`
-  (`tui-ui/src/engine/terminal.rs:795-820`) clones every changed cell into
-  a fresh `Vec`, while the full downstream chain needs only references:
+- **Absorbed technique, minor magnitude (Phase 1):** the *idea* behind #2416
+  (`Terminal::flush` per-frame Vec allocation removal) applied to coco's
+  custom diff. Production now stores changed indices in reusable
+  `update_index_scratch` and borrows cells through the full downstream chain:
   `SurfaceBackend: Backend` inherits ratatui's
   `draw(I: Iterator<Item = (u16, u16, &Cell)>)` (references, not owned —
   the clone is not signature-forced), and `CrosstermBackend::draw` performs
-  no internal cell copy (it serializes `cell.symbol()`'s bytes into the
-  writer, which is the output itself). However the waste is small:
-  `Cell.symbol` is `Option<CompactString>` (24-byte inline — a grapheme
-  symbol essentially never heap-allocates on clone), and `Vec::new()`
-  doesn't allocate on empty (idle) frames — so the cost is a few growth
-  allocations plus ~40 B/cell memcpy on busy frames only. See work item
-  **B8** (ROI low; do alongside the `CellDiffOption` migration).
-- **Absorb as regression tests:** coco's custom diff was audited against the
-  three upstream `Buffer::diff` bug classes and is *currently correct* —
+  no internal cell copy. The remaining `Cell::clone()` is confined to the
+  `#[cfg(test)]` compatibility helper that returns owned observations.
+- **Regression tests absorbed:** coco's custom diff is pinned against the
+  three upstream `Buffer::diff` bug classes —
   #2308 (style-only changes in wide-char trailing cells must not emit:
   coco never emits trailing cells, `to_skip` gate), #2587 (cells "uncovered"
   when a wide char is replaced by a narrow one must re-emit: coco's
   `invalidated` propagation uses `max(prev_width, next_width)`, which
   re-emits them — more conservatively than upstream's style-filtered fix),
-  #2487 (saturating advance for forced widths: applies once
-  `CellDiffOption` support lands). Port upstream's regression tests for all
-  three classes into `terminal.test.rs` so the B8/D3 diff changes cannot
-  regress them (folded into B8).
+  #2487 (saturating advance for forced widths). The Phase 1 tests in
+  `terminal.test.rs` prevent B8/D3 changes from regressing these classes.
 - **Verified not applicable:** resize cursor-query avoidance (#2485) — coco
   has zero cursor-position queries anywhere (`autoresize` uses
   `backend.size()`, an ioctl, and the engine parks the cursor with absolute
@@ -169,8 +159,7 @@ engine (`SurfaceTerminal`) does its own cell diff and does not use stock
   inline viewport's missing-clear bug is a path coco never had. A1's no-op
   frame elision remains unaddressed upstream and stays in this plan.
 - MSRV bumped to 1.88 (coco toolchain is 1.93.1 — fine); crossterm stays
-  0.29-compatible. Upgrade is a low-risk patch bump; do it before starting
-  D3.
+  0.29-compatible.
 
 ### 2.5 Rejected candidates
 
@@ -384,6 +373,20 @@ fixture and asserts the pty is left in cooked mode with `?2026l` observed.
 
 ### A6. Background terminal-writer thread with drain barrier — ROI medium, L
 
+**Implementation status (2026-07-18): complete.** Production now uses
+`FrameCrosstermBackend<Stdout>`; physical writes no longer run on the tokio
+event-loop thread. Writer latency is published atomically and reported
+separately from enqueue time. The incremental-diff queue is lossless and
+ordered, with an 8 MiB admission cap for ordinary frames so a wedged terminal
+cannot grow memory without bound. Rejected frames discard their buffered bytes
+immediately, so the teardown delivery class cannot accidentally carry rejected
+payload. Panic cleanup and writer-timeout cleanup both avoid the global stdout
+lock: Unix writes a separately opened nonblocking `/dev/tty`; Windows schedules
+a detached best-effort `CONOUT$` write because synchronous console handles have
+no nonblocking mode. Thus neither fallback extends the caller's bounded
+teardown wait. A real-PTY scenario pins nonblocking submission under an
+injected 150 ms physical-write delay.
+
 **Problem (verified).** `CrosstermBackend<Stdout>` is written synchronously on
 the tokio event loop (`app/tui/src/terminal.rs:49`); coco's own perf comment
 (`terminal.rs:399-401`) acknowledges that a slow flush means "the kernel pipe
@@ -402,11 +405,13 @@ frame cannot land on the child's alt screen or tear mid-escape.
 `FrameWriter`:
 
 - `FrameWriter` implements `io::Write` by buffering into a frame `Vec<u8>`;
-  `present()` sends the buffer over a bounded channel (capacity 2 — one
-  in-flight + one queued; a full channel means the previous frame is still
-  writing, and the new frame *replaces* the queued one, which is exactly the
-  frame-drop semantic we want under backpressure) to a named OS thread that
-  writes + flushes.
+  `present()` hands the buffer to a named OS thread with two bounded scheduling
+  slots (one in-flight + one queued). The original proposal's unconditional
+  queued-frame replacement was corrected during implementation: ratatui frames
+  are incremental diffs, and native-history appends are immutable, so dropping
+  one would corrupt the next delta or lose transcript rows. Production frames
+  therefore coalesce in-order inside the pending slot. Replacement remains
+  available only for callers that explicitly prove a frame is self-contained.
 - `DrainBarrier { queued: AtomicU64, written: AtomicU64, wait_drained(timeout) }`.
 - Env-injectable write delay for tests (`COCO_TUI_TEST_WRITE_DELAY_MS`, routed
   through `coco_config::EnvKey` and passed in as a value — tui-ui does not
@@ -415,9 +420,16 @@ frame cannot land on the child's alt screen or tear mid-escape.
 **Integration cost is the real work** (why this is L, and sequenced after A1):
 
 - `Tui::drop` teardown ordering: `wait_drained` before the final prompt park
-  and before A4's restore emission.
+  and before A4's restore emission; the restore/prompt batch is drained again
+  before the backend is dropped. The final tail uses a dedicated teardown
+  delivery class that bypasses ordinary backlog admission but remains ordered
+  after every accepted frame. If the writer remains wedged, Unix performs a
+  best-effort restore through a separately opened, nonblocking `/dev/tty` fd;
+  it never waits on Rust stdout's global lock.
 - Job control (SIGTSTP) and external-process handoff: drain before yielding
-  the tty (`prepare_external_process`, `job_control.rs`).
+  the tty (`prepare_external_process`, `Tui::trigger_suspend`). A bounded
+  timeout refuses the handoff instead of allowing a late frame to paint over
+  the child/shell.
 - Panic hook and A5: both must write directly to the fd, bypassing the thread
   (the thread may be the panicking one).
 - Perf stages: `present_flush` currently measures real terminal latency; keep
@@ -492,14 +504,14 @@ memo eviction; theme-change invalidation via `theme_hash`).
 
 ### B2. Append-only streaming markdown (stop re-rendering the stable prefix) — ROI medium, L
 
-**Problem (verified).** `app/tui/src/transcript/stream.rs:148-153`: every
+**Implementation status (2026-07-18): complete.**
+
+**Original problem (verified before implementation).** Every
 time `stable_prefix_end` advances, the controller re-renders the **entire**
 stable prefix from byte 0 and replaces `stable_lines` wholesale (the memo is
-deliberately bypassed on this path — `transcript/render/assistant.rs:179-185`:
-"the StreamRenderController is the cache on this path"). For a response with
-K top-level blocks this is K full-prefix renders — O(N²/block-size) total
-parse + `Line`/`Span` allocation, with jank largest late in the stream.
-`tui-ui/benches/render.rs:22-25` already names this as deferred work.
+deliberately bypassed on this path). For a response with K top-level blocks
+this was K full-prefix renders — O(N²/block-size) total parse + `Line`/`Span`
+allocation, with jank largest late in the stream.
 
 **Grok reference.** `xai-grok-markdown/src/checkpoint.rs` + `streaming.rs`:
 parser-event-grounded checkpoints freeze rendered lines at top-level block
@@ -507,7 +519,7 @@ boundaries; only the tail is ever re-rendered; wrapping is incremental
 (`markdown_content.rs:30-44` — "turns streaming from O(N²) total wrapping to
 ~O(N)").
 
-**Decision — the cheap variant, not grok's machinery.** coco already has the
+**Selected design — the cheap variant, not grok's machinery.** coco already has the
 hard half: a tested conservative stable-boundary finder and a stable/tail
 split. The missing piece is *append at the boundary* instead of re-render
 from zero:
@@ -525,11 +537,25 @@ from zero:
 - Wrapping stays as-is initially (wrap-on-projection); incremental wrap is a
   follow-up only if profiles still show it.
 
-**Landing.** `app/tui/src/transcript/stream.rs` (+ possibly a small
+**Original landing target.** `app/tui/src/transcript/stream.rs` (+ a small
 `tui-markdown` helper). Composes cleanly with native scrollback:
 `stable_lines` already feed history insertion append-only. Acceptance: the
 `markdown_streaming` bench in `tui-ui/benches/render.rs` goes from quadratic
 to ~linear; add a long-stream case (500-block document).
+
+**Landed shape.** `coco_tui_markdown::StablePrefixTracker` consumes appended
+bytes and scans each complete source line once. The controller renders only
+`source[previous_stable_end..new_stable_end]` and appends its rows; a single
+blank seam preserves the renderer's between-block gap. Reference definitions
+are document-global CommonMark state, so streams containing them deliberately
+take an authoritative full-stable-prefix fallback. A definition-only prefix
+also cannot commit a marker-only row. The seam matrix compares every
+incremental result with the full committed render, and
+`app/tui/benches/streaming_markdown.rs` drives the real controller at 50 and
+500 blocks. `tui-ui/benches/render.rs::markdown_streaming` remains the raw
+full-prefix quadratic baseline rather than pretending to measure the shipping
+controller. A local Criterion quick run measured about 180 µs at 50 blocks and
+2.36 ms at 500 blocks (10× blocks, ~13.1× time).
 
 ### B3. Transcript-overlay height-cache retention — ROI medium, S
 
@@ -576,6 +602,14 @@ post-draw coalescer — coco's `spawn_blocking` purge already serializes.
 
 ### B5. Always-on memory-trace artifact — ROI medium, M
 
+**Implementation status (2026-07-18): complete.** The rotating JSONL trace,
+30-second process/jemalloc samples, threshold hysteresis, bounded stats dumps,
+and purge before/after events are wired and covered by focused tests. Sampling
+and JSONL I/O run on blocking workers, while a ticketed sequencer preserves
+the UI thread's reservation order even when workers start out of order. Purge
+jobs reserve the same sequence before dispatch, so a purge can neither overtake
+its pre-purge sample nor mutate allocator state ahead of that sample.
+
 **Problem (verified).** All memory diagnostics are opt-in at launch:
 `MemoryPerfTracker` (`perf.rs:146-263`) emits `tracing::debug!` that the
 default filter drops, gated further on `tui.performance.memory_enabled`; heap
@@ -620,49 +654,41 @@ makes B3 measurable and guards it. Pattern, not code, from grok's
 
 ### B8. Upstream diff regression tests + viewport-diff copy elision — ROI low, S
 
-**Status after deep verification.** The clone in `buffer_updates()`
-(`tui-ui/src/engine/terminal.rs:795-820`) is genuinely unnecessary — the
-whole downstream chain takes references (`SurfaceBackend: Backend` inherits
-ratatui's `draw(Iterator<Item = (u16, u16, &Cell)>)`; `CrosstermBackend::draw`
-does no internal cell copy, only byte serialization of `cell.symbol()` into
-the writer). But the magnitude is small: `Cell.symbol` is
+**Implementation status (2026-07-18): complete in Phase 1 (`a3455dfd`).**
+
+**Original finding.** Before Phase 1, the production diff cloned every changed
+cell into an owned vector even though the whole downstream chain takes
+references (`SurfaceBackend: Backend` inherits ratatui's
+`draw(Iterator<Item = (u16, u16, &Cell)>)`; `CrosstermBackend::draw` does no
+internal cell copy). The magnitude was small: `Cell.symbol` is
 `Option<CompactString>` (24-byte inline storage), so cloning a grapheme cell
 is a ~40 B memcpy with **no heap allocation**, and `Vec::new()` allocates
 nothing on idle frames. Real cost: a few Vec growth allocations + N×~40 B
-memcpy on busy frames. This is a tidy-up, not a win — hence ROI low.
+memcpy on busy frames. This was a tidy-up, not a major win — hence ROI low.
 
-**Decision.**
-- **The valuable half — port upstream's diff regression tests** (see §2.4)
+**Implemented decision.**
+- **The valuable half — upstream diff regression tests** (see §2.4)
   into `terminal.test.rs`: style-only trailing-cell changes emit nothing
   (#2308 class); wide→narrow replacement re-emits the uncovered cell
   (#2587 class — coco's `invalidated = max(prev_width, next_width)`
-  propagation already handles this; pin it); forced-width advance saturates
-  (#2487 class — activates with the `CellDiffOption` migration). These pin
-  the audited-correct behaviors before the D3-enabling diff changes land.
-- **The tidy-up half — do only while already touching the diff** for the
-  `CellDiffOption` migration (that migration must rewrite this loop's
-  `next.skip` check anyway). Concrete shape (~30 lines, one file + its
-  companion test, byte-identical output):
-  1. Add `update_index_scratch: Vec<usize>` to `SurfaceTerminal` (precedent:
-     `history_row_scratch: String`). `collect_update_indices(&mut self)`
-     destructures `self` (`let Self { buffers, current,
-     update_index_scratch, invalidated, .. } = self;`) — the in-body
-     `self.current_buffer()` method calls must become direct field indexing
-     (`&buffers[*current]`), or the scratch's mutable borrow conflicts; this
-     is the only borrow-check trap. `clear()` + push `index` instead of
-     `(x, y, next.clone())`.
-  2. Call site: `let buffer = &self.buffers[self.current];` +
+  propagation handles this); forced-width advance saturates (#2487 class).
+- **The tidy-up half — completed with the `CellDiffOption` migration.** The
+  landed shape is byte-identical at the backend boundary:
+  1. `SurfaceTerminal` owns `update_index_scratch: Vec<usize>`;
+     `collect_update_indices(&mut self)` clears and reuses it, pushing indices
+     instead of `(x, y, next.clone())`.
+  2. The call site borrows `let buffer = &self.buffers[self.current];` and uses
      `self.backend.draw(indices.iter().map(|&i| { let (x, y) =
-     buffer.pos_of(i); (x, y, &buffer.content[i]) }))` — three disjoint
-     field borrows, compiles without gymnastics.
-  3. Adapt the one direct-consumer test
-     (`terminal.test.rs` `surface_terminal_skips_hidden_cells_after_wide_chars`)
-     to resolve cells through the buffer; all other tests assert on the
-     recording backend's bytes or `stats.buffer_updates` counts and are
-     unaffected.
+     buffer.pos_of(i); (x, y, &buffer.content[i]) }))`.
+  3. The owned `buffer_updates()` compatibility path is `#[cfg(test)]`; the
+     production backend path never clones cells.
 
 **Observable.** `ViewportDrawStats.diff_elapsed` (already recorded per
 frame); the regression tests are the deliverable.
+
+Production rendering now collects reusable update indices and passes borrowed
+`&Cell`s to the backend. The only owned clone path is the `#[cfg(test)]`
+`buffer_updates()` helper; it does not run in TUI rendering.
 
 ---
 
@@ -728,6 +754,9 @@ to `MAX_INPUT_HEIGHT` then scrolls.
 
 ### C3. Atomic `TextElement` chips (paste pills, file refs) — ROI high, L
 
+**Implementation status (2026-07-18): complete.** This was the first delivered
+item in Phase 3; B2 is now also complete and E1 is next.
+
 **Problem (verified — self-documented).** `textarea.rs:14` explicitly lists
 "TextElement / placeholder ranges" as a deliberate omission from the codex-rs
 port. Pills are literal strings: `app.rs:1052-1053` inserts a `[Pasted #N]`
@@ -739,20 +768,28 @@ display or expand-in-place.
 **Decision.** Port grok's element model shape, re-implemented against coco's
 verb-based textarea:
 
-- `TextElement { range: Range<usize>, kind: ElementKind, display: Line<'static> }`
+- `TextElement { id, range, kind, display: ElementDisplay }`
   stored sorted on `TextArea`; `ElementKind` is a small closed enum
   (`Paste`, `Image`, `FileRef`) with **no domain payload** — the payload key
-  stays in `app/tui`'s `PasteManager`, keyed by element id. This keeps tui-ui
-  domain-free.
+  stays in `app/tui`'s `AttachmentStore`, keyed by private `ElementId`, and
+  moves atomically with `ComposerSnapshot`. This keeps tui-ui domain-free.
 - Element-aware atomic boundaries: cursor motion treats an element as one
   grapheme; backspace/delete removes the whole element; any edit that would
   split an element instead selects it (or is rejected) — corruption becomes
   unrepresentable.
-- APIs: `insert_element`, `replace_element_with_text` (expand-in-place),
-  element enumeration for the resolver; `PasteManager` re-keys entries by
-  element id instead of label matching.
-- Likely a companion module `widgets/textarea_elements.rs` to respect the
-  800 LoC target.
+- APIs: typed `insert_element` / `register_element`, validated snapshots,
+  element enumeration, and width-aware display projection. App resolution is
+  by element id, never by matching a user-editable label.
+- `textarea_atomic.rs`, `textarea_elements.rs`, `textarea_layout.rs`, and
+  `textarea_navigation.rs` keep each concern below the 800 LoC target.
+- Cross-session history persists text-paste payloads inline or by hash and
+  always writes image bytes to a SHA-256 content-addressed attachment store;
+  resume verifies the hash before rebuilding the exact atomic composer.
+- Queue edit, rewind, stash/history, external `$EDITOR`, and permission
+  feedback preserve typed image payloads and exact byte anchors. Image-only
+  submissions are valid.
+- Vim's plain-text register rejects operations intersecting atomic elements;
+  it cannot delete an attachment and later put an inert lookalike label.
 - C1's undo groups make insert/expand atomically undoable.
 
 **Sequencing.** After C1 (groups) and C2 (wrap must count element display
@@ -916,6 +953,23 @@ everything tied to grok's owned scrollback (`table_geometry` selection/export,
 
 ### D3. OSC 8 hyperlinks (bare-URL detection + flicker-safe link layer) — ROI medium, L
 
+**Implementation status (2026-07-18): Phase 1 complete.** Markdown emits
+explicit `LinkSpan` sidecars (including links inside table cells) without
+printing destinations into visible prose. Native-history rows merge these
+with inferred URL/email/file-path links, resolve exact geometry after wrapping,
+and emit balanced, sanitized OSC 8 runs behind the conservative terminal
+capability gate. Replay, truncation, append-only stable-prefix commits, and
+final stream suffixes preserve sidecar offsets. Repository-relative paths and
+`path:line[:column]` are supported without turning slash-delimited prose or
+dates into file links. The render cache key includes terminal hyperlink
+capability: unknown/unsupported terminals and all non-sidecar consumers keep a
+visible ` (url)` fallback, including tables, the live viewport, and Ctrl+O;
+destinations are never silently hidden. Post-wrap geometry aligns terminal
+cells back to the original logical-line byte ranges, so repeated link labels
+cannot attach a target to an earlier unlinked occurrence. Recording-backend
+and real-PTY tests pin balanced OSC 8 emission. Live-viewport clickability
+remains the explicitly optional Phase 2.
+
 **Problem (verified).** Zero OSC 8 emission workspace-wide;
 `tui-markdown` `finish_link` appends a visible ` (url)` with an explicit
 comment that the paint engine has no OSC 8 plumbing (escape sequences in span
@@ -1006,6 +1060,14 @@ translation of grok's owned-scrollback UX.
 
 ### E1. In-transcript full-text search — ROI high, L
 
+**Implementation status (2026-07-18): complete.** The reader now has lazy
+rendered-plain-text indexing, smart-case substring matching, highlighted
+results, match counts, and wrapping n/N navigation with cache invalidation on
+content/stream/width changes. The corpus is cached per stable cell source and
+layout fingerprint: transcript appends move existing entries without cloning
+or rerendering them, stream generations rebuild only the active tail, and width
+changes alone force a full rewrap.
+
 **Problem (verified).** No transcript search exists: Ctrl+Shift+F is ripgrep
 over workspace files, Ctrl+R is composer history (C5), the reader has only
 scroll/select/expand. Users cannot find text in a long conversation.
@@ -1069,6 +1131,13 @@ UTF-8-safe truncation via `coco_utils_string` for any preview text.
 
 ### E4. Expand-after-commit re-print ring — ROI medium, M
 
+**Implementation status (2026-07-18): complete.** Alt+E reprints the newest
+still-live, actually-truncated committed tool result through the single native
+history owner; the 256-entry ring is rebuilt on replay and failed writes retain
+their pending request. Reprints remain bounded to one item per frame; if input
+coalescing queues multiple Alt+E requests, the draw outcome explicitly re-arms
+the frame scheduler until the pending queue is empty.
+
 **Problem (verified).** `ToggleToolCollapse` (`update.rs:1113`) only mutates
 live-viewport rendering. Once rows are committed to native scrollback they are
 frozen — a tool output committed collapsed dead-ends at `… +217 lines`; the
@@ -1078,11 +1147,11 @@ only recourse is opening the reader and finding the cell.
 native-scrollback ("minimal") mode invented this: every entry committed in a
 folded display mode is recorded in a bounded `commit_expand_ring` (VecDeque,
 cap 256); since committed terminal text cannot be mutated, **expansion is a
-re-print** — Ctrl+E pops the most recent still-live id and re-prints the full
+re-print** — Alt+E pops the most recent still-live id and re-prints the full
 render below; a `pending_expand` queue requeues at the front on failed writes.
 
 **Decision.** Port the mechanism keyed on coco identity: ring of
-`(message_uuid, call_id)` for cells committed collapsed; Ctrl+E (when the
+`(message_uuid, call_id)` for cells committed collapsed; Alt+E (when the
 reader is closed) re-emits the cell's full render as a new history block
 through the **existing single commit owner** (`surface/stream.rs` commit path
 — never a second emitter), with a small "re-printed from turn N" header line.
@@ -1115,6 +1184,18 @@ and derived-cell invariants):
 
 ### F1. Session picker upgrades — ROI high, L (phase 1 is M)
 
+**Implementation status (2026-07-18): complete.** The picker groups by cwd,
+shows metadata/relative age and first/last previews, and performs batched
+off-thread persisted-transcript content search with stale-result rejection and
+selection anchoring. Search requests are debounced, generation-cancelled, and
+single-flight; each streamed batch also carries the UI-issued request ID, so a
+same-text `a → ab → a` cycle cannot accept an earlier `a` result. Disk stores
+scan JSONL one physical record at a time instead of
+loading whole transcripts. Metadata and content lanes use the same Unicode
+lowercase matching semantics. Content hits retain their original Unicode byte
+range and generate a match-centered, UTF-8-safe picker snippet, including when
+the query occurs beyond the first 180 bytes of a long logical line.
+
 **Problem (verified).** `SessionBrowserState`/`SessionOption` is a flat
 `{id, label, message_count, created_at}` list
 (`state/surface_payloads.rs:349-364`); filter is label-substring; no
@@ -1134,33 +1215,40 @@ they are dropped at the TUI boundary.
   scan API over persisted transcripts, streamed results, dedup against title
   matches, selection anchoring while results stream.
 
-### F2. Queue management (pane + in-place edit + snapshot broadcast) — ROI medium, M→L
+### F2. Steering recall/edit — complete
 
-Three verified, layered items:
+**Implementation status (2026-07-18): the user-facing steering workflow is
+complete and sufficient. No further F2 work is planned.**
 
-- **F2a — interactive queue pane (M).** Today: a read-only 6-row dimmed strip
-  (`widgets/queue_status_widget.rs`), previews engine-truncated to 80 chars,
-  and the only mutation is recall-ALL. The dangling seam:
-  `UserCommand::EditQueuedCommand{id}` is **fully handled end-to-end**
-  (driver → agent-host → engine `remove_by_id` → `QueuedCommandEditReady`)
-  with zero UI senders. Build: focusable queue pane keyed by the stable
-  `QueuedCommandDisplay.id` — Enter/e recall-one (pure key wiring to the
-  shipped backend), `x` delete-one (one new `UserCommand::RemoveQueuedCommand`
-  + driver arm reusing `remove_by_id` + `CommandDequeued`), `v` view full
-  text (needs F2c or a fetch).
-- **F2b — in-place edit state machine (M–L, after F2a).** Add
-  `CommandQueue::update_by_id` (preserving id/priority/origin/position),
-  composer mode `EditingQueued { id, original }` with draft stash/restore, and
-  a drain-hold flag checked by `dequeue_next_prompt_batch` while the front
-  item is being edited (wake on edit exit). Skip grok's server-shared queue
-  semantics.
-- **F2c — full-queue snapshot broadcast (M).** Replace the three incremental
-  wire events + count-truncation reconciliation (self-described fragile,
-  `protocol.rs:779-821`) with a `ServerNotification::QueueChanged { entries }`
-  snapshot (id, full text, kind/origin, editable, position) emitted off the
-  existing `mark_changed`/`subscribe_changes` watch revision. Late-attaching
-  surfaces (SDK, resumed TUI, hub UI) become correct for free. **Skip**
-  version preconditions/optimistic echo — no remote queue mutation exists yet.
+**Current behavior (verified end-to-end).** A submit while a turn is active is
+queued as human steering. The footer shows ordered previews and an empty
+composer advertises “Press up to edit queued messages”. Up sends
+`EditQueuedCommands`; the engine leases every user-editable item while leaving
+slash, agent, coordinator, task-notification, and channel entries in place.
+The reply reconstructs one atomic composer containing all queued text, images,
+attachment offsets, and `TextElement` metadata, then merges the draft saved
+before the request plus any typing that arrived while the lease was in flight.
+The UI acknowledges only after restoration succeeds. A malformed restore,
+closed command channel, dropped TUI, or driver exit rolls the lease back into
+the exact session, so recall cannot silently lose steering.
+
+The recalled text is edited with the ordinary composer and resubmitted. During
+an active turn it becomes new steering; after the turn it becomes the next
+ordinary user turn. New ids/order are acceptable for this workflow. The
+existing batch recall is intentionally simpler than a queue editor and already
+meets the product need. Do **not** build a focusable queue pane, per-item
+delete/view actions, `CommandQueue::update_by_id`, an `EditingQueued` mode, or
+a drain-hold state machine without a new user requirement. The dormant
+single-item `EditQueuedCommand { id }` backend seam is not by itself a reason
+to expose more UI.
+
+**Deferred TODO (F2c, intentionally ignored for now):**
+
+- [ ] If a session later permits multiple simultaneous writable surfaces,
+  define revisioned lease ownership and reconnect/resume reconciliation so two
+  TUIs cannot both recall or restore the same steering batch. This is a
+  multi-surface consistency enhancement, not missing single-surface steering
+  UX; do not implement it before that requirement exists.
 
 ### F3. Project picker (non-project-dir first-prompt interception) — ROI medium, M
 
@@ -1397,8 +1485,15 @@ design doc before implementation.
 
 ## 12. Phasing & Sequencing
 
+**Active delivery TODO (single tracked item):**
+
+- [x] Complete `E1 → F1 → D3 → B5 → E4` in that order, and land A6 as an
+  isolated terminal-engine optimization before closing this TODO. F2c is
+  explicitly ignored; do not reintroduce it without a new multi-surface queue
+  consistency requirement.
+
 Dependencies that order the work: A4 → A5; A1 → A6; C1 → C3 → C7/C8;
-B3 → B7; F2a → F2b; G3 feeds A3/D3/F6; E5 → G7; G1 is a rolling substrate
+B3 → B7; G3 feeds A3/D3/F6; E5 → G7; G1 is a rolling substrate
 refactor. The ratatui 0.30.2 upgrade (§2.4 — `cell.skip` →
 `CellDiffOption` migration in the custom diff) is a standalone S chore that
 must precede D3 and any C8 revisit.
@@ -1417,15 +1512,15 @@ unsafe sign-off first) → C5 (Ctrl+R) → G4 (color tiers) → G6 (terminal the
 → E3 (per-cell copy) → D5 (mermaid sequence).
 
 **Phase 3 — structural features:**
-C3 (text elements) → B2 (append-only streaming) → E1 (transcript search) →
-F1 (session picker) → D3 (OSC 8 phase 1) → G5 (live theme) → B5 (memory
-trace) → E4 (expand ring) → F2a/F2c (queue pane + snapshot) → E2 (sticky
-headers) → D4 (LaTeX) → F6 (title/progress) → F7 (tips) → F3 (project
-picker).
+C3 (text elements, complete) → B2 (append-only streaming, complete) → E1
+(transcript search, complete) → F1 (session picker, complete) → D3 (OSC 8
+phase 1, complete) → B5 (memory trace, complete) → E4 (expand ring, complete)
+→ G5 (live theme) → E2 (sticky headers) → D4 (LaTeX) → F6
+(title/progress) → F7 (tips) → F3 (project picker).
 
 **Phase 4 — strategic (design review before code):**
-G2 (settings registry/modal) → G1 (effects-as-data, rolling) → A6 (writer
-thread) → A7 (PTY harness, grows throughout) → E5 (subagent views) → F4
+G2 (settings registry/modal) → G1 (effects-as-data, rolling) → A7 (PTY
+harness, grows throughout) → E5 (subagent views) → F4
 (welcome) → F5 (crash reports) → G7 (fleet dashboard) → G8 (hunk tracking).
 
 ---
@@ -1434,7 +1529,8 @@ thread) → A7 (PTY harness, grows throughout) → E5 (subagent views) → F4
 
 - Every engine-visible item (A1–A3, D3) adds a recording-backend test *and*
   one PTY scenario to A7's suite as its acceptance gate.
-- Every perf item states its observable: B1/B2 via `tui-ui/benches/render.rs`;
+- Every perf item states its observable: B1 via `tui-ui/benches/render.rs`, B2
+  via `app/tui/benches/streaming_markdown.rs`;
   B3 via B7's paired bench; A1 via the `frame_skipped` perf counter and the
   idle-frame byte count; B4/B5 via the memtrace artifact itself.
 - Every UI-visible item ships insta snapshots (`cargo insta pending-snapshots

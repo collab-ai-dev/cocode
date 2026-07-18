@@ -25,6 +25,8 @@ use uuid::Uuid;
 
 #[path = "storage/preview.rs"]
 mod preview;
+#[path = "storage/search.rs"]
+mod search;
 #[path = "storage_chain.rs"]
 mod storage_chain;
 #[path = "storage_metadata.rs"]
@@ -35,6 +37,8 @@ use preview::extract_text_content;
 use preview::is_synthetic_first_prompt_candidate;
 #[cfg(test)]
 use preview::truncate_prompt;
+pub use search::TranscriptTextMatch;
+pub(crate) use search::case_insensitive_match_range;
 pub(crate) use storage_chain::collect_agent_transcript_entries;
 use storage_chain::*;
 pub use storage_metadata::ResolvedSessionFile;
@@ -539,6 +543,8 @@ impl Serialize for Entry {
 pub struct TranscriptMetadata {
     pub session_id: SessionId,
     pub first_prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_message_preview: Option<String>,
     pub message_count: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_title: Option<String>,
@@ -1168,6 +1174,18 @@ impl TranscriptStore {
                 _ => None,
             })
             .collect())
+    }
+
+    /// Scan transcript JSONL one physical record at a time and stop at the
+    /// first matching message. This is the cancellation-aware search path for
+    /// `/resume`: it never materializes the whole (up to 50 MiB) transcript.
+    pub fn find_transcript_text(
+        &self,
+        session_id: &str,
+        needle_lowercase: &str,
+        is_cancelled: &mut dyn FnMut() -> bool,
+    ) -> crate::Result<Option<TranscriptTextMatch>> {
+        search::find_transcript_text(self, session_id, needle_lowercase, is_cancelled)
     }
 
     /// Extract lightweight metadata from a transcript without loading all

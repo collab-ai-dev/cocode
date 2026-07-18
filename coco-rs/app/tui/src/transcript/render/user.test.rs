@@ -32,6 +32,26 @@ fn user_cell(text: &str, origin: Option<MessageOrigin>) -> RenderedCell {
     }
 }
 
+fn user_cell_with_image(text: &str, insertion_offset: i64) -> RenderedCell {
+    let mut image = coco_messages::FileContent::image(vec![1, 2, 3], "image/png");
+    image.provider_metadata.get_or_insert_default().set(
+        "coco_composer_insertion_offset",
+        serde_json::json!(insertion_offset),
+    );
+    let msg = coco_messages::create_user_message_with_parts(vec![
+        coco_messages::UserContent::Text(coco_messages::TextContent::new(text)),
+        coco_messages::UserContent::File(image),
+    ]);
+    let uuid = msg.uuid().expect("user message has a UUID");
+    RenderedCell {
+        message_uuid: *uuid,
+        kind: CellKind::UserText {
+            text: text.to_string(),
+        },
+        source: Arc::new(msg),
+    }
+}
+
 fn render_user(cell: &RenderedCell) -> Vec<ratatui::text::Line<'static>> {
     let theme = Theme::default();
     let cells: Vec<RenderedCell> = Vec::new();
@@ -92,32 +112,21 @@ fn multiline_user_text_renders_single_chevron_with_aligned_continuation() {
 }
 
 #[test]
-fn image_pill_extracts_well_formed_refs_only() {
-    assert_eq!(
-        super::image_pill_refs("[Image #3] what is this?"),
-        vec!["[Image #3]".to_string()]
-    );
-    assert_eq!(
-        super::image_pill_refs("a [Image #1] b [Image #2]"),
-        vec!["[Image #1]".to_string(), "[Image #2]".to_string()]
-    );
-    // Malformed pills (non-digit `N`) are ignored.
-    assert!(super::image_pill_refs("[Image #foo]").is_empty());
-    assert!(super::image_pill_refs("no images here").is_empty());
-}
-
-#[test]
 fn pasted_image_hangs_confirmation_row_under_prompt() {
-    let lines = render_user(&user_cell(
-        "[Image #3] 这个图片是什么？",
-        Some(MessageOrigin::QueuedSteering),
-    ));
-    // `❯ [Image #3] …` echo plus a hanging `⎿ [Image #3]` confirmation row.
+    let lines = render_user(&user_cell_with_image("这个图片是什么？", 0));
+    // The typed image part produces both the inline chip and its confirmation.
     assert_eq!(lines.len(), 2);
     let row0 = flatten(&lines[..1]);
     let row1 = flatten(&lines[1..]);
-    assert_eq!(row0, "❯ [Image #3] 这个图片是什么？");
-    assert_eq!(row1, "  ⎿ [Image #3]");
+    assert_eq!(row0, "❯ [Image #1]这个图片是什么？");
+    assert_eq!(row1, "  ⎿ [Image #1]");
+}
+
+#[test]
+fn literal_image_lookalike_does_not_render_attachment_confirmation() {
+    let lines = render_user(&user_cell("[Image #7] literal", None));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(flatten(&lines), "❯ [Image #7] literal");
 }
 
 #[test]

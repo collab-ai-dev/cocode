@@ -6,11 +6,7 @@ use coco_tui_ui::style::UiStyles;
 use pretty_assertions::assert_eq;
 
 fn stash_with(text: &str) -> StashedInput {
-    StashedInput {
-        text: text.to_string(),
-        cursor_byte: text.len(),
-        paste_entries: Vec::new(),
-    }
+    StashedInput::plain(text, text.len())
 }
 
 #[test]

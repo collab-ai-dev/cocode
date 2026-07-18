@@ -10,6 +10,10 @@ use std::time::Instant;
 
 use ratatui::text::Line;
 
+use crate::surface::committed_tool_expand::CommittedToolExpand;
+use crate::surface::committed_tool_expand::CommittedToolKey;
+use crate::surface::committed_tool_expand::PreparedCommittedToolReprint;
+use crate::surface::committed_tool_expand::collapsed_tool_keys;
 use crate::surface::line_fingerprint::RenderedLineFingerprint;
 use crate::surface::line_fingerprint::fingerprint_lines;
 use crate::surface::stream::PreparedStreamAppend;
@@ -22,11 +26,12 @@ use crate::transcript::emission::finalize_after_stream_prefix;
 use crate::transcript::render::DEFAULT_MAX_REFLOW_ROWS;
 use crate::transcript::render::HistoryLineRenderOptions;
 use crate::transcript::render::HistoryReplayCache;
-use crate::transcript::render::render_finalized_history_lines;
+use crate::transcript::render::render_finalized_history_document;
 use crate::transcript::render::render_replay_history_lines_cached;
 use crate::transcript::stream::ScrollbackStreamCommit;
 use coco_tui_ui::engine::history_insert::HistoryRows;
 use coco_tui_ui::engine::history_insert::render_history_rows;
+use coco_tui_ui::engine::history_insert::render_history_rows_with_links;
 use coco_tui_ui::engine::history_reflow::HistoryReflowState;
 use coco_tui_ui::engine::history_reflow::HistoryViewportChange;
 use coco_tui_ui::engine::terminal::SurfaceBackend;
@@ -94,6 +99,7 @@ pub(crate) struct SurfaceHistoryDriver {
     emitted_transcript_revision: Option<u64>,
     emitted_history_rows: u16,
     replay_cache: HistoryReplayCache,
+    committed_tool_expand: CommittedToolExpand,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -129,6 +135,7 @@ pub(crate) struct PreparedHistoryAppend {
     /// lands. The commit is owned by `SurfaceStreamDriver` (single owner), so
     /// the history driver only signals the consumption.
     pub(crate) consumed_stream_commit: bool,
+    collapsed_tools: Vec<CommittedToolKey>,
 }
 
 impl PreparedFinalizedHistory {
@@ -173,6 +180,35 @@ impl SurfaceHistoryDriver {
 
     pub(crate) fn replay_due(&self, now: Instant) -> bool {
         self.reflow.pending_is_due(now)
+    }
+
+    pub(crate) fn request_expand_committed_tool(&mut self, cells: &[RenderedCell]) -> bool {
+        self.committed_tool_expand.request(cells)
+    }
+
+    pub(crate) fn has_pending_reprint(&self) -> bool {
+        self.committed_tool_expand.has_pending()
+    }
+
+    pub(crate) fn prepare_pending_reprint(
+        &mut self,
+        cells: &[RenderedCell],
+        options: HistoryLineRenderOptions<'_>,
+    ) -> Option<PreparedCommittedToolReprint> {
+        self.committed_tool_expand.prepare(cells, options)
+    }
+
+    pub(crate) fn commit_prepared_reprint<B>(
+        &mut self,
+        terminal: &mut SurfaceTerminal<B>,
+        prepared: &PreparedCommittedToolReprint,
+    ) -> Result<u16, B::Error>
+    where
+        B: SurfaceBackend,
+    {
+        let rows = self.committed_tool_expand.commit(terminal, prepared)?;
+        self.emitted_history_rows = self.emitted_history_rows.saturating_add(rows);
+        Ok(rows)
     }
 
     pub(crate) fn prepare_append(
@@ -235,7 +271,7 @@ impl SurfaceHistoryDriver {
         };
         let lines_build_started = Instant::now();
         let header = should_emit_header.then(|| session_header.lines.clone());
-        let Some(lines) = self.append_candidate_lines_from_plan(
+        let Some(document) = self.append_candidate_lines_from_plan(
             header,
             cells,
             start,
@@ -247,7 +283,13 @@ impl SurfaceHistoryDriver {
         };
         let lines_build_elapsed = lines_build_started.elapsed();
         let render_started = Instant::now();
-        let rows = render_history_rows(lines, options.width);
+        let rows = render_history_rows_with_links(
+            document.lines,
+            options.width,
+            options.cwd.map(std::path::Path::new),
+            document.links,
+        );
+        let collapsed_tools = collapsed_tool_keys(cells, start, end, options);
         PreparedFinalizedHistory::Append(PreparedHistoryAppend {
             start,
             end,
@@ -259,6 +301,7 @@ impl SurfaceHistoryDriver {
             lines_build_elapsed,
             render_elapsed: render_started.elapsed(),
             consumed_stream_commit: stream_commit.is_some(),
+            collapsed_tools,
         })
     }
 
@@ -310,6 +353,8 @@ impl SurfaceHistoryDriver {
                 self.header_fingerprint = Some(append.header_fingerprint.clone());
                 self.emitter.mark_emitted_through(cells, append.end);
                 self.emitted_transcript_revision = Some(append.transcript_revision);
+                self.committed_tool_expand
+                    .record(append.collapsed_tools.iter().cloned());
                 tracing::trace!(
                     target: "tui::surface::append",
                     start = append.start,
@@ -451,12 +496,14 @@ impl SurfaceHistoryDriver {
         );
         let render_elapsed = started.elapsed();
         let line_count = replay.lines.len();
+        let collapsed_tools = collapsed_tool_keys(cells, 0, end, options);
         let outcome = self.replay_rows(
             terminal,
             session_header,
             committable_cells,
             transcript_revision,
             &replay.rows,
+            collapsed_tools,
         )?;
         if replay.omitted_messages > 0 {
             tracing::info!(
@@ -509,6 +556,7 @@ impl SurfaceHistoryDriver {
         self.emitted_history_rows = 0;
         self.reflow.clear();
         self.replay_cache.clear();
+        self.committed_tool_expand.reset();
     }
 
     fn replay_rows<B>(
@@ -518,6 +566,7 @@ impl SurfaceHistoryDriver {
         cells: &[RenderedCell],
         transcript_revision: u64,
         message_rows: &HistoryRows,
+        collapsed_tools: Vec<CommittedToolKey>,
     ) -> Result<HistoryEmissionOutcome, B::Error>
     where
         B: SurfaceBackend,
@@ -568,6 +617,7 @@ impl SurfaceHistoryDriver {
         self.header_fingerprint = Some(header_fingerprint);
         self.emitter.mark_emitted_through(cells, cells.len());
         self.emitted_transcript_revision = Some(transcript_revision);
+        self.committed_tool_expand.replace_ring(collapsed_tools);
         tracing::debug!(
             target: "tui::surface::replay",
             message_count = cells.len(),
@@ -590,7 +640,7 @@ impl SurfaceHistoryDriver {
         end: usize,
         options: HistoryLineRenderOptions<'_>,
         stream_commit: Option<&ScrollbackStreamCommit>,
-    ) -> Option<Vec<Line<'static>>> {
+    ) -> Option<coco_tui_markdown::MarkdownRender> {
         if let Some(commit) = stream_commit {
             if header.is_some() {
                 tracing::debug!(
@@ -602,12 +652,16 @@ impl SurfaceHistoryDriver {
             }
             return finalize_after_stream_prefix(cells, start, end, options, commit);
         }
-        let mut lines = Vec::new();
-        if let Some(header) = header {
-            lines.extend(header);
+        let mut document = render_finalized_history_document(&cells[start..end], options);
+        if let Some(mut header) = header {
+            let line_offset = header.len();
+            for link in &mut document.links {
+                link.line = link.line.saturating_add(line_offset);
+            }
+            header.extend(document.lines);
+            document.lines = header;
         }
-        lines.extend(render_finalized_history_lines(&cells[start..end], options));
-        Some(lines)
+        Some(document)
     }
 }
 

@@ -355,6 +355,77 @@ fn user_cancel_with_lossless_tail_restores() {
 }
 
 #[test]
+fn user_cancel_auto_restore_rebuilds_image_and_file_reference_atoms() {
+    let mut state = AppState::new();
+    let user_uuid = crate::transcript::derive::id_to_uuid("u-typed");
+    let prompt = "see expanded paste @src/lib.rs";
+    let mut text = coco_messages::TextContent::new(prompt);
+    let mut text_metadata = text.provider_metadata.take().unwrap_or_default();
+    text_metadata.set(
+        "coco_submitted_composer",
+        serde_json::to_value(coco_types::SubmittedComposer {
+            next_attachment_label: 2,
+            elements: vec![
+                coco_types::SubmittedComposerElement::Paste {
+                    start: 4,
+                    end: 18,
+                    label: "[Pasted text #1]".into(),
+                },
+                coco_types::SubmittedComposerElement::FileRef { start: 19, end: 30 },
+                coco_types::SubmittedComposerElement::Image {
+                    insertion_offset: 30,
+                    image_index: 0,
+                    label: "[Image #2]".into(),
+                },
+            ],
+        })
+        .unwrap(),
+    );
+    text.provider_metadata = Some(text_metadata);
+    let mut image = coco_messages::FileContent::image(vec![1, 2, 3], "image/png");
+    let mut image_metadata = image.provider_metadata.take().unwrap_or_default();
+    image_metadata.set(
+        "coco_composer_insertion_offset",
+        serde_json::json!(prompt.len()),
+    );
+    image.provider_metadata = Some(image_metadata);
+    let user = coco_messages::create_user_message_with_parts_and_uuid(
+        user_uuid,
+        vec![
+            coco_messages::UserContent::Text(text),
+            coco_messages::UserContent::File(image),
+        ],
+    );
+    state.session.transcript.on_message_appended(Arc::new(user));
+    test_helpers::push_assistant_text(&mut state.session, "");
+    let (tx, mut rx) = channel();
+
+    on_turn_interrupted_outcome(&mut state, user_cancel(), &tx);
+
+    let resolved = state.ui.input.resolve().unwrap();
+    assert_eq!(resolved.text, prompt);
+    assert_eq!(
+        state.ui.input.text(),
+        "see [Pasted text #1] @src/lib.rs[Image #2]"
+    );
+    assert_eq!(resolved.images.len(), 1);
+    assert_eq!(resolved.images[0].bytes.as_ref(), [1, 2, 3]);
+    assert!(matches!(
+        resolved.submitted.elements.as_slice(),
+        [
+            coco_types::SubmittedComposerElement::Paste { .. },
+            coco_types::SubmittedComposerElement::FileRef { start: 19, end: 30 },
+            coco_types::SubmittedComposerElement::Image { .. }
+        ]
+    ));
+    let expected_message_id = user_uuid.to_string();
+    assert_eq!(
+        drained_auto_restore(&mut rx).as_deref(),
+        Some(expected_message_id.as_str())
+    );
+}
+
+#[test]
 fn user_cancel_without_auto_restore_leaves_no_dispatch() {
     // Meaningful tail → no auto-restore → no Rewind dispatch.
     let mut state = idle_with_meaningful_tail();
@@ -384,7 +455,11 @@ fn user_cancel_with_meaningful_tail_does_not_restore() {
 #[test]
 fn user_cancel_with_nonempty_input_does_not_restore() {
     let mut state = idle_with_lossless_tail("u1", "original prompt");
-    state.ui.input.textarea.set_text("user typed during cancel");
+    state
+        .ui
+        .input
+        .textarea_mut()
+        .set_text("user typed during cancel");
     let (tx, mut rx) = channel();
 
     on_turn_interrupted_outcome(&mut state, user_cancel(), &tx);

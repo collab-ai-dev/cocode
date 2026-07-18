@@ -126,9 +126,12 @@ fn cell_text(cells: &[RenderedCell], cell: &RenderedCell) -> Option<String> {
     let text = match &cell.kind {
         // Prose / thinking cells carry their text directly on the cell kind
         // (thinking text was otherwise dropped by `message_plain_text`).
-        CellKind::UserText { text }
-        | CellKind::AssistantText { text, .. }
-        | CellKind::AssistantThinking { text, .. } => text.clone(),
+        CellKind::UserText { text } => {
+            crate::transcript::derive::user_display_text(cell.source.as_ref(), text)
+        }
+        CellKind::AssistantText { text, .. } | CellKind::AssistantThinking { text, .. } => {
+            text.clone()
+        }
         // A tool cell's substantive content is its result output; fall back to
         // the one-line invocation preview when no result has arrived yet.
         CellKind::ToolUse { call_id, tool_name } => paired_result_output(cells, call_id)

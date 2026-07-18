@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use crate::FrameLayout;
 use crate::state::AppState;
+use crate::surface::committed_tool_expand::PreparedCommittedToolReprint;
 use crate::surface::history_driver::HistoryReplayMode;
 use crate::surface::history_driver::PreparedFinalizedHistory;
 use crate::surface::history_driver::SessionHeader;
@@ -40,6 +41,7 @@ pub(crate) struct NativeSurfaceController {
     /// when a header input (model/effort/cwd/branch/theme/width/…) changes,
     /// not per frame.
     session_header: Option<(u64, SessionHeader)>,
+    hyperlinks_enabled: bool,
 }
 
 /// Content-structure inputs whose change requires a full history re-render
@@ -70,6 +72,7 @@ pub(crate) struct NativeSurfaceDrawOutcome {
     #[cfg(test)]
     pub(crate) history: HistoryEmissionOutcome,
     pub(crate) layout: FrameLayout,
+    pub(crate) follow_up_frame_requested: bool,
 }
 
 #[derive(Debug)]
@@ -78,6 +81,7 @@ pub(crate) struct NativeSurfaceFramePlan {
     pub(crate) finalized_history: PreparedFinalizedHistory,
     pub(crate) stream_append: Option<PreparedStreamAppend>,
     pub(crate) stream_commit_invalidated: bool,
+    pub(crate) committed_tool_reprint: Option<PreparedCommittedToolReprint>,
     pub(crate) prepare_stats: NativePrepareStats,
 }
 
@@ -104,10 +108,19 @@ impl NativeSurfaceFramePlan {
         self.finalized_history
             .expected_rows()
             .saturating_add(stream_rows)
+            .saturating_add(
+                self.committed_tool_reprint
+                    .as_ref()
+                    .map_or(0, PreparedCommittedToolReprint::expected_rows),
+            )
     }
 }
 
 impl NativeSurfaceController {
+    pub(crate) fn set_hyperlinks_enabled(&mut self, enabled: bool) {
+        self.hyperlinks_enabled = enabled;
+    }
+
     pub(crate) fn history_replay_cache_estimated_bytes(&self) -> usize {
         self.history.replay_cache_estimated_bytes()
     }
@@ -120,7 +133,10 @@ impl NativeSurfaceController {
         now: Instant,
     ) -> NativeSurfaceFramePlan {
         let prepare_started = Instant::now();
-        let prepared_live = (width > 0).then(|| self.stream.prepare(state, width, plan));
+        let prepared_live = (width > 0).then(|| {
+            self.stream
+                .prepare_with_hyperlinks(state, width, plan, self.hyperlinks_enabled)
+        });
         let (live_lines, stream_append, stream_commit_invalidated, stream_cache_hit) =
             match prepared_live {
                 Some(prepared) => (
@@ -131,7 +147,7 @@ impl NativeSurfaceController {
                 ),
                 None => (None, None, false, None),
             };
-        let options = history_options(state, width);
+        let options = history_options(state, width, self.hyperlinks_enabled);
         let header_key = crate::presentation::header::header_input_key(
             state,
             UiStyles::new(&state.ui.theme).theme_hash(),
@@ -174,11 +190,16 @@ impl NativeSurfaceController {
         } else {
             PreparedFinalizedHistory::ReplayRequired
         };
+        let committed_tool_reprint = plan
+            .native_history_enabled()
+            .then(|| self.history.prepare_pending_reprint(cells, options))
+            .flatten();
         NativeSurfaceFramePlan {
             live_lines,
             finalized_history,
             stream_append,
             stream_commit_invalidated,
+            committed_tool_reprint,
             prepare_stats: NativePrepareStats {
                 prepare: prepare_started.elapsed(),
                 stream_cache_hit,
@@ -306,9 +327,10 @@ impl NativeSurfaceController {
         let mut precomputed_live = native_frame.live_lines.take();
         let mut prepared_stream_append = native_frame.stream_append.take();
         let stream_commit_invalidated = native_frame.stream_commit_invalidated;
+        let prepared_tool_reprint = native_frame.committed_tool_reprint.take();
         self.history.note_viewport(width, stream_active);
 
-        let options = history_options(state, width);
+        let options = history_options(state, width, self.hyperlinks_enabled);
         let history_display = HistoryDisplayState::from(state);
         let session_header = || session_header_lines(state, width);
         // Feed the native history driver with the engine-authoritative
@@ -400,6 +422,11 @@ impl NativeSurfaceController {
         };
         let finalized_history_stats = history_insert_stats_for(terminal, &history);
         if plan.native_history_enabled()
+            && let Some(reprint) = prepared_tool_reprint.as_ref()
+        {
+            self.history.commit_prepared_reprint(terminal, reprint)?;
+        }
+        if plan.native_history_enabled()
             && let Some(stream_append) = prepared_stream_append.as_ref()
         {
             let stream_outcome = self.history.commit_stream_append(terminal, stream_append)?;
@@ -475,6 +502,8 @@ impl NativeSurfaceController {
             #[cfg(test)]
             history,
             layout,
+            follow_up_frame_requested: plan.native_history_enabled()
+                && self.history.has_pending_reprint(),
         })
     }
 
@@ -511,7 +540,9 @@ impl NativeSurfaceController {
             mode,
         )?;
         if state.is_streaming() {
-            let prepared = self.stream.prepare(state, width, plan);
+            let prepared =
+                self.stream
+                    .prepare_with_hyperlinks(state, width, plan, self.hyperlinks_enabled);
             *precomputed_live = Some(prepared.lines);
             *prepared_stream_append = prepared.stream_append;
         }
@@ -522,6 +553,10 @@ impl NativeSurfaceController {
         self.history.reset();
         self.stream.reset();
         self.transcript_layout.reset();
+    }
+
+    pub(crate) fn request_expand_committed_tool(&mut self, cells: &[RenderedCell]) -> bool {
+        self.history.request_expand_committed_tool(cells)
     }
 }
 
@@ -571,13 +606,18 @@ impl From<&AppState> for HistoryDisplayState {
     }
 }
 
-fn history_options(state: &AppState, width: u16) -> HistoryLineRenderOptions<'_> {
+fn history_options(
+    state: &AppState,
+    width: u16,
+    hyperlinks_enabled: bool,
+) -> HistoryLineRenderOptions<'_> {
     HistoryLineRenderOptions {
         styles: UiStyles::new(&state.ui.theme),
         width,
         syntax_highlighting: state.ui.display_settings.syntax_highlighting,
         show_system_reminders: state.ui.show_system_reminders,
         show_thinking: state.ui.show_thinking,
+        hyperlinks_enabled,
         cwd: state.session.working_dir.as_deref(),
         kb_handle: Some(&state.ui.kb_handle),
         replay_cache_policy: state.ui.display_settings.native_replay_cache,

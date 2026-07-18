@@ -16,6 +16,10 @@ fn test_stream_render_controller_reuses_stable_prefix_for_new_tail() {
     assert!(stable_after_first > 0);
     assert_eq!(controller.stable_prefix_end, "first\n\nsecond\n\n".len());
     assert!(second.len() >= first.len());
+    assert_eq!(
+        controller.stable_rendered_source_bytes, controller.stable_prefix_end,
+        "each stable source byte must be rendered exactly once"
+    );
 }
 
 #[test]
@@ -32,6 +36,42 @@ fn test_stream_render_controller_render_does_not_duplicate_new_stable_lines() {
 
     assert_eq!(text.matches("alpha").count(), 1, "{text}");
     assert_eq!(text.matches("beta").count(), 1, "{text}");
+}
+
+#[test]
+fn stable_stream_links_follow_terminal_capability() {
+    let theme = Theme::default();
+    let source = "See [docs](https://example.com/docs).\n\n";
+
+    let mut fallback_controller = StreamRenderController::default();
+    let fallback = fallback_controller.render_projection(input(source, &theme));
+    let fallback_text = fallback
+        .stable_lines
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(fallback_text.contains("docs (https://example.com/docs)"));
+    assert!(fallback.stable_links.is_empty());
+
+    let mut sidecar_controller = StreamRenderController::default();
+    let sidecar = sidecar_controller.render_projection(StreamRenderInput {
+        source,
+        generation: 1,
+        styles: UiStyles::new(&theme),
+        width: 80,
+        syntax_highlighting: SyntaxHighlighting::Off,
+        hyperlinks_enabled: true,
+    });
+    let sidecar_text = sidecar
+        .stable_lines
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!sidecar_text.contains("https://example.com/docs"));
+    assert_eq!(sidecar.stable_links.len(), 1);
+    assert_eq!(sidecar.stable_links[0].target, "https://example.com/docs");
 }
 
 /// Stable + tail concatenated, as the retired full-render entry point did.
@@ -56,6 +96,7 @@ fn input<'a>(source: &'a str, theme: &'a Theme) -> StreamRenderInput<'a> {
         styles: UiStyles::new(theme),
         width: 80,
         syntax_highlighting: SyntaxHighlighting::Off,
+        hyperlinks_enabled: false,
     }
 }
 
@@ -80,8 +121,9 @@ fn test_stable_lines_are_row_prefix_of_full_committed_render() {
     //
     // over the FULL trap set — closed fence, mermaid diagram, growing loose
     // list, setext underline arriving after its paragraph, blockquote, GFM
-    // table, late reference-link definition, trailing partial line — at a wide
-    // and a narrow width, and under BOTH syntax states (production defaults to
+    // table, indented code, a blank-containing raw HTML block, multiline and
+    // late-defined reference links, trailing partial line — at a wide and a
+    // narrow width, and under BOTH syntax states (production defaults to
     // Enabled, and highlighted fences are the highest-risk construct). A
     // failure means streamed scrollback rows would disagree with the finalize
     // suffix: silent transcript corruption.
@@ -90,6 +132,9 @@ fn test_stable_lines_are_row_prefix_of_full_committed_render() {
                   ```mermaid\ngraph TD\n  A-->B\n```\n\n- alpha item\n\n\
                   - beta item\n\nTitle\n=====\n\n> quoted line\n> second line\n\n\
                   | col a | col b |\n| ----- | ----- |\n| one   | two   |\n\n\
+                  Indented code follows:\n\n    first line\n\n    second line\n\n\
+                  <script>\nconst first = 1;\n\nconst second = 2;\n</script>\n\n\
+                  See [a multiline\nlabel][ref] too.\n\n\
                   See [the spec][ref] for details.\n\n[ref]: https://example.com\n\n\
                   Closing paragraph.\n\ntrailing partial line";
     for syntax in [SyntaxHighlighting::Full, SyntaxHighlighting::Off] {
@@ -106,12 +151,28 @@ fn test_stable_lines_are_row_prefix_of_full_committed_render() {
                     styles: UiStyles::new(&theme),
                     width,
                     syntax_highlighting: syntax,
+                    hyperlinks_enabled: false,
                 });
                 let stable: Vec<String> = projection
                     .stable_lines
                     .iter()
                     .map(|line| format!("{line:?}"))
                     .collect();
+                let stable_prefix: Vec<String> = if projection.stable_source_len == 0 {
+                    Vec::new()
+                } else {
+                    crate::transcript::render::assistant::render_committed_assistant_markdown(
+                        &view[..projection.stable_source_len],
+                        crate::transcript::render::assistant::CommittedAssistantMarkdownOptions {
+                            styles: UiStyles::new(&theme),
+                            width,
+                            syntax_highlighting: syntax,
+                        },
+                    )
+                    .iter()
+                    .map(|line| format!("{line:?}"))
+                    .collect()
+                };
                 let full: Vec<String> =
                     crate::transcript::render::assistant::render_committed_assistant_markdown(
                         view,
@@ -128,6 +189,10 @@ fn test_stable_lines_are_row_prefix_of_full_committed_render() {
                     stable.len() <= full.len() && full[..stable.len()] == stable[..],
                     "stable-prefix render must be a row-prefix of the committed full render (syntax={syntax:?}, width={width}, fed={fed}):\nstable {stable:#?}\nfull {full:#?}",
                 );
+                assert_eq!(
+                    stable, stable_prefix,
+                    "independently rendered stable regions must equal one committed prefix render (syntax={syntax:?}, width={width}, fed={fed})",
+                );
                 assert!(
                     stable.len() >= prev_stable.len()
                         && stable[..prev_stable.len()] == prev_stable[..],
@@ -137,6 +202,59 @@ fn test_stable_lines_are_row_prefix_of_full_committed_render() {
             }
         }
     }
+}
+
+#[test]
+fn test_context_free_long_stream_renders_each_stable_source_byte_once() {
+    let theme = Theme::default();
+    let mut controller = StreamRenderController::default();
+    let mut source = String::new();
+    for block in 0..500 {
+        source.push_str(&format!("paragraph {block}\n\n"));
+        controller.render_projection(input(&source, &theme));
+    }
+
+    assert_eq!(controller.stable_prefix_end, source.len());
+    assert_eq!(
+        controller.stable_rendered_source_bytes,
+        source.len(),
+        "the common context-free path must render disjoint stable slices"
+    );
+    let authoritative = crate::transcript::render::assistant::render_committed_assistant_markdown(
+        &source,
+        crate::transcript::render::assistant::CommittedAssistantMarkdownOptions {
+            styles: UiStyles::new(&theme),
+            width: 80,
+            syntax_highlighting: SyntaxHighlighting::Off,
+        },
+    );
+    assert_eq!(controller.stable_lines, authoritative);
+}
+
+#[test]
+fn test_reference_definitions_use_authoritative_full_render_fallback() {
+    let theme = Theme::default();
+    let mut controller = StreamRenderController::default();
+    let definition_only = "[target]: https://example.com\n\n";
+    let first = controller.render_projection(input(definition_only, &theme));
+    assert!(
+        first.stable_lines.is_empty(),
+        "do not commit a marker-only prefix"
+    );
+    assert_eq!(first.stable_source_len, 0);
+
+    let source = format!("{definition_only}See [the target][target].\n\n");
+    let projection = controller.render_projection(input(&source, &theme));
+    let authoritative = crate::transcript::render::assistant::render_committed_assistant_markdown(
+        &source,
+        crate::transcript::render::assistant::CommittedAssistantMarkdownOptions {
+            styles: UiStyles::new(&theme),
+            width: 80,
+            syntax_highlighting: SyntaxHighlighting::Off,
+        },
+    );
+    assert_eq!(projection.stable_lines, authoritative);
+    assert_eq!(projection.stable_source_len, source.len());
 }
 
 #[test]

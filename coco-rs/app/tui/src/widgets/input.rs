@@ -25,22 +25,14 @@ use coco_tui_ui::style::UiStyles;
 /// two-space indent on every continuation row.
 pub(crate) const INPUT_GUTTER_WIDTH: u16 = 2;
 
-/// Visual rows the composer's text occupies at `area_width`, as byte ranges.
-///
-/// The single wrap decision for the composer. The render, the cursor placement,
-/// and the height reservation all resolve rows through this, so they cannot
-/// disagree about where a line breaks — a disagreement is a misplaced cursor or
-/// a clipped row.
-pub(crate) fn composer_rows(text: &str, area_width: u16) -> Vec<std::ops::Range<usize>> {
-    coco_tui_ui::widgets::wrap_ranges(text, area_width.saturating_sub(INPUT_GUTTER_WIDTH))
-}
-
 /// Pure input presentation data shared by the input widget and cursor logic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InputRenderModel {
     pub(crate) prompt_mode: PromptMode,
     pub(crate) prefix_consumed: usize,
     pub(crate) display_text: String,
+    pub(crate) display_elements: Vec<coco_tui_ui::widgets::ProjectedTextElement>,
+    pub(crate) rows: Vec<std::ops::Range<usize>>,
     pub(crate) inline_hint: Option<String>,
     pub(crate) inline_ghost: Option<InlineGhostRender>,
     pub(crate) prompt_suggestion_hint: bool,
@@ -72,6 +64,7 @@ impl InputRenderModel {
         // rows wrap at.
         width: u16,
     ) -> Self {
+        let text_width = width.saturating_sub(INPUT_GUTTER_WIDTH);
         let prompt_mode = if is_streaming {
             PromptMode::Normal
         } else {
@@ -90,6 +83,7 @@ impl InputRenderModel {
 
         let (
             display_text,
+            display_elements,
             inline_hint,
             is_placeholder,
             command_palette_filter,
@@ -97,6 +91,7 @@ impl InputRenderModel {
         ) = if let Some(filter) = command_palette_filter {
             (
                 format!("/{filter}"),
+                Vec::new(),
                 None,
                 false,
                 Some(filter.to_string()),
@@ -108,19 +103,25 @@ impl InputRenderModel {
                 // with queued messages hints how to recall them.
                 (
                     t!("input.placeholder_queued").to_string(),
+                    Vec::new(),
                     None,
                     true,
                     None,
                     false,
                 )
             } else if let Some(suggestion) = prompt_suggestion {
-                (suggestion.to_string(), None, true, None, true)
+                (suggestion.to_string(), Vec::new(), None, true, None, true)
             } else {
-                (String::new(), None, false, None, false)
+                (String::new(), Vec::new(), None, false, None, false)
             }
         } else {
+            let projection = input
+                .textarea()
+                .display_projection_with_width(prefix_consumed..input.text().len(), text_width);
+            let (text, elements) = projection.into_parts();
             (
-                input.text()[prefix_consumed..].to_string(),
+                text,
+                elements,
                 input.inline_hint.clone(),
                 false,
                 None,
@@ -131,7 +132,12 @@ impl InputRenderModel {
             None
         } else {
             input.active_inline_ghost().and_then(|ghost| {
-                let byte_pos = ghost.insert_position.checked_sub(prefix_consumed)?;
+                ghost.insert_position.checked_sub(prefix_consumed)?;
+                let byte_pos = input.textarea().display_offset_with_width(
+                    prefix_consumed,
+                    ghost.insert_position,
+                    text_width,
+                );
                 (byte_pos <= display_text.len()).then(|| InlineGhostRender {
                     byte_pos,
                     text: ghost.text.clone(),
@@ -148,18 +154,22 @@ impl InputRenderModel {
         } else {
             String::new()
         };
+        let rows = coco_tui_ui::widgets::wrap_ranges_with_elements(
+            &display_text,
+            text_width,
+            &display_elements,
+        );
 
         // Cursor's (row, col) within the displayed text — placeholder / palette
         // states park it at the origin (their cursor is handled specially).
         let (cursor_row, cursor_col) = if is_placeholder || command_palette_filter.is_some() {
             (0, 0)
         } else {
+            let source_cursor = input.textarea().cursor().max(prefix_consumed);
             let cursor_byte = input
-                .textarea
-                .cursor()
-                .saturating_sub(prefix_consumed)
+                .textarea()
+                .display_offset_with_width(prefix_consumed, source_cursor, text_width)
                 .min(display_text.len());
-            let rows = composer_rows(&display_text, width);
             // The last row starting at or before the cursor. At a soft-wrap
             // boundary that is the continuation row (column 0); at a hard
             // newline it is the row the cursor visually sits at the end of,
@@ -177,6 +187,8 @@ impl InputRenderModel {
             prompt_mode,
             prefix_consumed,
             display_text,
+            display_elements,
+            rows,
             inline_hint,
             inline_ghost,
             prompt_suggestion_hint,
@@ -290,7 +302,7 @@ impl Widget for InputWidget<'_> {
         } else {
             Style::default().fg(self.styles.text())
         };
-        let rows = composer_rows(&model.display_text, area.width);
+        let rows = &model.rows;
         let lines: Vec<Line> = if rows.len() > 1 {
             // Multi-row composer: one row per visual line — hard `\n` breaks AND
             // soft wraps — scrolled to keep the cursor visible. Wrapping here is
@@ -311,10 +323,14 @@ impl Widget for InputWidget<'_> {
                     } else {
                         Span::raw("  ")
                     };
-                    Line::from(vec![
-                        gutter,
-                        Span::styled(model.display_text[range.clone()].to_string(), text_style),
-                    ])
+                    let mut spans = vec![gutter];
+                    spans.extend(projected_spans(
+                        &model,
+                        range.clone(),
+                        text_style,
+                        self.styles,
+                    ));
+                    Line::from(spans)
                 })
                 .collect()
         } else {
@@ -330,14 +346,18 @@ impl Widget for InputWidget<'_> {
             }
             if let Some(ghost) = model.inline_ghost.as_ref() {
                 let split = ghost.byte_pos.min(model.display_text.len());
-                let before = model.display_text[..split].to_string();
-                let after = model.display_text[split..].to_string();
-                spans.extend(styled_display_text_spans(before, text_style, self.styles));
+                spans.extend(projected_spans(&model, 0..split, text_style, self.styles));
                 spans.push(Span::styled(ghost.text.clone(), self.styles.dim_style()));
-                spans.push(Span::styled(after, text_style));
+                spans.extend(projected_spans(
+                    &model,
+                    split..model.display_text.len(),
+                    text_style,
+                    self.styles,
+                ));
             } else {
-                spans.extend(styled_display_text_spans(
-                    model.display_text.clone(),
+                spans.extend(projected_spans(
+                    &model,
+                    0..model.display_text.len(),
                     text_style,
                     self.styles,
                 ));
@@ -355,6 +375,60 @@ impl Widget for InputWidget<'_> {
             block = block.title_bottom(self.history_search_footer_line(view));
         }
         Paragraph::new(lines).block(block).render(area, buf);
+    }
+}
+
+fn projected_spans(
+    model: &InputRenderModel,
+    range: std::ops::Range<usize>,
+    text_style: Style,
+    styles: UiStyles<'_>,
+) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut pos = range.start;
+    for element in &model.display_elements {
+        if element.range().end <= range.start {
+            continue;
+        }
+        if element.range().start >= range.end {
+            break;
+        }
+        if pos < element.range().start {
+            spans.extend(styled_plain_range(
+                &model.display_text,
+                pos..element.range().start,
+                text_style,
+                styles,
+            ));
+        }
+        spans.push(Span::styled(
+            element.display().text().to_string(),
+            element.display().style(),
+        ));
+        pos = element.range().end;
+    }
+    if pos < range.end {
+        spans.extend(styled_plain_range(
+            &model.display_text,
+            pos..range.end,
+            text_style,
+            styles,
+        ));
+    }
+    spans
+}
+
+fn styled_plain_range(
+    text: &str,
+    range: std::ops::Range<usize>,
+    text_style: Style,
+    styles: UiStyles<'_>,
+) -> Vec<Span<'static>> {
+    let value = text.get(range.clone()).unwrap_or_default().to_string();
+    if range.start == 0 {
+        styled_display_text_spans(value, text_style, styles)
+    } else {
+        vec![Span::styled(value, text_style)]
     }
 }
 

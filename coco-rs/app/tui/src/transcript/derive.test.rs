@@ -25,6 +25,53 @@ fn ui_hidden_attachment_derives_no_cells() {
 }
 
 #[test]
+fn user_image_parts_project_typed_chips_at_their_composer_offsets() {
+    let mut first = coco_messages::FileContent::image(vec![1], "image/png");
+    first
+        .provider_metadata
+        .get_or_insert_default()
+        .set("coco_composer_insertion_offset", serde_json::json!(1));
+    let mut second = coco_messages::FileContent::image(vec![2], "image/png");
+    second
+        .provider_metadata
+        .get_or_insert_default()
+        .set("coco_composer_insertion_offset", serde_json::json!(2));
+    let message = coco_messages::create_user_message_with_parts(vec![
+        coco_messages::UserContent::Text(coco_messages::TextContent::new("abc")),
+        coco_messages::UserContent::File(first),
+        coco_messages::UserContent::File(second),
+    ]);
+
+    let cells = message_to_cells(Arc::new(message));
+    let CellKind::UserText { text } = &cells[0].kind else {
+        panic!("expected user text cell");
+    };
+    assert_eq!(text, "abc");
+    assert_eq!(
+        super::user_display_text(cells[0].source.as_ref(), text),
+        "a[Image #1]b[Image #2]c"
+    );
+}
+
+#[test]
+fn image_only_user_message_still_derives_a_visible_user_cell() {
+    let message =
+        coco_messages::create_user_message_with_parts(vec![coco_messages::UserContent::File(
+            coco_messages::FileContent::image(vec![1], "image/png"),
+        )]);
+
+    let cells = message_to_cells(Arc::new(message));
+    let CellKind::UserText { text } = &cells[0].kind else {
+        panic!("expected user text cell");
+    };
+    assert!(text.is_empty());
+    assert_eq!(
+        super::user_display_text(cells[0].source.as_ref(), text),
+        "[Image #1]"
+    );
+}
+
+#[test]
 fn adjacent_reasoning_parts_coalesce_into_one_thinking_cell() {
     let msg = coco_messages::create_assistant_message(
         vec![

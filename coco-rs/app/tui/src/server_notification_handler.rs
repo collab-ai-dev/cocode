@@ -200,6 +200,7 @@ fn tui_event_variant(t: &coco_types::TuiOnlyEvent) -> &'static str {
         E::QueuedCommandsEditReady { .. } => "QueuedCommandsEditReady",
         E::QueuedCommandEditUnavailable { .. } => "QueuedCommandEditUnavailable",
         E::OpenSessionBrowser { .. } => "OpenSessionBrowser",
+        E::SessionSearchResults { .. } => "SessionSearchResults",
         E::CompactionCircuitBreakerOpen { .. } => "CompactionCircuitBreakerOpen",
         E::MicroCompactionApplied { .. } => "MicroCompactionApplied",
         E::SessionMemoryCompactApplied { .. } => "SessionMemoryCompactApplied",

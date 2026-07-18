@@ -382,21 +382,16 @@ pub async fn run_tui(
         coco_agent_host::session_dialogs::build_initial_session_ui_flags_payload(runtime);
     app.state_mut().ui.coordinator_mode_active = initial_ui_flags.coordinator_mode_active;
 
-    // Hydrate composer history from the timestamped persistent store. Paste
-    // payloads are resolved off the UI thread and reattached to their exact
-    // pill labels so cross-session recall never produces dangling tokens.
+    // Hydrate typed composer history after content-addressed payloads have
+    // been resolved and hash-verified off the UI thread.
     {
         let project = cwd.to_string_lossy().to_string();
         let entries = runtime
             .prompt_history_entries(project)
             .await
             .into_iter()
-            .map(|entry| {
-                coco_tui::HistoryEntry::persisted(
-                    entry.display,
-                    entry.timestamp,
-                    entry.pasted_contents,
-                )
+            .filter_map(|entry| {
+                coco_tui::HistoryEntry::persisted(entry.composer, entry.timestamp).ok()
             })
             .collect();
         app.state_mut().ui.input.hydrate_history_entries(entries);

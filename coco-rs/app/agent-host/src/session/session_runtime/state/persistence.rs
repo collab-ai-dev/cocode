@@ -43,7 +43,7 @@ impl SessionRuntime {
             coco_session::PromptHistory::new(&config_home, &project, &session_id)
                 .get_timestamped_history()
                 .into_iter()
-                .map(|entry| (entry.resolve)())
+                .filter_map(|entry| (entry.resolve)())
                 .collect()
         })
         .await
@@ -52,14 +52,13 @@ impl SessionRuntime {
     pub async fn persist_prompt_history_entry(
         &self,
         project: String,
-        display: String,
-        pasted_contents: std::collections::HashMap<i32, String>,
+        composer: coco_types::PersistedComposer,
     ) -> anyhow::Result<()> {
         let config_home = self.config_home().clone();
         let session_id = self.current_typed_session_id().await;
         tokio::task::spawn_blocking(move || {
             coco_session::PromptHistory::new(&config_home, &project, &session_id)
-                .add_with_pastes(&display, &pasted_contents)
+                .add_composer(&composer)
                 .map_err(anyhow::Error::from)
         })
         .await?
@@ -112,6 +111,8 @@ impl SessionRuntime {
                         created_at: session.created_at,
                         updated_at: session.updated_at,
                         title: session.title,
+                        first_prompt: session.first_prompt,
+                        last_message_preview: session.last_message_preview,
                         message_count: session.message_count,
                         total_tokens: session.total_tokens,
                     })

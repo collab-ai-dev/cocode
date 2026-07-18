@@ -135,7 +135,9 @@ pub(crate) fn modal_styled_surface(
         ModalState::MemoryDialog(m) => ps::memory_dialog_lines(m, styles, list_budget),
         ModalState::WorkflowPicker(w) => ps::workflow_picker_lines(w, styles, list_budget),
         ModalState::QuickOpen(q) => ps::quick_open_lines(q, styles, list_budget),
-        ModalState::SessionBrowser(s) => ps::session_browser_lines(s, styles, list_budget),
+        ModalState::SessionBrowser(s) => {
+            crate::presentation::session_picker::session_browser_lines(s, styles, list_budget)
+        }
         ModalState::GlobalSearch(g) => ps::global_search_lines(g, styles, list_budget),
         ModalState::CopyPicker(cp) => ps::copy_picker_lines(cp, styles, list_budget),
         ModalState::TeamRoster(r) => ps::team_roster_lines(r, styles, list_budget),

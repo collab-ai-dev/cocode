@@ -333,6 +333,7 @@ fn permission_content_renders_exit_plan_mode_without_raw_input_keys() {
         plan: Some("# Plan\n\n- Update code".to_string()),
         edited_plan: None,
         feedback_input: crate::state::PrefixInputState::new(String::new()),
+        feedback_images: Vec::new(),
         plan_file_path: Some("/tmp/plan.md".to_string()),
         allowed_prompts: vec![],
     });
@@ -387,6 +388,7 @@ fn permission_content_uses_no_plan_title_for_exit_plan_without_plan() {
         plan: Some("User asked for a read-only explanation.".to_string()),
         edited_plan: None,
         feedback_input: crate::state::PrefixInputState::new(String::new()),
+        feedback_images: Vec::new(),
         plan_file_path: None,
         allowed_prompts: vec![],
     });
@@ -410,6 +412,7 @@ fn exit_plan_prompt_lines_render_only_decision_rows() {
         plan: Some("# Goal\n\n- Step one".to_string()),
         edited_plan: None,
         feedback_input: crate::state::PrefixInputState::new(String::new()),
+        feedback_images: Vec::new(),
         plan_file_path: Some("/tmp/plan.md".to_string()),
         allowed_prompts: vec![],
     });
@@ -456,6 +459,7 @@ fn exit_plan_prompt_lines_use_no_plan_copy_without_plan() {
         plan: Some("This was a read-only question.".to_string()),
         edited_plan: None,
         feedback_input: crate::state::PrefixInputState::new(String::new()),
+        feedback_images: Vec::new(),
         plan_file_path: None,
         allowed_prompts: vec![],
     });
@@ -506,6 +510,7 @@ fn exit_plan_prompt_lines_render_feedback_input_on_no_row() {
         plan: Some("# Goal\n\n- Step one".to_string()),
         edited_plan: None,
         feedback_input: crate::state::PrefixInputState::new("split it up".to_string()),
+        feedback_images: Vec::new(),
         plan_file_path: None,
         allowed_prompts: vec![],
     });
@@ -539,6 +544,7 @@ fn exit_plan_pending_history_lines_render_plan_without_choices() {
         plan: Some("# Goal\n\n- Step one".to_string()),
         edited_plan: None,
         feedback_input: crate::state::PrefixInputState::new(String::new()),
+        feedback_images: Vec::new(),
         plan_file_path: Some("/tmp/plan.md".to_string()),
         allowed_prompts: vec![],
     });
@@ -572,6 +578,7 @@ fn exit_plan_pending_history_lines_lead_with_ready_to_code_title() {
         plan: Some("# Goal\n\n- Step one".to_string()),
         edited_plan: None,
         feedback_input: crate::state::PrefixInputState::new(String::new()),
+        feedback_images: Vec::new(),
         plan_file_path: None,
         allowed_prompts: vec![],
     });
@@ -608,6 +615,7 @@ fn exit_plan_pending_history_lines_render_no_plan_notice_without_file() {
         plan: Some("User asked for a read-only explanation.".to_string()),
         edited_plan: None,
         feedback_input: crate::state::PrefixInputState::new(String::new()),
+        feedback_images: Vec::new(),
         plan_file_path: Some("/tmp/plan.md".to_string()),
         allowed_prompts: vec![],
     });

@@ -45,31 +45,59 @@ static HEAP_PROFILING_DESIRED: AtomicBool = AtomicBool::new(false);
 /// The triggering [`crate::perf::MemoryPhase`] lands as a structured log field
 /// (via its `as_str`) so each site's reclaim can be measured separately. Cheap
 /// to call: returns immediately when jemalloc control isn't compiled in, so the
-/// common (non-jemalloc) build never spawns anything.
-pub(crate) fn spawn_purge(phase: crate::perf::MemoryPhase, heap_profile_enabled: bool) {
-    if !coco_utils_jemalloc::ENABLED {
-        return;
-    }
+/// common (non-jemalloc) build records an ordered unavailable event without
+/// touching allocator controls.
+pub(crate) fn spawn_purge(
+    phase: crate::perf::MemoryPhase,
+    heap_profile_enabled: bool,
+    trace_job: crate::memory_trace::MemoryTracePurgeJob,
+) {
     let reason = phase.as_str();
     // Purge + the two stat reads are a handful of syscalls (the MADV_DONTNEED
     // sweep dominates and can run into low-single-digit ms on a large dirty
     // set), so keep them off the UI thread. Fire-and-forget: the task borrows
-    // nothing and only logs. Concurrent cliffs are already serialized by
-    // jemalloc's own arena locks, so no extra coalescing is needed here.
+    // nothing. The trace job's ticket also serializes the allocator mutation
+    // after its pre-purge sample, preserving both measurement and JSONL order.
     tokio::task::spawn_blocking(move || {
-        let before = coco_utils_jemalloc::stats_snapshot();
-        match coco_utils_jemalloc::purge_all_arenas() {
-            Ok(()) => log_purge(reason, before, coco_utils_jemalloc::stats_snapshot()),
-            Err(err) => {
-                tracing::warn!(
-                    target: "tui::perf::mem",
-                    %err,
-                    reason,
-                    "jemalloc arena purge failed"
+        trace_job.run(|memory_trace| {
+            if !coco_utils_jemalloc::ENABLED {
+                memory_trace.record_purge(
+                    phase,
+                    None,
+                    None,
+                    std::time::Duration::ZERO,
+                    Some("jemalloc_unavailable"),
                 );
+                return;
             }
-        }
-        if heap_profile_enabled {
+
+            let started = std::time::Instant::now();
+            let before = coco_utils_jemalloc::stats_snapshot();
+            match coco_utils_jemalloc::purge_all_arenas() {
+                Ok(()) => {
+                    let after = coco_utils_jemalloc::stats_snapshot();
+                    log_purge(reason, before, after);
+                    memory_trace.record_purge(phase, before, after, started.elapsed(), None);
+                }
+                Err(err) => {
+                    let error = err.to_string();
+                    tracing::warn!(
+                        target: "tui::perf::mem",
+                        %err,
+                        reason,
+                        "jemalloc arena purge failed"
+                    );
+                    memory_trace.record_purge(
+                        phase,
+                        before,
+                        coco_utils_jemalloc::stats_snapshot(),
+                        started.elapsed(),
+                        Some(&error),
+                    );
+                }
+            }
+        });
+        if coco_utils_jemalloc::ENABLED && heap_profile_enabled {
             dump_heap_profile(reason);
         }
     });

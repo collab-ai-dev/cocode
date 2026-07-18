@@ -25,8 +25,6 @@ use crate::i18n::t;
 use crate::state::AppState;
 use crate::state::ExportFormat;
 use crate::state::ModalState;
-use crate::state::SessionBrowserState;
-use crate::state::SessionOption;
 use crate::state::ui::Toast;
 use crate::update_rewind;
 use coco_tui_ui::constants;
@@ -66,7 +64,20 @@ pub(crate) fn scrollable_map_key(key: KeyEvent) -> Option<TuiCommand> {
     }
 }
 
-pub(crate) fn transcript_map_key(key: KeyEvent) -> Option<TuiCommand> {
+pub(crate) fn transcript_map_key(search_editing: bool, key: KeyEvent) -> Option<TuiCommand> {
+    if search_editing {
+        return match key.code {
+            KeyCode::Esc => Some(TuiCommand::TranscriptSearchDismiss),
+            KeyCode::Enter => Some(TuiCommand::TranscriptSearchSubmit),
+            KeyCode::Backspace => Some(TuiCommand::TranscriptSearchBackspace),
+            KeyCode::Char(c)
+                if matches!(key.modifiers, KeyModifiers::NONE | KeyModifiers::SHIFT) =>
+            {
+                Some(TuiCommand::TranscriptSearchInsert(c))
+            }
+            _ => None,
+        };
+    }
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') => Some(TuiCommand::Cancel),
         KeyCode::Up | KeyCode::Char('k') => Some(TuiCommand::TranscriptScrollLines(-1)),
@@ -77,6 +88,9 @@ pub(crate) fn transcript_map_key(key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::PageDown => Some(TuiCommand::TranscriptPage(1)),
         KeyCode::Tab => Some(TuiCommand::TranscriptSelectNext),
         KeyCode::Enter => Some(TuiCommand::TranscriptToggleCell),
+        KeyCode::Char('/') => Some(TuiCommand::TranscriptSearchStart),
+        KeyCode::Char('n') => Some(TuiCommand::TranscriptSearchNavigate(1)),
+        KeyCode::Char('N') => Some(TuiCommand::TranscriptSearchNavigate(-1)),
         // E3: copy the selected cell — `y` its text, `Y` its command/path/url.
         KeyCode::Char('y') => Some(TuiCommand::TranscriptCopyCellText),
         KeyCode::Char('Y') => Some(TuiCommand::TranscriptCopyCellMeta),
@@ -360,7 +374,7 @@ pub(crate) fn filter(state: &mut AppState, c: char) {
         }
         Some(ModalState::SessionBrowser(s)) => {
             s.filter.push(c);
-            s.selected = 0;
+            s.reset_content_search();
         }
         Some(ModalState::GlobalSearch(g)) => {
             g.query.push(c);
@@ -390,7 +404,7 @@ pub(crate) fn filter_backspace(state: &mut AppState) {
         }
         Some(ModalState::SessionBrowser(s)) => {
             s.filter.pop();
-            s.selected = 0;
+            s.reset_content_search();
         }
         Some(ModalState::GlobalSearch(g)) => {
             g.query.pop();
@@ -434,7 +448,7 @@ pub(crate) fn nav(state: &mut AppState, delta: i32) {
             l.selected = (l.selected + delta).clamp(0, (count - 1).max(0));
         }
         Some(ModalState::SessionBrowser(s)) => {
-            let count = filtered_sessions(s).len() as i32;
+            let count = s.display_sessions().len() as i32;
             s.selected = (s.selected + delta).clamp(0, (count - 1).max(0));
         }
         Some(ModalState::GlobalSearch(g)) => {
@@ -562,7 +576,7 @@ pub(crate) async fn route_confirm(
             }
         }
         ModalState::SessionBrowser(s) => {
-            if let Some(session) = filtered_sessions(&s).get(s.selected as usize)
+            if let Some(session) = s.display_sessions().get(s.selected as usize)
                 && let Ok(name) = crate::state::SlashCommandName::new("resume")
                 && let Some(session_id) = state.active_session_id()
             {
@@ -707,14 +721,6 @@ pub(crate) fn rewind_cancel(state: &mut AppState) -> bool {
         return false;
     }
     true
-}
-
-fn filtered_sessions(s: &SessionBrowserState) -> Vec<&SessionOption> {
-    let filter_lower = s.filter.to_lowercase();
-    s.sessions
-        .iter()
-        .filter(|sess| filter_lower.is_empty() || sess.label.to_lowercase().contains(&filter_lower))
-        .collect()
 }
 
 #[cfg(test)]

@@ -141,6 +141,7 @@ pub struct App<B: SurfaceBackend<Error = io::Error> = TerminalBackend> {
     pending_frame_inputs: crate::perf::FrameInputStats,
     frame_index: u64,
     memory_perf: crate::perf::MemoryPerfTracker,
+    memory_trace: crate::memory_trace::MemoryTrace,
     /// Voice input session (capture + STT engine + state machine). `Some` only
     /// when the CLI bootstrap successfully initialized the voice subsystem
     /// (voice cargo feature compiled + a usable STT backend). Driven by the
@@ -208,6 +209,7 @@ impl App<TerminalBackend> {
             pending_frame_inputs: crate::perf::FrameInputStats::default(),
             frame_index: 0,
             memory_perf: crate::perf::MemoryPerfTracker::default(),
+            memory_trace: crate::memory_trace::MemoryTrace::open_default(),
             voice: None,
             voice_rx: None,
         })
@@ -259,6 +261,9 @@ where
             pending_frame_inputs: crate::perf::FrameInputStats::default(),
             frame_index: 0,
             memory_perf: crate::perf::MemoryPerfTracker::default(),
+            // Unit/PTY tests must never write into the developer's real config
+            // home. The artifact is covered through its own temp-dir tests.
+            memory_trace: crate::memory_trace::MemoryTrace::default(),
             voice: None,
             voice_rx: None,
         }
@@ -428,7 +433,7 @@ where
                 if !trimmed.is_empty() {
                     // Insert at the cursor (TranscriptMode::Insert). Not
                     // auto-submitted — the user edits/sends.
-                    self.state.ui.input.textarea.insert_str(trimmed);
+                    self.state.ui.input.textarea_mut().insert_str(trimmed);
                 }
             }
             coco_voice::VoiceEvent::Error(message) => {
@@ -490,9 +495,11 @@ where
             );
         });
         self.refresh_status_line();
-        self.log_memory_sample(
+        self.record_memory_sample(
             crate::perf::MemoryPhase::Startup,
             crate::perf::MemorySampleKind::Lifecycle,
+            true,
+            true,
         );
         crate::jemalloc_purge::sync_heap_profiling(
             self.state
@@ -503,9 +510,11 @@ where
         );
         // Initial render
         self.redraw()?;
-        self.log_memory_sample(
+        self.record_memory_sample(
             crate::perf::MemoryPhase::FirstDraw,
             crate::perf::MemorySampleKind::Lifecycle,
+            true,
+            true,
         );
 
         let mut event_stream = EventStream::new();
@@ -515,6 +524,7 @@ where
         // of catch-up ticks the moment the user types again.
         tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut memory_interval = memory_perf_interval(self.state.ui.display_settings.performance);
+        let mut memory_trace_interval = memory_trace_interval();
 
         loop {
             let mut needs_redraw = false;
@@ -615,10 +625,25 @@ where
                     self.pending_frame_inputs.ticks += 1;
                     needs_redraw = self.handle_event(TuiEvent::Tick).await;
                 }
-                _ = memory_interval.tick(), if crate::perf::MemoryPerfTracker::periodic_enabled(self.state.ui.display_settings.performance) => {
-                    self.log_memory_sample(
+                _ = memory_interval.tick(), if crate::perf::MemoryPerfTracker::periodic_enabled(self.state.ui.display_settings.performance)
+                    && crate::perf::MemoryPerfTracker::periodic_interval(self.state.ui.display_settings.performance) != crate::memory_trace::SAMPLE_INTERVAL => {
+                    self.record_memory_sample(
                         crate::perf::MemoryPhase::Periodic,
                         crate::perf::MemorySampleKind::Periodic,
+                        false,
+                        true,
+                    );
+                }
+                _ = memory_trace_interval.tick() => {
+                    let config = self.state.ui.display_settings.performance;
+                    let record_debug = crate::perf::MemoryPerfTracker::periodic_enabled(config)
+                        && crate::perf::MemoryPerfTracker::periodic_interval(config)
+                            == crate::memory_trace::SAMPLE_INTERVAL;
+                    self.record_memory_sample(
+                        crate::perf::MemoryPhase::Periodic,
+                        crate::perf::MemorySampleKind::Periodic,
+                        true,
+                        record_debug,
                     );
                 }
             };
@@ -669,18 +694,31 @@ where
         Ok(needs_redraw)
     }
 
-    fn log_memory_sample(
+    fn record_memory_sample(
         &mut self,
         phase: crate::perf::MemoryPhase,
         sample_kind: crate::perf::MemorySampleKind,
+        record_trace: bool,
+        record_debug: bool,
     ) {
         let config = self.state.ui.display_settings.performance;
-        let retained = crate::perf::retained_memory_stats(
-            &self.state,
-            self.tui.history_replay_cache_estimated_bytes(),
-        );
-        self.memory_perf
-            .maybe_log(config, phase, sample_kind, retained);
+        let debug_enabled = record_debug && crate::perf::MemoryPerfTracker::enabled(config);
+        let retained = if debug_enabled {
+            crate::perf::retained_memory_stats(
+                &self.state,
+                self.tui.history_replay_cache_estimated_bytes(),
+            )
+        } else {
+            crate::perf::RetainedMemoryStats::default()
+        };
+        let observation = debug_enabled.then(|| crate::perf::capture_memory_observation(retained));
+        if let Some(observation) = observation {
+            self.memory_perf
+                .maybe_log_observation(config, phase, sample_kind, observation);
+        }
+        if record_trace && let Some(job) = self.memory_trace.sample_job(phase, sample_kind) {
+            tokio::task::spawn_blocking(move || job.run(observation));
+        }
     }
 
     /// Handle a lifecycle-driven memory phase: log the sample, then — at a
@@ -695,7 +733,7 @@ where
     /// heap-profile dump when `tui.performance.heap_profile_enabled` is on.
     /// No-op when the `jemalloc` feature is off.
     fn note_lifecycle_memory_phase(&mut self, phase: crate::perf::MemoryPhase) {
-        self.log_memory_sample(phase, crate::perf::MemorySampleKind::Lifecycle);
+        self.record_memory_sample(phase, crate::perf::MemorySampleKind::Lifecycle, true, true);
         if phase.is_memory_cliff() {
             crate::jemalloc_purge::spawn_purge(
                 phase,
@@ -704,6 +742,7 @@ where
                     .display_settings
                     .performance
                     .heap_profile_enabled,
+                self.memory_trace.purge_job(),
             );
         }
     }
@@ -771,6 +810,12 @@ where
         }
         if outcome.attention_requested {
             self.handle_surface_attention_requested();
+        }
+        // E4 may have multiple Alt+E requests coalesced into this draw. One
+        // bounded re-print is committed per frame; explicitly re-arm while the
+        // queue is non-empty so no request waits for an unrelated future event.
+        if outcome.follow_up_frame_requested {
+            self.frame_requester.schedule_frame();
         }
 
         // Self-schedule the next animation frame. The decision of
@@ -1021,6 +1066,8 @@ where
                     // `update::handle_command`.
                     if matches!(cmd, crate::events::TuiCommand::VoiceToggle) {
                         self.toggle_voice()
+                    } else if matches!(cmd, crate::events::TuiCommand::ExpandCommittedTool) {
+                        self.tui.request_expand_committed_tool(&self.state)
                     } else {
                         handle_command(&mut self.state, cmd, &self.command_tx).await
                     }
@@ -1091,23 +1138,35 @@ where
                     // pill is dropped at submit) instead of inserting the
                     // path text.
                     let size_kb = bytes.len().div_ceil(1024);
-                    let pill = self.state.ui.paste_manager.add_image_data(bytes, mime);
-                    self.state.ui.input.textarea.insert_str(&pill);
-                    self.state.ui.add_toast(crate::state::ui::Toast::success(
-                        crate::i18n::t!("toast.image_attached", size_kb = size_kb).to_string(),
-                    ));
+                    match self.state.ui.input.insert_image_attachment(bytes, mime) {
+                        Ok(_) => self.state.ui.add_toast(crate::state::ui::Toast::success(
+                            crate::i18n::t!("toast.image_attached", size_kb = size_kb).to_string(),
+                        )),
+                        Err(error) => {
+                            self.state
+                                .ui
+                                .add_toast(crate::state::ui::Toast::error(format!(
+                                    "Unable to attach image: {error:?}"
+                                )))
+                        }
+                    }
                     crate::autocomplete::refresh_suggestions(&mut self.state);
-                } else if text.chars().count() > coco_tui_ui::paste::LARGE_PASTE_CHAR_THRESHOLD {
+                } else if text.chars().count() > crate::composer::LARGE_PASTE_CHAR_THRESHOLD {
                     // Large text paste: store as a pill instead of flooding
                     // the composer; expands back to the full content at
-                    // submit (`PasteManager::resolve_structured`).
-                    let pill = self.state.ui.paste_manager.add_text(text);
-                    self.state.ui.input.textarea.insert_str(&pill);
+                    // submit through the composer's element-aware resolver.
+                    if let Err(error) = self.state.ui.input.insert_text_attachment(text) {
+                        self.state
+                            .ui
+                            .add_toast(crate::state::ui::Toast::error(format!(
+                                "Unable to store pasted text: {error:?}"
+                            )));
+                    }
                     crate::autocomplete::refresh_suggestions(&mut self.state);
                 } else {
                     // Batch insertion via TextArea is O(text.len()) and only
                     // recomputes the wrap cache once, vs N times for per-char insert.
-                    self.state.ui.input.textarea.insert_str(&text);
+                    self.state.ui.input.textarea_mut().insert_str(&text);
                     // Paste bypasses update::handle_command, so refresh the
                     // autocomplete state directly here.
                     crate::autocomplete::refresh_suggestions(&mut self.state);
@@ -1324,6 +1383,15 @@ where
             ));
         true
     }
+}
+
+fn memory_trace_interval() -> tokio::time::Interval {
+    let mut interval = interval_at(
+        tokio::time::Instant::now() + crate::memory_trace::SAMPLE_INTERVAL,
+        crate::memory_trace::SAMPLE_INTERVAL,
+    );
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    interval
 }
 
 #[cfg(test)]

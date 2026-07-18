@@ -4,6 +4,7 @@
 //! and the `cancelRequest` handler that evicts pending entries
 //! without delivery.
 
+use base64::Engine as _;
 use coco_types::{
     ApprovalResolveParams, CoreEvent, ElicitationResolveParams, TurnStartParams,
     UserInputResolveParams,
@@ -41,9 +42,20 @@ pub(crate) async fn handle_turn_start(
     match handle_turn_start_shortcut(&params.prompt, ctx).await {
         TurnStartShortcut::Complete(result) => return result,
         TurnStartShortcut::RunWithPrompt(prompt) => {
+            if prompt != params.prompt {
+                params.composer = Default::default();
+            }
             params.prompt = prompt;
         }
         TurnStartShortcut::NotShortcut => {}
+    }
+
+    if let Err(message) = validate_turn_input(&params) {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message,
+            data: None,
+        };
     }
 
     let runner = ctx.state.turn_runner_snapshot().await;
@@ -142,6 +154,30 @@ pub(crate) async fn handle_turn_start(
     };
 
     HandlerResult::ok(coco_types::TurnStartResult { turn_id })
+}
+
+fn validate_turn_input(params: &TurnStartParams) -> Result<(), String> {
+    for image in &params.images {
+        let offset = usize::try_from(image.insertion_offset)
+            .map_err(|_| "turn/start image has a negative insertion offset".to_string())?;
+        if offset > params.prompt.len() || !params.prompt.is_char_boundary(offset) {
+            return Err("turn/start image insertion offset is outside the prompt".into());
+        }
+        if !image.media_type.is_empty() && !image.media_type.starts_with("image/") {
+            return Err("turn/start image has a non-image media type".into());
+        }
+        base64::engine::general_purpose::STANDARD
+            .decode(image.data_base64.as_bytes())
+            .map_err(|_| "turn/start image contains invalid base64".to_string())?;
+    }
+    if params.composer != coco_types::SubmittedComposer::default()
+        && !params
+            .composer
+            .is_valid_for_images(&params.prompt, &params.images)
+    {
+        return Err("turn/start composer does not match the prompt and images".into());
+    }
+    Ok(())
 }
 
 pub(super) fn start_active_turn_for_runtime(

@@ -21,6 +21,8 @@ crossterm.workspace = true
 unicode-width.workspace = true
 unicode-segmentation.workspace = true
 tracing.workspace = true
+linkify.workspace = true
+url.workspace = true
 # Terminal emulator for the `testing`-gated `VT100Backend`. Optional so
 # production builds never link it; `cfg(test)` builds get it via the dev-dep.
 vt100 = { workspace = true, optional = true }

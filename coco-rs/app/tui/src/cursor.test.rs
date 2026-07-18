@@ -9,7 +9,7 @@ fn make_state(text: &str) -> AppState {
     let mut state = AppState::default();
     state.ui.focus = FocusTarget::Input;
     if !text.is_empty() {
-        state.ui.input.textarea.insert_str(text);
+        state.ui.input.textarea_mut().insert_str(text);
     }
     state
 }

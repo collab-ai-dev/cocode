@@ -331,6 +331,9 @@ pub enum TuiCommand {
     // ── Display toggles ──
     /// Toggle tool call collapse.
     ToggleToolCollapse,
+    /// Re-print the newest truncated tool output already frozen in native
+    /// scrollback, using the full-detail renderer.
+    ExpandCommittedTool,
     /// Toggle system reminder visibility.
     ToggleSystemReminders,
     /// Toggle the permission-prompt risk-explainer panel (Ctrl+E). Lazily
@@ -377,6 +380,18 @@ pub enum TuiCommand {
     TranscriptSelectNext,
     /// Expand/collapse the selected transcript cell.
     TranscriptToggleCell,
+    /// Enter transcript search-field editing (`/`).
+    TranscriptSearchStart,
+    /// Append one character to the transcript search query.
+    TranscriptSearchInsert(char),
+    /// Delete the last character in the transcript search query.
+    TranscriptSearchBackspace,
+    /// Leave search-field editing and reveal the current match.
+    TranscriptSearchSubmit,
+    /// Leave search-field editing while retaining the query and highlights.
+    TranscriptSearchDismiss,
+    /// Select the next/previous transcript search match.
+    TranscriptSearchNavigate(i32),
     /// Copy the selected transcript cell's text to the clipboard (`y`).
     TranscriptCopyCellText,
     /// Copy the selected cell's kind-specific metadata — a shell command,

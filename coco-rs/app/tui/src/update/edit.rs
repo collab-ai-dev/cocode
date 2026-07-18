@@ -27,42 +27,11 @@ pub(super) fn parse_slash_input(trimmed: &str) -> Option<(SlashCommandName, Stri
 /// dropped persist is harmless.
 async fn persist_prompt_history(
     command_tx: &mpsc::Sender<UserCommand>,
-    display: String,
-    pastes: &[coco_tui_ui::paste::PasteEntry],
+    composer: coco_types::PersistedComposer,
 ) {
-    let pasted_contents = pastes
-        .iter()
-        .filter(|paste| !paste.is_image)
-        .filter_map(|paste| paste_id(&paste.pill).map(|id| (id, paste.content.clone())))
-        .collect();
     let _ = command_tx
-        .send(UserCommand::PersistPromptHistory {
-            display,
-            pasted_contents,
-        })
+        .send(UserCommand::PersistPromptHistory { composer })
         .await;
-}
-
-fn paste_id(pill: &str) -> Option<i32> {
-    let digits = pill
-        .split_once('#')?
-        .1
-        .split(']')
-        .next()?
-        .split(' ')
-        .next()?;
-    digits.parse().ok()
-}
-
-fn referenced_pastes(state: &AppState, text: &str) -> Vec<coco_tui_ui::paste::PasteEntry> {
-    state
-        .ui
-        .paste_manager
-        .entries()
-        .iter()
-        .filter(|entry| text.contains(&entry.pill))
-        .cloned()
-        .collect()
 }
 
 /// Handle a submission whose leading character is a prompt-mode prefix
@@ -77,10 +46,18 @@ async fn submit_prefixed(
     state: &mut AppState,
     command_tx: &mpsc::Sender<UserCommand>,
     mode: PromptMode,
-    text: &str,
+    composer: crate::composer::ComposerSnapshot,
+    resolved: crate::composer::ResolvedInput,
+    persisted: coco_types::PersistedComposer,
 ) -> bool {
     debug_assert_eq!(mode, PromptMode::Bash);
-    let resolved = state.ui.paste_manager.resolve_structured(text);
+    if !resolved.images.is_empty() {
+        state.ui.input.restore_composer(composer);
+        state.ui.add_toast(crate::state::ui::Toast::warning(
+            "Image attachments cannot be passed to a local shell command",
+        ));
+        return true;
+    }
     let payload = mode.strip_prefix(&resolved.text).to_string();
     if payload.is_empty() {
         // Empty body after stripping the prefix (e.g. user typed just
@@ -91,12 +68,8 @@ async fn submit_prefixed(
     // Record the *full* prefixed text in history so up-arrow recall
     // returns the user to the same mode without forcing them to retype
     // the prefix character.
-    let pastes = referenced_pastes(state, text);
-    persist_prompt_history(command_tx, text.to_string(), &pastes).await;
-    state
-        .ui
-        .input
-        .add_to_history_with_pastes(text.to_string(), pastes);
+    persist_prompt_history(command_tx, persisted).await;
+    state.ui.input.add_composer_to_history(composer);
 
     let user_message_id = uuid::Uuid::new_v4().to_string();
     tracing::info!(
@@ -120,7 +93,6 @@ async fn submit_prefixed(
         );
     }
 
-    state.ui.paste_manager.clear();
     state.ui.scroll_offset = 0;
     state.ui.user_scrolled = false;
     state.session.last_query_completion_at = None;
@@ -131,10 +103,29 @@ async fn submit_prefixed(
 /// Submit current input. Slash commands are sent as typed command requests
 /// and resolved by the command layer.
 pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) -> bool {
-    let text = state.ui.input.take_input();
-    if text.is_empty() {
+    if state.ui.input.is_empty() {
         return true;
     }
+    let resolved = match state.ui.input.resolve() {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            state.ui.add_toast(crate::state::ui::Toast::error(format!(
+                "Cannot submit inconsistent composer state: {error}"
+            )));
+            return true;
+        }
+    };
+    let persisted = match state.ui.input.persisted_composer() {
+        Ok(persisted) => persisted,
+        Err(error) => {
+            state.ui.add_toast(crate::state::ui::Toast::error(format!(
+                "Cannot persist inconsistent composer state: {error}"
+            )));
+            return true;
+        }
+    };
+    let composer = state.ui.input.take_composer();
+    let text = composer.text().to_string();
 
     // Prompt-mode routing happens BEFORE slash-command checks
     // because `!` and `#` are prefix-only — they can never collide with
@@ -142,26 +133,20 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
     // matches TS's `getModeFromInput → if bash …` dispatch order.
     let mode = PromptMode::from_text(&text);
     if mode != PromptMode::Normal {
-        return submit_prefixed(state, command_tx, mode, &text).await;
+        return submit_prefixed(state, command_tx, mode, composer, resolved, persisted).await;
     }
 
-    let trimmed = text.trim();
+    let trimmed = resolved.text.trim();
     if let Some((name, args)) = parse_slash_input(trimmed) {
-        let resolved = state.ui.paste_manager.resolve_structured(trimmed);
-        let resolved_args = parse_slash_input(resolved.text.trim())
-            .map(|(_, args)| args)
-            .unwrap_or(args);
         tracing::info!(
             target: "coco_tui::submit",
             kind = "slash",
             command = %name.as_str(),
-            args_chars = resolved_args.len(),
+            args_chars = args.len(),
             "user submitted slash command",
         );
-        let pastes = referenced_pastes(state, &text);
-        persist_prompt_history(command_tx, text.clone(), &pastes).await;
-        state.ui.input.add_to_history_with_pastes(text, pastes);
-        state.ui.paste_manager.clear();
+        persist_prompt_history(command_tx, persisted).await;
+        state.ui.input.add_composer_to_history(composer);
         // `/exit` (alias `/quit`) shuts down through the same path as the
         // Ctrl+C/Ctrl+D double-press exit, not the registry handler (which only
         // prints "Exiting…")., where /exit funnels into the shared
@@ -181,7 +166,7 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
             .send(UserCommand::ExecuteSlashCommand {
                 session_id,
                 name,
-                args: resolved_args,
+                args,
                 images: resolved.images,
             })
             .await
@@ -195,15 +180,8 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
         return true;
     }
 
-    // Snapshot the paste payloads this text references BEFORE the manager
-    // is cleared below, so recalling the entry rehydrates its pills.
-    let pastes = referenced_pastes(state, &text);
-    persist_prompt_history(command_tx, text.clone(), &pastes).await;
-    state
-        .ui
-        .input
-        .add_to_history_with_pastes(text.clone(), pastes);
-    let resolved = state.ui.paste_manager.resolve_structured(&text);
+    persist_prompt_history(command_tx, persisted).await;
+    state.ui.input.add_composer_to_history(composer);
     let Some(session_id) = state.active_session_id() else {
         tracing::warn!(
             target: "coco_tui::submit",
@@ -235,6 +213,7 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
             content: resolved.text,
             display_text: Some(text),
             images: resolved.images,
+            composer: resolved.submitted,
         })
         .await
     {
@@ -244,7 +223,6 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
             "failed to dispatch SubmitInput (command channel closed)",
         );
     }
-    state.ui.paste_manager.clear();
     state.ui.scroll_offset = 0;
     state.ui.user_scrolled = false;
     // Reset idle-prompt window: the user has just spoken, so any
@@ -258,37 +236,37 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
 /// Delegates to `TextArea::delete_backward_word`, which puts the killed
 /// span into the TextArea's kill buffer (yankable via Ctrl+Y).
 pub(super) fn delete_word_backward(state: &mut AppState) {
-    state.ui.input.textarea.delete_backward_word();
+    state.ui.input.textarea_mut().delete_backward_word();
 }
 
 /// Delete one word forward from the cursor.
 /// Delegates to `TextArea::delete_forward_word` (alt+d / ctrl+delete).
 pub(super) fn delete_word_forward(state: &mut AppState) {
-    state.ui.input.textarea.delete_forward_word();
+    state.ui.input.textarea_mut().delete_forward_word();
 }
 
 /// Kill from cursor to end of current line (Emacs Ctrl+K).
 /// TextArea owns the single-entry kill buffer; consecutive kills accumulate
 /// readline-style so `Ctrl+Y` recovers the full deleted region.
 pub(super) fn kill_to_end_of_line(state: &mut AppState) {
-    state.ui.input.textarea.kill_to_end_of_line();
+    state.ui.input.textarea_mut().kill_to_end_of_line();
 }
 
 /// Kill from BOL to cursor (Emacs Ctrl+U / readline `unix-line-discard`).
 pub(super) fn kill_to_beginning_of_line(state: &mut AppState) {
-    state.ui.input.textarea.kill_to_beginning_of_line();
+    state.ui.input.textarea_mut().kill_to_beginning_of_line();
 }
 
 /// Yank (paste) the kill buffer at the cursor (Emacs Ctrl+Y).
 pub(super) fn yank(state: &mut AppState) {
-    state.ui.input.textarea.yank();
+    state.ui.input.textarea_mut().yank();
 }
 
 /// Whether the cursor sits on the first line of the input (no newline
 /// before it). Up-arrow recalls history here; otherwise it moves the
 /// cursor up a line so multi-line drafts stay editable.
 fn cursor_on_first_line(input: &crate::state::InputState) -> bool {
-    let cursor = input.textarea.cursor();
+    let cursor = input.textarea().cursor();
     input.text().get(..cursor).is_none_or(|s| !s.contains('\n'))
 }
 
@@ -296,7 +274,7 @@ fn cursor_on_first_line(input: &crate::state::InputState) -> bool {
 /// or after it). Down-arrow advances history here; otherwise it moves the
 /// cursor down a line.
 fn cursor_on_last_line(input: &crate::state::InputState) -> bool {
-    let cursor = input.textarea.cursor();
+    let cursor = input.textarea().cursor();
     input.text().get(cursor..).is_none_or(|s| !s.contains('\n'))
 }
 
@@ -306,7 +284,12 @@ pub(super) fn history_up(state: &mut AppState) {
     if cursor_on_first_line(&state.ui.input) {
         history_browse_start(state);
     } else {
-        state.ui.input.textarea.move_cursor_up();
+        let width = state
+            .ui
+            .terminal_size
+            .width
+            .saturating_sub(crate::widgets::INPUT_GUTTER_WIDTH);
+        state.ui.input.textarea_mut().move_cursor_up_at_width(width);
     }
 }
 
@@ -318,7 +301,16 @@ pub(super) fn history_up(state: &mut AppState) {
 /// → `selectFooterItem`. Enter then opens the background-tasks dialog.
 pub(super) fn history_down(state: &mut AppState) {
     if !cursor_on_last_line(&state.ui.input) {
-        state.ui.input.textarea.move_cursor_down();
+        let width = state
+            .ui
+            .terminal_size
+            .width
+            .saturating_sub(crate::widgets::INPUT_GUTTER_WIDTH);
+        state
+            .ui
+            .input
+            .textarea_mut()
+            .move_cursor_down_at_width(width);
         return;
     }
     if state.ui.input.history_index.is_some() {
@@ -341,19 +333,16 @@ pub(super) fn history_next(state: &mut AppState) {
     if idx > 0 {
         let new_idx = idx - 1;
         state.ui.input.history_index = Some(new_idx);
-        let entry = &state.ui.input.history[new_idx];
-        let text = entry.text.clone();
-        state.ui.paste_manager.replace_entries(entry.pastes.clone());
-        state.ui.input.textarea.set_text(&text);
+        let composer = state.ui.input.history[new_idx].composer.clone();
+        state.ui.input.restore_composer(composer);
+        state.ui.input.history_index = Some(new_idx);
         state
             .ui
             .input
-            .textarea
+            .textarea_mut()
             .move_cursor_to_end_of_line(coco_tui_ui::widgets::EolBehavior::StayPut);
     } else {
-        state.ui.input.history_index = None;
-        state.ui.input.textarea.set_text("");
-        state.ui.paste_manager.clear();
+        state.ui.input.set_text("");
     }
 }
 
@@ -362,15 +351,12 @@ pub(super) fn history_next(state: &mut AppState) {
 /// Preview the matched history entry in the composer (text + pastes),
 /// cursor at end — mirrors up-arrow recall.
 fn apply_search_match(state: &mut AppState, idx: usize) {
-    let entry = &state.ui.input.history[idx];
-    let text = entry.text.clone();
-    let pastes = entry.pastes.clone();
-    state.ui.paste_manager.replace_entries(pastes);
-    state.ui.input.textarea.set_text(&text);
+    let composer = state.ui.input.history[idx].composer.clone();
+    state.ui.input.restore_composer(composer);
     state
         .ui
         .input
-        .textarea
+        .textarea_mut()
         .move_cursor_to_end_of_line(coco_tui_ui::widgets::EolBehavior::StayPut);
 }
 
@@ -379,10 +365,8 @@ fn restore_search_draft(state: &mut AppState) {
     let Some(search) = state.ui.history_search.as_ref() else {
         return;
     };
-    let text = search.original_text.clone();
-    let pastes = search.original_pastes.clone();
-    state.ui.paste_manager.replace_entries(pastes);
-    state.ui.input.textarea.set_text(&text);
+    let composer = search.original_composer.clone();
+    state.ui.input.restore_composer(composer);
 }
 
 /// Re-rank results for the current query, reset the selection to the top match,
@@ -446,15 +430,14 @@ fn start_history_search(state: &mut AppState, browse: bool) {
         return;
     }
     state.ui.input.clear_inline_hint();
-    let original_pastes = state.ui.paste_manager.entries().to_vec();
+    let original_composer = state.ui.input.composer_snapshot();
     state.ui.history_search = Some(crate::state::HistorySearch {
         browse,
         query: String::new(),
         results: Vec::new(),
         result_indices: Vec::new(),
         selected: 0,
-        original_text: state.ui.input.text().to_string(),
-        original_pastes,
+        original_composer,
         original_history_index: state.ui.input.history_index,
     });
     refresh_results(state);
@@ -529,22 +512,18 @@ pub(super) fn history_search_cancel(state: &mut AppState) {
     let Some(search) = state.ui.history_search.take() else {
         return;
     };
-    state
-        .ui
-        .paste_manager
-        .replace_entries(search.original_pastes);
-    state.ui.input.textarea.set_text(&search.original_text);
+    state.ui.input.restore_composer(search.original_composer);
     state.ui.input.history_index = search.original_history_index;
 }
 
 /// Move cursor one word to the left (grapheme-aware via TextArea).
 pub(super) fn word_left(state: &mut AppState) {
-    let target = state.ui.input.textarea.beginning_of_previous_word();
-    state.ui.input.textarea.set_cursor(target);
+    let target = state.ui.input.textarea().beginning_of_previous_word();
+    state.ui.input.textarea_mut().set_cursor(target);
 }
 
 /// Move cursor one word to the right (grapheme-aware via TextArea).
 pub(super) fn word_right(state: &mut AppState) {
-    let target = state.ui.input.textarea.end_of_next_word();
-    state.ui.input.textarea.set_cursor(target);
+    let target = state.ui.input.textarea().end_of_next_word();
+    state.ui.input.textarea_mut().set_cursor(target);
 }

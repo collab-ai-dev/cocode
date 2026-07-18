@@ -1,16 +1,20 @@
 //! History-row preparation for native scrollback insertion.
 
+use super::history_links::HistoryLinkHint;
+use super::history_links::HistoryLinkRun;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
+use std::path::Path;
 
 /// Rendered history rows ready to be inserted into native scrollback.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryRows {
     buffer: Buffer,
+    links: Vec<HistoryLinkRun>,
 }
 
 /// Borrowed suffix rows from a [`HistoryRows`] buffer.
@@ -23,7 +27,14 @@ pub struct HistoryRowsSlice<'a> {
 
 impl HistoryRows {
     pub fn new(buffer: Buffer) -> Self {
-        Self { buffer }
+        Self {
+            buffer,
+            links: Vec::new(),
+        }
+    }
+
+    fn with_links(buffer: Buffer, links: Vec<HistoryLinkRun>) -> Self {
+        Self { buffer, links }
     }
 
     pub fn width(&self) -> u16 {
@@ -42,12 +53,31 @@ impl HistoryRows {
         &self.buffer
     }
 
+    pub(crate) fn links(&self) -> &[HistoryLinkRun] {
+        &self.links
+    }
+
+    /// Number of post-wrap hyperlink runs. A link spanning rows contributes
+    /// one run per row; exposed for cross-crate rendering integration tests.
+    pub fn hyperlink_run_count(&self) -> usize {
+        self.links.len()
+    }
+
+    pub fn hyperlink_runs(&self) -> &[HistoryLinkRun] {
+        &self.links
+    }
+
     pub fn estimated_bytes(&self) -> usize {
         self.buffer
             .content
             .iter()
             .map(|cell| cell.symbol().len() + 8)
-            .sum()
+            .sum::<usize>()
+            + self
+                .links
+                .iter()
+                .map(|link| link.target.len() + 16)
+                .sum::<usize>()
     }
 
     pub fn tail_slice(&self, rows: u16) -> HistoryRowsSlice<'_> {
@@ -109,6 +139,7 @@ impl HistoryRows {
         let mut skip_rows = total_rows.saturating_sub(rows_to_copy);
         let mut target_y = 0u16;
         let mut buffer = Buffer::empty(Rect::new(0, 0, width, rows_to_copy));
+        let mut links = Vec::new();
         for slice in slices.iter().filter(|slice| slice.width() == width) {
             if skip_rows >= slice.height() {
                 skip_rows -= slice.height();
@@ -123,10 +154,22 @@ impl HistoryRows {
                     break;
                 }
                 copy_row_from(slice.buffer(), source_y, &mut buffer, target_y, width);
+                links.extend(
+                    slice
+                        .rows
+                        .links
+                        .iter()
+                        .filter(|link| link.row == source_y)
+                        .cloned()
+                        .map(|mut link| {
+                            link.row = target_y;
+                            link
+                        }),
+                );
                 target_y += 1;
             }
         }
-        Self::new(buffer)
+        Self::with_links(buffer, links)
     }
 }
 
@@ -171,6 +214,27 @@ impl<'a> HistoryRowsSlice<'a> {
 /// (`Paragraph::line_count`, the same `WordWrapper` the renderer uses), not
 /// `lines.len()`, so the caller inserts the correct number of scrollback rows.
 pub fn render_history_rows(lines: Vec<Line<'static>>, width: u16) -> HistoryRows {
+    render_history_rows_with_base_dir(lines, width, None)
+}
+
+/// Render finalized history with an application-supplied base directory for
+/// relative file links. Keeping cwd as plain input preserves the domain-free
+/// presentation seam and avoids silently resolving resumed-session paths
+/// against the coco process's current directory.
+pub fn render_history_rows_with_base_dir(
+    lines: Vec<Line<'static>>,
+    width: u16,
+    base_dir: Option<&Path>,
+) -> HistoryRows {
+    render_history_rows_with_links(lines, width, base_dir, Vec::new())
+}
+
+pub fn render_history_rows_with_links(
+    lines: Vec<Line<'static>>,
+    width: u16,
+    base_dir: Option<&Path>,
+    explicit_links: Vec<HistoryLinkHint>,
+) -> HistoryRows {
     if width == 0 || lines.is_empty() {
         return HistoryRows::new(Buffer::empty(Rect::new(0, 0, width, 0)));
     }
@@ -203,6 +267,8 @@ pub fn render_history_rows(lines: Vec<Line<'static>>, width: u16) -> HistoryRows
             }
         }
     }
+    let pending_links =
+        super::history_links::pending_links(&lines, width, base_dir, &explicit_links);
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     let height = paragraph.line_count(width).min(u16::MAX as usize) as u16;
     let area = Rect::new(0, 0, width, height);
@@ -210,7 +276,8 @@ pub fn render_history_rows(lines: Vec<Line<'static>>, width: u16) -> HistoryRows
     if height > 0 {
         paragraph.render(area, &mut buffer);
     }
-    HistoryRows::new(buffer)
+    let links = super::history_links::resolve_links(pending_links, &buffer, width);
+    HistoryRows::with_links(buffer, links)
 }
 
 #[cfg(test)]

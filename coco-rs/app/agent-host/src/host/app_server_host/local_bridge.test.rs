@@ -260,6 +260,7 @@ async fn local_turn_completion_rejects_terminal_without_session_result() {
                 prompt: "terminal without result".to_string(),
                 history_override: Vec::new(),
                 images: Vec::new(),
+                composer: Default::default(),
                 slash_metadata: None,
                 model_selection: None,
                 permission_mode: None,

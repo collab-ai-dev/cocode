@@ -15,6 +15,9 @@ Depends UP on `coco-tui-ui` for the shared `Theme` / `UiStyles` /
   first-class input applied structurally on the first line; **never** a
   caller-side first-span string-match.
   For a marker-free render, pass `None`: `render_markdown(text, MarkdownOptions::new(styles, width, syntax), None)`.
+- `StablePrefixTracker::push(appended)` incrementally returns the conservative
+  stable source boundary for an append-only Markdown stream. Reuse one tracker
+  per stream; `stable_prefix_end(source)` is the stateless convenience form.
 
 ## Invariants
 
@@ -41,5 +44,5 @@ verbatim code fence. `app/tui` opts in.
 
 ## Modules
 
-`lib.rs` (Writer + public API), `highlight.rs` (syntect scope→token), plus
-companion `*.test.rs`.
+`lib.rs` (Writer + public API), `stable.rs` (incremental conservative boundary
+state), `highlight.rs` (syntect scope→token), plus companion `*.test.rs`.

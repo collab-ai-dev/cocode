@@ -250,7 +250,7 @@ pub fn accept_suggestion(state: &mut AppState, mode: AcceptMode) -> Option<Compl
         state.ui.sync_popup_from_active_suggestions();
         return Some(CompletionInsertion {
             replacement: String::new(),
-            cursor_position: state.ui.input.textarea.cursor(),
+            cursor_position: state.ui.input.textarea().cursor(),
             keep_popup: false,
             should_submit: false,
         });
@@ -268,7 +268,7 @@ pub fn accept_suggestion(state: &mut AppState, mode: AcceptMode) -> Option<Compl
         state.ui.sync_popup_from_active_suggestions();
         return Some(CompletionInsertion {
             replacement: String::new(),
-            cursor_position: state.ui.input.textarea.cursor(),
+            cursor_position: state.ui.input.textarea().cursor(),
             keep_popup: false,
             should_submit: true,
         });
@@ -297,7 +297,7 @@ pub fn accept_suggestion(state: &mut AppState, mode: AcceptMode) -> Option<Compl
 
     let text_len = state.ui.input.text().len();
     let start = sug.trigger_pos.min(text_len);
-    let mut end = state.ui.input.textarea.cursor().min(text_len);
+    let mut end = state.ui.input.textarea().cursor().min(text_len);
     if sug.query.starts_with('"')
         && state
             .ui
@@ -308,13 +308,39 @@ pub fn accept_suggestion(state: &mut AppState, mode: AcceptMode) -> Option<Compl
     {
         end += 1;
     }
-    state
-        .ui
-        .input
-        .textarea
-        .replace_range(start..end, &insertion.replacement);
+    let is_file_ref = matches!(sug.kind, SuggestionKind::At | SuggestionKind::Path)
+        && matches!(item.metadata.as_ref(), Some(SuggestionMeta::Path { .. }))
+        && !insertion.keep_popup;
+    if is_file_ref {
+        let token = insertion
+            .replacement
+            .strip_suffix(' ')
+            .unwrap_or(&insertion.replacement);
+        let suffix = insertion.replacement.get(token.len()..).unwrap_or_default();
+        state.ui.input.textarea_mut().undo_group(|textarea| {
+            textarea.replace_range(start..end, "");
+            textarea.set_cursor(start);
+            if textarea
+                .insert_element(
+                    token,
+                    coco_tui_ui::widgets::ElementKind::FileRef,
+                    crate::composer::file_ref_display(token),
+                )
+                .is_err()
+            {
+                textarea.insert_str(token);
+            }
+            textarea.insert_str(suffix);
+        });
+    } else {
+        state
+            .ui
+            .input
+            .textarea_mut()
+            .replace_range(start..end, &insertion.replacement);
+    }
     let cursor_position = start + insertion.cursor_position;
-    state.ui.input.textarea.set_cursor(cursor_position);
+    state.ui.input.textarea_mut().set_cursor(cursor_position);
 
     if let Some(hint) = slash_command
         .as_ref()

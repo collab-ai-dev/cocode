@@ -92,6 +92,50 @@ fn a_short_prompt_still_uses_the_single_row_path() {
 }
 
 #[test]
+fn atomic_element_renders_as_a_styled_chip_and_wraps_by_display_width() {
+    use coco_tui_ui::widgets::ElementDisplay;
+    use ratatui::style::Modifier;
+    use ratatui::style::Style;
+
+    let mut input = InputState::new();
+    input.textarea_mut().insert_str("ab ");
+    assert!(
+        input
+            .textarea_mut()
+            .insert_element(
+                "[Pasted text #1]",
+                coco_tui_ui::widgets::ElementKind::Paste,
+                ElementDisplay::new(" Pasted #1 ", Style::new().reversed().bold(),),
+            )
+            .is_ok()
+    );
+    let model = InputRenderModel::build(&input, false, None, false, None, /*width*/ 16);
+
+    assert_eq!(model.display_text, "ab  Pasted #1 ");
+    assert_eq!(model.rows.len(), 1, "the shorter chip display fits one row");
+    assert_eq!(model.cursor_col, 14);
+    assert!(
+        model.display_elements[0]
+            .display()
+            .style()
+            .add_modifier
+            .contains(Modifier::REVERSED)
+    );
+
+    let rows = render_composer(&input, 16, 3);
+    assert!(
+        rows[1].contains("Pasted #1"),
+        "chip must be visible: {rows:?}"
+    );
+    assert!(!rows[1].contains("Pasted text"));
+    insta::assert_snapshot!(rows.join("\n"), @r"
+    ────────────────
+    ❯ ab  Pasted #1
+    ────────────────
+    ");
+}
+
+#[test]
 fn btw_trigger_highlight_matches_start_only_word_boundary() {
     assert_eq!(btw_trigger_len("/btw"), Some(4));
     assert_eq!(btw_trigger_len("/BTW why"), Some(4));
@@ -218,7 +262,7 @@ fn input_render_model_appends_inline_hint_after_text() {
 #[test]
 fn input_render_model_places_inline_ghost_at_cursor() {
     let mut input = input("abc xyz");
-    input.textarea.set_cursor(3);
+    input.textarea_mut().set_cursor(3);
     input.set_inline_ghost(crate::state::InlineGhost {
         text: "def".into(),
         insert_position: 3,
@@ -239,7 +283,7 @@ fn input_render_model_places_inline_ghost_at_cursor() {
 #[test]
 fn input_render_model_hides_stale_inline_ghost() {
     let mut input = input("abc");
-    input.textarea.set_cursor(2);
+    input.textarea_mut().set_cursor(2);
     input.set_inline_ghost(crate::state::InlineGhost {
         text: "d".into(),
         insert_position: 3,
@@ -257,7 +301,7 @@ fn input_render_model_hides_stale_inline_ghost() {
 #[test]
 fn input_render_model_multiline_tracks_cursor_row_and_col() {
     let mut input = input("ab\ncde");
-    input.textarea.set_cursor(input.text().len());
+    input.set_cursor_to_end();
 
     let model = InputRenderModel::build(&input, false, None, false, None, /*width*/ 80);
 
@@ -269,7 +313,7 @@ fn input_render_model_multiline_tracks_cursor_row_and_col() {
 #[test]
 fn input_render_model_multiline_cursor_on_first_line() {
     let mut input = input("ab\ncde");
-    input.textarea.set_cursor(1); // after 'a'
+    input.textarea_mut().set_cursor(1); // after 'a'
 
     let model = InputRenderModel::build(&input, false, None, false, None, /*width*/ 80);
 

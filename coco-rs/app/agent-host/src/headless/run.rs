@@ -585,6 +585,7 @@ pub async fn run_chat_with_options(
                 prompt: effective_prompt,
                 history_override: Vec::new(),
                 images: Vec::new(),
+                composer: Default::default(),
                 slash_metadata: None,
                 model_selection: None,
                 permission_mode: Some(permission_mode),

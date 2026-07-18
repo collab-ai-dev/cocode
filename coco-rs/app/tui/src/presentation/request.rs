@@ -293,6 +293,7 @@ pub(crate) fn exit_plan_pending_history_lines(
         feedback_input: _,
         plan_file_path,
         allowed_prompts,
+        ..
     } = &p.detail
     else {
         return Vec::new();

@@ -51,6 +51,7 @@ use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
 use coco_query::QueuePriority;
 use coco_query::QueuedCommand;
+use coco_query::QueuedImage;
 use coco_query::ServerNotification;
 use coco_system_reminder::QueueOrigin;
 use coco_tool_runtime::ToolRegistry;
@@ -294,6 +295,17 @@ async fn e2e_steering_drains_into_history_and_reaches_next_turn() {
         )
         .with_origin(QueueOrigin::Human);
         producer_queue.enqueue(item).await;
+        producer_queue
+            .enqueue(
+                QueuedCommand::new(String::new(), QueuePriority::Now)
+                    .with_origin(QueueOrigin::Human)
+                    .with_images(vec![QueuedImage {
+                        media_type: "image/png".into(),
+                        data_base64: "AQI=".into(),
+                        insertion_offset: 0,
+                    }]),
+            )
+            .await;
     });
 
     // Capture every `CoreEvent` the engine emits so the assertion
@@ -343,15 +355,29 @@ async fn e2e_steering_drains_into_history_and_reaches_next_turn() {
         .collect();
     assert_eq!(
         steering_users.len(),
-        1,
-        "expected exactly one drained steering user message in history; found {}",
+        2,
+        "expected the text and image-only steering messages in history; found {}",
         steering_users.len()
     );
-    let body = extract_all_text(&steering_users[0].message);
+    let text_steering = steering_users
+        .iter()
+        .find(|user| extract_all_text(&user.message).contains(STEERING_MARKER))
+        .expect("text steering message");
+    let image_steering = steering_users
+        .iter()
+        .find(|user| match &user.message {
+            LlmMessage::User { content, .. } => content
+                .iter()
+                .any(|part| matches!(part, coco_llm_types::UserContentPart::File(_))),
+            _ => false,
+        })
+        .expect("image-only steering message");
+    let body = extract_all_text(&text_steering.message);
     assert!(
         body.contains(STEERING_MARKER),
         "stored steering message must carry the raw user text; body was: {body}"
     );
+    assert!(extract_all_text(&image_steering.message).trim().is_empty());
     assert!(
         !body.contains("<system-reminder>"),
         "stored steering message must be RAW — no <system-reminder> wrap in \
@@ -373,14 +399,22 @@ async fn e2e_steering_drains_into_history_and_reaches_next_turn() {
     // ── 3. The next turn's API call saw the wrapped queued content in
     // its prompt — proving the wrapper is applied at prompt-build and the
     // content actually reached the model.
-    let (prompt_count, second_prompt_text) = {
+    let (prompt_count, second_prompt_text, second_prompt_has_image) = {
         let prompts = captured.lock().unwrap();
         let count = prompts.len();
         let text: String = prompts
             .get(1)
             .map(|p| p.iter().map(extract_all_text).collect())
             .unwrap_or_default();
-        (count, text)
+        let has_image = prompts.get(1).is_some_and(|prompt| {
+            prompt.iter().any(|message| match message {
+                LlmMessage::User { content, .. } => content
+                    .iter()
+                    .any(|part| matches!(part, coco_llm_types::UserContentPart::File(_))),
+                _ => false,
+            })
+        });
+        (count, text, has_image)
     };
     assert_eq!(
         prompt_count, 2,
@@ -401,6 +435,10 @@ async fn e2e_steering_drains_into_history_and_reaches_next_turn() {
         "second turn's prompt must carry the model-facing steering framing \
          (applied at prompt-build, not stored); got prompt: {second_prompt_text}"
     );
+    assert!(
+        second_prompt_has_image,
+        "image-only steering must reach the next API prompt"
+    );
 
     // ── 4. Lifecycle events fired exactly once each: one
     // CommandDequeued{id} per drained item plus one
@@ -414,7 +452,7 @@ async fn e2e_steering_drains_into_history_and_reaches_next_turn() {
         .collect();
     assert_eq!(
         dequeue_events.len(),
-        1,
+        2,
         "expected one CommandDequeued event per drained item; got {}",
         dequeue_events.len()
     );

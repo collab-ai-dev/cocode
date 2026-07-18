@@ -13,8 +13,6 @@ use crate::permission_options::PermissionAction;
 use crate::state::AppState;
 use crate::state::PanePromptState;
 use crate::state::Toast;
-use coco_tui_ui::paste::ImageData;
-use coco_tui_ui::paste::PasteManager;
 
 /// Route an inline-editing command to the editable always-allow prefix field
 /// when an allow row is focused on a shell-tool prompt (the
@@ -222,7 +220,6 @@ pub(crate) async fn resolve_classic_permission(
 pub(crate) async fn approve_permission(
     p: &crate::state::PermissionPromptState,
     current_mode: coco_types::PermissionMode,
-    paste_manager: &PasteManager,
     command_tx: &mpsc::Sender<UserCommand>,
 ) -> bool {
     let Some(choices) = &p.choices else {
@@ -236,7 +233,7 @@ pub(crate) async fn approve_permission(
         .unwrap_or(false);
     let approved = !chosen_is_no;
     let (feedback, content_blocks) = if chosen_is_no && exit_plan_no_requires_feedback(p) {
-        let Some((feedback, content_blocks)) = exit_plan_feedback(p, paste_manager).await else {
+        let Some((feedback, content_blocks)) = exit_plan_feedback(p).await else {
             return false;
         };
         (Some(feedback), content_blocks)
@@ -454,12 +451,11 @@ pub(crate) async fn classifier_auto_approve(
 pub(crate) async fn confirm_permission(
     p: &crate::state::PermissionPromptState,
     current_mode: coco_types::PermissionMode,
-    paste_manager: &PasteManager,
     command_tx: &mpsc::Sender<UserCommand>,
 ) -> bool {
     if p.choices.is_some() {
         // Multi-choice commit shares `approve_permission`'s splice + log.
-        return approve_permission(p, current_mode, paste_manager, command_tx).await;
+        return approve_permission(p, current_mode, command_tx).await;
     }
     resolve_classic_permission(
         p,
@@ -547,15 +543,17 @@ fn exit_plan_no_requires_feedback(p: &crate::state::PermissionPromptState) -> bo
 
 async fn exit_plan_feedback(
     p: &crate::state::PermissionPromptState,
-    paste_manager: &PasteManager,
 ) -> Option<(String, Option<Vec<serde_json::Value>>)> {
-    let crate::state::PermissionDetail::ExitPlanMode { feedback_input, .. } = &p.detail else {
+    let crate::state::PermissionDetail::ExitPlanMode {
+        feedback_input,
+        feedback_images,
+        ..
+    } = &p.detail
+    else {
         return None;
     };
-    let resolved = paste_manager.resolve_structured(&feedback_input.value);
-    let content_blocks = image_content_blocks(&resolved.images).await;
-    let feedback_text = strip_referenced_image_pills(resolved.text, paste_manager);
-    let trimmed = feedback_text.trim();
+    let content_blocks = image_content_blocks(feedback_images).await;
+    let trimmed = feedback_input.value.trim();
     if !trimmed.is_empty() {
         return Some((trimmed.to_string(), content_blocks));
     }
@@ -565,16 +563,9 @@ async fn exit_plan_feedback(
     None
 }
 
-fn strip_referenced_image_pills(mut text: String, paste_manager: &PasteManager) -> String {
-    for entry in paste_manager.entries() {
-        if entry.is_image {
-            text = text.replace(&entry.pill, "");
-        }
-    }
-    text
-}
-
-async fn image_content_blocks(images: &[ImageData]) -> Option<Vec<serde_json::Value>> {
+async fn image_content_blocks(
+    images: &[crate::state::FeedbackImage],
+) -> Option<Vec<serde_json::Value>> {
     if images.is_empty() {
         return None;
     }
@@ -586,9 +577,9 @@ async fn image_content_blocks(images: &[ImageData]) -> Option<Vec<serde_json::Va
         } else {
             image.mime.as_str()
         };
-        let normalized = normalize_feedback_image(image.bytes.clone(), source_mime.to_string())
+        let normalized = normalize_feedback_image(image.bytes.to_vec(), source_mime.to_string())
             .await
-            .unwrap_or_else(|| (image.bytes.clone(), source_mime.to_string()));
+            .unwrap_or_else(|| (image.bytes.to_vec(), source_mime.to_string()));
         let (bytes, media_type) = normalized;
         blocks.push(serde_json::json!({
             "type": "image",

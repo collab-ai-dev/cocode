@@ -154,6 +154,65 @@ fn attachment_to_messages_image_without_base64_returns_empty() {
 }
 
 #[test]
+fn turn_start_image_message_carries_composer_anchor_metadata() {
+    use base64::Engine as _;
+
+    let message = build_user_message(
+        uuid::Uuid::new_v4(),
+        "ab",
+        &[coco_types::QueuedCommandEditImage {
+            media_type: "image/png".into(),
+            data_base64: base64::engine::general_purpose::STANDARD.encode([1, 2]),
+            insertion_offset: 1,
+        }],
+        &Default::default(),
+    );
+    let Message::User(user) = message else {
+        panic!("expected user message");
+    };
+    let coco_messages::LlmMessage::User { content, .. } = user.message else {
+        panic!("expected user LLM message");
+    };
+    let coco_messages::UserContent::File(file) = &content[1] else {
+        panic!("expected image file part");
+    };
+    assert_eq!(
+        file.provider_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("coco_composer_insertion_offset"))
+            .and_then(serde_json::Value::as_i64),
+        Some(1)
+    );
+}
+
+#[test]
+fn turn_start_text_message_carries_file_reference_metadata() {
+    let composer = coco_types::SubmittedComposer {
+        next_attachment_label: 0,
+        elements: vec![coco_types::SubmittedComposerElement::FileRef { start: 4, end: 11 }],
+    };
+    let message = build_user_message(uuid::Uuid::new_v4(), "see @src/lib.rs", &[], &composer);
+    let Message::User(user) = message else {
+        panic!("expected user message");
+    };
+    let coco_messages::LlmMessage::User { content, .. } = user.message else {
+        panic!("expected user LLM message");
+    };
+    let coco_messages::UserContent::Text(text) = &content[0] else {
+        panic!("expected text part");
+    };
+    let restored: coco_types::SubmittedComposer = serde_json::from_value(
+        text.provider_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("coco_submitted_composer"))
+            .cloned()
+            .expect("file reference metadata"),
+    )
+    .unwrap();
+    assert_eq!(restored, composer);
+}
+
+#[test]
 fn attachment_to_messages_already_read_file_returns_empty() {
     let att = Attachment::AlreadyReadFile(coco_context::attachment::AlreadyReadFileAttachment {
         filename: "/already.rs".to_string(),
@@ -173,7 +232,15 @@ async fn resolve_turn_inputs_loads_at_mentioned_file_content() {
 
     let frs = Arc::new(RwLock::new(FileReadState::new()));
     let prompt = format!("read this @{}", file.display());
-    let inputs = resolve_turn_inputs(&prompt, &[], dir.path(), uuid::Uuid::new_v4(), &frs).await;
+    let inputs = resolve_turn_inputs(
+        &prompt,
+        &[],
+        &Default::default(),
+        dir.path(),
+        uuid::Uuid::new_v4(),
+        &frs,
+    )
+    .await;
 
     assert_eq!(
         inputs.attachment_messages.len(),
@@ -218,14 +285,30 @@ async fn resolve_turn_inputs_dedups_same_file_across_calls() {
     let frs = Arc::new(RwLock::new(FileReadState::new()));
     let prompt = format!("look at @{}", file.display());
 
-    let first = resolve_turn_inputs(&prompt, &[], dir.path(), uuid::Uuid::new_v4(), &frs).await;
+    let first = resolve_turn_inputs(
+        &prompt,
+        &[],
+        &Default::default(),
+        dir.path(),
+        uuid::Uuid::new_v4(),
+        &frs,
+    )
+    .await;
     assert_eq!(
         first.attachment_messages.len(),
         3,
         "summary + tool_use + tool_result"
     );
 
-    let second = resolve_turn_inputs(&prompt, &[], dir.path(), uuid::Uuid::new_v4(), &frs).await;
+    let second = resolve_turn_inputs(
+        &prompt,
+        &[],
+        &Default::default(),
+        dir.path(),
+        uuid::Uuid::new_v4(),
+        &frs,
+    )
+    .await;
     // Dedup: no fresh model-visible content reminders, but the re-mention
     // still shows a compact summary row (an `AlreadyRead` item).
     assert_eq!(second.attachment_messages.len(), 1);
@@ -248,7 +331,15 @@ async fn resolve_turn_inputs_emits_user_first_then_attachments() {
 
     let frs = Arc::new(RwLock::new(FileReadState::new()));
     let prompt = format!("@{} please summarize", file.display());
-    let inputs = resolve_turn_inputs(&prompt, &[], dir.path(), uuid::Uuid::new_v4(), &frs).await;
+    let inputs = resolve_turn_inputs(
+        &prompt,
+        &[],
+        &Default::default(),
+        dir.path(),
+        uuid::Uuid::new_v4(),
+        &frs,
+    )
+    .await;
 
     let messages = build_messages_for_turn(&inputs);
     assert!(messages.len() >= 4);
@@ -307,6 +398,7 @@ async fn resolve_turn_inputs_no_mentions_yields_only_user_message() {
     let inputs = resolve_turn_inputs(
         "just a plain prompt with no mentions",
         &[],
+        &Default::default(),
         dir.path(),
         uuid::Uuid::new_v4(),
         &frs,

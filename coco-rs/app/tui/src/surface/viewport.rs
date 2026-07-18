@@ -175,9 +175,7 @@ fn input_height_for_state(state: &AppState, width: u16) -> u16 {
         None,
         width,
     );
-    let line_count = crate::widgets::composer_rows(&model.display_text, width)
-        .len()
-        .clamp(1, max_content);
+    let line_count = model.rows.len().clamp(1, max_content);
     line_count as u16 + 2
 }
 

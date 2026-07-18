@@ -107,8 +107,7 @@ pub(crate) async fn route_approve(
     };
     let resolved = match prompt {
         PanePromptState::Permission(p) => {
-            permission::approve_permission(p, permission_mode, &state.ui.paste_manager, command_tx)
-                .await
+            permission::approve_permission(p, permission_mode, command_tx).await
         }
         PanePromptState::SandboxPermission(s) => {
             permission::respond_sandbox(s, /*approved*/ true, command_tx).await;
@@ -193,14 +192,7 @@ pub(crate) async fn route_confirm(
             state.ui.finish_taken_prompt();
         }
         PanePromptState::Permission(ref p) => {
-            if permission::confirm_permission(
-                p,
-                state.session.permission_mode,
-                &state.ui.paste_manager,
-                command_tx,
-            )
-            .await
-            {
+            if permission::confirm_permission(p, state.session.permission_mode, command_tx).await {
                 state.ui.finish_taken_prompt();
             } else {
                 state.ui.restore_prompt(prompt);

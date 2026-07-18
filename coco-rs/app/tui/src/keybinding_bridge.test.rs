@@ -142,6 +142,7 @@ fn install_exit_plan_prompt_on_no(state: &mut AppState) {
                 plan: Some("# Plan".into()),
                 edited_plan: None,
                 feedback_input: crate::state::PrefixInputState::new(String::new()),
+                feedback_images: Vec::new(),
                 plan_file_path: None,
                 allowed_prompts: vec![],
             },
@@ -656,7 +657,7 @@ fn test_roster_shift_arrows_cycle_all_modes() {
 #[test]
 fn test_enter_submits() {
     let mut state = AppState::new();
-    state.ui.input.textarea.insert_str("h");
+    state.ui.input.textarea_mut().insert_str("h");
     let cmd = map_key(&state, press(KeyCode::Enter));
     assert!(matches!(cmd, Some(TuiCommand::SubmitInput)));
 }
@@ -783,6 +784,35 @@ fn test_esc_cancels() {
     let state = AppState::new();
     let cmd = map_key(&state, press(KeyCode::Esc));
     assert!(matches!(cmd, Some(TuiCommand::Cancel)));
+}
+
+#[test]
+fn transcript_search_owns_typing_then_releases_n_navigation() {
+    let mut state = AppState::new();
+    state.ui.show_modal(crate::state::ModalState::Transcript(
+        crate::state::transcript::TranscriptState::new(),
+    ));
+
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Char('/'))),
+        Some(TuiCommand::TranscriptSearchStart)
+    ));
+    let Some(crate::state::ModalState::Transcript(transcript)) = state.ui.modal.as_mut() else {
+        panic!("expected transcript");
+    };
+    transcript.search.editing = true;
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Char('n'))),
+        Some(TuiCommand::TranscriptSearchInsert('n'))
+    ));
+    let Some(crate::state::ModalState::Transcript(transcript)) = state.ui.modal.as_mut() else {
+        panic!("expected transcript");
+    };
+    transcript.search.editing = false;
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Char('n'))),
+        Some(TuiCommand::TranscriptSearchNavigate(1))
+    ));
 }
 
 #[test]
@@ -921,8 +951,8 @@ fn test_autocomplete_context_when_suggestions_active() {
 #[test]
 fn test_tab_accepts_inline_ghost_before_plan_toggle() {
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("then /cl");
-    state.ui.input.textarea.set_cursor("then /cl".len());
+    state.ui.input.textarea_mut().set_text("then /cl");
+    state.ui.input.textarea_mut().set_cursor("then /cl".len());
     state.ui.input.set_inline_ghost(crate::state::InlineGhost {
         text: "ear".into(),
         insert_position: "then /cl".len(),

@@ -53,7 +53,7 @@ pub(crate) fn search_history(history: &[HistoryEntry], query: &str) -> HistoryRe
     for (idx, entry) in history.iter().enumerate() {
         // The popup displays the first line only. Match that same text so a
         // row is never selected for an invisible hit on a later line.
-        let haystack = Utf32String::from(entry.text.lines().next().unwrap_or(""));
+        let haystack = Utf32String::from(entry.text().lines().next().unwrap_or(""));
         if let Some(score) = pattern.score(haystack.slice(..), &mut matcher)
             && score > 0
         {
@@ -66,7 +66,7 @@ pub(crate) fn search_history(history: &[HistoryEntry], query: &str) -> HistoryRe
     let mut results = HistoryResults::default();
     for (_, idx) in scored.into_iter().take(MAX_HISTORY_RESULTS) {
         let entry = &history[idx];
-        let text = &entry.text;
+        let text = entry.text();
         results
             .items
             .push(to_item(entry, match_indices(&pattern, &mut matcher, text)));
@@ -96,7 +96,7 @@ fn match_indices(pattern: &Pattern, matcher: &mut Matcher, text: &str) -> Vec<i3
 }
 
 fn to_item(entry: &HistoryEntry, highlight_indices: Vec<i32>) -> SuggestionItem {
-    let text = &entry.text;
+    let text = entry.text();
     let first = text.lines().next().unwrap_or("");
     let label = if text.contains('\n') {
         format!("{first} …")

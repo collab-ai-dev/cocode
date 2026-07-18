@@ -97,3 +97,8 @@ required-features = ["testing"]
 name = "transcript_overlay"
 harness = false
 required-features = ["testing"]
+
+[[bench]]
+name = "streaming_markdown"
+harness = false
+required-features = ["testing"]

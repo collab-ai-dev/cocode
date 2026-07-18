@@ -62,6 +62,7 @@ const MAX_DIR_ENTRIES: i32 = 1000;
 pub async fn resolve_turn_inputs(
     content: &str,
     images: &[coco_types::QueuedCommandEditImage],
+    composer: &coco_types::SubmittedComposer,
     cwd: &Path,
     user_uuid: Uuid,
     file_read_state: &Arc<RwLock<FileReadState>>,
@@ -86,7 +87,7 @@ pub async fn resolve_turn_inputs(
         })
         .collect();
 
-    let user_message = build_user_message(user_uuid, content, images);
+    let user_message = build_user_message(user_uuid, content, images, composer);
 
     let mut attachment_messages: Vec<Message> = file_attachments
         .iter()
@@ -294,32 +295,40 @@ fn build_user_message(
     user_uuid: Uuid,
     text: &str,
     images: &[coco_types::QueuedCommandEditImage],
+    composer: &coco_types::SubmittedComposer,
 ) -> Message {
-    use base64::Engine as _;
-    if images.is_empty() {
+    let composer_is_valid = composer.is_valid_for(text, images.len());
+    debug_assert!(
+        composer == &coco_types::SubmittedComposer::default() || composer_is_valid,
+        "generated submitted composer must match its prompt and images"
+    );
+    if images.is_empty() && composer == &coco_types::SubmittedComposer::default() {
         coco_messages::create_user_message_with_uuid(user_uuid, text)
     } else {
-        let mut parts: Vec<UserContentPart> = vec![UserContentPart::text(text)];
+        let mut text_part = coco_messages::TextContent::new(text);
+        if composer != &coco_types::SubmittedComposer::default()
+            && composer_is_valid
+            && let Ok(value) = serde_json::to_value(composer)
+        {
+            let mut metadata = coco_llm_types::ProviderMetadata::new();
+            metadata.set("coco_submitted_composer", value);
+            text_part.provider_metadata = Some(metadata);
+        }
+        let mut parts: Vec<UserContentPart> = vec![UserContentPart::Text(text_part)];
         for img in images {
-            let bytes = match base64::engine::general_purpose::STANDARD
-                .decode(img.data_base64.as_bytes())
-            {
-                Ok(bytes) => bytes,
-                Err(error) => {
-                    tracing::warn!(
-                        media_type = %img.media_type,
-                        %error,
-                        "dropping invalid turn/start image payload"
-                    );
-                    continue;
-                }
-            };
             let mime = if img.media_type.is_empty() {
                 "image/png"
             } else {
                 img.media_type.as_str()
             };
-            parts.push(UserContentPart::image(bytes, mime));
+            let mut file = FilePart::image_base64(img.data_base64.clone(), mime);
+            let mut metadata = coco_llm_types::ProviderMetadata::new();
+            metadata.set(
+                "coco_composer_insertion_offset",
+                serde_json::json!(img.insertion_offset),
+            );
+            file.provider_metadata = Some(metadata);
+            parts.push(UserContentPart::File(file));
         }
         coco_messages::create_user_message_with_parts_and_uuid(user_uuid, parts)
     }

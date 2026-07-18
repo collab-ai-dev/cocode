@@ -90,8 +90,6 @@ pub struct UiState {
     /// One-shot flag: the "ctrl+r to search history" hint has been shown
     /// this session (after the user up-arrowed past the newest entry).
     pub search_hint_shown: bool,
-    /// Paste pill manager for tracking pasted content (text and images).
-    pub paste_manager: coco_tui_ui::paste::PasteManager,
     /// Chat scroll offset (lines from bottom).
     pub scroll_offset: i32,
     /// Current focus target.
@@ -207,6 +205,12 @@ pub struct UiState {
     ///   clear input
     /// * empty input + empty stash → silent no-op
     pub stashed_input: Option<StashedInput>,
+    /// Draft removed atomically while the engine returns queued commands for
+    /// editing. Restored on failure and merged after a successful response.
+    pub(crate) pending_queued_edit: Option<crate::composer::ComposerSnapshot>,
+    /// Typed image-marker mapping for the active prompt external-editor
+    /// round-trip. The live composer remains untouched until completion.
+    pub(crate) pending_external_editor: Option<crate::composer::ExternalEditorSession>,
     /// UI-only ephemera (spinner verb, status-clock pause accumulators,
     /// task-panel completion timestamps + all-completed anchor). These
     /// previously lived on [`crate::state::SessionState`]; they have no
@@ -245,20 +249,19 @@ pub enum VoiceStatusKind {
     Transcribing,
 }
 
-/// One slot of stashed input: text + cursor + paste-manager state.
+/// One slot of stashed composer state.
 #[derive(Debug, Clone)]
 pub struct StashedInput {
-    /// Stashed text content.
-    pub text: String,
-    /// Cursor byte offset at stash time. Restored alongside `text` on pop.
-    /// In-memory only (no on-disk persistence), so the encoding change
-    /// from char-index → byte-offset doesn't require migration.
-    pub cursor_byte: usize,
-    /// Snapshot of paste-pill entries at stash time. Restored on pop
-    /// so pill labels in the stashed `text` (e.g. `[Pasted text #1]`)
-    /// still resolve to the original content. Empty `Vec` when the
-    /// user hadn't pasted anything.
-    pub paste_entries: Vec<coco_tui_ui::paste::PasteEntry>,
+    pub(crate) composer: crate::composer::ComposerSnapshot,
+}
+
+impl StashedInput {
+    #[cfg(test)]
+    pub(crate) fn plain(text: impl Into<String>, cursor: usize) -> Self {
+        Self {
+            composer: crate::composer::ComposerSnapshot::plain(text.into(), cursor),
+        }
+    }
 }
 
 impl UiState {
@@ -269,7 +272,6 @@ impl UiState {
             input: InputState::new(),
             history_search: None,
             search_hint_shown: false,
-            paste_manager: coco_tui_ui::paste::PasteManager::new(),
             scroll_offset: 0,
             focus: FocusTarget::Input,
             agent_switcher_selected: 0,
@@ -303,6 +305,8 @@ impl UiState {
             completion: crate::completion::CompletionState::default(),
             kb_handle: KeybindingHandle::from_defaults(),
             stashed_input: None,
+            pending_queued_edit: None,
+            pending_external_editor: None,
             show_teammate_message_preview: false,
             coordinator_mode_active: false,
             ephemeral: crate::state::ui_ephemeral::UiEphemeralState::new(),
@@ -681,48 +685,34 @@ pub enum FocusTarget {
 /// text moves it back to the front rather than creating a duplicate.
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {
-    pub text: String,
+    pub(crate) composer: crate::composer::ComposerSnapshot,
     /// Persistence timestamp (Unix milliseconds), when this row came from the
     /// cross-session history store. In-session drafts may not have one yet.
     pub timestamp_ms: Option<i64>,
-    /// Paste-pill payloads referenced by `text`, snapshotted at submit so
-    /// recalling the entry rehydrates the paste manager — without this a
-    /// recalled `[Pasted text #N]` is a dangling token (the manager was
-    /// cleared at submit) and resolves to literal text. Mirrors codex
-    /// `HistoryEntry.pending_pastes`. Empty for entries hydrated from
-    /// persistent cross-session history (text-only, like codex).
-    pub pastes: Vec<coco_tui_ui::paste::PasteEntry>,
 }
 
 impl HistoryEntry {
-    /// Rehydrate one persisted history row, including the exact paste-pill
-    /// labels embedded in its display string.
-    pub fn persisted(
-        text: String,
-        timestamp_ms: i64,
-        pasted_contents: std::collections::HashMap<i32, String>,
-    ) -> Self {
-        let pastes = pasted_contents
-            .into_iter()
-            .filter_map(|(id, content)| {
-                let marker = format!("[Pasted text #{id}");
-                let start = text.find(&marker)?;
-                let relative_end = text[start..].find(']')?;
-                let pill = text[start..=start + relative_end].to_string();
-                Some(coco_tui_ui::paste::PasteEntry {
-                    pill,
-                    content,
-                    is_image: false,
-                    image_bytes: None,
-                    image_mime: None,
-                })
-            })
-            .collect();
+    pub fn plain(text: impl Into<String>) -> Self {
+        let text = text.into();
         Self {
-            text,
-            timestamp_ms: Some(timestamp_ms),
-            pastes,
+            composer: crate::composer::ComposerSnapshot::plain(text.clone(), text.len()),
+            timestamp_ms: None,
         }
+    }
+
+    pub fn persisted(
+        composer: coco_types::PersistedComposer,
+        timestamp_ms: i64,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            composer: crate::composer::ComposerSnapshot::from_persisted(composer)
+                .map_err(|error| error.to_string())?,
+            timestamp_ms: Some(timestamp_ms),
+        })
+    }
+
+    pub fn text(&self) -> &str {
+        self.composer.text()
     }
 }
 
@@ -744,10 +734,8 @@ pub struct HistorySearch {
     pub result_indices: Vec<usize>,
     /// Selected row (index into `results`) previewed in the composer.
     pub selected: usize,
-    /// Draft text to restore on cancel / no-match.
-    pub original_text: String,
-    /// Paste-manager snapshot to restore alongside `original_text`.
-    pub original_pastes: Vec<coco_tui_ui::paste::PasteEntry>,
+    /// Complete draft to restore on cancel / no-match.
+    pub(crate) original_composer: crate::composer::ComposerSnapshot,
     /// `history_index` to restore on cancel.
     pub original_history_index: Option<usize>,
 }
@@ -825,9 +813,8 @@ impl PromptMode {
 /// history + vim runtime live alongside it.
 #[derive(Debug)]
 pub struct InputState {
-    /// The editable buffer + cursor. Edit it directly for byte-offset
-    /// access; the surrounding `InputState` API only owns history + vim.
-    pub textarea: coco_tui_ui::widgets::TextArea,
+    /// Single owner of editable text, atomic elements, and their payloads.
+    composer: crate::composer::Composer,
     /// Dim, non-editable text rendered after the input cursor. Used for
     /// slash-command argument hints after accepting a command completion.
     pub inline_hint: Option<String>,
@@ -858,7 +845,7 @@ impl InputState {
     /// Create empty input.
     pub fn new() -> Self {
         Self {
-            textarea: coco_tui_ui::widgets::TextArea::new(),
+            composer: crate::composer::Composer::default(),
             inline_hint: None,
             inline_ghost: None,
             history: Vec::new(),
@@ -869,13 +856,27 @@ impl InputState {
 
     /// Current text content.
     pub fn text(&self) -> &str {
-        self.textarea.text()
+        self.composer.textarea().text()
+    }
+
+    pub(crate) fn textarea(&self) -> &coco_tui_ui::widgets::TextArea {
+        self.composer.textarea()
+    }
+
+    pub(crate) fn textarea_mut(&mut self) -> crate::composer::ComposerTextAreaMut<'_> {
+        self.composer.textarea_mut()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_cursor_to_end(&mut self) {
+        let end = self.textarea().text().len();
+        self.textarea_mut().set_cursor(end);
     }
 
     /// Replace the entire input. Resets `history_index` so subsequent
     /// Up/Down navigation restarts from the live draft.
     pub fn set_text(&mut self, text: &str) {
-        self.textarea.set_text(text);
+        self.composer.set_text(text);
         self.inline_hint = None;
         self.inline_ghost = None;
         self.history_index = None;
@@ -886,7 +887,86 @@ impl InputState {
         self.history_index = None;
         self.inline_hint = None;
         self.inline_ghost = None;
-        self.textarea.take_text()
+        self.composer.take_text()
+    }
+
+    pub(crate) fn composer_snapshot(&self) -> crate::composer::ComposerSnapshot {
+        self.composer.snapshot()
+    }
+
+    pub(crate) fn take_composer(&mut self) -> crate::composer::ComposerSnapshot {
+        self.history_index = None;
+        self.inline_hint = None;
+        self.inline_ghost = None;
+        self.composer.take_snapshot()
+    }
+
+    pub(crate) fn take_composer_preserving_attachment_labels(
+        &mut self,
+    ) -> crate::composer::ComposerSnapshot {
+        self.history_index = None;
+        self.inline_hint = None;
+        self.inline_ghost = None;
+        self.composer.take_snapshot_preserving_labels()
+    }
+
+    pub(crate) fn restore_composer(&mut self, snapshot: crate::composer::ComposerSnapshot) {
+        self.composer.restore(snapshot);
+        self.inline_hint = None;
+        self.inline_ghost = None;
+        self.history_index = None;
+    }
+
+    pub(crate) fn resolve(
+        &self,
+    ) -> Result<crate::composer::ResolvedInput, crate::composer::ResolveError> {
+        self.composer.resolve()
+    }
+
+    pub(crate) fn persisted_composer(
+        &self,
+    ) -> Result<coco_types::PersistedComposer, crate::composer::ResolveError> {
+        self.composer.persisted()
+    }
+
+    pub fn prune_attachments(&mut self) {
+        self.composer.prune();
+    }
+
+    pub fn insert_text_attachment(
+        &mut self,
+        content: String,
+    ) -> Result<String, coco_tui_ui::widgets::ElementError> {
+        self.composer.insert_text(content)
+    }
+
+    pub fn insert_image_attachment(
+        &mut self,
+        bytes: impl Into<std::sync::Arc<[u8]>>,
+        mime: String,
+    ) -> Result<String, coco_tui_ui::widgets::ElementError> {
+        self.composer.insert_image(bytes, mime)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn attachment_count(&self) -> usize {
+        self.composer.attachment_count()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn attachments_empty(&self) -> bool {
+        self.attachment_count() == 0
+    }
+
+    pub(crate) fn handle_vim_insert_escape(&mut self) -> bool {
+        let mut textarea = self.composer.textarea_mut();
+        crate::vim::wiring::handle_insert_escape(&mut textarea, &mut self.vim)
+    }
+
+    pub(crate) fn dispatch_and_apply_vim_key(&mut self, key: char) -> bool {
+        let mut textarea = self.composer.textarea_mut();
+        let action = crate::vim::wiring::dispatch_vim_key(key, &mut textarea, &mut self.vim);
+        crate::vim::wiring::apply_action(action, &mut textarea, &mut self.vim)
     }
 
     /// Set a dim inline hint rendered after the cursor. The hint is not
@@ -912,7 +992,7 @@ impl InputState {
     pub fn active_inline_ghost(&self) -> Option<&InlineGhost> {
         self.inline_ghost
             .as_ref()
-            .filter(|ghost| ghost.insert_position == self.textarea.cursor())
+            .filter(|ghost| ghost.insert_position == self.textarea().cursor())
     }
 
     pub fn accept_inline_ghost(&mut self) -> bool {
@@ -920,82 +1000,72 @@ impl InputState {
             self.clear_inline_ghost();
             return false;
         };
-        self.textarea
+        self.textarea_mut()
             .replace_range(ghost.replace_start..ghost.replace_end, &ghost.replacement);
-        self.textarea.set_cursor(ghost.cursor_after_accept);
+        self.textarea_mut().set_cursor(ghost.cursor_after_accept);
         self.clear_inline_ghost();
         true
     }
 
     /// Whether the input is empty.
     pub fn is_empty(&self) -> bool {
-        self.textarea.is_empty()
+        self.textarea().is_empty()
     }
 
     /// Current prompt-prefix mode (derived from leading character).
     pub fn prompt_mode(&self) -> PromptMode {
-        PromptMode::from_text(self.textarea.text())
+        PromptMode::from_text(self.textarea().text())
     }
 
     /// Seed history from persistent cross-session storage at startup.
     ///
-    /// `texts` arrives newest-first. Compatibility helper for callers/tests
-    /// without persistence metadata.
+    /// `texts` arrives newest-first.
     pub fn hydrate_history(&mut self, texts: Vec<String>) {
         self.hydrate_history_entries(
             texts
                 .into_iter()
                 .map(|text| HistoryEntry {
-                    text,
+                    composer: plain_composer_snapshot(text),
                     timestamp_ms: None,
-                    pastes: Vec::new(),
                 })
                 .collect(),
         );
     }
 
-    /// Seed history from timestamped persistent storage, retaining paste
-    /// payloads so a recalled pill can still resolve after restart.
+    /// Seed history from timestamped persistent storage.
     pub fn hydrate_history_entries(&mut self, entries: Vec<HistoryEntry>) {
         let max = constants::MAX_HISTORY_ENTRIES as usize;
-        let mut seen = std::collections::HashSet::new();
-        self.history = entries
-            .into_iter()
-            .filter(|entry| !entry.text.is_empty() && seen.insert(entry.text.clone()))
-            .take(max)
-            .collect();
+        let mut unique = Vec::<HistoryEntry>::new();
+        for entry in entries {
+            if !entry.text().is_empty()
+                && !unique
+                    .iter()
+                    .any(|existing| existing.composer == entry.composer)
+            {
+                unique.push(entry);
+                if unique.len() == max {
+                    break;
+                }
+            }
+        }
+        self.history = unique;
     }
 
-    /// Record a submitted text into history, most-recent-first.
-    ///
-    /// If the text already exists it is moved back to the front (no
-    /// duplicate); otherwise it is prepended. Capped at
-    /// [`constants::MAX_HISTORY_ENTRIES`] by dropping the oldest tail.
+    /// Record a complete composer snapshot into history, most-recent-first.
     pub fn add_to_history(&mut self, text: String) {
-        self.add_to_history_with_pastes(text, Vec::new());
+        self.add_composer_to_history(plain_composer_snapshot(text));
     }
 
-    /// [`Self::add_to_history`] carrying the paste-pill payloads referenced
-    /// by `text`. A same-text resubmit replaces the stored pastes (pill
-    /// numbering restarts after each clear, so equal display text can
-    /// reference different payloads).
-    pub fn add_to_history_with_pastes(
-        &mut self,
-        text: String,
-        pastes: Vec<coco_tui_ui::paste::PasteEntry>,
-    ) {
-        if text.is_empty() {
+    pub(crate) fn add_composer_to_history(&mut self, composer: crate::composer::ComposerSnapshot) {
+        if composer.text().is_empty() {
             return;
         }
-        // Drop any prior occurrence, then prepend so the most recent
-        // submission sits at index 0 for up-arrow recall.
-        self.history.retain(|h| h.text != text);
+        self.history.retain(|entry| entry.composer != composer);
         self.history.insert(
             0,
             HistoryEntry {
-                text,
+                composer,
                 timestamp_ms: None,
-                pastes,
             },
         );
         let max = constants::MAX_HISTORY_ENTRIES as usize;
@@ -1003,6 +1073,11 @@ impl InputState {
             self.history.truncate(max);
         }
     }
+}
+
+fn plain_composer_snapshot(text: String) -> crate::composer::ComposerSnapshot {
+    let cursor = text.len();
+    crate::composer::ComposerSnapshot::plain(text, cursor)
 }
 
 impl Default for InputState {

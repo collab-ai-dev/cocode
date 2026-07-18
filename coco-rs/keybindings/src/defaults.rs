@@ -79,6 +79,7 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("ctrl+l", KeybindingAction::AppRedraw),
                 ("ctrl+y", KeybindingAction::AppToggleTodos),
                 ("ctrl+o", KeybindingAction::AppToggleTranscript),
+                ("alt+e", KeybindingAction::AppExpandCommittedTool),
                 ("ctrl+shift+o", KeybindingAction::AppToggleTeammatePreview),
                 // coco-rs-only affordance. Sibling of `ctrl+y`; only active
                 // when the session has teammates (gated in dispatch).

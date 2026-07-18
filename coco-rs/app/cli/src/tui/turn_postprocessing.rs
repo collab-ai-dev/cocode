@@ -547,6 +547,7 @@ pub(super) fn image_data_to_queued(images: &[coco_tui::ImageData]) -> Vec<Queued
                 img.mime.clone()
             },
             data_base64: base64::engine::general_purpose::STANDARD.encode(&img.bytes),
+            insertion_offset: i64::try_from(img.insertion_offset).unwrap_or(i64::MAX),
         })
         .collect()
 }
@@ -559,6 +560,7 @@ pub(super) fn image_data_to_turn_start(
         .map(|image| coco_types::QueuedCommandEditImage {
             media_type: image.media_type,
             data_base64: image.data_base64,
+            insertion_offset: image.insertion_offset,
         })
         .collect()
 }

@@ -7917,6 +7917,12 @@
         "data_base64": {
           "type": "string"
         },
+        "insertion_offset": {
+          "default": 0,
+          "description": "Byte position in `prompt` where the atomic image chip should be restored.",
+          "format": "int64",
+          "type": "integer"
+        },
         "media_type": {
           "type": "string"
         }
@@ -10416,6 +10422,22 @@
       "title": "SessionResumeResult",
       "type": "object"
     },
+    "SessionSearchHit": {
+      "description": "One content-search match streamed into the TUI session picker.",
+      "properties": {
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        },
+        "snippet": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "snippet"
+      ],
+      "type": "object"
+    },
     "SessionStartParams": {
       "additionalProperties": false,
       "description": "Params for `session/start`.\n\nThe serialized wire form carries only per-session execution policy \u2014 never a\nsession identity or history. A remote caller therefore cannot name or resume\nan existing session through start; the server mints the identity. Unknown\nfields (including legacy `session_id`/`initial_messages`/`initial_prompt`)\nare rejected as invalid params, not silently ignored.",
@@ -10663,6 +10685,16 @@
         },
         "cwd": {
           "type": "string"
+        },
+        "first_prompt": {
+          "default": "",
+          "type": "string"
+        },
+        "last_message_preview": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "message_count": {
           "default": 0,
@@ -12007,6 +12039,103 @@
         "data"
       ],
       "type": "object"
+    },
+    "SubmittedComposer": {
+      "description": "Lossless, payload-light description of a composer after it has been\nresolved into the model-facing prompt. Paste payloads are addressed by\nranges in that prompt; image bytes remain in typed file parts.",
+      "properties": {
+        "elements": {
+          "items": {
+            "$ref": "#/$defs/SubmittedComposerElement"
+          },
+          "type": "array"
+        },
+        "next_attachment_label": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "next_attachment_label"
+      ],
+      "type": "object"
+    },
+    "SubmittedComposerElement": {
+      "oneOf": [
+        {
+          "properties": {
+            "end": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "kind": {
+              "const": "paste",
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "start": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "start",
+            "end",
+            "label"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "image_index": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "insertion_offset": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "kind": {
+              "const": "image",
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "insertion_offset",
+            "image_index",
+            "label"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "end": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "kind": {
+              "const": "file_ref",
+              "type": "string"
+            },
+            "start": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "start",
+            "end"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "SuggestionSeverity": {
       "description": "Severity of a context suggestion. `Warning` sorts before `Info`.",
@@ -14630,6 +14759,9 @@
         {
           "description": "Queued command was removed from the engine queue and is ready to\nrestore into the composer for editing.",
           "properties": {
+            "composer": {
+              "$ref": "#/$defs/SubmittedComposer"
+            },
             "id": {
               "type": "string"
             },
@@ -14650,17 +14782,16 @@
           "required": [
             "type",
             "id",
-            "prompt"
+            "prompt",
+            "composer"
           ],
           "type": "object"
         },
         {
           "description": "Editable queued commands were removed from the engine queue and\ncombined with the current composer draft.",
           "properties": {
-            "cursor": {
-              "format": "uint",
-              "minimum": 0,
-              "type": "integer"
+            "composer": {
+              "$ref": "#/$defs/SubmittedComposer"
             },
             "ids": {
               "items": {
@@ -14686,7 +14817,7 @@
             "type",
             "ids",
             "prompt",
-            "cursor"
+            "composer"
           ],
           "type": "object"
         },
@@ -14728,6 +14859,41 @@
           "required": [
             "type",
             "sessions"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "One streamed batch from the resume picker's transcript-content search.",
+          "properties": {
+            "complete": {
+              "type": "boolean"
+            },
+            "hits": {
+              "items": {
+                "$ref": "#/$defs/SessionSearchHit"
+              },
+              "type": "array"
+            },
+            "query": {
+              "type": "string"
+            },
+            "request_id": {
+              "description": "Identity issued by the picker when this exact search began. The\nquery text alone is insufficient when a user types `a -> ab -> a`.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "session_search_results",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "query",
+            "request_id",
+            "hits",
+            "complete"
           ],
           "type": "object"
         },
@@ -15914,6 +16080,10 @@
     "TurnStartParams": {
       "description": "Params for `turn/start`.",
       "properties": {
+        "composer": {
+          "$ref": "#/$defs/SubmittedComposer",
+          "description": "Lossless atomic composer description relative to `prompt`."
+        },
         "history_override": {
           "description": "Optional full-history override for local compatibility turns that have\nalready assembled transcript messages outside a plain prompt. Each item\nis a serialized `coco_messages::Message`; kept as JSON here to avoid a\nreverse dependency from `coco-types` to `coco-messages`.",
           "items": true,
@@ -15975,7 +16145,8 @@
       },
       "required": [
         "target",
-        "prompt"
+        "prompt",
+        "composer"
       ],
       "type": "object"
     },

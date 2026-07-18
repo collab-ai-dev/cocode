@@ -648,6 +648,52 @@ fn crossterm_surface_backend_direct_inserts_plain_history_rows() {
 }
 
 #[test]
+fn crossterm_history_serialization_emits_capability_gated_osc8() {
+    let capture = CapturedWriter::default();
+    let backend = CrosstermBackend::new(capture.clone());
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 1, 32, 1));
+    terminal.set_hyperlinks_enabled(true);
+
+    terminal
+        .insert_history_rows(&history_rows_width([Line::from("https://example.com")], 32))
+        .expect("insert history");
+
+    let bytes = capture.ansi_bytes();
+    assert!(
+        bytes.contains("\x1b]8;;https://example.com\x1b\\https://example.com\x1b]8;;\x1b\\"),
+        "expected one balanced OSC 8 run in {bytes:?}"
+    );
+}
+
+#[test]
+fn crossterm_history_serialization_leaves_links_plain_when_disabled() {
+    let capture = CapturedWriter::default();
+    let backend = CrosstermBackend::new(capture.clone());
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 1, 32, 1));
+
+    terminal
+        .insert_history_rows(&history_rows_width([Line::from("https://example.com")], 32))
+        .expect("insert history");
+
+    let bytes = capture.ansi_bytes();
+    assert!(bytes.contains("https://example.com"));
+    assert!(!bytes.contains("\x1b]8;;"), "unexpected OSC 8 in {bytes:?}");
+}
+
+#[test]
+fn osc8_target_rejects_terminal_control_characters() {
+    let mut output = String::new();
+
+    assert!(!push_osc8_open(
+        &mut output,
+        "https://example.com/\u{001b}]8;;evil"
+    ));
+    assert!(output.is_empty());
+}
+
+#[test]
 fn crossterm_surface_backend_direct_inserts_styled_and_wide_rows() {
     let capture = CapturedWriter::default();
     let backend = CrosstermBackend::new(capture.clone());

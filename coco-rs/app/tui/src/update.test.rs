@@ -108,12 +108,8 @@ async fn queue_input_of_slash_sends_queue_command() {
     // engine first. The CLI runner drains slash commands after the active
     // turn completes instead of executing them immediately from the TUI.
     let mut state = app_state_with_session();
-    state.ui.input.textarea.set_text("/compact foo");
-    state
-        .ui
-        .input
-        .textarea
-        .set_cursor(state.ui.input.text().len());
+    state.ui.input.textarea_mut().set_text("/compact foo");
+    state.ui.input.set_cursor_to_end();
 
     let (tx, mut rx) = drained_channel();
     handle_command(&mut state, TuiCommand::QueueInput, &tx).await;
@@ -140,12 +136,8 @@ async fn submit_during_active_turn_steers_instead_of_preempting() {
     // fresh turn that hard-preempts the active one (`SystemPreempt`). The gate
     // is `turn_active()`, mirroring TS `queryGuard.isActive`.
     let mut state = app_state_with_session();
-    state.ui.input.textarea.set_text("hello");
-    state
-        .ui
-        .input
-        .textarea
-        .set_cursor(state.ui.input.text().len());
+    state.ui.input.textarea_mut().set_text("hello");
+    state.ui.input.set_cursor_to_end();
     // Turn active but NOT streaming — the post-stream tool/subagent phase.
     state
         .ui
@@ -167,12 +159,8 @@ async fn submit_during_active_turn_steers_instead_of_preempting() {
 #[tokio::test]
 async fn submit_slash_dispatches_typed_command_without_chat_echo() {
     let mut state = app_state_with_session();
-    state.ui.input.textarea.set_text("/rewind last");
-    state
-        .ui
-        .input
-        .textarea
-        .set_cursor(state.ui.input.text().len());
+    state.ui.input.textarea_mut().set_text("/rewind last");
+    state.ui.input.set_cursor_to_end();
 
     let (tx, mut rx) = drained_channel();
     handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
@@ -196,12 +184,8 @@ async fn sidechat_slash_dispatches_with_child_session_id() {
     let parent = coco_types::SessionId::try_new("test-session").unwrap();
     let child = coco_types::SessionId::try_new("sidechat-session").unwrap();
     assert!(state.enter_side_chat(parent, child.clone()));
-    state.ui.input.textarea.set_text("/compact");
-    state
-        .ui
-        .input
-        .textarea
-        .set_cursor(state.ui.input.text().len());
+    state.ui.input.textarea_mut().set_text("/compact");
+    state.ui.input.textarea_mut().set_cursor("/compact".len());
 
     let (tx, mut rx) = drained_channel();
     handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
@@ -224,25 +208,24 @@ async fn sidechat_slash_dispatches_with_child_session_id() {
 #[tokio::test]
 async fn submit_bash_resolves_and_persists_referenced_paste_pills() {
     let mut state = AppState::new();
+    state.ui.input.textarea_mut().insert_str("!");
     let pill = state
         .ui
-        .paste_manager
-        .add_text("echo from paste".to_string());
-    state.ui.input.textarea.set_text(&format!("!{pill}"));
+        .input
+        .insert_text_attachment("echo from paste".to_string())
+        .unwrap();
     let (tx, mut rx) = drained_channel();
 
     handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
 
     match rx.try_recv() {
-        Ok(UserCommand::PersistPromptHistory {
-            display,
-            pasted_contents,
-        }) => {
-            assert_eq!(display, format!("!{pill}"));
-            assert_eq!(
-                pasted_contents.get(&1).map(String::as_str),
-                Some("echo from paste")
-            );
+        Ok(UserCommand::PersistPromptHistory { composer }) => {
+            assert_eq!(composer.text, format!("!{pill}"));
+            assert!(matches!(
+                composer.elements.as_slice(),
+                [coco_types::PersistedComposerElement::Paste { content, .. }]
+                    if content == "echo from paste"
+            ));
         }
         other => panic!("expected persisted bash history, got {other:?}"),
     }
@@ -250,18 +233,18 @@ async fn submit_bash_resolves_and_persists_referenced_paste_pills() {
         Ok(UserCommand::SubmitBash { command, .. }) => assert_eq!(command, "echo from paste"),
         other => panic!("expected resolved SubmitBash, got {other:?}"),
     }
-    assert_eq!(state.ui.input.history[0].pastes.len(), 1);
+    assert_eq!(state.ui.input.history[0].composer.attachments().len(), 1);
 }
 
 #[tokio::test]
 async fn submit_workflows_alias_dispatches_workflow_command_args() {
     let mut state = app_state_with_session();
-    state.ui.input.textarea.set_text("/workflows build release");
     state
         .ui
         .input
-        .textarea
-        .set_cursor(state.ui.input.text().len());
+        .textarea_mut()
+        .set_text("/workflows build release");
+    state.ui.input.set_cursor_to_end();
 
     let (tx, mut rx) = drained_channel();
     handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
@@ -284,12 +267,8 @@ async fn submit_exit_command_shuts_down_via_double_press_path() {
     // `/exit` must funnel into the same shutdown mechanism as the Ctrl+C/Ctrl+D
     // double-press exit — NOT the registry handler (which only prints text).
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("/exit");
-    state
-        .ui
-        .input
-        .textarea
-        .set_cursor(state.ui.input.text().len());
+    state.ui.input.textarea_mut().set_text("/exit");
+    state.ui.input.set_cursor_to_end();
 
     let (tx, mut rx) = drained_channel();
     handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
@@ -306,12 +285,8 @@ async fn submit_exit_command_shuts_down_via_double_press_path() {
 #[tokio::test]
 async fn submit_quit_alias_shuts_down() {
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("/quit");
-    state
-        .ui
-        .input
-        .textarea
-        .set_cursor(state.ui.input.text().len());
+    state.ui.input.textarea_mut().set_text("/quit");
+    state.ui.input.set_cursor_to_end();
 
     let (tx, mut rx) = drained_channel();
     handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
@@ -335,8 +310,8 @@ async fn autocomplete_tab_completes_selected_slash_without_submitting() {
         name: "clear".into(),
         ..SlashCommandInfo::default()
     }];
-    state.ui.input.textarea.set_text("/cl");
-    state.ui.input.textarea.set_cursor(3);
+    state.ui.input.textarea_mut().set_text("/cl");
+    state.ui.input.textarea_mut().set_cursor(3);
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::SlashCommand,
         items: vec![SuggestionItem {
@@ -367,8 +342,8 @@ async fn autocomplete_enter_completes_and_submits_no_arg_slash_command() {
         name: "clear".into(),
         ..SlashCommandInfo::default()
     }];
-    state.ui.input.textarea.set_text("/cl");
-    state.ui.input.textarea.set_cursor(3);
+    state.ui.input.textarea_mut().set_text("/cl");
+    state.ui.input.textarea_mut().set_cursor(3);
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::SlashCommand,
         items: vec![SuggestionItem {
@@ -407,8 +382,8 @@ async fn autocomplete_enter_completes_arg_slash_command_without_submitting() {
         argument_kind: CommandArgumentKind::DirectoryPath,
         ..SlashCommandInfo::default()
     }];
-    state.ui.input.textarea.set_text("/add");
-    state.ui.input.textarea.set_cursor(4);
+    state.ui.input.textarea_mut().set_text("/add");
+    state.ui.input.textarea_mut().set_cursor(4);
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::SlashCommand,
         items: vec![SuggestionItem {
@@ -444,8 +419,8 @@ async fn autocomplete_enter_completes_workflow_without_submitting() {
         kind: CommandTypeTag::Prompt,
         ..SlashCommandInfo::default()
     }];
-    state.ui.input.textarea.set_text("/workf");
-    state.ui.input.textarea.set_cursor(6);
+    state.ui.input.textarea_mut().set_text("/workf");
+    state.ui.input.textarea_mut().set_cursor(6);
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::SlashCommand,
         items: vec![SuggestionItem {
@@ -488,8 +463,8 @@ async fn autocomplete_enter_submits_overlay_command_despite_optional_arg_hint() 
         kind: CommandTypeTag::LocalOverlay,
         ..SlashCommandInfo::default()
     }];
-    state.ui.input.textarea.set_text("/mod");
-    state.ui.input.textarea.set_cursor(4);
+    state.ui.input.textarea_mut().set_text("/mod");
+    state.ui.input.textarea_mut().set_cursor(4);
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::SlashCommand,
         items: vec![SuggestionItem {
@@ -528,8 +503,8 @@ async fn typing_after_arg_slash_completion_clears_inline_hint() {
         argument_kind: CommandArgumentKind::DirectoryPath,
         ..SlashCommandInfo::default()
     }];
-    state.ui.input.textarea.set_text("/add");
-    state.ui.input.textarea.set_cursor(4);
+    state.ui.input.textarea_mut().set_text("/add");
+    state.ui.input.textarea_mut().set_cursor(4);
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::SlashCommand,
         items: vec![SuggestionItem {
@@ -557,8 +532,8 @@ async fn typing_after_arg_slash_completion_clears_inline_hint() {
 #[tokio::test]
 async fn autocomplete_tab_accepts_inline_ghost() {
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("then /cl");
-    state.ui.input.textarea.set_cursor("then /cl".len());
+    state.ui.input.textarea_mut().set_text("then /cl");
+    state.ui.input.textarea_mut().set_cursor("then /cl".len());
     state.ui.input.set_inline_ghost(crate::state::InlineGhost {
         text: "ear".into(),
         insert_position: "then /cl".len(),
@@ -572,7 +547,7 @@ async fn autocomplete_tab_accepts_inline_ghost() {
     handle_command(&mut state, TuiCommand::AutocompleteAccept, &tx).await;
 
     assert_eq!(state.ui.input.text(), "then /clear");
-    assert_eq!(state.ui.input.textarea.cursor(), "then /clear".len());
+    assert_eq!(state.ui.input.textarea().cursor(), "then /clear".len());
 }
 
 #[tokio::test]
@@ -582,8 +557,8 @@ async fn esc_dismisses_completion_until_token_changes() {
         name: "clear".into(),
         ..SlashCommandInfo::default()
     }];
-    state.ui.input.textarea.set_text("/cl");
-    state.ui.input.textarea.set_cursor(3);
+    state.ui.input.textarea_mut().set_text("/cl");
+    state.ui.input.textarea_mut().set_cursor(3);
     crate::autocomplete::refresh_suggestions(&mut state);
     assert!(state.ui.completion.active.is_some());
 
@@ -594,8 +569,8 @@ async fn esc_dismisses_completion_until_token_changes() {
     crate::autocomplete::refresh_suggestions(&mut state);
     assert!(state.ui.completion.active.is_none());
 
-    state.ui.input.textarea.set_text("/cle");
-    state.ui.input.textarea.set_cursor(4);
+    state.ui.input.textarea_mut().set_text("/cle");
+    state.ui.input.textarea_mut().set_cursor(4);
     crate::autocomplete::refresh_suggestions(&mut state);
     assert!(state.ui.completion.active.is_some());
 }
@@ -621,8 +596,8 @@ async fn prompt_suggestion_enter_submits_visible_suggestion() {
 #[tokio::test]
 async fn autocomplete_tab_completes_common_file_prefix() {
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("@s");
-    state.ui.input.textarea.set_cursor(2);
+    state.ui.input.textarea_mut().set_text("@s");
+    state.ui.input.textarea_mut().set_cursor(2);
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::At,
         items: vec![
@@ -652,14 +627,14 @@ async fn autocomplete_tab_completes_common_file_prefix() {
     handle_command(&mut state, TuiCommand::AutocompleteAccept, &tx).await;
 
     assert_eq!(state.ui.input.text(), "@src/");
-    assert_eq!(state.ui.input.textarea.cursor(), "@src/".len());
+    assert_eq!(state.ui.input.textarea().cursor(), "@src/".len());
 }
 
 #[tokio::test]
 async fn autocomplete_tab_does_not_invent_slash_for_partial_common_prefix() {
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("@s");
-    state.ui.input.textarea.set_cursor(2);
+    state.ui.input.textarea_mut().set_text("@s");
+    state.ui.input.textarea_mut().set_cursor(2);
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::At,
         items: vec![
@@ -689,18 +664,14 @@ async fn autocomplete_tab_does_not_invent_slash_for_partial_common_prefix() {
     handle_command(&mut state, TuiCommand::AutocompleteAccept, &tx).await;
 
     assert_eq!(state.ui.input.text(), "@src/ma");
-    assert_eq!(state.ui.input.textarea.cursor(), "@src/ma".len());
+    assert_eq!(state.ui.input.textarea().cursor(), "@src/ma".len());
 }
 
 #[tokio::test]
 async fn autocomplete_tab_completes_common_quoted_file_prefix() {
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("@\"/tmp/my pro");
-    state
-        .ui
-        .input
-        .textarea
-        .set_cursor(state.ui.input.text().len());
+    state.ui.input.textarea_mut().set_text("@\"/tmp/my pro");
+    state.ui.input.set_cursor_to_end();
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::Path,
         items: vec![
@@ -731,7 +702,7 @@ async fn autocomplete_tab_completes_common_quoted_file_prefix() {
 
     assert_eq!(state.ui.input.text(), "@\"/tmp/my project/src/\"");
     assert_eq!(
-        state.ui.input.textarea.cursor(),
+        state.ui.input.textarea().cursor(),
         "@\"/tmp/my project/src/".len(),
         "cursor stays inside the quotes while drilling down"
     );
@@ -740,12 +711,8 @@ async fn autocomplete_tab_completes_common_quoted_file_prefix() {
 #[tokio::test]
 async fn autocomplete_tab_keeps_directory_common_prefix_slash_inside_quotes() {
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("@\"/tmp/my pro");
-    state
-        .ui
-        .input
-        .textarea
-        .set_cursor(state.ui.input.text().len());
+    state.ui.input.textarea_mut().set_text("@\"/tmp/my pro");
+    state.ui.input.set_cursor_to_end();
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::Path,
         items: vec![
@@ -776,7 +743,7 @@ async fn autocomplete_tab_keeps_directory_common_prefix_slash_inside_quotes() {
 
     assert_eq!(state.ui.input.text(), "@\"/tmp/my project/api/\"");
     assert_eq!(
-        state.ui.input.textarea.cursor(),
+        state.ui.input.textarea().cursor(),
         "@\"/tmp/my project/api/".len()
     );
 }
@@ -784,8 +751,8 @@ async fn autocomplete_tab_keeps_directory_common_prefix_slash_inside_quotes() {
 #[tokio::test]
 async fn autocomplete_enter_accepts_selected_path_not_common_prefix() {
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("@s");
-    state.ui.input.textarea.set_cursor(2);
+    state.ui.input.textarea_mut().set_text("@s");
+    state.ui.input.textarea_mut().set_cursor(2);
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::At,
         items: vec![
@@ -820,8 +787,8 @@ async fn autocomplete_enter_accepts_selected_path_not_common_prefix() {
 #[tokio::test]
 async fn autocomplete_accepts_at_directory_and_keeps_completion_active() {
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("@s");
-    state.ui.input.textarea.set_cursor(2);
+    state.ui.input.textarea_mut().set_text("@s");
+    state.ui.input.textarea_mut().set_cursor(2);
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::At,
         items: vec![SuggestionItem {
@@ -839,7 +806,7 @@ async fn autocomplete_accepts_at_directory_and_keeps_completion_active() {
     handle_command(&mut state, TuiCommand::AutocompleteAccept, &tx).await;
 
     assert_eq!(state.ui.input.text(), "@src/");
-    assert_eq!(state.ui.input.textarea.cursor(), "@src/".len());
+    assert_eq!(state.ui.input.textarea().cursor(), "@src/".len());
     assert!(state.ui.completion.active.is_some());
 }
 
@@ -850,8 +817,8 @@ async fn autocomplete_submit_at_directory_finalizes_mention() {
     // file-mode. It previously drilled in (kept the popup open, no space) like
     // Tab, leaving no way to confirm a directory selection.
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("@app");
-    state.ui.input.textarea.set_cursor("@app".len());
+    state.ui.input.textarea_mut().set_text("@app");
+    state.ui.input.textarea_mut().set_cursor("@app".len());
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::At,
         items: vec![SuggestionItem {
@@ -869,7 +836,7 @@ async fn autocomplete_submit_at_directory_finalizes_mention() {
     handle_command(&mut state, TuiCommand::AutocompleteSubmit, &tx).await;
 
     assert_eq!(state.ui.input.text(), "@app/cli/ ");
-    assert_eq!(state.ui.input.textarea.cursor(), "@app/cli/ ".len());
+    assert_eq!(state.ui.input.textarea().cursor(), "@app/cli/ ".len());
     assert!(
         state.ui.completion.active.is_none(),
         "finalizing a directory mention closes the popup"
@@ -883,8 +850,8 @@ async fn autocomplete_submit_at_directory_does_not_loop_on_identical_token() {
     // search returns the directory itself as the top hit for that query).
     // Enter must finalize + close, not re-insert the identical token.
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("@app/cli/");
-    state.ui.input.textarea.set_cursor("@app/cli/".len());
+    state.ui.input.textarea_mut().set_text("@app/cli/");
+    state.ui.input.textarea_mut().set_cursor("@app/cli/".len());
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::At,
         items: vec![SuggestionItem {
@@ -913,8 +880,8 @@ async fn autocomplete_submit_path_directory_drills_into_contents() {
     // directory's *contents*. Path search lists children (not the directory
     // itself), so this makes progress instead of looping.
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("@./sr");
-    state.ui.input.textarea.set_cursor("@./sr".len());
+    state.ui.input.textarea_mut().set_text("@./sr");
+    state.ui.input.textarea_mut().set_cursor("@./sr".len());
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::Path,
         items: vec![SuggestionItem {
@@ -941,8 +908,8 @@ async fn autocomplete_submit_path_directory_drills_into_contents() {
 #[tokio::test]
 async fn autocomplete_submit_bash_path_directory_drills_without_at_prefix() {
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("!cat ./sr");
-    state.ui.input.textarea.set_cursor("!cat ./sr".len());
+    state.ui.input.textarea_mut().set_text("!cat ./sr");
+    state.ui.input.textarea_mut().set_cursor("!cat ./sr".len());
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::BashPath,
         items: vec![SuggestionItem {
@@ -969,8 +936,12 @@ async fn autocomplete_submit_bash_path_directory_drills_without_at_prefix() {
 #[tokio::test]
 async fn autocomplete_submit_bash_path_file_appends_space_and_closes() {
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("!cat src/ma");
-    state.ui.input.textarea.set_cursor("!cat src/ma".len());
+    state.ui.input.textarea_mut().set_text("!cat src/ma");
+    state
+        .ui
+        .input
+        .textarea_mut()
+        .set_cursor("!cat src/ma".len());
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::BashPath,
         items: vec![SuggestionItem {
@@ -996,12 +967,8 @@ async fn autocomplete_submit_bash_path_file_appends_space_and_closes() {
 #[tokio::test]
 async fn final_quoted_file_accept_closes_quote_and_appends_space() {
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("@\"/tmp/my pro");
-    state
-        .ui
-        .input
-        .textarea
-        .set_cursor(state.ui.input.text().len());
+    state.ui.input.textarea_mut().set_text("@\"/tmp/my pro");
+    state.ui.input.set_cursor_to_end();
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::Path,
         items: vec![SuggestionItem {
@@ -1022,7 +989,7 @@ async fn final_quoted_file_accept_closes_quote_and_appends_space() {
 
     assert_eq!(state.ui.input.text(), "@\"/tmp/my project/main.rs\" ");
     assert_eq!(
-        state.ui.input.textarea.cursor(),
+        state.ui.input.textarea().cursor(),
         state.ui.input.text().len()
     );
 }
@@ -1030,11 +997,15 @@ async fn final_quoted_file_accept_closes_quote_and_appends_space() {
 #[tokio::test]
 async fn final_quoted_file_accept_replaces_drilldown_closing_quote() {
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("@\"/tmp/my project/\"");
     state
         .ui
         .input
-        .textarea
+        .textarea_mut()
+        .set_text("@\"/tmp/my project/\"");
+    state
+        .ui
+        .input
+        .textarea_mut()
         .set_cursor("@\"/tmp/my project/".len());
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::Path,
@@ -1060,12 +1031,8 @@ async fn final_quoted_file_accept_replaces_drilldown_closing_quote() {
 #[tokio::test]
 async fn quoted_path_accept_escapes_quote_and_backslash() {
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("@\"/tmp/a");
-    state
-        .ui
-        .input
-        .textarea
-        .set_cursor(state.ui.input.text().len());
+    state.ui.input.textarea_mut().set_text("@\"/tmp/a");
+    state.ui.input.set_cursor_to_end();
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::Path,
         items: vec![SuggestionItem {
@@ -1090,12 +1057,8 @@ async fn quoted_path_accept_escapes_quote_and_backslash() {
 #[tokio::test]
 async fn directory_command_enter_submits_current_input() {
     let mut state = app_state_with_session();
-    state.ui.input.textarea.set_text("/add-dir ./src");
-    state
-        .ui
-        .input
-        .textarea
-        .set_cursor(state.ui.input.text().len());
+    state.ui.input.textarea_mut().set_text("/add-dir ./src");
+    state.ui.input.set_cursor_to_end();
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::Directory,
         items: vec![SuggestionItem {
@@ -1124,12 +1087,8 @@ async fn directory_command_enter_submits_current_input() {
 #[tokio::test]
 async fn resume_completion_inserts_session_id_and_submits() {
     let mut state = app_state_with_session();
-    state.ui.input.textarea.set_text("/resume aut");
-    state
-        .ui
-        .input
-        .textarea
-        .set_cursor(state.ui.input.text().len());
+    state.ui.input.textarea_mut().set_text("/resume aut");
+    state.ui.input.set_cursor_to_end();
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::CustomTitle,
         items: vec![SuggestionItem {
@@ -1158,12 +1117,8 @@ async fn resume_completion_inserts_session_id_and_submits() {
 #[tokio::test]
 async fn mcp_resource_completion_preserves_server_name_on_insert() {
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("@guide");
-    state
-        .ui
-        .input
-        .textarea
-        .set_cursor(state.ui.input.text().len());
+    state.ui.input.textarea_mut().set_text("@guide");
+    state.ui.input.set_cursor_to_end();
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::At,
         items: vec![SuggestionItem {
@@ -1189,12 +1144,8 @@ async fn mcp_resource_completion_preserves_server_name_on_insert() {
 #[tokio::test]
 async fn directory_insertion_quotes_trailing_slash_inside_quotes() {
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("@\"/tmp/my pro");
-    state
-        .ui
-        .input
-        .textarea
-        .set_cursor(state.ui.input.text().len());
+    state.ui.input.textarea_mut().set_text("@\"/tmp/my pro");
+    state.ui.input.set_cursor_to_end();
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::Path,
         items: vec![SuggestionItem {
@@ -1217,12 +1168,8 @@ async fn directory_insertion_quotes_trailing_slash_inside_quotes() {
 #[tokio::test]
 async fn submit_rewind_undo_alias_dispatches_typed_command() {
     let mut state = app_state_with_session();
-    state.ui.input.textarea.set_text("/undo");
-    state
-        .ui
-        .input
-        .textarea
-        .set_cursor(state.ui.input.text().len());
+    state.ui.input.textarea_mut().set_text("/undo");
+    state.ui.input.set_cursor_to_end();
 
     let (tx, mut rx) = drained_channel();
     handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
@@ -1247,9 +1194,17 @@ async fn session_browser_confirm_dispatches_resume_command() {
                 label: "Auth refactor".to_string(),
                 message_count: 8,
                 created_at: "2026-05-23T00:00:00Z".to_string(),
+                updated_at: None,
+                cwd: "/repo".to_string(),
+                first_prompt: "Auth refactor".to_string(),
+                last_message_preview: None,
             }],
             filter: String::new(),
             selected: 0,
+            current_cwd: "/repo".to_string(),
+            content_hits: std::collections::HashMap::new(),
+            is_searching: false,
+            search_request_id: 0,
         }));
 
     let (tx, mut rx) = drained_channel();
@@ -1265,14 +1220,35 @@ async fn session_browser_confirm_dispatches_resume_command() {
 }
 
 #[tokio::test]
-async fn queue_input_of_plain_text_still_queues() {
-    let mut state = app_state_with_session();
-    state.ui.input.textarea.set_text("write a haiku");
+async fn session_browser_typing_requests_transcript_content_search() {
+    let mut state = AppState::new();
     state
         .ui
-        .input
-        .textarea
-        .set_cursor(state.ui.input.text().len());
+        .show_modal(ModalState::SessionBrowser(SessionBrowserState {
+            sessions: Vec::new(),
+            filter: String::new(),
+            selected: 0,
+            current_cwd: "/repo".to_string(),
+            content_hits: std::collections::HashMap::new(),
+            is_searching: false,
+            search_request_id: 0,
+        }));
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::SurfaceFilter('x'), &tx).await;
+
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UserCommand::SearchSessions { query, request_id })
+            if query == "x" && request_id > 0
+    ));
+}
+
+#[tokio::test]
+async fn queue_input_of_plain_text_still_queues() {
+    let mut state = app_state_with_session();
+    state.ui.input.textarea_mut().set_text("write a haiku");
+    state.ui.input.set_cursor_to_end();
 
     let (tx, mut rx) = drained_channel();
     handle_command(&mut state, TuiCommand::QueueInput, &tx).await;
@@ -1296,6 +1272,102 @@ async fn queue_input_of_plain_text_still_queues() {
 }
 
 #[tokio::test]
+async fn image_only_input_can_be_submitted_and_queued() {
+    let mut submitted = app_state_with_session();
+    submitted
+        .ui
+        .input
+        .insert_image_attachment(vec![1, 2, 3], "image/png".into())
+        .unwrap();
+    let (submit_tx, mut submit_rx) = drained_channel();
+    handle_command(&mut submitted, TuiCommand::SubmitInput, &submit_tx).await;
+    match next_user_command(&mut submit_rx) {
+        Ok(UserCommand::SubmitInput {
+            content, images, ..
+        }) => {
+            assert!(content.is_empty());
+            assert_eq!(images.len(), 1);
+            assert_eq!(images[0].insertion_offset, 0);
+            assert_eq!(images[0].bytes.as_ref(), [1, 2, 3]);
+        }
+        other => panic!("expected image-only SubmitInput, got {other:?}"),
+    }
+
+    let mut queued = app_state_with_session();
+    queued
+        .ui
+        .input
+        .insert_image_attachment(vec![4, 5], "image/jpeg".into())
+        .unwrap();
+    let (queue_tx, mut queue_rx) = drained_channel();
+    handle_command(&mut queued, TuiCommand::QueueInput, &queue_tx).await;
+    match queue_rx.try_recv() {
+        Ok(UserCommand::QueueCommand { prompt, images, .. }) => {
+            assert!(prompt.is_empty());
+            assert_eq!(images.len(), 1);
+            assert_eq!(images[0].insertion_offset, 0);
+            assert_eq!(images[0].bytes.as_ref(), [4, 5]);
+        }
+        other => panic!("expected image-only QueueCommand, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn typed_file_ref_ranges_survive_submit_and_queue_commands() {
+    use coco_tui_ui::widgets::ElementDisplay;
+    use coco_tui_ui::widgets::ElementKind;
+    use ratatui::style::Style;
+
+    fn state_with_file_ref() -> AppState {
+        let mut state = app_state_with_session();
+        state.ui.input.textarea_mut().insert_str("你 ");
+        state
+            .ui
+            .input
+            .textarea_mut()
+            .insert_element(
+                "@src/main.rs",
+                ElementKind::FileRef,
+                ElementDisplay::new("@src/main.rs", Style::new().underlined()),
+            )
+            .unwrap();
+        state
+    }
+
+    let mut submitted = state_with_file_ref();
+    let (submit_tx, mut submit_rx) = drained_channel();
+    handle_command(&mut submitted, TuiCommand::SubmitInput, &submit_tx).await;
+    match next_user_command(&mut submit_rx) {
+        Ok(UserCommand::SubmitInput {
+            content, composer, ..
+        }) => {
+            assert_eq!(content, "你 @src/main.rs");
+            assert_eq!(
+                composer.elements,
+                vec![coco_types::SubmittedComposerElement::FileRef { start: 4, end: 16 }]
+            );
+        }
+        other => panic!("expected typed SubmitInput, got {other:?}"),
+    }
+
+    let mut queued = state_with_file_ref();
+    let (queue_tx, mut queue_rx) = drained_channel();
+    handle_command(&mut queued, TuiCommand::QueueInput, &queue_tx).await;
+    match queue_rx.try_recv() {
+        Ok(UserCommand::QueueCommand {
+            prompt, composer, ..
+        }) => {
+            assert_eq!(prompt, "你 @src/main.rs");
+            assert_eq!(
+                composer.elements,
+                vec![coco_types::SubmittedComposerElement::FileRef { start: 4, end: 16 }]
+            );
+        }
+        other => panic!("expected typed QueueCommand, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn submit_input_while_streaming_without_interruptible_tool_queues() {
     let mut state = app_state_with_session();
     state.ui.streaming = Some(crate::state::StreamingState::default());
@@ -1304,12 +1376,8 @@ async fn submit_input_while_streaming_without_interruptible_tool_queues() {
         .ui
         .ephemeral
         .start_turn("Working", std::time::Instant::now());
-    state.ui.input.textarea.set_text("next turn prompt");
-    state
-        .ui
-        .input
-        .textarea
-        .set_cursor(state.ui.input.text().len());
+    state.ui.input.textarea_mut().set_text("next turn prompt");
+    state.ui.input.set_cursor_to_end();
 
     let (tx, mut rx) = drained_channel();
     handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
@@ -1337,12 +1405,8 @@ async fn submit_input_while_streaming_with_interruptible_tool_queues_then_interr
         .ephemeral
         .start_turn("Working", std::time::Instant::now());
     state.session.has_submit_interruptible_tool_in_progress = true;
-    state.ui.input.textarea.set_text("follow-up prompt");
-    state
-        .ui
-        .input
-        .textarea
-        .set_cursor(state.ui.input.text().len());
+    state.ui.input.textarea_mut().set_text("follow-up prompt");
+    state.ui.input.set_cursor_to_end();
 
     let (tx, mut rx) = drained_channel();
     handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
@@ -1376,12 +1440,10 @@ async fn up_on_empty_input_requests_edit_for_queued_commands() {
     handle_command(&mut state, TuiCommand::CursorUp, &tx).await;
 
     match rx.try_recv() {
-        Ok(UserCommand::EditQueuedCommands {
-            current_input,
-            current_cursor,
-        }) => {
-            assert_eq!(current_input, "");
-            assert_eq!(current_cursor, 0);
+        Ok(UserCommand::EditQueuedCommands) => {
+            let pending = state.ui.pending_queued_edit.as_ref().unwrap();
+            assert_eq!(pending.text(), "");
+            assert_eq!(pending.cursor(), 0);
         }
         other => panic!("expected EditQueuedCommands on the wire, got {other:?}"),
     }
@@ -1508,8 +1570,8 @@ async fn busy_ctrl_c_interrupts_without_exit_hint() {
 async fn busy_escape_interrupts_without_clearing_input() {
     let mut state = AppState::new();
     state.session.set_busy(true);
-    state.ui.input.textarea.set_text("draft");
-    state.ui.input.textarea.set_cursor(5);
+    state.ui.input.textarea_mut().set_text("draft");
+    state.ui.input.textarea_mut().set_cursor(5);
     let (tx, mut rx) = drained_channel();
 
     handle_command(&mut state, TuiCommand::Cancel, &tx).await;
@@ -1524,8 +1586,8 @@ async fn busy_escape_interrupts_without_clearing_input() {
 #[tokio::test]
 async fn escape_with_editable_queue_requests_batch_edit() {
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("draft");
-    state.ui.input.textarea.set_cursor(2);
+    state.ui.input.textarea_mut().set_text("draft");
+    state.ui.input.textarea_mut().set_cursor(2);
     state
         .session
         .queued_commands
@@ -1539,12 +1601,10 @@ async fn escape_with_editable_queue_requests_batch_edit() {
     handle_command(&mut state, TuiCommand::Cancel, &tx).await;
 
     match rx.try_recv() {
-        Ok(UserCommand::EditQueuedCommands {
-            current_input,
-            current_cursor,
-        }) => {
-            assert_eq!(current_input, "draft");
-            assert_eq!(current_cursor, 2);
+        Ok(UserCommand::EditQueuedCommands) => {
+            let pending = state.ui.pending_queued_edit.as_ref().unwrap();
+            assert_eq!(pending.text(), "draft");
+            assert_eq!(pending.cursor(), 2);
         }
         other => panic!("expected EditQueuedCommands on Esc, got {other:?}"),
     }
@@ -1578,8 +1638,8 @@ async fn up_on_lower_line_moves_cursor_instead_of_recalling_history() {
     let mut state = AppState::new();
     state.ui.input.add_to_history("prior".to_string());
     // Multi-line draft with the cursor parked on the second line.
-    state.ui.input.textarea.set_text("line1\nline2");
-    state.ui.input.textarea.set_cursor(8); // inside "line2"
+    state.ui.input.textarea_mut().set_text("line1\nline2");
+    state.ui.input.textarea_mut().set_cursor(8); // inside "line2"
     let (tx, _rx) = drained_channel();
 
     handle_command(&mut state, TuiCommand::CursorUp, &tx).await;
@@ -1621,6 +1681,47 @@ async fn ctrl_r_reverse_search_previews_match_and_accepts() {
 }
 
 #[tokio::test]
+async fn ctrl_r_accept_restores_complete_typed_composer_snapshot() {
+    use base64::Engine as _;
+
+    let mut state = AppState::new();
+    state.ui.input.history.push(
+        crate::state::HistoryEntry::persisted(
+            coco_types::PersistedComposer {
+                text: "inspect [Image #1] @src/lib.rs".into(),
+                next_attachment_label: 1,
+                elements: vec![
+                    coco_types::PersistedComposerElement::Image {
+                        start: 8,
+                        end: 18,
+                        media_type: "image/png".into(),
+                        data_base64: base64::engine::general_purpose::STANDARD.encode([7, 8]),
+                    },
+                    coco_types::PersistedComposerElement::FileRef { start: 19, end: 30 },
+                ],
+            },
+            1,
+        )
+        .unwrap(),
+    );
+    let (tx, _rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::HistorySearchStart, &tx).await;
+    handle_command(&mut state, TuiCommand::HistorySearchAccept, &tx).await;
+
+    let resolved = state.ui.input.resolve().unwrap();
+    assert_eq!(resolved.text, "inspect  @src/lib.rs");
+    assert_eq!(resolved.images[0].bytes.as_ref(), [7, 8]);
+    assert!(matches!(
+        resolved.submitted.elements.as_slice(),
+        [
+            coco_types::SubmittedComposerElement::Image { .. },
+            coco_types::SubmittedComposerElement::FileRef { start: 9, end: 20 }
+        ]
+    ));
+}
+
+#[tokio::test]
 async fn plain_up_opens_bottom_anchored_history_browse_then_typing_reanchors() {
     let mut state = AppState::new();
     state.ui.input.add_to_history("oldest command".to_string());
@@ -1645,7 +1746,7 @@ async fn history_browse_down_from_newest_restores_live_draft() {
     let mut state = AppState::new();
     state.ui.input.add_to_history("oldest command".to_string());
     state.ui.input.add_to_history("newest command".to_string());
-    state.ui.input.textarea.set_text("unfinished draft");
+    state.ui.input.textarea_mut().set_text("unfinished draft");
     let (tx, _rx) = drained_channel();
 
     handle_command(&mut state, TuiCommand::CursorUp, &tx).await;
@@ -1660,7 +1761,7 @@ async fn history_browse_down_from_newest_restores_live_draft() {
 async fn ctrl_r_reverse_search_cancel_restores_draft() {
     let mut state = AppState::new();
     state.ui.input.add_to_history("git status".to_string());
-    state.ui.input.textarea.set_text("draft text");
+    state.ui.input.textarea_mut().set_text("draft text");
     let (tx, _rx) = drained_channel();
 
     handle_command(&mut state, TuiCommand::HistorySearchStart, &tx).await;
@@ -2062,8 +2163,8 @@ async fn ctrl_c_with_text_clears_input_and_saves_to_history() {
     // so the user can recover it with Up. Per `update/exit.rs::on_interrupt`,
     // the exit hint is still pre-armed so a second Ctrl+C exits.
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("draft text");
-    state.ui.input.textarea.set_cursor(10);
+    state.ui.input.textarea_mut().set_text("draft text");
+    state.ui.input.textarea_mut().set_cursor(10);
     let (tx, _rx) = drained_channel();
 
     handle_command(&mut state, TuiCommand::Interrupt, &tx).await;
@@ -2075,7 +2176,7 @@ async fn ctrl_c_with_text_clears_input_and_saves_to_history() {
             .input
             .history
             .iter()
-            .any(|h| h.text == "draft text"),
+            .any(|h| h.text() == "draft text"),
         "draft must be in history",
     );
     // Tracker armed so the next Ctrl+C goes through the Quit path.
@@ -2102,7 +2203,7 @@ async fn ctrl_c_idle_empty_arms_exit_then_quits() {
 async fn esc_with_text_first_press_shows_toast() {
     // When input is non-empty, single Esc shows a toast and arms the double-press.
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("draft");
+    state.ui.input.textarea_mut().set_text("draft");
     let (tx, _rx) = drained_channel();
 
     handle_command(&mut state, TuiCommand::Cancel, &tx).await;
@@ -2122,14 +2223,14 @@ async fn esc_with_text_first_press_shows_toast() {
 async fn esc_double_press_clears_input_and_records_history() {
     // Double-press Esc within the window clears input + records history.
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("draft");
+    state.ui.input.textarea_mut().set_text("draft");
     let (tx, _rx) = drained_channel();
 
     handle_command(&mut state, TuiCommand::Cancel, &tx).await;
     handle_command(&mut state, TuiCommand::Cancel, &tx).await;
 
     assert!(state.ui.input.is_empty(), "double-Esc clears input");
-    assert!(state.ui.input.history.iter().any(|h| h.text == "draft"));
+    assert!(state.ui.input.history.iter().any(|h| h.text() == "draft"));
 }
 
 #[tokio::test]
@@ -2138,28 +2239,59 @@ async fn history_recall_rehydrates_paste_pills() {
     // its paste payload on Up-arrow recall — otherwise the recalled pill is
     // a dangling token that resolves to literal text at submit.
     let mut state = AppState::new();
+    state.ui.input.textarea_mut().insert_str("see ");
     let pill = state
         .ui
-        .paste_manager
-        .add_text("the huge payload".to_string());
-    state.ui.input.textarea.set_text(&format!("see {pill}"));
+        .input
+        .insert_text_attachment("the huge payload".to_string())
+        .unwrap();
     let (tx, _rx) = drained_channel();
 
     handle_command(&mut state, TuiCommand::Cancel, &tx).await;
     handle_command(&mut state, TuiCommand::Cancel, &tx).await;
     assert!(state.ui.input.is_empty(), "double-Esc clears input");
     assert!(
-        state.ui.paste_manager.entries().is_empty(),
+        state.ui.input.attachments_empty(),
         "cleared draft must not leave stale paste entries on the manager",
     );
 
     handle_command(&mut state, TuiCommand::CursorUp, &tx).await;
     assert_eq!(state.ui.input.text(), format!("see {pill}"));
-    let resolved = state
-        .ui
-        .paste_manager
-        .resolve_structured(state.ui.input.text());
+    let resolved = state.ui.input.resolve().unwrap();
     assert_eq!(resolved.text, "see the huge payload");
+}
+
+#[tokio::test]
+async fn history_recall_rehydrates_atomic_file_refs() {
+    use coco_tui_ui::widgets::ElementDisplay;
+    use coco_tui_ui::widgets::ElementKind;
+    use ratatui::style::Style;
+
+    let mut state = AppState::new();
+    assert!(
+        state
+            .ui
+            .input
+            .textarea_mut()
+            .insert_element(
+                "@src/main.rs",
+                ElementKind::FileRef,
+                ElementDisplay::new("@src/main.rs", Style::new().underlined()),
+            )
+            .is_ok()
+    );
+    let (tx, _rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::Cancel, &tx).await;
+    handle_command(&mut state, TuiCommand::Cancel, &tx).await;
+    handle_command(&mut state, TuiCommand::CursorUp, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "@src/main.rs");
+    assert_eq!(state.ui.input.textarea().elements().len(), 1);
+    assert_eq!(
+        state.ui.input.textarea().elements()[0].kind(),
+        ElementKind::FileRef
+    );
 }
 
 #[tokio::test]
@@ -2278,13 +2410,13 @@ async fn ctrl_e_moves_cursor_to_end_not_external_editor() {
     // the legacy global cascade, shadowing readline's end-of-line. The
     // user now expects Ctrl+E → CursorEnd via `map_input_key`.
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("hello");
-    state.ui.input.textarea.set_cursor(0);
+    state.ui.input.textarea_mut().set_text("hello");
+    state.ui.input.textarea_mut().set_cursor(0);
     let (tx, _rx) = drained_channel();
 
     handle_command(&mut state, TuiCommand::CursorEnd, &tx).await;
 
-    assert_eq!(state.ui.input.textarea.cursor(), 5);
+    assert_eq!(state.ui.input.textarea().cursor(), 5);
 }
 
 #[tokio::test]
@@ -2535,6 +2667,7 @@ async fn open_plan_editor_in_exit_plan_prompt_sends_prompt_editor_command() {
                 plan: Some("# Plan".into()),
                 edited_plan: None,
                 feedback_input: crate::state::PrefixInputState::new(String::new()),
+                feedback_images: Vec::new(),
                 plan_file_path: Some("/tmp/plan.md".into()),
                 allowed_prompts: vec![],
             },
@@ -2589,6 +2722,7 @@ async fn exit_plan_no_feedback_editing_does_not_touch_composer() {
                 plan: Some("# Plan".into()),
                 edited_plan: None,
                 feedback_input: crate::state::PrefixInputState::new(String::new()),
+                feedback_images: Vec::new(),
                 plan_file_path: Some("/tmp/plan.md".into()),
                 allowed_prompts: vec![],
             },
@@ -2642,13 +2776,13 @@ async fn ctrl_a_moves_cursor_to_start_visually_correct_for_cjk() {
     // render-layer test (snapshot) covers the column-0 visual; here we
     // just confirm the state-level position.
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("你好世界");
-    state.ui.input.textarea.set_cursor(12); // end (4 chars × 3 bytes)
+    state.ui.input.textarea_mut().set_text("你好世界");
+    state.ui.input.textarea_mut().set_cursor(12); // end (4 chars × 3 bytes)
     let (tx, _rx) = drained_channel();
 
     handle_command(&mut state, TuiCommand::CursorHome, &tx).await;
 
-    assert_eq!(state.ui.input.textarea.cursor(), 0);
+    assert_eq!(state.ui.input.textarea().cursor(), 0);
 }
 
 fn toggle_test_prompt(request_id: &str) -> crate::state::PermissionPromptState {

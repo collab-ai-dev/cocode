@@ -282,9 +282,13 @@ fn apply_auto_restore(
         crate::transcript::cells::CellKind::UserText { text } => text.clone(),
         _ => String::new(),
     };
-    let perm = match cell.source.as_ref() {
-        coco_messages::Message::User(u) => u.permission_mode,
-        _ => None,
+    let (perm, mut images, submitted) = match cell.source.as_ref() {
+        coco_messages::Message::User(user) => (
+            user.permission_mode,
+            crate::composer::images_from_user_message(user),
+            crate::composer::submitted_composer_for_restored_text(user, &input_text),
+        ),
+        _ => (None, Vec::new(), None),
     };
     // Phase 3d (§5): the renderer reads from `transcript.cells()`
     // directly. The engine emits `MessageTruncated` after our follow-up
@@ -301,14 +305,32 @@ fn apply_auto_restore(
     if let Some(mode) = perm {
         state.session.permission_mode = mode;
     }
-    if !input_text.is_empty() {
-        state.ui.input.textarea.set_text(&input_text);
-        let eol = state.ui.input.textarea.end_of_current_line();
-        state.ui.input.textarea.set_cursor(eol);
+    for image in &mut images {
+        let valid = usize::try_from(image.insertion_offset)
+            .ok()
+            .is_some_and(|offset| {
+                offset <= input_text.len() && input_text.is_char_boundary(offset)
+            });
+        if !valid {
+            image.insertion_offset = i64::try_from(input_text.len()).unwrap_or(i64::MAX);
+        }
+    }
+    if !input_text.is_empty() || !images.is_empty() {
+        let restored = match submitted {
+            Some(submitted) => {
+                crate::composer::ComposerSnapshot::from_submitted(input_text, images, submitted)
+            }
+            None => crate::composer::ComposerSnapshot::from_queued_edit(input_text, images, 0),
+        };
+        match restored {
+            Ok(composer) => state.ui.input.restore_composer(composer),
+            Err(error) => state.ui.add_toast(Toast::warning(format!(
+                "Could not restore interrupted composer attachments: {error}"
+            ))),
+        }
     }
     state.session.conversation_id = Some(uuid::Uuid::new_v4().to_string());
     state.session.prompt_suggestions.clear();
-    state.ui.paste_manager.clear();
     state.ui.scroll_offset = 0;
     state.ui.user_scrolled = false;
     // Direct dispatch (no `pending_*` round-trip). `try_send` rather

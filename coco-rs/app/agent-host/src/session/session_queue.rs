@@ -17,14 +17,17 @@ pub struct QueuedCommandForEdit {
     pub id: String,
     pub prompt: String,
     pub images: Vec<coco_types::QueuedCommandEditImage>,
+    pub composer: coco_types::SubmittedComposer,
+    pub original: QueuedCommand,
 }
 
 pub struct QueuedCommandsForEdit {
     pub ids: Vec<String>,
     pub prompt: String,
-    pub cursor: usize,
     pub images: Vec<coco_types::QueuedCommandEditImage>,
+    pub composer: coco_types::SubmittedComposer,
     pub remaining_queued: usize,
+    pub originals: Vec<QueuedCommand>,
 }
 
 pub struct DequeuedPromptBatch {
@@ -54,11 +57,12 @@ pub async fn enqueue_human_prompt(
     session: &SessionHandle,
     prompt: String,
     images: Vec<QueuedImage>,
+    composer: coco_types::SubmittedComposer,
 ) -> Option<EnqueuedCommand> {
-    if prompt.trim().is_empty() {
+    if prompt.trim().is_empty() && images.is_empty() {
         return None;
     }
-    let queued = human_queued_command(prompt, images);
+    let queued = human_queued_command(prompt, images, composer);
     let result = EnqueuedCommand {
         id: queued.id,
         preview: queued.preview(),
@@ -68,10 +72,15 @@ pub async fn enqueue_human_prompt(
     Some(result)
 }
 
-pub fn human_queued_command(prompt: String, images: Vec<QueuedImage>) -> QueuedCommand {
+pub fn human_queued_command(
+    prompt: String,
+    images: Vec<QueuedImage>,
+    composer: coco_types::SubmittedComposer,
+) -> QueuedCommand {
     QueuedCommand::new(prompt, QueuePriority::Next)
         .with_origin(QueueOrigin::Human)
         .with_images(images)
+        .with_editable_composer(composer)
 }
 
 pub fn coordinator_queued_command(content: String) -> QueuedCommand {
@@ -173,68 +182,84 @@ pub async fn remove_queued_command_for_edit(
         .ok_or(QueuedCommandEditError::AlreadyProcessed)?;
     Ok(QueuedCommandForEdit {
         id: queued.id.to_string(),
-        prompt: queued.prompt,
-        images: queued_images_to_wire(queued.images),
+        prompt: queued.prompt.clone(),
+        images: queued_images_to_wire(queued.images.clone()),
+        composer: queued.editable_composer.clone(),
+        original: queued,
     })
 }
 
 pub async fn dequeue_editable_commands_for_edit(
     session: &SessionHandle,
-    current_input: &str,
-    current_cursor: usize,
 ) -> Result<QueuedCommandsForEdit, QueuedCommandEditError> {
     let queued = session.command_queue().dequeue_all_editable().await;
     if queued.is_empty() {
         return Err(QueuedCommandEditError::NoEditableCommands);
     }
-    Ok(queued_commands_for_edit(
-        queued,
-        current_input,
-        current_cursor,
-        session.command_queue().len().await,
-    ))
+    let remaining_queued = session.command_queue().len().await;
+    let mut response = queued_commands_for_edit(&queued, remaining_queued);
+    response.originals = queued;
+    Ok(response)
 }
 
 fn queued_commands_for_edit(
-    queued: Vec<QueuedCommand>,
-    current_input: &str,
-    current_cursor: usize,
+    queued: &[QueuedCommand],
     remaining_queued: usize,
 ) -> QueuedCommandsForEdit {
     let ids: Vec<String> = queued.iter().map(|cmd| cmd.id.to_string()).collect();
     let mut queued_text = String::new();
-    for cmd in &queued {
+    let mut images = Vec::new();
+    let mut composer = coco_types::SubmittedComposer::default();
+    for cmd in queued {
         if !queued_text.is_empty() {
             queued_text.push('\n');
         }
+        let base = i64::try_from(queued_text.len()).unwrap_or(i64::MAX);
+        let image_base = i64::try_from(images.len()).unwrap_or(i64::MAX);
         queued_text.push_str(&cmd.prompt);
+        images.extend(cmd.images.iter().cloned().map(|mut image| {
+            image.insertion_offset = image.insertion_offset.checked_add(base).unwrap_or(i64::MAX);
+            image
+        }));
+        composer.next_attachment_label = composer
+            .next_attachment_label
+            .max(cmd.editable_composer.next_attachment_label);
+        composer
+            .elements
+            .extend(
+                cmd.editable_composer
+                    .elements
+                    .iter()
+                    .cloned()
+                    .map(|mut element| {
+                        match &mut element {
+                            coco_types::SubmittedComposerElement::Paste { start, end, .. }
+                            | coco_types::SubmittedComposerElement::FileRef { start, end } => {
+                                *start = start.checked_add(base).unwrap_or(i64::MAX);
+                                *end = end.checked_add(base).unwrap_or(i64::MAX);
+                            }
+                            coco_types::SubmittedComposerElement::Image {
+                                insertion_offset,
+                                image_index,
+                                ..
+                            } => {
+                                *insertion_offset =
+                                    insertion_offset.checked_add(base).unwrap_or(i64::MAX);
+                                *image_index =
+                                    image_index.checked_add(image_base).unwrap_or(i64::MAX);
+                            }
+                        }
+                        element
+                    }),
+            );
     }
-    let mut prompt = queued_text.clone();
-    if !current_input.is_empty() {
-        if !prompt.is_empty() {
-            prompt.push('\n');
-        }
-        prompt.push_str(current_input);
-    }
-    let cursor = if queued_text.is_empty() {
-        current_cursor
-    } else {
-        queued_text
-            .len()
-            .saturating_add(1)
-            .saturating_add(current_cursor)
-    };
-    let images = queued
-        .into_iter()
-        .flat_map(|cmd| cmd.images)
-        .collect::<Vec<_>>();
-
     QueuedCommandsForEdit {
         ids,
-        prompt,
-        cursor,
+        prompt: queued_text,
         images: queued_images_to_wire(images),
+        composer,
         remaining_queued,
+        originals: Vec::new(),
     }
 }
 
@@ -244,6 +269,7 @@ fn queued_images_to_wire(images: Vec<QueuedImage>) -> Vec<coco_types::QueuedComm
         .map(|image| coco_types::QueuedCommandEditImage {
             media_type: image.media_type,
             data_base64: image.data_base64,
+            insertion_offset: image.insertion_offset,
         })
         .collect()
 }

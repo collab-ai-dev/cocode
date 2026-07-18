@@ -123,6 +123,12 @@ pub enum UserCommand {
     /// bridge resolves the concrete plan-file path from the current
     /// session id and runtime config before launching the editor.
     OpenPlanEditor,
+    /// Search persisted transcript content for the active session-picker query.
+    SearchSessions {
+        query: String,
+        /// UI-issued identity for this exact picker query generation.
+        request_id: u64,
+    },
     /// Open the active ExitPlanMode prompt's plan in an external editor.
     /// The CLI bridge reads the edited content back and returns it to
     /// the same permission prompt instead of the chat composer.
@@ -166,17 +172,16 @@ pub enum UserCommand {
         /// Original input text (with pills intact) for display in chat history.
         display_text: Option<String>,
         /// Image data from pasted images (clipboard or drag-drop).
-        images: Vec<coco_tui_ui::paste::ImageData>,
+        images: Vec<crate::composer::ImageData>,
+        /// Lossless atomic composer shape relative to `content`.
+        composer: coco_types::SubmittedComposer,
     },
     /// Persist a submitted prompt to the cross-session composer history
     /// (`<config_home>/history.jsonl`). Emitted by the composer alongside
     /// the in-memory `add_to_history` so up-arrow recall survives restarts;
     /// the driver writes it off-thread via `coco_session::PromptHistory`.
-    /// `display` carries any mode prefix (`!` / `/`) so recall returns to
-    /// the same mode.
     PersistPromptHistory {
-        display: String,
-        pasted_contents: std::collections::HashMap<i32, String>,
+        composer: coco_types::PersistedComposer,
     },
     /// Interrupt current operation (Ctrl+C).
     Interrupt(coco_types::TurnAbortReason),
@@ -336,7 +341,7 @@ pub enum UserCommand {
         name: crate::state::SlashCommandName,
         args: String,
         /// Images referenced by paste pills in the slash arguments.
-        images: Vec<coco_tui_ui::paste::ImageData>,
+        images: Vec<crate::composer::ImageData>,
     },
     /// Queue a command for mid-turn injection.
     /// Sent by [`crate::update::QueueInput`] when the user presses
@@ -349,17 +354,17 @@ pub enum UserCommand {
     QueueCommand {
         session_id: coco_types::SessionId,
         prompt: String,
-        images: Vec<coco_tui_ui::paste::ImageData>,
+        images: Vec<crate::composer::ImageData>,
+        composer: coco_types::SubmittedComposer,
     },
     /// Remove a queued command from the engine queue and return it to
     /// the composer for editing.
     EditQueuedCommand { id: String },
     /// Remove all user-editable queued commands from the engine queue
     /// and combine them with the current composer draft.
-    EditQueuedCommands {
-        current_input: String,
-        current_cursor: usize,
-    },
+    EditQueuedCommands,
+    /// Commit or roll back queue entries leased by an edit response.
+    ResolveQueuedCommandEdits { ids: Vec<String>, accept: bool },
     /// Background all foreground tasks. Sent by the live single-press
     /// Ctrl+B path (`TuiCommand::BackgroundAllTasks` in update.rs).
     BackgroundAllTasks,

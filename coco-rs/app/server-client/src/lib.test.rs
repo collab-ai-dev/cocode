@@ -1450,6 +1450,7 @@ async fn remote_session_handle_forwards_query_interrupt_and_close() {
                 prompt: "hello".to_string(),
                 history_override: Vec::new(),
                 images: Vec::new(),
+                composer: Default::default(),
                 slash_metadata: None,
                 model_selection: None,
                 permission_mode: None,

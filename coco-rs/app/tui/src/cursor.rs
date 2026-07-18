@@ -130,9 +130,7 @@ fn compute_input_xy(state: &AppState, area: Rect) -> (u16, u16) {
 
     // Cursor row, offset by the same scroll the renderer uses so the two agree.
     let content_rows = area.height.saturating_sub(2).max(1) as usize;
-    let total_rows = crate::widgets::composer_rows(&model.display_text, area.width)
-        .len()
-        .max(1);
+    let total_rows = model.rows.len().max(1);
     let scroll = crate::widgets::scroll_offset(model.cursor_row, total_rows, content_rows);
     let row_on_screen = model.cursor_row.saturating_sub(scroll) as u16;
 

@@ -10,8 +10,10 @@
 //!
 //! Flow (Unix):
 //!
-//! 1. [`crate::terminal::leave_tui_modes`] — turn off raw mode, leave any
-//!    state alt-screen, and disable bracketed paste / focus change reporting.
+//! 1. [`crate::terminal::Tui::trigger_suspend`] leaves any state alt-screen
+//!    and drains the terminal-writer barrier, then
+//!    [`crate::terminal::leave_tui_modes`] turns off raw mode and disables
+//!    bracketed paste / focus change reporting.
 //! 2. Show the cursor on a fresh normal-buffer row so the shell sees its
 //!    prompt.
 //! 3. Record the pending resume flag for the next draw.
@@ -70,8 +72,9 @@ impl SuspendContext {
     pub fn suspend(&self) -> io::Result<()> {
         let mut stdout = io::stdout();
 
-        // 1. Disable our private terminal modes so the shell can read
-        //    user input normally (otherwise keystrokes wouldn't echo).
+        // 1. The owning Tui drained its frame writer before entering this
+        //    method. Disable private modes so the shell can read user input
+        //    normally (otherwise keystrokes wouldn't echo).
         crate::terminal::leave_tui_modes()?;
 
         // 2. Show the cursor on a fresh row in the normal buffer. This

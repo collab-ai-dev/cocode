@@ -4,7 +4,10 @@
 //! into `Line`s and a `CursorClaim` and drives this engine to paint them.
 
 pub mod compatibility;
+pub mod frame_backend;
+pub mod frame_writer;
 pub mod history_insert;
+pub mod history_links;
 pub mod history_reflow;
 pub mod restore_seq;
 pub mod seat;

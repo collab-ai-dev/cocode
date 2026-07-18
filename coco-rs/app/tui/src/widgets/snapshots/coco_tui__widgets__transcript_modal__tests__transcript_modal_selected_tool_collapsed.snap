@@ -1,6 +1,5 @@
 ---
 source: app/tui/src/widgets/transcript_modal.test.rs
-assertion_line: 99
 expression: "render_to_text(&app_state, &transcript, 60, 16)"
 ---
 ┌ Transcript ──────────────────────────────────────────────┐
@@ -17,5 +16,5 @@ expression: "render_to_text(&app_state, &transcript, 60, 16)"
 │                                                          │
 │                                                          │
 │ctrl+o toggle · ↑/↓ scroll · PgUp/PgDn page · Home/End jum│
-│Tab select · Enter expand/collapse · Esc/q quit           │
+│Tab select · Enter fold · / search · n/N · Esc/q quit     │
 └──────────────────────────────────────────────────────────┘

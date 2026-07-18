@@ -222,6 +222,18 @@ pub(crate) fn render_modal_surface(
             ),
             area,
         );
+        if transcript.search.editing && area.width > 4 && area.height > 4 {
+            let query_width = text_width(&transcript.search.query).min(usize::from(u16::MAX));
+            let query_width = u16::try_from(query_width).unwrap_or(u16::MAX);
+            layout.modal_text_cursor = Some(Position {
+                x: area
+                    .x
+                    .saturating_add(3)
+                    .saturating_add(query_width)
+                    .min(area.right().saturating_sub(2)),
+                y: area.bottom().saturating_sub(2),
+            });
+        }
         return;
     }
 
