@@ -288,6 +288,29 @@ fn status_bar_surfaces_manual_mode_and_cycle_hint_in_default_state() {
 }
 
 #[test]
+fn status_bar_marks_sidechat_and_shows_return_key_with_inherited_mode() {
+    let _locale = locale_test_guard("en");
+    let mut state = AppState::default();
+    let parent_id = test_session_id("parent");
+    let child_id = test_session_id("child");
+    state.session.session_id = Some(parent_id.as_str().to_string());
+    state.session.permission_mode = coco_types::PermissionMode::Auto;
+    assert!(state.enter_side_chat(parent_id, child_id));
+
+    let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
+        panic!("expected built-in status bar");
+    };
+    let text = lines
+        .iter()
+        .flatten()
+        .map(|span| span.text.as_str())
+        .collect::<String>();
+    assert!(text.contains("ctrl+c ↩ main"));
+    assert!(text.contains("▸▸ auto mode on"));
+    assert!(!text.contains("to cycle"));
+}
+
+#[test]
 fn status_bar_view_renders_lsp_badge() {
     let _locale = locale_test_guard("en");
     let mut state = AppState::default();
@@ -491,6 +514,32 @@ fn custom_status_line_replaces_built_in_segments() {
     };
 
     assert_eq!(line, "custom");
+}
+
+#[test]
+fn custom_status_line_keeps_sidechat_return_affordance() {
+    let _locale = locale_test_guard("en");
+    let mut state = AppState::default();
+    let parent_id = test_session_id("parent");
+    let child_id = test_session_id("child");
+    state.session.session_id = Some(parent_id.as_str().to_string());
+    assert!(state.enter_side_chat(parent_id, child_id));
+    state.ui.display_settings.status_line = Some(coco_config::StatusLineSettings::Command(
+        coco_config::StatusLineCommandSettings {
+            command: "printf custom".to_string(),
+            padding: 1,
+        },
+    ));
+    state.ui.status_line.apply_update(StatusLineUpdate {
+        generation: 0,
+        output: Some("custom".to_string()),
+    });
+
+    let StatusBarView::Custom { line } = status_bar_view(&state) else {
+        panic!("expected custom status bar");
+    };
+
+    assert_eq!(line, " ctrl+c ↩ main | custom");
 }
 
 #[test]

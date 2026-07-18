@@ -1,14 +1,20 @@
 ---
 name: test-tui
-description: Guide for testing Codex TUI interactively
+description: Guide for testing the COCODE TUI interactively
 ---
 
-You can start and use Codex TUI to verify changes. 
+You can start and use the COCODE TUI to verify changes.
 
 Important notes:
 
-Start interactively.
-Always set RUST_LOG="trace" when starting the process.
-Pass `-c log_dir=<some_temp_dir>` argument to have logs written to a specific directory to help with debugging.
-When sending a test message programmatically, send text first, then send Enter in a separate write (do not send text + Enter in one burst).
-Use `just codex` target to run - `just codex -c ...`
+- Run from the `coco-rs/` workspace directory.
+- Start the process interactively with a PTY.
+- Always set `RUST_LOG="trace"` when starting the process.
+- Pass `--log-file <absolute_temp_dir>/coco.log` so logs are isolated and easy
+  to inspect. In COCODE, `-c` means `--continue-session`; it is not a config
+  override flag. The daily rotating sink writes a date-suffixed file such as
+  `coco.log.2026-07-18`.
+- Use the repository's `just coco` recipe, for example:
+  `RUST_LOG="trace" just coco --log-file /tmp/cocode-tui-test/coco.log`.
+- When sending a test message programmatically, send the text first, then send
+  Enter in a separate write. Do not send text and Enter in one burst.

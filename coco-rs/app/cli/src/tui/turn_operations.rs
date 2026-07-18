@@ -445,16 +445,8 @@ pub(super) async fn run_side_chat(
 ) {
     // `/btw --close` closes the sidechat and returns to the primary view.
     if request.is_close() {
-        let parent_id = session.session_id().clone();
         match local_app_server_bridge.close_child().await {
-            Ok(Some(child_id)) => {
-                let _ = event_tx
-                    .send(CoreEvent::Tui(coco_types::TuiOnlyEvent::SideChatExited {
-                        parent_id,
-                        child_id,
-                    }))
-                    .await;
-            }
+            Ok(Some(_)) => {}
             Ok(None) => {
                 emit_slash_text(event_tx, "btw", "--close", "No sidechat is open.").await;
             }
@@ -523,12 +515,6 @@ pub(super) async fn run_side_chat(
     };
     if let Err(error) = local_app_server_bridge.start_child_turn(params).await {
         let _ = local_app_server_bridge.close_child().await;
-        let _ = event_tx
-            .send(CoreEvent::Tui(coco_types::TuiOnlyEvent::SideChatExited {
-                parent_id,
-                child_id,
-            }))
-            .await;
         emit_slash_text(
             event_tx,
             "btw",

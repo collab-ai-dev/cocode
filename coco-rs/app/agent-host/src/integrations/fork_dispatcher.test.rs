@@ -177,8 +177,11 @@ fn temp_transcript_store(home: &TempDir) -> Arc<coco_session::TranscriptStore> {
 async fn dispatch_with_parent_history_uses_no_event_message_path() {
     let home = TempDir::new().expect("home tempdir");
     let runtime = build_runtime(&home).await;
-    let dispatcher =
-        SessionRuntimeForkDispatcher::new(SessionHandle::new(runtime, Default::default()));
+    let usage_before = runtime.session_usage_snapshot().await;
+    let dispatcher = SessionRuntimeForkDispatcher::new(SessionHandle::new(
+        Arc::clone(&runtime),
+        Default::default(),
+    ));
     let cache = CacheSafeParams {
         rendered_system_prompt: "test".into(),
         model_id: "mock-model".into(),
@@ -202,6 +205,13 @@ async fn dispatch_with_parent_history_uses_no_event_message_path() {
     let text = coco_messages::wrapping::extract_text_from_message(&result.messages[0]);
     assert!(text.contains("parent turn"));
     assert!(text.contains("fork turn"));
+    let usage_after = runtime.session_usage_snapshot().await;
+    assert_eq!(
+        usage_after.totals, usage_before.totals,
+        "forked inference must not be charged to the interactive session ledger"
+    );
+    assert_eq!(usage_after.source_records, usage_before.source_records);
+    assert_eq!(usage_after.models, usage_before.models);
 }
 
 #[tokio::test]

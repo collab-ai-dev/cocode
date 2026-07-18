@@ -252,6 +252,7 @@ impl SessionRuntimeFactory {
             command_registry,
             skill_manager,
             project_services,
+            parent_usage_accounting,
         } = seed;
         let opts = self.opts.as_ref();
         let handle = SessionHandle::build(SessionRuntimeBuildOpts {
@@ -284,6 +285,9 @@ impl SessionRuntimeFactory {
         .await?;
         handle
             .apply_side_chat_parent_state(engine_config, permissions)
+            .await;
+        handle
+            .install_usage_mirror(parent_usage_accounting, coco_types::UsageSource::SideQuery)
             .await;
 
         let mut inherited_messages = context.into_messages();

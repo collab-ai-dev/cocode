@@ -31,3 +31,19 @@ fn header_shows_pid_badge_when_set() {
     let row1 = line_text(&view.info_lines[0]);
     assert!(row1.contains("pid 4242"), "row1 = {row1:?}");
 }
+
+#[test]
+fn header_marks_sidechat_without_losing_parent_model() {
+    let theme = Theme::default();
+    let mut state = AppState::new();
+    let parent_id = coco_types::SessionId::try_new("parent").unwrap();
+    let child_id = coco_types::SessionId::try_new("child").unwrap();
+    state.session.session_id = Some(parent_id.as_str().to_string());
+    state.session.provider = "openai".into();
+    state.session.model = "gpt-5.4".into();
+    assert!(state.enter_side_chat(parent_id, child_id));
+
+    let view = header_bar_view(&state, UiStyles::new(&theme), 80);
+    assert!(line_text(&view.info_lines[0]).contains("SIDECHAT"));
+    assert_eq!(line_text(&view.info_lines[1]), "openai/gpt-5.4  *  auto");
+}

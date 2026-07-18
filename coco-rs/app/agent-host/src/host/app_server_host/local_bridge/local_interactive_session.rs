@@ -35,7 +35,19 @@ impl AppServerLocalBridge {
     }
 
     pub fn child_interactive_session(&self) -> Option<&crate::local_client::LocalSessionClient> {
-        self.child_interactive_surface.as_ref()
+        self.child_interactive_surface.as_ref().filter(|surface| {
+            // The lifecycle pump may observe an autonomous child close before
+            // the next mutable bridge call gets a chance to clear the cached
+            // handle. Keep reporting the child until its terminal exit event
+            // has actually been queued; after that, registry membership is the
+            // authority boundary and a terminal surface is never exposed as a
+            // live sidechat.
+            self.app_server.has_session_slot(surface.session_id())
+                || self
+                    .child_event_pump
+                    .as_ref()
+                    .is_some_and(|pump| !pump.is_finished())
+        })
     }
 
     async fn attach_child_interactive_session(
@@ -76,6 +88,7 @@ impl AppServerLocalBridge {
             .attach_surface(child_id.clone(), AttachSurfaceOptions::default())
             .map_err(crate::local_client::client_error_from_attach)?;
         let surface_id = surface.surface_id;
+        let app_server = Arc::clone(&self.app_server);
         self.child_event_pump = Some(tokio::spawn(async move {
             while let Some(inbound) = connection.recv().await {
                 match inbound {
@@ -98,6 +111,15 @@ impl AppServerLocalBridge {
                                 if session_id == &child_id
                         );
                         if child_ended {
+                            if let Some(parent) = app_server.registry().get(&parent_id) {
+                                let usage = parent.runtime().session_usage_snapshot().await;
+                                let event = CoreEvent::Protocol(
+                                    ServerNotification::SessionUsageUpdated(Box::new(usage)),
+                                );
+                                if let Some(event) = scope_surface_event(parent_id.clone(), event) {
+                                    let _ = event_tx.send(event).await;
+                                }
+                            }
                             let _ = event_tx
                                 .send(CoreEvent::Tui(TuiOnlyEvent::SideChatExited {
                                     parent_id: parent_id.clone(),
@@ -145,6 +167,11 @@ impl AppServerLocalBridge {
         parent_id: SessionId,
         event_tx: Option<mpsc::Sender<CoreEvent>>,
     ) -> Result<AppServerLocalSessionBinding, ClientError> {
+        if self.child_interactive_session().is_some() {
+            return Err(ClientError::InvalidArgument(
+                "a sidechat child is already active".into(),
+            ));
+        }
         let replacement = self
             .handler
             .state
@@ -233,19 +260,30 @@ impl AppServerLocalBridge {
     /// Close the sidechat child without leaving stale bridge authority.
     /// Handles remain installed if close fails before the registry commits;
     /// once the slot is terminally removed they are cleared even when runtime
-    /// teardown reported an error. The detached pump consumes the terminal
-    /// lifecycle effect and then exits by itself.
+    /// teardown reported an error. Once removal commits, this waits for the
+    /// lifecycle pump to publish the parent usage snapshot and exit event so
+    /// callers cannot race a second, weaker transition into the TUI.
     pub async fn close_child(&mut self) -> Result<Option<SessionId>, ClientError> {
         let Some(surface) = self.child_interactive_surface.as_ref() else {
             return Ok(None);
         };
         let child_id = surface.session_id().clone();
         let close_result = self.close_registered_child(child_id.clone()).await;
+        let mut terminal_pump = None;
         if !self.app_server.has_session_slot(&child_id) {
-            // Dropping a JoinHandle detaches rather than aborts. The pump must
-            // remain alive long enough to forward SessionEnded to the TUI.
-            self.child_event_pump.take();
+            terminal_pump = self.child_event_pump.take();
             self.child_interactive_surface = None;
+        }
+        if let Some(pump) = terminal_pump {
+            match tokio::time::timeout(self.handler.turn_drain_timeout, pump).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, %child_id, "sidechat lifecycle pump join failed");
+                }
+                Err(_) => {
+                    tracing::warn!(%child_id, "timed out waiting for sidechat lifecycle event");
+                }
+            }
         }
         close_result?;
         Ok(Some(child_id))

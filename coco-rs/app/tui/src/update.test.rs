@@ -1412,6 +1412,43 @@ async fn idle_ctrl_c_closes_sidechat_instead_of_arming_process_exit() {
 }
 
 #[tokio::test]
+async fn sidechat_rejects_session_level_controls() {
+    use coco_types::PermissionMode;
+    use coco_types::ReasoningEffort;
+
+    let mut state = AppState::new();
+    let parent = coco_types::SessionId::try_new("parent").unwrap();
+    let child = coco_types::SessionId::try_new("child").unwrap();
+    state.session.session_id = Some(parent.as_str().to_string());
+    state.session.model = "frozen-model".into();
+    state.session.permission_mode = PermissionMode::Auto;
+    state.session.thinking_effort = ReasoningEffort::High;
+    state.session.fast_mode = true;
+    assert!(state.enter_side_chat(parent, child));
+    let (tx, mut rx) = drained_channel();
+
+    for command in [
+        TuiCommand::TogglePlanMode,
+        TuiCommand::CyclePermissionMode,
+        TuiCommand::CycleThinkingLevel,
+        TuiCommand::CycleModel,
+        TuiCommand::ToggleFastMode,
+    ] {
+        handle_command(&mut state, command, &tx).await;
+    }
+
+    assert_eq!(state.session.model, "frozen-model");
+    assert_eq!(state.session.permission_mode, PermissionMode::Auto);
+    assert_eq!(state.session.thinking_effort, ReasoningEffort::High);
+    assert!(state.session.fast_mode);
+    assert!(!state.ui.has_active_surface());
+    assert!(
+        rx.try_recv().is_err(),
+        "frozen sidechat controls must not reach the parent runtime"
+    );
+}
+
+#[tokio::test]
 async fn busy_ctrl_c_interrupts_without_exit_hint() {
     let mut state = AppState::new();
     state.session.set_busy(true);

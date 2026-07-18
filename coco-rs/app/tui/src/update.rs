@@ -261,6 +261,24 @@ pub async fn handle_command(
         }
     }
 
+    // A sidechat is a point-in-time projection of its parent configuration.
+    // Session-level controls belong to the primary session and must not mutate
+    // either the frozen child projection or the hidden parent while the child
+    // is active. UI-only presentation controls (for example ToggleThinking)
+    // remain available.
+    if state.is_viewing_side_chat()
+        && matches!(
+            &cmd,
+            TuiCommand::TogglePlanMode
+                | TuiCommand::CyclePermissionMode
+                | TuiCommand::CycleThinkingLevel
+                | TuiCommand::CycleModel
+                | TuiCommand::ToggleFastMode
+        )
+    {
+        return false;
+    }
+
     let changed = match cmd {
         TuiCommand::Noop => false,
         // ── Mode toggles ──

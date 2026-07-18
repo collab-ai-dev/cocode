@@ -789,35 +789,25 @@ pub(super) async fn run_agent_driver(
                     .await;
             }
 
-            UserCommand::CloseSideChat => {
-                let parent_id = current_session.read().await.session_id().clone();
-                match local_app_server_bridge.close_child().await {
-                    Ok(Some(child_id)) => {
-                        let _ = event_tx
-                            .send(CoreEvent::Tui(TuiOnlyEvent::SideChatExited {
-                                parent_id,
-                                child_id,
-                            }))
-                            .await;
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        tracing::warn!(%error, "Ctrl+C sidechat close failed");
-                        if local_app_server_bridge
-                            .child_interactive_session()
-                            .is_some()
-                        {
-                            emit_slash_text(
-                                &event_tx,
-                                "btw",
-                                "--close",
-                                &format!("Couldn't close the sidechat: {error}"),
-                            )
-                            .await;
-                        }
+            UserCommand::CloseSideChat => match local_app_server_bridge.close_child().await {
+                Ok(Some(_)) => {}
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "Ctrl+C sidechat close failed");
+                    if local_app_server_bridge
+                        .child_interactive_session()
+                        .is_some()
+                    {
+                        emit_slash_text(
+                            &event_tx,
+                            "btw",
+                            "--close",
+                            &format!("Couldn't close the sidechat: {error}"),
+                        )
+                        .await;
                     }
                 }
-            }
+            },
 
             UserCommand::Interrupt(_reason) => {
                 if local_app_server_bridge

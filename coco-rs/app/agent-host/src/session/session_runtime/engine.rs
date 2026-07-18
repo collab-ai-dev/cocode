@@ -632,20 +632,25 @@ impl SessionRuntime {
         if let Some(bridge) = self.turn_resources.permission_bridge() {
             engine = engine.with_permission_bridge(bridge);
         }
+        // Usage accounting is a runtime concern, not a transcript-persistence
+        // concern. Ephemeral main-session profiles such as sidechat still need
+        // their own live totals (and may mirror those totals into a parent),
+        // while fork engines must remain excluded from the runtime ledger.
+        if persistence == EnginePersistenceMode::MainSession {
+            engine = engine.with_usage_accounting(self.turn_resources.usage_accounting());
+        }
+
         // Main-session transcript persistence. Same `TranscriptStore`
-        // instance feeds both the per-turn user / assistant JSONL
-        // append in `engine_finalize_turn::record_transcript_tail`
-        // and the metadata writes already wired there. The dedup set
-        // lives on `SessionRuntime` so a fresh per-turn engine doesn't
-        // re-write history each time; writes are keyed by session id and
-        // skip already-persisted uuids.
+        // instance feeds the per-turn user / assistant JSONL append in
+        // `engine_finalize_turn::record_transcript_tail`. The dedup set lives
+        // on `SessionRuntime` so a fresh per-turn engine doesn't re-write
+        // history each time; writes are keyed by session id.
         if persistence == EnginePersistenceMode::MainSession && self.persistence.persist_session() {
             let transcript_session_id = self.current_typed_session_id().await;
             engine = engine.with_transcript_store(
                 Arc::clone(self.persistence.transcript_store()),
                 transcript_session_id,
             );
-            engine = engine.with_usage_accounting(self.turn_resources.usage_accounting());
             engine = engine
                 .with_transcript_dedup(self.engine_state_resources.transcript_dedup().clone());
             engine = engine.with_tool_result_replacement_state(
