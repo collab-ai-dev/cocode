@@ -122,13 +122,6 @@ impl SessionRuntime {
         // Late-bind the session id so user-typed skill slash commands can
         // substitute `${CLAUDE_SESSION_ID}`.
         registry.set_session_id(self.current_typed_session_id().await);
-        // Capture this engine's cache-safe-params handle so a between-turns
-        // `/btw` fork can read the parent turn's `CacheSafeParams` even though
-        // the engine is rebuilt per turn. The handle is an `Arc` shared with
-        // the engine's slot - it keeps observing writes the engine makes at
-        // turn finalize and outlives the engine drop.
-        *self.handle_resources.last_engine_cache_handle.write().await =
-            Some(engine.cache_safe_params_handle());
         engine
     }
 
@@ -369,7 +362,8 @@ impl SessionRuntime {
             self.execution.tools().clone(),
             cancel,
             Some(self.hook_resources.registry()),
-        );
+        )
+        .with_hook_execution_policy(self.execution_profile().hook_policy());
         let mut engine = self
             .wire_engine(engine, app_state_override, persistence)
             .await;

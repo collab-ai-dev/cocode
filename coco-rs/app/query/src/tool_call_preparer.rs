@@ -67,6 +67,7 @@ pub(crate) struct PendingToolPreparation<'a> {
     pub tools: &'a ToolRegistry,
     pub tool_materialization: &'a coco_tool_runtime::ToolMaterialization,
     pub hooks: Option<&'a Arc<HookRegistry>>,
+    pub hook_execution_policy: coco_hooks::HookExecutionPolicy,
     pub orchestration_ctx: OrchestrationContext,
     pub hook_tx_opt: Option<&'a mpsc::Sender<HookExecutionEvent>>,
     pub permission_denials: &'a mut Vec<PermissionDenialInfo>,
@@ -206,7 +207,8 @@ pub(crate) async fn prepare_one_pending_tool_call(
         return None;
     }
     let hook_controller =
-        HookController::new(args.hooks, args.orchestration_ctx.clone(), args.hook_tx_opt);
+        HookController::new(args.hooks, args.orchestration_ctx.clone(), args.hook_tx_opt)
+            .with_policy(args.hook_execution_policy);
     let pre_tool_outcome = hook_controller
         .run_pre_tool_use(
             args.event_tx,
@@ -270,6 +272,8 @@ pub(crate) async fn prepare_one_pending_tool_call(
         args.session_id,
         args.cancel,
         args.hooks,
+        args.hook_execution_policy
+            .allows(coco_types::HookEventType::PermissionRequest),
         Some(&args.orchestration_ctx),
         args.ctx
             .cwd_override
@@ -406,9 +410,15 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
         .clone()
         .or_else(|| denial_tracker.cloned());
 
-    if let Some(gate) =
-        resolve_can_use_tool_decision(tool_call, effective_input, ctx, hook_permission_behavior)
-            .await
+    let resolved_tool_id = tool.id();
+    if let Some(gate) = resolve_can_use_tool_decision(
+        &resolved_tool_id,
+        tool_call,
+        effective_input,
+        ctx,
+        hook_permission_behavior,
+    )
+    .await
     {
         match gate {
             CanUseToolResolution::Decision(decision) => {
@@ -587,6 +597,7 @@ enum CanUseToolResolution {
 }
 
 async fn resolve_can_use_tool_decision(
+    tool_id: &coco_types::ToolId,
     tool_call: &ToolCallPart,
     effective_input: &Value,
     ctx: &ToolUseContext,
@@ -610,7 +621,7 @@ async fn resolve_can_use_tool_decision(
         messages: ctx.messages.clone(),
     };
     match handle
-        .check(&tool_call.tool_name, effective_input, &cb_ctx)
+        .check(tool_id, &tool_call.tool_name, effective_input, &cb_ctx)
         .await
     {
         CanUseToolDecision::Deny {
@@ -911,6 +922,7 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
                     context_management: None,
                     query_source: None,
                     agent_id: None,
+                    cache_scope: None,
                     time_since_last_assistant_ms: None,
                     // Auto-mode classifier helper call — not the agent loop.
                     agentic: false,

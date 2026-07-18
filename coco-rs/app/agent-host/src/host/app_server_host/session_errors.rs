@@ -207,6 +207,10 @@ pub(crate) fn registry_lifecycle_error_parts(
             LifecycleErrorKind::InvalidRequest,
             serde_json::json!({ "kind": "destination_session_occupied", "session_id": session_id }),
         ),
+        RegistryError::ChildExists { session_id, .. } => (
+            LifecycleErrorKind::InvalidRequest,
+            serde_json::json!({ "kind": "child_sidechat_exists", "session_id": session_id }),
+        ),
         RegistryError::SlotConflict {
             session_id,
             expected,

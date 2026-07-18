@@ -54,14 +54,19 @@ pub(super) async fn handle_turn_start_shortcut(
     prompt: &str,
     ctx: &HandlerContext,
 ) -> TurnStartShortcut {
+    let trimmed = prompt.trim_start();
+    if trimmed == "/btw" || trimmed.starts_with("/btw ") {
+        return TurnStartShortcut::Complete(HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "/btw is available only through the local interactive TUI".to_string(),
+            data: Some(serde_json::json!({ "kind": "local_only_sidechat" })),
+        });
+    }
     if let Some(rename) = coco_commands::parse_rename_sentinel(prompt) {
         return TurnStartShortcut::Complete(handle_turn_start_rename_shortcut(rename, ctx).await);
     }
     if let Some(shortcut) = SessionMemoryRefresh::parse_turn_start_sentinel(prompt) {
         return TurnStartShortcut::Complete(handle_turn_start_memory_shortcut(shortcut, ctx).await);
-    }
-    if let Some(request) = coco_commands::handlers::btw::parse_btw_sentinel(prompt) {
-        return TurnStartShortcut::Complete(handle_turn_start_btw_shortcut(request, ctx).await);
     }
     if let Some(request) = coco_commands::handlers::compact::parse_compact_sentinel(prompt) {
         return TurnStartShortcut::Complete(handle_turn_start_compact_shortcut(request, ctx).await);
@@ -200,37 +205,6 @@ async fn handle_turn_start_memory_shortcut(
     }
 
     emit_shortcut_turn_lifecycle(&shortcut_turn, &ctx.notif_tx, None).await;
-    HandlerResult::ok(coco_types::TurnStartResult {
-        turn_id: shortcut_turn.turn_id,
-    })
-}
-
-async fn handle_turn_start_btw_shortcut(
-    request: coco_commands::handlers::btw::BtwRequest,
-    ctx: &HandlerContext,
-) -> HandlerResult {
-    let shortcut_turn = match mint_shortcut_turn(ctx).await {
-        Ok(shortcut_turn) => shortcut_turn,
-        Err(error) => return error,
-    };
-
-    let response_text = crate::side_question::run_side_question_for_session(
-        ctx.resolve_runtime().await,
-        &request.question,
-    )
-    .await;
-
-    let messages = crate::session_messages::append_slash_text_to_history(
-        &shortcut_turn.session,
-        "btw",
-        &request.question,
-        &response_text,
-        /*is_sensitive*/ false,
-    )
-    .await;
-    send_appended_messages(&ctx.notif_tx, shortcut_turn.session_id.clone(), messages).await;
-    emit_shortcut_turn_lifecycle(&shortcut_turn, &ctx.notif_tx, Some(response_text)).await;
-
     HandlerResult::ok(coco_types::TurnStartResult {
         turn_id: shortcut_turn.turn_id,
     })

@@ -216,7 +216,10 @@ pub async fn install_session_integrations(
     .await;
     // Own the goal cold edges (§10.3): resume-auto-start, waiting-wake, and
     // restart reconciliation. Session-owned task; idles until a goal exists.
-    crate::session::goal_driver::spawn(session.clone());
+    // A sidechat has no goals, so it never spawns the driver.
+    if session.execution_profile().runs_goals() {
+        crate::session::goal_driver::spawn(session.clone());
+    }
     crate::leader_inbox_poller::install_leader(session, options.leader_permission_bridge).await;
     Ok(())
 }
@@ -442,9 +445,8 @@ pub(crate) fn resolve_skill_load_gates_with_add_dirs(
 /// Install the post-`SessionRuntime::build` late-binds shared by local and
 /// remote entrypoints. Without this adapters must independently remember to
 /// attach `task_runtime`, `agent_transcript_store`, the agent-team
-/// wiring, and the fork dispatcher — TUI used to forget all four,
-/// causing background AgentTool, transcript resume, and `/btw` to
-/// silently degrade to no-ops.
+/// wiring, and the fork dispatcher — adapters must not install divergent
+/// runtime capability sets.
 ///
 /// `mcp_handle` is optional because some adapters do not bootstrap an
 /// `McpConnectionManager`. Passing `Some(handle)` preserves the original
@@ -509,8 +511,12 @@ pub async fn install_session_late_binds(
         )
         .with_notification_sink(sink),
     );
-    task_runtime.start_memory_pressure_shell_reaper(session.shutdown_child_token());
-    session.attach_task_runtime(task_runtime).await;
+    // A sidechat owns no background task runtime: no memory-pressure reaper and
+    // no attachment (the read-only tool boundary already denies the Task tool).
+    if session.execution_profile().runs_scheduled_tasks() {
+        task_runtime.start_memory_pressure_shell_reaper(session.shutdown_child_token());
+        session.attach_task_runtime(task_runtime).await;
+    }
     let task_list_id = coco_tasks::resolve_task_list_id(None, None, task_session_id.as_str());
     let task_list_root = coco_config::global_config::config_home().join("tasks");
     let task_list_router =
@@ -569,9 +575,12 @@ pub async fn install_session_late_binds(
     )
     .await?;
 
-    // Post-turn fork dispatcher (`/btw`, `promptSuggestion`) and hook-agent
-    // runner install through the session handle boundary.
-    crate::fork_dispatcher::install(session.clone()).await;
+    // Prompt-suggestion / compaction fork dispatcher and hook-agent runner
+    // install through the session handle boundary. A sidechat runs no
+    // background fork features, so it does not install the dispatcher.
+    if session.execution_profile().runs_prompt_suggestion() {
+        crate::fork_dispatcher::install(session.clone()).await;
+    }
     crate::hook_agent_runner::install(session).await;
 
     // In-prompt skill / slash-command shell routing is wired at the

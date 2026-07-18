@@ -52,6 +52,11 @@ pub struct AppServerLocalBridge {
     event_pump: Option<JoinHandle<()>>,
     event_pump_session_id: Option<SessionId>,
     interactive_surface: Option<LocalSessionClient>,
+    // At most one ephemeral sidechat child coexists with the primary session
+    // (I-2), so a single extra pair of slots suffices — no map needed. The
+    // primary fields above are never disturbed by child lifecycle.
+    child_interactive_surface: Option<LocalSessionClient>,
+    child_event_pump: Option<JoinHandle<()>>,
     channel_capacity: usize,
 }
 
@@ -115,7 +120,11 @@ impl AppServerLocalBridge {
             "local AppServer bridge event retention must be non-zero"
         );
         let app_server = Arc::new(AppServer::<AppSessionHandle>::new_with_surface_limits(
-            /*max_sessions*/ 1,
+            // Capacity guard: the primary session plus at most one ephemeral
+            // sidechat child (I-2). Correctness is enforced by the registry's
+            // parent→child index, not this number.
+            /*max_sessions*/
+            2,
             event_retention_per_session,
             surface_limits,
         ));
@@ -146,6 +155,8 @@ impl AppServerLocalBridge {
             event_pump: None,
             event_pump_session_id: None,
             interactive_surface: None,
+            child_interactive_surface: None,
+            child_event_pump: None,
             channel_capacity,
         }
     }

@@ -54,6 +54,7 @@ pub mod reminder_adapters;
 pub mod sdk_types;
 pub mod session_start_hooks;
 mod session_state;
+pub mod side_chat_tool_gate;
 pub mod single_turn;
 pub mod skill_runtime;
 pub mod test_support;

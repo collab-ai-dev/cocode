@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use super::*;
-use coco_session::SessionKind;
+use coco_session::ProcessSessionKind;
 use coco_session::SessionRegistry;
 use coco_tasks::job_store::now_ms;
 use pretty_assertions::assert_eq;
@@ -19,7 +19,7 @@ fn job(session_id: &str, status: TaskStatus) -> JobState {
         id: format!("job-{session_id}"),
         session_id: test_session_id(session_id),
         cwd: std::path::PathBuf::from("/work"),
-        kind: SessionKind::DaemonWorker,
+        kind: ProcessSessionKind::DaemonWorker,
         created_at: now,
         updated_at: now,
         status,

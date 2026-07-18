@@ -93,6 +93,7 @@ pub(super) fn handle(
     command_tx: &tokio::sync::mpsc::Sender<crate::command::UserCommand>,
 ) -> bool {
     match event {
+        TuiOnlyEvent::SessionScoped { .. } => false,
         TuiOnlyEvent::ApprovalRequired {
             request_id,
             tool_name,
@@ -672,6 +673,19 @@ pub(super) fn handle(
             state.ui.add_toast(Toast::info(text));
             true
         }
+        TuiOnlyEvent::SideChatEntered {
+            parent_id,
+            child_id,
+        } => {
+            // Swap the active view to a fresh sidechat child transcript,
+            // stashing the primary view so the child's turns render in
+            // isolation (restored on `SideChatExited`).
+            state.enter_side_chat(parent_id, child_id)
+        }
+        TuiOnlyEvent::SideChatExited {
+            parent_id,
+            child_id,
+        } => state.exit_side_chat(&parent_id, &child_id),
         // /copy [N] — branch into either direct clipboard write or the
         // CopyPicker modal based on `copy_full_response` + presence of
         // code blocks.

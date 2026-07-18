@@ -925,9 +925,8 @@ async fn test_cache_safe_params_fallback_builds_before_first_turn() {
 #[tokio::test]
 async fn test_cache_safe_params_populated_after_turn() {
     // After a successful turn the slot is populated with the
-    // model_id + post-turn history. Future post-turn fork features
-    // (`/btw`, `promptSuggestion`, `postTurnSummary`) read this for
-    // cache-key parity with the parent's last request.
+    // model_id + post-turn history. Engine-owned fork features read this for
+    // cache-key parity with the current request.
     let model = Arc::new(TextMock {
         text: "Hello!".into(),
     });
@@ -959,36 +958,6 @@ async fn test_cache_safe_params_populated_after_turn() {
     assert!(
         !slot.fork_context_messages.is_empty(),
         "fork_context_messages must mirror the post-turn history"
-    );
-}
-
-#[tokio::test]
-async fn test_cache_safe_params_handle_observes_writer_side() {
-    // `cache_safe_params_handle()` returns a clone of the Arc so an
-    // out-of-band observer (TUI status, transcript recorder) can
-    // poll the slot without contending with the engine writer.
-    let model = Arc::new(TextMock {
-        text: "Hello!".into(),
-    });
-    let client = crate::test_support::model_runtime_registry(model);
-    let tools = Arc::new(ToolRegistry::new());
-    let cancel = CancellationToken::new();
-    let engine = QueryEngine::new(
-        QueryEngineConfig::default(),
-        coco_types::SessionId::try_new("test-session").unwrap(),
-        client,
-        tools,
-        cancel,
-        None,
-    );
-
-    let handle = engine.cache_safe_params_handle();
-    assert!(handle.read().await.is_none());
-
-    engine.run("hi").await.expect("turn must complete");
-    assert!(
-        handle.read().await.is_some(),
-        "observer handle must see the updated slot"
     );
 }
 

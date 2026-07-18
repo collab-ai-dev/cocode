@@ -26,5 +26,4 @@ pub(crate) mod session_resume;
 pub mod session_runtime;
 pub mod session_slash;
 pub(crate) mod session_start;
-pub(crate) mod side_question;
 pub mod task_runtime;

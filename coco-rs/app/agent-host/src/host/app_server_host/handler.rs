@@ -46,6 +46,22 @@ pub struct AppServerHostHandler {
     require_initialize: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RequestOrigin {
+    Local,
+    Remote,
+}
+
+fn targeted_session_id(request: &ClientRequest) -> Option<&coco_types::SessionId> {
+    if let ClientRequest::SessionClose(params) = request {
+        return Some(params.target.session_id());
+    }
+    request
+        .interactive_target()
+        .map(|target| &target.session_id)
+        .or_else(|| request.session_target().map(|target| &target.session_id))
+}
+
 impl AppServerHostHandler {
     pub async fn set_turn_runner(&self, runner: Arc<dyn super::TurnRunner>) {
         self.state.install_turn_runner(runner).await;
@@ -106,12 +122,33 @@ impl AppServerHostHandler {
         &self,
         connection: coco_app_server::ConnectionKey,
         request: ClientRequest,
+        origin: RequestOrigin,
     ) -> JsonRpcRequestFuture {
         let connection_profile = match self.profile_for_request(&request) {
             Ok(profile) => profile,
             Err(error) => return Box::pin(async move { Err(error) }),
         };
         let local_app_server = self.local_app_server.clone();
+        if origin == RequestOrigin::Remote
+            && let (Some(app_server), Some(session_id)) =
+                (local_app_server.as_ref(), targeted_session_id(&request))
+            && app_server
+                .registry()
+                .policy(session_id)
+                .is_some_and(|policy| policy.is_internal())
+        {
+            let session_id = session_id.clone();
+            return Box::pin(async move {
+                Err(JsonRpcDispatchError {
+                    code: coco_types::error_codes::INVALID_REQUEST,
+                    message: "session is not available to remote clients".to_string(),
+                    data: Some(serde_json::json!({
+                        "kind": "internal_session",
+                        "session_id": session_id,
+                    })),
+                })
+            });
+        }
         if let (Some(app_server), ClientRequest::SessionSubscribe(params)) =
             (local_app_server.clone(), &request)
         {
@@ -261,7 +298,11 @@ impl JsonRpcRequestHandler for AppServerHostHandler {
         context: JsonRpcRequestContext,
         request: ClientRequest,
     ) -> JsonRpcRequestFuture {
-        self.handle_client_request_for_connection(context.connection, request)
+        self.handle_client_request_for_connection(
+            context.connection,
+            request,
+            RequestOrigin::Remote,
+        )
     }
 }
 
@@ -271,7 +312,11 @@ impl LocalClientRequestHandler for AppServerHostHandler {
         context: LocalClientRequestContext,
         request: ClientRequest,
     ) -> LocalClientRequestFuture {
-        self.handle_client_request_for_connection(context.connection_key(), request)
+        self.handle_client_request_for_connection(
+            context.connection_key(),
+            request,
+            RequestOrigin::Local,
+        )
     }
 }
 

@@ -1496,24 +1496,30 @@ impl ModelRuntime {
         runtime: Arc<std::sync::Mutex<Self>>,
         query_source: &str,
         agent_id: Option<&str>,
+        cache_scope: Option<&str>,
     ) {
         let client = {
             let guard = mutex_lock(&runtime);
             guard.current_client()
         };
-        client.notify_compaction(query_source, agent_id).await;
+        client
+            .notify_compaction(query_source, agent_id, cache_scope)
+            .await;
     }
 
     pub async fn notify_active_cache_deletion(
         runtime: Arc<std::sync::Mutex<Self>>,
         query_source: &str,
         agent_id: Option<&str>,
+        cache_scope: Option<&str>,
     ) {
         let client = {
             let guard = mutex_lock(&runtime);
             guard.current_client()
         };
-        client.notify_cache_deletion(query_source, agent_id).await;
+        client
+            .notify_cache_deletion(query_source, agent_id, cache_scope)
+            .await;
     }
 
     pub async fn cleanup_active_agent(runtime: Arc<std::sync::Mutex<Self>>, agent_id: &str) {
@@ -1869,6 +1875,7 @@ fn recovery_probe_params() -> QueryParams {
         context_management: None,
         query_source: None,
         agent_id: None,
+        cache_scope: None,
         time_since_last_assistant_ms: None,
         cache: None,
         agentic: false,

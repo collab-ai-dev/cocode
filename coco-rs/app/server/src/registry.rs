@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
 use coco_error::ErrorExt;
@@ -8,22 +8,67 @@ use coco_error::stack_trace_debug;
 use coco_types::SessionId;
 use snafu::Snafu;
 
+use crate::registration_policy::{SessionRegistrationPolicy, SessionTopology};
+
 type LoadResult<H> = Option<Result<H, RegistryError>>;
 type CloseResult = Option<Result<(), RegistryError>>;
 
-/// Registry for root session lifecycle slots.
+/// Registry storage guarded by a single lock: the lifecycle slots plus their
+/// immutable registration policies and the parent→child sidechat index. Keeping
+/// all three under one lock lets child reservation and its "one child per
+/// parent" guarantee commit atomically with slot transitions.
+pub(crate) struct RegistryInner<H> {
+    pub(crate) slots: HashMap<SessionId, SessionSlot<H>>,
+    pub(crate) policies: HashMap<SessionId, SessionRegistrationPolicy>,
+    /// parent session id → its single live/loading/closing child.
+    pub(crate) children: HashMap<SessionId, SessionId>,
+    /// Parents whose close/replace transaction has begun. Child admission is
+    /// closed until the parent is removed or a failed replace rolls back.
+    pub(crate) blocked_parents: HashSet<SessionId>,
+}
+
+impl<H> RegistryInner<H> {
+    fn new() -> Self {
+        Self {
+            slots: HashMap::new(),
+            policies: HashMap::new(),
+            children: HashMap::new(),
+            blocked_parents: HashSet::new(),
+        }
+    }
+
+    /// Retire a slot key entirely: drop the slot, its policy, and (if it was a
+    /// child) its parent→child index entry. Returns the removed slot, if any.
+    /// Only for terminal removal — transitions that re-insert the same key
+    /// (`promote`) must keep the policy and index intact.
+    pub(crate) fn forget(&mut self, session_id: &SessionId) -> Option<SessionSlot<H>> {
+        let removed = self.slots.remove(session_id);
+        self.blocked_parents.remove(session_id);
+        if let Some(policy) = self.policies.remove(session_id)
+            && let SessionTopology::Child { parent } = &policy.topology
+            && self.children.get(parent) == Some(session_id)
+        {
+            self.children.remove(parent);
+        }
+        removed
+    }
+}
+
+/// Registry for session lifecycle slots (root plus at most one sidechat child
+/// per parent).
 ///
-/// The registry owns only slot state and completion signals. Runtime
-/// construction, close cascade, and owner-task spawning are wired by AppServer.
+/// The registry owns only slot state, registration policy, the parent→child
+/// index, and completion signals. Runtime construction, close cascade, and
+/// owner-task spawning are wired by AppServer.
 pub struct LiveSessionRegistry<H> {
-    pub(crate) sessions: RwLock<HashMap<SessionId, SessionSlot<H>>>,
+    pub(crate) sessions: RwLock<RegistryInner<H>>,
     max_sessions: usize,
 }
 
 impl<H: Clone> LiveSessionRegistry<H> {
     pub fn new(max_sessions: usize) -> Self {
         Self {
-            sessions: RwLock::new(HashMap::new()),
+            sessions: RwLock::new(RegistryInner::new()),
             max_sessions,
         }
     }
@@ -36,6 +81,7 @@ impl<H: Clone> LiveSessionRegistry<H> {
         self.sessions
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .slots
             .len()
     }
 
@@ -43,6 +89,7 @@ impl<H: Clone> LiveSessionRegistry<H> {
         self.sessions
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .slots
             .values()
             .filter(|slot| matches!(slot, SessionSlot::Live(_)))
             .count()
@@ -53,6 +100,7 @@ impl<H: Clone> LiveSessionRegistry<H> {
             .sessions
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .slots
             .get(session_id)
         {
             Some(SessionSlot::Live(handle)) => Some(handle.clone()),
@@ -60,16 +108,52 @@ impl<H: Clone> LiveSessionRegistry<H> {
         }
     }
 
+    /// The registration policy for a slot in any lifecycle state, if present.
+    pub fn policy(&self, session_id: &SessionId) -> Option<SessionRegistrationPolicy> {
+        self.sessions
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .policies
+            .get(session_id)
+            .cloned()
+    }
+
+    /// The child sidechat currently associated with `parent`, if one is
+    /// loading, live, or closing.
+    pub fn child_of(&self, parent: &SessionId) -> Option<SessionId> {
+        self.sessions
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .children
+            .get(parent)
+            .cloned()
+    }
+
+    /// True when public/remote session-data APIs may observe the slot. Absent
+    /// slots and slots whose policy is `Internal` are not public. Slots without
+    /// a recorded policy default to public (legacy root behavior).
+    pub fn is_public(&self, session_id: &SessionId) -> bool {
+        let inner = self
+            .sessions
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.slots.contains_key(session_id)
+            && inner
+                .policies
+                .get(session_id)
+                .is_none_or(|policy| !policy.is_internal())
+    }
+
     pub fn replace_live_handle(
         &self,
         session_id: &SessionId,
         handle: H,
     ) -> Result<H, RegistryError> {
-        let mut sessions = self
+        let mut inner = self
             .sessions
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(slot @ SessionSlot::Live(_)) = sessions.get_mut(session_id) else {
+        let Some(slot @ SessionSlot::Live(_)) = inner.slots.get_mut(session_id) else {
             return SlotConflictSnafu {
                 session_id: session_id.clone(),
                 expected: "Live",
@@ -83,16 +167,26 @@ impl<H: Clone> LiveSessionRegistry<H> {
     }
 
     /// Session ids that must stay announced to process egress: Live plus
-    /// retiring Closing slots. A Closing session's final `SessionResult` may
-    /// still be in flight, so it must remain in Hub membership until its slot is
-    /// removed by the completed close cascade (CS-4 / R17). Loading slots are
-    /// not yet announced.
+    /// retiring Closing slots whose egress is durable. A Closing session's final
+    /// `SessionResult` may still be in flight, so it must remain in Hub
+    /// membership until its slot is removed by the completed close cascade
+    /// (CS-4 / R17). Loading slots are not yet announced. `LocalOnly` slots
+    /// (sidechat children) never announce — their events never reach the Hub.
     pub fn list_announced(&self) -> Vec<SessionId> {
-        self.sessions
+        let inner = self
+            .sessions
             .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner
+            .slots
             .iter()
             .filter(|&(_, slot)| matches!(slot, SessionSlot::Live(_) | SessionSlot::Closing(_)))
+            .filter(|&(id, _)| {
+                inner
+                    .policies
+                    .get(id)
+                    .is_none_or(|policy| !policy.is_local_only())
+            })
             .map(|(session_id, _)| session_id.clone())
             .collect()
     }
@@ -101,27 +195,60 @@ impl<H: Clone> LiveSessionRegistry<H> {
         self.sessions
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .slots
             .iter()
             .filter(|&(_, slot)| matches!(slot, SessionSlot::Live(_)))
             .map(|(session_id, _)| session_id.clone())
             .collect()
     }
 
-    pub fn list_closable(&self) -> Vec<SessionId> {
-        self.sessions
+    /// Live session ids that are publicly visible — the projection behind
+    /// `session/list`. Excludes `Internal` slots (sidechat children) so they
+    /// never appear in a public catalog.
+    pub fn list_public_live(&self) -> Vec<SessionId> {
+        let inner = self
+            .sessions
             .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner
+            .slots
+            .iter()
+            .filter(|&(_, slot)| matches!(slot, SessionSlot::Live(_)))
+            .filter(|&(id, _)| {
+                inner
+                    .policies
+                    .get(id)
+                    .is_none_or(|policy| !policy.is_internal())
+            })
+            .map(|(session_id, _)| session_id.clone())
+            .collect()
+    }
+
+    pub fn list_closable(&self) -> Vec<SessionId> {
+        let inner = self
+            .sessions
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner
+            .slots
             .keys()
+            .filter(|session_id| {
+                inner
+                    .policies
+                    .get(*session_id)
+                    .and_then(SessionRegistrationPolicy::parent)
+                    .is_none_or(|parent| !inner.slots.contains_key(parent))
+            })
             .cloned()
             .collect()
     }
 
     pub fn begin_load(&self, session_id: SessionId) -> Result<LoadStart<H>, RegistryError> {
-        let mut sessions = self
+        let mut inner = self
             .sessions
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        match sessions.get(&session_id) {
+        match inner.slots.get(&session_id) {
             Some(SessionSlot::Loading(load)) => {
                 return Ok(LoadStart::Loading(load.completion()));
             }
@@ -133,11 +260,68 @@ impl<H: Clone> LiveSessionRegistry<H> {
             }
             None => {}
         }
-        if sessions.len() >= self.max_sessions {
+        if inner.slots.len() >= self.max_sessions {
             return ResourceExhaustedSnafu.fail();
         }
 
-        sessions.insert(session_id, SessionSlot::Loading(LoadState::new()));
+        inner
+            .slots
+            .insert(session_id.clone(), SessionSlot::Loading(LoadState::new()));
+        inner
+            .policies
+            .insert(session_id, SessionRegistrationPolicy::root());
+        Ok(LoadStart::Reserved)
+    }
+
+    /// Reserve a `Loading` slot for a sidechat `child` of a live `parent`, under
+    /// one locked transaction. Enforces the "at most one child per parent"
+    /// invariant (I-2) and stamps the child's `Child/Internal/LocalOnly` policy
+    /// and the parent→child index atomically with the slot insert.
+    pub fn begin_child_load(
+        &self,
+        parent: &SessionId,
+        child: SessionId,
+    ) -> Result<LoadStart<H>, RegistryError> {
+        let mut inner = self
+            .sessions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // The parent must be live to own a child.
+        if !matches!(inner.slots.get(parent), Some(SessionSlot::Live(_))) {
+            return OldNotReadySnafu {
+                session_id: parent.clone(),
+            }
+            .fail();
+        }
+        // At most one loading/live/closing child per parent.
+        if inner.blocked_parents.contains(parent) {
+            return OldNotReadySnafu {
+                session_id: parent.clone(),
+            }
+            .fail();
+        }
+        if inner.children.contains_key(parent) {
+            return ChildExistsSnafu {
+                session_id: parent.clone(),
+            }
+            .fail();
+        }
+        // The child id must be unused.
+        if inner.slots.contains_key(&child) {
+            return NewSlotOccupiedSnafu { session_id: child }.fail();
+        }
+        if inner.slots.len() >= self.max_sessions {
+            return ResourceExhaustedSnafu.fail();
+        }
+
+        inner
+            .slots
+            .insert(child.clone(), SessionSlot::Loading(LoadState::new()));
+        inner.policies.insert(
+            child.clone(),
+            SessionRegistrationPolicy::side_chat_child(parent.clone()),
+        );
+        inner.children.insert(parent.clone(), child);
         Ok(LoadStart::Reserved)
     }
 
@@ -146,18 +330,39 @@ impl<H: Clone> LiveSessionRegistry<H> {
         session_id: &SessionId,
         handle: H,
     ) -> Result<(), RegistryError> {
-        let mut sessions = self
+        let mut inner = self
             .sessions
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(SessionSlot::Loading(load)) = sessions.remove(session_id) else {
+        if let Some(parent) = inner
+            .policies
+            .get(session_id)
+            .and_then(SessionRegistrationPolicy::parent)
+            .cloned()
+        {
+            let parent_accepts_child =
+                matches!(inner.slots.get(&parent), Some(SessionSlot::Live(_)))
+                    && !inner.blocked_parents.contains(&parent);
+            let close_was_recorded = matches!(
+                inner.slots.get(session_id),
+                Some(SessionSlot::Loading(LoadState {
+                    close_after_load: Some(_),
+                    ..
+                }))
+            );
+            if !parent_accepts_child && !close_was_recorded {
+                return OldNotReadySnafu { session_id: parent }.fail();
+            }
+        }
+        // Same key is re-inserted by `promote`; policy/index stay intact.
+        let Some(SessionSlot::Loading(load)) = inner.slots.remove(session_id) else {
             return SlotConflictSnafu {
                 session_id: session_id.clone(),
                 expected: "Loading",
             }
             .fail();
         };
-        sessions.insert(session_id.clone(), load.promote(handle));
+        inner.slots.insert(session_id.clone(), load.promote(handle));
         Ok(())
     }
 
@@ -166,16 +371,19 @@ impl<H: Clone> LiveSessionRegistry<H> {
         session_id: &SessionId,
         error: RegistryError,
     ) -> Result<(), RegistryError> {
-        let mut sessions = self
+        let mut inner = self
             .sessions
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(SessionSlot::Loading(load)) = sessions.remove(session_id) else {
+        if !matches!(inner.slots.get(session_id), Some(SessionSlot::Loading(_))) {
             return SlotConflictSnafu {
                 session_id: session_id.clone(),
                 expected: "Loading",
             }
             .fail();
+        }
+        let Some(SessionSlot::Loading(load)) = inner.forget(session_id) else {
+            unreachable!("slot was matched as Loading above");
         };
         let _ = load.sender.send(Some(Err(error)));
         if let Some(close) = load.close_after_load {
@@ -185,46 +393,76 @@ impl<H: Clone> LiveSessionRegistry<H> {
     }
 
     pub fn begin_close(&self, session_id: &SessionId) -> Result<CloseStart<H>, RegistryError> {
-        let mut sessions = self
+        let mut inner = self
             .sessions
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        match sessions.get_mut(session_id) {
-            Some(SessionSlot::Loading(load)) => {
-                let load_completion = load.completion();
-                let should_spawn = load.close_after_load.is_none();
-                let close_completion = load
-                    .close_after_load
-                    .get_or_insert_with(CloseState::new)
-                    .completion();
-                Ok(CloseStart::Loading {
-                    load_completion,
-                    close_completion,
-                    should_spawn,
-                })
-            }
-            Some(SessionSlot::Closing(closing)) => Ok(CloseStart::Closing {
-                handle: closing.handle.clone(),
-                completion: closing.close.completion(),
-            }),
-            Some(SessionSlot::Live(handle)) => {
-                let handle = handle.clone();
-                let close = CloseState::new();
-                let completion = close.completion();
-                sessions.insert(
-                    session_id.clone(),
-                    SessionSlot::Closing(ClosingState {
-                        handle: handle.clone(),
-                        close,
-                    }),
-                );
-                Ok(CloseStart::Started { handle, completion })
-            }
-            None => NotFoundSnafu {
+        begin_close_locked(&mut inner, session_id)
+    }
+
+    /// Atomically close child admission and transition the owned child before
+    /// transitioning `session_id` itself.
+    pub fn begin_close_cascade(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<CloseCascadeStart<H>, RegistryError> {
+        let mut inner = self
+            .sessions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !inner.slots.contains_key(session_id) {
+            return NotFoundSnafu {
                 session_id: session_id.clone(),
             }
-            .fail(),
+            .fail();
         }
+        let child = inner
+            .children
+            .get(session_id)
+            .cloned()
+            .map(|child_id| {
+                begin_close_locked(&mut inner, &child_id).map(|start| (child_id, start))
+            })
+            .transpose()?;
+        let parent = begin_close_locked(&mut inner, session_id)?;
+        inner.blocked_parents.insert(session_id.clone());
+        Ok(CloseCascadeStart { child, parent })
+    }
+
+    pub fn unblock_child_admission(&self, session_id: &SessionId) {
+        self.sessions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .blocked_parents
+            .remove(session_id);
+    }
+
+    /// Block new child admission and transition the current child, if any,
+    /// before a parent replacement that does not reserve a new slot.
+    pub fn begin_parent_transition(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<(SessionId, CloseStart<H>)>, RegistryError> {
+        let mut inner = self
+            .sessions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !matches!(inner.slots.get(session_id), Some(SessionSlot::Live(_))) {
+            return OldNotReadySnafu {
+                session_id: session_id.clone(),
+            }
+            .fail();
+        }
+        let child = inner
+            .children
+            .get(session_id)
+            .cloned()
+            .map(|child_id| {
+                begin_close_locked(&mut inner, &child_id).map(|start| (child_id, start))
+            })
+            .transpose()?;
+        inner.blocked_parents.insert(session_id.clone());
+        Ok(child)
     }
 
     pub fn begin_replace(
@@ -232,30 +470,51 @@ impl<H: Clone> LiveSessionRegistry<H> {
         old_session_id: &SessionId,
         new_session_id: SessionId,
     ) -> Result<ReplaceStart<H>, RegistryError> {
-        let mut sessions = self
+        let mut inner = self
             .sessions
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(SessionSlot::Live(old_handle)) = sessions.get(old_session_id) else {
-            return OldNotReadySnafu {
-                session_id: old_session_id.clone(),
+        let old_handle = match inner.slots.get(old_session_id) {
+            Some(SessionSlot::Live(old_handle)) => old_handle.clone(),
+            _ => {
+                return OldNotReadySnafu {
+                    session_id: old_session_id.clone(),
+                }
+                .fail();
             }
-            .fail();
         };
-        if sessions.contains_key(&new_session_id) {
+        if inner.slots.contains_key(&new_session_id) {
             return NewSlotOccupiedSnafu {
                 session_id: new_session_id,
             }
             .fail();
         }
 
+        let child = inner
+            .children
+            .get(old_session_id)
+            .cloned()
+            .map(|child_id| {
+                begin_close_locked(&mut inner, &child_id).map(|start| (child_id, start))
+            })
+            .transpose()?;
+        inner.blocked_parents.insert(old_session_id.clone());
+
         let new_load = LoadState::new();
         let new_completion = new_load.completion();
-        let old_handle = old_handle.clone();
-        sessions.insert(new_session_id, SessionSlot::Loading(new_load));
+        let inherited = inner
+            .policies
+            .get(old_session_id)
+            .cloned()
+            .unwrap_or_else(SessionRegistrationPolicy::root);
+        inner
+            .slots
+            .insert(new_session_id.clone(), SessionSlot::Loading(new_load));
+        inner.policies.insert(new_session_id, inherited);
         Ok(ReplaceStart::Reserved {
             old_handle,
             new_completion,
+            child,
         })
     }
 
@@ -265,12 +524,12 @@ impl<H: Clone> LiveSessionRegistry<H> {
         new_session_id: &SessionId,
         new_handle: H,
     ) -> Result<ReplaceCommit<H>, RegistryError> {
-        let mut sessions = self
+        let mut inner = self
             .sessions
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Validate both slots before mutating either (no await between).
-        let old_handle = match sessions.get(old_session_id) {
+        let old_handle = match inner.slots.get(old_session_id) {
             Some(SessionSlot::Live(handle)) => handle.clone(),
             _ => {
                 return OldNotReadySnafu {
@@ -279,7 +538,10 @@ impl<H: Clone> LiveSessionRegistry<H> {
                 .fail();
             }
         };
-        if !matches!(sessions.get(new_session_id), Some(SessionSlot::Loading(_))) {
+        if !matches!(
+            inner.slots.get(new_session_id),
+            Some(SessionSlot::Loading(_))
+        ) {
             return SlotConflictSnafu {
                 session_id: new_session_id.clone(),
                 expected: "Loading",
@@ -290,12 +552,15 @@ impl<H: Clone> LiveSessionRegistry<H> {
         let old_close = CloseState::new();
         let old_close_completion = old_close.completion();
         // Consume the new reservation so `promote` can honor a close-after-load
-        // recorded on it instead of a blind `Live` insert.
-        let Some(SessionSlot::Loading(new_load)) = sessions.remove(new_session_id) else {
+        // recorded on it instead of a blind `Live` insert. Same keys are
+        // re-inserted, so policy/index bookkeeping is unchanged.
+        let Some(SessionSlot::Loading(new_load)) = inner.slots.remove(new_session_id) else {
             unreachable!("new slot was matched as Loading above");
         };
-        sessions.insert(new_session_id.clone(), new_load.promote(new_handle));
-        sessions.insert(
+        inner
+            .slots
+            .insert(new_session_id.clone(), new_load.promote(new_handle));
+        inner.slots.insert(
             old_session_id.clone(),
             SessionSlot::Closing(ClosingState {
                 handle: old_handle.clone(),
@@ -310,10 +575,13 @@ impl<H: Clone> LiveSessionRegistry<H> {
 
     pub fn complete_replace_failure(
         &self,
+        old_session_id: &SessionId,
         new_session_id: &SessionId,
         error: RegistryError,
     ) -> Result<(), RegistryError> {
-        self.complete_load_failure(new_session_id, error)
+        self.complete_load_failure(new_session_id, error)?;
+        self.unblock_child_admission(old_session_id);
+        Ok(())
     }
 
     pub fn complete_close(&self, session_id: &SessionId) -> Result<(), RegistryError> {
@@ -325,11 +593,11 @@ impl<H: Clone> LiveSessionRegistry<H> {
         session_id: &SessionId,
         close_result: Result<(), RegistryError>,
     ) -> Result<(), RegistryError> {
-        let mut sessions = self
+        let mut inner = self
             .sessions
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(SessionSlot::Closing(closing)) = sessions.get(session_id) else {
+        let Some(SessionSlot::Closing(closing)) = inner.slots.get(session_id) else {
             return SlotConflictSnafu {
                 session_id: session_id.clone(),
                 expected: "Closing",
@@ -337,8 +605,50 @@ impl<H: Clone> LiveSessionRegistry<H> {
             .fail();
         };
         let _ = closing.close.sender.send(Some(close_result));
-        sessions.remove(session_id);
+        inner.forget(session_id);
         Ok(())
+    }
+}
+
+pub(crate) fn begin_close_locked<H: Clone>(
+    inner: &mut RegistryInner<H>,
+    session_id: &SessionId,
+) -> Result<CloseStart<H>, RegistryError> {
+    match inner.slots.get_mut(session_id) {
+        Some(SessionSlot::Loading(load)) => {
+            let load_completion = load.completion();
+            let should_spawn = load.close_after_load.is_none();
+            let close_completion = load
+                .close_after_load
+                .get_or_insert_with(CloseState::new)
+                .completion();
+            Ok(CloseStart::Loading {
+                load_completion,
+                close_completion,
+                should_spawn,
+            })
+        }
+        Some(SessionSlot::Closing(closing)) => Ok(CloseStart::Closing {
+            handle: closing.handle.clone(),
+            completion: closing.close.completion(),
+        }),
+        Some(SessionSlot::Live(handle)) => {
+            let handle = handle.clone();
+            let close = CloseState::new();
+            let completion = close.completion();
+            inner.slots.insert(
+                session_id.clone(),
+                SessionSlot::Closing(ClosingState {
+                    handle: handle.clone(),
+                    close,
+                }),
+            );
+            Ok(CloseStart::Started { handle, completion })
+        }
+        None => NotFoundSnafu {
+            session_id: session_id.clone(),
+        }
+        .fail(),
     }
 }
 
@@ -433,10 +743,17 @@ pub enum CloseStart<H> {
 }
 
 #[derive(Debug, Clone)]
+pub struct CloseCascadeStart<H> {
+    pub child: Option<(SessionId, CloseStart<H>)>,
+    pub parent: CloseStart<H>,
+}
+
+#[derive(Debug, Clone)]
 pub enum ReplaceStart<H> {
     Reserved {
         old_handle: H,
         new_completion: LoadCompletion<H>,
+        child: Option<(SessionId, CloseStart<H>)>,
     },
 }
 
@@ -523,6 +840,12 @@ pub enum RegistryError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("session {session_id} already has a child sidechat"))]
+    ChildExists {
+        session_id: SessionId,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("session {session_id} was not in expected {expected} slot"))]
     SlotConflict {
         session_id: SessionId,
@@ -585,6 +908,7 @@ impl ErrorExt for RegistryError {
             Self::ResourceExhausted { .. } => StatusCode::ResourcesExhausted,
             Self::OldNotReady { .. } => StatusCode::InvalidArguments,
             Self::NewSlotOccupied { .. } => StatusCode::InvalidArguments,
+            Self::ChildExists { .. } => StatusCode::InvalidArguments,
             Self::SlotConflict { .. } => StatusCode::InvalidArguments,
             Self::LoadFailed { .. } => StatusCode::Internal,
             Self::CloseFailed { .. } => StatusCode::Internal,

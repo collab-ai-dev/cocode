@@ -1,65 +1,40 @@
-//! `/btw <question>` — by-the-way side-channel question.
+//! `/btw <question>` — open a local TUI sidechat.
 //!
-//! Asks a quick side question that shares the parent session's prompt
-//! cache via [`coco_query::forked_agent`]. The fork is tool-less and
-//! one-shot; the parent conversation is never mutated.
-//!
-//! The answer is surfaced as **model-invisible** content so it never
-//! re-enters the LLM's view of the main conversation (the "without
-//! interrupting" contract): the TUI renders it as a transcript-only
-//! slash result, and the SDK appends the same transcript-only slash
-//! messages. Intentional divergence from TS, whose modal is fully
-//! ephemeral — coco has no modal, so the answer stays visible in
-//! scrollback / SDK notifications (and the JSONL) but out of the model's
-//! context.
-//!
-//! ## Sentinel pattern
-//!
-//! Slash-command handlers in this crate are pure `fn(&str) -> String` —
-//! they don't hold a `QueryEngine` reference, so the actual fork has
-//! to happen in the runner. The handler emits:
-//!
-//! ```text
-//! __COCO_BTW_NOW__ <question>
-//! ```
-//!
-//! TUI and SDK surfaces consume it through the AppServer `turn/start` handler
-//! shortcut. TUI submits it over the local bridge; SDK submits it over
-//! JSON-RPC. The shortcut delegates the fork + answer extraction to
-//! `coco_agent_host::side_question`. Headless `-p` mode does not expand registry slash
-//! commands, so it never reaches this handler.
+//! Runtime ownership lives in the TUI's local AppServer bridge. This command
+//! module owns only syntax and the fallback text shown on surfaces that cannot
+//! create local ephemeral child sessions.
 
-/// Sentinel prefix runners recognise on the handler output. Text after
-/// the prefix (until newline) is the user's question.
-pub const BTW_SENTINEL: &str = "__COCO_BTW_NOW__";
-
-/// Parsed `/btw` request extracted from handler output.
+/// Parsed `/btw` request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BtwRequest {
-    /// The user's `/btw <question>` argument, trimmed.
     pub question: String,
 }
 
-/// Parse a [`BTW_SENTINEL`]-prefixed handler output. Returns `None`
-/// when the input does not begin with the sentinel or carries no question.
-#[must_use]
-pub fn parse_btw_sentinel(handler_output: &str) -> Option<BtwRequest> {
-    let first = handler_output.lines().next()?;
-    let question = first.strip_prefix(BTW_SENTINEL)?.trim().to_string();
-    if question.is_empty() {
-        return None;
+impl BtwRequest {
+    pub const USAGE: &'static str = "Usage: /btw <your question> (or /btw --close)";
+
+    pub fn parse(args: &str) -> Result<Self, &'static str> {
+        let question = args.trim();
+        if question.is_empty() {
+            return Err(Self::USAGE);
+        }
+        Ok(Self {
+            question: question.to_string(),
+        })
     }
-    Some(BtwRequest { question })
+
+    pub fn is_close(&self) -> bool {
+        self.question == "--close"
+    }
 }
 
-/// Sync handler — emits the sentinel carrying the question. The runner
-/// picks up the sentinel and drives the actual fork.
+/// Honest fallback for non-TUI command execution. The local TUI intercepts
+/// `/btw` before invoking this handler.
 pub fn handler(args: &str) -> String {
-    let question = args.trim();
-    if question.is_empty() {
-        return "Usage: /btw <your question>".to_string();
+    match BtwRequest::parse(args) {
+        Ok(_) => "/btw is available only in the interactive TUI.".to_string(),
+        Err(usage) => usage.to_string(),
     }
-    format!("{BTW_SENTINEL} {question}")
 }
 
 #[cfg(test)]

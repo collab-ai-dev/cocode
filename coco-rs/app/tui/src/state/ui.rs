@@ -29,6 +29,34 @@ use coco_tui_ui::double_press::DoublePressTracker;
 
 const RECENT_DENIAL_LIMIT: usize = 20;
 
+/// UI state that belongs to one conversation projection rather than to the
+/// process-wide TUI surface. Permission prompts and modals intentionally stay
+/// global so an inactive parent can still ask the user for approval.
+#[derive(Debug)]
+pub(crate) struct SessionUiProjection {
+    streaming: Option<StreamingState>,
+    ephemeral: crate::state::ui_ephemeral::UiEphemeralState,
+    scroll_offset: i32,
+    user_scrolled: bool,
+    collapsed_tools: HashSet<String>,
+    recent_denials: VecDeque<RecentDenialRow>,
+    next_recent_denial_id: i64,
+}
+
+impl Default for SessionUiProjection {
+    fn default() -> Self {
+        Self {
+            streaming: None,
+            ephemeral: crate::state::ui_ephemeral::UiEphemeralState::default(),
+            scroll_offset: 0,
+            user_scrolled: false,
+            collapsed_tools: HashSet::new(),
+            recent_denials: VecDeque::new(),
+            next_recent_denial_id: 1,
+        }
+    }
+}
+
 /// Exit keys subject to double-press confirmation.
 ///
 /// The variant labels (`"Ctrl-C"` / `"Ctrl-D"`) match the string
@@ -280,6 +308,25 @@ impl UiState {
             ephemeral: crate::state::ui_ephemeral::UiEphemeralState::new(),
             voice: VoiceUiState::default(),
         }
+    }
+
+    pub(crate) fn take_session_projection(&mut self) -> SessionUiProjection {
+        let mut projection = SessionUiProjection::default();
+        self.swap_session_projection(&mut projection);
+        projection
+    }
+
+    pub(crate) fn swap_session_projection(&mut self, projection: &mut SessionUiProjection) {
+        std::mem::swap(&mut self.streaming, &mut projection.streaming);
+        std::mem::swap(&mut self.ephemeral, &mut projection.ephemeral);
+        std::mem::swap(&mut self.scroll_offset, &mut projection.scroll_offset);
+        std::mem::swap(&mut self.user_scrolled, &mut projection.user_scrolled);
+        std::mem::swap(&mut self.collapsed_tools, &mut projection.collapsed_tools);
+        std::mem::swap(&mut self.recent_denials, &mut projection.recent_denials);
+        std::mem::swap(
+            &mut self.next_recent_denial_id,
+            &mut projection.next_recent_denial_id,
+        );
     }
 
     /// Install a resolved theme. Single chokepoint: quantize RGB palettes to

@@ -11,7 +11,6 @@
 //! | Variant | canUseTool policy |
 //! |---|---|
 //! | `PromptSuggestion` | deny-all |
-//! | `SideQuestion` | deny-all |
 //! | `Compact` | deny-all |
 //! | `ExtractMemories` | auto-mem (Read/Glob/Grep + read-only Bash + Edit/Write within memory_dir) |
 //! | `SessionMemoryAuto` | session-mem (Edit only on exact path, Read) |
@@ -21,7 +20,7 @@
 //! | `Speculation` | 3-boundary (Edit/Write rewrites to overlay; Bash via shell-parser read-only check; deny default) |
 //! | `HookAgent` | scoped StructuredOutput verifier |
 //!
-//! Order is deliberate: PromptSuggestion / SideQuestion / Compact are
+//! Order is deliberate: PromptSuggestion / Compact are
 //! the simplest deny-all callers; the memory family follows; finally
 //! AgentSummary, AutoDream, Speculation. New forks should be inserted
 //! in their thematic group.
@@ -37,9 +36,6 @@ pub enum ForkLabel {
     /// Post-turn "what should the user type next" predictor. Renders
     /// behind the user's cursor in the TUI prompt input.
     PromptSuggestion,
-    /// `/btw <question>` slash-command — answer one question without
-    /// polluting main transcript.
-    SideQuestion,
     /// `/compact` summarizer — fork produces the new summary message.
     Compact,
     /// Post-turn extraction of facts → MEMORY.md / CLAUDE.md.
@@ -74,7 +70,6 @@ impl ForkLabel {
     pub fn as_str(self) -> &'static str {
         match self {
             ForkLabel::PromptSuggestion => "prompt_suggestion",
-            ForkLabel::SideQuestion => "side_question",
             ForkLabel::Compact => "compact",
             ForkLabel::ExtractMemories => "extract_memories",
             ForkLabel::SessionMemoryAuto => "session_memory_auto",

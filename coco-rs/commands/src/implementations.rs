@@ -780,13 +780,8 @@ fn copy_handler(args: &str) -> String {
 }
 
 fn btw_handler(args: &str) -> String {
-    // Delegate to the structured handler in `handlers::btw` so the
-    // sentinel format stays one source of truth (tested separately).
-    // Runners (TUI / SDK) parse `BTW_SENTINEL` on the first output
-    // line and dispatch into `coco_query::forked_agent` against the
-    // engine's `last_cache_safe_params` for an actual cache-shared
-    // forked query; runners that don't recognise it fall back to
-    // showing the verbatim sentinel + status text (no crash).
+    // The interactive TUI intercepts this command before registry execution;
+    // other surfaces receive honest local-only guidance.
     handlers::btw::handler(args)
 }
 

@@ -29,7 +29,7 @@ impl ActiveTurnDrainState {
 enum TurnLifecycleState {
     #[default]
     Idle,
-    /// A synchronous-lifecycle shortcut (`/cost`, `/btw`, …) holds the slot for
+    /// A synchronous-lifecycle shortcut (`/cost`, `/summary`, …) holds the slot for
     /// its duration. It has no engine turn task or forwarder to drain — only a
     /// cancel token — and is released to `Idle` by its RAII reservation guard.
     Reserved {

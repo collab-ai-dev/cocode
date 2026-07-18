@@ -43,6 +43,7 @@ pub(crate) struct HookController<'a> {
     hooks: Option<&'a Arc<HookRegistry>>,
     ctx: OrchestrationContext,
     hook_tx: Option<&'a mpsc::Sender<HookExecutionEvent>>,
+    policy: coco_hooks::HookExecutionPolicy,
 }
 
 impl<'a> HookController<'a> {
@@ -55,7 +56,13 @@ impl<'a> HookController<'a> {
             hooks,
             ctx,
             hook_tx,
+            policy: coco_hooks::HookExecutionPolicy::All,
         }
+    }
+
+    pub(crate) fn with_policy(mut self, policy: coco_hooks::HookExecutionPolicy) -> Self {
+        self.policy = policy;
+        self
     }
 
     pub(crate) async fn run_pre_tool_use(
@@ -177,6 +184,12 @@ impl<'a> HookController<'a> {
         tool_input: &serde_json::Value,
         reason: &str,
     ) -> bool {
+        if !self
+            .policy
+            .allows(coco_types::HookEventType::PermissionDenied)
+        {
+            return false;
+        }
         let Some(hooks) = self.hooks else {
             return false;
         };

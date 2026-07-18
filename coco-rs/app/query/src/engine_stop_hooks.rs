@@ -173,7 +173,7 @@ impl QueryEngine {
             // (`max_output_tokens` / `prompt_too_long` /
             // `content_filter` / `model_error` / …) so hook matchers
             // can filter by specific error.
-            if let Some(hooks) = &self.hooks {
+            if let Some(hooks) = self.hooks_for(coco_types::HookEventType::StopFailure) {
                 let hook_ctx = self.orchestration_ctx();
                 let error_label = payload.error_type.as_deref().unwrap_or("unknown");
                 if let Err(e) = orchestration::execute_stop_failure(
@@ -196,7 +196,7 @@ impl QueryEngine {
             };
         }
 
-        let Some(hooks) = &self.hooks else {
+        let Some(hooks) = self.hooks_for(coco_types::HookEventType::Stop) else {
             return StopHookDecision::Continue;
         };
 

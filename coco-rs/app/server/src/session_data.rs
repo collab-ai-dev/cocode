@@ -174,6 +174,11 @@ where
         if self.registry().get(&params.target.session_id).is_none() {
             return Ok(None);
         }
+        // Internal (sidechat child) sessions are not exposed through public
+        // data APIs; a public read returns not-found.
+        if !self.registry().is_public(&params.target.session_id) {
+            return Ok(None);
+        }
         let Some(snapshot) = self
             .live_session_data(&params.target.session_id, source)
             .await?
@@ -207,6 +212,11 @@ where
         S: AppSessionDataSource + ?Sized,
     {
         if self.registry().get(&params.target.session_id).is_none() {
+            return Ok(None);
+        }
+        // Internal (sidechat child) sessions are not exposed through public
+        // data APIs; a public turns-list returns not-found.
+        if !self.registry().is_public(&params.target.session_id) {
             return Ok(None);
         }
         let Some(snapshot) = self

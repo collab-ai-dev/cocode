@@ -6,7 +6,6 @@ use super::ForkLabel;
 fn test_as_str_round_trip_with_serde() {
     let cases = [
         (ForkLabel::PromptSuggestion, "prompt_suggestion"),
-        (ForkLabel::SideQuestion, "side_question"),
         (ForkLabel::Compact, "compact"),
         (ForkLabel::ExtractMemories, "extract_memories"),
         (ForkLabel::SessionMemoryAuto, "session_memory_auto"),
@@ -31,7 +30,6 @@ fn test_as_str_round_trip_with_serde() {
 fn test_wire_strings_are_unique() {
     let all = [
         ForkLabel::PromptSuggestion,
-        ForkLabel::SideQuestion,
         ForkLabel::Compact,
         ForkLabel::ExtractMemories,
         ForkLabel::SessionMemoryAuto,

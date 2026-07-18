@@ -141,7 +141,7 @@ use super::run_session_rename;
 use super::run_session_tag;
 use super::run_show_cost;
 use super::run_show_status;
-use super::run_side_question;
+use super::run_side_chat;
 use super::session_plan_file_path;
 use super::set_thinking_level_through_app_server;
 use super::should_trigger_title_gen;
@@ -172,6 +172,21 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::sync::Mutex;
+
+fn expect_session_scoped_protocol(
+    event: coco_types::CoreEvent,
+) -> (coco_types::SessionId, coco_types::ServerNotification) {
+    match event {
+        coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SessionScoped {
+            session_id,
+            event,
+        }) => match *event {
+            coco_types::SessionScopedEvent::Protocol(notification) => (session_id, *notification),
+            other => panic!("expected protocol event in session scope, got {other:?}"),
+        },
+        other => panic!("expected session-scoped protocol event, got {other:?}"),
+    }
+}
 
 #[test]
 fn directory_already_accessible_message_distinguishes_current_added_and_nested() {
@@ -463,6 +478,21 @@ async fn build_runtime_with_registry_and_settings(
     registry: coco_commands::CommandRegistry,
     settings_overrides: Settings,
 ) -> crate::session_runtime::SessionHandle {
+    build_runtime_with_profile(
+        home,
+        registry,
+        settings_overrides,
+        crate::session_runtime::SessionExecutionProfile::Primary,
+    )
+    .await
+}
+
+async fn build_runtime_with_profile(
+    home: &TempDir,
+    registry: coco_commands::CommandRegistry,
+    settings_overrides: Settings,
+    execution_profile: crate::session_runtime::SessionExecutionProfile,
+) -> crate::session_runtime::SessionHandle {
     let settings = SettingsWithSource {
         merged: Settings {
             models: coco_config::ModelSelectionSettings {
@@ -522,6 +552,7 @@ async fn build_runtime_with_registry_and_settings(
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         session_id_override: None,
         is_non_interactive: false,
+        execution_profile,
         callback_requirements: Default::default(),
     })
     .await
@@ -960,49 +991,156 @@ async fn manual_compact_uses_local_app_server_turn_shortcut() {
 }
 
 #[tokio::test]
-async fn btw_uses_local_app_server_turn_shortcut() {
+async fn btw_does_not_disturb_active_parent_turn() {
+    // `/btw` now creates an independent read-only sidechat child with its own
+    // turn coordinator, so it never touches the parent's active turn. With no
+    // runtime factory configured in this test bridge, it surfaces a graceful
+    // error instead of disturbing the parent.
+    struct DropFlag(Arc<AtomicBool>);
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
     let home = TempDir::new().unwrap();
     let registry = coco_commands::CommandRegistry::new();
     let runtime = build_runtime_with_registry(&home, registry).await;
-    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(32);
-    let active_turn = Arc::new(Mutex::new(None));
-    let (turn_done_tx, mut turn_done_rx) = tokio::sync::mpsc::channel(4);
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(32);
+    let (turn_done_tx, _turn_done_rx) = tokio::sync::mpsc::channel(4);
     let state = Arc::new(coco_agent_host::app_server_host::AppServerHostState::default());
     let mut local_app_server_bridge =
         coco_agent_host::app_server_host::AppServerLocalBridge::new(Arc::clone(&state));
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
 
-    let question = "how does caching work?";
-    run_side_question(
+    // A live parent turn: a pending task parked in the active-turn slot.
+    let dropped = Arc::new(AtomicBool::new(false));
+    let dropped_for_task = dropped.clone();
+    let parent_task = tokio::spawn(async move {
+        let _guard = DropFlag(dropped_for_task);
+        std::future::pending::<()>().await;
+    });
+    let parent_turn_id = uuid::Uuid::new_v4();
+    let active_turn = Arc::new(Mutex::new(Some(ActiveTurn {
+        id: parent_turn_id,
+        task: parent_task,
+        cancel: ActiveTurnCancel {
+            client: local_app_server_bridge.connect_local_client(),
+            handler: local_app_server_bridge.handler().clone(),
+            target: coco_types::InteractiveTarget {
+                session_id: coco_types::SessionId::generate(),
+                surface_id: coco_types::SurfaceId::generate(),
+            },
+        },
+    })));
+
+    run_side_chat(
         &runtime,
         &event_tx,
         &mut local_app_server_bridge,
         &active_turn,
         &turn_done_tx,
         coco_commands::handlers::btw::BtwRequest {
-            question: question.to_string(),
+            question: "how does caching work?".to_string(),
         },
     )
     .await;
 
+    // The parent turn is untouched: same slot, same id, task never aborted.
+    {
+        let guard = active_turn.lock().await;
+        let parent = guard.as_ref().expect("parent turn slot must survive /btw");
+        assert_eq!(parent.id, parent_turn_id);
+        assert!(
+            !parent.task.is_finished(),
+            "parent turn task must not be touched by /btw"
+        );
+    }
     assert!(
-        active_turn.lock().await.is_some(),
-        "/btw should start an AppServer-owned active turn"
+        !dropped.load(Ordering::SeqCst),
+        "parent turn task must not be dropped/aborted by /btw"
     );
-    let completed_turn = tokio::time::timeout(Duration::from_secs(3), turn_done_rx.recv())
+
+    // Without a runtime factory the sidechat can't be built; the failure is
+    // surfaced gracefully (after the view enter/exit events) rather than
+    // silently swallowed.
+    let mut surfaced = false;
+    while let Ok(Some(event)) = tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await
+    {
+        if let coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SlashCommandResult {
+            name,
+            text,
+            ..
+        }) = event
+        {
+            assert_eq!(name, "btw");
+            assert!(text.contains("Couldn't start the sidechat"));
+            surfaced = true;
+            break;
+        }
+    }
+    assert!(
+        surfaced,
+        "the sidechat failure should be surfaced as a slash-command result"
+    );
+}
+
+#[tokio::test]
+async fn side_chat_runtime_installs_read_only_tool_boundary() {
+    // A runtime built with the SideChatReadOnly profile installs the structural
+    // read-only tool gate on every turn and sets require_can_use_tool so a
+    // PreToolUse hook auto-approve cannot bypass it. A Primary runtime does not.
+    let home = TempDir::new().unwrap();
+    let side_chat = build_runtime_with_profile(
+        &home,
+        coco_commands::CommandRegistry::new(),
+        Settings::default(),
+        crate::session_runtime::SessionExecutionProfile::SideChatReadOnly,
+    )
+    .await;
+    let cfg = side_chat.current_engine_config().await;
+    assert!(
+        cfg.can_use_tool.is_some(),
+        "sidechat runtime must install the read-only tool gate"
+    );
+    assert!(
+        cfg.require_can_use_tool,
+        "sidechat must set require_can_use_tool so hook auto-approve cannot bypass the boundary"
+    );
+
+    let home2 = TempDir::new().unwrap();
+    let primary = build_runtime_with_registry(&home2, coco_commands::CommandRegistry::new()).await;
+    let primary_cfg = primary.current_engine_config().await;
+    assert!(
+        primary_cfg.can_use_tool.is_none(),
+        "a primary runtime installs no can_use_tool gate"
+    );
+    assert!(!primary_cfg.require_can_use_tool);
+}
+
+#[tokio::test]
+async fn capture_side_chat_seed_bounds_committed_parent_history() {
+    // The parent captures its committed history as bounded inherited context
+    // for a sidechat child. Under a large budget this is the full prefix.
+    let home = TempDir::new().unwrap();
+    let parent = build_runtime_with_registry(&home, coco_commands::CommandRegistry::new()).await;
+    parent
+        .append_messages_to_history(vec![
+            coco_messages::create_user_message("what does the cache layer do?"),
+            coco_messages::create_user_message("and how is it invalidated?"),
+        ])
+        .await;
+
+    let seed = parent
+        .capture_side_chat_seed()
         .await
-        .expect("/btw turn should finish")
-        .expect("turn_done channel should stay open");
-    assert!(drain_completed_turn(&active_turn, completed_turn).await);
-    let messages = runtime.history_messages().await;
-    assert_eq!(messages.len(), 2);
-    let echo = coco_messages::wrapping::extract_text_from_message(&messages[0]);
-    let result = coco_messages::wrapping::extract_text_from_message(&messages[1]);
-    assert!(echo.contains("/btw"));
-    assert!(echo.contains(question));
-    assert!(result.contains("fork dispatcher not installed"));
-    assert!(!echo.contains(coco_commands::handlers::btw::BTW_SENTINEL));
-    assert!(!result.contains(coco_commands::handlers::btw::BTW_SENTINEL));
+        .expect("capture parent seed");
+    assert!(seed.context().fidelity().is_full_prefix());
+    assert!(
+        seed.context().messages().len() >= 2,
+        "seed should carry the committed parent turns"
+    );
+    assert!(seed.context().estimated_tokens() > 0);
 }
 
 #[tokio::test]
@@ -1765,10 +1903,10 @@ async fn toggle_fast_mode_uses_local_app_server_apply_flags() {
         .await
         .expect("fast-mode event should be forwarded")
         .expect("event channel should stay open");
-    match event {
-        coco_types::CoreEvent::Protocol(coco_types::ServerNotification::FastModeChanged {
-            active,
-        }) => {
+    let (session_id, notification) = expect_session_scoped_protocol(event);
+    assert_eq!(session_id, *runtime.session_id());
+    match notification {
+        coco_types::ServerNotification::FastModeChanged { active } => {
             assert!(active);
         }
         other => panic!("expected FastModeChanged, got {other:?}"),
@@ -1809,10 +1947,10 @@ async fn set_thinking_level_uses_local_app_server_set_thinking() {
         .await
         .expect("model-role event should be forwarded")
         .expect("event channel should stay open");
-    match event {
-        coco_types::CoreEvent::Protocol(coco_types::ServerNotification::ModelRoleChanged(
-            params,
-        )) => {
+    let (session_id, notification) = expect_session_scoped_protocol(event);
+    assert_eq!(session_id, *runtime.session_id());
+    match notification {
+        coco_types::ServerNotification::ModelRoleChanged(params) => {
             assert_eq!(params.role, coco_types::ModelRole::Main);
             assert_eq!(params.effort, Some(coco_types::ReasoningEffort::High));
         }
@@ -2109,23 +2247,6 @@ fn classify_sentinel_dream() {
         classify_sentinel_trigger(&text),
         Some(SentinelTrigger::Dream)
     );
-}
-
-#[test]
-fn classify_sentinel_btw() {
-    use coco_commands::handlers::btw::BTW_SENTINEL;
-    let text = format!("{BTW_SENTINEL} how does caching work?");
-    assert!(matches!(
-        classify_sentinel_trigger(&text),
-        Some(SentinelTrigger::Btw { request }) if request.question == "how does caching work?"
-    ));
-}
-
-#[test]
-fn classify_sentinel_btw_empty_question_is_none() {
-    use coco_commands::handlers::btw::BTW_SENTINEL;
-    let text = format!("{BTW_SENTINEL} ");
-    assert_eq!(classify_sentinel_trigger(&text), None);
 }
 
 #[test]

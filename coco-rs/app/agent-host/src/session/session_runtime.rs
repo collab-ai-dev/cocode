@@ -37,6 +37,7 @@ mod agent_catalog;
 mod build;
 mod clear;
 mod engine;
+mod execution_profile;
 mod factory;
 mod handles;
 mod hooks;
@@ -46,11 +47,13 @@ mod resources;
 mod roles;
 mod sandbox;
 mod session_handle;
+mod side_chat_seed;
 mod state;
 mod turn;
 
 pub use clear::ClearReplacementSnapshot;
 pub use coco_app_runtime::SessionRuntimeBootstrap;
+pub use execution_profile::{HookExecutionPolicy, SessionExecutionProfile};
 pub use factory::{
     SessionRuntimeBootstrapSource, SessionRuntimeFactory, SessionRuntimeFactoryHostConfig,
     SessionRuntimeFactoryOpts,
@@ -68,6 +71,7 @@ pub(crate) use sandbox::{build_sandbox_state, sandbox_settings_deny_paths};
 pub(crate) use session_handle::SessionCloseDrainError;
 pub use session_handle::SessionHandle;
 pub(crate) use session_handle::ShortcutReservationGuard;
+pub use side_chat_seed::SideChatSeed;
 pub use turn::SessionStats;
 pub(crate) use turn::{
     ActiveTurnDrainState, ActiveTurnHandles, SessionAccounting, SessionTurnCoordinator,
@@ -317,6 +321,12 @@ pub struct SessionRuntimeBuildOpts<'a> {
     /// defaults OFF for these and ON for the interactive TUI, unless
     /// overridden by `COCO_FILE_CHECKPOINTING_*`.
     pub is_non_interactive: bool,
+    /// Construction-time capability profile. `Primary` installs every
+    /// configured durable/background subsystem; `SideChatReadOnly` is the
+    /// ephemeral read-only sidechat child (no persistence, PID, goals, memory,
+    /// skills, suggestions, tasks, or title). Gated in `build` /
+    /// `install_session_late_binds` like `is_non_interactive`.
+    pub execution_profile: SessionExecutionProfile,
     /// Callback requirements this session is constructed with. Empty for local
     /// (TUI/headless) surfaces; the connection profile's set for AppServer/SDK
     /// sessions. Owned by the handle from construction — never installed late.

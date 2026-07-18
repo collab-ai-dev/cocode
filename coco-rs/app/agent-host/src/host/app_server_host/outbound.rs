@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use coco_app_server::AppServer;
+use coco_app_server::SessionEgress;
 use coco_types::{AgentId, CoreEvent, ServerNotification, SessionEnvelope, SessionId};
 use tokio::{
     sync::{mpsc, oneshot},
@@ -184,6 +185,15 @@ pub fn route_app_server_session_event<H>(
 {
     let seq_session_id = session_id.clone();
     let agent_id = event_agent_id(&event);
+    if server
+        .registry()
+        .policy(&session_id)
+        .is_some_and(|policy| policy.egress == SessionEgress::LocalOnly)
+    {
+        let envelope = SessionEnvelope::ephemeral(session_id, agent_id, event.turn_id(), event);
+        server.route_envelope(envelope);
+        return;
+    }
     let envelope = SessionEnvelope::stamp(session_id, agent_id, event, || {
         session_seq.next(&seq_session_id)
     });

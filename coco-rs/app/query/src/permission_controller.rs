@@ -76,6 +76,7 @@ pub(crate) struct PermissionController<'a> {
     /// `PermissionRequest` hooks before the dialog so hooks can
     /// override the user prompt with allow/deny.
     hooks: Option<&'a Arc<HookRegistry>>,
+    allow_permission_hooks: bool,
     orchestration_ctx: Option<&'a OrchestrationContext>,
     cwd: Option<String>,
     completion_event_mode: ToolCompletionEventMode,
@@ -97,6 +98,7 @@ impl<'a> PermissionController<'a> {
         session_id: &'a SessionId,
         cancel: &'a CancellationToken,
         hooks: Option<&'a Arc<HookRegistry>>,
+        allow_permission_hooks: bool,
         orchestration_ctx: Option<&'a OrchestrationContext>,
         cwd: Option<String>,
         completion_event_mode: ToolCompletionEventMode,
@@ -112,6 +114,7 @@ impl<'a> PermissionController<'a> {
             session_id,
             cancel,
             hooks,
+            allow_permission_hooks,
             orchestration_ctx,
             cwd,
             completion_event_mode,
@@ -218,7 +221,8 @@ impl<'a> PermissionController<'a> {
         // PermissionRequest hook: fires before the dialog. If the hook
         // returns a `decision` (allow/deny), it short-circuits the
         // prompt entirely.
-        if let (Some(registry), Some(ctx)) = (self.hooks, self.orchestration_ctx)
+        if self.allow_permission_hooks
+            && let (Some(registry), Some(ctx)) = (self.hooks, self.orchestration_ctx)
             && !ctx.disable_all_hooks
         {
             let permission_suggestions = serde_json::to_value(&ask.suggestions).ok();

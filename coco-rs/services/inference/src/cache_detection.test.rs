@@ -41,6 +41,7 @@ fn make_input(model: &str, system_hash: u64, tools_hash: u64) -> PromptStateInpu
         cache_break_detection_excluded: false,
         query_source: "repl_main_thread".into(),
         agent_id: None,
+        cache_scope: None,
         fast_mode: false,
         betas: Vec::new(),
         extra_body_hash: 0,
@@ -51,6 +52,50 @@ fn make_input(model: &str, system_hash: u64, tools_hash: u64) -> PromptStateInpu
         is_using_overage: false,
         cached_mc_enabled: false,
     }
+}
+
+#[test]
+fn session_cache_scopes_do_not_share_detector_baselines() {
+    let mut detector = CacheBreakDetector::new();
+
+    let mut parent = make_input("claude", 1, 1);
+    parent.agent_id = Some("shared-agent".into());
+    parent.cache_scope = Some("parent".into());
+    detector.record_prompt_state(parent.clone());
+    let first_parent = detector.check_response_for_cache_break_scoped(
+        "repl_main_thread",
+        10_000,
+        1_000,
+        None,
+        Some("shared-agent"),
+        Some("parent"),
+    );
+    assert_eq!(first_parent.state, CacheState::Cold);
+
+    let mut child = make_input("claude", 2, 1);
+    child.agent_id = Some("shared-agent".into());
+    child.cache_scope = Some("child".into());
+    detector.record_prompt_state(child);
+    let first_child = detector.check_response_for_cache_break_scoped(
+        "repl_main_thread",
+        50_000,
+        1_000,
+        None,
+        Some("shared-agent"),
+        Some("child"),
+    );
+    assert_eq!(first_child.state, CacheState::Cold);
+
+    detector.record_prompt_state(parent);
+    let second_parent = detector.check_response_for_cache_break_scoped(
+        "repl_main_thread",
+        9_000,
+        2_000,
+        None,
+        Some("shared-agent"),
+        Some("parent"),
+    );
+    assert_eq!(second_parent.state, CacheState::Warm);
 }
 
 #[test]
@@ -532,7 +577,9 @@ fn test_exclusion_is_flag_driven_not_model_name() {
     other.cache_break_detection_excluded = true;
     detector.record_prompt_state(other);
     assert!(
-        detector.states.contains_key("sdk"),
+        detector
+            .states
+            .contains_key(&tracking_key("sdk", None, None).unwrap()),
         "an excluded model is still recorded — phase 2 is the gate, not phase 1"
     );
     let res = detector.check_response_for_cache_break("sdk", 100, 49_000, Some(1000), None);

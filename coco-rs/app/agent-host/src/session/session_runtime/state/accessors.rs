@@ -18,6 +18,14 @@ impl SessionRuntime {
     pub fn tools(&self) -> &Arc<ToolRegistry> {
         self.execution.tools()
     }
+    /// Construction-time execution profile (`Primary` vs `SideChatReadOnly`).
+    /// Background/lifecycle subsystems read this to skip work a sidechat must
+    /// not do.
+    pub(crate) fn execution_profile(
+        &self,
+    ) -> crate::session::session_runtime::SessionExecutionProfile {
+        self.execution.execution_profile()
+    }
     /// Session-scoped sandbox state. Cheap-clone via `Arc`; consumers
     /// (fork dispatch, AppServer adapters) inherit the same instance so
     /// `SandboxState::update_config` hot-reloads propagate everywhere.

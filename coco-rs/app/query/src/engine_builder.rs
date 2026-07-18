@@ -83,6 +83,7 @@ impl QueryEngine {
             cancel,
             turn_abort,
             hooks,
+            hook_execution_policy: coco_hooks::HookExecutionPolicy::All,
             async_hook_registry: None,
             hook_llm_handle: None,
             model_runtimes,
@@ -110,7 +111,7 @@ impl QueryEngine {
             live_command_rules,
             permission_rule_handle,
             agent_catalog: None,
-            last_cache_safe_params: Arc::new(tokio::sync::RwLock::new(None)),
+            last_cache_safe_params: tokio::sync::RwLock::new(None),
             fork_dispatcher: None,
             current_suggestion_abort: None,
             task_handle: None,
@@ -192,6 +193,18 @@ impl QueryEngine {
         self
     }
 
+    pub fn with_hook_execution_policy(mut self, policy: coco_hooks::HookExecutionPolicy) -> Self {
+        self.hook_execution_policy = policy;
+        self
+    }
+
+    pub(crate) fn hooks_for(&self, event: coco_types::HookEventType) -> Option<&Arc<HookRegistry>> {
+        self.hook_execution_policy
+            .allows(event)
+            .then_some(())
+            .and(self.hooks.as_ref())
+    }
+
     /// Install the LLM-driven hook handler so `Prompt` / `Agent` hook
     /// handlers route through the runtime registry instead of falling back to
     /// passthrough text. `SessionRuntime` builds one
@@ -261,6 +274,7 @@ impl QueryEngine {
                 runtime,
                 query_source,
                 self.config.agent_id_str(),
+                Some(self.session_id.as_str()),
             )
             .await;
         }
@@ -275,6 +289,7 @@ impl QueryEngine {
                 runtime,
                 query_source,
                 self.config.agent_id_str(),
+                Some(self.session_id.as_str()),
             )
             .await;
         }
@@ -399,16 +414,14 @@ impl QueryEngine {
     // ── Post-turn cache-safe params (D8) ──
 
     /// Snapshot the current post-turn cache-safe params. `None` until
-    /// the first turn finalises. Post-turn fork features
-    /// (`promptSuggestion`, compaction, side-query) read this to share
-    /// the parent's prompt cache.
+    /// the first turn finalises. Engine-owned fork features such as prompt
+    /// suggestion and compaction read this to share the current prompt cache.
     pub async fn last_cache_safe_params(&self) -> Option<coco_types::CacheSafeParams> {
         self.last_cache_safe_params.read().await.clone()
     }
 
-    /// Build cache-safe params from the current engine config and an
-    /// arbitrary history snapshot. Used as the `/btw` fallback before the
-    /// first parent turn has populated `last_cache_safe_params`.
+    /// Build cache-safe params from the current engine config and an arbitrary
+    /// history snapshot.
     pub fn cache_safe_params_from_history(
         &self,
         history: &coco_messages::MessageHistory,
@@ -454,18 +467,6 @@ impl QueryEngine {
                 .or(slot_effort),
             fork_context_messages: history.as_slice().to_vec(),
         }
-    }
-
-    /// Clone the `Arc<RwLock<...>>` so observers (the TUI runtime, transcript
-    /// recorder) can poll the slot across the per-turn engine's lifetime
-    /// without holding a `&QueryEngine`. Read-only contract: external holders
-    /// observe the slot; the engine is the only writer (via
-    /// `save_cache_safe_params` at turn finalize). `/clear` drops the handle
-    /// at the runtime layer rather than mutating the inner slot.
-    pub fn cache_safe_params_handle(
-        &self,
-    ) -> std::sync::Arc<tokio::sync::RwLock<Option<coco_types::CacheSafeParams>>> {
-        self.last_cache_safe_params.clone()
     }
 
     /// Engine-internal writer for the cache-safe params slot. Called
@@ -798,10 +799,8 @@ impl QueryEngine {
         self
     }
 
-    /// Install a fork dispatcher (D1/D2). Used by post-turn forks
-    /// (`/btw`, `promptSuggestion`) to drive a fresh engine without
-    /// mutating the parent. CLI / SDK runners install the same
-    /// instance — usually backed by `SessionRuntime`.
+    /// Install a fork dispatcher (D1/D2). Used by prompt suggestion and
+    /// compaction to drive a fresh engine without mutating the current one.
     /// Install the session-scoped prompt-suggestion abort slot. Called
     /// from `wire_engine` so every per-turn engine sees the same
     /// `Arc<Mutex<Option<CancellationToken>>>` shared across the

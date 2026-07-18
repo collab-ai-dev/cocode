@@ -793,15 +793,18 @@ impl QueryEngine {
         // registry (tests / single-turn helpers) we pass `None` and the
         // `ToolUseContext` receives no handle — executor treats that as
         // a no-op, matching legacy behavior.
-        let hook_handle = self.hooks.as_ref().map(|registry| {
-            let handle: coco_tool_runtime::HookHandleRef =
-                std::sync::Arc::new(crate::hook_adapter::QueryHookHandle::new(
-                    registry.clone(),
-                    self.orchestration_ctx(),
-                    hook_tx.cloned(),
-                ));
-            handle
-        });
+        let hook_handle = self
+            .hooks_for(coco_types::HookEventType::PreToolUse)
+            .map(|registry| {
+                let handle: coco_tool_runtime::HookHandleRef =
+                    std::sync::Arc::new(crate::hook_adapter::QueryHookHandle::new(
+                        registry.clone(),
+                        self.orchestration_ctx(),
+                        hook_tx.cloned(),
+                        self.hook_execution_policy,
+                    ));
+                handle
+            });
         crate::tool_context::ToolContextFactory {
             config: self.config.clone(),
             session_id: self.session_id.clone(),

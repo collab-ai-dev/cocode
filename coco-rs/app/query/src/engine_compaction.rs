@@ -202,7 +202,7 @@ impl QueryEngine {
 
         let mut effective_instructions = custom_instructions.clone();
         let mut pre_display: Option<String> = None;
-        if let Some(registry) = self.hooks.as_ref() {
+        if let Some(registry) = self.hooks_for(coco_types::HookEventType::PreCompact) {
             let ctx = self.orchestration_ctx();
             match coco_hooks::orchestration::execute_pre_compact(
                 registry,
@@ -270,7 +270,7 @@ impl QueryEngine {
                     }),
                 )
                 .await;
-                if let Some(registry) = self.hooks.as_ref() {
+                if let Some(registry) = self.hooks_for(coco_types::HookEventType::PostCompact) {
                     let ctx = self.orchestration_ctx();
                     match coco_hooks::orchestration::execute_post_compact(
                         registry,
@@ -331,7 +331,7 @@ impl QueryEngine {
                 {
                     result.attachments.push(att);
                 }
-                if let Some(registry) = self.hooks.as_ref() {
+                if let Some(registry) = self.hooks_for(coco_types::HookEventType::SessionStart) {
                     let _ = emit_protocol(
                         event_tx,
                         ServerNotification::CompactionPhase(coco_types::CompactionPhaseParams {
@@ -519,7 +519,7 @@ impl QueryEngine {
         // messages into the rewritten history. We collect events directly
         // instead of also pushing them to the next-turn sync buffer, so
         // compact output is not delivered twice.
-        if let Some(registry) = self.hooks.as_ref() {
+        if let Some(registry) = self.hooks_for(coco_types::HookEventType::SessionStart) {
             let _ = emit_protocol(
                 event_tx,
                 ServerNotification::CompactionPhase(coco_types::CompactionPhaseParams {
@@ -838,6 +838,7 @@ impl QueryEngine {
                 prompt.clone(),
                 attempt.max_summary_tokens,
                 fallback_min_context_window,
+                Some(&self.session_id),
             );
             let params = crate::moa::maybe_attach_moa_guidance_for_query_once(
                 &self.model_runtimes,

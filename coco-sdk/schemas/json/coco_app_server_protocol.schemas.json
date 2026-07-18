@@ -15673,6 +15673,48 @@
             "failure"
           ],
           "type": "object"
+        },
+        {
+          "description": "A sidechat child opened: the TUI swaps the active view to a fresh child\ntranscript, stashing the primary view. Emitted before the child's first\nturn events so they render in the child view. See\n`docs/internal/sidechat-architecture.md`.",
+          "properties": {
+            "child_id": {
+              "$ref": "#/$defs/SessionId"
+            },
+            "parent_id": {
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "const": "side_chat_entered",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "parent_id",
+            "child_id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The sidechat child closed: the TUI restores the stashed primary view.",
+          "properties": {
+            "child_id": {
+              "$ref": "#/$defs/SessionId"
+            },
+            "parent_id": {
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "const": "side_chat_exited",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "parent_id",
+            "child_id"
+          ],
+          "type": "object"
         }
       ],
       "title": "TuiOnlyEvent"

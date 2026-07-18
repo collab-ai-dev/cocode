@@ -115,6 +115,176 @@ async fn spawn_load_owner_task_promotes_slot_without_origin_waiter() {
 }
 
 #[tokio::test]
+async fn spawn_child_load_registers_internal_child_under_live_parent() {
+    let server = Arc::new(AppServer::<TestHandle>::new(4, 8));
+    let parent = test_session_id("parent");
+    let child = test_session_id("child");
+
+    let AppLoadStart::Started { mut completion } = server
+        .spawn_load(parent.clone(), async { Ok(TestHandle("parent")) })
+        .expect("start parent load")
+    else {
+        panic!("expected started parent");
+    };
+    completion.wait().await.expect("parent live");
+
+    let AppLoadStart::Started { mut completion, .. } = server
+        .spawn_child_load(parent.clone(), child.clone(), async {
+            Ok(TestHandle("child"))
+        })
+        .expect("start child load")
+    else {
+        panic!("expected started child");
+    };
+    completion.wait().await.expect("child live");
+
+    // The child is live, indexed under its parent, and Internal (not public).
+    assert_eq!(server.registry().get(&child), Some(TestHandle("child")));
+    assert_eq!(server.registry().child_of(&parent), Some(child.clone()));
+    assert!(server.registry().is_public(&parent));
+    assert!(!server.registry().is_public(&child));
+
+    // A second child under the same parent is rejected (I-2).
+    server
+        .spawn_child_load(parent.clone(), test_session_id("child-2"), async {
+            Ok(TestHandle("child-2"))
+        })
+        .expect_err("second child must be rejected");
+
+    // A child under a non-live parent is rejected.
+    server
+        .spawn_child_load(test_session_id("ghost"), test_session_id("orphan"), async {
+            Ok(TestHandle("orphan"))
+        })
+        .expect_err("child requires a live parent");
+}
+
+#[tokio::test]
+async fn parent_close_blocks_child_admission_and_drains_loading_child_first() {
+    let server = Arc::new(AppServer::<TestHandle>::new(4, 8));
+    let parent = test_session_id("parent-close-race");
+    let child = test_session_id("child-loading");
+
+    let AppLoadStart::Started { mut completion } = server
+        .spawn_load(parent.clone(), async { Ok(TestHandle("parent")) })
+        .expect("start parent")
+    else {
+        panic!("expected parent load");
+    };
+    completion.wait().await.expect("parent live");
+
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let AppLoadStart::Started {
+        completion: child_completion,
+    } = server
+        .spawn_child_load(parent.clone(), child.clone(), async move {
+            release_rx.await.expect("release child factory");
+            Ok(TestHandle("child"))
+        })
+        .expect("reserve child")
+    else {
+        panic!("expected child load");
+    };
+
+    let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let close_order = Arc::clone(&order);
+    let AppCloseStart::Started {
+        completion: mut parent_close,
+    } = server
+        .spawn_close(parent.clone(), move |handle| {
+            let close_order = Arc::clone(&close_order);
+            async move {
+                close_order
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(handle.0);
+                Ok(())
+            }
+        })
+        .expect("start parent cascade")
+    else {
+        panic!("expected parent close");
+    };
+
+    server
+        .spawn_child_load(parent.clone(), test_session_id("late-child"), async {
+            Ok(TestHandle("late"))
+        })
+        .expect_err("parent transition must close child admission");
+
+    release_tx.send(()).expect("release child");
+    let mut child_completion = child_completion;
+    child_completion
+        .wait()
+        .await
+        .expect("factory completion remains observable before close");
+    parent_close.wait().await.expect("parent close completes");
+
+    assert_eq!(
+        *order
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        vec!["child", "parent"]
+    );
+    assert!(!server.has_session_slot(&child));
+    assert!(!server.has_session_slot(&parent));
+}
+
+#[tokio::test]
+async fn orphan_parent_close_drains_child_first() {
+    let server = Arc::new(AppServer::<TestHandle>::new(4, 8));
+    let parent = test_session_id("orphan-parent");
+    let child = test_session_id("orphan-child");
+
+    let AppLoadStart::Started { mut completion } = server
+        .spawn_load(parent.clone(), async { Ok(TestHandle("parent")) })
+        .expect("start parent")
+    else {
+        panic!("expected parent load");
+    };
+    completion.wait().await.expect("parent live");
+    let AppLoadStart::Started { mut completion, .. } = server
+        .spawn_child_load(parent.clone(), child.clone(), async {
+            Ok(TestHandle("child"))
+        })
+        .expect("start child")
+    else {
+        panic!("expected child load");
+    };
+    completion.wait().await.expect("child live");
+
+    let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let close_order = Arc::clone(&order);
+    let AppCloseStart::Started {
+        completion: mut parent_close,
+    } = server
+        .spawn_close_orphan(parent.clone(), move |handle| {
+            let close_order = Arc::clone(&close_order);
+            async move {
+                close_order
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(handle.0);
+                Ok(())
+            }
+        })
+        .expect("start orphan parent cascade")
+    else {
+        panic!("expected parent close");
+    };
+
+    parent_close.wait().await.expect("parent close completes");
+    assert_eq!(
+        *order
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        vec!["child", "parent"]
+    );
+    assert!(!server.has_session_slot(&child));
+    assert!(!server.has_session_slot(&parent));
+}
+
+#[tokio::test]
 async fn spawn_load_failure_removes_loading_slot() {
     let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
     let session_id = test_session_id("sess-1");
@@ -170,14 +340,19 @@ async fn spawn_close_owner_task_closes_surfaces_after_cascade_without_origin_wai
     }
 
     let close_runs = Arc::new(AtomicUsize::new(0));
-    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let release_close = Arc::new(tokio::sync::Notify::new());
+    let release_close_for_task = Arc::clone(&release_close);
     let close_runs_1 = Arc::clone(&close_runs);
     let AppCloseStart::Started { completion } = server
-        .spawn_close(session_id.clone(), move |handle| async move {
-            assert_eq!(handle, TestHandle("handle"));
-            close_runs_1.fetch_add(1, Ordering::SeqCst);
-            release_rx.await.expect("release close");
-            Ok(())
+        .spawn_close(session_id.clone(), move |handle| {
+            let close_runs = Arc::clone(&close_runs_1);
+            let release_close = Arc::clone(&release_close_for_task);
+            async move {
+                assert_eq!(handle, TestHandle("handle"));
+                close_runs.fetch_add(1, Ordering::SeqCst);
+                release_close.notified().await;
+                Ok(())
+            }
         })
         .expect("start close")
     else {
@@ -187,16 +362,19 @@ async fn spawn_close_owner_task_closes_surfaces_after_cascade_without_origin_wai
 
     let close_runs_2 = Arc::clone(&close_runs);
     let AppCloseStart::Closing(mut waiter) = server
-        .spawn_close(session_id.clone(), move |_| async move {
-            close_runs_2.fetch_add(10, Ordering::SeqCst);
-            Ok(())
+        .spawn_close(session_id.clone(), move |_| {
+            let close_runs = Arc::clone(&close_runs_2);
+            async move {
+                close_runs.fetch_add(10, Ordering::SeqCst);
+                Ok(())
+            }
         })
         .expect("observe closing")
     else {
         panic!("expected closing");
     };
 
-    release_tx.send(()).expect("release close");
+    release_close.notify_one();
     let delivery = lifecycle_rx.recv().await.expect("lifecycle delivery");
     assert_eq!(delivery.surface_id, surface_id.clone());
     assert_eq!(
@@ -249,10 +427,13 @@ async fn spawn_close_on_loading_waits_for_load_then_closes_surfaces_once() {
     let close_runs = Arc::new(AtomicUsize::new(0));
     let close_runs_1 = Arc::clone(&close_runs);
     let AppCloseStart::Loading(mut close_completion) = server
-        .spawn_close(session_id.clone(), move |handle| async move {
-            assert_eq!(handle, TestHandle("loaded"));
-            close_runs_1.fetch_add(1, Ordering::SeqCst);
-            Ok(())
+        .spawn_close(session_id.clone(), move |handle| {
+            let close_runs = Arc::clone(&close_runs_1);
+            async move {
+                assert_eq!(handle, TestHandle("loaded"));
+                close_runs.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
         })
         .expect("close loading")
     else {
@@ -261,9 +442,12 @@ async fn spawn_close_on_loading_waits_for_load_then_closes_surfaces_once() {
 
     let close_runs_2 = Arc::clone(&close_runs);
     let AppCloseStart::Loading(repeated_completion) = server
-        .spawn_close(session_id.clone(), move |_| async move {
-            close_runs_2.fetch_add(10, Ordering::SeqCst);
-            Ok(())
+        .spawn_close(session_id.clone(), move |_| {
+            let close_runs = Arc::clone(&close_runs_2);
+            async move {
+                close_runs.fetch_add(10, Ordering::SeqCst);
+                Ok(())
+            }
         })
         .expect("repeat close loading")
     else {
@@ -410,11 +594,15 @@ async fn spawn_shutdown_includes_loading_and_observes_closing_sessions() {
         .registry()
         .complete_load_success(&closing_session_id, TestHandle("closing"))
         .expect("closing session live");
-    let (release_close_tx, release_close_rx) = tokio::sync::oneshot::channel();
+    let release_close = Arc::new(tokio::sync::Notify::new());
+    let release_close_for_task = Arc::clone(&release_close);
     let AppCloseStart::Started { completion, .. } = server
-        .spawn_close(closing_session_id.clone(), move |_| async move {
-            release_close_rx.await.expect("release close");
-            Ok(())
+        .spawn_close(closing_session_id.clone(), move |_| {
+            let release_close = Arc::clone(&release_close_for_task);
+            async move {
+                release_close.notified().await;
+                Ok(())
+            }
         })
         .expect("start close")
     else {
@@ -450,7 +638,7 @@ async fn spawn_shutdown_includes_loading_and_observes_closing_sessions() {
     );
 
     release_load_tx.send(()).expect("release load");
-    release_close_tx.send(()).expect("release close");
+    release_close.notify_one();
     for session in shutdown.sessions {
         let mut completion = session.completion;
         completion.wait().await.expect("shutdown close");
@@ -499,8 +687,10 @@ async fn spawn_replace_commits_then_closes_old_without_origin_waiter() {
     }
 
     let (release_build_tx, release_build_rx) = tokio::sync::oneshot::channel();
-    let (close_started_tx, close_started_rx) = tokio::sync::oneshot::channel();
-    let (release_close_tx, release_close_rx) = tokio::sync::oneshot::channel();
+    let close_started = Arc::new(tokio::sync::Notify::new());
+    let close_started_for_task = Arc::clone(&close_started);
+    let release_close = Arc::new(tokio::sync::Notify::new());
+    let release_close_for_task = Arc::clone(&release_close);
     let AppReplaceStart::Started { completion } = server
         .spawn_replace(
             old_session_id.clone(),
@@ -510,11 +700,15 @@ async fn spawn_replace_commits_then_closes_old_without_origin_waiter() {
                 release_build_rx.await.expect("release build");
                 Ok(TestHandle("new"))
             },
-            move |old_handle| async move {
-                assert_eq!(old_handle, TestHandle("old"));
-                close_started_tx.send(()).expect("signal close started");
-                release_close_rx.await.expect("release close");
-                Ok(())
+            move |old_handle| {
+                let close_started = Arc::clone(&close_started_for_task);
+                let release_close = Arc::clone(&release_close_for_task);
+                async move {
+                    assert_eq!(old_handle, TestHandle("old"));
+                    close_started.notify_one();
+                    release_close.notified().await;
+                    Ok(())
+                }
             },
         )
         .expect("start replace");
@@ -547,7 +741,7 @@ async fn spawn_replace_commits_then_closes_old_without_origin_waiter() {
             new_session_id: new_session_id.clone(),
         }
     );
-    close_started_rx.await.expect("close started");
+    close_started.notified().await;
     let AppLoadStart::Closing(mut old_close) = server
         .spawn_load(old_session_id.clone(), async {
             Ok(TestHandle("old-duplicate"))
@@ -564,7 +758,7 @@ async fn spawn_replace_commits_then_closes_old_without_origin_waiter() {
         assert_eq!(routing.surface_session(&peer), None);
     }
 
-    release_close_tx.send(()).expect("release close");
+    release_close.notify_one();
     old_close.wait().await.expect("old close complete");
 
     assert_eq!(

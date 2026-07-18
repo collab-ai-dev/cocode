@@ -31,6 +31,12 @@ pub enum ContextError {
 
     #[error("path error at {path}: {message}")]
     PathError { path: PathBuf, message: String },
+
+    /// A single required conversation group is larger than the entire sidechat
+    /// inheritance budget, so bounded fallback cannot represent it. The message
+    /// carries a `/compact` suggestion for the user.
+    #[error("{message}")]
+    SideChatContextTooLarge { message: String },
 }
 
 impl ContextError {
@@ -42,6 +48,12 @@ impl ContextError {
 
     pub fn git_failed(message: impl Into<String>) -> Self {
         Self::GitFailed {
+            message: message.into(),
+        }
+    }
+
+    pub fn side_chat_context_too_large(message: impl Into<String>) -> Self {
+        Self::SideChatContextTooLarge {
             message: message.into(),
         }
     }
@@ -64,6 +76,7 @@ impl ErrorExt for ContextError {
             Self::Json { .. } => StatusCode::InvalidJson,
             Self::GitFailed { .. } => StatusCode::External,
             Self::PathError { .. } => StatusCode::InvalidArguments,
+            Self::SideChatContextTooLarge { .. } => StatusCode::InvalidArguments,
             Self::Generic { .. } => StatusCode::Internal,
         }
     }

@@ -3380,6 +3380,22 @@ class TuiOnlyEventJourneyMutationFailed(BaseModel):
     failure: JourneyMutationFailed
 
 
+class TuiOnlyEventSideChatEntered(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal["side_chat_entered"] = Field(
+        default="side_chat_entered", alias="type"
+    )
+    child_id: SessionId
+    parent_id: SessionId
+
+
+class TuiOnlyEventSideChatExited(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal["side_chat_exited"] = Field(default="side_chat_exited", alias="type")
+    child_id: SessionId
+    parent_id: SessionId
+
+
 TuiOnlyEvent = Annotated[
     Union[
         TuiOnlyEventApprovalRequired,
@@ -3448,6 +3464,8 @@ TuiOnlyEvent = Annotated[
         TuiOnlyEventSkillOverridesSaved,
         TuiOnlyEventOpenJourneyDialog,
         TuiOnlyEventJourneyMutationFailed,
+        TuiOnlyEventSideChatEntered,
+        TuiOnlyEventSideChatExited,
     ],
     Field(discriminator="type_"),
 ]

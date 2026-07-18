@@ -235,7 +235,7 @@ impl QueryEngine {
         // Fire `InstructionsLoaded` for each newly-loaded memory file.
         // Reason `nested_traversal` matches the lazy traversal path here;
         // the eager pass at session start fires with `session_start`.
-        if let Some(registry) = self.hooks.as_ref() {
+        if let Some(registry) = self.hooks_for(coco_types::HookEventType::InstructionsLoaded) {
             let ctx = self.orchestration_ctx();
             if !ctx.disable_all_hooks {
                 for (loaded_path, trigger_path, source) in newly_loaded {

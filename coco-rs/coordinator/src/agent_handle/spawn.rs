@@ -902,7 +902,6 @@ impl SwarmAgentHandle {
                 | Some(coco_types::ForkLabel::SessionMemoryAuto)
                 | Some(coco_types::ForkLabel::SessionMemoryManual)
                 | Some(coco_types::ForkLabel::PromptSuggestion)
-                | Some(coco_types::ForkLabel::SideQuestion)
                 | Some(coco_types::ForkLabel::Compact)
                 | Some(coco_types::ForkLabel::AgentSummary)
                 | Some(coco_types::ForkLabel::Speculation)

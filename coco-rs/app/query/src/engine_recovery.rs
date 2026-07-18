@@ -207,9 +207,9 @@ pub(crate) enum BlockingLimitDecision {
 ///
 /// Labels `session_memory_auto`, `session_memory_manual`, and
 /// `extract_memories` also operate on the parent's oversized state.
-/// `prompt_suggestion` / `agent_summary` / `side_question` are NOT
-/// in this set — those forks are post-turn, run on already-fitting
-/// history, and benefit from the gate.
+/// `prompt_suggestion` and `agent_summary` are NOT in this set — those
+/// forks are post-turn, run on already-fitting history, and benefit from the
+/// gate.
 fn is_forked_compact_or_session_memory_source(qs: &str) -> bool {
     matches!(
         qs,

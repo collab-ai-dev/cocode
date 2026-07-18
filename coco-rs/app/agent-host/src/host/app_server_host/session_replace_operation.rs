@@ -242,14 +242,18 @@ pub(crate) async fn replace_app_server_session_with_runtime(
         // `Closing` forever on a cascade panic (and escape shutdown joining).
         let close_state = Arc::clone(&state);
         let close_source_id = source_session_id.clone();
-        let close_old = move |old_handle: AppSessionHandle| async move {
-            close_app_server_session_state(&close_state, &close_source_id).await;
-            close_local_session_handle_with_reason(
-                old_handle,
-                coco_hooks::orchestration::ExitReason::Other,
-                turn_drain_timeout,
-            )
-            .await
+        let close_old = move |old_handle: AppSessionHandle| {
+            let close_state = Arc::clone(&close_state);
+            let close_source_id = close_source_id.clone();
+            async move {
+                close_app_server_session_state(&close_state, &close_source_id).await;
+                close_local_session_handle_with_reason(
+                    old_handle,
+                    coco_hooks::orchestration::ExitReason::Other,
+                    turn_drain_timeout,
+                )
+                .await
+            }
         };
         app_server
             .spawn_replace_to_live(
@@ -294,28 +298,31 @@ where
             reservation.destination_id,
             reservation.source_surface_id,
             factory,
-            move |handle| async move {
-                let source_session_id = handle.session_id().clone();
-                close_app_server_session_state(&close_state, &source_session_id).await;
-                let result = close_local_session_handle_with_reason(
-                    handle,
-                    close_reason,
-                    turn_drain_timeout,
-                )
-                .await;
-                if let Err(error) = &result {
-                    // Post-commit source close failed after the replacement was
-                    // committed; the destination is live, so this is never a
-                    // clean success (CS-3b). Surface it as a structured error
-                    // rather than dropping it.
-                    tracing::error!(
-                        %source_session_id,
-                        %error,
-                        kind = "committed_close_failed",
-                        "session/replace committed the destination but the source close failed",
-                    );
+            move |handle| {
+                let close_state = Arc::clone(&close_state);
+                async move {
+                    let source_session_id = handle.session_id().clone();
+                    close_app_server_session_state(&close_state, &source_session_id).await;
+                    let result = close_local_session_handle_with_reason(
+                        handle,
+                        close_reason,
+                        turn_drain_timeout,
+                    )
+                    .await;
+                    if let Err(error) = &result {
+                        // Post-commit source close failed after the replacement was
+                        // committed; the destination is live, so this is never a
+                        // clean success (CS-3b). Surface it as a structured error
+                        // rather than dropping it.
+                        tracing::error!(
+                            %source_session_id,
+                            %error,
+                            kind = "committed_close_failed",
+                            "session/replace committed the destination but the source close failed",
+                        );
+                    }
+                    result
                 }
-                result
             },
         )
         .map_err(|error| app_server_lifecycle_error_parts("reserve replacement", error))?

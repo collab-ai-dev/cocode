@@ -19,17 +19,27 @@ pub(in crate::session::session_runtime) struct SessionExecutionResources {
     pub(in crate::session::session_runtime) tools: Arc<ToolRegistry>,
     pub(in crate::session::session_runtime) model_runtimes:
         Arc<coco_inference::ModelRuntimeRegistry>,
+    pub(in crate::session::session_runtime) execution_profile:
+        crate::session::session_runtime::SessionExecutionProfile,
 }
 
 impl SessionExecutionResources {
     pub(in crate::session::session_runtime) fn new(
         tools: Arc<ToolRegistry>,
         model_runtimes: Arc<coco_inference::ModelRuntimeRegistry>,
+        execution_profile: crate::session::session_runtime::SessionExecutionProfile,
     ) -> Self {
         Self {
             tools,
             model_runtimes,
+            execution_profile,
         }
+    }
+
+    pub(in crate::session::session_runtime) fn execution_profile(
+        &self,
+    ) -> crate::session::session_runtime::SessionExecutionProfile {
+        self.execution_profile
     }
 
     pub(in crate::session::session_runtime) fn tools(&self) -> &Arc<ToolRegistry> {

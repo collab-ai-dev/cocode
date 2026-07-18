@@ -32,7 +32,7 @@
 //! Directory mode `0o700`. Snake_case wire, `Ok(None)` on `ENOENT` —
 //! mirrors the `coco-session` PID-registry IO idioms.
 
-use coco_session::SessionKind;
+use coco_session::ProcessSessionKind;
 use coco_types::SessionId;
 use coco_types::TaskStatus;
 use serde::Deserialize;
@@ -42,7 +42,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-/// Durable record of a background job. Reuses [`SessionKind`] and
+/// Durable record of a background job. Reuses [`ProcessSessionKind`] and
 /// [`TaskStatus`] rather than inventing parallel enums — `TaskStatus`
 /// is the one that can represent terminal `Completed` / `Failed` /
 /// `Killed`, which is exactly what the `ps` lifecycle mapper needs.
@@ -54,7 +54,7 @@ pub struct JobState {
     /// registry's `SessionRegistration.session_id`.
     pub session_id: SessionId,
     pub cwd: PathBuf,
-    pub kind: SessionKind,
+    pub kind: ProcessSessionKind,
     /// Unix-ms timestamp.
     pub created_at: i64,
     /// Unix-ms timestamp of the last [`JobStore::write`].

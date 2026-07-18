@@ -33,18 +33,17 @@ pub(crate) async fn close_local_app_server_session_parts(
     session_id: SessionId,
     turn_drain_timeout: Duration,
 ) -> Result<(), LifecycleError> {
-    if !app_server
-        .list_live_sessions()
-        .iter()
-        .any(|summary| summary.session_id == session_id)
-    {
+    if !app_server.has_session_slot(&session_id) {
         return Ok(());
     }
     let close_state = Arc::clone(&state);
     let mut completion = match app_server
-        .spawn_close(session_id, move |handle| async move {
-            close_app_server_session_state(&close_state, handle.session_id()).await;
-            close_local_session_handle(handle, turn_drain_timeout).await
+        .spawn_close(session_id, move |handle| {
+            let close_state = Arc::clone(&close_state);
+            async move {
+                close_app_server_session_state(&close_state, handle.session_id()).await;
+                close_local_session_handle(handle, turn_drain_timeout).await
+            }
         })
         .map_err(|error| app_server_lifecycle_error_parts("close session", error))?
     {
@@ -146,18 +145,26 @@ async fn close_app_server_session_with_callback(
     let close_state = Arc::clone(&state);
     let close_notif_tx = notif_tx.clone();
     let start = if orphan {
-        app_server.spawn_close_orphan(session_id, move |handle| async move {
-            close_app_server_session_state(&close_state, handle.session_id()).await;
-            close_local_session_handle(handle.clone(), turn_drain_timeout).await?;
-            emit_final_session_result(&close_notif_tx, &handle).await;
-            Ok(())
+        app_server.spawn_close_orphan(session_id, move |handle| {
+            let close_state = Arc::clone(&close_state);
+            let close_notif_tx = close_notif_tx.clone();
+            async move {
+                close_app_server_session_state(&close_state, handle.session_id()).await;
+                close_local_session_handle(handle.clone(), turn_drain_timeout).await?;
+                emit_final_session_result(&close_notif_tx, &handle).await;
+                Ok(())
+            }
         })
     } else {
-        app_server.spawn_close(session_id, move |handle| async move {
-            close_app_server_session_state(&close_state, handle.session_id()).await;
-            close_local_session_handle(handle.clone(), turn_drain_timeout).await?;
-            emit_final_session_result(&close_notif_tx, &handle).await;
-            Ok(())
+        app_server.spawn_close(session_id, move |handle| {
+            let close_state = Arc::clone(&close_state);
+            let close_notif_tx = close_notif_tx.clone();
+            async move {
+                close_app_server_session_state(&close_state, handle.session_id()).await;
+                close_local_session_handle(handle.clone(), turn_drain_timeout).await?;
+                emit_final_session_result(&close_notif_tx, &handle).await;
+                Ok(())
+            }
         })
     }
     .map_err(|error| app_server_lifecycle_error_parts(operation, error))?;

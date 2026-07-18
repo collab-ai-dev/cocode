@@ -7,6 +7,8 @@ use std::sync::Arc;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
+use coco_types::{ToolId, ToolName};
+
 use super::CanUseToolCallContext;
 use super::CanUseToolDecision;
 use super::CanUseToolHandle;
@@ -29,7 +31,12 @@ fn ctx() -> CanUseToolCallContext {
 async fn test_no_op_returns_ask() {
     let handle = NoOpCanUseToolHandle;
     let decision = handle
-        .check("Read", &json!({"path": "/tmp/x"}), &ctx())
+        .check(
+            &ToolId::Builtin(ToolName::Read),
+            "Read",
+            &json!({"path": "/tmp/x"}),
+            &ctx(),
+        )
         .await;
     match decision {
         CanUseToolDecision::Ask { decision_reason } => match decision_reason {
@@ -44,7 +51,8 @@ async fn test_no_op_returns_ask() {
 async fn test_deny_all_denies_every_tool() {
     let handle = deny_all_handle("test-only");
     for tool in ["Read", "Write", "Edit", "Bash", "TaskOutput"] {
-        let decision = handle.check(tool, &json!({}), &ctx()).await;
+        let tool_id: ToolId = tool.parse().expect("valid tool id");
+        let decision = handle.check(&tool_id, tool, &json!({}), &ctx()).await;
         match decision {
             CanUseToolDecision::Deny {
                 message,

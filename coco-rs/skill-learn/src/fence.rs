@@ -74,6 +74,7 @@ impl std::fmt::Debug for SkillWriteHandle {
 impl CanUseToolHandle for SkillWriteHandle {
     async fn check(
         &self,
+        _tool_id: &coco_types::ToolId,
         tool_name: &str,
         input: &Value,
         ctx: &CanUseToolCallContext,

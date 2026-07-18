@@ -51,6 +51,7 @@ impl SessionRuntime {
             builtin_agent_catalog,
             session_id_override,
             is_non_interactive,
+            execution_profile,
             // Owned by `SessionHandle`, not the runtime — read off `opts` in
             // `SessionHandle::build` before this destructure.
             callback_requirements: _,
@@ -66,13 +67,15 @@ impl SessionRuntime {
         // (print-mode-only, validated at startup) suppresses ALL transcript
         // JSONL + usage-snapshot + file-history + subagent-transcript writes
         // for this run.
-        let persist_session = !cli.no_session_persistence;
+        // A sidechat runtime never persists (no transcript JSONL, usage
+        // snapshot, or file history); otherwise the CLI kill switch decides.
+        let persist_session = !cli.no_session_persistence && execution_profile.persists_history();
 
         // Concurrent-sessions PID registry. Skipped for subagent contexts
-        // (non-null `COCO_AGENT_ID`), and best-effort: a write failure here
-        // is logged and ignored so a constrained FS doesn't block session
-        // startup.
-        let pid_registry = {
+        // (non-null `COCO_AGENT_ID`) and for sidechat (ephemeral, never in
+        // `coco ps`), and best-effort otherwise: a write failure here is logged
+        // and ignored so a constrained FS doesn't block session startup.
+        let pid_registry = if execution_profile.registers_pid() {
             let agent_id_env = coco_config::env::var(coco_config::env::EnvKey::CocoAgentId).ok();
             match coco_session::SessionRegistry::register(
                 &config_home,
@@ -86,6 +89,8 @@ impl SessionRuntime {
                     None
                 }
             }
+        } else {
+            None
         };
 
         // FileReadState — @mention dedup + Read tool dedup.
@@ -154,7 +159,9 @@ impl SessionRuntime {
         // rendering work without an agent handle.
         let active_shell_tool =
             crate::shell_tool_selection::active_shell_tool_from_runtime(&runtime_config)?;
-        let memory_runtime = if runtime_config.memory_activation.active {
+        let memory_runtime = if runtime_config.memory_activation.active
+            && execution_profile.runs_auto_memory()
+        {
             let agent: coco_tool_runtime::AgentHandleRef =
                 Arc::new(coco_tool_runtime::NoOpAgentHandle);
             let mem_cfg = coco_memory::MemoryConfig::from(runtime_config.memory.clone());
@@ -248,6 +255,7 @@ impl SessionRuntime {
             .features
             .enabled(coco_types::Feature::SkillLearning)
             && runtime_config.skill_learn.enabled
+            && execution_profile.runs_skill_learning()
         {
             let rt = Arc::new(coco_skill_learn::SkillReviewRuntime::with_config(
                 &config_home,
@@ -546,7 +554,7 @@ impl SessionRuntime {
             // opts in via settings.json / env; `None` is zero overhead.
             wire_dump: {
                 let d = &runtime_config.diagnostics;
-                (!d.wire_dump.is_off()).then(|| {
+                (persist_session && !d.wire_dump.is_off()).then(|| {
                     coco_query::WireDumpConfig::new(
                         project_paths.session_dir(&session_id),
                         d.wire_dump,
@@ -559,6 +567,13 @@ impl SessionRuntime {
             skill_overrides: Arc::new(runtime_config.skill_overrides.clone()),
             tool_overrides: runtime_config.tool_overrides.clone(),
             include_hook_events: cli.include_hook_events,
+            // Sidechat: install the structural read-only tool boundary on every
+            // turn, with `require_can_use_tool` so a PreToolUse hook that
+            // auto-approves cannot bypass it.
+            can_use_tool: execution_profile
+                .read_only_tools()
+                .then(coco_query::side_chat_tool_gate::side_chat_read_only_handle),
+            require_can_use_tool: execution_profile.read_only_tools(),
             ..Default::default()
         };
 
@@ -577,7 +592,8 @@ impl SessionRuntime {
             permission_rule_source_roots,
         );
 
-        let auto_title_enabled = runtime_config.settings.merged.session.auto_title;
+        let auto_title_enabled = runtime_config.settings.merged.session.auto_title
+            && execution_profile.runs_auto_title();
 
         // LLM-driven hook handler. It resolves HookAgent and per-hook
         // role overrides through the shared ModelRuntimeRegistry.
@@ -602,7 +618,8 @@ impl SessionRuntime {
         // (mostly built-in) catalog. Snapshot is reload-able via
         // [`Self::reload_agent_catalog`]; this initial build lives on
         // the blocking pool because the markdown loader is sync IO.
-        let auto_memory_enabled = runtime_config.memory_activation.active;
+        let auto_memory_enabled =
+            runtime_config.memory_activation.active && execution_profile.runs_auto_memory();
         // Initial agent-catalog load. Client-supplied agents from
         // `initialize.agents` get injected here on session start —
         // they live on `SessionRuntime.client_supplied_agents` until
@@ -651,10 +668,11 @@ impl SessionRuntime {
         // The sink reads session id from the same synchronized engine-config
         // mirror used by detached hook factories, so `/clear` regen propagates
         // without a separate file-history identity slot.
-        let file_history = if file_checkpointing_enabled(
-            runtime_config.settings.merged.file_checkpointing_enabled,
-            is_non_interactive,
-        ) {
+        let file_history = if persist_session
+            && file_checkpointing_enabled(
+                runtime_config.settings.merged.file_checkpointing_enabled,
+                is_non_interactive,
+            ) {
             let sink: Arc<dyn FileHistorySnapshotSink> = Arc::new(TranscriptFileHistorySink::new(
                 project_paths.clone(),
                 typed_session_id.clone(),
@@ -665,7 +683,7 @@ impl SessionRuntime {
         } else {
             None
         };
-        let execution = SessionExecutionResources::new(tools, model_runtimes);
+        let execution = SessionExecutionResources::new(tools, model_runtimes, execution_profile);
         let hook_resources = SessionHookResources::new(
             hook_registry,
             hook_llm_handle,
@@ -675,10 +693,14 @@ impl SessionRuntime {
         );
         // First-class goal aggregate, recovered from the durable snapshot on
         // resume (empty for a fresh session). Sole writer of the live projection.
-        let goal_store = std::sync::Arc::new(crate::session::goal_store::TranscriptGoalStore::new(
-            transcript_store.clone(),
-            typed_session_id.clone(),
-        ));
+        let goal_store: Arc<dyn coco_goal_runtime::GoalStore> = if execution_profile.runs_goals() {
+            Arc::new(crate::session::goal_store::TranscriptGoalStore::new(
+                transcript_store.clone(),
+                typed_session_id.clone(),
+            ))
+        } else {
+            Arc::new(coco_goal_runtime::InMemoryGoalStore::new())
+        };
         let goal_runtime = std::sync::Arc::new(
             coco_goal_runtime::GoalRuntimeHandle::restore(typed_session_id.clone(), goal_store)
                 .map_err(|e| anyhow::anyhow!("restore goal runtime: {e}"))?,
@@ -694,11 +716,17 @@ impl SessionRuntime {
         let config_resources =
             SessionConfigResources::new(config_home, runtime_config, config_reloader);
         let catalog_resources = SessionCatalogResources::new(command_registry, skill_manager);
+        let schedule_store: coco_tool_runtime::ScheduleStoreRef =
+            if execution_profile.runs_scheduled_tasks() {
+                Arc::new(coco_tool_runtime::DiskBackedScheduleStore::new(
+                    cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+                        .join("scheduled_tasks.json"),
+                ))
+            } else {
+                Arc::new(coco_tool_runtime::NoOpScheduleStore)
+            };
         let turn_resources = SessionTurnResources::new(
-            Arc::new(coco_tool_runtime::DiskBackedScheduleStore::new(
-                cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
-                    .join("scheduled_tasks.json"),
-            )),
+            schedule_store,
             side_query,
             usage_accounting,
             mailbox,

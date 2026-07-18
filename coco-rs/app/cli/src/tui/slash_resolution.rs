@@ -83,12 +83,7 @@ pub(super) enum SlashOutcome {
     /// Open a concrete session plan file through the same external
     /// editor terminal handoff used by prompt and memory editing.
     TriggerOpenPlanEditor { path: std::path::PathBuf },
-    /// Run a `/btw` side question as a one-shot fork that shares the
-    /// parent turn's prompt cache, then render the answer inline. Emitted
-    /// when the dispatcher sees `BTW_SENTINEL`; the runner reads
-    /// `runtime.last_cache_safe_params()` (or the transcript fallback) plus
-    /// the installed `ForkDispatcher` (mirrors the SDK `/btw` handler shortcut).
-    /// The parent conversation is untouched.
+    /// Open, continue, or close a local ephemeral sidechat child.
     TriggerBtw {
         request: coco_commands::handlers::btw::BtwRequest,
     },
@@ -181,9 +176,6 @@ pub(super) enum SentinelTrigger {
     },
     ReloadPlugins,
     ReloadHooks,
-    Btw {
-        request: coco_commands::handlers::btw::BtwRequest,
-    },
 }
 
 pub(super) fn classify_sentinel_trigger(text: &str) -> Option<SentinelTrigger> {
@@ -250,11 +242,6 @@ pub(super) fn classify_sentinel_trigger(text: &str) -> Option<SentinelTrigger> {
         && coco_commands::parse_reload_hooks_sentinel(text).is_some()
     {
         return Some(SentinelTrigger::ReloadHooks);
-    }
-    if text.starts_with(coco_commands::handlers::btw::BTW_SENTINEL)
-        && let Some(request) = coco_commands::handlers::btw::parse_btw_sentinel(text)
-    {
-        return Some(SentinelTrigger::Btw { request });
     }
     None
 }
@@ -377,7 +364,7 @@ pub(super) async fn handle_slash_outcome(
             SlashFollowup::Done
         }
         SlashOutcome::TriggerBtw { request } => {
-            run_side_question(
+            run_side_chat(
                 session,
                 event_tx,
                 local_app_server_bridge,
@@ -590,7 +577,7 @@ pub(super) async fn drain_queued_slash_commands(
                 .await;
             }
             SlashOutcome::TriggerBtw { request } => {
-                run_side_question(
+                run_side_chat(
                     session,
                     event_tx,
                     local_app_server_bridge,

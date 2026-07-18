@@ -74,8 +74,8 @@ impl QueryEngine {
     /// `TurnCompleted` emission so text-only exits can run promptSuggestion
     /// after cache save but before closing the protocol turn.
     pub(crate) async fn flush_successful_turn_state(&self, history: &mut MessageHistory) {
-        // D8: snapshot post-turn cache-safe params for future post-turn
-        // fork features (`/btw`, `promptSuggestion`, `postTurnSummary`).
+        // D8: snapshot post-turn cache-safe params for engine-owned fork
+        // features such as prompt suggestion and compaction.
         // Helper handles the empty-history skip + serialisation.
         self.save_post_turn_cache_params(history).await;
 

@@ -1336,6 +1336,21 @@ async fn idle_ctrl_c_arms_exit_hint_without_interrupting() {
 }
 
 #[tokio::test]
+async fn idle_ctrl_c_closes_sidechat_instead_of_arming_process_exit() {
+    let mut state = AppState::new();
+    let parent = coco_types::SessionId::try_new("parent").unwrap();
+    let child = coco_types::SessionId::try_new("child").unwrap();
+    state.session.session_id = Some(parent.as_str().to_string());
+    assert!(state.enter_side_chat(parent, child));
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::Interrupt, &tx).await;
+
+    assert_eq!(state.ui.pending_exit_hint(), None);
+    assert!(matches!(rx.try_recv(), Ok(UserCommand::CloseSideChat)));
+}
+
+#[tokio::test]
 async fn busy_ctrl_c_interrupts_without_exit_hint() {
     let mut state = AppState::new();
     state.session.set_busy(true);

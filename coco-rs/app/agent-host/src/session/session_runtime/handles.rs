@@ -211,53 +211,6 @@ impl SessionRuntime {
             .await
     }
 
-    /// Read the currently installed fork dispatcher. Returns `None`
-    /// before bootstrap installs one (or in unit tests). Used by AppServer
-    /// runners that want to dispatch a fork outside of the engine's
-    /// post-turn hook (`/btw` over the remote protocol).
-    pub async fn current_fork_dispatcher(
-        &self,
-    ) -> Option<coco_query::forked_agent::ForkDispatcherRef> {
-        self.handle_resources.fork_dispatcher.read().await.clone()
-    }
-
-    /// Read the most recent turn's cache-safe params. `None` before the
-    /// first turn finalises (or after `/clear`). The TUI `/btw` dispatch
-    /// uses this when present and falls back to rebuilding from transcript.
-    pub async fn last_cache_safe_params(&self) -> Option<coco_types::CacheSafeParams> {
-        let handle = self
-            .handle_resources
-            .last_engine_cache_handle
-            .read()
-            .await
-            .clone();
-        match handle {
-            Some(h) => h.read().await.clone(),
-            None => None,
-        }
-    }
-
-    /// Build fresh cache params from the current session config and transcript.
-    /// This is the `/btw` fallback when no post-turn cache slot exists yet.
-    pub async fn fallback_cache_safe_params(&self) -> coco_types::CacheSafeParams {
-        let cfg = self.current_engine_config().await;
-        let snapshot = self
-            .execution
-            .model_runtimes()
-            .snapshot_for_role(coco_types::ModelRole::Main)
-            .ok();
-        let provider = snapshot
-            .as_ref()
-            .map(|s| s.provider.clone())
-            .unwrap_or_default();
-        let slot_effort = snapshot.and_then(|s| s.role_effort);
-        let history = {
-            let guard = self.history_resources.history().lock().await;
-            guard.snapshot()
-        };
-        coco_query::QueryEngine::cache_safe_params_from_parts(&cfg, provider, slot_effort, &history)
-    }
-
     /// Install the background task runtime. Called once during CLI
     /// bootstrap; the same `Arc` flows into `SwarmAgentHandle` for
     /// the registration side. Idempotent - re-attaching replaces.

@@ -108,6 +108,17 @@ pub struct LocalClientConnection<H> {
     lifecycle: tokio::sync::mpsc::Receiver<SurfaceLifecycleEffect>,
 }
 
+/// A live delivery received by a local in-process connection.
+///
+/// Keeping ordinary session events and surface lifecycle effects in one typed
+/// receive path prevents event pumps from silently missing server-driven
+/// close/replace transitions.
+#[derive(Debug, Clone)]
+pub enum LocalClientInbound {
+    Event(Box<SurfaceDelivery>),
+    Lifecycle(SurfaceLifecycleEffect),
+}
+
 impl<H: Clone> LocalClientConnection<H> {
     pub fn connection_key(&self) -> ConnectionKey {
         self.connection
@@ -193,6 +204,26 @@ impl<H: Clone> LocalClientConnection<H> {
 
     pub fn lifecycle_mut(&mut self) -> &mut tokio::sync::mpsc::Receiver<SurfaceLifecycleEffect> {
         &mut self.lifecycle
+    }
+
+    pub async fn recv(&mut self) -> Option<LocalClientInbound> {
+        loop {
+            if self.events.is_closed() && self.lifecycle.is_closed() {
+                return None;
+            }
+            tokio::select! {
+                event = self.events.recv(), if !self.events.is_closed() => {
+                    if let Some(event) = event {
+                        return Some(LocalClientInbound::Event(Box::new(event)));
+                    }
+                }
+                lifecycle = self.lifecycle.recv(), if !self.lifecycle.is_closed() => {
+                    if let Some(lifecycle) = lifecycle {
+                        return Some(LocalClientInbound::Lifecycle(lifecycle));
+                    }
+                }
+            }
+        }
     }
 
     pub fn detach_surface(&self, surface_id: &SurfaceId) -> DetachSurfaceOutcome {

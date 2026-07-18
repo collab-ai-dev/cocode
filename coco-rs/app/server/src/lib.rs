@@ -9,6 +9,7 @@ mod activity;
 mod app_server;
 mod json_rpc_adapter;
 mod local_client_adapter;
+mod registration_policy;
 mod registry;
 mod session_data;
 mod session_seq;
@@ -39,9 +40,12 @@ pub use json_rpc_adapter::{
     JsonRpcRequestHandler, JsonRpcServerRequestResponse, PendingJsonRpcServerRequest,
 };
 pub use local_client_adapter::{
-    LocalClientAdapter, LocalClientConnection, LocalClientDispatchError, LocalClientRequestContext,
-    LocalClientRequestFuture, LocalClientRequestHandler, LocalClientSubscribeOutcome,
-    LocalClientSubscription, LocalClientSurface,
+    LocalClientAdapter, LocalClientConnection, LocalClientDispatchError, LocalClientInbound,
+    LocalClientRequestContext, LocalClientRequestFuture, LocalClientRequestHandler,
+    LocalClientSubscribeOutcome, LocalClientSubscription, LocalClientSurface,
+};
+pub use registration_policy::{
+    SessionEgress, SessionRegistrationPolicy, SessionTopology, SessionVisibility,
 };
 pub use registry::{
     CloseCompletion, CloseStart, LiveSessionRegistry, LoadCompletion, LoadStart, RegistryError,

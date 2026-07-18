@@ -59,6 +59,7 @@ pub(crate) struct QueryHookHandle {
     /// orchestration so UI shows the same hook events whether they
     /// fire from the runner or the tool callback path.
     hook_tx: Option<mpsc::Sender<HookExecutionEvent>>,
+    policy: coco_hooks::HookExecutionPolicy,
 }
 
 impl QueryHookHandle {
@@ -66,11 +67,13 @@ impl QueryHookHandle {
         registry: Arc<HookRegistry>,
         ctx: OrchestrationContext,
         hook_tx: Option<mpsc::Sender<HookExecutionEvent>>,
+        policy: coco_hooks::HookExecutionPolicy,
     ) -> Self {
         Self {
             registry,
             ctx,
             hook_tx,
+            policy,
         }
     }
 }
@@ -177,6 +180,9 @@ impl HookHandle for QueryHookHandle {
         teammate_name: Option<&str>,
         team_name: Option<&str>,
     ) -> TaskHookOutcome {
+        if !self.policy.allows(coco_types::HookEventType::TaskCreated) {
+            return TaskHookOutcome::default();
+        }
         if self.ctx.disable_all_hooks {
             return TaskHookOutcome::default();
         }
@@ -212,6 +218,9 @@ impl HookHandle for QueryHookHandle {
         teammate_name: Option<&str>,
         team_name: Option<&str>,
     ) -> TaskHookOutcome {
+        if !self.policy.allows(coco_types::HookEventType::TaskCompleted) {
+            return TaskHookOutcome::default();
+        }
         if self.ctx.disable_all_hooks {
             return TaskHookOutcome::default();
         }

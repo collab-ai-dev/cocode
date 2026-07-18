@@ -43,7 +43,14 @@ fn assert_denied(d: &CanUseToolDecision, msg: &str) {
 async fn test_auto_mem_allows_read_glob_grep_unrestricted() {
     let h = create_auto_mem_handle(PathBuf::from("/memdir"));
     for tool in ["Read", "Glob", "Grep"] {
-        let d = h.check(tool, &json!({}), &ctx()).await;
+        let d = h
+            .check(
+                &tool.parse::<coco_types::ToolId>().unwrap(),
+                tool,
+                &json!({}),
+                &ctx(),
+            )
+            .await;
         assert_allowed(&d, tool);
     }
 }
@@ -57,7 +64,14 @@ async fn test_auto_mem_allows_read_only_bash() {
         json!({"command": "grep foo bar.txt"}),
     ];
     for cmd in cases {
-        let d = h.check("Bash", &cmd, &ctx()).await;
+        let d = h
+            .check(
+                &"Bash".parse::<coco_types::ToolId>().unwrap(),
+                "Bash",
+                &cmd,
+                &ctx(),
+            )
+            .await;
         assert_allowed(&d, &cmd.to_string());
     }
 }
@@ -72,7 +86,14 @@ async fn test_auto_mem_denies_mutating_bash() {
         json!({"command": "curl http://evil"}),
     ];
     for cmd in cases {
-        let d = h.check("Bash", &cmd, &ctx()).await;
+        let d = h
+            .check(
+                &"Bash".parse::<coco_types::ToolId>().unwrap(),
+                "Bash",
+                &cmd,
+                &ctx(),
+            )
+            .await;
         assert_denied(&d, &cmd.to_string());
     }
 }
@@ -85,7 +106,14 @@ async fn test_auto_dream_allows_rm_md_inside_memdir() {
         json!({"command": "rm -f -- /memdir/old.md '/memdir/second.md'"}),
     ];
     for cmd in cases {
-        let d = h.check("Bash", &cmd, &ctx()).await;
+        let d = h
+            .check(
+                &"Bash".parse::<coco_types::ToolId>().unwrap(),
+                "Bash",
+                &cmd,
+                &ctx(),
+            )
+            .await;
         assert_allowed(&d, &cmd.to_string());
     }
 }
@@ -101,7 +129,14 @@ async fn test_auto_dream_denies_unsafe_rm() {
         json!({"command": "rm /memdir/old.md; rm /tmp/x.md"}),
     ];
     for cmd in cases {
-        let d = h.check("Bash", &cmd, &ctx()).await;
+        let d = h
+            .check(
+                &"Bash".parse::<coco_types::ToolId>().unwrap(),
+                "Bash",
+                &cmd,
+                &ctx(),
+            )
+            .await;
         assert_denied(&d, &cmd.to_string());
     }
 }
@@ -116,7 +151,14 @@ async fn test_auto_mem_allows_safe_piped_bash() {
         json!({"command": "git log --oneline | head"}),
     ];
     for cmd in cases {
-        let d = h.check("Bash", &cmd, &ctx()).await;
+        let d = h
+            .check(
+                &"Bash".parse::<coco_types::ToolId>().unwrap(),
+                "Bash",
+                &cmd,
+                &ctx(),
+            )
+            .await;
         assert_allowed(&d, &cmd.to_string());
     }
 }
@@ -131,7 +173,14 @@ async fn test_auto_mem_denies_pipe_to_mutating() {
         json!({"command": "ls / && rm -rf /tmp"}),
     ];
     for cmd in cases {
-        let d = h.check("Bash", &cmd, &ctx()).await;
+        let d = h
+            .check(
+                &"Bash".parse::<coco_types::ToolId>().unwrap(),
+                "Bash",
+                &cmd,
+                &ctx(),
+            )
+            .await;
         assert_denied(&d, &cmd.to_string());
     }
 }
@@ -140,7 +189,12 @@ async fn test_auto_mem_denies_pipe_to_mutating() {
 async fn test_auto_mem_allows_edit_within_memdir() {
     let h = create_auto_mem_handle(PathBuf::from("/memdir"));
     let d = h
-        .check("Edit", &json!({"file_path": "/memdir/notes.md"}), &ctx())
+        .check(
+            &"Edit".parse::<coco_types::ToolId>().unwrap(),
+            "Edit",
+            &json!({"file_path": "/memdir/notes.md"}),
+            &ctx(),
+        )
         .await;
     assert_allowed(&d, "edit within memdir");
 }
@@ -151,7 +205,12 @@ async fn test_auto_mem_allows_relative_edit_resolved_against_context_cwd() {
     ctx.cwd = PathBuf::from("/memdir");
     let h = create_auto_mem_handle(PathBuf::from("/memdir"));
     let d = h
-        .check("Edit", &json!({"file_path": "notes.md"}), &ctx)
+        .check(
+            &"Edit".parse::<coco_types::ToolId>().unwrap(),
+            "Edit",
+            &json!({"file_path": "notes.md"}),
+            &ctx,
+        )
         .await;
     assert_allowed(&d, "relative edit within memdir cwd");
 }
@@ -162,7 +221,12 @@ async fn test_auto_mem_denies_relative_escape_from_context_cwd() {
     ctx.cwd = PathBuf::from("/memdir/nested");
     let h = create_auto_mem_handle(PathBuf::from("/memdir"));
     let d = h
-        .check("Write", &json!({"file_path": "../../outside.md"}), &ctx)
+        .check(
+            &"Write".parse::<coco_types::ToolId>().unwrap(),
+            "Write",
+            &json!({"file_path": "../../outside.md"}),
+            &ctx,
+        )
         .await;
     assert_denied(&d, "relative escape from memdir cwd");
 }
@@ -171,7 +235,12 @@ async fn test_auto_mem_denies_relative_escape_from_context_cwd() {
 async fn test_auto_mem_denies_non_md_write_within_memdir() {
     let h = create_auto_mem_handle(PathBuf::from("/memdir"));
     let d = h
-        .check("Write", &json!({"file_path": "/memdir/notes.txt"}), &ctx())
+        .check(
+            &"Write".parse::<coco_types::ToolId>().unwrap(),
+            "Write",
+            &json!({"file_path": "/memdir/notes.txt"}),
+            &ctx(),
+        )
         .await;
     assert_denied(&d, "non-md write within memdir");
 }
@@ -180,7 +249,12 @@ async fn test_auto_mem_denies_non_md_write_within_memdir() {
 async fn test_auto_mem_denies_edit_outside_memdir() {
     let h = create_auto_mem_handle(PathBuf::from("/memdir"));
     let d = h
-        .check("Edit", &json!({"file_path": "/tmp/x"}), &ctx())
+        .check(
+            &"Edit".parse::<coco_types::ToolId>().unwrap(),
+            "Edit",
+            &json!({"file_path": "/tmp/x"}),
+            &ctx(),
+        )
         .await;
     assert_denied(&d, "edit outside memdir");
 }
@@ -191,7 +265,12 @@ async fn test_auto_mem_denies_traversal_escape() {
     // not `/memdir/x` — Deny.
     let h = create_auto_mem_handle(PathBuf::from("/memdir"));
     let d = h
-        .check("Edit", &json!({"file_path": "/memdir/../x"}), &ctx())
+        .check(
+            &"Edit".parse::<coco_types::ToolId>().unwrap(),
+            "Edit",
+            &json!({"file_path": "/memdir/../x"}),
+            &ctx(),
+        )
         .await;
     assert_denied(&d, "traversal escape");
 }
@@ -203,7 +282,14 @@ async fn test_auto_mem_allows_apply_patch_for_relative_md_under_memdir() {
     let h = create_auto_mem_handle(PathBuf::from("/memdir"));
     let patch = "*** Begin Patch\n*** Add File: notes.md\n+hello\n*** End Patch\n";
 
-    let d = h.check("apply_patch", &json!({"patch": patch}), &ctx).await;
+    let d = h
+        .check(
+            &"apply_patch".parse::<coco_types::ToolId>().unwrap(),
+            "apply_patch",
+            &json!({"patch": patch}),
+            &ctx,
+        )
+        .await;
 
     assert_allowed(&d, "apply_patch relative md under memdir");
 }
@@ -215,7 +301,14 @@ async fn test_auto_mem_denies_apply_patch_with_non_md_path() {
     let h = create_auto_mem_handle(PathBuf::from("/memdir"));
     let patch = "*** Begin Patch\n*** Add File: notes.txt\n+hello\n*** End Patch\n";
 
-    let d = h.check("apply_patch", &json!({"patch": patch}), &ctx).await;
+    let d = h
+        .check(
+            &"apply_patch".parse::<coco_types::ToolId>().unwrap(),
+            "apply_patch",
+            &json!({"patch": patch}),
+            &ctx,
+        )
+        .await;
 
     assert_denied(&d, "apply_patch non-md path");
 }
@@ -227,7 +320,14 @@ async fn test_auto_mem_denies_apply_patch_with_mixed_escape() {
     let h = create_auto_mem_handle(PathBuf::from("/memdir"));
     let patch = "*** Begin Patch\n*** Add File: ok.md\n+hello\n*** Add File: ../outside.md\n+bad\n*** End Patch\n";
 
-    let d = h.check("apply_patch", &json!({"patch": patch}), &ctx).await;
+    let d = h
+        .check(
+            &"apply_patch".parse::<coco_types::ToolId>().unwrap(),
+            "apply_patch",
+            &json!({"patch": patch}),
+            &ctx,
+        )
+        .await;
 
     assert_denied(&d, "apply_patch mixed escape");
 }
@@ -235,7 +335,14 @@ async fn test_auto_mem_denies_apply_patch_with_mixed_escape() {
 #[tokio::test]
 async fn test_auto_mem_denies_unknown_tool() {
     let h = create_auto_mem_handle(PathBuf::from("/memdir"));
-    let d = h.check("TaskOutput", &json!({}), &ctx()).await;
+    let d = h
+        .check(
+            &"TaskOutput".parse::<coco_types::ToolId>().unwrap(),
+            "TaskOutput",
+            &json!({}),
+            &ctx(),
+        )
+        .await;
     assert_denied(&d, "unknown tool");
 }
 
@@ -244,7 +351,14 @@ async fn test_auto_mem_denies_unknown_tool() {
 #[tokio::test]
 async fn test_session_mem_allows_read() {
     let h = create_session_mem_handle(PathBuf::from("/sessions/sm.md"));
-    let d = h.check("Read", &json!({}), &ctx()).await;
+    let d = h
+        .check(
+            &"Read".parse::<coco_types::ToolId>().unwrap(),
+            "Read",
+            &json!({}),
+            &ctx(),
+        )
+        .await;
     assert_allowed(&d, "read");
 }
 
@@ -252,7 +366,12 @@ async fn test_session_mem_allows_read() {
 async fn test_session_mem_allows_edit_on_exact_path() {
     let h = create_session_mem_handle(PathBuf::from("/sessions/sm.md"));
     let d = h
-        .check("Edit", &json!({"file_path": "/sessions/sm.md"}), &ctx())
+        .check(
+            &"Edit".parse::<coco_types::ToolId>().unwrap(),
+            "Edit",
+            &json!({"file_path": "/sessions/sm.md"}),
+            &ctx(),
+        )
         .await;
     assert_allowed(&d, "edit on canonical path");
 }
@@ -261,7 +380,12 @@ async fn test_session_mem_allows_edit_on_exact_path() {
 async fn test_session_mem_denies_edit_on_wrong_path() {
     let h = create_session_mem_handle(PathBuf::from("/sessions/sm.md"));
     let d = h
-        .check("Edit", &json!({"file_path": "/tmp/other.md"}), &ctx())
+        .check(
+            &"Edit".parse::<coco_types::ToolId>().unwrap(),
+            "Edit",
+            &json!({"file_path": "/tmp/other.md"}),
+            &ctx(),
+        )
         .await;
     assert_denied(&d, "edit wrong path");
 }
@@ -270,7 +394,14 @@ async fn test_session_mem_denies_edit_on_wrong_path() {
 async fn test_session_mem_denies_other_tools() {
     let h = create_session_mem_handle(PathBuf::from("/sessions/sm.md"));
     for tool in ["Write", "Bash", "Glob", "Grep", "TaskOutput"] {
-        let d = h.check(tool, &json!({}), &ctx()).await;
+        let d = h
+            .check(
+                &tool.parse::<coco_types::ToolId>().unwrap(),
+                tool,
+                &json!({}),
+                &ctx(),
+            )
+            .await;
         assert_denied(&d, tool);
     }
 }
@@ -296,6 +427,7 @@ async fn test_auto_mem_denies_real_symlink_escape() {
     let h = create_auto_mem_handle(memdir.clone());
     let d = h
         .check(
+            &"Edit".parse::<coco_types::ToolId>().unwrap(),
             "Edit",
             &json!({"file_path": escape_link.display().to_string()}),
             &ctx(),
@@ -322,6 +454,7 @@ async fn test_auto_mem_denies_dangling_symlink_inside_memdir() {
     let h = create_auto_mem_handle(memdir.clone());
     let d = h
         .check(
+            &"Edit".parse::<coco_types::ToolId>().unwrap(),
             "Edit",
             &json!({"file_path": dangling.display().to_string()}),
             &ctx(),

@@ -198,6 +198,35 @@ pub(super) async fn run_agent_driver(
                     }
                 }
 
+                // Sidechat follow-up: while a sidechat child is open, plain
+                // input continues the child on its own turn coordinator — never
+                // the parent. (`/btw` and other slash commands were handled
+                // above; this only fires for ordinary input, and is skipped
+                // entirely when no child is open, so the primary path is
+                // unchanged.)
+                if local_app_server_bridge
+                    .child_interactive_session()
+                    .is_some()
+                {
+                    let params = coco_types::TurnStartParams {
+                        target: interactive_target(&local_app_server_bridge),
+                        prompt: effective_content,
+                        history_override: Vec::new(),
+                        images: image_data_to_turn_start(&images),
+                        slash_metadata,
+                        model_selection: model_runtime_source_to_turn_start_selection(
+                            slash_model_runtime_source,
+                        ),
+                        permission_mode: None,
+                        thinking_level: slash_thinking_level,
+                        goal_continuation: false,
+                    };
+                    if let Err(error) = local_app_server_bridge.start_child_turn(params).await {
+                        tracing::warn!(%error, "TUI sidechat follow-up turn failed");
+                    }
+                    continue;
+                }
+
                 // Defensive drain: TUI input layer gates submit on
                 // `running` state, but a slow gate could still let a
                 // second SubmitInput through. Cancel + await the prior
@@ -757,7 +786,50 @@ pub(super) async fn run_agent_driver(
                     .await;
             }
 
+            UserCommand::CloseSideChat => {
+                let parent_id = current_session.read().await.session_id().clone();
+                match local_app_server_bridge.close_child().await {
+                    Ok(Some(child_id)) => {
+                        let _ = event_tx
+                            .send(CoreEvent::Tui(TuiOnlyEvent::SideChatExited {
+                                parent_id,
+                                child_id,
+                            }))
+                            .await;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        tracing::warn!(%error, "Ctrl+C sidechat close failed");
+                        if local_app_server_bridge
+                            .child_interactive_session()
+                            .is_some()
+                        {
+                            emit_slash_text(
+                                &event_tx,
+                                "btw",
+                                "--close",
+                                &format!("Couldn't close the sidechat: {error}"),
+                            )
+                            .await;
+                        }
+                    }
+                }
+            }
+
             UserCommand::Interrupt(_reason) => {
+                if local_app_server_bridge
+                    .child_interactive_session()
+                    .is_some()
+                {
+                    match local_app_server_bridge.interrupt_child_turn().await {
+                        Ok(true) => info!("Interrupt: cancelled sidechat turn"),
+                        Ok(false) => {}
+                        Err(error) => {
+                            tracing::warn!(%error, "Interrupt: sidechat turn/interrupt failed")
+                        }
+                    }
+                    continue;
+                }
                 // Mid-turn cancel now flows through the same AppServer
                 // `turn/interrupt` request the SDK uses. The task slot stays
                 // Some until the turn naturally emits its terminal event; the

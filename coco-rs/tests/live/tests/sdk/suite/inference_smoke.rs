@@ -47,6 +47,7 @@ pub async fn run(provider: &str, model_id: &str) -> Result<()> {
         context_management: None,
         query_source: Some("coco-tests-live::inference_smoke".into()),
         agent_id: None,
+        cache_scope: None,
         time_since_last_assistant_ms: None,
         agentic: false,
         cache: None,

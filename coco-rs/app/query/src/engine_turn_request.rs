@@ -222,6 +222,7 @@ impl QueryEngine {
             context_management,
             query_source: Some(query_source.to_string()),
             agent_id: self.config.agent_id_string(),
+            cache_scope: Some(self.session_id.as_str().to_string()),
             time_since_last_assistant_ms,
             agentic: true,
             cache: self.config.prompt_cache.clone(),

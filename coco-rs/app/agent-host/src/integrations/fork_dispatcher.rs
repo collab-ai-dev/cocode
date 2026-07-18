@@ -1,7 +1,7 @@
 //! Production [`ForkDispatcher`] backed by [`SessionRuntime`].
 //!
-//! D1 / D2: post-turn fork callers (`/btw`, `promptSuggestion`,
-//! and future `postTurnSummary` / `extractMemories` paths) need to
+//! D1 / D2: fork callers (`promptSuggestion`, compaction, and memory paths)
+//! need to
 //! drive a *fresh* [`coco_query::QueryEngine`] without mutating the
 //! parent. This module owns that bridge.
 //!

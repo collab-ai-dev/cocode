@@ -142,6 +142,98 @@ async fn local_bridge_restore_session_seq_from_watermark_restores_replay_and_all
 }
 
 #[tokio::test]
+async fn local_only_child_event_is_delivered_without_allocating_durable_sequence() {
+    let server = Arc::new(coco_app_server::AppServer::<&'static str>::new(2, 8));
+    let parent = coco_types::SessionId::try_new("egress-parent").unwrap();
+    let child = coco_types::SessionId::try_new("egress-child").unwrap();
+
+    let coco_app_server::AppLoadStart::Started { mut completion } = server
+        .spawn_load(parent.clone(), async { Ok("parent") })
+        .expect("load parent")
+    else {
+        panic!("expected parent load");
+    };
+    completion.wait().await.expect("parent live");
+    let coco_app_server::AppLoadStart::Started { mut completion } = server
+        .spawn_child_load(parent, child.clone(), async { Ok("child") })
+        .expect("load child")
+    else {
+        panic!("expected child load");
+    };
+    completion.wait().await.expect("child live");
+
+    let adapter =
+        coco_app_server::LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 4);
+    let mut connection = adapter.connect();
+    let surface = connection
+        .attach_surface(
+            child.clone(),
+            coco_app_server::AttachSurfaceOptions::default(),
+        )
+        .expect("attach child");
+    let allocator = coco_app_server::SessionSeqAllocator::new();
+    route_app_server_session_event(
+        &server,
+        None,
+        &allocator,
+        child.clone(),
+        CoreEvent::Protocol(ServerNotification::SessionStateChanged {
+            state: coco_types::SessionState::Running,
+        }),
+    );
+
+    let delivery = connection.events_mut().recv().await.expect("local event");
+    assert_eq!(delivery.surface_id, surface.surface_id);
+    assert_eq!(delivery.envelope.session_id, child);
+    assert_eq!(delivery.envelope.session_seq, None);
+    assert_eq!(allocator.high_water(&delivery.envelope.session_id), None);
+}
+
+#[tokio::test]
+async fn remote_requests_cannot_target_internal_child_sessions() {
+    let home = tempfile::TempDir::new().expect("home tempdir");
+    let state = Arc::new(AppServerHostState::default());
+    let mut bridge = AppServerLocalBridge::new(state);
+    let runtime = build_local_bridge_test_runtime(&home).await;
+    let parent_id = runtime.session_id().clone();
+    bridge
+        .bind_interactive_session(runtime.clone(), None)
+        .await
+        .expect("bind parent");
+
+    let child_id = coco_types::SessionId::try_new("internal-child").unwrap();
+    let child_handle = crate::app_session::AppSessionHandle::from_runtime(runtime);
+    let coco_app_server::AppLoadStart::Started { mut completion } = bridge
+        .app_server()
+        .spawn_child_load(parent_id, child_id.clone(), async move { Ok(child_handle) })
+        .expect("reserve internal child")
+    else {
+        panic!("expected child load");
+    };
+    completion.wait().await.expect("child live");
+
+    let connection = coco_app_server::ConnectionKey::generate();
+    let error = bridge
+        .handler()
+        .handle_json_rpc_request(
+            JsonRpcRequestContext {
+                connection,
+                scope: RequestScope::Connection,
+            },
+            ClientRequest::SessionRead(coco_types::SessionReadParams {
+                target: coco_types::SessionTarget {
+                    session_id: child_id,
+                },
+                cursor: None,
+                limit: None,
+            }),
+        )
+        .await
+        .expect_err("remote internal target must be rejected");
+    assert_eq!(error.data.unwrap()["kind"], "internal_session");
+}
+
+#[tokio::test]
 async fn local_turn_completion_rejects_terminal_without_session_result() {
     let home = tempfile::TempDir::new().expect("home tempdir");
     let state = Arc::new(AppServerHostState::default());

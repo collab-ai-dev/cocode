@@ -170,11 +170,16 @@ pub fn attachment_to_messages(att: &Attachment) -> Vec<Message> {
             // First message: text-only system-reminder with the synthetic
             // tool-use narration. Second message: the image block by itself
             // — unwrapped, because `<system-reminder>` only wraps text blocks.
-            vec![
-                coco_messages::wrapping::create_system_reminder_message(&call),
+            let mut image_message =
                 coco_messages::create_user_message_with_parts(vec![UserContentPart::File(
                     FilePart::image_base64(b64, &img.media_type),
-                )]),
+                )]);
+            if let Message::User(user) = &mut image_message {
+                user.origin = Some(coco_types::MessageOrigin::SystemInjected);
+            }
+            vec![
+                coco_messages::wrapping::create_system_reminder_message(&call),
+                image_message,
             ]
         }
         Attachment::Directory(d) => {

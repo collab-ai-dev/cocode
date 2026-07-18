@@ -112,16 +112,17 @@ table when a gap closes.
 slash dispatch (`app/cli/src/tui/slash_execution.rs` / `slash_resolution.rs`),
 not the registry sync handler — they don't run meaningfully in headless `-p`
 mode. Registry handlers return honest usage guidance for non-interactive
-surfaces; `/btw` additionally has an SDK `turn/start` handler path (shared
-`coco_agent_host::side_question`).
+surfaces. `/btw` is omitted from remote command metadata, and remote/raw
+`turn/start` input is rejected rather than reinterpreted as a model prompt.
 
 - `/export <filename>` writes the conversation under cwd; format inferred from
   extension (`.md`/`.json`/else text); no-arg opens the format picker.
   Clipboard export is `/copy` (coco split).
 - `/branch` forks the on-disk transcript (`recovery::fork_conversation`,
   relabeling `session_id`) + live-switches via the `/resume` hydration path.
-- `/btw` answer is model-invisible but transcript-visible (TS modal is fully
-  ephemeral) — see `handlers/btw.rs`.
+- `/btw` creates a local-only ephemeral child session with isolated multi-turn
+  history and read-only tools — see `handlers/btw.rs` and
+  `docs/internal/sidechat-architecture.md`.
 
 ## Always-Enabled General-Purpose Commands
 

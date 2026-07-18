@@ -55,14 +55,14 @@ use std::time::UNIX_EPOCH;
 /// killing the process).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum SessionKind {
+pub enum ProcessSessionKind {
     Interactive,
     Bg,
     Daemon,
     DaemonWorker,
 }
 
-impl SessionKind {
+impl ProcessSessionKind {
     /// Parse the env-var value used by `COCO_SESSION_KIND`. Only `bg` /
     /// `daemon` / `daemon-worker` are honored; anything else falls back
     /// to the caller's default.
@@ -97,7 +97,7 @@ pub struct SessionRegistration {
     pub cwd: PathBuf,
     /// Unix-ms timestamp.
     pub started_at: i64,
-    pub kind: SessionKind,
+    pub kind: ProcessSessionKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entrypoint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -154,7 +154,7 @@ impl SessionRegistry {
         let pid_file = dir.join(format!("{pid}.json"));
         create_sessions_dir(&dir)?;
 
-        let kind = env_session_kind().unwrap_or(SessionKind::Interactive);
+        let kind = env_session_kind().unwrap_or(ProcessSessionKind::Interactive);
         let record = SessionRegistration {
             pid,
             session_id: session_id.clone(),
@@ -278,7 +278,7 @@ impl Drop for SessionRegistry {
 /// spawn. Exit paths (e.g. /exit, Ctrl-C) detach the attached client
 /// instead of killing the process.
 pub fn is_bg_session() -> bool {
-    env_session_kind() == Some(SessionKind::Bg)
+    env_session_kind() == Some(ProcessSessionKind::Bg)
 }
 
 /// Count live sessions under `<config_home>/sessions/`.
@@ -387,7 +387,7 @@ pub enum PsViewState {
 /// Terminal outcome carried by a durable job record (e.g. the
 /// `coco-tasks` `JobStore`). Kept as a tiny `coco-session`-local enum so
 /// the layer graph stays clean: `coco-tasks` depends on `coco-session`
-/// (for [`SessionKind`]), therefore `coco-session` must NOT depend on
+/// (for [`ProcessSessionKind`]), therefore `coco-session` must NOT depend on
 /// `coco-tasks` — so [`view_state`] takes this hint rather than a
 /// `JobState`. The merge of `JobStore` records into `ps` happens in the
 /// `coco-cli` layer (which depends on both), mapping
@@ -407,7 +407,7 @@ pub struct PsEntry {
     /// Stable id (= `session_id`).
     pub id: SessionId,
     pub cwd: PathBuf,
-    pub kind: SessionKind,
+    pub kind: ProcessSessionKind,
     /// Unix-ms timestamp.
     pub started_at: i64,
     pub session_id: SessionId,
@@ -538,10 +538,10 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-fn env_session_kind() -> Option<SessionKind> {
+fn env_session_kind() -> Option<ProcessSessionKind> {
     coco_config::env::var(EnvKey::CocoSessionKind)
         .ok()
-        .and_then(|s| SessionKind::from_env_value(&s))
+        .and_then(|s| ProcessSessionKind::from_env_value(&s))
 }
 
 fn create_sessions_dir(dir: &Path) -> std::io::Result<()> {

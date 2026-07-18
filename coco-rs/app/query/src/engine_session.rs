@@ -329,7 +329,10 @@ impl QueryEngine {
         // API / runtime error rather than a clean stop. Output and exit
         // codes are intentionally ignored — this is observability only,
         // not a recovery path.
-        if let (Err(e), Some(hooks)) = (&result, &self.hooks) {
+        if let (Err(e), Some(hooks)) = (
+            &result,
+            self.hooks_for(coco_types::HookEventType::StopFailure),
+        ) {
             let err_msg = e.to_string();
             let hook_ctx = self.orchestration_ctx();
             let last_text = extract_last_assistant_text(&history);

@@ -1,12 +1,9 @@
 use std::path::Path;
-use std::sync::Mutex;
 
 use super::*;
 use coco_config::EnvKey;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
-
-static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn session_workspace_uses_cwd_as_project_root_outside_git() {
@@ -44,7 +41,7 @@ fn session_workspace_uses_git_root_as_project_root() {
 
 #[test]
 fn runtime_paths_uses_remote_memory_dir_for_project_scoped_paths() {
-    let _guard = ENV_LOCK.lock().expect("env lock");
+    let _guard = crate::test_support::CONFIG_ENV_LOCK.blocking_lock();
     let config_home =
         std::env::temp_dir().join(format!("coco-paths-cfg-{}", uuid::Uuid::new_v4().simple()));
     let memory_home =

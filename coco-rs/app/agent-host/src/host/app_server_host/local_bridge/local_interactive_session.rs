@@ -1,15 +1,254 @@
 use std::sync::Arc;
 
-use coco_app_server::{AttachSurfaceOptions, LocalClientAdapter};
+use coco_app_server::{AttachSurfaceOptions, LocalClientAdapter, LocalClientInbound};
 use coco_app_server_client::ClientError;
-use coco_types::{CoreEvent, ServerNotification, SessionId, SurfaceId};
+use coco_types::{
+    CoreEvent, ServerNotification, SessionId, SessionScopedEvent, SurfaceId,
+    SurfaceLifecycleEffectKind, TuiOnlyEvent,
+};
 use tokio::sync::mpsc;
 
+use super::super::session_close::close_local_app_server_session;
+use super::super::session_registry::load_local_app_server_child_session;
 use super::{AppServerLocalBridge, AppServerLocalSessionBinding, AppServerLocalTurnCompletion};
+
+fn scope_surface_event(session_id: SessionId, event: CoreEvent) -> Option<CoreEvent> {
+    let event = match SessionScopedEvent::try_from(event) {
+        Ok(event) => event,
+        Err(_) => {
+            tracing::warn!(
+                %session_id,
+                "dropping TUI-only event received from an AppServer surface"
+            );
+            return None;
+        }
+    };
+    Some(CoreEvent::Tui(TuiOnlyEvent::SessionScoped {
+        session_id,
+        event: Box::new(event),
+    }))
+}
 
 impl AppServerLocalBridge {
     pub fn interactive_session(&self) -> Option<&crate::local_client::LocalSessionClient> {
         self.interactive_surface.as_ref()
+    }
+
+    pub fn child_interactive_session(&self) -> Option<&crate::local_client::LocalSessionClient> {
+        self.child_interactive_surface.as_ref()
+    }
+
+    async fn attach_child_interactive_session(
+        &mut self,
+        child: crate::session_runtime::SessionHandle,
+        parent_id: SessionId,
+        event_tx: Option<mpsc::Sender<CoreEvent>>,
+    ) -> Result<AppServerLocalSessionBinding, ClientError> {
+        let child_id = child.session_id().clone();
+        let surface = self
+            .client
+            .attach_interactive_session(child_id.clone(), AttachSurfaceOptions::default())?;
+        if let Some(event_tx) = event_tx {
+            self.start_child_event_pump(parent_id, child_id, event_tx)?;
+        }
+        self.child_interactive_surface = Some(surface.clone());
+        Ok(AppServerLocalSessionBinding {
+            session: child,
+            surface,
+        })
+    }
+
+    fn start_child_event_pump(
+        &mut self,
+        parent_id: SessionId,
+        child_id: SessionId,
+        event_tx: mpsc::Sender<CoreEvent>,
+    ) -> Result<(), ClientError> {
+        if let Some(handle) = self.child_event_pump.take() {
+            handle.abort();
+        }
+        let adapter = LocalClientAdapter::with_channel_capacity(
+            Arc::clone(&self.app_server),
+            self.channel_capacity,
+        );
+        let mut connection = adapter.connect();
+        let surface = connection
+            .attach_surface(child_id.clone(), AttachSurfaceOptions::default())
+            .map_err(crate::local_client::client_error_from_attach)?;
+        let surface_id = surface.surface_id;
+        self.child_event_pump = Some(tokio::spawn(async move {
+            while let Some(inbound) = connection.recv().await {
+                match inbound {
+                    LocalClientInbound::Event(delivery) if delivery.surface_id == surface_id => {
+                        let delivery = *delivery;
+                        let Some(event) = scope_surface_event(
+                            delivery.envelope.session_id,
+                            delivery.envelope.event,
+                        ) else {
+                            continue;
+                        };
+                        if event_tx.send(event).await.is_err() {
+                            break;
+                        }
+                    }
+                    LocalClientInbound::Lifecycle(effect) if effect.surface_id == surface_id => {
+                        let child_ended = matches!(
+                            &effect.kind,
+                            SurfaceLifecycleEffectKind::SessionEnded { session_id }
+                                if session_id == &child_id
+                        );
+                        if child_ended {
+                            let _ = event_tx
+                                .send(CoreEvent::Tui(TuiOnlyEvent::SideChatExited {
+                                    parent_id: parent_id.clone(),
+                                    child_id: child_id.clone(),
+                                }))
+                                .await;
+                            break;
+                        }
+                    }
+                    LocalClientInbound::Event(_) | LocalClientInbound::Lifecycle(_) => {}
+                }
+            }
+        }));
+        Ok(())
+    }
+
+    /// Start a turn on the sidechat child (its own turn coordinator — never
+    /// touches the parent's).
+    pub async fn start_child_turn(
+        &mut self,
+        mut params: coco_types::TurnStartParams,
+    ) -> Result<coco_types::TurnStartResult, ClientError> {
+        let surface = self.child_interactive_surface.as_ref().ok_or_else(|| {
+            ClientError::InvalidArgument("child interactive surface missing".into())
+        })?;
+        params.target = surface.interactive_target();
+        self.client.turn_start(&self.handler, params).await
+    }
+
+    pub async fn interrupt_child_turn(&self) -> Result<bool, ClientError> {
+        let Some(surface) = self.child_interactive_surface.as_ref() else {
+            return Ok(false);
+        };
+        self.client
+            .interrupt_session(&self.handler, surface)
+            .await?;
+        Ok(true)
+    }
+
+    /// Reserve, build, and attach a sidechat child of `parent_id` without
+    /// starting a turn. The caller can switch the TUI projection using the
+    /// returned ids before the child's first event-producing turn begins.
+    pub async fn open_side_chat(
+        &mut self,
+        parent_id: SessionId,
+        event_tx: Option<mpsc::Sender<CoreEvent>>,
+    ) -> Result<AppServerLocalSessionBinding, ClientError> {
+        let replacement = self
+            .handler
+            .state
+            .runtime_replacement_snapshot()
+            .await
+            .ok_or_else(|| {
+                ClientError::InvalidArgument(
+                    "sidechat requires a configured runtime factory".into(),
+                )
+            })?;
+        let parent = self
+            .app_server
+            .registry()
+            .get(&parent_id)
+            .ok_or_else(|| ClientError::InvalidArgument("sidechat parent is not live".into()))?
+            .into_session();
+        let child_id = SessionId::generate();
+        let build_child_id = child_id.clone();
+        let factory = async move {
+            let seed = parent.capture_side_chat_seed().await.map_err(|error| {
+                coco_app_server::RegistryError::load_failed(format!(
+                    "sidechat context capture failed: {error:?}"
+                ))
+            })?;
+            let child = replacement
+                .runtime_factory
+                .build_side_chat(
+                    Some(build_child_id),
+                    replacement.cwd.clone(),
+                    Default::default(),
+                    seed,
+                )
+                .await
+                .map_err(|error| {
+                    coco_app_server::RegistryError::load_failed(format!(
+                        "building sidechat child failed: {error:#}"
+                    ))
+                })?;
+            Ok(crate::app_session::AppSessionHandle::from_runtime(child))
+        };
+        let handle = load_local_app_server_child_session(
+            &self.app_server,
+            parent_id.clone(),
+            child_id.clone(),
+            factory,
+        )
+        .await
+        .map_err(|error| {
+            ClientError::InvalidArgument(format!("load sidechat child failed: {error:?}"))
+        })?;
+        let child = handle.into_session();
+        crate::app_server_host::hook_callback_bridge::install_runtime_callback(
+            Arc::clone(&self.app_server),
+            &child,
+        );
+        match self
+            .attach_child_interactive_session(child, parent_id, event_tx)
+            .await
+        {
+            Ok(binding) => Ok(binding),
+            Err(error) => {
+                let cleanup = self.close_registered_child(child_id).await;
+                if let Err(cleanup_error) = cleanup {
+                    tracing::error!(%cleanup_error, "failed to roll back sidechat after attach failure");
+                }
+                Err(error)
+            }
+        }
+    }
+
+    async fn close_registered_child(&self, child_id: SessionId) -> Result<(), ClientError> {
+        close_local_app_server_session(
+            Arc::clone(&self.app_server),
+            Arc::clone(&self.handler.state),
+            child_id,
+            self.handler.turn_drain_timeout,
+        )
+        .await
+        .map_err(|error| ClientError::Server {
+            code: error.code,
+            message: error.message,
+            data: error.data,
+        })
+    }
+
+    /// Close the sidechat child without leaving stale bridge authority.
+    /// Handles remain installed if close fails before the registry commits;
+    /// once the slot is terminally removed they are cleared even when runtime
+    /// teardown reported an error. The detached pump consumes the terminal
+    /// lifecycle effect and then exits by itself.
+    pub async fn close_child(&mut self) -> Result<Option<SessionId>, ClientError> {
+        let Some(surface) = self.child_interactive_surface.as_ref() else {
+            return Ok(None);
+        };
+        let child_id = surface.session_id().clone();
+        let close_result = self.close_registered_child(child_id.clone()).await;
+        if !self.app_server.has_session_slot(&child_id) {
+            // Dropping a JoinHandle detaches rather than aborts. The pump must
+            // remain alive long enough to forward SessionEnded to the TUI.
+            self.child_event_pump.take();
+            self.child_interactive_surface = None;
+        }
+        close_result?;
+        Ok(Some(child_id))
     }
 
     pub fn ensure_interactive_surface(&mut self, session_id: SessionId) -> Result<(), ClientError> {
@@ -83,10 +322,15 @@ impl AppServerLocalBridge {
         let surface_id = surface.surface_id;
         self.event_pump = Some(tokio::spawn(async move {
             while let Some(delivery) = connection.events_mut().recv().await {
-                if delivery.surface_id == surface_id
-                    && event_tx.send(delivery.envelope.event).await.is_err()
-                {
-                    break;
+                if delivery.surface_id == surface_id {
+                    let Some(event) =
+                        scope_surface_event(delivery.envelope.session_id, delivery.envelope.event)
+                    else {
+                        continue;
+                    };
+                    if event_tx.send(event).await.is_err() {
+                        break;
+                    }
                 }
             }
         }));
@@ -205,7 +449,10 @@ impl AppServerLocalBridge {
         };
         for pass in 0..2 {
             while let Some(envelope) = self.client.try_next_session_event(&surface) {
-                if event_tx.send(envelope.event).await.is_err() {
+                let Some(event) = scope_surface_event(envelope.session_id, envelope.event) else {
+                    continue;
+                };
+                if event_tx.send(event).await.is_err() {
                     return;
                 }
             }

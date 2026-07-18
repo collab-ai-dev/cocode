@@ -12,8 +12,33 @@ impl SessionHandle {
         self.runtime.tools()
     }
 
+    /// Construction-time execution profile (`Primary` vs `SideChatReadOnly`).
+    pub(crate) fn execution_profile(
+        &self,
+    ) -> crate::session::session_runtime::SessionExecutionProfile {
+        self.runtime.execution_profile()
+    }
+
     pub(crate) fn app_state(&self) -> &Arc<tokio::sync::RwLock<coco_types::ToolAppState>> {
         self.runtime.app_state()
+    }
+
+    pub(crate) async fn apply_side_chat_parent_state(
+        &self,
+        parent_config: coco_query::QueryEngineConfig,
+        permissions: coco_types::LiveToolPermissionState,
+    ) {
+        self.runtime
+            .update_engine_config(move |config| {
+                config.model_id = parent_config.model_id;
+                config.system_prompt = parent_config.system_prompt;
+                config.append_system_prompt = parent_config.append_system_prompt;
+                config.thinking_level = parent_config.thinking_level;
+                config.fast_mode = parent_config.fast_mode;
+                config.permission_mode = parent_config.permission_mode;
+            })
+            .await;
+        self.runtime.app_state().write().await.permissions = permissions;
     }
 
     pub fn original_cwd(&self) -> &std::path::PathBuf {
@@ -189,12 +214,6 @@ impl SessionHandle {
         self.runtime.current_agent_transcript_store().await
     }
 
-    pub async fn current_fork_dispatcher(
-        &self,
-    ) -> Option<coco_query::forked_agent::ForkDispatcherRef> {
-        self.runtime.current_fork_dispatcher().await
-    }
-
     pub async fn current_mcp_handle(&self) -> Option<coco_tool_runtime::McpHandleRef> {
         self.runtime.current_mcp_handle().await
     }
@@ -255,14 +274,6 @@ impl SessionHandle {
         self.current_engine_config().await.thinking_level
     }
 
-    pub async fn last_cache_safe_params(&self) -> Option<coco_types::CacheSafeParams> {
-        self.runtime.last_cache_safe_params().await
-    }
-
-    pub async fn fallback_cache_safe_params(&self) -> coco_types::CacheSafeParams {
-        self.runtime.fallback_cache_safe_params().await
-    }
-
     pub async fn has_exited_plan_mode(&self) -> bool {
         self.runtime.has_exited_plan_mode().await
     }
@@ -312,7 +323,7 @@ impl SessionHandle {
     pub async fn initialize_metadata_snapshot(&self) -> super::SessionInitializeMetadata {
         let command_registry = self.current_command_registry().await;
         let commands = command_registry
-            .client_visible()
+            .remote_client_visible()
             .iter()
             .map(|cmd| super::SessionInitializeCommand {
                 name: cmd.base.name.clone(),

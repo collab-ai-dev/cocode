@@ -298,6 +298,8 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // dream / session services) honour their per-policy
             // callbacks. Other (AgentTool) spawns leave it `None`.
             can_use_tool: config.can_use_tool.clone(),
+            // Subagents gate via `fork_isolation`, not the session-level flag.
+            require_can_use_tool: false,
             query_source_override: None,
             fork_label: config.fork_label,
             // Sub-context isolation for fork-flavored subagent spawns.

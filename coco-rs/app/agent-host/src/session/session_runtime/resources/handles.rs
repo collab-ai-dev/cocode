@@ -7,11 +7,6 @@ use coco_messages::MessageHistory;
 use coco_tool_runtime::AgentHandleRef;
 use tokio::sync::{Mutex, RwLock};
 
-/// Shared handle to a `QueryEngine`'s post-turn cache-safe-params slot, as
-/// returned by `QueryEngine::cache_safe_params_handle`. Kept as an alias so
-/// the runtime field that stores the latest one stays readable.
-type CacheParamsHandle = Arc<RwLock<Option<coco_types::CacheSafeParams>>>;
-
 pub(in crate::session::session_runtime) struct SessionIntegrationResources {
     /// MCP handle installed on every per-turn engine via `wire_engine`.
     pub(in crate::session::session_runtime) mcp_handle:
@@ -103,9 +98,6 @@ pub(in crate::session::session_runtime) struct SessionHandleResources {
     /// Post-turn fork dispatcher installed after the runtime Arc exists.
     pub(in crate::session::session_runtime) fork_dispatcher:
         Arc<RwLock<Option<coco_query::forked_agent::ForkDispatcherRef>>>,
-    /// Latest per-turn cache-safe-params slot captured from built engines.
-    pub(in crate::session::session_runtime) last_engine_cache_handle:
-        Arc<RwLock<Option<CacheParamsHandle>>>,
     /// Session-scoped abort token for the in-flight prompt-suggestion fork.
     pub(in crate::session::session_runtime) current_suggestion_abort:
         Arc<tokio::sync::Mutex<Option<tokio_util::sync::CancellationToken>>>,
@@ -135,7 +127,6 @@ impl SessionHandleResources {
             skill_handle: Arc::new(RwLock::new(None)),
             skill_bash_cell: Arc::new(std::sync::RwLock::new(None)),
             fork_dispatcher: Arc::new(RwLock::new(None)),
-            last_engine_cache_handle: Arc::new(RwLock::new(None)),
             current_suggestion_abort: Arc::new(tokio::sync::Mutex::new(None)),
             task_runtime: Arc::new(RwLock::new(None)),
             task_list: Arc::new(RwLock::new(None)),

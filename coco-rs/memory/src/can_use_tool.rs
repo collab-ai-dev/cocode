@@ -121,6 +121,7 @@ impl std::fmt::Debug for AutoMemHandle {
 impl CanUseToolHandle for AutoMemHandle {
     async fn check(
         &self,
+        _tool_id: &coco_types::ToolId,
         tool_name: &str,
         input: &Value,
         ctx: &CanUseToolCallContext,
@@ -215,6 +216,7 @@ struct SessionMemHandle {
 impl CanUseToolHandle for SessionMemHandle {
     async fn check(
         &self,
+        _tool_id: &coco_types::ToolId,
         tool_name: &str,
         input: &Value,
         _ctx: &CanUseToolCallContext,
