@@ -5,12 +5,14 @@ use super::*;
 /// no translation).
 pub(super) async fn emit_slash_text(
     event_tx: &mpsc::Sender<CoreEvent>,
+    session_id: &coco_types::SessionId,
     name: &str,
     args: &str,
     text: &str,
 ) {
     let _ = event_tx
         .send(CoreEvent::Tui(TuiOnlyEvent::SlashCommandResult {
+            session_id: session_id.clone(),
             name: name.to_string(),
             args: args.to_string(),
             text: text.to_string(),
@@ -23,36 +25,37 @@ pub(super) async fn dispatch_context(
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> SlashOutcome {
-    if let Err(error) = local_app_server_bridge
-        .activate_existing_interactive_session(session.session_id().clone(), None)
-    {
+    let session_id = session.session_id();
+    let Some(target) = session_target_for(local_app_server_bridge, session_id) else {
         emit_slash_status(
             event_tx,
+            session_id,
             "context",
             "failed",
             SlashCommandStatusKind::Failed {
-                error: format!("could not activate local AppServer session: {error}"),
+                error: "interactive session surface is no longer available".to_string(),
             },
         )
         .await;
         return SlashOutcome::Handled;
-    }
+    };
     match local_app_server_bridge
         .client()
-        .context_usage(
-            local_app_server_bridge.handler(),
-            session_target(local_app_server_bridge),
-        )
+        .context_usage(local_app_server_bridge.handler(), target)
         .await
     {
         Ok(result) => {
             let _ = event_tx
-                .send(CoreEvent::Tui(TuiOnlyEvent::OpenContextUsage { result }))
+                .send(CoreEvent::Tui(TuiOnlyEvent::OpenContextUsage {
+                    session_id: session_id.clone(),
+                    result,
+                }))
                 .await;
         }
         Err(e) => {
             emit_slash_status(
                 event_tx,
+                session_id,
                 "context",
                 /*args*/ "",
                 SlashCommandStatusKind::Failed {

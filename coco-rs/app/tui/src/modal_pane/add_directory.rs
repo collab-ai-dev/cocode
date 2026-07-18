@@ -140,9 +140,16 @@ async fn on_submit(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>)
             state.ui.dismiss_modal();
             // Re-dispatch the validated path through the normal slash path so
             // the CLI runner's session-add + confirmation message own the add.
-            if let Ok(name) = crate::state::SlashCommandName::new("add-dir") {
+            if let Ok(name) = crate::state::SlashCommandName::new("add-dir")
+                && let Some(session_id) = state.active_session_id()
+            {
                 let _ = command_tx
-                    .send(UserCommand::ExecuteSlashCommand { name, args: path })
+                    .send(UserCommand::ExecuteSlashCommand {
+                        session_id,
+                        name,
+                        args: path,
+                        images: Vec::new(),
+                    })
                     .await;
             }
             true
@@ -165,9 +172,11 @@ async fn on_cancel(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>)
         text: cancelled,
         is_error: false,
     };
-    let _ = command_tx
-        .send(UserCommand::PushSlashResult { entry })
-        .await;
+    if let Some(session_id) = state.active_session_id() {
+        let _ = command_tx
+            .send(UserCommand::PushSlashResult { session_id, entry })
+            .await;
+    }
 }
 
 /// Mirror of `commands::add_dir_handler` validation so the overlay can give

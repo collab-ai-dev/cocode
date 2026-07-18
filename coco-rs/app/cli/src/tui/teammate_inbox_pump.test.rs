@@ -33,7 +33,14 @@ async fn inject_and_wait_releases_only_on_own_turn_id() {
 
     let handle = tokio::spawn(async move {
         let mut rx = turn_done_rx;
-        inject_and_wait(&command_tx, &mut rx, &cancel_task, FRAMED.to_string()).await
+        inject_and_wait(
+            &command_tx,
+            &mut rx,
+            &cancel_task,
+            coco_types::SessionId::generate(),
+            FRAMED.to_string(),
+        )
+        .await
     });
 
     let id = extract_user_message_id(command_rx.recv().await.unwrap());
@@ -64,7 +71,14 @@ async fn inject_and_wait_exits_on_cancel() {
 
     let handle = tokio::spawn(async move {
         let mut rx = turn_done_rx;
-        inject_and_wait(&command_tx, &mut rx, &cancel_task, FRAMED.to_string()).await
+        inject_and_wait(
+            &command_tx,
+            &mut rx,
+            &cancel_task,
+            coco_types::SessionId::generate(),
+            FRAMED.to_string(),
+        )
+        .await
     });
 
     // Drain the injected command so the send succeeds, then cancel while the
@@ -83,7 +97,14 @@ async fn inject_and_wait_exits_when_handshake_sender_dropped() {
 
     let handle = tokio::spawn(async move {
         let mut rx = turn_done_rx;
-        inject_and_wait(&command_tx, &mut rx, &cancel_task, FRAMED.to_string()).await
+        inject_and_wait(
+            &command_tx,
+            &mut rx,
+            &cancel_task,
+            coco_types::SessionId::generate(),
+            FRAMED.to_string(),
+        )
+        .await
     });
 
     let _ = extract_user_message_id(command_rx.recv().await.unwrap());
@@ -100,7 +121,14 @@ async fn inject_and_wait_exits_when_command_receiver_dropped() {
 
     // Driver gone before the inject: the send fails immediately.
     drop(command_rx);
-    let result = inject_and_wait(&command_tx, &mut turn_done_rx, &cancel, FRAMED.to_string()).await;
+    let result = inject_and_wait(
+        &command_tx,
+        &mut turn_done_rx,
+        &cancel,
+        coco_types::SessionId::generate(),
+        FRAMED.to_string(),
+    )
+    .await;
     assert_eq!(result, None);
 }
 

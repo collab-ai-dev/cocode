@@ -332,7 +332,14 @@ pub async fn run_tui(
         if let Some(warning) =
             runtime.reconcile_session_mode_on_resume(plan.conversation.mode.as_deref())
         {
-            emit_slash_text(&notification_tx, "resume", "", warning).await;
+            emit_slash_text(
+                &notification_tx,
+                session_handle.session_id(),
+                "resume",
+                "",
+                warning,
+            )
+            .await;
         }
         eprintln!(
             "{} session {} ({} prior message(s))",
@@ -360,6 +367,12 @@ pub async fn run_tui(
     // Create TUI app
     let mut app = App::new(command_tx, notification_rx, cwd.clone())
         .map_err(|e| anyhow::anyhow!("Failed to create TUI: {e}"))?;
+    // `SessionStarted` is not emitted on this local interactive path, so
+    // install the authoritative identity before the first frame can accept
+    // input. Every user command captures this id at the UI boundary; leaving
+    // it empty would drop early input, while resolving it later in the driver
+    // could redirect stale input after a session switch.
+    app.state_mut().session.session_id = Some(session_handle.session_id().to_string());
     app.state_mut()
         .ui
         .apply_display_settings(coco_tui::DisplaySettings::from_runtime_config(

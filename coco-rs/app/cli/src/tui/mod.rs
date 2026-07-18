@@ -83,6 +83,53 @@ fn session_target(
     interactive_session(bridge).session_target()
 }
 
+fn interactive_session_for<'a>(
+    bridge: &'a coco_agent_host::app_server_host::AppServerLocalBridge,
+    session_id: &coco_types::SessionId,
+) -> Option<&'a coco_agent_host::local_client::LocalSessionClient> {
+    bridge.interactive_session_by_id(session_id)
+}
+
+fn session_target_for(
+    bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
+    session_id: &coco_types::SessionId,
+) -> Option<coco_types::SessionTarget> {
+    interactive_session_for(bridge, session_id)
+        .map(coco_agent_host::local_client::LocalSessionClient::session_target)
+}
+
+/// Adapt engine events emitted outside an AppServer surface (for example the
+/// localized slash-result writeback) into the same exact-session envelope used
+/// by surface pumps.
+fn session_scoped_event_sender(
+    event_tx: &mpsc::Sender<coco_types::CoreEvent>,
+    session_id: coco_types::SessionId,
+) -> mpsc::Sender<coco_types::CoreEvent> {
+    let (scoped_tx, mut scoped_rx) = mpsc::channel(16);
+    let event_tx = event_tx.clone();
+    tokio::spawn(async move {
+        while let Some(event) = scoped_rx.recv().await {
+            let Ok(event) = coco_types::SessionScopedEvent::try_from(event) else {
+                tracing::warn!(%session_id, "dropping non-scopeable local session event");
+                continue;
+            };
+            if event_tx
+                .send(coco_types::CoreEvent::Tui(
+                    coco_types::TuiOnlyEvent::SessionScoped {
+                        session_id: session_id.clone(),
+                        event: Box::new(event),
+                    },
+                ))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+    scoped_tx
+}
+
 #[cfg(test)]
 #[path = "tui.test.rs"]
 mod tests;

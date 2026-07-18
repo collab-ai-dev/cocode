@@ -312,30 +312,36 @@ pub(super) async fn dispatch_slash_command(
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
     runtime_reload_subscriptions: &Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
+    images: &[coco_types::QueuedCommandEditImage],
 ) -> SlashOutcome {
     let runtime = session;
-    if name == "btw" {
-        return match coco_commands::handlers::btw::BtwRequest::parse(args) {
-            Ok(request) => SlashOutcome::TriggerBtw { request },
-            Err(usage) => {
-                emit_slash_text(event_tx, name, args, usage).await;
-                SlashOutcome::Handled
-            }
+    let session_id = session.session_id();
+    let side_chat = local_app_server_bridge.is_child_session(session_id);
+    let canonical_name = if side_chat {
+        let registry = session.current_command_registry().await;
+        let Some(command) = registry.get(name).filter(|command| {
+            command.is_active() && command.base.session_scope.supports_side_chat()
+        }) else {
+            emit_slash_text(
+                event_tx,
+                session_id,
+                name,
+                args,
+                SIDECHAT_SLASH_POLICY_MESSAGE,
+            )
+            .await;
+            return SlashOutcome::Handled;
         };
-    }
-    if local_app_server_bridge
-        .child_interactive_session()
-        .is_some()
-        && name != "help"
-    {
-        emit_slash_text(
-            event_tx,
-            name,
-            args,
-            "Only /help and /btw --close are available while viewing a sidechat.",
-        )
-        .await;
-        return SlashOutcome::Handled;
+        Some(command.base.name.clone())
+    } else {
+        None
+    };
+    let name = canonical_name.as_deref().unwrap_or(name);
+    if name == "btw" {
+        return SlashOutcome::TriggerBtw {
+            request: coco_commands::handlers::btw::BtwRequest::parse(args),
+            images: images.to_vec(),
+        };
     }
     // Runtime-state-aware commands intercepted before registry lookup:
     // their behavior depends on per-session state (session_id, plan
@@ -362,7 +368,7 @@ pub(super) async fn dispatch_slash_command(
     // mutating subcommands so they actually take effect.
     if name == "permissions"
         && let Some(outcome) =
-            dispatch_permissions_mutation(args, event_tx, local_app_server_bridge).await
+            dispatch_permissions_mutation(args, session, event_tx, local_app_server_bridge).await
     {
         return outcome;
     }
@@ -371,7 +377,8 @@ pub(super) async fn dispatch_slash_command(
     // owns the teammate guard. Falls through to the registry (handler lists
     // colors) when args are empty.
     if name == "color"
-        && let Some(outcome) = dispatch_color(args, event_tx, local_app_server_bridge).await
+        && let Some(outcome) =
+            dispatch_color(args, session, event_tx, local_app_server_bridge).await
     {
         return outcome;
     }
@@ -485,6 +492,7 @@ pub(super) async fn dispatch_slash_command(
         let full_model_name = format!("{}/{}", restricted.provider, restricted.model_id);
         emit_slash_text(
             event_tx,
+            session.session_id(),
             "model",
             args,
             &format!(
@@ -515,7 +523,7 @@ pub(super) async fn dispatch_slash_command(
         }
         coco_agent_host::session_slash::ResolvedSlashCommand::Inactive => {
             let text = slash_unavailable_in_session_message(name);
-            emit_slash_text(event_tx, name, args, &text).await;
+            emit_slash_text(event_tx, session.session_id(), name, args, &text).await;
             return SlashOutcome::Handled;
         }
         coco_agent_host::session_slash::ResolvedSlashCommand::Loop { canonical_name } => {
@@ -538,7 +546,14 @@ pub(super) async fn dispatch_slash_command(
             };
         }
         coco_agent_host::session_slash::ResolvedSlashCommand::NoHandler => {
-            emit_slash_status(event_tx, name, args, SlashCommandStatusKind::NoHandler).await;
+            emit_slash_status(
+                event_tx,
+                session.session_id(),
+                name,
+                args,
+                SlashCommandStatusKind::NoHandler,
+            )
+            .await;
             return SlashOutcome::Handled;
         }
         coco_agent_host::session_slash::ResolvedSlashCommand::Executable(command) => command,
@@ -560,6 +575,7 @@ pub(super) async fn dispatch_slash_command(
             cmd.record_skill_invocation(coco_skills::telemetry::SkillOutcome::Failure);
             emit_slash_status(
                 event_tx,
+                session.session_id(),
                 name,
                 args,
                 SlashCommandStatusKind::Failed {
@@ -608,7 +624,7 @@ pub(super) async fn dispatch_slash_command(
                     }
                 }
             };
-            emit_slash_text(event_tx, name, args, text).await;
+            emit_slash_text(event_tx, session.session_id(), name, args, text).await;
             SlashOutcome::Handled
         }
         CommandResult::Text(text) => {
@@ -638,7 +654,7 @@ pub(super) async fn dispatch_slash_command(
                     SentinelTrigger::ReloadHooks => SlashOutcome::TriggerReloadHooks,
                 };
             }
-            emit_slash_text(event_tx, name, args, &text).await;
+            emit_slash_text(event_tx, session.session_id(), name, args, &text).await;
             SlashOutcome::Handled
         }
         CommandResult::InjectPrompt(text) => SlashOutcome::RunEngine {
@@ -679,7 +695,14 @@ pub(super) async fn dispatch_slash_command(
                 }
             }
             if buf.is_empty() {
-                emit_slash_status(event_tx, name, args, SlashCommandStatusKind::EmptyPrompt).await;
+                emit_slash_status(
+                    event_tx,
+                    session.session_id(),
+                    name,
+                    args,
+                    SlashCommandStatusKind::EmptyPrompt,
+                )
+                .await;
                 SlashOutcome::Handled
             } else {
                 SlashOutcome::RunEngine {
@@ -716,7 +739,7 @@ pub(super) async fn dispatch_slash_command(
                 &summary,
             )
             .await;
-            emit_slash_text(event_tx, name, args, &display_text).await;
+            emit_slash_text(event_tx, session.session_id(), name, args, &display_text).await;
             SlashOutcome::Handled
         }
         CommandResult::OpenDialog(spec) => {
@@ -869,6 +892,7 @@ pub(super) async fn dispatch_slash_command(
                     .to_string();
                     emit_slash_status(
                         event_tx,
+                        session.session_id(),
                         name,
                         args,
                         SlashCommandStatusKind::DialogPending { dialog_kind },
@@ -898,6 +922,7 @@ pub(super) async fn dispatch_plan(
     if !coco_agent_host::session_controls::plan_mode_feature_enabled(session) {
         emit_slash_text(
             event_tx,
+            session.session_id(),
             "plan",
             args,
             "Plan mode is disabled (`features.plan_mode = false`). \
@@ -951,7 +976,7 @@ pub(super) async fn dispatch_plan(
         } else {
             format!("Enabled plan mode.\n\n{body}")
         };
-        emit_slash_text(event_tx, "plan", args, &text).await;
+        emit_slash_text(event_tx, session.session_id(), "plan", args, &text).await;
         return SlashOutcome::Handled;
     }
 
@@ -964,7 +989,7 @@ pub(super) async fn dispatch_plan(
                 plan_path.display()
             )
         };
-        emit_slash_text(event_tx, "plan", args, &text).await;
+        emit_slash_text(event_tx, session.session_id(), "plan", args, &text).await;
         return SlashOutcome::TriggerOpenPlanEditor { path: plan_path };
     }
 
@@ -984,7 +1009,7 @@ pub(super) async fn dispatch_plan(
             ),
             _ => "Already in plan mode. No plan written yet.".to_string(),
         };
-        emit_slash_text(event_tx, "plan", args, &text).await;
+        emit_slash_text(event_tx, session.session_id(), "plan", args, &text).await;
         return SlashOutcome::Handled;
     }
     match plan_command_query_after_flip(args) {

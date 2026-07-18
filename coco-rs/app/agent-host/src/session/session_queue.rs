@@ -36,6 +36,7 @@ pub struct DequeuedPromptBatch {
 pub struct DequeuedSlashCommand {
     pub id: String,
     pub prompt: String,
+    pub images: Vec<QueuedImage>,
     pub remaining_queued: usize,
 }
 
@@ -155,6 +156,7 @@ pub async fn dequeue_next_slash_command(session: &SessionHandle) -> Option<Deque
     Some(DequeuedSlashCommand {
         id: command.id.to_string(),
         prompt: command.prompt,
+        images: command.images,
         remaining_queued: session.command_queue().len().await,
     })
 }

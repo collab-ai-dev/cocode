@@ -15,11 +15,18 @@ pub(super) async fn run_file_history_diff_command(
                 Ok(diff) => format_file_history_diff("Session diff", diff),
                 Err(error) => format_file_history_diff_error(error),
             };
-            emit_slash_text(event_tx, "diff", args, &text).await;
+            emit_slash_text(event_tx, session.session_id(), "diff", args, &text).await;
         }
         Some("turn") => {
             let Some(message_id) = parts.next() else {
-                emit_slash_text(event_tx, "diff", args, "Usage: /diff turn <message-id>").await;
+                emit_slash_text(
+                    event_tx,
+                    session.session_id(),
+                    "diff",
+                    args,
+                    "Usage: /diff turn <message-id>",
+                )
+                .await;
                 return;
             };
             let text = match session_controls::file_history_diff(
@@ -31,11 +38,12 @@ pub(super) async fn run_file_history_diff_command(
                 Ok(diff) => format_file_history_diff("Turn diff", diff),
                 Err(error) => format_file_history_diff_error(error),
             };
-            emit_slash_text(event_tx, "diff", args, &text).await;
+            emit_slash_text(event_tx, session.session_id(), "diff", args, &text).await;
         }
         _ => {
             emit_slash_text(
                 event_tx,
+                session.session_id(),
                 "diff",
                 args,
                 "Usage: /diff session | /diff turn <message-id>",
@@ -117,6 +125,7 @@ pub(super) async fn run_tasks_command(
             {
                 emit_slash_text(
                     event_tx,
+                    session.session_id(),
                     name,
                     args,
                     &format!("Failed to activate AppServer session: {error}"),
@@ -134,11 +143,12 @@ pub(super) async fn run_tasks_command(
             {
                 Ok(result) => {
                     let text = format_task_list(&result.tasks);
-                    emit_slash_text(event_tx, name, args, &text).await;
+                    emit_slash_text(event_tx, session.session_id(), name, args, &text).await;
                 }
                 Err(err) => {
                     emit_slash_text(
                         event_tx,
+                        session.session_id(),
                         name,
                         args,
                         &format!("Failed to list tasks: {err}"),
@@ -149,7 +159,14 @@ pub(super) async fn run_tasks_command(
         }
         Some("detail") => {
             let Some(task_id) = parts.next() else {
-                emit_slash_text(event_tx, name, args, "Usage: /tasks detail <id>").await;
+                emit_slash_text(
+                    event_tx,
+                    session.session_id(),
+                    name,
+                    args,
+                    "Usage: /tasks detail <id>",
+                )
+                .await;
                 return;
             };
             if let Err(error) = local_app_server_bridge
@@ -157,6 +174,7 @@ pub(super) async fn run_tasks_command(
             {
                 emit_slash_text(
                     event_tx,
+                    session.session_id(),
                     name,
                     args,
                     &format!("Failed to activate AppServer session: {error}"),
@@ -177,17 +195,30 @@ pub(super) async fn run_tasks_command(
             {
                 Ok(result) => {
                     let text = format_task_detail(&result);
-                    emit_slash_text(event_tx, name, args, &text).await;
+                    emit_slash_text(event_tx, session.session_id(), name, args, &text).await;
                 }
                 Err(err) => {
-                    emit_slash_text(event_tx, name, args, &format!("Failed to read task: {err}"))
-                        .await;
+                    emit_slash_text(
+                        event_tx,
+                        session.session_id(),
+                        name,
+                        args,
+                        &format!("Failed to read task: {err}"),
+                    )
+                    .await;
                 }
             }
         }
         Some("cancel") => {
             let Some(task_id) = parts.next() else {
-                emit_slash_text(event_tx, name, args, "Usage: /tasks cancel <id>").await;
+                emit_slash_text(
+                    event_tx,
+                    session.session_id(),
+                    name,
+                    args,
+                    "Usage: /tasks cancel <id>",
+                )
+                .await;
                 return;
             };
             if let Err(error) = local_app_server_bridge
@@ -195,6 +226,7 @@ pub(super) async fn run_tasks_command(
             {
                 emit_slash_text(
                     event_tx,
+                    session.session_id(),
                     name,
                     args,
                     &format!("Failed to activate AppServer session: {error}"),
@@ -214,12 +246,19 @@ pub(super) async fn run_tasks_command(
                 .await
             {
                 Ok(()) => {
-                    emit_slash_text(event_tx, name, args, &format!("Cancelled task {task_id}."))
-                        .await;
+                    emit_slash_text(
+                        event_tx,
+                        session.session_id(),
+                        name,
+                        args,
+                        &format!("Cancelled task {task_id}."),
+                    )
+                    .await;
                 }
                 Err(err) => {
                     emit_slash_text(
                         event_tx,
+                        session.session_id(),
                         name,
                         args,
                         &format!("Failed to cancel task {task_id}: {err}"),
@@ -231,6 +270,7 @@ pub(super) async fn run_tasks_command(
         Some(_) | None => {
             emit_slash_text(
                 event_tx,
+                session.session_id(),
                 name,
                 args,
                 "Usage: /tasks [list|detail <id>|cancel <id>]",

@@ -65,6 +65,27 @@ pub fn handle_core_event(
                 })
                 .unwrap_or(false);
         }
+        CoreEvent::Tui(
+            event @ (coco_types::TuiOnlyEvent::SlashCommandResult { .. }
+            | coco_types::TuiOnlyEvent::OpenGoalStatus { .. }
+            | coco_types::TuiOnlyEvent::OpenContextUsage { .. }
+            | coco_types::TuiOnlyEvent::SlashCommandStatus { .. }),
+        ) => {
+            let session_id = match &event {
+                coco_types::TuiOnlyEvent::SlashCommandResult { session_id, .. }
+                | coco_types::TuiOnlyEvent::OpenGoalStatus { session_id, .. }
+                | coco_types::TuiOnlyEvent::OpenContextUsage { session_id, .. }
+                | coco_types::TuiOnlyEvent::SlashCommandStatus { session_id, .. } => {
+                    session_id.clone()
+                }
+                _ => unreachable!(),
+            };
+            return state
+                .with_session_projection(&session_id, |state| {
+                    tui_only::handle(state, event, command_tx)
+                })
+                .unwrap_or(false);
+        }
         event => event,
     };
     // Top-level breadcrumb. Per-arm handlers in `protocol.rs` / `tui_only.rs`

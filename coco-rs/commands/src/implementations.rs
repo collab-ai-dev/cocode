@@ -318,7 +318,7 @@ pub fn register_extended_builtins_with_cwd(
             btw_handler,
             true,
             AlwaysSafe,
-            Some("<question>"),
+            Some("[question]"),
         ),
         // /statusline registered as a Prompt below (invokes statusline-setup
         // subagent).
@@ -666,6 +666,9 @@ pub fn register_extended_builtins_with_cwd(
         };
         let mut base = builtin_base_ext(name, description, aliases, safety, arg_hint);
         base.argument_kind = builtin_argument_kind(name, base.argument_kind);
+        if matches!(name, names::COMPACT | names::CONTEXT) {
+            base.session_scope = coco_types::SlashCommandSessionScope::PrimaryAndSideChat;
+        }
         registry.register(RegisteredCommand {
             base,
             command_type,

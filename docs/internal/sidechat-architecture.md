@@ -157,7 +157,7 @@ requires both the expected parent id and child id.
 ## 4. Construction and first turn
 
 ```text
-/btw <question>
+/btw [question]
   -> TUI parses BtwRequest directly
   -> bridge resolves live parent and generates child SessionId
   -> AppServer atomically reserves child under parent
@@ -169,7 +169,7 @@ requires both the expected parent id and child id.
   -> bridge attaches child interactive authority and tagged pump
   -> TUI receives SideChatEntered(parent, child)
   -> TUI switches projection
-  -> ordinary turn/start targets the child surface
+  -> optional question and referenced images target the child surface
 ```
 
 Reservation precedes capture and construction. The first turn starts only after
@@ -182,13 +182,29 @@ tools are read-only, and normal permissions may still ask.
 
 ## 5. Follow-up, interrupt, and close
 
+With no question, `/btw` stops after the view switch and leaves the composer
+ready for input. With a question, the first turn uses the same structured image
+payload as main input; queued `/btw` commands retain those images as well.
+
 While the child is open:
 
 - plain input starts another child turn;
 - a second `/btw` is rejected;
-- only `/help` and `/btw --close` are accepted slash commands;
+- only `/compact` and `/context` are accepted slash commands;
 - Ctrl+C during a child turn interrupts that child turn; and
-- Ctrl+C with an empty idle composer, or `/btw --close`, closes the child.
+- Ctrl+C with an empty idle composer closes the child.
+
+Slash commands carry the exact originating `SessionId` from the active TUI
+projection through dispatch and transcript writeback. A stale id is rejected;
+it never falls back to the primary session. Slash results, statuses, and context
+usage are also session-addressed, then written to that runtime and re-emitted in
+a session-scoped envelope.
+
+The child owns an independent command-registry projection containing only
+commands explicitly marked `PrimaryAndSideChat`. Today that projection is
+`/compact` and `/context`. Its late-bound session/Bash cells are not shared with
+the parent registry, so concurrent parent and child engine builds cannot
+overwrite each other's command context.
 
 The TUI child projection inherits the parent's model binding, thinking effort,
 permission mode, cwd, and header metadata at entry. Transcript and usage start

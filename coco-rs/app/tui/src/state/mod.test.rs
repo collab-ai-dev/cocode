@@ -14,6 +14,22 @@ fn side_chat_view_swap_stashes_and_restores_primary() {
     state.session.permission_mode = coco_types::PermissionMode::Auto;
     state.session.thinking_effort = coco_types::ReasoningEffort::High;
     state.session.working_dir = Some("/workspace".to_string());
+    state.session.available_commands = vec![
+        coco_types::SlashCommandInfo {
+            name: "compact".to_string(),
+            session_scope: coco_types::SlashCommandSessionScope::PrimaryAndSideChat,
+            ..Default::default()
+        },
+        coco_types::SlashCommandInfo {
+            name: "help".to_string(),
+            ..Default::default()
+        },
+        coco_types::SlashCommandInfo {
+            name: "context".to_string(),
+            session_scope: coco_types::SlashCommandSessionScope::PrimaryAndSideChat,
+            ..Default::default()
+        },
+    ];
     state.session.token_usage.input_tokens = 100;
     state.ui.streaming = Some(StreamingState::new());
     state.ui.streaming.as_mut().unwrap().content = "primary stream".to_string();
@@ -36,6 +52,15 @@ fn side_chat_view_swap_stashes_and_restores_primary() {
     assert_eq!(state.session.working_dir.as_deref(), Some("/workspace"));
     assert_eq!(state.session.token_usage.input_tokens, 0);
     assert_eq!(state.session.session_id.as_deref(), Some(child_id.as_str()));
+    assert_eq!(
+        state
+            .session
+            .available_commands
+            .iter()
+            .map(|command| command.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["compact", "context"]
+    );
     assert!(state.ui.streaming.is_none());
     assert_eq!(state.ui.scroll_offset, 0);
 

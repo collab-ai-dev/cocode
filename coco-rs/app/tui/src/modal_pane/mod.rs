@@ -131,11 +131,15 @@ async fn apply_plugin_hint_response(
 
     match response {
         PluginHintResponse::Install => {
-            if let Ok(name) = crate::state::SlashCommandName::new("plugin") {
+            if let Ok(name) = crate::state::SlashCommandName::new("plugin")
+                && let Some(session_id) = state.active_session_id()
+            {
                 let _ = command_tx
                     .send(UserCommand::ExecuteSlashCommand {
+                        session_id,
                         name,
                         args: format!("install {plugin_id}"),
+                        images: Vec::new(),
                     })
                     .await;
             }
@@ -323,9 +327,11 @@ pub(crate) async fn close_modal_with_feedback(
                 text: message.to_string(),
                 is_error: false,
             };
-            let _ = command_tx
-                .send(UserCommand::PushSlashResult { entry })
-                .await;
+            if let Some(session_id) = state.active_session_id() {
+                let _ = command_tx
+                    .send(UserCommand::PushSlashResult { session_id, entry })
+                    .await;
+            }
         }
         Some(PickerDismiss::System { message }) => {
             let _ = command_tx
@@ -558,11 +564,14 @@ pub(crate) async fn route_confirm(
         ModalState::SessionBrowser(s) => {
             if let Some(session) = filtered_sessions(&s).get(s.selected as usize)
                 && let Ok(name) = crate::state::SlashCommandName::new("resume")
+                && let Some(session_id) = state.active_session_id()
             {
                 let _ = command_tx
                     .send(UserCommand::ExecuteSlashCommand {
+                        session_id,
                         name,
                         args: session.id.clone(),
+                        images: Vec::new(),
                     })
                     .await;
             }
@@ -571,6 +580,7 @@ pub(crate) async fn route_confirm(
         ModalState::Export(e) => {
             if let Some(fmt) = e.formats.get(e.selected as usize)
                 && let Ok(name) = crate::state::SlashCommandName::new("export")
+                && let Some(session_id) = state.active_session_id()
             {
                 // Dispatch the bare format keyword; the CLI runner expands it
                 // to a timestamped default filename and writes the file.
@@ -581,8 +591,10 @@ pub(crate) async fn route_confirm(
                 };
                 let _ = command_tx
                     .send(UserCommand::ExecuteSlashCommand {
+                        session_id,
                         name,
                         args: args.to_string(),
+                        images: Vec::new(),
                     })
                     .await;
             }
@@ -599,9 +611,14 @@ pub(crate) async fn route_confirm(
                                 text: format!("Theme set to {}", choice.label),
                                 is_error: false,
                             };
-                            let _ = command_tx
-                                .send(crate::command::UserCommand::PushSlashResult { entry })
-                                .await;
+                            if let Some(session_id) = state.active_session_id() {
+                                let _ = command_tx
+                                    .send(crate::command::UserCommand::PushSlashResult {
+                                        session_id,
+                                        entry,
+                                    })
+                                    .await;
+                            }
                         }
                         Err(err) => state.ui.add_toast(crate::state::ui::Toast::error(format!(
                             "Failed to save theme: {err}"
@@ -638,11 +655,14 @@ pub(crate) async fn route_confirm(
             if let Some(entry) =
                 crate::presentation::picker_styled::filtered_workflows(&w).get(w.selected as usize)
                 && let Ok(name) = crate::state::SlashCommandName::new("workflow")
+                && let Some(session_id) = state.active_session_id()
             {
                 let _ = command_tx
                     .send(UserCommand::ExecuteSlashCommand {
+                        session_id,
                         name,
                         args: entry.name.clone(),
+                        images: Vec::new(),
                     })
                     .await;
             }

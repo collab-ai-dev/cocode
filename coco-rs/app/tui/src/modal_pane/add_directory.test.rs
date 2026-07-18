@@ -37,6 +37,7 @@ fn map_key_maps_text_input_essentials() {
 
 fn open_state() -> AppState {
     let mut state = AppState::new();
+    state.session.session_id = Some("test-session".to_string());
     state
         .ui
         .show_modal(ModalState::AddDirectory(AddDirectoryState::new()));

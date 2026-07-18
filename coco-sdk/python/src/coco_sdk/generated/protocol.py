@@ -589,6 +589,11 @@ class SkillsDialogSource(str, Enum):
     mcp = "mcp"
 
 
+class SlashCommandSessionScope(str, Enum):
+    primary_only = "primary_only"
+    primary_and_side_chat = "primary_and_side_chat"
+
+
 class SourceType(str, Enum):
     url = "url"
     document = "document"
@@ -3127,6 +3132,7 @@ class TuiOnlyEventSlashCommandResult(BaseModel):
     )
     args: str
     name: str
+    session_id: SessionId
     text: str
 
 
@@ -3134,6 +3140,7 @@ class TuiOnlyEventOpenGoalStatus(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal["open_goal_status"] = Field(default="open_goal_status", alias="type")
     body: str
+    session_id: SessionId
     title: str
 
 
@@ -3143,6 +3150,7 @@ class TuiOnlyEventOpenContextUsage(BaseModel):
         default="open_context_usage", alias="type"
     )
     result: ContextUsageResult
+    session_id: SessionId
 
 
 class TuiOnlyEventSlashCommandStatus(BaseModel):
@@ -3153,6 +3161,7 @@ class TuiOnlyEventSlashCommandStatus(BaseModel):
     args: str
     kind: SlashCommandStatusKind
     name: str
+    session_id: SessionId
 
 
 class TuiOnlyEventOpenRewindPicker(BaseModel):
@@ -6457,6 +6466,7 @@ class SlashCommandInfo(BaseModel):
     badge: SkillProvenanceBadge | None = None
     description: str | None = None
     kind: CommandTypeTag = "local"
+    session_scope: SlashCommandSessionScope = "primary_only"
     source: CommandSource | None = None
     usage_score: float = 0.0
 

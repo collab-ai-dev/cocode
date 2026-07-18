@@ -279,6 +279,22 @@ impl AppState {
         matches!(self.view_mode, ViewMode::SideChat { .. })
     }
 
+    /// Exact session represented by the active projection.
+    ///
+    /// Commands are dropped while bootstrap has not installed a valid primary
+    /// id; callers must never fall back to a later "current session" because
+    /// that can redirect a stale slash invocation after a session switch.
+    pub fn active_session_id(&self) -> Option<SessionId> {
+        match &self.view_mode {
+            ViewMode::SideChat { child_id, .. } => Some(child_id.clone()),
+            ViewMode::Primary => self
+                .session
+                .session_id
+                .as_ref()
+                .and_then(|id| SessionId::try_new(id.clone()).ok()),
+        }
+    }
+
     /// Enter a sidechat only from the matching primary projection.
     pub fn enter_side_chat(&mut self, parent_id: SessionId, child_id: SessionId) -> bool {
         if !matches!(self.view_mode, ViewMode::Primary)

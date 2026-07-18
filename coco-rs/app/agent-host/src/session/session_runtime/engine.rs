@@ -60,11 +60,14 @@ impl SessionRuntime {
             *runtime_history = history;
         }
 
-        let session_id = self.current_typed_session_id().await.to_string();
-        let manager = Arc::clone(self.session_manager());
-        let _ =
-            tokio::task::spawn_blocking(move || manager.re_append_session_metadata(&session_id))
-                .await;
+        if self.execution_profile().persists_history() {
+            let session_id = self.current_typed_session_id().await.to_string();
+            let manager = Arc::clone(self.session_manager());
+            let _ = tokio::task::spawn_blocking(move || {
+                manager.re_append_session_metadata(&session_id)
+            })
+            .await;
+        }
 
         outcome
     }

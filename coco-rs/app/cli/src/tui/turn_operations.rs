@@ -182,9 +182,6 @@ pub(super) async fn run_manual_compact(
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
 ) {
-    // Drain any active turn before compacting: the AppServer compact shortcut
-    // mutates the active history and runs an LLM call.
-    drain_active_turn(active_turn, ActiveTurnDrain::Wait).await;
     let prompt =
         match coco_commands::handlers::compact::handler(custom_instructions.unwrap_or_default())
             .await
@@ -195,6 +192,33 @@ pub(super) async fn run_manual_compact(
                 return;
             }
         };
+    if local_app_server_bridge.is_child_session(session.session_id()) {
+        let Some(surface) = interactive_session_for(local_app_server_bridge, session.session_id())
+        else {
+            warn!(session_id = %session.session_id(), "TUI sidechat /compact surface is stale");
+            return;
+        };
+        let params = coco_types::TurnStartParams {
+            target: surface.interactive_target(),
+            prompt,
+            history_override: Vec::new(),
+            images: Vec::new(),
+            slash_metadata: None,
+            model_selection: None,
+            permission_mode: None,
+            thinking_level: None,
+            goal_continuation: false,
+        };
+        if let Err(error) = local_app_server_bridge.start_child_turn(params).await {
+            warn!(%error, "TUI sidechat /compact failed");
+        }
+        return;
+    }
+
+    // Primary compaction mutates primary history and therefore drains only the
+    // primary foreground turn. Sidechat compaction above owns a separate turn
+    // coordinator and can run concurrently.
+    drain_active_turn(active_turn, ActiveTurnDrain::Wait).await;
     run_local_app_server_shortcut_turn(
         session,
         event_tx,
@@ -427,14 +451,14 @@ pub(super) async fn run_session_memory_force(
     .await;
 }
 
-/// `/btw <question>` runner — creates an ephemeral, read-only sidechat child
-/// session and starts its first turn (`docs/internal/sidechat-architecture.md`).
+/// `/btw [question]` runner — creates an ephemeral, read-only sidechat child
+/// session and optionally starts its first turn.
 ///
 /// The child is a distinct session with its own turn coordinator, so it runs
 /// concurrently with the parent and never touches the parent transcript. Its
 /// turn events stream into the view through the child event pump. At most one
 /// child exists per parent (I-2); a second `/btw` is rejected until the current
-/// child is explicitly closed.
+/// child is closed from the TUI (Ctrl+C while idle).
 pub(super) async fn run_side_chat(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
@@ -442,27 +466,13 @@ pub(super) async fn run_side_chat(
     _active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     _turn_done_tx: &mpsc::Sender<uuid::Uuid>,
     request: coco_commands::handlers::btw::BtwRequest,
+    images: &[coco_types::QueuedCommandEditImage],
 ) {
-    // `/btw --close` closes the sidechat and returns to the primary view.
-    if request.is_close() {
-        match local_app_server_bridge.close_child().await {
-            Ok(Some(_)) => {}
-            Ok(None) => {
-                emit_slash_text(event_tx, "btw", "--close", "No sidechat is open.").await;
-            }
-            Err(error) => {
-                warn!(%error, "TUI /btw --close failed");
-                emit_slash_text(
-                    event_tx,
-                    "btw",
-                    "--close",
-                    &format!("Couldn't close the sidechat: {error}"),
-                )
-                .await;
-            }
-        }
-        return;
-    }
+    let args = match &request {
+        coco_commands::handlers::btw::BtwRequest::Open => "",
+        coco_commands::handlers::btw::BtwRequest::OpenAndAsk { question } => question,
+    };
+    let parent_id = session.session_id().clone();
 
     if local_app_server_bridge
         .child_interactive_session()
@@ -470,15 +480,15 @@ pub(super) async fn run_side_chat(
     {
         emit_slash_text(
             event_tx,
+            &parent_id,
             "btw",
-            &request.question,
-            "A sidechat is already open. Continue it with plain input, or run /btw --close first.",
+            args,
+            "A sidechat is already open. Continue it with plain input, or press Ctrl+C to return to main.",
         )
         .await;
         return;
     }
 
-    let parent_id = session.session_id().clone();
     let binding = match local_app_server_bridge
         .open_side_chat(parent_id.clone(), Some(event_tx.clone()))
         .await
@@ -487,8 +497,9 @@ pub(super) async fn run_side_chat(
         Err(error) => {
             emit_slash_text(
                 event_tx,
+                &parent_id,
                 "btw",
-                &request.question,
+                args,
                 &format!("Couldn't start the sidechat: {error}"),
             )
             .await;
@@ -502,11 +513,14 @@ pub(super) async fn run_side_chat(
             child_id: child_id.clone(),
         }))
         .await;
+    let coco_commands::handlers::btw::BtwRequest::OpenAndAsk { question } = request else {
+        return;
+    };
     let params = coco_types::TurnStartParams {
         target: binding.surface.interactive_target(),
-        prompt: request.question.clone(),
+        prompt: question.clone(),
         history_override: Vec::new(),
-        images: Vec::new(),
+        images: images.to_vec(),
         slash_metadata: None,
         model_selection: None,
         permission_mode: None,
@@ -517,8 +531,9 @@ pub(super) async fn run_side_chat(
         let _ = local_app_server_bridge.close_child().await;
         emit_slash_text(
             event_tx,
+            &parent_id,
             "btw",
-            &request.question,
+            &question,
             &format!("Couldn't start the sidechat turn: {error}"),
         )
         .await;
@@ -535,7 +550,7 @@ pub(super) async fn run_export(
 ) -> SlashOutcome {
     let message =
         coco_agent_host::conversation_export::export_conversation_for_session(session, args).await;
-    emit_slash_text(event_tx, "export", args, &message).await;
+    emit_slash_text(event_tx, session.session_id(), "export", args, &message).await;
     SlashOutcome::Handled
 }
 
@@ -553,6 +568,7 @@ pub(super) async fn run_session_rename(
     if coco_coordinator::identity::is_teammate() {
         emit_slash_text(
             event_tx,
+            session.session_id(),
             "rename",
             "",
             "Cannot rename: This session is a swarm teammate. \
@@ -568,7 +584,14 @@ pub(super) async fn run_session_rename(
         match coco_agent_host::session_labels::resolve_rename_name(Some(session), request).await {
             Ok(name) => name,
             Err(error) => {
-                emit_slash_text(event_tx, "rename", "", &error.user_message()).await;
+                emit_slash_text(
+                    event_tx,
+                    session.session_id(),
+                    "rename",
+                    "",
+                    &error.user_message(),
+                )
+                .await;
                 return;
             }
         };
@@ -578,7 +601,9 @@ pub(super) async fn run_session_rename(
         .session_rename(
             local_app_server_bridge.handler(),
             coco_types::SessionRenameParams {
-                target: session_target(local_app_server_bridge),
+                target: coco_types::SessionTarget {
+                    session_id: session.session_id().clone(),
+                },
                 name: name.clone(),
             },
         )
@@ -592,7 +617,7 @@ pub(super) async fn run_session_rename(
         }
         Err(error) => format!("Failed to rename session: {error}"),
     };
-    emit_slash_text(event_tx, "rename", "", &text).await;
+    emit_slash_text(event_tx, session.session_id(), "rename", "", &text).await;
 }
 
 /// `/reload-plugins` runner — rescans plugin + skill dirs and
@@ -608,18 +633,28 @@ pub(super) async fn run_reload_plugins(
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) {
+    let Some(interactive_session) =
+        interactive_session_for(local_app_server_bridge, session.session_id())
+    else {
+        emit_slash_text(
+            event_tx,
+            session.session_id(),
+            "reload-plugins",
+            "",
+            "Plugin reload failed: this session is no longer available.",
+        )
+        .await;
+        return;
+    };
     let result = match local_app_server_bridge
         .client()
-        .plugin_reload(
-            local_app_server_bridge.handler(),
-            interactive_session(local_app_server_bridge),
-        )
+        .plugin_reload(local_app_server_bridge.handler(), interactive_session)
         .await
     {
         Ok(result) => result,
         Err(error) => {
             let body = format!("Plugin reload failed: {error}");
-            emit_slash_text(event_tx, "reload-plugins", "", &body).await;
+            emit_slash_text(event_tx, session.session_id(), "reload-plugins", "", &body).await;
             return;
         }
     };
@@ -632,7 +667,7 @@ pub(super) async fn run_reload_plugins(
         "Reloaded — {} commands{hook_note}; agents + LSP refreshed.",
         result.commands.len()
     );
-    emit_slash_text(event_tx, "reload-plugins", "", &body).await;
+    emit_slash_text(event_tx, session.session_id(), "reload-plugins", "", &body).await;
 
     let snapshot =
         coco_agent_host::session_dialogs::build_available_commands_payload(session).await;
@@ -646,15 +681,26 @@ pub(super) async fn run_reload_plugins(
 /// `/hooks reload` runner — rebuild the live `HookRegistry` from the
 /// latest `RuntimeConfig` snapshot.
 pub(super) async fn run_reload_hooks(
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) {
+    let Some(interactive_session) =
+        interactive_session_for(local_app_server_bridge, session.session_id())
+    else {
+        emit_slash_text(
+            event_tx,
+            session.session_id(),
+            "hooks",
+            "",
+            "Hook reload failed: this session is no longer available.",
+        )
+        .await;
+        return;
+    };
     let body = match local_app_server_bridge
         .client()
-        .hook_reload(
-            local_app_server_bridge.handler(),
-            interactive_session(local_app_server_bridge),
-        )
+        .hook_reload(local_app_server_bridge.handler(), interactive_session)
         .await
     {
         Ok(result) => format!(
@@ -663,10 +709,11 @@ pub(super) async fn run_reload_hooks(
         ),
         Err(error) => format!("Hook reload failed: {error}"),
     };
-    emit_slash_text(event_tx, "hooks", "", &body).await;
+    emit_slash_text(event_tx, session.session_id(), "hooks", "", &body).await;
 }
 
 pub(super) async fn run_show_cost(
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) {
@@ -674,19 +721,24 @@ pub(super) async fn run_show_cost(
         .client()
         .session_cost(
             local_app_server_bridge.handler(),
-            session_target(local_app_server_bridge),
+            coco_types::SessionTarget {
+                session_id: session.session_id().clone(),
+            },
         )
         .await
     {
-        Ok(result) => emit_slash_text(event_tx, "cost", "", &result.text).await,
+        Ok(result) => {
+            emit_slash_text(event_tx, session.session_id(), "cost", "", &result.text).await
+        }
         Err(error) => {
             let body = format!("Failed to read session cost: {error}");
-            emit_slash_text(event_tx, "cost", "", &body).await;
+            emit_slash_text(event_tx, session.session_id(), "cost", "", &body).await;
         }
     }
 }
 
 pub(super) async fn run_show_status(
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) {
@@ -694,13 +746,16 @@ pub(super) async fn run_show_status(
         .client()
         .session_status(
             local_app_server_bridge.handler(),
-            session_target(local_app_server_bridge),
+            coco_types::SessionTarget {
+                session_id: session.session_id().clone(),
+            },
         )
         .await
     {
         Ok(result) => {
             let _ = event_tx
                 .send(CoreEvent::Tui(TuiOnlyEvent::OpenGoalStatus {
+                    session_id: session.session_id().clone(),
                     title: "Status".to_string(),
                     body: result.text,
                 }))
@@ -708,7 +763,7 @@ pub(super) async fn run_show_status(
         }
         Err(error) => {
             let body = format!("Failed to read session status: {error}");
-            emit_slash_text(event_tx, "status", "", &body).await;
+            emit_slash_text(event_tx, session.session_id(), "status", "", &body).await;
         }
     }
 }
@@ -726,17 +781,32 @@ pub(super) async fn dispatch_add_dir(
         {
             Ok(prepared) => prepared,
             Err(error) => {
-                emit_slash_text(event_tx, "add-dir", args, &error.to_string()).await;
+                emit_slash_text(
+                    event_tx,
+                    session.session_id(),
+                    "add-dir",
+                    args,
+                    &error.to_string(),
+                )
+                .await;
                 return SlashOutcome::Handled;
             }
         };
     let absolute = prepared.path;
     let path = absolute.to_string_lossy().into_owned();
-    if !apply_session_add_directory(&path, event_tx, local_app_server_bridge).await {
+    if !apply_session_add_directory(
+        &path,
+        session.session_id(),
+        event_tx,
+        local_app_server_bridge,
+    )
+    .await
+    {
         return SlashOutcome::Handled;
     }
     emit_slash_text(
         event_tx,
+        session.session_id(),
         "add-dir",
         args,
         &format!("Added {} as a working directory.", absolute.display()),
@@ -747,6 +817,7 @@ pub(super) async fn dispatch_add_dir(
 
 pub(super) async fn apply_session_add_directory(
     path: &str,
+    session_id: &coco_types::SessionId,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> bool {
@@ -755,6 +826,7 @@ pub(super) async fn apply_session_add_directory(
             directories: vec![path.to_string()],
             destination: coco_types::PermissionUpdateDestination::Session,
         },
+        session_id,
         event_tx,
         local_app_server_bridge,
     )
@@ -764,7 +836,7 @@ pub(super) async fn apply_session_add_directory(
 /// `/tag <name>` runner — toggles the tag via `SessionManager`. Reports
 /// "added" or "removed" so the user knows the new state.
 pub(super) async fn run_session_tag(
-    _session: &crate::session_runtime::SessionHandle,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
     tag: &str,
@@ -774,7 +846,9 @@ pub(super) async fn run_session_tag(
         .session_toggle_tag(
             local_app_server_bridge.handler(),
             coco_types::SessionToggleTagParams {
-                target: session_target(local_app_server_bridge),
+                target: coco_types::SessionTarget {
+                    session_id: session.session_id().clone(),
+                },
                 tag: tag.to_string(),
             },
         )
@@ -784,7 +858,7 @@ pub(super) async fn run_session_tag(
         Ok(result) => format!("Tag removed: {}", result.tag),
         Err(error) => format!("Failed to toggle tag `{tag}`: {error}"),
     };
-    emit_slash_text(event_tx, "tag", tag, &text).await;
+    emit_slash_text(event_tx, session.session_id(), "tag", tag, &text).await;
 }
 
 /// `/permissions allow|deny|reset` dispatch with live-base mutation.
@@ -802,6 +876,7 @@ pub(super) async fn run_session_tag(
 /// "Available colors: …" listing.
 pub(super) async fn dispatch_color(
     args: &str,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> Option<SlashOutcome> {
@@ -811,6 +886,7 @@ pub(super) async fn dispatch_color(
     if is_teammate() {
         emit_slash_text(
             event_tx,
+            session.session_id(),
             "color",
             args,
             "Cannot set color: This session is a swarm teammate. \
@@ -832,20 +908,42 @@ pub(super) async fn dispatch_color(
     const RESET_ALIASES: &[&str] = &["default", "reset", "none", "gray", "grey"];
     let lower = trimmed.to_ascii_lowercase();
     if RESET_ALIASES.contains(&lower.as_str()) {
-        if !set_agent_color(None, event_tx, local_app_server_bridge).await {
+        if !set_agent_color(
+            None,
+            session.session_id(),
+            event_tx,
+            local_app_server_bridge,
+        )
+        .await
+        {
             return Some(SlashOutcome::Handled);
         }
-        emit_slash_text(event_tx, "color", args, "Session color reset to default").await;
+        emit_slash_text(
+            event_tx,
+            session.session_id(),
+            "color",
+            args,
+            "Session color reset to default",
+        )
+        .await;
         return Some(SlashOutcome::Handled);
     }
 
     match lower.parse::<AgentColorName>() {
         Ok(color) => {
-            if !set_agent_color(Some(color), event_tx, local_app_server_bridge).await {
+            if !set_agent_color(
+                Some(color),
+                session.session_id(),
+                event_tx,
+                local_app_server_bridge,
+            )
+            .await
+            {
                 return Some(SlashOutcome::Handled);
             }
             emit_slash_text(
                 event_tx,
+                session.session_id(),
                 "color",
                 args,
                 &format!("Session color set to: {color}"),
@@ -861,6 +959,7 @@ pub(super) async fn dispatch_color(
                 .join(", ");
             emit_slash_text(
                 event_tx,
+                session.session_id(),
                 "color",
                 args,
                 &format!("Invalid color \"{lower}\". Available colors: {list}, default"),
@@ -873,6 +972,7 @@ pub(super) async fn dispatch_color(
 
 pub(super) async fn dispatch_permissions_mutation(
     args: &str,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> Option<SlashOutcome> {
@@ -887,6 +987,7 @@ pub(super) async fn dispatch_permissions_mutation(
         // dispatcher status messages).
         emit_slash_status(
             event_tx,
+            session.session_id(),
             "permissions",
             args,
             SlashCommandStatusKind::PermissionsUsageAllow,
@@ -897,6 +998,7 @@ pub(super) async fn dispatch_permissions_mutation(
     if trimmed == "deny" || trimmed.starts_with("deny  ") || trimmed == "deny " {
         emit_slash_status(
             event_tx,
+            session.session_id(),
             "permissions",
             args,
             SlashCommandStatusKind::PermissionsUsageDeny,
@@ -912,8 +1014,13 @@ pub(super) async fn dispatch_permissions_mutation(
             update,
             confirmation,
         } => {
-            if !apply_and_persist_permission_update(&update, event_tx, local_app_server_bridge)
-                .await
+            if !apply_and_persist_permission_update(
+                &update,
+                session.session_id(),
+                event_tx,
+                local_app_server_bridge,
+            )
+            .await
             {
                 return Some(SlashOutcome::Handled);
             }
@@ -922,12 +1029,25 @@ pub(super) async fn dispatch_permissions_mutation(
         coco_agent_host::session_controls::PermissionMutationAction::Reset { confirmation } => {
             // Reset is Session-source-only and never persists to disk. Route
             // through AppServer so the TUI does not mutate SessionRuntime.
-            if !reset_session_permission_rules(event_tx, local_app_server_bridge).await {
+            if !reset_session_permission_rules(
+                session.session_id(),
+                event_tx,
+                local_app_server_bridge,
+            )
+            .await
+            {
                 return Some(SlashOutcome::Handled);
             }
             confirmation
         }
     };
-    emit_slash_text(event_tx, "permissions", args, &confirmation).await;
+    emit_slash_text(
+        event_tx,
+        session.session_id(),
+        "permissions",
+        args,
+        &confirmation,
+    )
+    .await;
     Some(SlashOutcome::Handled)
 }

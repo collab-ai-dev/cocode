@@ -181,6 +181,7 @@ fn open_goal_status_opens_goal_modal() {
     let consumed = handle(
         &mut state,
         TuiOnlyEvent::OpenGoalStatus {
+            session_id: coco_types::SessionId::generate(),
             title: "Goal active".into(),
             body: "Goal:\nship it".into(),
         },

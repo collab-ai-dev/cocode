@@ -82,6 +82,7 @@ async fn memory_dialog_file_confirm_advances_queued_modal() {
 #[tokio::test]
 async fn workflow_picker_confirm_dispatches_selected_workflow() {
     let mut state = AppState::new();
+    state.session.session_id = Some("test-session".to_string());
     queue_help_after_active(
         &mut state,
         ModalState::WorkflowPicker(WorkflowPickerState {
@@ -105,7 +106,7 @@ async fn workflow_picker_confirm_dispatches_selected_workflow() {
 
     assert!(route_confirm(&mut state, &tx).await);
 
-    let UserCommand::ExecuteSlashCommand { name, args } =
+    let UserCommand::ExecuteSlashCommand { name, args, .. } =
         rx.try_recv().expect("workflow slash command sent")
     else {
         panic!("expected ExecuteSlashCommand")

@@ -147,11 +147,15 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
 
     let trimmed = text.trim();
     if let Some((name, args)) = parse_slash_input(trimmed) {
+        let resolved = state.ui.paste_manager.resolve_structured(trimmed);
+        let resolved_args = parse_slash_input(resolved.text.trim())
+            .map(|(_, args)| args)
+            .unwrap_or(args);
         tracing::info!(
             target: "coco_tui::submit",
             kind = "slash",
             command = %name.as_str(),
-            args_chars = args.len(),
+            args_chars = resolved_args.len(),
             "user submitted slash command",
         );
         let pastes = referenced_pastes(state, &text);
@@ -166,8 +170,20 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
             super::shutdown_via_slash_command(state, command_tx).await;
             return true;
         }
+        let Some(session_id) = state.active_session_id() else {
+            tracing::warn!(
+                target: "coco_tui::submit",
+                "dropping slash command before a session id is installed",
+            );
+            return false;
+        };
         if let Err(e) = command_tx
-            .send(UserCommand::ExecuteSlashCommand { name, args })
+            .send(UserCommand::ExecuteSlashCommand {
+                session_id,
+                name,
+                args: resolved_args,
+                images: resolved.images,
+            })
             .await
         {
             tracing::warn!(
@@ -188,6 +204,13 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
         .input
         .add_to_history_with_pastes(text.clone(), pastes);
     let resolved = state.ui.paste_manager.resolve_structured(&text);
+    let Some(session_id) = state.active_session_id() else {
+        tracing::warn!(
+            target: "coco_tui::submit",
+            "dropping prompt before a session id is installed",
+        );
+        return false;
+    };
 
     // Mint the user-message UUID once at submit time so the agent
     // driver's `Message::User`, the file-history snapshot, and the
@@ -207,6 +230,7 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
 
     if let Err(e) = command_tx
         .send(UserCommand::SubmitInput {
+            session_id,
             user_message_id,
             content: resolved.text,
             display_text: Some(text),

@@ -2644,6 +2644,7 @@ pub enum TuiOnlyEvent {
     /// output (often command-specific status / git output / prompt
     /// preview).
     SlashCommandResult {
+        session_id: crate::SessionId,
         name: String,
         /// Raw argument string the user typed (e.g. `sonnet` for
         /// `/model sonnet`). Threaded into the model-visible echo
@@ -2657,11 +2658,16 @@ pub enum TuiOnlyEvent {
     /// The CLI side pre-renders the body from engine state/history so the TUI
     /// does not reach across layers to compute durations, tokens, or the last
     /// achieved goal.
-    OpenGoalStatus { title: String, body: String },
+    OpenGoalStatus {
+        session_id: crate::SessionId,
+        title: String,
+        body: String,
+    },
     /// Open the full-color `/context` usage surface. Carries the analyzed
     /// report (the TUI cannot reach the engine to compute it). Replaces the
     /// former markdown-in-transcript output and the removed `Ctrl+W` overlay.
     OpenContextUsage {
+        session_id: crate::SessionId,
         result: crate::server_request::ContextUsageResult,
     },
     /// Dispatcher-side breadcrumb for slash commands the runtime couldn't
@@ -2669,6 +2675,7 @@ pub enum TuiOnlyEvent {
     /// dialog wiring pending). The TUI translates `kind` via the i18n
     /// catalog before rendering.
     SlashCommandStatus {
+        session_id: crate::SessionId,
         name: String,
         /// Argument string the user typed after the command, used to render the
         /// `❯ /name args` echo alongside the status. Empty when none was given.

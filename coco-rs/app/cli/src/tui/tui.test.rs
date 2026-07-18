@@ -678,6 +678,7 @@ async fn dispatch_slash_command_for_test(
         event_tx,
         local_app_server_bridge,
         &reload_subscriptions,
+        &[],
     )
     .await
 }
@@ -994,6 +995,123 @@ async fn manual_compact_uses_local_app_server_turn_shortcut() {
 }
 
 #[tokio::test]
+async fn btw_dispatch_supports_open_only_and_preserves_images() {
+    let home = TempDir::new().unwrap();
+    let mut registry = coco_commands::CommandRegistry::new();
+    coco_commands::register_extended_builtins(&mut registry);
+    let runtime = build_runtime_with_registry(&home, registry).await;
+    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(8);
+    let (current_session, _factory, _process_runtime, _cwd) = test_resume_context(&runtime).await;
+    let reload_subscriptions = test_runtime_reload_subscriptions(&current_session, &event_tx);
+    let mut bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(Arc::new(
+        coco_agent_host::app_server_host::AppServerHostState::default(),
+    ));
+    install_test_session_runtime(&mut bridge, &runtime).await;
+
+    let open = super::dispatch_slash_command(
+        "btw",
+        "",
+        &runtime,
+        &current_session,
+        &event_tx,
+        &mut bridge,
+        &reload_subscriptions,
+        &[],
+    )
+    .await;
+    assert!(matches!(
+        open,
+        super::SlashOutcome::TriggerBtw {
+            request: coco_commands::handlers::btw::BtwRequest::Open,
+            images
+        } if images.is_empty()
+    ));
+
+    let input_images = vec![coco_types::QueuedCommandEditImage {
+        media_type: "image/png".to_string(),
+        data_base64: "aW1hZ2U=".to_string(),
+    }];
+    let ask = super::dispatch_slash_command(
+        "btw",
+        "inspect this",
+        &runtime,
+        &current_session,
+        &event_tx,
+        &mut bridge,
+        &reload_subscriptions,
+        &input_images,
+    )
+    .await;
+    assert!(matches!(
+        ask,
+        super::SlashOutcome::TriggerBtw {
+            request: coco_commands::handlers::btw::BtwRequest::OpenAndAsk { question },
+            images,
+        } if question == "inspect this" && images == input_images
+    ));
+}
+
+#[tokio::test]
+async fn sidechat_dispatch_rejects_nested_and_primary_only_slashes() {
+    let home = TempDir::new().unwrap();
+    let mut registry = coco_commands::CommandRegistry::new();
+    coco_commands::register_extended_builtins(&mut registry);
+    let parent = build_runtime_with_registry(&home, registry).await;
+    let parent_id = parent.current_typed_session_id().await;
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(32);
+    let (current_session, factory, process_runtime, _cwd) = test_resume_context(&parent).await;
+    let reload_subscriptions = test_runtime_reload_subscriptions(&current_session, &event_tx);
+    let mut bridge =
+        local_bridge_for_resume_test(&parent, factory, process_runtime, Some(event_tx.clone()));
+    install_test_session_runtime(&mut bridge, &parent).await;
+    let child = bridge
+        .open_side_chat(parent_id, Some(event_tx.clone()))
+        .await
+        .expect("open sidechat");
+    let child_id = child.session.current_typed_session_id().await;
+
+    for name in ["btw", "help"] {
+        let outcome = super::dispatch_slash_command(
+            name,
+            "",
+            &child.session,
+            &current_session,
+            &event_tx,
+            &mut bridge,
+            &reload_subscriptions,
+            &[],
+        )
+        .await;
+        assert!(matches!(outcome, super::SlashOutcome::Handled));
+
+        let result = loop {
+            let event = tokio::time::timeout(Duration::from_secs(3), event_rx.recv())
+                .await
+                .expect("sidechat rejection should be emitted")
+                .expect("event channel should remain open");
+            if let coco_types::CoreEvent::Tui(
+                result @ coco_types::TuiOnlyEvent::SlashCommandResult { .. },
+            ) = event
+            {
+                break result;
+            }
+        };
+        let coco_types::TuiOnlyEvent::SlashCommandResult {
+            session_id,
+            name: emitted_name,
+            text,
+            ..
+        } = result
+        else {
+            unreachable!();
+        };
+        assert_eq!(session_id, child_id);
+        assert_eq!(emitted_name, name);
+        assert!(text.contains("only /compact and /context"));
+    }
+}
+
+#[tokio::test]
 async fn btw_does_not_disturb_active_parent_turn() {
     // `/btw` now creates an independent read-only sidechat child with its own
     // turn coordinator, so it never touches the parent's active turn. With no
@@ -1043,9 +1161,10 @@ async fn btw_does_not_disturb_active_parent_turn() {
         &mut local_app_server_bridge,
         &active_turn,
         &turn_done_tx,
-        coco_commands::handlers::btw::BtwRequest {
+        coco_commands::handlers::btw::BtwRequest::OpenAndAsk {
             question: "how does caching work?".to_string(),
         },
+        &[],
     )
     .await;
 
@@ -1168,12 +1287,9 @@ async fn side_chat_factory_routes_rolls_up_persists_and_restores_usage() {
     let home = TempDir::new().unwrap();
     let mut settings = Settings::default();
     settings.session.backend = coco_config::SessionBackend::Memory;
-    let parent = build_runtime_with_registry_and_settings(
-        &home,
-        coco_commands::CommandRegistry::new(),
-        settings,
-    )
-    .await;
+    let mut registry = coco_commands::CommandRegistry::new();
+    coco_commands::register_extended_builtins(&mut registry);
+    let parent = build_runtime_with_registry_and_settings(&home, registry, settings).await;
     let parent_id = parent.current_typed_session_id().await;
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(128);
     parent.install_side_query_event_tx(event_tx.clone()).await;
@@ -1215,6 +1331,30 @@ async fn side_chat_factory_routes_rolls_up_persists_and_restores_usage() {
         .await
         .expect("sidechat factory should build and attach a child");
     let child_id = child.session.current_typed_session_id().await;
+    let child_surface = bridge
+        .interactive_session_by_id(&child_id)
+        .expect("child surface must resolve by its exact session id");
+    assert_eq!(child_surface.session_id(), &child_id);
+    assert_ne!(
+        bridge
+            .interactive_session()
+            .expect("primary surface remains attached")
+            .session_id(),
+        &child_id,
+        "the generic interactive surface is primary and must not drive child follow-ups"
+    );
+    let child_registry = child.session.current_command_registry().await;
+    let mut child_commands: Vec<&str> = child_registry
+        .all()
+        .map(|command| command.base.name.as_str())
+        .collect();
+    child_commands.sort_unstable();
+    assert_eq!(child_commands, vec!["compact", "context"]);
+    let parent_registry = parent.current_command_registry().await;
+    assert!(
+        !Arc::ptr_eq(&parent_registry, &child_registry),
+        "the sidechat must own an isolated command registry projection"
+    );
     let parent_config = parent.current_engine_config().await;
     let child_config = child.session.current_engine_config().await;
     assert_eq!(child_config.model_id, parent_config.model_id);
@@ -1780,6 +1920,7 @@ async fn resume_slash_uses_local_app_server_session_resume() {
         &tx,
         &mut local_app_server_bridge,
         &reload_subscriptions,
+        &[],
     )
     .await;
 
@@ -1857,6 +1998,7 @@ async fn branch_slash_switches_to_fork_through_local_app_server() {
         &tx,
         &mut local_app_server_bridge,
         &reload_subscriptions,
+        &[],
     )
     .await;
 
@@ -2028,8 +2170,8 @@ async fn cost_and_status_slashes_use_local_app_server_observability() {
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
 
-    run_show_cost(&tx, &local_app_server_bridge).await;
-    run_show_status(&tx, &local_app_server_bridge).await;
+    run_show_cost(&runtime, &tx, &local_app_server_bridge).await;
+    run_show_status(&runtime, &tx, &local_app_server_bridge).await;
 
     let mut saw_cost = false;
     let mut saw_status = false;
@@ -2045,6 +2187,7 @@ async fn cost_and_status_slashes_use_local_app_server_observability() {
             coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::OpenGoalStatus {
                 title,
                 body,
+                ..
             }) if title == "Status" && body.contains("Session status:") => {
                 saw_status = true;
             }
@@ -2114,6 +2257,7 @@ async fn tasks_list_and_detail_slashes_use_local_app_server_task_observability()
                 name,
                 args,
                 text,
+                ..
             }) if name == "tasks"
                 && args == "list"
                 && text.contains(&task_id)
@@ -2125,6 +2269,7 @@ async fn tasks_list_and_detail_slashes_use_local_app_server_task_observability()
                 name,
                 args,
                 text,
+                ..
             }) if name == "tasks"
                 && args == format!("detail {task_id}")
                 && text.contains(&format!("Task {task_id}"))
@@ -2226,6 +2371,7 @@ async fn tasks_cancel_slash_uses_local_app_server_stop_task() {
             name,
             args,
             text,
+            ..
         }) => {
             assert_eq!(name, "tasks");
             assert_eq!(args, format!("cancel {task_id}"));
@@ -2408,6 +2554,7 @@ async fn model_slash_arg_rejects_unavailable_model() {
             name,
             args,
             text,
+            ..
         }) => {
             assert_eq!(name, "model");
             assert_eq!(args, "gpt5");
@@ -2438,6 +2585,7 @@ async fn inactive_slash_command_emits_session_hint_without_running_handler() {
             skill_badge: None,
             safety: CommandSafety::AlwaysSafe,
             supports_non_interactive: false,
+            session_scope: coco_types::SlashCommandSessionScope::PrimaryOnly,
         },
         command_type: CommandType::Local(LocalCommandData {
             handler: "blocked".to_string(),
@@ -2472,6 +2620,7 @@ async fn inactive_slash_command_emits_session_hint_without_running_handler() {
             name,
             args,
             text,
+            ..
         }) => {
             assert_eq!(name, "blocked");
             assert_eq!(args, "arg");

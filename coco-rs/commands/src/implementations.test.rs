@@ -20,7 +20,7 @@ fn test_register_extended_builtins() {
 }
 
 #[test]
-fn btw_registration_matches_upstream_command_metadata() {
+fn btw_registration_advertises_an_optional_question() {
     let mut registry = CommandRegistry::new();
     register_extended_builtins(&mut registry);
 
@@ -29,12 +29,46 @@ fn btw_registration_matches_upstream_command_metadata() {
         btw.base.description,
         "Ask a quick side question without interrupting the main conversation"
     );
-    assert_eq!(btw.base.argument_hint.as_deref(), Some("<question>"));
+    assert_eq!(btw.base.argument_hint.as_deref(), Some("[question]"));
     assert_eq!(
         btw.base.argument_kind,
         coco_types::CommandArgumentKind::FreeText
     );
     assert_eq!(btw.base.safety, coco_types::CommandSafety::AlwaysSafe);
+}
+
+#[test]
+fn sidechat_registry_contains_only_compact_and_context() {
+    let mut registry = CommandRegistry::new();
+    register_extended_builtins(&mut registry);
+
+    for name in [names::COMPACT, names::CONTEXT] {
+        assert!(
+            registry
+                .get(name)
+                .expect("sidechat command is registered")
+                .base
+                .session_scope
+                .supports_side_chat(),
+            "/{name} must opt into sidechat execution"
+        );
+    }
+    assert_eq!(
+        registry
+            .get(names::BTW)
+            .expect("btw registered")
+            .base
+            .session_scope,
+        coco_types::SlashCommandSessionScope::PrimaryOnly
+    );
+
+    let projected = registry.side_chat_projection();
+    let mut projected_names: Vec<&str> = projected
+        .all()
+        .map(|command| command.base.name.as_str())
+        .collect();
+    projected_names.sort_unstable();
+    assert_eq!(projected_names, vec![names::COMPACT, names::CONTEXT]);
 }
 
 #[test]

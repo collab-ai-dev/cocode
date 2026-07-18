@@ -401,10 +401,12 @@ impl TuiHarness {
             event_tx_for_driver,
         ));
 
-        // AppState starts empty — production fills it via `app.state_mut()`
-        // post-`new`; we don't need any of that bootstrapping for these
-        // scenarios.
+        // Mirror production bootstrap by installing the authoritative
+        // session identity before the first input can be submitted. TUI
+        // commands capture this id at the UI boundary so stale commands
+        // cannot be redirected after a session switch.
         let mut state = AppState::new();
+        state.session.session_id = Some("test-session".to_string());
         state.session.permission_mode = cfg.permission_mode;
         state.session.bypass_permissions_available =
             matches!(cfg.permission_mode, PermissionMode::BypassPermissions);
