@@ -40,6 +40,7 @@ pub struct ConversationForResume {
     /// Stored execution mode (`coordinator` / `normal`) from the last
     /// `Mode` metadata entry — drives coordinator-mode reconcile on resume.
     pub mode: Option<String>,
+    pub mcp_tool_exposure: Option<coco_types::McpToolExposure>,
 }
 
 /// Full session state for resume, anchored to one selected conversation chain.
@@ -60,6 +61,7 @@ pub struct SessionResumeState {
     /// Stored execution mode (`coordinator` / `normal`) from the last
     /// `Mode` metadata entry — drives coordinator-mode reconcile on resume.
     pub mode: Option<String>,
+    pub mcp_tool_exposure: Option<coco_types::McpToolExposure>,
 }
 
 /// Load a conversation from a session transcript for resume.
@@ -82,6 +84,7 @@ pub fn load_conversation_for_resume(
         plan_slug: resume_state.plan_slug,
         has_sidechain: resume_state.has_sidechain,
         mode: resume_state.mode,
+        mcp_tool_exposure: resume_state.mcp_tool_exposure,
     })
 }
 
@@ -334,6 +337,10 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
         Entry::Metadata(MetadataEntry::Mode { mode, .. }) => Some(mode.clone()),
         _ => None,
     });
+    let latest_mcp_tool_exposure = metadata_entries.iter().rev().find_map(|entry| match entry {
+        Entry::Metadata(MetadataEntry::McpToolExposure { exposure, .. }) => Some(*exposure),
+        _ => None,
+    });
 
     Ok(SessionResumeState {
         messages,
@@ -349,6 +356,7 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
         plan_slug,
         has_sidechain,
         mode: latest_mode,
+        mcp_tool_exposure: latest_mcp_tool_exposure,
     })
 }
 

@@ -1,5 +1,10 @@
 {
   "enabledPlugins": {
     "andrej-karpathy-skills@karpathy-skills": true
+  },
+  "permissions": {
+    "allow": [
+      "Bash(git branch -D:*)"
+    ]
   }
 }

@@ -169,6 +169,29 @@ impl McpSource for McpAdapter {
         out
     }
 
+    async fn connected_server_summaries(
+        &self,
+        _agent_id: Option<&str>,
+    ) -> Vec<coco_system_reminder::McpServerSummary> {
+        let mut out = Vec::new();
+        for name in self.manager.registered_server_names() {
+            if let Some(coco_mcp::McpConnectionState::Connected(server)) =
+                self.manager.get_state(&name).await
+            {
+                // Connection state only. The engine joins this with the exact
+                // request materialization before exposing a server or tool
+                // count. Instructions are executable context, not a trusted
+                // human-readable description, and must never be reused here.
+                out.push(coco_system_reminder::McpServerSummary {
+                    name,
+                    tool_count: 0,
+                    description: server.description,
+                });
+            }
+        }
+        out
+    }
+
     async fn resolve_resources(
         &self,
         _agent_id: Option<&str>,

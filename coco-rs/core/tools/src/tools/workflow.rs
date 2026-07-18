@@ -447,6 +447,8 @@ impl Tool for WorkflowTool {
                 active_shell_tool: ctx.active_shell_tool,
                 log_assistant_responses: ctx.log_assistant_responses,
                 parent_mode: ctx.permission_context.mode,
+                mcp_tool_exposure: ctx.mcp_tool_exposure,
+                mcp_server_tool_exposure: ctx.mcp_server_tool_exposure.as_ref().clone(),
                 agent_catalog: ctx.agent_catalog.clone(),
                 total_token_budget: ctx.total_token_budget,
                 workflow_abort: coco_tool_runtime::TurnAbortSignal::from_token(cancel.clone()),

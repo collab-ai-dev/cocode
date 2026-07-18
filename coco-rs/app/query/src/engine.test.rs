@@ -20,6 +20,7 @@ use coco_tools::AskUserQuestionTool;
 use coco_tools::EnterPlanModeTool;
 use coco_tools::ExitPlanModeTool;
 use coco_tools::ReadTool;
+use coco_tools::UseToolTool;
 use tokio_util::sync::CancellationToken;
 
 use super::*;
@@ -3098,20 +3099,24 @@ async fn post_tool_use_updated_mcp_output_rewrites_mcp_result() {
     let model = Arc::new(OneToolThenTextMock {
         call_count: AtomicI32::new(0),
         tool_call_id: "post_hook_mcp_rewrite_1".into(),
-        tool_name: "hook_mcp".into(),
-        input: serde_json::json!({}),
+        tool_name: coco_types::ToolName::UseTool.as_str().into(),
+        input: serde_json::json!({
+            "name": "mcp__test-server__hook_mcp",
+            "arguments": {}
+        }),
         final_text: "done".into(),
     });
     let client = crate::test_support::model_runtime_registry(model);
     let registry = ToolRegistry::new();
     registry.register(Arc::new(HookMcpTool));
+    registry.register(Arc::new(UseToolTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
 
     let hooks = coco_hooks::HookRegistry::new();
     hooks.register(coco_hooks::HookDefinition {
         event: coco_types::HookEventType::PostToolUse,
-        matcher: Some("hook_mcp".into()),
+        matcher: Some("mcp__test-server__hook_mcp".into()),
         handler: coco_hooks::HookHandler::Command {
             command:
                 "printf '%s\\n' '{\"updatedMCPToolOutput\":{\"value\":\"rewritten-mcp-output\"}}'"
@@ -3129,7 +3134,10 @@ async fn post_tool_use_updated_mcp_output_rewrites_mcp_result() {
     });
 
     let engine = QueryEngine::new(
-        QueryEngineConfig::default(),
+        QueryEngineConfig {
+            mcp_tool_exposure: coco_types::McpToolExposure::UseTool,
+            ..Default::default()
+        },
         coco_types::SessionId::try_new("test-session").unwrap(),
         client,
         tools,
@@ -3404,20 +3412,24 @@ async fn mcp_success_path_defers_post_hook_messages_until_after_prevent() {
     let model = Arc::new(OneToolThenTextMock {
         call_count: AtomicI32::new(0),
         tool_call_id: "ordering_mcp_1".into(),
-        tool_name: "hook_ordering_mcp".into(),
-        input: serde_json::json!({}),
+        tool_name: coco_types::ToolName::UseTool.as_str().into(),
+        input: serde_json::json!({
+            "name": "mcp__test-server__hook_ordering_mcp",
+            "arguments": {}
+        }),
         final_text: "should not happen".into(),
     });
     let client = crate::test_support::model_runtime_registry(model);
     let registry = ToolRegistry::new();
     registry.register(Arc::new(HookOrderingMcpTool));
+    registry.register(Arc::new(UseToolTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
 
     let hooks = coco_hooks::HookRegistry::new();
     hooks.register(coco_hooks::HookDefinition {
         event: coco_types::HookEventType::PostToolUse,
-        matcher: Some("hook_ordering_mcp".into()),
+        matcher: Some("mcp__test-server__hook_ordering_mcp".into()),
         handler: coco_hooks::HookHandler::Command {
             command: "printf '%s\\n' '{\"additionalContext\":\"hook context\",\"continue\":false,\"stopReason\":\"stop ordering\"}'".into(),
             timeout_ms: Some(1000),
@@ -3433,7 +3445,10 @@ async fn mcp_success_path_defers_post_hook_messages_until_after_prevent() {
     });
 
     let engine = QueryEngine::new(
-        QueryEngineConfig::default(),
+        QueryEngineConfig {
+            mcp_tool_exposure: coco_types::McpToolExposure::UseTool,
+            ..Default::default()
+        },
         coco_types::SessionId::try_new("test-session").unwrap(),
         client,
         tools,

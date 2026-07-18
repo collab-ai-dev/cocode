@@ -436,6 +436,8 @@ fn in_process_config(prompt: &str) -> InProcessRunnerConfig {
         effort: None,
         use_exact_tools: false,
         mcp_servers: Vec::new(),
+        mcp_tool_exposure: coco_types::McpToolExposure::UseTool,
+        mcp_server_tool_exposure: Default::default(),
         disallowed_tools: Vec::new(),
         model_role: None,
         model_selection: coco_types::LlmModelSelection::default(),

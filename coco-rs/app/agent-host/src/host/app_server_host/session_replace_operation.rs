@@ -126,6 +126,7 @@ pub(crate) async fn replace_app_server_session_with_runtime(
             } else {
                 let cwd = loaded.session.working_dir.clone();
                 let prior_messages = loaded.conversation.messages.clone();
+                let persisted_mcp_tool_exposure = loaded.conversation.mcp_tool_exposure;
                 let factory = {
                     let state = Arc::clone(&state);
                     let replacement = replacement.clone();
@@ -145,6 +146,7 @@ pub(crate) async fn replace_app_server_session_with_runtime(
                             // Replace-to-resume carries only a target; plan-mode
                             // policy is re-supplied via `session/resume`.
                             None,
+                            persisted_mcp_tool_exposure,
                             Arc::clone(&app_server),
                         )
                         .await

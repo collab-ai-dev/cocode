@@ -30,6 +30,8 @@ fn host() -> WorkflowRunHost {
             active_shell_tool: coco_types::ActiveShellTool::Disabled,
             log_assistant_responses: None,
             parent_mode: coco_types::PermissionMode::Default,
+            mcp_tool_exposure: coco_types::McpToolExposure::UseTool,
+            mcp_server_tool_exposure: Default::default(),
             agent_catalog: None,
             total_token_budget: Some(100),
             workflow_abort: coco_tool_runtime::TurnAbortSignal::from_token(
@@ -476,6 +478,8 @@ fn cyclic_host_with_cwd(cwd: std::path::PathBuf) -> Arc<WorkflowRunHost> {
             active_shell_tool: coco_types::ActiveShellTool::Disabled,
             log_assistant_responses: None,
             parent_mode: coco_types::PermissionMode::Default,
+            mcp_tool_exposure: coco_types::McpToolExposure::UseTool,
+            mcp_server_tool_exposure: Default::default(),
             agent_catalog: None,
             total_token_budget: None,
             workflow_abort: coco_tool_runtime::TurnAbortSignal::from_token(

@@ -134,6 +134,14 @@ impl SessionRuntime {
             // Fork-mode skill subagents count toward the same depth cap as
             // other forked subagents.
             parent_query_depth: cfg.query_depth,
+            // This entry point lacks the live model-capability snapshot. Treat
+            // configured `defer` conservatively as the `use_tool` floor so a
+            // skill model switch cannot widen the parent.
+            mcp_tool_exposure: coco_types::McpToolExposure::restrict(
+                cfg.mcp_tool_exposure,
+                coco_types::McpToolExposure::UseTool,
+            ),
+            mcp_server_tool_exposure: cfg.mcp_server_tool_exposure.as_ref().clone(),
         };
         let gate = coco_tool_runtime::SkillGateContext {
             overrides: cfg.skill_overrides.clone(),

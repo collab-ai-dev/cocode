@@ -324,6 +324,24 @@ fn passes_filter_pipeline(tool: &dyn DynTool, ctx: &ToolUseContext) -> bool {
 // MCP 运行时可用性通过断开时 `deregister_by_server` 清出 registry，不在此函数显式过滤。
 ```
 
+### 7.3.1 MCP placement 与 transport closure
+
+`mcp.tool_exposure` 是 server policy 的默认值，
+`mcp.server_tool_exposure` 可按 server 覆盖。普通 target filter 完成后，
+materializer 再把每个 MCP target 投影为 `Loaded`、`Deferred` 或 `UseTool`。
+`Feature::Mcp` 仍是总开关；MCP 的完整禁用属于 activation/filtering，
+而不是 exposure enum。`Feature::ToolSearch` 只控制内置工具的 lazy-loading，
+不能切断 MCP `defer` / `use_tool` 所需的发现通道。
+
+Transport carrier 不是普通 target capability：Layer 1–4 收窄后，
+materializer 按闭包规则补入 `ToolSearch`，并在任一 server 需要 `UseTool`
+时补入 `use_tool`。Carrier 不能恢复已被过滤的 target，也不能改变 target
+placement。它的存在跟随配置 policy，而不是瞬时 candidate 数量，以保持
+provider tool prefix 稳定。
+
+完整规则与 provider strategy matrix 见
+[`mcp-tool-exposure-design.md`](mcp-tool-exposure-design.md)。
+
 ### 7.4 Tool::is_enabled 签名重构
 
 ```rust

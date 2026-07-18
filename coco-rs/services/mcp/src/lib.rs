@@ -61,8 +61,6 @@ pub use elicitation::ElicitationMode;
 pub use elicitation::ElicitationRequest;
 pub use elicitation::ElicitationResult;
 pub use elicitation::ElicitationType;
-pub use naming::mcp_tool_id;
-pub use naming::parse_mcp_tool_id;
 pub use naming::parse_permission_reply;
 pub use naming::short_request_id;
 pub use types::ConfigScope;

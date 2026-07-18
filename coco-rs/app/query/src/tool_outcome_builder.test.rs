@@ -164,7 +164,8 @@ async fn text_only_multipart_output_uses_level1_windowed_persistence() {
     let outcome = build_outcome_from_execution(RunOneTail {
         tool_use_id: "call-1".into(),
         tool_id: tool.id(),
-        tool_name: tool.name().into(),
+        semantic_tool_name: tool.name().into(),
+        provider_tool_name: coco_types::WireToolName::for_tool_id(&tool.id()),
         model_index: 0,
         tool,
         effective_input: Value::Null,
@@ -207,7 +208,8 @@ async fn oversized_output_without_store_degrades_to_pointerless_window() {
     let outcome = build_outcome_from_execution(RunOneTail {
         tool_use_id: "call-no-store".into(),
         tool_id: tool.id(),
-        tool_name: tool.name().into(),
+        semantic_tool_name: tool.name().into(),
+        provider_tool_name: coco_types::WireToolName::for_tool_id(&tool.id()),
         model_index: 0,
         tool,
         effective_input: Value::Null,
@@ -250,7 +252,8 @@ async fn mixed_output_uses_aggregate_windowed_persistence_and_preserves_media() 
     let outcome = build_outcome_from_execution(RunOneTail {
         tool_use_id: "call-mixed".into(),
         tool_id: tool.id(),
-        tool_name: tool.name().into(),
+        semantic_tool_name: tool.name().into(),
+        provider_tool_name: coco_types::WireToolName::for_tool_id(&tool.id()),
         model_index: 0,
         tool,
         effective_input: Value::Null,
@@ -296,7 +299,8 @@ async fn mcp_error_envelope_creates_error_tool_result() {
     let outcome = build_outcome_from_execution(RunOneTail {
         tool_use_id: "call-err".into(),
         tool_id: tool.id(),
-        tool_name: tool.name().into(),
+        semantic_tool_name: tool.name().into(),
+        provider_tool_name: coco_types::WireToolName::for_tool_id(&tool.id()),
         model_index: 0,
         tool,
         effective_input: Value::Null,
@@ -329,7 +333,8 @@ async fn structured_output_uses_tool_result_side_channel_only() {
     let outcome = build_outcome_from_execution(RunOneTail {
         tool_use_id: "call-structured".into(),
         tool_id: tool.id(),
-        tool_name: tool.name().into(),
+        semantic_tool_name: tool.name().into(),
+        provider_tool_name: coco_types::WireToolName::for_tool_id(&tool.id()),
         model_index: 0,
         tool,
         effective_input: Value::Null,
@@ -368,7 +373,8 @@ async fn structured_output_ignores_model_visible_data_lookalike() {
     let outcome = build_outcome_from_execution(RunOneTail {
         tool_use_id: "call-lookalike".into(),
         tool_id: tool.id(),
-        tool_name: tool.name().into(),
+        semantic_tool_name: tool.name().into(),
+        provider_tool_name: coco_types::WireToolName::for_tool_id(&tool.id()),
         model_index: 0,
         tool,
         effective_input: Value::Null,
@@ -403,7 +409,8 @@ async fn success_copies_tool_result_display_data() {
     let outcome = build_outcome_from_execution(RunOneTail {
         tool_use_id: "call-display".into(),
         tool_id: tool.id(),
-        tool_name: tool.name().into(),
+        semantic_tool_name: tool.name().into(),
+        provider_tool_name: coco_types::WireToolName::for_tool_id(&tool.id()),
         model_index: 0,
         tool,
         effective_input: Value::Null,
@@ -438,7 +445,8 @@ async fn error_copies_execution_failed_display_data() {
     let outcome = build_outcome_from_execution(RunOneTail {
         tool_use_id: "call-display-error".into(),
         tool_id: tool.id(),
-        tool_name: tool.name().into(),
+        semantic_tool_name: tool.name().into(),
+        provider_tool_name: coco_types::WireToolName::for_tool_id(&tool.id()),
         model_index: 0,
         tool,
         effective_input: Value::Null,
@@ -472,7 +480,8 @@ async fn plain_tool_error_has_no_display_data() {
     let outcome = build_outcome_from_execution(RunOneTail {
         tool_use_id: "call-plain-error".into(),
         tool_id: tool.id(),
-        tool_name: tool.name().into(),
+        semantic_tool_name: tool.name().into(),
+        provider_tool_name: coco_types::WireToolName::for_tool_id(&tool.id()),
         model_index: 0,
         tool,
         effective_input: Value::Null,

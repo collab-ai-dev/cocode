@@ -55,6 +55,8 @@ pub(crate) struct WorkflowSpawnContext {
     pub active_shell_tool: coco_types::ActiveShellTool,
     pub log_assistant_responses: Option<bool>,
     pub parent_mode: coco_types::PermissionMode,
+    pub mcp_tool_exposure: coco_types::McpToolExposure,
+    pub mcp_server_tool_exposure: std::collections::HashMap<String, coco_types::McpToolExposure>,
     pub agent_catalog: Option<Arc<coco_subagent::AgentCatalogSnapshot>>,
     pub total_token_budget: Option<i64>,
     pub workflow_abort: coco_tool_runtime::TurnAbortSignal,
@@ -155,6 +157,8 @@ impl WorkflowRunHost {
                 tool_overrides: Some(ctx.tool_overrides.clone()),
                 parent_tool_filter: Some(ctx.parent_tool_filter.clone()),
                 active_shell_tool: ctx.active_shell_tool,
+                mcp_tool_exposure: ctx.mcp_tool_exposure,
+                mcp_server_tool_exposure: ctx.mcp_server_tool_exposure.clone(),
                 ..Default::default()
             },
             routing: AgentSpawnRouting {

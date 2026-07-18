@@ -33,6 +33,7 @@ impl Drop for ConfigDirGuard {
 }
 
 #[test]
+#[serial_test::serial(config_env)]
 fn process_announce_accepts_empty_live_session_snapshot() {
     let _lock = crate::test_support::CONFIG_ENV_LOCK.blocking_lock();
     let config_home = tempfile::TempDir::new().expect("config home tempdir");
@@ -45,6 +46,7 @@ fn process_announce_accepts_empty_live_session_snapshot() {
 }
 
 #[test]
+#[serial_test::serial(config_env)]
 fn process_announce_preserves_live_session_snapshot() {
     let _lock = crate::test_support::CONFIG_ENV_LOCK.blocking_lock();
     let config_home = tempfile::TempDir::new().expect("config home tempdir");

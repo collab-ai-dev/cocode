@@ -159,19 +159,21 @@ pub struct McpCapabilities {
 }
 ```
 
-### Tool Naming (from `mcpStringUtils.ts`, `normalization.ts`)
+### Tool identity
 
 ```rust
-/// MCP tool name convention: mcp__<normalized_server>__<normalized_tool>
-pub fn build_mcp_tool_name(server: &str, tool: &str) -> String;
-pub fn parse_mcp_tool_name(name: &str) -> Option<McpToolInfo>;
-pub fn normalize_name_for_mcp(name: &str) -> String;
-
-pub struct McpToolInfo {
+pub struct DiscoveredTool {
+    pub tool_id: coco_types::ToolId,
     pub server_name: String,
-    pub tool_name: Option<String>,
+    pub tool_name: String,
+    // description, schema, and annotations omitted
 }
 ```
+
+`coco-mcp` preserves raw MCP server/tool identity. `coco-types::ToolId` owns
+canonical semantic identity and `coco-types::WireToolName` owns the bounded,
+provider-safe name sent to the model. The service layer never normalizes a
+server/tool pair or parses a provider wire handle to decide what to execute.
 
 ### OAuth (from `auth.ts`)
 

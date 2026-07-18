@@ -49,6 +49,7 @@
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::DynTool;
+use coco_tool_runtime::MaterializedTool;
 use coco_tool_runtime::PromptOptions;
 use coco_tool_runtime::SchemaContext;
 use coco_tool_runtime::Tool;
@@ -65,9 +66,28 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::Arc;
 
 const DEFAULT_MAX_RESULTS: usize = 5;
+
+/// Upper bound on a single advertised tool schema (serialized UTF-8 bytes). A
+/// schema larger than this is omitted from search results rather than
+/// truncated — a partial schema is not safely callable.
+const MAX_TOOL_SEARCH_SCHEMA_BYTES: usize = 4 * 1024;
+
+/// Upper bound on the aggregate rendered schema payload (serialized UTF-8
+/// bytes). Whole schemas are added until the next one would exceed this; the
+/// rest are dropped so a discovery response can never blow the context window.
+const MAX_TOOL_SEARCH_OUTPUT_BYTES: usize = 8 * 1024;
+
+/// Server-controlled description budget inside a projected schema.
+const MAX_TOOL_SEARCH_DESCRIPTION_BYTES: usize = 512;
+
+/// Bound model-supplied query work before tokenization and regex compilation.
+const MAX_TOOL_SEARCH_QUERY_BYTES: usize = 512;
+
+/// Pending-server retry hints are metadata, not a registry dump.
+const MAX_PENDING_MCP_SERVERS: usize = 8;
+const MAX_PENDING_MCP_SERVER_NAME_BYTES: usize = 128;
 
 /// MCP wire prefix used by [`parse_tool_name`] to detect MCP tools.
 /// Centralized in [`coco_types::MCP_TOOL_PREFIX`]; duplicated here as
@@ -88,16 +108,11 @@ const PROMPT_LOCATION_HINT: &str = "Deferred tools appear by name in <system-rem
 /// **Prefix is case-insensitive** — `select:`, `Select:`, `SELECT:` all
 /// trigger select mode (case-insensitive prefix check).
 pub(super) fn parse_select_query(query: &str) -> Option<Vec<String>> {
-    // Case-insensitive prefix match: if the first 7 chars (lowercased)
-    // equal `"select:"`, strip them. Otherwise return None.
-    if query.len() < 7 {
-        return None;
-    }
-    let prefix = &query[..7];
+    let prefix = query.get(..7)?;
+    let rest = query.get(7..)?;
     if !prefix.eq_ignore_ascii_case("select:") {
         return None;
     }
-    let rest = &query[7..];
     Some(
         rest.split(',')
             .map(|s| s.trim().to_string())
@@ -236,8 +251,8 @@ fn score_tool(
 
 /// Run the keyword path over the deferred-tool list.
 fn search_with_keywords(
-    deferred: &[Arc<dyn DynTool>],
-    all: &[Arc<dyn DynTool>],
+    deferred: &[MaterializedTool],
+    all: &[MaterializedTool],
     desc_opts: &DescriptionOptions,
     query: &str,
     max_results: usize,
@@ -245,29 +260,27 @@ fn search_with_keywords(
     let query_lower = query.to_lowercase();
     let query_trimmed = query_lower.trim();
 
-    // Fast path 1: exact name match (deferred first, then full set).
-    // Selecting an already-loaded tool is a harmless no-op that lets
-    // the model proceed without retry churn.
+    // Fast path 1: exact match on canonical id / bare name / alias (deferred
+    // first, then full set). Selecting an already-loaded tool is a harmless
+    // no-op that lets the model proceed without retry churn.
     if let Some(t) = deferred
         .iter()
-        .find(|t| t.name().eq_ignore_ascii_case(query_trimmed))
-        .or_else(|| {
-            all.iter()
-                .find(|t| t.name().eq_ignore_ascii_case(query_trimmed))
-        })
+        .find(|t| tool_matches_query(t, query_trimmed))
+        .or_else(|| all.iter().find(|t| tool_matches_query(t, query_trimmed)))
     {
-        return vec![t.name().to_string()];
+        return vec![tool_identity(t)];
     }
 
     // Fast path 2: `mcp__<server>` prefix — returns up to `max_results`
     // MCP tools whose qualified name starts with the query. Length > 5
-    // guards against the bare `mcp__` query.
+    // guards against the bare `mcp__` query. Matches on the canonical id
+    // (`mcp__server__tool`), not the bare `name()` (which lacks the prefix).
     if query_trimmed.starts_with(MCP_PREFIX) && query_trimmed.len() > MCP_PREFIX.len() {
         let hits: Vec<String> = deferred
             .iter()
-            .filter(|t| t.name().to_lowercase().starts_with(query_trimmed))
+            .filter(|t| tool_identity(t).to_lowercase().starts_with(query_trimmed))
             .take(max_results)
-            .map(|t| t.name().to_string())
+            .map(tool_identity)
             .collect();
         if !hits.is_empty() {
             return hits;
@@ -310,7 +323,7 @@ fn search_with_keywords(
     // Precompute description + hint for each deferred tool so the
     // pre-filter and the scoring pass don't both call `description`.
     struct ToolWithText {
-        tool: Arc<dyn DynTool>,
+        tool: MaterializedTool,
         parsed: ParsedToolName,
         desc_lower: String,
         hint_lower: String,
@@ -318,9 +331,13 @@ fn search_with_keywords(
     let prepared: Vec<ToolWithText> = deferred
         .iter()
         .map(|t| {
-            let parsed = parse_tool_name(t.name());
-            let desc_lower = t.description(&Value::Null, desc_opts).to_lowercase();
-            let hint_lower = t.search_hint().map(str::to_lowercase).unwrap_or_default();
+            let parsed = parse_tool_name(&t.canonical_name);
+            let desc_lower = t.tool.description(&Value::Null, desc_opts).to_lowercase();
+            let hint_lower = t
+                .tool
+                .search_hint()
+                .map(str::to_lowercase)
+                .unwrap_or_default();
             ToolWithText {
                 tool: t.clone(),
                 parsed,
@@ -365,9 +382,9 @@ fn search_with_keywords(
     let mut scored: Vec<ScoredTool> = candidates
         .into_iter()
         .map(|tw| ScoredTool {
-            name: tw.tool.name().to_string(),
+            name: tw.tool.wire_name.as_str().to_string(),
             score: score_tool(
-                tw.tool.as_ref(),
+                tw.tool.tool.as_ref(),
                 &tw.parsed,
                 &tw.desc_lower,
                 &tw.hint_lower,
@@ -385,8 +402,55 @@ fn search_with_keywords(
         .collect()
 }
 
-fn sort_tools_by_name(tools: &mut [Arc<dyn DynTool>]) {
-    tools.sort_by(|a, b| a.name().cmp(b.name()));
+fn sort_tools_by_name(tools: &mut [MaterializedTool]) {
+    tools.sort_by(|a, b| a.canonical_name.cmp(&b.canonical_name));
+}
+
+/// Model-facing identity of a tool = canonical `ToolId` string
+/// (`mcp__server__tool` for MCP, the plain name for built-ins / custom). This
+/// is what ToolSearch returns, dedups on, and records in
+/// `discovered_tool_names`, so two servers exposing the same bare tool name
+/// never collapse into one.
+fn tool_identity(t: &MaterializedTool) -> String {
+    t.wire_name.as_str().to_string()
+}
+
+/// Whether `query` selects `t`, by canonical id, bare name, or a declared
+/// alias (the model may type any of the three).
+fn tool_matches_query(t: &MaterializedTool, query: &str) -> bool {
+    t.wire_name.as_str().eq_ignore_ascii_case(query)
+        || t.canonical_name.eq_ignore_ascii_case(query)
+        || t.tool.name().eq_ignore_ascii_case(query)
+        || t.tool
+            .aliases()
+            .iter()
+            .any(|a| a.eq_ignore_ascii_case(query))
+}
+
+/// Model-facing name to advertise for a matched tool spec: the canonical id
+/// for MCP tools (so the search preview, the next-turn tool array, and
+/// `discovered_tool_names` all agree on `mcp__server__tool`), else the tool's
+/// own `tool_spec` name. Mirrors the MCP-name override in
+/// `app/query::build_tool_definitions_with_materialization`.
+fn model_facing_name(tool: &MaterializedTool, spec_name: String) -> String {
+    if tool.tool.is_mcp() {
+        tool.wire_name.as_str().to_string()
+    } else {
+        spec_name
+    }
+}
+
+/// A `UseTool` target is not directly callable, so its ToolSearch schema is
+/// annotated with the exact invocation form. Other placements are unchanged.
+fn use_tool_invoke_note(description: String, wire_name: &str, tool: &MaterializedTool) -> String {
+    if tool.placement == coco_tool_runtime::ToolPlacement::UseTool {
+        format!(
+            "{description}\n\n[Not directly callable. Invoke through use_tool: \
+             use_tool with {{\"name\": \"{wire_name}\", \"arguments\": {{ … }}}}.]"
+        )
+    } else {
+        description
+    }
 }
 
 fn canonical_json(value: Value) -> Value {
@@ -406,46 +470,71 @@ fn canonical_json(value: Value) -> Value {
 }
 
 fn stable_json_string(value: Value) -> String {
-    serde_json::to_string(&canonical_json(value)).unwrap_or_default()
+    serde_json::to_string(&canonical_json(value))
+        .unwrap_or_default()
+        .replace('&', "\\u0026")
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+}
+
+fn escape_untrusted_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 fn matched_tools_for_schema(
     matches: &[String],
-    deferred: &[Arc<dyn DynTool>],
-    enabled_tools: &[Arc<dyn DynTool>],
-    all_tools: &[Arc<dyn DynTool>],
-) -> Vec<Arc<dyn DynTool>> {
-    let mut tools: Vec<Arc<dyn DynTool>> = matches
+    deferred: &[MaterializedTool],
+    enabled_tools: &[MaterializedTool],
+    all_tools: &[MaterializedTool],
+) -> Vec<MaterializedTool> {
+    let mut tools: Vec<MaterializedTool> = matches
         .iter()
-        .filter_map(|name| {
+        .filter_map(|wire_name| {
             deferred
                 .iter()
                 .chain(enabled_tools.iter())
                 .chain(all_tools.iter())
-                .find(|tool| tool.name() == name)
+                .find(|tool| tool.wire_name.as_str() == wire_name)
                 .cloned()
         })
         .collect();
     sort_tools_by_name(&mut tools);
-    tools.dedup_by(|a, b| a.name() == b.name());
+    tools.dedup_by(|a, b| a.tool_id == b.tool_id);
     tools
+}
+
+struct ClientSchemaProjection {
+    rendered: Option<String>,
+    wire_names: Vec<String>,
+    canonical_names: Vec<String>,
+    omitted_oversized: Vec<String>,
 }
 
 async fn render_functions_for_client_side(
     matches: &[String],
-    deferred: &[Arc<dyn DynTool>],
-    enabled_tools: &[Arc<dyn DynTool>],
-    all_tools: &[Arc<dyn DynTool>],
+    deferred: &[MaterializedTool],
+    enabled_tools: &[MaterializedTool],
+    all_tools: &[MaterializedTool],
     ctx: &ToolUseContext,
-) -> Option<String> {
+) -> ClientSchemaProjection {
     let tools = matched_tools_for_schema(matches, deferred, enabled_tools, all_tools);
     if tools.is_empty() {
-        return None;
+        return ClientSchemaProjection {
+            rendered: None,
+            wire_names: Vec::new(),
+            canonical_names: Vec::new(),
+            omitted_oversized: Vec::new(),
+        };
     }
 
     let mut tool_names: Vec<String> = all_tools
         .iter()
-        .map(|tool| tool.name().to_string())
+        .map(|tool| tool.wire_name.as_str().to_string())
         .collect();
     tool_names.sort();
     let prompt_options = PromptOptions {
@@ -461,19 +550,54 @@ async fn render_functions_for_client_side(
 
     let mut lines = Vec::with_capacity(tools.len() + 2);
     lines.push("<functions>".to_string());
+    let mut total_bytes = "<functions>\n</functions>".len();
+    let mut wire_names = Vec::new();
+    let mut canonical_names = Vec::new();
+    let mut omitted_oversized = Vec::new();
     for tool in tools {
-        let ToolSpec::Function(spec) = tool.tool_spec(&schema_ctx, &prompt_options).await else {
+        let ToolSpec::Function(spec) = tool.tool.tool_spec(&schema_ctx, &prompt_options).await
+        else {
             continue;
         };
+        let name = model_facing_name(&tool, spec.name);
+        let description = coco_utils_string::take_bytes_at_char_boundary(
+            &spec.description,
+            MAX_TOOL_SEARCH_DESCRIPTION_BYTES,
+        )
+        .to_string();
+        let description = use_tool_invoke_note(description, &name, &tool);
         let schema = stable_json_string(serde_json::json!({
-            "name": spec.name,
-            "description": spec.description,
+            "name": name,
+            "description": description,
             "parameters": spec.parameters,
         }));
-        lines.push(format!("<function>{schema}</function>"));
+        // Omit (never truncate) a single oversized schema, and stop once the
+        // aggregate budget is spent — a partial schema is not safely callable
+        // Byte comparisons only; no UTF-8 slicing.
+        if schema.len() > MAX_TOOL_SEARCH_SCHEMA_BYTES {
+            omitted_oversized.push(name);
+            continue;
+        }
+        let entry = format!("<function>{schema}</function>");
+        let projected_bytes = total_bytes + 1 + entry.len();
+        if projected_bytes > MAX_TOOL_SEARCH_OUTPUT_BYTES {
+            omitted_oversized.push(name);
+            break;
+        }
+        total_bytes = projected_bytes;
+        wire_names.push(name);
+        if tool.placement == coco_tool_runtime::ToolPlacement::Deferred {
+            canonical_names.push(tool.canonical_name.clone());
+        }
+        lines.push(entry);
     }
     lines.push("</functions>".to_string());
-    Some(lines.join("\n"))
+    ClientSchemaProjection {
+        rendered: (!wire_names.is_empty()).then(|| lines.join("\n")),
+        wire_names,
+        canonical_names,
+        omitted_oversized,
+    }
 }
 
 /// Build the `AppStatePatch` that inserts the matched tool names into
@@ -517,19 +641,19 @@ fn build_discovery_patch(matches: &[String]) -> Option<coco_types::AppStatePatch
 /// function entries are valid OpenAI tool defs and round-trip correctly.
 async fn openai_function_specs_for_matches(
     matches: &[String],
-    deferred: &[Arc<dyn DynTool>],
-    enabled_tools: &[Arc<dyn DynTool>],
-    all_tools: &[Arc<dyn DynTool>],
+    deferred: &[MaterializedTool],
+    enabled_tools: &[MaterializedTool],
+    all_tools: &[MaterializedTool],
     ctx: &ToolUseContext,
-) -> Vec<Value> {
+) -> (Vec<Value>, Vec<String>, Vec<String>, Vec<String>) {
     let tools = matched_tools_for_schema(matches, deferred, enabled_tools, all_tools);
     if tools.is_empty() {
-        return Vec::new();
+        return (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     }
 
     let mut tool_names: Vec<String> = all_tools
         .iter()
-        .map(|tool| tool.name().to_string())
+        .map(|tool| tool.wire_name.as_str().to_string())
         .collect();
     tool_names.sort();
     let prompt_options = PromptOptions {
@@ -543,23 +667,119 @@ async fn openai_function_specs_for_matches(
         ..SchemaContext::default()
     };
     let mut specs = Vec::new();
+    let mut wire_names = Vec::new();
+    let mut canonical_names = Vec::new();
+    let mut omitted_oversized = Vec::new();
     for tool in tools {
-        let ToolSpec::Function(spec) = tool.tool_spec(&schema_ctx, &prompt_options).await else {
+        let ToolSpec::Function(spec) = tool.tool.tool_spec(&schema_ctx, &prompt_options).await
+        else {
             continue;
         };
+        let name = model_facing_name(&tool, spec.name);
+        let description = coco_utils_string::take_bytes_at_char_boundary(
+            &spec.description,
+            MAX_TOOL_SEARCH_DESCRIPTION_BYTES,
+        )
+        .to_string();
+        let description = use_tool_invoke_note(description, &name, &tool);
         let mut entry = serde_json::json!({
             "type": "function",
-            "name": spec.name,
-            "description": spec.description,
+            "name": name,
+            "description": description,
             "strict": false,
             "parameters": spec.parameters,
         });
-        if tool.should_defer() {
+        if tool.discoverable {
             entry["defer_loading"] = Value::Bool(true);
+        }
+        // Same per-schema and aggregate bounds as the client-side `<functions>`
+        // path: omit an oversized entry, stop at the budget.
+        let entry_bytes = serde_json::to_string(&entry).map(|s| s.len()).unwrap_or(0);
+        if entry_bytes > MAX_TOOL_SEARCH_SCHEMA_BYTES {
+            omitted_oversized.push(name);
+            continue;
+        }
+        let mut projected_specs = specs.clone();
+        projected_specs.push(entry.clone());
+        let projected_bytes = serde_json::to_vec(&serde_json::json!({
+            "tools": projected_specs,
+        }))
+        .map(|bytes| bytes.len())
+        .unwrap_or(usize::MAX);
+        if projected_bytes > MAX_TOOL_SEARCH_OUTPUT_BYTES {
+            omitted_oversized.push(name);
+            break;
+        }
+        wire_names.push(name);
+        if tool.placement == coco_tool_runtime::ToolPlacement::Deferred {
+            canonical_names.push(tool.canonical_name.clone());
         }
         specs.push(entry);
     }
-    specs
+    (specs, wire_names, canonical_names, omitted_oversized)
+}
+
+struct ToolSearchProjection {
+    wire_names: Vec<String>,
+    canonical_names: Vec<String>,
+    rendered_functions: Option<String>,
+    openai_tools: Option<Vec<Value>>,
+    omitted_oversized: Vec<String>,
+}
+
+struct ToolSearchEnvelopeContext<'a> {
+    query: &'a str,
+    total_deferred_tools: i64,
+    use_tool_reference: bool,
+    include_pending_mcp_servers: bool,
+    mcp: &'a coco_tool_runtime::McpHandleRef,
+}
+
+fn preserve_match_order(matches: &[String], projected: Vec<String>) -> Vec<String> {
+    let accepted: HashSet<&str> = projected.iter().map(String::as_str).collect();
+    matches
+        .iter()
+        .filter(|name| accepted.contains(name.as_str()))
+        .cloned()
+        .collect()
+}
+
+async fn project_matches(
+    matches: &[String],
+    deferred: &[MaterializedTool],
+    enabled_tools: &[MaterializedTool],
+    all_tools: &[MaterializedTool],
+    ctx: &ToolUseContext,
+    server_side_expansion: bool,
+    use_openai_native: bool,
+) -> ToolSearchProjection {
+    if use_openai_native {
+        let (tools, wire_names, canonical_names, omitted_oversized) =
+            openai_function_specs_for_matches(matches, deferred, enabled_tools, all_tools, ctx)
+                .await;
+        return ToolSearchProjection {
+            wire_names: preserve_match_order(matches, wire_names),
+            canonical_names,
+            rendered_functions: None,
+            openai_tools: Some(tools),
+            omitted_oversized,
+        };
+    }
+
+    // Anthropic references still run the client projection as a validation
+    // and size gate. Only eligible names become provider references; the text
+    // itself is discarded for server-side expansion.
+    let projection =
+        render_functions_for_client_side(matches, deferred, enabled_tools, all_tools, ctx).await;
+    ToolSearchProjection {
+        wire_names: preserve_match_order(matches, projection.wire_names),
+        canonical_names: projection.canonical_names,
+        rendered_functions: (!server_side_expansion)
+            .then_some(projection.rendered)
+            .flatten(),
+        openai_tools: None,
+        omitted_oversized: projection.omitted_oversized,
+    }
 }
 
 /// Serde default for `max_results` — default is 5.
@@ -578,6 +798,7 @@ pub struct ToolSearchInput {
     /// `tool_search` provider tool (which names this field `limit`) parse
     /// cleanly on the OpenAI-native path.
     #[serde(default = "default_tool_search_max_results", alias = "limit")]
+    #[schemars(range(min = 1, max = 5), extend("default" = 5))]
     pub max_results: Option<i64>,
 }
 
@@ -608,6 +829,10 @@ pub struct ToolSearchOutput {
     /// OpenAI Responses native `tool_search_output.tools` payload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub openai_tools: Option<Vec<Value>>,
+    /// Matches omitted because their complete projected schema could not fit
+    /// the per-entry or aggregate context budget. These tools are not promoted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub omitted_oversized: Vec<String>,
 }
 
 pub struct ToolSearchTool;
@@ -624,10 +849,9 @@ impl Tool for ToolSearchTool {
     fn name(&self) -> &str {
         ToolName::ToolSearch.as_str()
     }
-    /// Hidden from the model when `ToolSearch` is inactive: the feature is off,
-    /// the current model resolved to [`coco_tool_runtime::ToolSearchStrategy::Eager`],
-    /// or there are no
-    /// deferred tools / pending MCP servers to search.
+    /// Hidden from the model when both discovery domains are inactive:
+    /// built-in lazy loading is feature-gated, while non-hidden MCP exposure
+    /// independently keeps its required transport available.
     /// Symmetric with [`coco_tool_runtime::ToolRegistry::loaded_tools`]
     /// which short-circuits the `should_defer()` filter on the same
     /// `ToolUseContext::tool_search_active()` predicate, so an
@@ -695,7 +919,10 @@ impl Tool for ToolSearchTool {
         } else if out.matches.is_empty() {
             let mut text = "No matching deferred tools found".to_string();
             if let Some(pending) = out.pending_mcp_servers.as_ref() {
-                let names: Vec<&str> = pending.iter().map(String::as_str).collect();
+                let names: Vec<String> = pending
+                    .iter()
+                    .map(|name| escape_untrusted_text(name))
+                    .collect();
                 if !names.is_empty() {
                     use std::fmt::Write;
                     let _ = write!(
@@ -733,32 +960,40 @@ impl Tool for ToolSearchTool {
                 error_code: None,
             });
         }
+        if raw_query.len() > MAX_TOOL_SEARCH_QUERY_BYTES {
+            return Err(ToolError::InvalidInput {
+                message: format!("query must be at most {MAX_TOOL_SEARCH_QUERY_BYTES} UTF-8 bytes"),
+                error_code: None,
+            });
+        }
 
         let max_results = input
             .max_results
-            .filter(|n| *n > 0)
-            .map(|n| n as usize)
+            .map(|n| n.clamp(1, DEFAULT_MAX_RESULTS as i64) as usize)
             .unwrap_or(DEFAULT_MAX_RESULTS);
 
-        // Snapshot the registry once so the searchable pools see a
-        // consistent state. `ctx.tools.*` clone Arc handles — cheap.
-        let mut all_tools = ctx.tools.all();
+        let materialization =
+            ctx.tool_materialization
+                .as_ref()
+                .ok_or_else(|| ToolError::InvalidInput {
+                    message: "ToolSearch requires the current request tool snapshot".into(),
+                    error_code: None,
+                })?;
+        let mut all_tools: Vec<MaterializedTool> = materialization.all_materialized().to_vec();
         sort_tools_by_name(&mut all_tools);
-        // Pipeline-filtered candidate pools. ToolSearch must never match a
-        // tool the registry would refuse to surface: a match that fails
-        // `passes_filter_pipeline` is inert (it can't enter `loaded_tools`)
-        // and would make the model re-search forever. `searchable_deferred`
-        // is the deferred pool that passes the pipeline (discovered names
-        // kept so re-select is an idempotent no-op); `enabled` is the
-        // exact-name fallback corpus of pipeline-passing tools that aren't
-        // deferred (already loaded → harmless no-op match).
-        let mut deferred: Vec<Arc<dyn DynTool>> = ctx.tools.searchable_deferred(ctx);
+        let mut deferred: Vec<MaterializedTool> = materialization.searchable().cloned().collect();
         sort_tools_by_name(&mut deferred);
-        let mut enabled_tools = ctx.tools.enabled(ctx);
+        let mut enabled_tools: Vec<MaterializedTool> = materialization.loaded().cloned().collect();
         sort_tools_by_name(&mut enabled_tools);
         let total_deferred_tools = deferred.len() as i64;
-        let deferred_tool_names: Vec<&str> = deferred.iter().map(|t| t.name()).collect();
-        let enabled_tool_names: Vec<&str> = enabled_tools.iter().map(|t| t.name()).collect();
+        let deferred_tool_names: Vec<&str> = deferred
+            .iter()
+            .map(|tool| tool.wire_name.as_str())
+            .collect();
+        let enabled_tool_names: Vec<&str> = enabled_tools
+            .iter()
+            .map(|tool| tool.wire_name.as_str())
+            .collect();
         tracing::debug!(
             query = %raw_query,
             max_results,
@@ -772,7 +1007,10 @@ impl Tool for ToolSearchTool {
         // Includes the full tool-name list so tools whose description
         // varies by sibling tools (Agent / Skill) render their final
         // text rather than a placeholder.
-        let mut tool_names: Vec<String> = all_tools.iter().map(|t| t.name().to_string()).collect();
+        let mut tool_names: Vec<String> = all_tools
+            .iter()
+            .map(|tool| tool.wire_name.as_str().to_string())
+            .collect();
         tool_names.sort();
         let desc_opts = DescriptionOptions {
             is_non_interactive: false,
@@ -787,12 +1025,18 @@ impl Tool for ToolSearchTool {
         // patch is skipped — the discovery state lives in message
         // history (the `tool_reference` blocks themselves).
         let strategy = ctx.tool_search_strategy;
-        let use_tool_reference = strategy.uses_anthropic_tool_reference();
-        let use_openai_native = strategy.uses_openai_native_client();
+        // `use_tool` exposure always renders schemas client-side: the
+        // discovered MCP tools are reached through the carrier, not
+        // promoted into the model's direct tool list, so native/server-side
+        // expansion (which implies invocation by the returned name) must not
+        // be used when any match may require `use_tool`.
+        let force_client_json = ctx.use_tool_active();
+        let use_tool_reference = strategy.uses_anthropic_tool_reference() && !force_client_json;
+        let use_openai_native = strategy.uses_openai_native_client() && !force_client_json;
         // Both native paths surface schemas server-side: skip the client
         // `<functions>` block AND the `discovered_tool_names` patch, leaving
         // the tools array (and cache prefix) untouched across discoveries.
-        let server_side_expansion = strategy.uses_server_side_expansion();
+        let server_side_expansion = strategy.uses_server_side_expansion() && !force_client_json;
 
         // Direct selection mode — `select:Tool1,Tool2,...`. Missing names
         // are silently dropped. Names that resolve in the full pool but not
@@ -808,24 +1052,15 @@ impl Tool for ToolSearchTool {
             }
             let mut matches: Vec<String> = Vec::new();
             let mut seen = HashSet::new();
-            for name in &names {
-                let lowered = name.to_lowercase();
+            for name in names.iter().take(max_results) {
                 let hit = deferred
                     .iter()
-                    .find(|t| {
-                        t.name().eq_ignore_ascii_case(name)
-                            || t.aliases().iter().any(|a| a.eq_ignore_ascii_case(name))
-                    })
-                    .or_else(|| {
-                        enabled_tools.iter().find(|t| {
-                            t.name().eq_ignore_ascii_case(name)
-                                || t.aliases().iter().any(|a| a.eq_ignore_ascii_case(&lowered))
-                        })
-                    });
+                    .find(|t| tool_matches_query(t, name))
+                    .or_else(|| enabled_tools.iter().find(|t| tool_matches_query(t, name)));
                 if let Some(tool) = hit {
-                    let canonical = tool.name().to_string();
-                    if seen.insert(canonical.clone()) {
-                        matches.push(canonical);
+                    let wire_name = tool_identity(tool);
+                    if seen.insert(wire_name.clone()) {
+                        matches.push(wire_name);
                     }
                 }
             }
@@ -835,40 +1070,25 @@ impl Tool for ToolSearchTool {
                 matches = ?matches,
                 "ToolSearch resolved matches"
             );
-            let rendered_functions = if server_side_expansion {
-                None
-            } else {
-                render_functions_for_client_side(
-                    &matches,
-                    &deferred,
-                    &enabled_tools,
-                    &all_tools,
-                    ctx,
-                )
-                .await
-            };
-            let openai_tools = if use_openai_native {
-                Some(
-                    openai_function_specs_for_matches(
-                        &matches,
-                        &deferred,
-                        &enabled_tools,
-                        &all_tools,
-                        ctx,
-                    )
-                    .await,
-                )
-            } else {
-                None
-            };
-            let envelope = build_envelope(
+            let projection = project_matches(
                 &matches,
-                &raw_query,
-                total_deferred_tools,
-                use_tool_reference,
-                rendered_functions,
-                openai_tools,
-                &ctx.mcp,
+                &deferred,
+                &enabled_tools,
+                &all_tools,
+                ctx,
+                server_side_expansion,
+                use_openai_native,
+            )
+            .await;
+            let (envelope, canonical_names) = build_envelope(
+                projection,
+                ToolSearchEnvelopeContext {
+                    query: &raw_query,
+                    total_deferred_tools,
+                    use_tool_reference,
+                    include_pending_mcp_servers: ctx.features.enabled(coco_types::Feature::Mcp),
+                    mcp: &ctx.mcp,
+                },
             )
             .await;
             return Ok(ToolResult {
@@ -877,7 +1097,7 @@ impl Tool for ToolSearchTool {
                 app_state_patch: if server_side_expansion {
                     None
                 } else {
-                    build_discovery_patch(&matches)
+                    build_discovery_patch(&canonical_names)
                 },
                 permission_updates: Vec::new(),
                 display_data: None,
@@ -899,34 +1119,25 @@ impl Tool for ToolSearchTool {
             "ToolSearch resolved matches"
         );
 
-        let rendered_functions = if server_side_expansion {
-            None
-        } else {
-            render_functions_for_client_side(&matches, &deferred, &enabled_tools, &all_tools, ctx)
-                .await
-        };
-        let openai_tools = if use_openai_native {
-            Some(
-                openai_function_specs_for_matches(
-                    &matches,
-                    &deferred,
-                    &enabled_tools,
-                    &all_tools,
-                    ctx,
-                )
-                .await,
-            )
-        } else {
-            None
-        };
-        let envelope = build_envelope(
+        let projection = project_matches(
             &matches,
-            &raw_query,
-            total_deferred_tools,
-            use_tool_reference,
-            rendered_functions,
-            openai_tools,
-            &ctx.mcp,
+            &deferred,
+            &enabled_tools,
+            &all_tools,
+            ctx,
+            server_side_expansion,
+            use_openai_native,
+        )
+        .await;
+        let (envelope, canonical_names) = build_envelope(
+            projection,
+            ToolSearchEnvelopeContext {
+                query: &raw_query,
+                total_deferred_tools,
+                use_tool_reference,
+                include_pending_mcp_servers: ctx.features.enabled(coco_types::Feature::Mcp),
+                mcp: &ctx.mcp,
+            },
         )
         .await;
         Ok(ToolResult {
@@ -935,7 +1146,7 @@ impl Tool for ToolSearchTool {
             app_state_patch: if server_side_expansion {
                 None
             } else {
-                build_discovery_patch(&matches)
+                build_discovery_patch(&canonical_names)
             },
             permission_updates: Vec::new(),
             display_data: None,
@@ -953,36 +1164,49 @@ impl Tool for ToolSearchTool {
 /// - `openai_tools: [Value]` — OpenAI Responses-compatible function
 /// specs when using native client-side `tool_search`.
 async fn build_envelope(
-    matches: &[String],
-    raw_query: &str,
-    total_deferred_tools: i64,
-    use_tool_reference: bool,
-    rendered_functions: Option<String>,
-    openai_tools: Option<Vec<Value>>,
-    mcp: &coco_tool_runtime::McpHandleRef,
-) -> ToolSearchOutput {
+    projection: ToolSearchProjection,
+    context: ToolSearchEnvelopeContext<'_>,
+) -> (ToolSearchOutput, Vec<String>) {
     // Empty-result retry hint: only attach when there's genuine MCP-
     // server churn so the model gets actionable info, not noise.
-    let pending_mcp_servers = if matches.is_empty() {
-        let pending = mcp.pending_server_names().await;
-        if pending.is_empty() {
-            None
+    let pending_mcp_servers =
+        if projection.wire_names.is_empty() && context.include_pending_mcp_servers {
+            let pending: Vec<String> = context
+                .mcp
+                .pending_server_names()
+                .await
+                .into_iter()
+                .take(MAX_PENDING_MCP_SERVERS)
+                .map(|name| {
+                    coco_utils_string::take_bytes_at_char_boundary(
+                        &name,
+                        MAX_PENDING_MCP_SERVER_NAME_BYTES,
+                    )
+                    .to_string()
+                })
+                .collect();
+            if pending.is_empty() {
+                None
+            } else {
+                Some(pending)
+            }
         } else {
-            Some(pending)
-        }
-    } else {
-        None
-    };
+            None
+        };
 
-    ToolSearchOutput {
-        matches: matches.to_vec(),
-        query: raw_query.to_string(),
-        total_deferred_tools,
-        render_as_tool_reference: use_tool_reference.then_some(true),
-        pending_mcp_servers,
-        rendered_functions,
-        openai_tools,
-    }
+    (
+        ToolSearchOutput {
+            matches: projection.wire_names,
+            query: context.query.to_string(),
+            total_deferred_tools: context.total_deferred_tools,
+            render_as_tool_reference: context.use_tool_reference.then_some(true),
+            pending_mcp_servers,
+            rendered_functions: projection.rendered_functions,
+            openai_tools: projection.openai_tools,
+            omitted_oversized: projection.omitted_oversized,
+        },
+        projection.canonical_names,
+    )
 }
 
 #[cfg(test)]

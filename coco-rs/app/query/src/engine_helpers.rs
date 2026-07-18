@@ -343,6 +343,48 @@ pub(crate) fn compute_mcp_instructions_delta(
     })
 }
 
+/// Maximum MCP servers listed in one `mcp_servers_delta` announcement (plan §8).
+const MAX_ANNOUNCED_MCP_SERVERS: usize = 8;
+
+/// Compute the `mcp_servers_delta`: announce the current connected MCP servers
+/// when the set changed since `last_announced`. Returns `None` when there is no
+/// change or when there are no servers. The list is sorted and capped, with an
+/// omitted count.
+pub(crate) fn compute_mcp_servers_delta(
+    current: &[coco_system_reminder::McpServerSummary],
+    last_announced: &std::collections::BTreeMap<String, coco_types::McpServerAnnouncementState>,
+) -> Option<coco_system_reminder::McpServersDeltaInfo> {
+    let current_state: std::collections::BTreeMap<_, _> = current
+        .iter()
+        .map(|server| {
+            (
+                server.name.clone(),
+                coco_types::McpServerAnnouncementState {
+                    tool_count: server.tool_count,
+                    description: server.description.clone(),
+                },
+            )
+        })
+        .collect();
+    if &current_state == last_announced {
+        return None;
+    }
+    let removed_names = last_announced
+        .keys()
+        .filter(|name| !current_state.contains_key(name.as_str()))
+        .cloned()
+        .collect();
+    let mut servers = current.to_vec();
+    servers.sort_by(|a, b| a.name.cmp(&b.name));
+    let omitted = servers.len().saturating_sub(MAX_ANNOUNCED_MCP_SERVERS);
+    servers.truncate(MAX_ANNOUNCED_MCP_SERVERS);
+    Some(coco_system_reminder::McpServersDeltaInfo {
+        servers,
+        removed_names,
+        omitted,
+    })
+}
+
 /// Compute the `agent_listing_delta` between the current agent types and
 /// the last-announced set on `ToolAppState`. `is_initial` is true when no
 /// agents have been announced yet (first emission of the session); that

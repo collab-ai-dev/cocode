@@ -8,10 +8,10 @@ use tracing::info;
 
 use crate::client::McpClientError;
 use crate::client::McpConnectionManager;
-use crate::naming::mcp_tool_id;
 use crate::tool_call::truncate_description;
 use crate::types::McpConnectionState;
 use crate::types::McpToolDefinition;
+use coco_types::ToolId;
 
 /// Tool annotations from an MCP server.
 #[derive(Debug, Clone, Default)]
@@ -29,8 +29,9 @@ pub struct ToolAnnotations {
 /// A discovered tool with its server context.
 #[derive(Debug, Clone)]
 pub struct DiscoveredTool {
-    /// Fully qualified name: mcp__<server>__<tool>.
-    pub fq_name: String,
+    /// Structured semantic identity. Provider-facing naming is derived later
+    /// by `WireToolName`; discovery must not normalize or flatten identity.
+    pub tool_id: ToolId,
     /// Server name.
     pub server_name: String,
     /// Original tool name on the server.
@@ -374,7 +375,10 @@ fn convert_server_tools(server_name: &str, tools: &[McpToolDefinition]) -> Vec<D
                 .unwrap_or(false);
 
             DiscoveredTool {
-                fq_name: mcp_tool_id(server_name, &tool.name),
+                tool_id: ToolId::Mcp {
+                    server: server_name.to_string(),
+                    tool: tool.name.clone(),
+                },
                 server_name: server_name.to_string(),
                 tool_name: tool.name.clone(),
                 description,

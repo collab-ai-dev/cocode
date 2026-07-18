@@ -78,6 +78,12 @@ fn test_parse_select_query_preserves_tool_name_case() {
     );
 }
 
+#[test]
+fn test_parse_select_query_is_utf8_safe() {
+    assert_eq!(parse_select_query("工具"), None);
+    assert_eq!(parse_select_query("select:工具"), Some(vec!["工具".into()]));
+}
+
 // ── render_for_model — ToolSearch envelopes ─────────────────────────────
 
 mod render_tests {
@@ -209,7 +215,7 @@ mod render_tests {
 // ── execute — select + keyword + scoring + promotion ──────────────────
 
 mod execute_tests {
-    use super::super::ToolSearchTool;
+    use super::super::{MAX_TOOL_SEARCH_OUTPUT_BYTES, MAX_TOOL_SEARCH_QUERY_BYTES, ToolSearchTool};
     use async_trait::async_trait;
     use coco_messages::ToolResult;
     use coco_tool_runtime::DescriptionOptions;
@@ -230,6 +236,158 @@ mod execute_tests {
         desc: String,
         hint: Option<&'static str>,
         deferred: bool,
+    }
+
+    struct OversizedSchemaTool;
+
+    struct MediumSchemaTool {
+        name: String,
+    }
+
+    struct PendingMcpHandle;
+
+    #[async_trait]
+    impl coco_tool_runtime::McpHandle for PendingMcpHandle {
+        async fn list_resources(
+            &self,
+            _: Option<&str>,
+        ) -> Result<Vec<coco_tool_runtime::mcp_handle::McpResourceInfo>, coco_error::BoxedError>
+        {
+            Ok(Vec::new())
+        }
+
+        async fn read_resource(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<Vec<coco_tool_runtime::mcp_handle::McpResourceContent>, coco_error::BoxedError>
+        {
+            unreachable!("not used")
+        }
+
+        async fn call_tool(
+            &self,
+            _: &str,
+            _: &str,
+            _: Option<Value>,
+        ) -> Result<coco_tool_runtime::mcp_handle::McpToolCallResult, coco_error::BoxedError>
+        {
+            unreachable!("not used")
+        }
+
+        async fn authenticate(&self, _: &str) -> Result<String, coco_error::BoxedError> {
+            unreachable!("not used")
+        }
+
+        async fn connected_servers(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        async fn pending_server_names(&self) -> Vec<String> {
+            vec!["secret-pending-server".into()]
+        }
+    }
+
+    #[async_trait]
+    impl Tool for OversizedSchemaTool {
+        type Input = serde_json::Value;
+        type Output = serde_json::Value;
+
+        fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+            static SCHEMA: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
+                std::sync::OnceLock::new();
+            SCHEMA.get_or_init(|| {
+                coco_tool_runtime::ToolInputSchema::from_value(json!({
+                    "type": "object",
+                    "properties": {
+                        "payload": {
+                            "type": "string",
+                            "enum": ["x".repeat(6_000)]
+                        }
+                    }
+                }))
+                .expect("oversized test schema")
+            })
+        }
+
+        fn id(&self) -> ToolId {
+            ToolId::Custom("Oversized".into())
+        }
+
+        fn name(&self) -> &str {
+            "Oversized"
+        }
+
+        fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
+            "oversized test schema".into()
+        }
+
+        async fn prompt(&self, _: &coco_tool_runtime::PromptOptions) -> String {
+            "oversized test schema".into()
+        }
+
+        fn should_defer(&self) -> bool {
+            true
+        }
+
+        async fn execute(
+            &self,
+            _input: Value,
+            _ctx: &ToolUseContext,
+        ) -> Result<ToolResult<Value>, ToolError> {
+            Ok(ToolResult::data(Value::Null))
+        }
+    }
+
+    #[async_trait]
+    impl Tool for MediumSchemaTool {
+        type Input = serde_json::Value;
+        type Output = serde_json::Value;
+
+        fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+            static SCHEMA: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
+                std::sync::OnceLock::new();
+            SCHEMA.get_or_init(|| {
+                coco_tool_runtime::ToolInputSchema::from_value(json!({
+                    "type": "object",
+                    "properties": {
+                        "payload": {
+                            "type": "string",
+                            "enum": ["x".repeat(1_800)]
+                        }
+                    }
+                }))
+                .expect("medium test schema")
+            })
+        }
+
+        fn id(&self) -> ToolId {
+            ToolId::Custom(self.name.clone())
+        }
+
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
+            "medium test schema".into()
+        }
+
+        async fn prompt(&self, _: &coco_tool_runtime::PromptOptions) -> String {
+            "medium test schema".into()
+        }
+
+        fn should_defer(&self) -> bool {
+            true
+        }
+
+        async fn execute(
+            &self,
+            _input: Value,
+            _ctx: &ToolUseContext,
+        ) -> Result<ToolResult<Value>, ToolError> {
+            Ok(ToolResult::data(Value::Null))
+        }
     }
 
     #[async_trait]
@@ -301,12 +459,24 @@ mod execute_tests {
     /// `ToolSearch` tool itself is not registered — `execute` only
     /// consults `ctx.tools.all()`, not `ctx.tools.get_by_name(...)`.
     fn ctx_with_tools(tools: Vec<Arc<dyn DynTool>>) -> ToolUseContext {
+        ctx_with_tools_strategy(
+            tools,
+            coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion,
+        )
+    }
+
+    fn ctx_with_tools_strategy(
+        tools: Vec<Arc<dyn DynTool>>,
+        strategy: coco_tool_runtime::ToolSearchStrategy,
+    ) -> ToolUseContext {
         let registry = ToolRegistry::new();
         for t in tools {
             registry.register(t);
         }
         let mut ctx = ToolUseContext::test_default();
         ctx.tools = Arc::new(registry);
+        ctx.tool_search_strategy = strategy;
+        ctx.tool_materialization = Some(Arc::new(ctx.tools.materialize(&ctx)));
         ctx
     }
 
@@ -396,6 +566,7 @@ mod execute_tests {
         ctx.tool_overrides = Arc::new(
             coco_types::ToolOverrides::default().with_excluded(ToolId::Custom("WebFetch".into())),
         );
+        ctx.tool_materialization = Some(Arc::new(ctx.tools.materialize(&ctx)));
 
         // select: drops the excluded tool silently; the pool count reflects
         // only surfaceable tools.
@@ -643,6 +814,20 @@ mod execute_tests {
     }
 
     #[tokio::test]
+    async fn oversized_query_is_rejected_before_search_work() {
+        let ctx = ctx_with_tools(vec![]);
+        let err = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({"query": "危险".repeat(MAX_TOOL_SEARCH_QUERY_BYTES)}),
+            &ctx,
+        )
+        .await
+        .expect_err("oversized query must error");
+
+        assert!(matches!(err, ToolError::InvalidInput { .. }));
+    }
+
+    #[tokio::test]
     async fn keyword_match_emits_promotion_patch() {
         let ctx = ctx_with_tools(vec![deferred("WebFetch", "Fetch a URL", None)]);
         let result =
@@ -674,20 +859,20 @@ mod execute_tests {
 
     /// Anthropic tool-reference capable ctx (Sonnet/Opus).
     fn ctx_with_tools_capable(tools: Vec<Arc<dyn DynTool>>) -> ToolUseContext {
-        let mut ctx = ctx_with_tools(tools);
-        ctx.tool_search_strategy = coco_tool_runtime::ToolSearchStrategy::AnthropicToolReference;
-        ctx.tool_search_has_candidates = true;
-        ctx
+        ctx_with_tools_strategy(
+            tools,
+            coco_tool_runtime::ToolSearchStrategy::AnthropicToolReference,
+        )
     }
 
     /// Client-side-only capable ctx (GPT-5, Gemini, DeepSeek, Haiku).
     /// Used to verify the universal promotion path remains active
     /// when the model only declares `ClientSideToolSearchPromotion`.
     fn ctx_with_tools_client_capable(tools: Vec<Arc<dyn DynTool>>) -> ToolUseContext {
-        let mut ctx = ctx_with_tools(tools);
-        ctx.tool_search_strategy = coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion;
-        ctx.tool_search_has_candidates = true;
-        ctx
+        ctx_with_tools_strategy(
+            tools,
+            coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion,
+        )
     }
 
     /// When the model supports `tool_reference` expansion, the
@@ -744,7 +929,11 @@ mod execute_tests {
     #[tokio::test]
     async fn tool_search_tool_hidden_when_feature_off() {
         let mut ctx =
-            ctx_with_tools_client_capable(vec![deferred("WebFetch", "Fetch a URL", None)]);
+            ctx_with_tools_client_capable(vec![deferred("WebFetch", "Fetch a URL", None)])
+                .with_mcp_tool_exposure(
+                    coco_types::McpToolExposure::Load,
+                    Arc::new(Default::default()),
+                );
         assert!(
             <ToolSearchTool as DynTool>::is_enabled(&ToolSearchTool, &ctx),
             "feature on + client-side cap → ToolSearch exposed"
@@ -766,8 +955,11 @@ mod execute_tests {
     /// but my custom local model breaks under it".
     #[tokio::test]
     async fn tool_search_tool_hidden_when_no_capability() {
-        let ctx = ctx_with_tools(vec![]);
-        // `ctx_with_tools` → defaults: feature on, no capability.
+        let ctx = ctx_with_tools_strategy(vec![], coco_tool_runtime::ToolSearchStrategy::Eager)
+            .with_mcp_tool_exposure(
+                coco_types::McpToolExposure::Load,
+                Arc::new(Default::default()),
+            );
         assert!(ctx.features.enabled(coco_types::Feature::ToolSearch));
         assert_eq!(
             ctx.tool_search_strategy,
@@ -861,10 +1053,10 @@ mod execute_tests {
     /// inside the `tool_search_output.tools` payload instead of the
     /// client-side `<functions>` text + promotion patch.
     fn ctx_with_tools_openai_native(tools: Vec<Arc<dyn DynTool>>) -> ToolUseContext {
-        let mut ctx = ctx_with_tools(tools);
-        ctx.tool_search_strategy = coco_tool_runtime::ToolSearchStrategy::OpenAiNativeClient;
-        ctx.tool_search_has_candidates = true;
-        ctx
+        ctx_with_tools_strategy(
+            tools,
+            coco_tool_runtime::ToolSearchStrategy::OpenAiNativeClient,
+        )
     }
 
     /// Native path: `openai_tools` carries codex-shaped function entries
@@ -985,6 +1177,200 @@ mod execute_tests {
             2,
             "limit alias caps results like max_results"
         );
+    }
+
+    #[tokio::test]
+    async fn select_mode_hard_caps_results_at_five() {
+        let tools = (0..7)
+            .map(|index| deferred(&format!("Tool{index}"), "test tool", None) as Arc<dyn DynTool>)
+            .collect();
+        let ctx = ctx_with_tools(tools);
+        let result = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({
+                "query": "select:Tool0,Tool1,Tool2,Tool3,Tool4,Tool5,Tool6",
+                "max_results": 99
+            }),
+            &ctx,
+        )
+        .await
+        .expect("select executes");
+
+        assert_eq!(result.data["matches"].as_array().unwrap().len(), 5);
+    }
+
+    #[tokio::test]
+    async fn registry_mutation_after_snapshot_is_not_searchable() {
+        let ctx = ctx_with_tools(vec![deferred("Initial", "initial", None)]);
+        ctx.tools.register(deferred("Late", "late", None));
+
+        let result = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({"query": "select:Late"}),
+            &ctx,
+        )
+        .await
+        .expect("search executes against captured snapshot");
+
+        assert!(result.data["matches"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn oversized_schema_is_omitted_and_never_promoted() {
+        let ctx = ctx_with_tools(vec![Arc::new(OversizedSchemaTool)]);
+        let result = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({"query": "select:Oversized"}),
+            &ctx,
+        )
+        .await
+        .expect("search executes");
+
+        assert!(result.data["matches"].as_array().unwrap().is_empty());
+        assert_eq!(result.data["omitted_oversized"], json!(["Oversized"]));
+        assert!(result.app_state_patch.is_none());
+    }
+
+    fn medium_schema_tools() -> Vec<Arc<dyn DynTool>> {
+        (0..5)
+            .map(|index| {
+                Arc::new(MediumSchemaTool {
+                    name: format!("Medium{index}"),
+                }) as Arc<dyn DynTool>
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn client_projection_obeys_exact_aggregate_render_budget() {
+        let ctx = ctx_with_tools_client_capable(medium_schema_tools());
+        let result = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({"query": "select:Medium0,Medium1,Medium2,Medium3,Medium4"}),
+            &ctx,
+        )
+        .await
+        .expect("search executes");
+        let rendered = result.data["rendered_functions"]
+            .as_str()
+            .expect("rendered functions");
+
+        assert!(rendered.len() <= MAX_TOOL_SEARCH_OUTPUT_BYTES);
+        assert!(
+            !result.data["omitted_oversized"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn openai_projection_obeys_exact_aggregate_render_budget() {
+        let ctx = ctx_with_tools_openai_native(medium_schema_tools());
+        let result = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({"query": "select:Medium0,Medium1,Medium2,Medium3,Medium4"}),
+            &ctx,
+        )
+        .await
+        .expect("search executes");
+        let parts = <ToolSearchTool as DynTool>::render_for_model(&ToolSearchTool, &result.data);
+        let coco_tool_runtime::ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected text projection");
+        };
+
+        assert!(text.len() <= MAX_TOOL_SEARCH_OUTPUT_BYTES);
+        assert!(
+            !result.data["omitted_oversized"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn use_tool_match_returns_guidance_without_promotion() {
+        let registry = ToolRegistry::new();
+        registry.register(Arc::new(
+            crate::tools::McpTool::new(
+                "github".into(),
+                "create_issue".into(),
+                "Create an issue".into(),
+                json!({
+                    "type": "object",
+                    "properties": { "title": { "type": "string" } },
+                    "required": ["title"]
+                }),
+                coco_tool_runtime::McpToolAnnotations::default(),
+            )
+            .expect("valid MCP schema"),
+        ));
+        let mut ctx = ToolUseContext::test_default().with_mcp_tool_exposure(
+            coco_types::McpToolExposure::UseTool,
+            Arc::new(Default::default()),
+        );
+        ctx.tools = Arc::new(registry);
+        ctx.tool_materialization = Some(Arc::new(ctx.tools.materialize(&ctx)));
+        let wire_name = ctx
+            .tool_materialization
+            .as_ref()
+            .and_then(|snapshot| snapshot.use_tool_targets().next())
+            .expect("use_tool target")
+            .wire_name
+            .as_str()
+            .to_string();
+
+        let result = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({"query": format!("select:{wire_name}")}),
+            &ctx,
+        )
+        .await
+        .expect("use_tool search executes");
+
+        assert_eq!(result.data["matches"], json!([wire_name]));
+        assert!(
+            result
+                .data
+                .get("rendered_functions")
+                .and_then(Value::as_str)
+                .is_some_and(|schema| schema.contains("use_tool"))
+        );
+        assert!(result.app_state_patch.is_none());
+    }
+
+    #[tokio::test]
+    async fn disabled_mcp_feature_removes_tools_and_pending_server_metadata() {
+        let registry = ToolRegistry::new();
+        registry.register(Arc::new(
+            crate::tools::McpTool::new(
+                "secret-server".into(),
+                "secret-tool".into(),
+                "must not leak".into(),
+                json!({"type": "object", "properties": {}}),
+                coco_tool_runtime::McpToolAnnotations::default(),
+            )
+            .expect("valid MCP schema"),
+        ));
+        let mut ctx = ToolUseContext::test_default()
+            .with_tool_search_strategy(coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion);
+        let mut features = (*ctx.features).clone();
+        features.disable(coco_types::Feature::Mcp);
+        ctx.features = Arc::new(features);
+        ctx.tools = Arc::new(registry);
+        ctx.tool_materialization = Some(Arc::new(ctx.tools.materialize(&ctx)));
+        ctx.mcp = Arc::new(PendingMcpHandle);
+
+        let result =
+            <ToolSearchTool as DynTool>::execute(&ToolSearchTool, json!({"query": "secret"}), &ctx)
+                .await
+                .expect("ordinary ToolSearch remains usable for non-MCP tools");
+
+        assert_eq!(result.data["total_deferred_tools"], json!(0));
+        assert!(result.data["matches"].as_array().unwrap().is_empty());
+        assert!(result.data.get("rendered_functions").is_none());
+        assert!(result.data.get("pending_mcp_servers").is_none());
+        assert!(result.app_state_patch.is_none());
     }
 }
 

@@ -87,6 +87,7 @@ pub struct MaterializedSources {
     pub skill_discovery: Option<coco_types::SkillDiscoveryPayload>,
     pub invoked_skills: Vec<InvokedSkillEntry>,
     pub mcp_instructions_current: HashMap<String, String>,
+    pub mcp_server_summaries: Vec<crate::generator::McpServerSummary>,
     pub mcp_resources: Vec<McpResourceEntry>,
     pub teammate_mailbox: Option<TeammateMailboxInfo>,
     pub team_context: Option<TeamContextSnapshot>,

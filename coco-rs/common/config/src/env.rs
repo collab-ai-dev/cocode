@@ -205,6 +205,8 @@ pub enum EnvKey {
     /// standard auto-memory system-prompt section.
     CocoCoworkMemoryExtraGuidelines,
     CocoMcpToolTimeoutMs,
+    /// Default MCP server exposure: `load` / `defer` / `use_tool`.
+    CocoMcpToolExposure,
     /// Claude Code compatibility knob for remote MCP tool-call silence.
     /// `COCO_MCP_TOOL_IDLE_TIMEOUT_MS` is the native coco-rs spelling; this
     /// variant preserves the upstream env surface.
@@ -475,6 +477,7 @@ impl EnvKey {
             Self::CocoCoworkMemoryGuidelines => "COCO_COWORK_MEMORY_GUIDELINES",
             Self::CocoCoworkMemoryExtraGuidelines => "COCO_COWORK_MEMORY_EXTRA_GUIDELINES",
             Self::CocoMcpToolTimeoutMs => "COCO_MCP_TOOL_TIMEOUT_MS",
+            Self::CocoMcpToolExposure => "COCO_MCP_TOOL_EXPOSURE",
             Self::ClaudeCodeMcpToolIdleTimeout => "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT",
             Self::CocoMcpToolIdleTimeoutMs => "COCO_MCP_TOOL_IDLE_TIMEOUT_MS",
             Self::CocoModelMain => "COCO_MODEL_MAIN",

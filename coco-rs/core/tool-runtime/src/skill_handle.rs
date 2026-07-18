@@ -60,6 +60,10 @@ pub struct SubagentInheritance {
     /// is a sibling (not a nested level), so it runs at this same depth
     /// — the skill runtime threads it through unchanged.
     pub parent_query_depth: i32,
+    /// Parent's effective MCP exposure ceiling.
+    pub mcp_tool_exposure: coco_types::McpToolExposure,
+    /// Parent's per-server MCP exposure overrides.
+    pub mcp_server_tool_exposure: std::collections::HashMap<String, coco_types::McpToolExposure>,
 }
 
 impl Default for SubagentInheritance {
@@ -77,6 +81,8 @@ impl Default for SubagentInheritance {
             log_assistant_responses: None,
             parent_tool_filter: None,
             parent_query_depth: 0,
+            mcp_tool_exposure: coco_types::McpToolExposure::UseTool,
+            mcp_server_tool_exposure: std::collections::HashMap::new(),
         }
     }
 }

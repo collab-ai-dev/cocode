@@ -19,6 +19,7 @@ schema = ["dep:schemars", "coco-llm-types/schema"]
 coco-llm-types.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
+sha2.workspace = true
 uuid = { workspace = true, features = ["v4", "serde"] }
 strum = { workspace = true, features = ["derive"] }
 schemars = { workspace = true, optional = true }

@@ -223,10 +223,18 @@ pub struct ToolUseContext {
     /// Selected ToolSearch execution path for the active model.
     pub tool_search_strategy: ToolSearchStrategy,
 
-    /// Whether this turn has anything ToolSearch can usefully surface:
-    /// at least one filtered, undiscovered deferred tool or one MCP server
-    /// still pending bootstrap. Computed by app/query for real turns.
-    pub tool_search_has_candidates: bool,
+    /// Default server-level MCP exposure for this request.
+    pub mcp_tool_exposure: coco_types::McpToolExposure,
+
+    /// Per-server MCP exposure overrides. Placement is resolved per tool from
+    /// its `ToolId::Mcp { server, .. }`, so one request can combine loaded,
+    /// deferred, and `use_tool`-only MCP servers.
+    pub mcp_server_tool_exposure: Arc<HashMap<String, coco_types::McpToolExposure>>,
+
+    /// Immutable tool surface sent with the current provider request.
+    /// ToolSearch and `use_tool` settlement must use this snapshot rather than
+    /// consulting the live registry again.
+    pub tool_materialization: Option<Arc<crate::ToolMaterialization>>,
 
     // ── Core State ──
     /// Structured abort signal for tool execution.
@@ -680,7 +688,9 @@ impl ToolUseContext {
             tool_filter: self.tool_filter.clone(),
             discovered_tool_names: self.discovered_tool_names.clone(),
             tool_search_strategy: self.tool_search_strategy,
-            tool_search_has_candidates: self.tool_search_has_candidates,
+            mcp_tool_exposure: self.mcp_tool_exposure,
+            mcp_server_tool_exposure: self.mcp_server_tool_exposure.clone(),
+            tool_materialization: self.tool_materialization.clone(),
             abort: self.abort.clone(),
             messages: self.messages.clone(),
             permission_context: self.permission_context.clone(),
@@ -786,6 +796,55 @@ impl ToolUseContext {
         self
     }
 
+    /// Set the default MCP exposure and per-server overrides for this request.
+    pub fn with_mcp_tool_exposure(
+        mut self,
+        default: coco_types::McpToolExposure,
+        by_server: Arc<HashMap<String, coco_types::McpToolExposure>>,
+    ) -> Self {
+        self.mcp_tool_exposure = default;
+        self.mcp_server_tool_exposure = by_server;
+        self
+    }
+
+    /// Attach the exact request tool materialization to an execution context.
+    pub fn with_tool_materialization(
+        mut self,
+        materialization: Arc<crate::ToolMaterialization>,
+    ) -> Self {
+        self.tool_materialization = Some(materialization);
+        self
+    }
+
+    /// Resolve the configured exposure for one MCP server.
+    pub fn mcp_tool_exposure_for(&self, server: &str) -> coco_types::McpToolExposure {
+        self.mcp_server_tool_exposure
+            .get(server)
+            .copied()
+            .unwrap_or(self.mcp_tool_exposure)
+    }
+
+    fn any_mcp_exposure(&self, predicate: impl Fn(coco_types::McpToolExposure) -> bool) -> bool {
+        predicate(self.mcp_tool_exposure)
+            || self
+                .mcp_server_tool_exposure
+                .values()
+                .copied()
+                .any(predicate)
+    }
+
+    /// Whether at least one configured MCP server needs the `use_tool`
+    /// carrier. `defer` falls back to this path when the model has no discovery
+    /// strategy capable of promoting a deferred schema.
+    pub fn use_tool_active(&self) -> bool {
+        self.features.enabled(coco_types::Feature::Mcp)
+            && self.any_mcp_exposure(|exposure| {
+                matches!(exposure, coco_types::McpToolExposure::UseTool)
+                    || (matches!(exposure, coco_types::McpToolExposure::Defer)
+                        && !self.tool_search_strategy.is_supported())
+            })
+    }
+
     /// Best available session cwd anchor: worktree override first, then
     /// the live shared session cwd, then the bootstrap cwd.
     pub async fn cwd_anchor(&self) -> Option<std::path::PathBuf> {
@@ -857,12 +916,6 @@ impl ToolUseContext {
         self
     }
 
-    /// Builder: install the current turn's ToolSearch candidate gate.
-    pub fn with_tool_search_candidates(mut self, has_candidates: bool) -> Self {
-        self.tool_search_has_candidates = has_candidates;
-        self
-    }
-
     /// Capability/feature predicate before checking whether any candidates
     /// are currently searchable.
     pub fn tool_search_supported(&self) -> bool {
@@ -870,26 +923,21 @@ impl ToolUseContext {
             && self.tool_search_strategy.is_supported()
     }
 
-    /// Effective `ToolSearch` activation for the current turn.
-    ///
-    /// Three-way predicate combining:
-    /// 1. User-facing [`coco_types::Feature::ToolSearch`] gate.
-    /// 2. A non-eager [`ToolSearchStrategy`] resolved from model capabilities.
-    /// 3. A current candidate source — at least one undiscovered deferred
-    ///    tool or one pending MCP server.
-    ///
-    /// When `false`:
-    ///   - [`crate::ToolRegistry::loaded_tools`] short-circuits the
-    ///     deferral filter — every enabled tool's schema lands on
-    ///     turn 1 (standard mode equivalent).
-    ///   - [`crate::ToolRegistry::deferred_tools`] returns empty.
-    ///   - `ToolSearchTool::is_enabled` returns `false`; the tool
-    ///     is hidden from the model.
-    ///
-    /// This is the canonical site for the predicate so registry /
-    /// tool / engine_prompt agree byte-for-byte.
+    /// MCP discovery is independent of the built-in ToolSearch feature gate.
+    /// `defer` and `use_tool` both need a bounded name-discovery transport;
+    /// only `load` can omit it.
+    pub fn mcp_tool_search_active(&self) -> bool {
+        self.features.enabled(coco_types::Feature::Mcp)
+            && self
+                .any_mcp_exposure(|exposure| !matches!(exposure, coco_types::McpToolExposure::Load))
+    }
+
+    /// Effective `ToolSearch` activation for the current request. Candidate
+    /// churn deliberately does not affect this predicate: transport carriers
+    /// are stable for prompt-cache safety and simply return an empty result
+    /// when the immutable request snapshot contains no matches.
     pub fn tool_search_active(&self) -> bool {
-        self.tool_search_supported() && self.tool_search_has_candidates
+        self.tool_search_supported() || self.mcp_tool_search_active()
     }
 
     pub fn is_coordinator_lead(&self) -> bool {
@@ -941,7 +989,9 @@ impl ToolUseContext {
             tool_filter: ToolFilter::unrestricted(),
             discovered_tool_names: Arc::new(HashSet::new()),
             tool_search_strategy: ToolSearchStrategy::Eager,
-            tool_search_has_candidates: false,
+            mcp_tool_exposure: coco_types::McpToolExposure::Defer,
+            mcp_server_tool_exposure: Arc::new(HashMap::new()),
+            tool_materialization: None,
             abort: ToolAbortSignal::from_turn(TurnAbortController::new().signal()),
             messages: Arc::new(Vec::new()),
             permission_context: ToolPermissionContext {

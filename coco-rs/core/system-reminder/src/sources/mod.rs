@@ -203,6 +203,16 @@ impl ReminderSources {
             },
         );
 
+        let mcp_server_summaries_fut = gate(
+            self.mcp.as_ref(),
+            config.attachments.mcp_servers_delta,
+            t,
+            |s| {
+                let s = s.clone();
+                async move { s.connected_server_summaries(a).await }
+            },
+        );
+
         // MCP resources only resolves when the user actually submitted
         // text this turn (UserPrompt tier gate).
         let mcp_resources_fut = {
@@ -352,6 +362,7 @@ impl ReminderSources {
             invoked_skills,
             skill_discovery,
             mcp_instructions_current,
+            mcp_server_summaries,
             mcp_resources,
             teammate_mailbox,
             team_context,
@@ -368,6 +379,7 @@ impl ReminderSources {
             invoked_skills_fut,
             skill_discovery_fut,
             mcp_instructions_fut,
+            mcp_server_summaries_fut,
             mcp_resources_fut,
             teammate_mailbox_fut,
             team_context_fut,
@@ -387,6 +399,7 @@ impl ReminderSources {
             skill_discovery,
             invoked_skills,
             mcp_instructions_current,
+            mcp_server_summaries,
             mcp_resources,
             teammate_mailbox,
             team_context,

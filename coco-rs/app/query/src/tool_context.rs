@@ -203,6 +203,8 @@ pub(crate) struct ToolContextOverrides {
     /// snapshot for test stubs / pre-first-turn paths.
     pub(crate) messages_snapshot:
         Option<std::sync::Arc<Vec<std::sync::Arc<coco_messages::Message>>>>,
+    /// Exact tool surface used for the provider request being settled.
+    pub(crate) tool_materialization: Option<std::sync::Arc<coco_tool_runtime::ToolMaterialization>>,
 }
 
 fn merge_rules_by_behavior(
@@ -475,7 +477,7 @@ impl ToolContextFactory {
                 None => None,
             },
         };
-        let mut ctx = ToolUseContext {
+        ToolUseContext {
             tools: self.tools.clone(),
             main_loop_model,
             // Honor the config-driven values that the previous inline
@@ -513,7 +515,9 @@ impl ToolContextFactory {
             tool_filter: self.config.tool_filter.clone(),
             discovered_tool_names: live_discovered_tool_names,
             tool_search_strategy: overrides.current_tool_search_strategy,
-            tool_search_has_candidates: false,
+            mcp_tool_exposure: self.config.mcp_tool_exposure,
+            mcp_server_tool_exposure: self.config.mcp_server_tool_exposure.clone(),
+            tool_materialization: overrides.tool_materialization,
             is_teammate: self.config.is_teammate,
             is_in_process_teammate: self.config.is_in_process_teammate,
             plan_mode_required: self.config.plan_mode_required,
@@ -726,15 +730,7 @@ impl ToolContextFactory {
                 .as_ref()
                 .map(|iso| iso.child_query_depth())
                 .unwrap_or(self.config.query_depth),
-        };
-
-        if ctx.tool_search_supported() {
-            ctx.tool_search_has_candidates = true;
-            let has_deferred = !ctx.tools.deferred_tools(&ctx).is_empty();
-            let has_pending_mcp = !ctx.mcp.pending_server_names().await.is_empty();
-            ctx.tool_search_has_candidates = has_deferred || has_pending_mcp;
         }
-        ctx
     }
 }
 

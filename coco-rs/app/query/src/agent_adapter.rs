@@ -121,6 +121,11 @@ impl AgentQueryEngine for QueryEngineAdapter {
             model_id: engine_model_id,
             permission_mode,
             permission_mode_availability: config.permission_mode_availability,
+            // Inherited from the parent's resolved exposure (populated on
+            // `AgentQueryConfig` at the spawn boundary); a child never widens
+            // (plan §4.3).
+            mcp_tool_exposure: config.mcp_tool_exposure,
+            mcp_server_tool_exposure: Arc::new(config.mcp_server_tool_exposure),
             use_auto_mode_during_plan: config.use_auto_mode_during_plan,
             // This child engine's OWN run depth (= parent + 1, stamped at
             // the AgentTool boundary). For plain spawns the tool-context

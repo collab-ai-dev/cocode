@@ -33,6 +33,7 @@ pub mod skill_advanced;
 pub mod structured_output;
 pub mod task_tools;
 pub mod tool_search;
+pub mod use_tool;
 pub mod verify_plan_execution;
 pub mod web;
 pub mod workflow;
@@ -90,6 +91,7 @@ pub use goal_tools::{CreateGoalTool, GetGoalTool, ReportGoalTurnTool};
 pub use lsp_tool::LspTool;
 pub use send_user_message::SendUserMessageTool;
 pub use tool_search::ToolSearchTool;
+pub use use_tool::UseToolTool;
 
 // MCP management (4)
 pub use mcp_tools::ListMcpResourcesTool;

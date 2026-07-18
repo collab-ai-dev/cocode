@@ -173,9 +173,11 @@ fn prepared_from(
     tool_use_id: &str,
     model_index: usize,
 ) -> PreparedToolCall {
+    let tool_id = tool.id();
     PreparedToolCall {
         tool_use_id: tool_use_id.into(),
-        tool_id: tool.id(),
+        provider_tool_name: coco_types::WireToolName::for_tool_id(&tool_id),
+        tool_id,
         parsed_input: crate::ValidatedInput::validate(tool.as_ref(), json!({}))
             .expect("test input must validate"),
         is_concurrency_safe: tool.is_concurrency_safe(&json!({})),
@@ -309,6 +311,9 @@ async fn test_execute_with_bash_failure_aborts_concurrent_sibling_runtime() {
         ToolCallPlan::Runnable(Box::new(PreparedToolCall {
             tool_use_id: "bash-call".into(),
             tool_id: ToolId::Builtin(coco_types::ToolName::Bash),
+            provider_tool_name: coco_types::WireToolName::for_tool_id(&ToolId::Builtin(
+                coco_types::ToolName::Bash,
+            )),
             parsed_input: crate::ValidatedInput::validate(bash_tool.as_ref(), json!({}))
                 .expect("test input must validate"),
             is_concurrency_safe: true,

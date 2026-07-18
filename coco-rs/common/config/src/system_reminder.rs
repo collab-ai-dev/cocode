@@ -132,6 +132,10 @@ pub struct AttachmentSettings {
     /// default.
     pub mcp_instructions_delta: bool,
 
+    /// Announces connected MCP servers so the model knows what to ToolSearch
+    /// for `defer` / `use_tool` exposure modes. On by default.
+    pub mcp_servers_delta: bool,
+
     /// Recurring tool-search usage nudge. Fires whenever deferred tools
     /// remain undiscovered, reminding the model to load their schemas via
     /// ToolSearch before concluding a capability is missing. On by default;
@@ -231,6 +235,7 @@ impl Default for AttachmentSettings {
             deferred_tools_delta: true,
             agent_listing_delta: true,
             mcp_instructions_delta: true,
+            mcp_servers_delta: true,
             tool_search_usage_reminder: true,
             // Phase 3 — on by default; generators short-circuit when ctx state is empty.
             hook_success: true,

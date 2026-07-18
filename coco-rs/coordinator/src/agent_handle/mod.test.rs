@@ -176,6 +176,7 @@ async fn resume_agent_rejects_user_stopped_metadata() {
             killed_by: Some(coco_types::TaskKilledBy::User),
             mode: None,
             isolation: None,
+            mcp_tool_exposure: coco_types::McpToolExposure::UseTool,
         },
     }));
 
@@ -2946,6 +2947,7 @@ async fn resume_agent_full_wiring_reuses_id_restores_mode_and_replays_history() 
                 killed_by: None,
                 mode: Some(coco_types::PermissionMode::Plan),
                 isolation: None,
+                mcp_tool_exposure: coco_types::McpToolExposure::UseTool,
             }))
         }
     }

@@ -55,6 +55,8 @@ impl TeammateExecutor for InProcessBackend {
             isolation: AgentIsolation::None,
             memory_scope: None,
             mcp_servers: config.mcp_servers,
+            mcp_tool_exposure: config.mcp_tool_exposure,
+            mcp_server_tool_exposure: config.mcp_server_tool_exposure,
             disallowed_tools: config.disallowed_tools,
             max_turns: config.max_turns,
         };

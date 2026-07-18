@@ -20,6 +20,7 @@ async fn write_then_read_metadata_roundtrip() {
         killed_by: Some(coco_types::TaskKilledBy::User),
         mode: Some(coco_types::PermissionMode::Plan),
         isolation: Some(coco_types::AgentIsolation::Worktree),
+        mcp_tool_exposure: coco_types::McpToolExposure::UseTool,
     };
     st.write_agent_metadata("sess-1", "agent-7af2", &meta)
         .await

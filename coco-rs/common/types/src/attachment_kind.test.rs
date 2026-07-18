@@ -10,8 +10,8 @@ use std::collections::HashSet;
 fn attachment_kind_all_has_68_variants() {
     assert_eq!(
         AttachmentKind::all().len(),
-        68,
-        "61 TS Attachment union members + coco-rs-synthetic user_context, slash_command_metadata, workflow_keyword_request, tool_search_usage_reminder, memory_index_warning, and memory_update_reminder"
+        69,
+        "61 TS Attachment union members + coco-rs-synthetic user_context, slash_command_metadata, workflow_keyword_request, tool_search_usage_reminder, memory_index_warning, memory_update_reminder, and mcp_servers_delta"
     );
 }
 
@@ -70,8 +70,8 @@ fn coverage_distribution_matches_readme_snapshot() {
     // API-hidden audit-add kinds are typed silent events or inactive runtime
     // bookkeeping.
     assert_eq!(
-        reminder, 41,
-        "in-crate reminders (incl. synthetic user_context + tool_search_usage_reminder)"
+        reminder, 42,
+        "in-crate reminders (incl. synthetic user_context + tool_search_usage_reminder + mcp_servers_delta)"
     );
     assert_eq!(silent_reminder, 2, "in-crate silent reminders");
     assert_eq!(
@@ -83,8 +83,8 @@ fn coverage_distribution_matches_readme_snapshot() {
     assert_eq!(runtime, 3, "inactive runtime bookkeeping");
     assert_eq!(
         reminder + silent_reminder + outside + silent_event + feature_gated + runtime,
-        68,
-        "total must match union size + synthetic user_context + slash_command_metadata + workflow_keyword_request + tool_search_usage_reminder + memory reminders"
+        69,
+        "total must match union size + synthetic user_context + slash_command_metadata + workflow_keyword_request + tool_search_usage_reminder + memory reminders + mcp_servers_delta"
     );
 }
 

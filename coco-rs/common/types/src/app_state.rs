@@ -277,6 +277,13 @@ pub struct ToolAppState {
     /// reconstructed from prior delta attachments.
     pub last_announced_mcp_instructions: std::collections::HashMap<String, String>,
 
+    /// Full normalized MCP-server announcement baseline per visibility scope.
+    /// Counts and descriptions are part of the comparison so reconnects and
+    /// metadata changes are announced; one agent can never suppress another
+    /// agent's first scoped reminder.
+    pub last_announced_mcp_servers_by_scope:
+        HashMap<String, BTreeMap<String, McpServerAnnouncementState>>,
+
     // ── Agent progress summaries gate ──────────────────────────────
     /// Whether per-spawn periodic AgentSummary timers should run.
     /// Default `false`; the SDK control protocol's
@@ -361,6 +368,31 @@ impl ToolAppState {
         self.last_announced_tools_by_scope
             .insert(announced_tools_scope_key(agent_id), tools);
     }
+
+    pub fn last_announced_mcp_servers_for_scope(
+        &self,
+        agent_id: Option<&str>,
+    ) -> BTreeMap<String, McpServerAnnouncementState> {
+        self.last_announced_mcp_servers_by_scope
+            .get(&announced_tools_scope_key(agent_id))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn set_last_announced_mcp_servers_for_scope(
+        &mut self,
+        agent_id: Option<&str>,
+        servers: BTreeMap<String, McpServerAnnouncementState>,
+    ) {
+        self.last_announced_mcp_servers_by_scope
+            .insert(announced_tools_scope_key(agent_id), servers);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpServerAnnouncementState {
+    pub tool_count: usize,
+    pub description: Option<String>,
 }
 
 fn announced_tools_scope_key(agent_id: Option<&str>) -> String {

@@ -204,8 +204,7 @@ impl QueryEngine {
             return ToolExecutionBranch::ContinueLoop;
         }
 
-        let tool_search_strategy =
-            crate::tool_context::resolve_tool_search_strategy(Some(opened_runtime_snapshot));
+        let tool_search_strategy = tool_materialization.tool_search_strategy();
         let ctx = self
             .tool_context_factory(hook_tx_opt)
             .build(crate::tool_context::ToolContextOverrides {
@@ -214,6 +213,7 @@ impl QueryEngine {
                 current_model_id: Some(opened_runtime_snapshot.model_id.clone()),
                 current_tool_search_strategy: tool_search_strategy,
                 messages_snapshot: Some(messages_snapshot),
+                tool_materialization: Some(std::sync::Arc::new(tool_materialization.clone())),
             })
             .await;
 

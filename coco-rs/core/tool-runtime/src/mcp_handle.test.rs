@@ -49,6 +49,18 @@ fn from_meta_normalizes_whitespace_and_drops_empty() {
 }
 
 #[test]
+fn from_meta_bounds_untrusted_search_hint_on_a_utf8_boundary() {
+    let hint = format!("{} 危险", "a".repeat(1_000_000));
+    let annotations = McpToolAnnotations::from_input_schema_meta(&json!({
+        "_meta": { "searchHint": hint }
+    }));
+    let stored = annotations.search_hint.expect("non-empty hint");
+
+    assert!(stored.len() <= MAX_MCP_SEARCH_HINT_BYTES);
+    assert!(stored.is_char_boundary(stored.len()));
+}
+
+#[test]
 fn from_meta_no_hint_is_none_and_always_load_independent() {
     let none = McpToolAnnotations::from_input_schema_meta(&json!({ "type": "object" }));
     assert_eq!(none.search_hint, None);

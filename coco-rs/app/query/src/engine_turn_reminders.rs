@@ -16,6 +16,7 @@
 //! that performs all five phases. Returns the `app_state` snapshot the
 //! caller passes to [`QueryEngine::build_tool_definitions`].
 
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 
 use coco_messages::CostTracker;
@@ -39,6 +40,7 @@ use coco_types::ToolName;
 use crate::engine::QueryEngine;
 use crate::engine_helpers::compute_agents_delta;
 use crate::engine_helpers::compute_mcp_instructions_delta;
+use crate::engine_helpers::compute_mcp_servers_delta;
 use crate::engine_helpers::compute_tools_delta;
 use crate::engine_helpers::latest_user_input_text;
 use crate::plan_mode_reminder::PlanModeReminder;
@@ -62,12 +64,24 @@ pub(crate) struct TurnReminderContext<'a> {
     pub todo_key: &'a str,
     pub context_window: i64,
     pub effective_window: i64,
+    /// Discovery capability of the exact model runtime selected for this
+    /// provider request. Plan-role switches must not fall back to the engine's
+    /// main-role snapshot.
+    pub tool_search_strategy: coco_tool_runtime::ToolSearchStrategy,
     /// Wire channel for the reminder injection step so each
     /// model-visible reminder appended to `MessageHistory` emits a
     /// `ServerNotification::MessageAppended` and observers stay
     /// coherent (I-1 authority). `None` for paths that don't have a
     /// wire (forked agents, tests).
     pub event_tx: &'a Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+}
+
+/// Immutable request inputs produced by the reminder phase. The prompt and
+/// every later tool call must consume this exact materialization rather than
+/// re-reading the mutable registry.
+pub(crate) struct TurnReminderSnapshot {
+    pub app_state: ToolAppState,
+    pub tool_materialization: coco_tool_runtime::ToolMaterialization,
 }
 
 #[cfg(test)]
@@ -93,7 +107,7 @@ impl QueryEngine {
     pub(crate) async fn run_turn_reminder_pipeline(
         &self,
         ctx: TurnReminderContext<'_>,
-    ) -> ToolAppState {
+    ) -> TurnReminderSnapshot {
         let TurnReminderContext {
             history,
             plan_reminder,
@@ -104,6 +118,7 @@ impl QueryEngine {
             todo_key: reminder_todo_key,
             context_window: reminder_context_window,
             effective_window: reminder_effective_window,
+            tool_search_strategy,
             event_tx,
         } = ctx;
         // Phase 1. Run non-reminder side effects (mode reconciliation +
@@ -139,13 +154,10 @@ impl QueryEngine {
         // false in the registry and `deferred_tools` is empty — the
         // `deferred_tools_delta` reminder collapses to "nothing
         // searchable", which is the correct truth.
-        let snapshot = self.runtime_snapshot();
-        let tool_search_strategy =
-            crate::tool_context::resolve_tool_search_strategy(snapshot.as_ref());
         // Both partitions share the same filter context so they
         // cover disjoint halves of the registry — `loaded` includes
         // discovered tools, `deferred` excludes them.
-        let (reminder_loaded_tools, reminder_deferred_tools): (Vec<String>, Vec<String>) = {
+        let reminder_tool_materialization = {
             let stub_ctx = coco_tool_runtime::ToolUseContext::stub_for_filtering(
                 self.config.features.clone(),
                 self.config.tool_overrides.clone(),
@@ -154,24 +166,23 @@ impl QueryEngine {
             )
             .with_discovered_tool_names(pre_snapshot_discovered)
             .with_tool_search_strategy(tool_search_strategy)
+            .with_mcp_tool_exposure(
+                self.config.mcp_tool_exposure,
+                self.config.mcp_server_tool_exposure.clone(),
+            )
             .with_active_shell_tool(self.config.active_shell_tool);
-            let stub_ctx = self.with_current_tool_search_candidates(stub_ctx).await;
-            let mut loaded: Vec<String> = self
-                .tools
-                .loaded_tools(&stub_ctx)
-                .iter()
-                .map(|t| t.name().to_string())
-                .collect();
-            loaded.sort();
-            let mut deferred: Vec<String> = self
-                .tools
-                .deferred_tools(&stub_ctx)
-                .iter()
-                .map(|t| t.name().to_string())
-                .collect();
-            deferred.sort();
-            (loaded, deferred)
+            self.tools.materialize(&stub_ctx)
         };
+        let mut reminder_loaded_tools: Vec<String> = reminder_tool_materialization
+            .loaded()
+            .map(|tool| tool.wire_name.as_str().to_string())
+            .collect();
+        reminder_loaded_tools.sort();
+        let mut reminder_deferred_tools: Vec<String> = reminder_tool_materialization
+            .deferred()
+            .map(|tool| tool.wire_name.as_str().to_string())
+            .collect();
+        reminder_deferred_tools.sort();
         // `reminder_tools` is the model-visible (loaded) tool list —
         // used by `TurnReminderInput::tools` and unchanged consumers below.
         let reminder_tools = reminder_loaded_tools.clone();
@@ -428,6 +439,32 @@ impl QueryEngine {
                 skill_tool_loaded: reminder_skill_tool_loaded,
             })
             .await;
+        // Join connection state with the exact request materialization. A
+        // connected server is model-visible only when at least one of its MCP
+        // tools is searchable in this scope; raw connection metadata and MCP
+        // instructions never widen that surface.
+        let mut visible_mcp_tool_counts = BTreeMap::<String, usize>::new();
+        for tool in reminder_tool_materialization.searchable() {
+            if let Some(info) = tool.tool.mcp_info() {
+                *visible_mcp_tool_counts
+                    .entry(info.server_name.clone())
+                    .or_default() += 1;
+            }
+        }
+        let reminder_mcp_server_summaries: Vec<_> = materialized
+            .mcp_server_summaries
+            .iter()
+            .filter_map(|server| {
+                visible_mcp_tool_counts
+                    .get(&server.name)
+                    .copied()
+                    .map(|tool_count| coco_system_reminder::McpServerSummary {
+                        name: server.name.clone(),
+                        tool_count,
+                        description: server.description.clone(),
+                    })
+            })
+            .collect();
         if just_compacted && !materialized.task_status_timed_out {
             let _ = self.pending_just_compacted.compare_exchange(
                 observed_compact_epoch,
@@ -536,7 +573,20 @@ impl QueryEngine {
             Some(handle) => handle.goal_context_fragment().await,
             None => None,
         };
-
+        let reminder_mcp_baseline =
+            app_state_snapshot.last_announced_mcp_servers_for_scope(self.config.agent_id_str());
+        let reminder_mcp_current: BTreeMap<_, _> = reminder_mcp_server_summaries
+            .iter()
+            .map(|server| {
+                (
+                    server.name.clone(),
+                    coco_types::McpServerAnnouncementState {
+                        tool_count: server.tool_count,
+                        description: server.description.clone(),
+                    },
+                )
+            })
+            .collect();
         let reminder_input = TurnReminderInput {
             config: reminder_orchestrator.config(),
             turn_number: reminder_human_turn_number,
@@ -600,6 +650,13 @@ impl QueryEngine {
             mcp_instructions_delta: compute_mcp_instructions_delta(
                 &materialized.mcp_instructions_current,
                 &app_state_snapshot.last_announced_mcp_instructions,
+            ),
+            // Announce connected MCP servers so the model knows what to
+            // ToolSearch for. Fully disabling MCP is handled by the MCP feature
+            // and server activation controls, not by exposure policy.
+            mcp_servers_delta: compute_mcp_servers_delta(
+                &reminder_mcp_server_summaries,
+                &reminder_mcp_baseline,
             ),
             // Phase 3: cross-crate state flows via `ReminderSources`.
             // Sources that aren't wired → default output → generator skips.
@@ -734,6 +791,13 @@ impl QueryEngine {
                     guard.last_announced_mcp_instructions =
                         materialized.mcp_instructions_current.clone();
                 }
+                // Same pattern for the MCP-servers delta baseline.
+                if fired_types.contains(&ReminderAttachmentType::McpServersDelta) {
+                    guard.set_last_announced_mcp_servers_for_scope(
+                        self.config.agent_id_str(),
+                        reminder_mcp_current.clone(),
+                    );
+                }
             }
         }
 
@@ -785,7 +849,10 @@ impl QueryEngine {
             );
         }
 
-        app_state_snapshot
+        TurnReminderSnapshot {
+            app_state: app_state_snapshot,
+            tool_materialization: reminder_tool_materialization,
+        }
     }
 }
 

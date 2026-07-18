@@ -92,6 +92,8 @@ impl QueryEngine {
         };
         services.set_active_runtime(active_runtime, active_source);
         let active_snapshot = services.snapshot();
+        let request_tool_search_strategy =
+            crate::tool_context::resolve_tool_search_strategy(Some(&active_snapshot));
 
         let session_turn = count_human_turns(history.as_slice());
         let (last_compact_run_id, turns_since_last_compact) = self
@@ -132,7 +134,10 @@ impl QueryEngine {
             self.drain_changed_files(&attachment_ctx, history, event_tx)
                 .await;
 
-            let app_state_snapshot = self
+            let crate::engine_turn_reminders::TurnReminderSnapshot {
+                app_state: app_state_snapshot,
+                tool_materialization: reminder_tool_materialization,
+            } = self
                 .run_turn_reminder_pipeline(crate::engine_turn_reminders::TurnReminderContext {
                     history: &mut *history,
                     plan_reminder: &mut services.plan,
@@ -143,13 +148,17 @@ impl QueryEngine {
                     todo_key: &consts.todo_key,
                     context_window: consts.context_window,
                     effective_window: consts.effective_window,
+                    tool_search_strategy: request_tool_search_strategy,
                     event_tx,
                 })
                 .await;
 
             let built_prompt = self.build_prompt(history).await;
             let built_tool_definitions = self
-                .build_tool_definitions_with_materialization(&app_state_snapshot)
+                .build_tool_definitions_from_materialization(
+                    &app_state_snapshot,
+                    reminder_tool_materialization,
+                )
                 .await;
 
             (built_prompt, built_tool_definitions)
@@ -237,8 +246,7 @@ impl QueryEngine {
         };
 
         let streaming_ctx: Option<Arc<ToolUseContext>> = if self.config.streaming_tool_execution {
-            let current_tool_search_strategy =
-                crate::tool_context::resolve_tool_search_strategy(Some(&active_snapshot));
+            let current_tool_search_strategy = tool_materialization.tool_search_strategy();
             let base = self
                 .tool_context_factory(hook_tx_opt)
                 .build(crate::tool_context::ToolContextOverrides {
@@ -247,6 +255,7 @@ impl QueryEngine {
                     current_model_id: Some(services.current_model_id()),
                     current_tool_search_strategy,
                     messages_snapshot: Some(messages_snapshot.clone()),
+                    tool_materialization: Some(Arc::new(tool_materialization.clone())),
                 })
                 .await;
             Some(Arc::new(base))
@@ -298,7 +307,8 @@ impl QueryEngine {
                         crate::tool_outcome_builder::RunOneTail {
                             tool_use_id: prepared.tool_use_id.clone(),
                             tool_id: prepared.tool_id.clone(),
-                            tool_name: prepared.tool.name().to_string(),
+                            semantic_tool_name: prepared.tool_id.to_string(),
+                            provider_tool_name: prepared.provider_tool_name.clone(),
                             model_index: prepared.model_index,
                             tool: prepared.tool,
                             effective_input: effective_input.into_value(),

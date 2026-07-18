@@ -151,6 +151,7 @@ pub fn tool_name_tone(tool_name: &str) -> ToolNameTone {
         | ToolName::McpAuth
         | ToolName::SendUserMessage
         | ToolName::Sleep
+        | ToolName::UseTool
         | ToolName::StructuredOutput => ToolNameTone::Utility,
     }
 }

@@ -604,6 +604,16 @@ impl SwarmAgentHandle {
                         .collect()
                 })
                 .unwrap_or_default(),
+            mcp_tool_exposure: coco_types::McpToolExposure::restrict(
+                request.inheritance.mcp_tool_exposure,
+                runtime_config.mcp.tool_exposure,
+            ),
+            mcp_server_tool_exposure: coco_types::McpToolExposure::restrict_server_overrides(
+                request.inheritance.mcp_tool_exposure,
+                &request.inheritance.mcp_server_tool_exposure,
+                runtime_config.mcp.tool_exposure,
+                &runtime_config.mcp.server_tool_exposure,
+            ),
             disallowed_tools: request
                 .input
                 .definition
@@ -668,6 +678,17 @@ impl SwarmAgentHandle {
                                 .collect()
                         })
                         .unwrap_or_default(),
+                    mcp_tool_exposure: coco_types::McpToolExposure::restrict(
+                        request.inheritance.mcp_tool_exposure,
+                        runtime_config.mcp.tool_exposure,
+                    ),
+                    mcp_server_tool_exposure:
+                        coco_types::McpToolExposure::restrict_server_overrides(
+                            request.inheritance.mcp_tool_exposure,
+                            &request.inheritance.mcp_server_tool_exposure,
+                            runtime_config.mcp.tool_exposure,
+                            &runtime_config.mcp.server_tool_exposure,
+                        ),
                     disallowed_tools: request
                         .input
                         .definition
@@ -883,6 +904,16 @@ impl SwarmAgentHandle {
                             .collect()
                     })
                     .unwrap_or_default(),
+                mcp_tool_exposure: coco_types::McpToolExposure::restrict(
+                    request.inheritance.mcp_tool_exposure,
+                    runtime_config.mcp.tool_exposure,
+                ),
+                mcp_server_tool_exposure: coco_types::McpToolExposure::restrict_server_overrides(
+                    request.inheritance.mcp_tool_exposure,
+                    &request.inheritance.mcp_server_tool_exposure,
+                    runtime_config.mcp.tool_exposure,
+                    &runtime_config.mcp.server_tool_exposure,
+                ),
                 disallowed_tools: request
                     .input
                     .definition

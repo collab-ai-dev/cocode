@@ -311,6 +311,8 @@ pub struct AgentSpawnMetadata {
     /// typically GC'd on completion).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation: Option<coco_types::AgentIsolation>,
+    /// Effective MCP exposure ceiling captured at spawn time.
+    pub mcp_tool_exposure: coco_types::McpToolExposure,
 }
 
 /// Per-agent transcript persistence trait.

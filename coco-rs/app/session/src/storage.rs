@@ -330,6 +330,14 @@ pub enum MetadataEntry {
         mode: String,
     },
 
+    /// Session MCP exposure ceiling. Resume combines this with current
+    /// settings and can only keep or reduce exposure.
+    #[serde(rename = "mcp-tool-exposure")]
+    McpToolExposure {
+        session_id: SessionId,
+        exposure: coco_types::McpToolExposure,
+    },
+
     /// First-class goal-runtime snapshot (§13.1). Append-only; the highest
     /// `state_version` for a `goal_id` is authoritative on resume. `snapshot`
     /// is a passthrough JSON blob whose typed shape is owned by
@@ -604,6 +612,8 @@ pub struct AgentMetadata {
     /// is re-isolated when its original worktree was GC'd.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation: Option<coco_types::AgentIsolation>,
+    /// Effective MCP exposure ceiling captured at spawn time.
+    pub mcp_tool_exposure: coco_types::McpToolExposure,
 }
 
 // ---------------------------------------------------------------------------

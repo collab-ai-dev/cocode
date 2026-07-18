@@ -293,8 +293,8 @@ async fn test_factory_threads_tool_search_strategy() {
         "client-side promotion is supported when feature on"
     );
     assert!(
-        !ctx_client_only.tool_search_active(),
-        "no deferred tools and no pending MCP means ToolSearch remains hidden"
+        ctx_client_only.tool_search_active(),
+        "non-hidden MCP exposure keeps the discovery carrier stable even with an empty corpus"
     );
 
     let ctx_server_only = factory(config)
@@ -309,8 +309,8 @@ async fn test_factory_threads_tool_search_strategy() {
         "server-side cap alone is supported when feature on"
     );
     assert!(
-        !ctx_server_only.tool_search_active(),
-        "no deferred tools and no pending MCP means ToolSearch remains hidden"
+        ctx_server_only.tool_search_active(),
+        "non-hidden MCP exposure keeps the discovery carrier stable even with an empty corpus"
     );
 }
 

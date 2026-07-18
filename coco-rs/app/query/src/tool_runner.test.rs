@@ -42,14 +42,30 @@ fn tool_result_text(message: &Message) -> &str {
     }
 }
 
+fn mcp_tool() -> Arc<dyn coco_tool_runtime::DynTool> {
+    Arc::new(
+        coco_tools::tools::McpTool::new(
+            "github".into(),
+            "create_issue".into(),
+            "Create an issue".into(),
+            json!({
+                "type": "object",
+                "properties": { "title": { "type": "string" } },
+                "required": ["title"]
+            }),
+            coco_tool_runtime::McpToolAnnotations::default(),
+        )
+        .expect("valid MCP schema"),
+    )
+}
+
 #[tokio::test]
 async fn deferred_tool_call_before_tool_search_does_not_schema_validate() {
     // WebFetch has required input fields, so it exercises the deferred-before-
     // schema-validation path with deliberately malformed input.
     let tools = registry_with(Arc::new(coco_tools::tools::WebFetchTool));
     let ctx = ToolUseContext::test_default()
-        .with_tool_search_strategy(coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion)
-        .with_tool_search_candidates(true);
+        .with_tool_search_strategy(coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion);
     let mut history = MessageHistory::new();
     let tc = ToolCallPart::new(
         "call-deferred",
@@ -75,12 +91,49 @@ async fn deferred_tool_call_before_tool_search_does_not_schema_validate() {
     assert!(prepared.is_none());
     assert_eq!(history.len(), 1);
     let text = tool_result_text(history.iter().next().unwrap());
-    assert!(
-        text.contains("deferred tool that has not been loaded yet"),
-        "{text}"
-    );
+    assert!(text.contains("It is deferred"), "{text}");
     assert!(text.contains("select:WebFetch"));
     assert!(!text.contains("InputValidationError"));
+}
+
+#[tokio::test]
+async fn native_discovery_direct_call_resolves_without_client_promotion() {
+    let tools = registry_with(mcp_tool());
+    let ctx = ToolUseContext::test_default()
+        .with_tool_search_strategy(coco_tool_runtime::ToolSearchStrategy::AnthropicToolReference);
+    let materialization = tools.materialize(&ctx);
+    let deferred = materialization
+        .deferred()
+        .next()
+        .expect("deferred MCP tool");
+    let tc = ToolCallPart::new(
+        "call-native",
+        deferred.wire_name.as_str(),
+        json!({"title": "bug"}),
+    );
+    let mut history = MessageHistory::new();
+
+    let resolved = prepare_committed_tool_call(
+        &None,
+        &mut history,
+        ToolSettlement {
+            registry: &tools,
+            materialization: &materialization,
+        },
+        &ctx,
+        &tc,
+        ToolCompletionEventMode::Emit,
+        None,
+    )
+    .await
+    .expect("native provider authorizes the direct deferred call");
+
+    assert!(matches!(resolved.tool_id, ToolId::Mcp { .. }));
+    assert_eq!(
+        resolved.provider_tool_name.as_str(),
+        deferred.wire_name.as_str()
+    );
+    assert!(history.is_empty());
 }
 
 /// calm-bouncing-biscuit regression: a freeform apply_patch call arrives as
@@ -158,6 +211,95 @@ async fn test_prepare_committed_double_encoded_json_threads_recovered_input() {
         &json!({ "file_path": "/tmp/recovered.txt" })
     );
     assert_eq!(tc.input, json!("{\"file_path\": \"/tmp/recovered.txt\"}"));
+}
+
+#[tokio::test]
+async fn use_tool_call_preserves_provider_name_and_uses_target_semantics() {
+    let tools = registry_with(mcp_tool());
+    let ctx = ToolUseContext::test_default().with_mcp_tool_exposure(
+        coco_types::McpToolExposure::UseTool,
+        Arc::new(Default::default()),
+    );
+    let materialization = tools.materialize(&ctx);
+    let target_wire = materialization
+        .use_tool_targets()
+        .next()
+        .expect("use_tool target")
+        .wire_name
+        .as_str()
+        .to_string();
+    let tc = ToolCallPart::new(
+        "call-use-tool",
+        "use_tool",
+        json!({"name": target_wire, "arguments": {"title": "bug"}}),
+    );
+    let mut history = MessageHistory::new();
+
+    let resolved = prepare_committed_tool_call(
+        &None,
+        &mut history,
+        ToolSettlement {
+            registry: &tools,
+            materialization: &materialization,
+        },
+        &ctx,
+        &tc,
+        ToolCompletionEventMode::Emit,
+        None,
+    )
+    .await
+    .expect("use_tool call resolves");
+
+    assert_eq!(
+        resolved.semantic_call.tool_name,
+        "mcp__github__create_issue"
+    );
+    assert_eq!(resolved.provider_tool_name.as_str(), "use_tool");
+    assert_eq!(resolved.input.as_value(), &json!({"title": "bug"}));
+    assert!(matches!(resolved.tool_id, ToolId::Mcp { .. }));
+    assert!(history.is_empty());
+}
+
+#[tokio::test]
+async fn use_tool_call_fails_closed_when_registration_changes_after_snapshot() {
+    let tools = registry_with(mcp_tool());
+    let ctx = ToolUseContext::test_default().with_mcp_tool_exposure(
+        coco_types::McpToolExposure::UseTool,
+        Arc::new(Default::default()),
+    );
+    let materialization = tools.materialize(&ctx);
+    let target_wire = materialization
+        .use_tool_targets()
+        .next()
+        .expect("use_tool target")
+        .wire_name
+        .as_str()
+        .to_string();
+    tools.deregister_by_server("github");
+    let tc = ToolCallPart::new(
+        "call-stale",
+        "use_tool",
+        json!({"name": target_wire, "arguments": {"title": "bug"}}),
+    );
+    let mut history = MessageHistory::new();
+
+    let resolved = prepare_committed_tool_call(
+        &None,
+        &mut history,
+        ToolSettlement {
+            registry: &tools,
+            materialization: &materialization,
+        },
+        &ctx,
+        &tc,
+        ToolCompletionEventMode::Emit,
+        None,
+    )
+    .await;
+
+    assert!(resolved.is_none());
+    assert_eq!(history.len(), 1);
+    assert!(tool_result_text(history.iter().next().unwrap()).contains("registration changed"));
 }
 
 #[test]

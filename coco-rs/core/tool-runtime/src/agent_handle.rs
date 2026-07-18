@@ -216,6 +216,12 @@ pub struct AgentSpawnInheritance {
     pub use_auto_mode_during_plan: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inherited_read_dirs: Vec<String>,
+    /// Parent's effective MCP exposure ceiling. Spawn consumers must combine
+    /// this with any child/session request using `McpToolExposure::restrict`.
+    pub mcp_tool_exposure: coco_types::McpToolExposure,
+    /// Parent's effective per-server exposure overrides.
+    #[serde(default)]
+    pub mcp_server_tool_exposure: std::collections::HashMap<String, coco_types::McpToolExposure>,
 }
 
 impl Default for AgentSpawnInheritance {
@@ -228,6 +234,10 @@ impl Default for AgentSpawnInheritance {
             active_shell_tool: default_active_shell_tool(),
             use_auto_mode_during_plan: default_use_auto_mode_during_plan(),
             inherited_read_dirs: Vec::new(),
+            // Missing inheritance must fail closed; production spawn
+            // boundaries always populate the parent's effective ceiling.
+            mcp_tool_exposure: coco_types::McpToolExposure::UseTool,
+            mcp_server_tool_exposure: std::collections::HashMap::new(),
         }
     }
 }

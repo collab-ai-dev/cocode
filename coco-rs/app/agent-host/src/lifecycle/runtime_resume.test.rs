@@ -62,6 +62,7 @@ fn empty_resume_conversation() -> coco_session::recovery::ConversationForResume 
         plan_slug: None,
         has_sidechain: false,
         mode: None,
+        mcp_tool_exposure: None,
     }
 }
 

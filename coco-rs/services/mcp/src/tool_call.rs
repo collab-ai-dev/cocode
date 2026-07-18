@@ -1,7 +1,5 @@
 //! MCP tool call handling.
 
-use coco_types::MCP_TOOL_PREFIX;
-use coco_types::MCP_TOOL_SEPARATOR;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -57,26 +55,6 @@ pub fn truncate_description(description: &str) -> String {
 /// Format an MCP tool call error for the model.
 pub fn format_mcp_error(server: &str, tool: &str, error: &str) -> String {
     format!("MCP tool call failed (server={server}, tool={tool}): {error}")
-}
-
-/// Parse MCP tool name into (server_name, tool_name).
-///
-/// Format: "mcp__server__tool"
-pub fn parse_mcp_tool_name(full_name: &str) -> Option<(&str, &str)> {
-    let stripped = full_name.strip_prefix(MCP_TOOL_PREFIX)?;
-    let parts: Vec<&str> = stripped.splitn(2, MCP_TOOL_SEPARATOR).collect();
-    if parts.len() == 2 {
-        Some((parts[0], parts[1]))
-    } else {
-        None
-    }
-}
-
-/// Build the full MCP tool name from server and tool names.
-///
-/// Delegates to `naming::mcp_tool_id` which normalizes names for wire format.
-pub fn build_mcp_tool_name(server: &str, tool: &str) -> String {
-    crate::naming::mcp_tool_id(server, tool)
 }
 
 #[cfg(test)]

@@ -110,6 +110,8 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
             effort: config.effort,
             use_exact_tools: config.use_exact_tools,
             mcp_servers: config.mcp_servers,
+            mcp_tool_exposure: config.mcp_tool_exposure,
+            mcp_server_tool_exposure: config.mcp_server_tool_exposure,
             event_tx,
             ..Default::default()
         };
@@ -209,6 +211,7 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
                     // is separate from structured fork context so we do
                     // not re-flatten history into a legacy string.
                     allowed_tools: vec![String::new()],
+                    mcp_tool_exposure: coco_types::McpToolExposure::UseTool,
                     is_teammate: true,
                     is_in_process_teammate: true,
                     ..Default::default()

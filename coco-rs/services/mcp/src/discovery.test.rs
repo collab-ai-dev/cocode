@@ -57,11 +57,36 @@ fn test_convert_server_tools_basic() {
     let discovered = convert_server_tools("my-server", &tools);
 
     assert_eq!(discovered.len(), 2);
-    assert_eq!(discovered[0].fq_name, "mcp__my-server__read_file");
+    assert_eq!(
+        discovered[0].tool_id,
+        coco_types::ToolId::Mcp {
+            server: "my-server".into(),
+            tool: "read_file".into(),
+        }
+    );
     assert_eq!(discovered[0].server_name, "my-server");
     assert_eq!(discovered[0].tool_name, "read_file");
     assert_eq!(discovered[0].description, "Read a file from disk");
-    assert_eq!(discovered[1].fq_name, "mcp__my-server__write_file");
+    assert_eq!(
+        discovered[1].tool_id,
+        coco_types::ToolId::Mcp {
+            server: "my-server".into(),
+            tool: "write_file".into(),
+        }
+    );
+}
+
+#[test]
+fn test_convert_server_tools_preserves_raw_identity() {
+    let discovered = convert_server_tools("my server", &[make_tool("send  msg", None)]);
+
+    assert_eq!(
+        discovered[0].tool_id,
+        coco_types::ToolId::Mcp {
+            server: "my server".into(),
+            tool: "send  msg".into(),
+        }
+    );
 }
 
 #[test]

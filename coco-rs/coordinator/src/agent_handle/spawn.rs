@@ -1340,6 +1340,16 @@ impl SwarmAgentHandle {
             // an isolated-worktree subagent can read the parent project without
             // a prompt (TS subagent cwd + additionalWorkingDirectories parity).
             inherited_read_dirs: request.inheritance.inherited_read_dirs.clone(),
+            mcp_tool_exposure: coco_types::McpToolExposure::restrict(
+                request.inheritance.mcp_tool_exposure,
+                self.runtime_config().mcp.tool_exposure,
+            ),
+            mcp_server_tool_exposure: coco_types::McpToolExposure::restrict_server_overrides(
+                request.inheritance.mcp_tool_exposure,
+                &request.inheritance.mcp_server_tool_exposure,
+                self.runtime_config().mcp.tool_exposure,
+                &self.runtime_config().mcp.server_tool_exposure,
+            ),
             // Depth this child engine runs at (= parent + 1, stamped at
             // the AgentTool boundary). The adapter copies it onto the
             // child `QueryEngineConfig.query_depth`.
@@ -2170,6 +2180,7 @@ impl SwarmAgentHandle {
                 // Persist so resume can restore them.
                 mode: request.permissions.mode,
                 isolation: request.execution.isolation,
+                mcp_tool_exposure: query_config.mcp_tool_exposure,
             };
             if let Err(e) = store_for_meta
                 .write_agent_metadata(&session_for_meta, &task_for_meta, &meta)
@@ -2431,6 +2442,7 @@ impl SwarmAgentHandle {
                                 // so mode/isolation are moot here.
                                 mode: None,
                                 isolation: None,
+                                mcp_tool_exposure: coco_types::McpToolExposure::UseTool,
                             };
                             if let Err(write_err) = store
                                 .write_agent_metadata(

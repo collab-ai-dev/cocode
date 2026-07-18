@@ -52,6 +52,7 @@ pub(crate) async fn resume_app_server_session_with_runtime_replacement(
     let resumed_session_id = loaded.session_id.clone();
     let resumed_cwd = loaded.session.working_dir.clone();
     let prior_messages = loaded.conversation.messages.clone();
+    let persisted_mcp_tool_exposure = loaded.conversation.mcp_tool_exposure;
     if let Some(watermark) = loaded.session.session_seq_watermark {
         restore_session_seq_from_watermark(
             &app_server,
@@ -98,6 +99,7 @@ pub(crate) async fn resume_app_server_session_with_runtime_replacement(
                 cwd,
                 prior_messages,
                 plan_mode_instructions,
+                persisted_mcp_tool_exposure,
                 app_server,
             )
             .await

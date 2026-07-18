@@ -65,7 +65,16 @@ impl Tool for StubTool {
     type Output = serde_json::Value;
 
     fn id(&self) -> ToolId {
-        ToolId::Custom(self.name.clone())
+        // Mirror the real `McpTool`, whose id is a structured `ToolId::Mcp`
+        // (not a `Custom` string). This is what `WireToolName::for_tool_id`
+        // keys on to produce the qualified wire name.
+        match &self.mcp {
+            Some(info) => ToolId::Mcp {
+                server: info.server_name.clone(),
+                tool: info.tool_name.clone(),
+            },
+            None => ToolId::Custom(self.name.clone()),
+        }
     }
     fn name(&self) -> &str {
         &self.name
@@ -217,6 +226,235 @@ fn test_qualified_name_format() {
     assert_eq!(info.qualified_name(), "mcp__slack__send_message");
 }
 
+/// Two servers exposing the same bare tool name must stay distinct at both
+/// canonical and wire identity. Before the refactor the discovery layer keyed
+/// on the bare `name()` and silently collapsed them; the materialization now
+/// carries a per-tool [`crate::WireToolName`] derived from the full `ToolId`.
+/// (plan §5.1)
+#[test]
+fn test_same_bare_tool_two_servers_stay_distinct() {
+    let reg = ToolRegistry::new();
+    reg.register(mcp_stub("create_issue", "github", "create_issue"));
+    reg.register(mcp_stub("create_issue", "gitlab", "create_issue"));
+
+    let ctx = default_filter_ctx();
+    let mat = reg.materialize(&ctx);
+
+    // Neither tool is dropped.
+    assert_eq!(mat.all_materialized().len(), 2);
+
+    // Distinct canonical identity.
+    let canonical: std::collections::HashSet<&str> = mat
+        .all_materialized()
+        .iter()
+        .map(|t| t.canonical_name.as_str())
+        .collect();
+    assert!(canonical.contains("mcp__github__create_issue"));
+    assert!(canonical.contains("mcp__gitlab__create_issue"));
+
+    // Distinct wire identity — the names the model actually calls.
+    let wire: std::collections::HashSet<&str> = mat
+        .all_materialized()
+        .iter()
+        .map(|t| t.wire_name.as_str())
+        .collect();
+    assert_eq!(wire.len(), 2, "wire names must not collide: {wire:?}");
+
+    // Each is independently resolvable.
+    for server in ["github", "gitlab"] {
+        let lookup = mat.lookup(
+            &reg,
+            &ToolId::Mcp {
+                server: server.into(),
+                tool: "create_issue".into(),
+            },
+        );
+        assert!(
+            matches!(lookup, MaterializedToolLookup::Loaded(t) if t.tool_id.mcp_server() == Some(server)),
+            "{server}/create_issue must resolve to its own tool",
+        );
+    }
+}
+
+#[test]
+fn replace_server_tools_is_atomic_on_collision() {
+    let reg = ToolRegistry::new();
+    reg.register(mcp_stub("old", "github", "old"));
+
+    let result = reg.replace_server_tools(
+        "github",
+        vec![
+            mcp_stub("duplicate", "github", "duplicate"),
+            mcp_stub("duplicate", "github", "duplicate"),
+        ],
+    );
+
+    assert!(matches!(
+        result,
+        Err(super::ToolRegistrationError::CanonicalCollision { .. })
+    ));
+    assert!(reg.get_by_name("mcp__github__old").is_some());
+    assert!(reg.get_by_name("mcp__github__duplicate").is_none());
+}
+
+#[test]
+fn replace_server_tools_rejects_foreign_server_batch_without_mutation() {
+    let reg = ToolRegistry::new();
+    reg.register(mcp_stub("old", "github", "old"));
+
+    let result = reg.replace_server_tools("github", vec![mcp_stub("foreign", "gitlab", "foreign")]);
+
+    assert!(matches!(
+        result,
+        Err(super::ToolRegistrationError::ServerOwnershipMismatch { .. })
+    ));
+    assert!(reg.get_by_name("mcp__github__old").is_some());
+    assert!(reg.get_by_name("mcp__gitlab__foreign").is_none());
+}
+
+#[test]
+fn dynamic_mcp_registration_rejects_empty_identity_components() {
+    let registry = ToolRegistry::new();
+
+    assert!(matches!(
+        registry.try_register(mcp_stub("empty", "", "tool")),
+        Err(super::ToolRegistrationError::EmptyMcpIdentityComponent {
+            component: "server"
+        })
+    ));
+    assert!(matches!(
+        registry.try_register(mcp_stub("empty", "server", "")),
+        Err(super::ToolRegistrationError::EmptyMcpIdentityComponent { component: "tool" })
+    ));
+    assert!(registry.is_empty());
+}
+
+#[test]
+fn mcp_exposure_strategy_matrix_is_fail_closed() {
+    use crate::{ToolPlacement, ToolSearchStrategy, ToolUseContext};
+    use coco_types::McpToolExposure;
+
+    let strategies = [
+        ToolSearchStrategy::Eager,
+        ToolSearchStrategy::ClientSidePromotion,
+        ToolSearchStrategy::AnthropicToolReference,
+        ToolSearchStrategy::OpenAiNativeClient,
+    ];
+    for exposure in [
+        McpToolExposure::Load,
+        McpToolExposure::Defer,
+        McpToolExposure::UseTool,
+    ] {
+        for strategy in strategies {
+            let registry = ToolRegistry::new();
+            registry.register(deferred_mcp_stub("search", "server", false));
+            let ctx = ToolUseContext::test_default()
+                .with_tool_search_strategy(strategy)
+                .with_mcp_tool_exposure(exposure, Arc::new(Default::default()));
+            let materialization = registry.materialize(&ctx);
+            let tool = materialization
+                .all_materialized()
+                .iter()
+                .find(|tool| tool.tool.is_mcp())
+                .expect("MCP identity remains registered in every mode");
+
+            assert_eq!(
+                tool.placement,
+                match exposure {
+                    McpToolExposure::Load => ToolPlacement::Loaded,
+                    McpToolExposure::UseTool => ToolPlacement::UseTool,
+                    McpToolExposure::Defer if strategy.is_supported() => {
+                        ToolPlacement::Deferred
+                    }
+                    McpToolExposure::Defer => ToolPlacement::UseTool,
+                }
+            );
+            assert_eq!(
+                materialization.searchable().count(),
+                usize::from(exposure != McpToolExposure::Load),
+                "exposure={exposure:?}, strategy={strategy:?}"
+            );
+            if exposure == McpToolExposure::Load {
+                assert!(!tool.discoverable, "load must not enter ToolSearch");
+                assert!(matches!(
+                    materialization.lookup(&registry, &tool.tool_id),
+                    MaterializedToolLookup::Loaded(_)
+                ));
+            }
+        }
+    }
+}
+
+#[test]
+fn native_discovery_settles_direct_deferred_calls_against_snapshot() {
+    use crate::{MaterializedToolLookup, ToolSearchStrategy, ToolUseContext};
+
+    for strategy in [
+        ToolSearchStrategy::AnthropicToolReference,
+        ToolSearchStrategy::OpenAiNativeClient,
+    ] {
+        let registry = ToolRegistry::new();
+        registry.register(deferred_mcp_stub("search", "server", false));
+        let ctx = ToolUseContext::test_default().with_tool_search_strategy(strategy);
+        let materialization = registry.materialize(&ctx);
+        let id = ToolId::Mcp {
+            server: "server".into(),
+            tool: "search".into(),
+        };
+
+        assert!(matches!(
+            materialization.lookup(&registry, &id),
+            MaterializedToolLookup::Loaded(_)
+        ));
+
+        registry
+            .replace_server_tools("server", vec![deferred_mcp_stub("search", "server", false)])
+            .expect("replacement succeeds");
+        assert!(matches!(
+            materialization.lookup(&registry, &id),
+            MaterializedToolLookup::Stale { .. }
+        ));
+    }
+}
+
+#[test]
+fn mcp_discovery_does_not_depend_on_builtin_tool_search_feature() {
+    use crate::{ToolPlacement, ToolSearchStrategy, ToolUseContext};
+
+    let registry = ToolRegistry::new();
+    registry.register(deferred_mcp_stub("search", "server", false));
+    registry.register(Arc::new(StubTool {
+        name: "LazyBuiltinLike".into(),
+        mcp: None,
+        should_defer: true,
+        always_load: false,
+    }));
+    let mut features = coco_types::Features::with_defaults();
+    features.disable(coco_types::Feature::ToolSearch);
+    let mut ctx = ToolUseContext::test_default()
+        .with_tool_search_strategy(ToolSearchStrategy::ClientSidePromotion);
+    ctx.features = Arc::new(features);
+
+    assert!(!ctx.tool_search_supported());
+    assert!(ctx.mcp_tool_search_active());
+    let materialization = registry.materialize(&ctx);
+    let mcp = materialization
+        .all_materialized()
+        .iter()
+        .find(|tool| tool.tool.is_mcp())
+        .expect("MCP tool");
+    let ordinary = materialization
+        .all_materialized()
+        .iter()
+        .find(|tool| tool.canonical_name == "LazyBuiltinLike")
+        .expect("ordinary tool");
+
+    assert_eq!(mcp.placement, ToolPlacement::Deferred);
+    assert!(mcp.discoverable);
+    assert_eq!(ordinary.placement, ToolPlacement::Loaded);
+    assert!(!ordinary.discoverable);
+}
+
 // ---------------------------------------------------------------------------
 // Schema-time filter pipeline (docs/internal/feature-gates-and-tool-filtering.md §7)
 // ---------------------------------------------------------------------------
@@ -331,14 +569,23 @@ fn default_filter_ctx() -> crate::context::ToolUseContext {
 #[test]
 fn materialized_lookup_rejects_replaced_registration_as_stale() {
     let reg = ToolRegistry::new();
-    reg.register(stub("Mutable"));
+    reg.register(mcp_stub("Mutable", "server1", "Mutable"));
     let ctx = default_filter_ctx();
     let materialized = reg.materialize(&ctx);
 
-    reg.register(stub("Mutable"));
+    reg.replace_server_tools("server1", vec![mcp_stub("Mutable", "server1", "Mutable")])
+        .expect("replacement succeeds");
 
-    let lookup = materialized.lookup(&reg, &ToolId::Custom("Mutable".into()));
-    assert!(matches!(lookup, MaterializedToolLookup::Stale { name } if name == "Mutable"));
+    let lookup = materialized.lookup(
+        &reg,
+        &ToolId::Mcp {
+            server: "server1".into(),
+            tool: "Mutable".into(),
+        },
+    );
+    assert!(
+        matches!(lookup, MaterializedToolLookup::Stale { name } if name == "mcp__server1__Mutable")
+    );
 }
 
 #[test]
@@ -350,7 +597,13 @@ fn materialized_lookup_rejects_deregistered_mcp_registration_as_stale() {
 
     reg.deregister_by_server("server1");
 
-    let lookup = materialized.lookup(&reg, &ToolId::Custom("mcp__server1__Read".into()));
+    let lookup = materialized.lookup(
+        &reg,
+        &ToolId::Mcp {
+            server: "server1".into(),
+            tool: "Read".into(),
+        },
+    );
     assert!(matches!(
         lookup,
         MaterializedToolLookup::Stale { name } if name == "mcp__server1__Read"
@@ -358,23 +611,21 @@ fn materialized_lookup_rejects_deregistered_mcp_registration_as_stale() {
 }
 
 #[test]
-fn materialized_lookup_resolves_snapshot_alias_without_live_alias_drift() {
+fn materialized_lookup_does_not_invent_bare_mcp_aliases() {
     let reg = ToolRegistry::new();
     reg.register(mcp_stub("hook_mcp", "test-server", "hook_mcp"));
     let ctx = default_filter_ctx();
     let materialized = reg.materialize(&ctx);
 
     let lookup = materialized.lookup(&reg, &ToolId::Custom("hook_mcp".into()));
-    assert!(
-        matches!(lookup, MaterializedToolLookup::Loaded(tool) if tool.canonical_name == "mcp__test-server__hook_mcp")
-    );
+    assert!(matches!(lookup, MaterializedToolLookup::Unavailable));
 }
 
 #[test]
 fn materialized_lookup_prefers_visible_canonical_over_alias() {
     let reg = ToolRegistry::new();
     reg.register(mcp_stub("Read", "evil_server", "Read"));
-    reg.register(stub("Read"));
+    reg.register(builtin(ToolName::Read, true, None));
     let ctx = default_filter_ctx();
     let materialized = reg.materialize(&ctx);
 
@@ -574,11 +825,12 @@ fn pipeline_design_doc_gpt5_plan_mode_trace() {
 #[test]
 fn tool_search_disabled_loads_every_deferred_tool_eagerly() {
     let reg = ToolRegistry::new();
-    reg.register(deferred_mcp_stub(
-        "mcp__notes__list",
-        "notes",
-        /*always_load=*/ false,
-    ));
+    reg.register(Arc::new(StubTool {
+        name: "LazyBuiltinLike".into(),
+        mcp: None,
+        should_defer: true,
+        always_load: false,
+    }));
     reg.register(stub("Read")); // eager built-in
 
     let mut features = coco_types::Features::with_defaults();
@@ -594,8 +846,8 @@ fn tool_search_disabled_loads_every_deferred_tool_eagerly() {
     let deferred = names(&reg.deferred_tools(&ctx));
 
     assert!(
-        loaded.contains("mcp__notes__list"),
-        "feature off → deferred tool must surface eagerly"
+        loaded.contains("LazyBuiltinLike"),
+        "feature off → deferred built-in must surface eagerly"
     );
     assert!(loaded.contains("Read"));
     assert!(
@@ -625,8 +877,7 @@ fn tool_search_enabled_keeps_deferred_pool() {
     )
     // Declare client-side capability so `tool_search_active()` is
     // true — feature alone isn't enough now that we three-state.
-    .with_tool_search_strategy(crate::ToolSearchStrategy::ClientSidePromotion)
-    .with_tool_search_candidates(true);
+    .with_tool_search_strategy(crate::ToolSearchStrategy::ClientSidePromotion);
 
     let loaded = names(&reg.loaded_tools(&ctx));
     let deferred = names(&reg.deferred_tools(&ctx));
@@ -634,17 +885,130 @@ fn tool_search_enabled_keeps_deferred_pool() {
     assert!(deferred.contains("mcp__notes__list"));
 }
 
+/// Discovery is keyed on canonical identity, not the bare tool name: promoting
+/// `github/create_issue` via ToolSearch must NOT also promote a same-bare-name
+/// `gitlab/create_issue`. Before the fix the registry checked
+/// `discovered_tool_names.contains(tool.name())` (bare), so one discovery bled
+/// onto every server sharing that bare name (plan §6.3).
+#[test]
+fn tool_search_discovery_keys_on_canonical_not_bare_name() {
+    let reg = ToolRegistry::new();
+    reg.register(deferred_mcp_stub(
+        "create_issue",
+        "github",
+        /*always_load=*/ false,
+    ));
+    reg.register(deferred_mcp_stub(
+        "create_issue",
+        "gitlab",
+        /*always_load=*/ false,
+    ));
+
+    // The model discovered ONLY github's tool (canonical id in the set).
+    let mut discovered = std::collections::HashSet::new();
+    discovered.insert("mcp__github__create_issue".to_string());
+
+    let ctx = crate::context::ToolUseContext::stub_for_filtering(
+        Arc::new(coco_types::Features::with_defaults()),
+        Arc::new(coco_types::ToolOverrides::none()),
+        coco_types::ToolFilter::unrestricted(),
+        coco_types::PermissionMode::Default,
+    )
+    .with_tool_search_strategy(crate::ToolSearchStrategy::ClientSidePromotion)
+    .with_discovered_tool_names(Arc::new(discovered));
+
+    let mat = reg.materialize(&ctx);
+    let loaded: Vec<&str> = mat.loaded().map(|t| t.canonical_name.as_str()).collect();
+    let deferred: Vec<&str> = mat.deferred().map(|t| t.canonical_name.as_str()).collect();
+
+    assert!(
+        loaded.contains(&"mcp__github__create_issue"),
+        "discovered github tool must be promoted: {loaded:?}"
+    );
+    assert!(
+        deferred.contains(&"mcp__gitlab__create_issue"),
+        "undiscovered gitlab tool must stay deferred: {deferred:?}"
+    );
+    assert!(
+        !loaded.contains(&"mcp__gitlab__create_issue"),
+        "gitlab tool must not bleed into loaded from github's discovery"
+    );
+}
+
+/// One request can combine all server-level placements. `alwaysLoad` is a hint
+/// only in `defer`; explicit `use_tool` wins over it.
+#[test]
+fn mcp_placement_resolves_per_server_and_honors_always_load_precedence() {
+    let reg = ToolRegistry::new();
+    reg.register(deferred_mcp_stub(
+        "create_issue",
+        "github",
+        /*always_load=*/ false,
+    ));
+    reg.register(deferred_mcp_stub("merge", "gitlab", true));
+    reg.register(deferred_mcp_stub("remember", "memory", false));
+    reg.register(deferred_mcp_stub("send", "slack", true));
+    reg.register(stub("Read"));
+
+    let base = || {
+        crate::context::ToolUseContext::stub_for_filtering(
+            Arc::new(coco_types::Features::with_defaults()),
+            Arc::new(coco_types::ToolOverrides::none()),
+            coco_types::ToolFilter::unrestricted(),
+            coco_types::PermissionMode::Default,
+        )
+    };
+
+    let overrides = std::collections::HashMap::from([
+        ("memory".to_string(), coco_types::McpToolExposure::Load),
+        ("slack".to_string(), coco_types::McpToolExposure::UseTool),
+    ]);
+    let mat = reg.materialize(
+        &base()
+            .with_tool_search_strategy(crate::ToolSearchStrategy::ClientSidePromotion)
+            .with_mcp_tool_exposure(coco_types::McpToolExposure::Defer, Arc::new(overrides)),
+    );
+
+    let placement = |name: &str| {
+        mat.all_materialized()
+            .iter()
+            .find(|tool| tool.canonical_name == name)
+            .map(|tool| tool.placement)
+    };
+    assert_eq!(placement("Read"), Some(super::ToolPlacement::Loaded));
+    assert_eq!(
+        placement("mcp__github__create_issue"),
+        Some(super::ToolPlacement::Deferred)
+    );
+    assert_eq!(
+        placement("mcp__gitlab__merge"),
+        Some(super::ToolPlacement::Loaded),
+        "alwaysLoad promotes a tool only under defer"
+    );
+    assert_eq!(
+        placement("mcp__memory__remember"),
+        Some(super::ToolPlacement::Loaded)
+    );
+    assert_eq!(
+        placement("mcp__slack__send"),
+        Some(super::ToolPlacement::UseTool),
+        "explicit use_tool must override alwaysLoad"
+    );
+}
+
 /// Three-state coverage: feature ON but model lacks both
-/// capabilities → deferral filter short-circuits like
-/// `Feature::ToolSearch = false`. Surface every tool eagerly.
+/// capabilities → built-in deferral short-circuits like
+/// `Feature::ToolSearch = false`. Surface every built-in eagerly. MCP `defer`
+/// has its own `use_tool` fallback and is covered by the exposure matrix.
 #[test]
 fn tool_search_inactive_when_model_lacks_capability() {
     let reg = ToolRegistry::new();
-    reg.register(deferred_mcp_stub(
-        "mcp__notes__list",
-        "notes",
-        /*always_load=*/ false,
-    ));
+    reg.register(Arc::new(StubTool {
+        name: "LazyBuiltinLike".into(),
+        mcp: None,
+        should_defer: true,
+        always_load: false,
+    }));
 
     let ctx = crate::context::ToolUseContext::stub_for_filtering(
         Arc::new(coco_types::Features::with_defaults()),
@@ -657,8 +1021,8 @@ fn tool_search_inactive_when_model_lacks_capability() {
     let loaded = names(&reg.loaded_tools(&ctx));
     let deferred = names(&reg.deferred_tools(&ctx));
     assert!(
-        loaded.contains("mcp__notes__list"),
-        "no capability → deferred tool must surface eagerly"
+        loaded.contains("LazyBuiltinLike"),
+        "no capability → deferred built-in must surface eagerly"
     );
     assert!(
         deferred.is_empty(),
@@ -693,8 +1057,7 @@ fn loaded_tools_includes_always_load_mcp_tool_on_turn_one() {
     // Declare a capability so `tool_search_active()` is true and the
     // deferral filter actually runs (the always-load short-circuit
     // is what the test is asserting).
-    .with_tool_search_strategy(crate::ToolSearchStrategy::ClientSidePromotion)
-    .with_tool_search_candidates(true);
+    .with_tool_search_strategy(crate::ToolSearchStrategy::ClientSidePromotion);
 
     let loaded = names(&reg.loaded_tools(&ctx));
     let deferred = names(&reg.deferred_tools(&ctx));
