@@ -134,9 +134,9 @@ pub(super) async fn run_agent_driver(
         // Re-read each turn so `/clear` regen picks up the new id.
         let session = current_session.read().await.clone();
         let runtime = &session;
-        let session_id = runtime.session_id().clone();
         match command {
             UserCommand::SubmitInput {
+                session_id: origin_session_id,
                 user_message_id,
                 content,
                 images,
@@ -145,6 +145,13 @@ pub(super) async fn run_agent_driver(
                 if content.is_empty() {
                     continue;
                 }
+                let Some(session) = local_app_server_bridge.session_by_id(&origin_session_id)
+                else {
+                    warn!(%origin_session_id, "dropping input from a stale TUI session");
+                    continue;
+                };
+                let runtime = &session;
+                let session_id = runtime.session_id().clone();
 
                 // Slash-command interception. When the user typed `/foo args`,
                 // resolve through `runtime.command_registry` BEFORE handing
@@ -162,6 +169,7 @@ pub(super) async fn run_agent_driver(
                         &event_tx,
                         &mut local_app_server_bridge,
                         &runtime_reload_subscriptions,
+                        &image_data_to_turn_start(&images),
                     )
                     .await;
                     let control_context = LocalRuntimeControlContext {
@@ -204,12 +212,15 @@ pub(super) async fn run_agent_driver(
                 // above; this only fires for ordinary input, and is skipped
                 // entirely when no child is open, so the primary path is
                 // unchanged.)
-                if local_app_server_bridge
-                    .child_interactive_session()
-                    .is_some()
-                {
+                if local_app_server_bridge.is_child_session(&session_id) {
+                    let Some(surface) =
+                        local_app_server_bridge.interactive_session_by_id(&session_id)
+                    else {
+                        warn!(%session_id, "dropping input for a stale sidechat surface");
+                        continue;
+                    };
                     let params = coco_types::TurnStartParams {
-                        target: interactive_target(&local_app_server_bridge),
+                        target: surface.interactive_target(),
                         prompt: effective_content,
                         history_override: Vec::new(),
                         images: image_data_to_turn_start(&images),
@@ -536,7 +547,17 @@ pub(super) async fn run_agent_driver(
                 .await;
             }
 
-            UserCommand::ExecuteSkill { name, args } => {
+            UserCommand::ExecuteSkill {
+                session_id: origin_session_id,
+                name,
+                args,
+            } => {
+                let Some(session) = local_app_server_bridge.session_by_id(&origin_session_id)
+                else {
+                    warn!(%origin_session_id, "dropping skill command from a stale TUI session");
+                    continue;
+                };
+                let session_id = session.session_id().clone();
                 // Command-palette dispatch.
                 // Same registry lookup as the typed path, but with no
                 // user-supplied chat message — for `Prompt` outcomes
@@ -552,6 +573,7 @@ pub(super) async fn run_agent_driver(
                     &event_tx,
                     &mut local_app_server_bridge,
                     &runtime_reload_subscriptions,
+                    &[],
                 )
                 .await;
                 let control_context = LocalRuntimeControlContext {
@@ -601,7 +623,18 @@ pub(super) async fn run_agent_driver(
                 }
             }
 
-            UserCommand::ExecuteSlashCommand { name, args } => {
+            UserCommand::ExecuteSlashCommand {
+                session_id: origin_session_id,
+                name,
+                args,
+                images,
+            } => {
+                let Some(session) = local_app_server_bridge.session_by_id(&origin_session_id)
+                else {
+                    warn!(%origin_session_id, "dropping slash command from a stale TUI session");
+                    continue;
+                };
+                let session_id = session.session_id().clone();
                 let refresh_plugin_dialog = name.as_str() == "plugin";
                 let outcome = dispatch_slash_command(
                     name.as_str(),
@@ -611,6 +644,7 @@ pub(super) async fn run_agent_driver(
                     &event_tx,
                     &mut local_app_server_bridge,
                     &runtime_reload_subscriptions,
+                    &image_data_to_turn_start(&images),
                 )
                 .await;
                 let control_context = LocalRuntimeControlContext {
@@ -633,6 +667,7 @@ pub(super) async fn run_agent_driver(
                     SlashFollowup::NotFound => {
                         emit_slash_status(
                             &event_tx,
+                            &session_id,
                             name.as_str(),
                             &args,
                             SlashCommandStatusKind::NoHandler,
@@ -794,14 +829,15 @@ pub(super) async fn run_agent_driver(
                 Ok(None) => {}
                 Err(error) => {
                     tracing::warn!(%error, "Ctrl+C sidechat close failed");
-                    if local_app_server_bridge
+                    if let Some(child_id) = local_app_server_bridge
                         .child_interactive_session()
-                        .is_some()
+                        .map(|surface| surface.session_id().clone())
                     {
                         emit_slash_text(
                             &event_tx,
+                            &child_id,
                             "btw",
-                            "--close",
+                            "",
                             &format!("Couldn't close the sidechat: {error}"),
                         )
                         .await;
@@ -991,7 +1027,37 @@ pub(super) async fn run_agent_driver(
                 }
             }
 
-            UserCommand::QueueCommand { prompt, images } => {
+            UserCommand::QueueCommand {
+                session_id: origin_session_id,
+                prompt,
+                images,
+            } => {
+                let Some(session) = local_app_server_bridge.session_by_id(&origin_session_id)
+                else {
+                    warn!(%origin_session_id, "dropping queued input from a stale TUI session");
+                    continue;
+                };
+                if local_app_server_bridge.is_child_session(&origin_session_id)
+                    && let Some((name, args)) = parse_slash_command(&prompt)
+                {
+                    let registry = session.current_command_registry().await;
+                    let supported = registry.get(name).is_some_and(|command| {
+                        command.is_active() && command.base.session_scope.supports_side_chat()
+                    });
+                    emit_slash_text(
+                        &event_tx,
+                        &origin_session_id,
+                        name,
+                        args,
+                        if supported {
+                            "Wait for the current sidechat turn to finish before running /compact or /context."
+                        } else {
+                            SIDECHAT_SLASH_POLICY_MESSAGE
+                        },
+                    )
+                    .await;
+                    continue;
+                }
                 // User typed Enter while the agent was streaming.
                 // Push onto the session-scoped command queue so the
                 // running engine sees it at its next drain point
@@ -1012,10 +1078,15 @@ pub(super) async fn run_agent_driver(
                 // engine state and waits for this event to update —
                 // see `update.rs::QueueInput` (no optimistic push).
                 let _ = event_tx
-                    .send(CoreEvent::Protocol(ServerNotification::CommandQueued {
-                        id: queued.id.to_string(),
-                        preview: queued.preview,
-                        editable: queued.editable,
+                    .send(CoreEvent::Tui(TuiOnlyEvent::SessionScoped {
+                        session_id: origin_session_id,
+                        event: Box::new(coco_types::SessionScopedEvent::Protocol(Box::new(
+                            ServerNotification::CommandQueued {
+                                id: queued.id.to_string(),
+                                preview: queued.preview,
+                                editable: queued.editable,
+                            },
+                        ))),
                     }))
                     .await;
             }
@@ -1096,27 +1167,6 @@ pub(super) async fn run_agent_driver(
                         images: queued.images,
                     }))
                     .await;
-            }
-
-            UserCommand::Compact {
-                custom_instructions,
-            } => {
-                // Manual `/compact [instructions]` from the TUI.
-                // `custom_instructions` comes from trimming the args.
-                info!(
-                    session_id = %session_id,
-                    has_instructions = custom_instructions.is_some(),
-                    "TUI: manual /compact"
-                );
-                run_manual_compact(
-                    &session,
-                    &event_tx,
-                    &mut local_app_server_bridge,
-                    custom_instructions,
-                    &active_turn,
-                    &turn_done_tx,
-                )
-                .await;
             }
 
             UserCommand::SetPermissionMode { mode } => {
@@ -1315,6 +1365,7 @@ pub(super) async fn run_agent_driver(
                     for update in &permission_updates {
                         if apply_and_persist_permission_update(
                             update,
+                            runtime.session_id(),
                             &event_tx,
                             &local_app_server_bridge,
                         )
@@ -1409,6 +1460,7 @@ pub(super) async fn run_agent_driver(
                 // so the open overlay refreshes from disk.
                 let _ = apply_and_persist_permission_update(
                     &update,
+                    session.session_id(),
                     &event_tx,
                     &local_app_server_bridge,
                 )
@@ -1553,7 +1605,18 @@ pub(super) async fn run_agent_driver(
                 .await;
             }
 
-            UserCommand::PushSlashResult { entry } => {
+            UserCommand::PushSlashResult {
+                session_id: origin_session_id,
+                entry,
+            } => {
+                let Some(session) = local_app_server_bridge.session_by_id(&origin_session_id)
+                else {
+                    warn!(%origin_session_id, "dropping slash result for a stale TUI session");
+                    continue;
+                };
+                let runtime = &session;
+                let scoped_event_tx =
+                    session_scoped_event_sender(&event_tx, origin_session_id.clone());
                 // TUI owns localized text and interaction policy; host owns
                 // the engine message envelopes and transcript authority.
                 match entry {
@@ -1565,7 +1628,7 @@ pub(super) async fn run_agent_driver(
                     } => {
                         coco_agent_host::session_messages::append_slash_result_to_history_and_emit(
                             runtime,
-                            event_tx.clone(),
+                            scoped_event_tx.clone(),
                             &name,
                             &args,
                             &text,
@@ -1576,7 +1639,7 @@ pub(super) async fn run_agent_driver(
                     coco_tui::SlashTranscriptEntry::ContextUsage { args, result } => {
                         coco_agent_host::session_messages::append_context_usage_to_history_and_emit(
                             runtime,
-                            event_tx.clone(),
+                            scoped_event_tx.clone(),
                             &args,
                             *result,
                         )

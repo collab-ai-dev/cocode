@@ -30,6 +30,39 @@ fn scope_surface_event(session_id: SessionId, event: CoreEvent) -> Option<CoreEv
 }
 
 impl AppServerLocalBridge {
+    /// Resolve a live runtime by exact id. No current-session fallback is
+    /// permitted: callers use this for commands emitted by a concrete TUI
+    /// projection, which may be stale by the time the driver receives them.
+    pub fn session_by_id(
+        &self,
+        session_id: &SessionId,
+    ) -> Option<crate::session_runtime::SessionHandle> {
+        self.app_server
+            .registry()
+            .get(session_id)
+            .map(crate::host::app_session::AppSessionHandle::into_session)
+    }
+
+    /// Return the interactive surface bound to `session_id`, including the
+    /// sidechat child surface. This never silently returns another session.
+    pub fn interactive_session_by_id(
+        &self,
+        session_id: &SessionId,
+    ) -> Option<&crate::local_client::LocalSessionClient> {
+        self.interactive_surface
+            .as_ref()
+            .filter(|surface| surface.session_id() == session_id)
+            .or_else(|| {
+                self.child_interactive_session()
+                    .filter(|surface| surface.session_id() == session_id)
+            })
+    }
+
+    pub fn is_child_session(&self, session_id: &SessionId) -> bool {
+        self.child_interactive_session()
+            .is_some_and(|surface| surface.session_id() == session_id)
+    }
+
     pub fn interactive_session(&self) -> Option<&crate::local_client::LocalSessionClient> {
         self.interactive_surface.as_ref()
     }

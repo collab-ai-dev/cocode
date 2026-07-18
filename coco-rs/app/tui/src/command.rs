@@ -151,6 +151,8 @@ pub enum UserCommand {
     },
     /// Submit user input text with resolved paste data.
     SubmitInput {
+        /// Exact TUI projection that originated this input.
+        session_id: coco_types::SessionId,
         /// User-message UUID minted at submit time. The agent driver
         /// builds the `Message::User` carrying this id and emits it via
         /// `history_push_and_emit`; `FileHistoryState` keys the per-turn
@@ -158,7 +160,8 @@ pub enum UserCommand {
         /// picker selections, file-history snapshots, and the JSONL
         /// transcript line up.
         user_message_id: String,
-        /// Resolved text content (paste pills expanded, image pills removed).
+        /// Resolved text content (paste pills expanded, image pills preserved
+        /// for display while their decoded payloads travel in `images`).
         content: String,
         /// Original input text (with pills intact) for display in chat history.
         display_text: Option<String>,
@@ -302,7 +305,11 @@ pub enum UserCommand {
         content_blocks: Option<Vec<serde_json::Value>>,
     },
     /// Execute a skill by name.
-    ExecuteSkill { name: String, args: Option<String> },
+    ExecuteSkill {
+        session_id: coco_types::SessionId,
+        name: String,
+        args: Option<String>,
+    },
     /// Persist a `skill_overrides` patch to
     /// `project config dir/settings.local.json` and republish
     /// `RuntimeConfig`. Emitted by the `/skills` dialog's Enter
@@ -324,8 +331,12 @@ pub enum UserCommand {
     /// Execute a registered slash command without echoing the raw slash
     /// invocation into chat history.
     ExecuteSlashCommand {
+        /// Exact TUI projection that originated this invocation.
+        session_id: coco_types::SessionId,
         name: crate::state::SlashCommandName,
         args: String,
+        /// Images referenced by paste pills in the slash arguments.
+        images: Vec<coco_tui_ui::paste::ImageData>,
     },
     /// Queue a command for mid-turn injection.
     /// Sent by [`crate::update::QueueInput`] when the user presses
@@ -336,6 +347,7 @@ pub enum UserCommand {
     /// images at submit time so mid-turn screenshot pastes survive
     /// queueing — same shape as [`Self::SubmitInput`].
     QueueCommand {
+        session_id: coco_types::SessionId,
         prompt: String,
         images: Vec<coco_tui_ui::paste::ImageData>,
     },
@@ -355,10 +367,6 @@ pub enum UserCommand {
     KillAllAgents,
     /// Toggle fast mode.
     ToggleFastMode,
-    /// Trigger manual compaction. Optional `custom_instructions` carry
-    /// any text after `/compact` so the LLM summarizer prompt can honor
-    /// the user's focus directive.
-    Compact { custom_instructions: Option<String> },
     /// Rewind to an earlier user message.
     /// `mode` is an ADT, not a flag — the `AutoRestore` variant
     /// structurally cannot carry a `RestoreType`, so the
@@ -419,7 +427,10 @@ pub enum UserCommand {
     /// Push a TUI-originated slash transcript entry into engine
     /// `MessageHistory`. The TUI owns localized text and interaction
     /// decisions; the runner/host constructs the engine message envelopes.
-    PushSlashResult { entry: SlashTranscriptEntry },
+    PushSlashResult {
+        session_id: coco_types::SessionId,
+        entry: SlashTranscriptEntry,
+    },
 }
 
 #[derive(Debug, Clone)]

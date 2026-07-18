@@ -90,6 +90,26 @@ pub enum SkillProvenanceBadge {
     Learned,
 }
 
+/// Interactive session kinds in which a slash command may run.
+///
+/// Commands default to the primary session. Sidechat support is opt-in so a
+/// newly registered builtin, plugin command, or skill cannot accidentally
+/// mutate the hidden parent or escape the sidechat's restricted surface.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SlashCommandSessionScope {
+    #[default]
+    PrimaryOnly,
+    PrimaryAndSideChat,
+}
+
+impl SlashCommandSessionScope {
+    pub fn supports_side_chat(self) -> bool {
+        matches!(self, Self::PrimaryAndSideChat)
+    }
+}
+
 impl SkillProvenanceBadge {
     /// The `/`-popup suffix tag (no parentheses).
     pub fn suffix_tag(self) -> &'static str {
@@ -133,6 +153,9 @@ pub struct CommandBase {
     /// Whether non-interactive (SDK/headless) mode is supported.
     #[serde(default)]
     pub supports_non_interactive: bool,
+    /// Whether the command may execute from an ephemeral sidechat child.
+    #[serde(default)]
+    pub session_scope: SlashCommandSessionScope,
 }
 
 /// Safety classification for remote/bridge filtering.
@@ -332,4 +355,7 @@ pub struct SlashCommandInfo {
     /// pick by name regardless.
     #[serde(default)]
     pub usage_score: f64,
+    /// Interactive session scope used by the TUI to project the command list.
+    #[serde(default)]
+    pub session_scope: SlashCommandSessionScope,
 }

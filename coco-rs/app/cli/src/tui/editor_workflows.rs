@@ -234,29 +234,38 @@ pub(super) async fn refresh_permissions_editor(
 /// to disk.
 pub(super) async fn apply_and_persist_permission_update(
     update: &coco_types::PermissionUpdate,
+    session_id: &coco_types::SessionId,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> bool {
+    let Some(surface) = interactive_session_for(local_app_server_bridge, session_id) else {
+        emit_session_control_error(
+            event_tx,
+            session_id,
+            "permission_update_failed",
+            "failed to apply permission update: this session is no longer available",
+        )
+        .await;
+        return false;
+    };
     if let Err(error) = local_app_server_bridge
         .client()
         .apply_permission_update(
             local_app_server_bridge.handler(),
             coco_types::ApplyPermissionUpdateParams {
-                target: interactive_target(local_app_server_bridge),
+                target: surface.interactive_target(),
                 update: update.clone(),
             },
         )
         .await
     {
-        let _ = event_tx
-            .send(CoreEvent::Protocol(ServerNotification::Error(
-                coco_types::ErrorParams {
-                    message: format!("failed to apply permission update: {error}"),
-                    category: Some("permission_update_failed".to_string()),
-                    retryable: true,
-                },
-            )))
-            .await;
+        emit_session_control_error(
+            event_tx,
+            session_id,
+            "permission_update_failed",
+            format!("failed to apply permission update: {error}"),
+        )
+        .await;
         return false;
     }
     true
@@ -264,26 +273,32 @@ pub(super) async fn apply_and_persist_permission_update(
 
 /// Clear session-scoped permission rules through local AppServer runtime control.
 pub(super) async fn reset_session_permission_rules(
+    session_id: &coco_types::SessionId,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> bool {
+    let Some(surface) = interactive_session_for(local_app_server_bridge, session_id) else {
+        emit_session_control_error(
+            event_tx,
+            session_id,
+            "permission_reset_failed",
+            "failed to reset session permission rules: this session is no longer available",
+        )
+        .await;
+        return false;
+    };
     if let Err(error) = local_app_server_bridge
         .client()
-        .reset_session_permission_rules(
-            local_app_server_bridge.handler(),
-            interactive_session(local_app_server_bridge),
-        )
+        .reset_session_permission_rules(local_app_server_bridge.handler(), surface)
         .await
     {
-        let _ = event_tx
-            .send(CoreEvent::Protocol(ServerNotification::Error(
-                coco_types::ErrorParams {
-                    message: format!("failed to reset session permission rules: {error}"),
-                    category: Some("permission_reset_failed".to_string()),
-                    retryable: true,
-                },
-            )))
-            .await;
+        emit_session_control_error(
+            event_tx,
+            session_id,
+            "permission_reset_failed",
+            format!("failed to reset session permission rules: {error}"),
+        )
+        .await;
         return false;
     }
     true
@@ -291,32 +306,62 @@ pub(super) async fn reset_session_permission_rules(
 
 pub(super) async fn set_agent_color(
     color: Option<coco_types::AgentColorName>,
+    session_id: &coco_types::SessionId,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> bool {
+    let Some(surface) = interactive_session_for(local_app_server_bridge, session_id) else {
+        emit_session_control_error(
+            event_tx,
+            session_id,
+            "agent_color_failed",
+            "failed to set session color: this session is no longer available",
+        )
+        .await;
+        return false;
+    };
     if let Err(error) = local_app_server_bridge
         .client()
         .set_agent_color(
             local_app_server_bridge.handler(),
             coco_types::SetAgentColorParams {
-                target: interactive_target(local_app_server_bridge),
+                target: surface.interactive_target(),
                 color,
             },
         )
         .await
     {
-        let _ = event_tx
-            .send(CoreEvent::Protocol(ServerNotification::Error(
-                coco_types::ErrorParams {
-                    message: format!("failed to set session color: {error}"),
-                    category: Some("agent_color_failed".to_string()),
-                    retryable: true,
-                },
-            )))
-            .await;
+        emit_session_control_error(
+            event_tx,
+            session_id,
+            "agent_color_failed",
+            format!("failed to set session color: {error}"),
+        )
+        .await;
         return false;
     }
     true
+}
+
+async fn emit_session_control_error(
+    event_tx: &mpsc::Sender<CoreEvent>,
+    session_id: &coco_types::SessionId,
+    category: &str,
+    message: impl Into<String>,
+) {
+    let notification = ServerNotification::Error(coco_types::ErrorParams {
+        message: message.into(),
+        category: Some(category.to_string()),
+        retryable: true,
+    });
+    let _ = event_tx
+        .send(CoreEvent::Tui(TuiOnlyEvent::SessionScoped {
+            session_id: session_id.clone(),
+            event: Box::new(coco_types::SessionScopedEvent::Protocol(Box::new(
+                notification,
+            ))),
+        }))
+        .await;
 }
 
 pub(super) fn open_memory_file_blocking(path: &std::path::Path) -> Result<(), String> {
@@ -488,4 +533,4 @@ use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use super::{PendingEditorRequest, interactive_session, interactive_target};
+use super::{PendingEditorRequest, interactive_session_for};

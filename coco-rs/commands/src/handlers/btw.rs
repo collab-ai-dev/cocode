@@ -1,4 +1,4 @@
-//! `/btw <question>` — open a local TUI sidechat.
+//! `/btw [question]` — open a local TUI sidechat.
 //!
 //! Runtime ownership lives in the TUI's local AppServer bridge. This command
 //! module owns only syntax and the fallback text shown on surfaces that cannot
@@ -6,35 +6,28 @@
 
 /// Parsed `/btw` request.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BtwRequest {
-    pub question: String,
+pub enum BtwRequest {
+    Open,
+    OpenAndAsk { question: String },
 }
 
 impl BtwRequest {
-    pub const USAGE: &'static str = "Usage: /btw <your question> (or /btw --close)";
-
-    pub fn parse(args: &str) -> Result<Self, &'static str> {
+    pub fn parse(args: &str) -> Self {
         let question = args.trim();
         if question.is_empty() {
-            return Err(Self::USAGE);
+            return Self::Open;
         }
-        Ok(Self {
+        Self::OpenAndAsk {
             question: question.to_string(),
-        })
-    }
-
-    pub fn is_close(&self) -> bool {
-        self.question == "--close"
+        }
     }
 }
 
 /// Honest fallback for non-TUI command execution. The local TUI intercepts
 /// `/btw` before invoking this handler.
 pub fn handler(args: &str) -> String {
-    match BtwRequest::parse(args) {
-        Ok(_) => "/btw is available only in the interactive TUI.".to_string(),
-        Err(usage) => usage.to_string(),
-    }
+    let _ = BtwRequest::parse(args);
+    "/btw is available only in the interactive TUI.".to_string()
 }
 
 #[cfg(test)]

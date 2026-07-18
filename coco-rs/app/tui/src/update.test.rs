@@ -39,6 +39,12 @@ fn drained_channel() -> (mpsc::Sender<UserCommand>, mpsc::Receiver<UserCommand>)
     mpsc::channel(8)
 }
 
+fn app_state_with_session() -> AppState {
+    let mut state = AppState::new();
+    state.session.session_id = Some("test-session".to_string());
+    state
+}
+
 /// Next real `UserCommand` on the wire, transparently skipping the
 /// `PersistPromptHistory` bookkeeping message that `submit` now emits beside
 /// every `add_to_history`. Returns the same `Result` shape as `try_recv` so
@@ -101,7 +107,7 @@ async fn queue_input_of_slash_sends_queue_command() {
     // Slash input typed while the agent is streaming is queued in the
     // engine first. The CLI runner drains slash commands after the active
     // turn completes instead of executing them immediately from the TUI.
-    let mut state = AppState::new();
+    let mut state = app_state_with_session();
     state.ui.input.textarea.set_text("/compact foo");
     state
         .ui
@@ -117,7 +123,7 @@ async fn queue_input_of_slash_sends_queue_command() {
         "no optimistic local push — display reconciles from the engine"
     );
     match rx.try_recv() {
-        Ok(UserCommand::QueueCommand { prompt, images }) => {
+        Ok(UserCommand::QueueCommand { prompt, images, .. }) => {
             assert_eq!(prompt, "/compact foo");
             assert!(images.is_empty());
         }
@@ -133,7 +139,7 @@ async fn submit_during_active_turn_steers_instead_of_preempting() {
     // must still STEER (queue into the running turn) rather than starting a
     // fresh turn that hard-preempts the active one (`SystemPreempt`). The gate
     // is `turn_active()`, mirroring TS `queryGuard.isActive`.
-    let mut state = AppState::new();
+    let mut state = app_state_with_session();
     state.ui.input.textarea.set_text("hello");
     state
         .ui
@@ -160,7 +166,7 @@ async fn submit_during_active_turn_steers_instead_of_preempting() {
 
 #[tokio::test]
 async fn submit_slash_dispatches_typed_command_without_chat_echo() {
-    let mut state = AppState::new();
+    let mut state = app_state_with_session();
     state.ui.input.textarea.set_text("/rewind last");
     state
         .ui
@@ -176,11 +182,42 @@ async fn submit_slash_dispatches_typed_command_without_chat_echo() {
         "slash invocations are commands, not chat transcript entries"
     );
     match next_user_command(&mut rx) {
-        Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
+        Ok(UserCommand::ExecuteSlashCommand { name, args, .. }) => {
             assert_eq!(name, "rewind");
             assert_eq!(args, "last");
         }
         other => panic!("expected ExecuteSlashCommand on the wire, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn sidechat_slash_dispatches_with_child_session_id() {
+    let mut state = app_state_with_session();
+    let parent = coco_types::SessionId::try_new("test-session").unwrap();
+    let child = coco_types::SessionId::try_new("sidechat-session").unwrap();
+    assert!(state.enter_side_chat(parent, child.clone()));
+    state.ui.input.textarea.set_text("/compact");
+    state
+        .ui
+        .input
+        .textarea
+        .set_cursor(state.ui.input.text().len());
+
+    let (tx, mut rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
+
+    match next_user_command(&mut rx) {
+        Ok(UserCommand::ExecuteSlashCommand {
+            session_id,
+            name,
+            args,
+            ..
+        }) => {
+            assert_eq!(session_id, child);
+            assert_eq!(name, "compact");
+            assert!(args.is_empty());
+        }
+        other => panic!("expected child-scoped ExecuteSlashCommand, got {other:?}"),
     }
 }
 
@@ -218,7 +255,7 @@ async fn submit_bash_resolves_and_persists_referenced_paste_pills() {
 
 #[tokio::test]
 async fn submit_workflows_alias_dispatches_workflow_command_args() {
-    let mut state = AppState::new();
+    let mut state = app_state_with_session();
     state.ui.input.textarea.set_text("/workflows build release");
     state
         .ui
@@ -234,7 +271,7 @@ async fn submit_workflows_alias_dispatches_workflow_command_args() {
         "workflow slash invocations should dispatch as commands, not chat"
     );
     match next_user_command(&mut rx) {
-        Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
+        Ok(UserCommand::ExecuteSlashCommand { name, args, .. }) => {
             assert_eq!(name, "workflows");
             assert_eq!(args, "build release");
         }
@@ -325,7 +362,7 @@ async fn autocomplete_tab_completes_selected_slash_without_submitting() {
 
 #[tokio::test]
 async fn autocomplete_enter_completes_and_submits_no_arg_slash_command() {
-    let mut state = AppState::new();
+    let mut state = app_state_with_session();
     state.session.available_commands = vec![SlashCommandInfo {
         name: "clear".into(),
         ..SlashCommandInfo::default()
@@ -353,7 +390,7 @@ async fn autocomplete_enter_completes_and_submits_no_arg_slash_command() {
         "submitted command consumes input"
     );
     match next_user_command(&mut rx) {
-        Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
+        Ok(UserCommand::ExecuteSlashCommand { name, args, .. }) => {
             assert_eq!(name, "clear");
             assert!(args.is_empty());
         }
@@ -443,7 +480,7 @@ async fn autocomplete_enter_submits_overlay_command_despite_optional_arg_hint() 
     // accepting `/model` and pressing Enter must open the picker.
     // Previously the mere presence of an arg hint forced
     // completion-only mode, parking the input at `/model ` with no overlay.
-    let mut state = AppState::new();
+    let mut state = app_state_with_session();
     state.session.available_commands = vec![SlashCommandInfo {
         name: "model".into(),
         argument_hint: Some("[model]".into()),
@@ -474,7 +511,7 @@ async fn autocomplete_enter_submits_overlay_command_despite_optional_arg_hint() 
         "submitted overlay command consumes input"
     );
     match next_user_command(&mut rx) {
-        Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
+        Ok(UserCommand::ExecuteSlashCommand { name, args, .. }) => {
             assert_eq!(name, "model");
             assert!(args.is_empty(), "no-arg overlay open carries empty args");
         }
@@ -565,7 +602,7 @@ async fn esc_dismisses_completion_until_token_changes() {
 
 #[tokio::test]
 async fn prompt_suggestion_enter_submits_visible_suggestion() {
-    let mut state = AppState::new();
+    let mut state = app_state_with_session();
     state.session.prompt_suggestions = vec!["Run the failing tests".into()];
 
     let (tx, mut rx) = drained_channel();
@@ -1052,7 +1089,7 @@ async fn quoted_path_accept_escapes_quote_and_backslash() {
 
 #[tokio::test]
 async fn directory_command_enter_submits_current_input() {
-    let mut state = AppState::new();
+    let mut state = app_state_with_session();
     state.ui.input.textarea.set_text("/add-dir ./src");
     state
         .ui
@@ -1076,7 +1113,7 @@ async fn directory_command_enter_submits_current_input() {
     handle_command(&mut state, TuiCommand::AutocompleteSubmit, &tx).await;
 
     match next_user_command(&mut rx) {
-        Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
+        Ok(UserCommand::ExecuteSlashCommand { name, args, .. }) => {
             assert_eq!(name, "add-dir");
             assert_eq!(args, "./src");
         }
@@ -1086,7 +1123,7 @@ async fn directory_command_enter_submits_current_input() {
 
 #[tokio::test]
 async fn resume_completion_inserts_session_id_and_submits() {
-    let mut state = AppState::new();
+    let mut state = app_state_with_session();
     state.ui.input.textarea.set_text("/resume aut");
     state
         .ui
@@ -1110,7 +1147,7 @@ async fn resume_completion_inserts_session_id_and_submits() {
     handle_command(&mut state, TuiCommand::AutocompleteSubmit, &tx).await;
 
     match next_user_command(&mut rx) {
-        Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
+        Ok(UserCommand::ExecuteSlashCommand { name, args, .. }) => {
             assert_eq!(name, "resume");
             assert_eq!(args, "session-123");
         }
@@ -1179,7 +1216,7 @@ async fn directory_insertion_quotes_trailing_slash_inside_quotes() {
 
 #[tokio::test]
 async fn submit_rewind_undo_alias_dispatches_typed_command() {
-    let mut state = AppState::new();
+    let mut state = app_state_with_session();
     state.ui.input.textarea.set_text("/undo");
     state
         .ui
@@ -1191,7 +1228,7 @@ async fn submit_rewind_undo_alias_dispatches_typed_command() {
     handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
 
     match next_user_command(&mut rx) {
-        Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
+        Ok(UserCommand::ExecuteSlashCommand { name, args, .. }) => {
             assert_eq!(name, "undo");
             assert!(args.is_empty());
         }
@@ -1201,7 +1238,7 @@ async fn submit_rewind_undo_alias_dispatches_typed_command() {
 
 #[tokio::test]
 async fn session_browser_confirm_dispatches_resume_command() {
-    let mut state = AppState::new();
+    let mut state = app_state_with_session();
     state
         .ui
         .show_modal(ModalState::SessionBrowser(SessionBrowserState {
@@ -1219,7 +1256,7 @@ async fn session_browser_confirm_dispatches_resume_command() {
     handle_command(&mut state, TuiCommand::SurfaceConfirm, &tx).await;
 
     match rx.try_recv() {
-        Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
+        Ok(UserCommand::ExecuteSlashCommand { name, args, .. }) => {
             assert_eq!(name, "resume");
             assert_eq!(args, "session-123");
         }
@@ -1229,7 +1266,7 @@ async fn session_browser_confirm_dispatches_resume_command() {
 
 #[tokio::test]
 async fn queue_input_of_plain_text_still_queues() {
-    let mut state = AppState::new();
+    let mut state = app_state_with_session();
     state.ui.input.textarea.set_text("write a haiku");
     state
         .ui
@@ -1250,7 +1287,7 @@ async fn queue_input_of_plain_text_still_queues() {
         "no optimistic local push — display reconciles from the engine"
     );
     match rx.try_recv() {
-        Ok(UserCommand::QueueCommand { prompt, images }) => {
+        Ok(UserCommand::QueueCommand { prompt, images, .. }) => {
             assert_eq!(prompt, "write a haiku");
             assert!(images.is_empty());
         }
@@ -1260,7 +1297,7 @@ async fn queue_input_of_plain_text_still_queues() {
 
 #[tokio::test]
 async fn submit_input_while_streaming_without_interruptible_tool_queues() {
-    let mut state = AppState::new();
+    let mut state = app_state_with_session();
     state.ui.streaming = Some(crate::state::StreamingState::default());
     // Streaming implies an active turn; the steering gate reads `turn_active`.
     state
@@ -1278,7 +1315,7 @@ async fn submit_input_while_streaming_without_interruptible_tool_queues() {
     handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
 
     match rx.try_recv() {
-        Ok(UserCommand::QueueCommand { prompt, images }) => {
+        Ok(UserCommand::QueueCommand { prompt, images, .. }) => {
             assert_eq!(prompt, "next turn prompt");
             assert!(images.is_empty());
         }
@@ -1292,7 +1329,7 @@ async fn submit_input_while_streaming_without_interruptible_tool_queues() {
 
 #[tokio::test]
 async fn submit_input_while_streaming_with_interruptible_tool_queues_then_interrupts() {
-    let mut state = AppState::new();
+    let mut state = app_state_with_session();
     state.ui.streaming = Some(crate::state::StreamingState::default());
     // Streaming implies an active turn; the steering gate reads `turn_active`.
     state
@@ -1311,7 +1348,7 @@ async fn submit_input_while_streaming_with_interruptible_tool_queues_then_interr
     handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
 
     match rx.try_recv() {
-        Ok(UserCommand::QueueCommand { prompt, images }) => {
+        Ok(UserCommand::QueueCommand { prompt, images, .. }) => {
             assert_eq!(prompt, "follow-up prompt");
             assert!(images.is_empty());
         }
@@ -2127,7 +2164,7 @@ async fn history_recall_rehydrates_paste_pills() {
 
 #[tokio::test]
 async fn esc_on_memory_dialog_records_transcript_result() {
-    let mut state = AppState::new();
+    let mut state = app_state_with_session();
     state
         .ui
         .show_modal(ModalState::MemoryDialog(MemoryDialogState {
@@ -2158,6 +2195,7 @@ async fn esc_on_memory_dialog_records_transcript_result() {
                     is_error,
                     ..
                 },
+            ..
         }) => {
             assert_eq!(name, "memory");
             assert!(!is_error);
@@ -2175,7 +2213,7 @@ async fn esc_on_theme_picker_emits_dismiss_slash_result() {
     // Esc on the theme picker emits "Theme picker dismissed".
     // The theme picker reuses the Settings keybinding context, whose Esc maps to
     // `Deny` (not `Cancel`) — the dismiss feedback must fire on that route too.
-    let mut state = AppState::new();
+    let mut state = app_state_with_session();
     state
         .ui
         .show_modal(ModalState::ThemePicker(crate::state::ThemePickerState {
@@ -2197,6 +2235,7 @@ async fn esc_on_theme_picker_emits_dismiss_slash_result() {
                     is_error,
                     ..
                 },
+            ..
         }) => {
             assert_eq!(name, "theme");
             assert!(!is_error);

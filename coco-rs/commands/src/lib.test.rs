@@ -24,6 +24,7 @@ fn test_base(name: &str, description: &str, aliases: Vec<String>) -> CommandBase
         skill_badge: None,
         safety: CommandSafety::default(),
         supports_non_interactive: false,
+        session_scope: coco_types::SlashCommandSessionScope::PrimaryOnly,
     }
 }
 

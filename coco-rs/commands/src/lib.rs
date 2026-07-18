@@ -268,6 +268,7 @@ pub enum MemoryScope {
 pub type IsEnabledFn = fn() -> bool;
 
 /// A registered command with metadata and an executable handler.
+#[derive(Clone)]
 pub struct RegisteredCommand {
     pub base: CommandBase,
     pub command_type: CommandType,
@@ -453,11 +454,27 @@ impl CommandRegistry {
                     // there, not here.
                     kind: cmd.command_type.tag(),
                     usage_score,
+                    session_scope: cmd.base.session_scope,
                 }
             })
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
         out
+    }
+
+    /// Build an independently bound command registry for a sidechat child.
+    ///
+    /// Only explicitly opted-in commands are copied. The registry's mutable
+    /// per-runtime binding cells are freshly allocated, so building a child
+    /// engine cannot overwrite the parent's session id or Bash handle.
+    pub fn side_chat_projection(&self) -> Self {
+        let mut projected = Self::new();
+        for command in self.commands.values().filter(|command| {
+            command.is_active() && command.base.session_scope.supports_side_chat()
+        }) {
+            projected.register(command.clone());
+        }
+        projected
     }
 
     /// Toggle `is_hidden` on a registered command. No-op when the
@@ -1383,6 +1400,7 @@ pub fn builtin_base(name: &str, description: &str, aliases: &[&str]) -> CommandB
         skill_badge: None,
         safety: CommandSafety::default(),
         supports_non_interactive: false,
+        session_scope: coco_types::SlashCommandSessionScope::PrimaryOnly,
     }
 }
 
@@ -1411,6 +1429,7 @@ pub fn builtin_base_ext(
         skill_badge: None,
         safety,
         supports_non_interactive: false,
+        session_scope: coco_types::SlashCommandSessionScope::PrimaryOnly,
     }
 }
 

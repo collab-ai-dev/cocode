@@ -11783,6 +11783,11 @@
           "description": "Canonical command name without the leading `/`.",
           "type": "string"
         },
+        "session_scope": {
+          "$ref": "#/$defs/SlashCommandSessionScope",
+          "default": "primary_only",
+          "description": "Interactive session scope used by the TUI to project the command list."
+        },
         "source": {
           "anyOf": [
             {
@@ -11805,6 +11810,14 @@
         "name"
       ],
       "type": "object"
+    },
+    "SlashCommandSessionScope": {
+      "description": "Interactive session kinds in which a slash command may run.\n\nCommands default to the primary session. Sidechat support is opt-in so a\nnewly registered builtin, plugin command, or skill cannot accidentally\nmutate the hidden parent or escape the sidechat's restricted surface.",
+      "enum": [
+        "primary_only",
+        "primary_and_side_chat"
+      ],
+      "type": "string"
     },
     "SlashCommandStatusKind": {
       "description": "Categorization of a `SlashCommandStatus` payload. Each variant maps to\na `slash.status.*` key in the TUI locale catalog.\n\nWire format intentionally tagged so SDK clients can render their own\nlocalized strings instead of consuming the TUI's English fallback.",
@@ -15076,6 +15089,9 @@
             "name": {
               "type": "string"
             },
+            "session_id": {
+              "$ref": "#/$defs/SessionId"
+            },
             "text": {
               "type": "string"
             },
@@ -15086,6 +15102,7 @@
           },
           "required": [
             "type",
+            "session_id",
             "name",
             "args",
             "text"
@@ -15098,6 +15115,9 @@
             "body": {
               "type": "string"
             },
+            "session_id": {
+              "$ref": "#/$defs/SessionId"
+            },
             "title": {
               "type": "string"
             },
@@ -15108,6 +15128,7 @@
           },
           "required": [
             "type",
+            "session_id",
             "title",
             "body"
           ],
@@ -15119,6 +15140,9 @@
             "result": {
               "$ref": "#/$defs/ContextUsageResult"
             },
+            "session_id": {
+              "$ref": "#/$defs/SessionId"
+            },
             "type": {
               "const": "open_context_usage",
               "type": "string"
@@ -15126,6 +15150,7 @@
           },
           "required": [
             "type",
+            "session_id",
             "result"
           ],
           "type": "object"
@@ -15143,6 +15168,9 @@
             "name": {
               "type": "string"
             },
+            "session_id": {
+              "$ref": "#/$defs/SessionId"
+            },
             "type": {
               "const": "slash_command_status",
               "type": "string"
@@ -15150,6 +15178,7 @@
           },
           "required": [
             "type",
+            "session_id",
             "name",
             "args",
             "kind"

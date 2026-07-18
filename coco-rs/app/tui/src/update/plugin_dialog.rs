@@ -97,10 +97,15 @@ async fn handle_submit(state: &mut AppState, command_tx: &mpsc::Sender<UserComma
     let Ok(name) = SlashCommandName::new("plugin") else {
         return;
     };
+    let Some(session_id) = state.active_session_id() else {
+        return;
+    };
     let _ = command_tx
         .send(UserCommand::ExecuteSlashCommand {
+            session_id,
             name,
             args: action.plugin_args,
+            images: Vec::new(),
         })
         .await;
 }

@@ -199,7 +199,7 @@ pub use jsonrpc::{
 pub use command::{
     CommandArgumentKind, CommandAvailability, CommandBase, CommandContext, CommandSafety,
     CommandSource, CommandType, CommandTypeTag, LocalCommandData, PromptCommandData,
-    SkillProvenanceBadge, SlashCommandInfo,
+    SkillProvenanceBadge, SlashCommandInfo, SlashCommandSessionScope,
 };
 
 // Hook types

@@ -30,6 +30,7 @@ async fn commands_walks_registry_visible_list() {
             skill_badge: None,
             safety: CommandSafety::AlwaysSafe,
             supports_non_interactive: false,
+            session_scope: coco_types::SlashCommandSessionScope::PrimaryOnly,
         },
         command_type: CommandType::Local(coco_types::LocalCommandData {
             handler: "test".into(),
@@ -55,6 +56,7 @@ async fn commands_walks_registry_visible_list() {
             skill_badge: None,
             safety: CommandSafety::AlwaysSafe,
             supports_non_interactive: false,
+            session_scope: coco_types::SlashCommandSessionScope::PrimaryOnly,
         },
         command_type: CommandType::Local(coco_types::LocalCommandData {
             handler: "test".into(),
@@ -97,6 +99,7 @@ async fn commands_filters_sensitive_commands() {
             skill_badge: None,
             safety: CommandSafety::AlwaysSafe,
             supports_non_interactive: false,
+            session_scope: coco_types::SlashCommandSessionScope::PrimaryOnly,
         },
         command_type: CommandType::Local(coco_types::LocalCommandData {
             handler: "test".into(),
@@ -124,6 +127,7 @@ async fn commands_filters_sensitive_commands() {
             skill_badge: None,
             safety: CommandSafety::AlwaysSafe,
             supports_non_interactive: false,
+            session_scope: coco_types::SlashCommandSessionScope::PrimaryOnly,
         },
         command_type: CommandType::Local(coco_types::LocalCommandData {
             handler: "test".into(),
@@ -167,6 +171,7 @@ async fn missing_argument_hint_becomes_empty_string() {
             skill_badge: None,
             safety: CommandSafety::AlwaysSafe,
             supports_non_interactive: false,
+            session_scope: coco_types::SlashCommandSessionScope::PrimaryOnly,
         },
         command_type: CommandType::Local(coco_types::LocalCommandData {
             handler: "test".into(),

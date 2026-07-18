@@ -423,6 +423,12 @@ impl SessionState {
             thinking_effort: parent.thinking_effort,
             worktree_path: parent.worktree_path.clone(),
             output_style: parent.output_style.clone(),
+            available_commands: parent
+                .available_commands
+                .iter()
+                .filter(|command| command.session_scope.supports_side_chat())
+                .cloned()
+                .collect(),
             ..Self::default()
         }
     }

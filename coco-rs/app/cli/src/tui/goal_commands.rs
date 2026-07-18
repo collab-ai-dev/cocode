@@ -19,12 +19,13 @@ pub(super) async fn run_goal_command(
                 let modal = goal_command::build_goal_status_modal_for_session(session, text).await;
                 let _ = event_tx
                     .send(CoreEvent::Tui(TuiOnlyEvent::OpenGoalStatus {
+                        session_id: session.session_id().clone(),
                         title: modal.title,
                         body: modal.body,
                     }))
                     .await;
             } else {
-                emit_slash_text(event_tx, "goal", &args, &text).await;
+                emit_slash_text(event_tx, session.session_id(), "goal", &args, &text).await;
                 // Pause/resume change goal state with no following turn to
                 // re-emit; refresh the footer badge from the current snapshot.
                 emit_active_goal_snapshot(session, event_tx).await;
@@ -43,7 +44,7 @@ pub(super) async fn run_goal_command(
         } => {
             append_goal_status(session, event_tx, status).await;
             emit_active_goal_snapshot(session, event_tx).await;
-            emit_slash_text(event_tx, "goal", &args, &text).await;
+            emit_slash_text(event_tx, session.session_id(), "goal", &args, &text).await;
             SlashFollowup::RunEngine {
                 content: kickoff,
                 metadata: Some(coco_agent_host::session_messages::slash_command_metadata(

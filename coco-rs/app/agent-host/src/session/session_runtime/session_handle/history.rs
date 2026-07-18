@@ -49,7 +49,8 @@ impl SessionHandle {
         let context =
             coco_context::side_chat::capture_bounded_context(&messages, max_inherited_tokens)?;
         let permissions = self.runtime.app_state().read().await.permissions.clone();
-        let command_registry = self.current_command_registry().await;
+        let command_registry =
+            Arc::new(self.current_command_registry().await.side_chat_projection());
         Ok(super::SideChatSeed {
             context,
             runtime_config: Arc::clone(self.runtime_config()),

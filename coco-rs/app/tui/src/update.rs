@@ -1005,11 +1005,15 @@ pub async fn handle_command(
             // the modal with fresh data. Reading `state.session.saved_sessions`
             // here showed an empty browser on a fresh start (its only writer is
             // that event).
-            if let Ok(name) = crate::state::SlashCommandName::new("resume") {
+            if let Ok(name) = crate::state::SlashCommandName::new("resume")
+                && let Some(session_id) = state.active_session_id()
+            {
                 let _ = command_tx
                     .send(UserCommand::ExecuteSlashCommand {
+                        session_id,
                         name,
                         args: String::new(),
+                        images: Vec::new(),
                     })
                     .await;
             }
@@ -1109,9 +1113,15 @@ pub async fn handle_command(
             true
         }
         TuiCommand::ExecuteSkill(name) => {
-            let _ = command_tx
-                .send(UserCommand::ExecuteSkill { name, args: None })
-                .await;
+            if let Some(session_id) = state.active_session_id() {
+                let _ = command_tx
+                    .send(UserCommand::ExecuteSkill {
+                        session_id,
+                        name,
+                        args: None,
+                    })
+                    .await;
+            }
             true
         }
         TuiCommand::ExecuteSlashCommand(name) => {
@@ -1121,12 +1131,16 @@ pub async fn handle_command(
                 shutdown_via_slash_command(state, command_tx).await;
                 return true;
             }
-            let _ = command_tx
-                .send(UserCommand::ExecuteSlashCommand {
-                    name,
-                    args: String::new(),
-                })
-                .await;
+            if let Some(session_id) = state.active_session_id() {
+                let _ = command_tx
+                    .send(UserCommand::ExecuteSlashCommand {
+                        session_id,
+                        name,
+                        args: String::new(),
+                        images: Vec::new(),
+                    })
+                    .await;
+            }
             true
         }
 
@@ -1550,9 +1564,13 @@ async fn queue_current_input(state: &mut AppState, command_tx: &mpsc::Sender<Use
     if text.is_empty() {
         return true;
     }
+    let Some(session_id) = state.active_session_id() else {
+        return false;
+    };
     let resolved = state.ui.paste_manager.resolve_structured(&text);
     let _ = command_tx
         .send(UserCommand::QueueCommand {
+            session_id,
             prompt: resolved.text,
             images: resolved.images,
         })

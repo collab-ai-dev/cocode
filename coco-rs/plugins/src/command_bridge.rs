@@ -287,6 +287,7 @@ fn build_plugin_command(input: PluginCommandBuild<'_>) -> PluginCommand {
             skill_badge: None,
             safety: CommandSafety::default(),
             supports_non_interactive: false,
+            session_scope: coco_types::SlashCommandSessionScope::PrimaryOnly,
         },
         command_type: CommandType::Prompt(PromptCommandData {
             progress_message: format!("Running {}...", input.namespaced_name),

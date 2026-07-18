@@ -757,6 +757,9 @@
         "name": {
           "type": "string"
         },
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        },
         "text": {
           "type": "string"
         },
@@ -767,6 +770,7 @@
       },
       "required": [
         "type",
+        "session_id",
         "name",
         "args",
         "text"
@@ -779,6 +783,9 @@
         "body": {
           "type": "string"
         },
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        },
         "title": {
           "type": "string"
         },
@@ -789,6 +796,7 @@
       },
       "required": [
         "type",
+        "session_id",
         "title",
         "body"
       ]
@@ -800,6 +808,9 @@
         "result": {
           "$ref": "#/$defs/ContextUsageResult"
         },
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        },
         "type": {
           "type": "string",
           "const": "open_context_usage"
@@ -807,6 +818,7 @@
       },
       "required": [
         "type",
+        "session_id",
         "result"
       ]
     },
@@ -824,6 +836,9 @@
         "name": {
           "type": "string"
         },
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        },
         "type": {
           "type": "string",
           "const": "slash_command_status"
@@ -831,6 +846,7 @@
       },
       "required": [
         "type",
+        "session_id",
         "name",
         "args",
         "kind"
@@ -5864,6 +5880,11 @@
           "description": "Canonical command name without the leading `/`.",
           "type": "string"
         },
+        "session_scope": {
+          "description": "Interactive session scope used by the TUI to project the command list.",
+          "$ref": "#/$defs/SlashCommandSessionScope",
+          "default": "primary_only"
+        },
         "source": {
           "description": "Where this command came from. Drives empty-query source grouping\nin the `/` popup and the `(user)` / `(project)` / `(plugin)`\nsuffix on descriptions (`formatDescriptionWithSource`, empty-input\ngrouping in `generateCommandSuggestions`). Plugin / MCP attribution\nrides on the `Plugin { name }` / `Mcp { server_name }` variants.",
           "anyOf": [
@@ -5884,6 +5905,14 @@
       },
       "required": [
         "name"
+      ]
+    },
+    "SlashCommandSessionScope": {
+      "description": "Interactive session kinds in which a slash command may run.\n\nCommands default to the primary session. Sidechat support is opt-in so a\nnewly registered builtin, plugin command, or skill cannot accidentally\nmutate the hidden parent or escape the sidechat's restricted surface.",
+      "type": "string",
+      "enum": [
+        "primary_only",
+        "primary_and_side_chat"
       ]
     },
     "SlashCommandStatusKind": {

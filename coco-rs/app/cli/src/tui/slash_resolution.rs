@@ -83,9 +83,10 @@ pub(super) enum SlashOutcome {
     /// Open a concrete session plan file through the same external
     /// editor terminal handoff used by prompt and memory editing.
     TriggerOpenPlanEditor { path: std::path::PathBuf },
-    /// Open, continue, or close a local ephemeral sidechat child.
+    /// Open a local ephemeral sidechat child, optionally with a first prompt.
     TriggerBtw {
         request: coco_commands::handlers::btw::BtwRequest,
+        images: Vec<coco_types::QueuedCommandEditImage>,
     },
     /// Rebuild the slash-command registry from disk and atomically
     /// swap. Triggered by `/reload-plugins`.
@@ -102,6 +103,9 @@ pub(super) enum SlashOutcome {
 pub(super) fn slash_unavailable_in_session_message(name: &str) -> String {
     format!("/{name} isn't available in this session.")
 }
+
+pub(super) const SIDECHAT_SLASH_POLICY_MESSAGE: &str =
+    "Sidechat supports only /compact and /context. Press Ctrl+C to return to main.";
 
 /// Split `/<name> <args>` into ` (name, args)`. Returns `None` when
 /// `text` does not start with `/` or has no name. Whitespace-trimmed.
@@ -363,7 +367,7 @@ pub(super) async fn handle_slash_outcome(
             .await;
             SlashFollowup::Done
         }
-        SlashOutcome::TriggerBtw { request } => {
+        SlashOutcome::TriggerBtw { request, images } => {
             run_side_chat(
                 session,
                 event_tx,
@@ -371,16 +375,17 @@ pub(super) async fn handle_slash_outcome(
                 active_turn,
                 control_context.turn_done_tx,
                 request,
+                &images,
             )
             .await;
             SlashFollowup::Done
         }
         SlashOutcome::ShowCost => {
-            run_show_cost(event_tx, local_app_server_bridge).await;
+            run_show_cost(session, event_tx, local_app_server_bridge).await;
             SlashFollowup::Done
         }
         SlashOutcome::ShowStatus => {
-            run_show_status(event_tx, local_app_server_bridge).await;
+            run_show_status(session, event_tx, local_app_server_bridge).await;
             SlashFollowup::Done
         }
         SlashOutcome::TriggerGoal { request } => run_goal_command(session, event_tx, request).await,
@@ -393,7 +398,13 @@ pub(super) async fn handle_slash_outcome(
             SlashFollowup::Done
         }
         SlashOutcome::TriggerAddDir { path } => {
-            let _ = apply_session_add_directory(&path, event_tx, local_app_server_bridge).await;
+            let _ = apply_session_add_directory(
+                &path,
+                session.session_id(),
+                event_tx,
+                local_app_server_bridge,
+            )
+            .await;
             SlashFollowup::Done
         }
         SlashOutcome::TriggerOpenPlanEditor { path } => {
@@ -410,7 +421,7 @@ pub(super) async fn handle_slash_outcome(
             SlashFollowup::Done
         }
         SlashOutcome::TriggerReloadHooks => {
-            run_reload_hooks(event_tx, local_app_server_bridge).await;
+            run_reload_hooks(session, event_tx, local_app_server_bridge).await;
             SlashFollowup::Done
         }
     }
@@ -485,6 +496,14 @@ pub(super) async fn drain_queued_slash_commands(
         let Some((name, args)) = parse_slash_command(&cmd.prompt) else {
             continue;
         };
+        let images: Vec<coco_types::QueuedCommandEditImage> = cmd
+            .images
+            .into_iter()
+            .map(|image| coco_types::QueuedCommandEditImage {
+                media_type: image.media_type,
+                data_base64: image.data_base64,
+            })
+            .collect();
         let outcome = dispatch_slash_command(
             name,
             args,
@@ -493,12 +512,20 @@ pub(super) async fn drain_queued_slash_commands(
             event_tx,
             local_app_server_bridge,
             runtime_reload_subscriptions,
+            &images,
         )
         .await;
         match outcome {
             SlashOutcome::Handled => {}
             SlashOutcome::NotFound => {
-                emit_slash_status(event_tx, name, args, SlashCommandStatusKind::NoHandler).await;
+                emit_slash_status(
+                    event_tx,
+                    session.session_id(),
+                    name,
+                    args,
+                    SlashCommandStatusKind::NoHandler,
+                )
+                .await;
             }
             SlashOutcome::RunEngine {
                 content,
@@ -576,7 +603,7 @@ pub(super) async fn drain_queued_slash_commands(
                 )
                 .await;
             }
-            SlashOutcome::TriggerBtw { request } => {
+            SlashOutcome::TriggerBtw { request, images } => {
                 run_side_chat(
                     session,
                     event_tx,
@@ -584,14 +611,15 @@ pub(super) async fn drain_queued_slash_commands(
                     active_turn,
                     turn_done_tx,
                     request,
+                    &images,
                 )
                 .await;
             }
             SlashOutcome::ShowCost => {
-                run_show_cost(event_tx, local_app_server_bridge).await;
+                run_show_cost(session, event_tx, local_app_server_bridge).await;
             }
             SlashOutcome::ShowStatus => {
-                run_show_status(event_tx, local_app_server_bridge).await;
+                run_show_status(session, event_tx, local_app_server_bridge).await;
             }
             SlashOutcome::TriggerGoal { request } => {
                 if let SlashFollowup::RunEngine {
@@ -628,7 +656,13 @@ pub(super) async fn drain_queued_slash_commands(
                 run_session_tag(session, event_tx, local_app_server_bridge, &tag).await;
             }
             SlashOutcome::TriggerAddDir { path } => {
-                let _ = apply_session_add_directory(&path, event_tx, local_app_server_bridge).await;
+                let _ = apply_session_add_directory(
+                    &path,
+                    session.session_id(),
+                    event_tx,
+                    local_app_server_bridge,
+                )
+                .await;
             }
             SlashOutcome::TriggerOpenPlanEditor { path } => {
                 prepare_external_editor_request(
@@ -642,7 +676,7 @@ pub(super) async fn drain_queued_slash_commands(
                 run_reload_plugins(session, event_tx, local_app_server_bridge).await;
             }
             SlashOutcome::TriggerReloadHooks => {
-                run_reload_hooks(event_tx, local_app_server_bridge).await;
+                run_reload_hooks(session, event_tx, local_app_server_bridge).await;
             }
         }
     }

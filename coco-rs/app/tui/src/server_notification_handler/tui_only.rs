@@ -455,7 +455,12 @@ pub(super) fn handle(
         }
 
         // === Slash-command result (tool-style `❯ /cmd` + `⎿ output`) ===
-        TuiOnlyEvent::SlashCommandResult { name, args, text } => {
+        TuiOnlyEvent::SlashCommandResult {
+            session_id,
+            name,
+            args,
+            text,
+        } => {
             // Render `❯ /cmd args` + `⎿ output` (tool-style) but keep it
             // `System` (transcript-only): these are user↔tool interactions
             // (/help, /model, /login, …), NOT conversation — the LLM must
@@ -471,8 +476,8 @@ pub(super) fn handle(
                 text,
                 is_error: false,
             };
-            if let Err(e) =
-                command_tx.try_send(crate::command::UserCommand::PushSlashResult { entry })
+            if let Err(e) = command_tx
+                .try_send(crate::command::UserCommand::PushSlashResult { session_id, entry })
             {
                 tracing::warn!(
                     target: "coco_tui::system_push",
@@ -483,7 +488,11 @@ pub(super) fn handle(
             }
             true
         }
-        TuiOnlyEvent::OpenGoalStatus { title, body } => {
+        TuiOnlyEvent::OpenGoalStatus {
+            session_id: _,
+            title,
+            body,
+        } => {
             state
                 .ui
                 .show_modal(ModalState::GoalStatus(crate::state::GoalStatusState {
@@ -493,7 +502,7 @@ pub(super) fn handle(
             true
         }
         // === `/context` full-color usage snapshot (inline in transcript) ===
-        TuiOnlyEvent::OpenContextUsage { result } => {
+        TuiOnlyEvent::OpenContextUsage { session_id, result } => {
             // `/context` prints `<ContextVisualization>` into the scrollback,
             // not a modal. Build the `❯ /context` echo + the typed system
             // snapshot and round-trip them through engine history so transcript
@@ -502,8 +511,8 @@ pub(super) fn handle(
                 args: String::new(),
                 result: Box::new(result),
             };
-            if let Err(e) =
-                command_tx.try_send(crate::command::UserCommand::PushSlashResult { entry })
+            if let Err(e) = command_tx
+                .try_send(crate::command::UserCommand::PushSlashResult { session_id, entry })
             {
                 tracing::warn!(
                     target: "coco_tui::system_push",
@@ -860,7 +869,12 @@ pub(super) fn handle(
             ));
             true
         }
-        TuiOnlyEvent::SlashCommandStatus { name, args, kind } => {
+        TuiOnlyEvent::SlashCommandStatus {
+            session_id,
+            name,
+            args,
+            kind,
+        } => {
             use coco_types::SlashCommandStatusKind;
             // Render dispatcher statuses inline tool-style (`❯ /cmd args` +
             // `⎿ …`) so they match the success path and a real tool result,
@@ -907,8 +921,8 @@ pub(super) fn handle(
                 text,
                 is_error,
             };
-            if let Err(e) =
-                command_tx.try_send(crate::command::UserCommand::PushSlashResult { entry })
+            if let Err(e) = command_tx
+                .try_send(crate::command::UserCommand::PushSlashResult { session_id, entry })
             {
                 tracing::warn!(
                     target: "coco_tui::system_push",

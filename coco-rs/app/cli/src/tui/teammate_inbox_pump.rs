@@ -103,7 +103,14 @@ pub async fn spawn_for_current_teammate(
         ))
         .await;
     let (turn_done_tx, turn_done_rx) = mpsc::channel::<String>(16);
-    spawn(identity, command_tx, turn_done_rx, cancel, live_rules);
+    spawn(
+        identity,
+        session.session_id().clone(),
+        command_tx,
+        turn_done_rx,
+        cancel,
+        live_rules,
+    );
     Some(turn_done_tx)
 }
 
@@ -122,6 +129,7 @@ pub async fn spawn_for_current_teammate(
 ///   `TeamPermissionUpdate` arrives.
 pub fn spawn(
     identity: TeammateIdentity,
+    session_id: coco_types::SessionId,
     command_tx: mpsc::Sender<UserCommand>,
     turn_done_rx: mpsc::Receiver<String>,
     cancel: CancellationToken,
@@ -130,6 +138,7 @@ pub fn spawn(
     tokio::spawn(async move {
         run(
             identity,
+            session_id,
             command_tx,
             turn_done_rx,
             cancel,
@@ -141,6 +150,7 @@ pub fn spawn(
 
 async fn run(
     identity: TeammateIdentity,
+    session_id: coco_types::SessionId,
     command_tx: mpsc::Sender<UserCommand>,
     mut turn_done_rx: mpsc::Receiver<String>,
     cancel: CancellationToken,
@@ -166,9 +176,15 @@ async fn run(
                 }
             }
             Some(framed) => {
-                if inject_and_wait(&command_tx, &mut turn_done_rx, &cancel, framed)
-                    .await
-                    .is_none()
+                if inject_and_wait(
+                    &command_tx,
+                    &mut turn_done_rx,
+                    &cancel,
+                    session_id.clone(),
+                    framed,
+                )
+                .await
+                .is_none()
                 {
                     // Driver gone or cancelled — drop command_tx and exit.
                     return;
@@ -282,10 +298,12 @@ async fn inject_and_wait(
     command_tx: &mpsc::Sender<UserCommand>,
     turn_done_rx: &mut mpsc::Receiver<String>,
     cancel: &CancellationToken,
+    session_id: coco_types::SessionId,
     framed: String,
 ) -> Option<()> {
     let id = uuid::Uuid::new_v4().to_string();
     let cmd = UserCommand::SubmitInput {
+        session_id,
         user_message_id: id.clone(),
         content: framed,
         display_text: None,

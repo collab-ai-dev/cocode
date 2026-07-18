@@ -17,8 +17,10 @@ pub(super) async fn dispatch_provider_login(
 ) -> SlashOutcome {
     let provider = slash_provider_arg(args);
     let tx = event_tx.clone();
+    let session_id = session.session_id().clone();
     let url_sink: std::sync::Arc<dyn Fn(String) + Send + Sync> = std::sync::Arc::new(move |url| {
         let _ = tx.try_send(CoreEvent::Tui(TuiOnlyEvent::SlashCommandResult {
+            session_id: session_id.clone(),
             name: "login".to_string(),
             args: String::new(),
             text: format!("Opening your browser to sign in. If it doesn't open, visit:\n{url}"),
@@ -27,7 +29,7 @@ pub(super) async fn dispatch_provider_login(
     match coco_agent_host::provider_login::run_login_for_session(session, provider, url_sink).await
     {
         Ok(msg) => {
-            emit_slash_text(event_tx, "login", args, &msg).await;
+            emit_slash_text(event_tx, session.session_id(), "login", args, &msg).await;
             emit_provider_statuses_refresh(session, event_tx).await;
             // Best-effort: discover the provider's live model list so
             // subscription-only models surface in `/model` without a restart.
@@ -44,6 +46,7 @@ pub(super) async fn dispatch_provider_login(
         Err(e) => {
             emit_slash_status(
                 event_tx,
+                session.session_id(),
                 "login",
                 args,
                 SlashCommandStatusKind::Failed {
@@ -66,12 +69,13 @@ pub(super) async fn dispatch_provider_logout(
     let provider = slash_provider_arg(args);
     match coco_agent_host::provider_login::run_logout_session(provider).await {
         Ok(msg) => {
-            emit_slash_text(event_tx, "logout", args, &msg).await;
+            emit_slash_text(event_tx, session.session_id(), "logout", args, &msg).await;
             emit_provider_statuses_refresh(session, event_tx).await;
         }
         Err(e) => {
             emit_slash_status(
                 event_tx,
+                session.session_id(),
                 "logout",
                 args,
                 SlashCommandStatusKind::Failed {
@@ -89,12 +93,14 @@ pub(super) async fn dispatch_provider_logout(
 /// empty Prompt body, dialog wiring pending).
 pub(super) async fn emit_slash_status(
     event_tx: &mpsc::Sender<CoreEvent>,
+    session_id: &coco_types::SessionId,
     name: &str,
     args: &str,
     kind: SlashCommandStatusKind,
 ) {
     let _ = event_tx
         .send(CoreEvent::Tui(TuiOnlyEvent::SlashCommandStatus {
+            session_id: session_id.clone(),
             name: name.to_string(),
             args: args.to_string(),
             kind,

@@ -152,6 +152,7 @@ pub(super) async fn dispatch_resume(
             Err(err) => {
                 emit_slash_text(
                     event_tx,
+                    session.session_id(),
                     "resume",
                     args,
                     &format!("Failed to list sessions: {err}"),
@@ -187,6 +188,7 @@ pub(super) async fn dispatch_resume(
                 event_tx,
                 local_app_server_bridge,
                 runtime_reload_subscriptions,
+                session.session_id(),
             )
             .await
             {
@@ -198,12 +200,13 @@ pub(super) async fn dispatch_resume(
             if let Some(warning) =
                 runtime.reconcile_session_mode_on_resume(plan.conversation.mode.as_deref())
             {
-                emit_slash_text(event_tx, "resume", args, warning).await;
+                emit_slash_text(event_tx, &plan.session_id, "resume", args, warning).await;
             }
         }
         Err(err) => {
             emit_slash_text(
                 event_tx,
+                session.session_id(),
                 "resume",
                 args,
                 &format!("Failed to resume session: {err}"),
@@ -224,6 +227,7 @@ pub(super) async fn switch_to_resume_plan_through_app_server(
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
     runtime_reload_subscriptions: &Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
+    output_session_id: &coco_types::SessionId,
 ) -> bool {
     match apply_resume_plan_through_app_server(
         plan,
@@ -238,6 +242,7 @@ pub(super) async fn switch_to_resume_plan_through_app_server(
         Err(err) => {
             emit_slash_text(
                 event_tx,
+                output_session_id,
                 command_name,
                 args,
                 &format!("Failed to resume session: {err}"),
@@ -317,6 +322,7 @@ pub(super) async fn dispatch_branch(
                 event_tx,
                 local_app_server_bridge,
                 runtime_reload_subscriptions,
+                session.session_id(),
             )
             .await
             {
@@ -328,7 +334,7 @@ pub(super) async fn dispatch_branch(
             if let Some(warning) =
                 runtime.reconcile_session_mode_on_resume(plan.conversation.mode.as_deref())
             {
-                emit_slash_text(event_tx, "branch", args, warning).await;
+                emit_slash_text(event_tx, &plan.session_id, "branch", args, warning).await;
             }
             // The fork is now the live session, so session/rename titles it.
             if let Some(base) = base_title {
@@ -338,7 +344,9 @@ pub(super) async fn dispatch_branch(
                     .session_rename(
                         local_app_server_bridge.handler(),
                         coco_types::SessionRenameParams {
-                            target: session_target(local_app_server_bridge),
+                            target: coco_types::SessionTarget {
+                                session_id: plan.session_id.clone(),
+                            },
                             name: title,
                         },
                     )
@@ -349,6 +357,7 @@ pub(super) async fn dispatch_branch(
             }
             emit_slash_text(
                 event_tx,
+                &plan.session_id,
                 "branch",
                 args,
                 &format!(
@@ -359,7 +368,14 @@ pub(super) async fn dispatch_branch(
             .await;
         }
         Err(err) => {
-            emit_slash_text(event_tx, "branch", "", &format!("Failed to branch: {err}")).await;
+            emit_slash_text(
+                event_tx,
+                session.session_id(),
+                "branch",
+                "",
+                &format!("Failed to branch: {err}"),
+            )
+            .await;
         }
     }
     SlashOutcome::Handled
@@ -407,7 +423,4 @@ use coco_types::TuiOnlyEvent;
 use tokio::sync::{Mutex, mpsc};
 use tracing::warn;
 
-use super::{
-    SharedSessionHandle, SlashOutcome, TuiRuntimeReloadSubscriptions, emit_slash_text,
-    session_target,
-};
+use super::{SharedSessionHandle, SlashOutcome, TuiRuntimeReloadSubscriptions, emit_slash_text};
