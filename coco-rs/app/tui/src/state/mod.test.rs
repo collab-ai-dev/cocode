@@ -10,14 +10,31 @@ fn side_chat_view_swap_stashes_and_restores_primary() {
     assert!(!state.is_viewing_side_chat());
     state.session.session_id = Some(parent_id.as_str().to_string());
     state.session.model = "primary-model".to_string();
+    state.session.provider = "primary-provider".to_string();
+    state.session.permission_mode = coco_types::PermissionMode::Auto;
+    state.session.thinking_effort = coco_types::ReasoningEffort::High;
+    state.session.working_dir = Some("/workspace".to_string());
+    state.session.token_usage.input_tokens = 100;
     state.ui.streaming = Some(StreamingState::new());
     state.ui.streaming.as_mut().unwrap().content = "primary stream".to_string();
     state.ui.scroll_offset = 7;
 
-    // Entering swaps the active view to a fresh child and stashes the primary.
+    // Entering swaps to a fresh child conversation while inheriting the
+    // parent's model/mode chrome. Child usage remains independent.
     assert!(state.enter_side_chat(parent_id.clone(), child_id.clone()));
     assert!(state.is_viewing_side_chat());
-    assert_ne!(state.session.model, "primary-model");
+    assert_eq!(state.session.model, "primary-model");
+    assert_eq!(state.session.provider, "primary-provider");
+    assert_eq!(
+        state.session.permission_mode,
+        coco_types::PermissionMode::Auto
+    );
+    assert_eq!(
+        state.session.thinking_effort,
+        coco_types::ReasoningEffort::High
+    );
+    assert_eq!(state.session.working_dir.as_deref(), Some("/workspace"));
+    assert_eq!(state.session.token_usage.input_tokens, 0);
     assert_eq!(state.session.session_id.as_deref(), Some(child_id.as_str()));
     assert!(state.ui.streaming.is_none());
     assert_eq!(state.ui.scroll_offset, 0);

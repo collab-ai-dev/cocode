@@ -17,10 +17,31 @@ impl SessionRuntime {
         self.turn_resources.usage_accounting()
     }
     pub async fn install_side_query_event_tx(&self, event_tx: mpsc::Sender<coco_query::CoreEvent>) {
+        let (snapshot_tx, mut snapshot_rx) = mpsc::channel(16);
         self.turn_resources
             .usage_accounting()
-            .install_event_tx(event_tx)
+            .install_snapshot_tx(snapshot_tx)
             .await;
+        std::mem::drop(tokio::spawn(async move {
+            while let Some(snapshot) = snapshot_rx.recv().await {
+                let session_id = snapshot.session_id.clone();
+                let event = coco_types::SessionScopedEvent::Protocol(Box::new(
+                    coco_types::ServerNotification::SessionUsageUpdated(Box::new(snapshot)),
+                ));
+                if event_tx
+                    .send(coco_types::CoreEvent::Tui(
+                        coco_types::TuiOnlyEvent::SessionScoped {
+                            session_id,
+                            event: Box::new(event),
+                        },
+                    ))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }));
     }
     /// Generate the on-demand LLM risk explanation for a permission prompt.
     /// Runs the explainer via the session `SideQuery` handle, gated on

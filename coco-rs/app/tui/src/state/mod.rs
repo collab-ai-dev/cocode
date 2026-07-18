@@ -290,12 +290,13 @@ impl AppState {
         {
             return false;
         }
+        let side_chat = SessionState::side_chat_projection(&self.session, &child_id);
         let primary = SessionProjection {
             session: std::mem::take(&mut self.session),
             ui: self.ui.take_session_projection(),
         };
         self.inactive_sessions.insert(parent_id.clone(), primary);
-        self.session.session_id = Some(child_id.as_str().to_string());
+        self.session = side_chat;
         self.view_mode = ViewMode::SideChat {
             parent_id,
             child_id,

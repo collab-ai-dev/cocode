@@ -41,6 +41,17 @@ impl SessionHandle {
         self.runtime.app_state().write().await.permissions = permissions;
     }
 
+    pub(crate) async fn install_usage_mirror(
+        &self,
+        accounting: coco_query::usage_accounting::UsageAccounting,
+        source: coco_types::UsageSource,
+    ) {
+        self.runtime
+            .usage_accounting()
+            .install_mirror(accounting, source)
+            .await;
+    }
+
     pub fn original_cwd(&self) -> &std::path::PathBuf {
         self.runtime.original_cwd()
     }

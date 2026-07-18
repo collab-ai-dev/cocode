@@ -60,6 +60,7 @@ impl SessionHandle {
             command_registry,
             skill_manager: self.skill_manager(),
             project_services: Arc::clone(self.project_services()),
+            parent_usage_accounting: self.runtime.usage_accounting(),
         })
     }
 

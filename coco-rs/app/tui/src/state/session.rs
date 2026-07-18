@@ -400,6 +400,33 @@ pub struct SessionState {
 }
 
 impl SessionState {
+    /// Build a fresh child projection with the parent's session configuration
+    /// needed by the shared header and permission/model status chrome.
+    /// Conversation content and usage deliberately start empty.
+    pub(crate) fn side_chat_projection(parent: &Self, child_id: &coco_types::SessionId) -> Self {
+        Self {
+            model: parent.model.clone(),
+            provider: parent.provider.clone(),
+            model_catalog: parent.model_catalog.clone(),
+            provider_statuses: parent.provider_statuses.clone(),
+            model_by_role: parent.model_by_role.clone(),
+            permission_mode: parent.permission_mode,
+            bypass_permissions_available: parent.bypass_permissions_available,
+            auto_mode_available: parent.auto_mode_available,
+            plan_mode_available: parent.plan_mode_available,
+            session_id: Some(child_id.as_str().to_string()),
+            pid: parent.pid,
+            working_dir: parent.working_dir.clone(),
+            fast_mode: parent.fast_mode,
+            fallback_model: parent.fallback_model.clone(),
+            git_branch: parent.git_branch.clone(),
+            thinking_effort: parent.thinking_effort,
+            worktree_path: parent.worktree_path.clone(),
+            output_style: parent.output_style.clone(),
+            ..Self::default()
+        }
+    }
+
     /// Whether the agent is busy.
     pub fn is_busy(&self) -> bool {
         self.busy

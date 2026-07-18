@@ -20,8 +20,15 @@ pub struct UsageAccounting {
     write_lock: Arc<Mutex<()>>,
     transcript_store: Option<Arc<dyn coco_session::SessionStore>>,
     persist_session: bool,
-    event_tx: Arc<RwLock<Option<mpsc::Sender<CoreEvent>>>>,
+    snapshot_tx: Arc<RwLock<Option<mpsc::Sender<SessionUsageSnapshot>>>>,
     base_attribution: UsageAttribution,
+    mirror: Arc<RwLock<Option<UsageMirror>>>,
+}
+
+#[derive(Clone)]
+struct UsageMirror {
+    accounting: UsageAccounting,
+    source: UsageSource,
 }
 
 pub struct UsageRecord<'a> {
@@ -64,8 +71,9 @@ impl UsageAccounting {
             write_lock,
             transcript_store: None,
             persist_session: false,
-            event_tx: Arc::new(RwLock::new(None)),
+            snapshot_tx: Arc::new(RwLock::new(None)),
             base_attribution,
+            mirror: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -89,8 +97,20 @@ impl UsageAccounting {
         self
     }
 
-    pub async fn install_event_tx(&self, event_tx: mpsc::Sender<CoreEvent>) {
-        *self.event_tx.write().await = Some(event_tx);
+    /// Install the typed sink for usage produced outside a turn surface.
+    ///
+    /// The host owns conversion into transport- or UI-specific envelopes so
+    /// query accounting never emits an unscoped event into a multi-session UI.
+    pub async fn install_snapshot_tx(&self, snapshot_tx: mpsc::Sender<SessionUsageSnapshot>) {
+        *self.snapshot_tx.write().await = Some(snapshot_tx);
+    }
+
+    /// Mirror future records into another session's authoritative accounting.
+    ///
+    /// Sidechat uses this to keep its own ephemeral totals for the active child
+    /// view while charging the same calls to the durable parent session.
+    pub async fn install_mirror(&self, accounting: UsageAccounting, source: UsageSource) {
+        *self.mirror.write().await = Some(UsageMirror { accounting, source });
     }
 
     pub fn with_base_attribution(mut self, attribution: UsageAttribution) -> Self {
@@ -216,6 +236,33 @@ impl UsageAccounting {
     }
 
     pub async fn record_usage(&self, record: UsageRecord<'_>) {
+        let mirror = self.mirror.read().await.clone();
+        let mirrored_usage = record.usage;
+        let mirrored_duration_ms = record.duration_ms;
+        let mirrored_provider = record.provider;
+        let mirrored_model_id = record.model_id;
+        let mirrored_auto_compact_threshold = record.auto_compact_threshold;
+        // The parent is authoritative and durable. Charge it before touching
+        // the ephemeral child so cancellation can never leave provider spend
+        // visible only in a child ledger that is about to be discarded.
+        if let Some(mirror) = mirror {
+            mirror
+                .accounting
+                .record_usage_locally(UsageRecord {
+                    provider: mirrored_provider,
+                    model_id: mirrored_model_id,
+                    usage: mirrored_usage,
+                    duration_ms: mirrored_duration_ms,
+                    source: mirror.source,
+                    auto_compact_threshold: mirrored_auto_compact_threshold,
+                    event_tx: None,
+                })
+                .await;
+        }
+        self.record_usage_locally(record).await;
+    }
+
+    async fn record_usage_locally(&self, record: UsageRecord<'_>) {
         let UsageRecord {
             provider,
             model_id,
@@ -283,12 +330,8 @@ impl UsageAccounting {
             return;
         }
 
-        if let Some(tx) = self.event_tx.read().await.clone() {
-            let _ = tx
-                .send(CoreEvent::Protocol(
-                    ServerNotification::SessionUsageUpdated(Box::new(usage_snapshot)),
-                ))
-                .await;
+        if let Some(tx) = self.snapshot_tx.read().await.clone() {
+            let _ = tx.send(usage_snapshot).await;
         }
     }
 

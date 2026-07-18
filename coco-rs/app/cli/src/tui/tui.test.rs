@@ -493,6 +493,7 @@ async fn build_runtime_with_profile(
     settings_overrides: Settings,
     execution_profile: crate::session_runtime::SessionExecutionProfile,
 ) -> crate::session_runtime::SessionHandle {
+    let session_backend = settings_overrides.session.backend;
     let settings = SettingsWithSource {
         merged: Settings {
             models: coco_config::ModelSelectionSettings {
@@ -505,6 +506,7 @@ async fn build_runtime_with_profile(
             available_models: settings_overrides.available_models,
             file_checkpointing_enabled: settings_overrides.file_checkpointing_enabled,
             respond_to_bash_commands: settings_overrides.respond_to_bash_commands,
+            session: settings_overrides.session,
             ..Default::default()
         },
         per_source: std::collections::HashMap::new(),
@@ -536,7 +538,8 @@ async fn build_runtime_with_profile(
             QueuedTurnMockModel,
         ))),
         tools: Arc::new(coco_tool_runtime::ToolRegistry::new()),
-        session_manager: Arc::new(coco_session::SessionManager::new(
+        session_manager: Arc::new(coco_session::SessionManager::with_backend(
+            session_backend,
             home.path().join("sessions"),
         )),
         fast_model_spec: None,
@@ -1116,6 +1119,355 @@ async fn side_chat_runtime_installs_read_only_tool_boundary() {
         "a primary runtime installs no can_use_tool gate"
     );
     assert!(!primary_cfg.require_can_use_tool);
+}
+
+#[tokio::test]
+async fn side_chat_runtime_accounts_usage_without_persisting_transcript() {
+    let home = TempDir::new().unwrap();
+    let runtime = build_runtime_with_profile(
+        &home,
+        coco_commands::CommandRegistry::new(),
+        Settings::default(),
+        crate::session_runtime::SessionExecutionProfile::SideChatReadOnly,
+    )
+    .await;
+    let session_id = runtime.current_typed_session_id().await;
+    let mut bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(Arc::new(
+        coco_agent_host::app_server_host::AppServerHostState::default(),
+    ));
+    install_test_session_runtime(&mut bridge, &runtime).await;
+
+    bridge
+        .start_turn_and_wait_for_end(
+            session_id.clone(),
+            coco_types::TurnStartParams {
+                target: coco_types::InteractiveTarget {
+                    session_id,
+                    surface_id: coco_types::SurfaceId::generate(),
+                },
+                prompt: "account this ephemeral sidechat turn".into(),
+                history_override: Vec::new(),
+                images: Vec::new(),
+                slash_metadata: None,
+                model_selection: None,
+                permission_mode: None,
+                thinking_level: None,
+                goal_continuation: false,
+            },
+        )
+        .await
+        .expect("sidechat turn completes");
+
+    let usage = runtime.session_usage_snapshot().await;
+    assert_eq!(usage.totals.input_tokens, 1);
+    assert_eq!(usage.totals.output_tokens, 1);
+}
+
+#[tokio::test]
+async fn side_chat_factory_routes_rolls_up_persists_and_restores_usage() {
+    let home = TempDir::new().unwrap();
+    let mut settings = Settings::default();
+    settings.session.backend = coco_config::SessionBackend::Memory;
+    let parent = build_runtime_with_registry_and_settings(
+        &home,
+        coco_commands::CommandRegistry::new(),
+        settings,
+    )
+    .await;
+    let parent_id = parent.current_typed_session_id().await;
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(128);
+    parent.install_side_query_event_tx(event_tx.clone()).await;
+    let (_current_session, factory, process_runtime, _cwd) = test_resume_context(&parent).await;
+    let mut bridge =
+        local_bridge_for_resume_test(&parent, factory, process_runtime, Some(event_tx.clone()));
+    install_test_session_runtime(&mut bridge, &parent).await;
+
+    // Establish durable main-session usage before the child exists.
+    bridge
+        .start_turn_and_wait_for_end(
+            parent_id.clone(),
+            coco_types::TurnStartParams {
+                target: coco_types::InteractiveTarget {
+                    session_id: parent_id.clone(),
+                    surface_id: coco_types::SurfaceId::generate(),
+                },
+                prompt: "main turn".into(),
+                history_override: Vec::new(),
+                images: Vec::new(),
+                slash_metadata: None,
+                model_selection: None,
+                permission_mode: None,
+                thinking_level: None,
+                goal_continuation: false,
+            },
+        )
+        .await
+        .expect("parent turn completes");
+    let parent_history_len = parent.history_messages().await.len();
+    let parent_usage_before = parent.session_usage_snapshot().await;
+    assert_eq!(parent_usage_before.totals.input_tokens, 1);
+    assert_eq!(parent_usage_before.totals.output_tokens, 1);
+
+    // This is the production factory/registry/child-pump path, not a
+    // separately constructed SideChatReadOnly runtime.
+    let child = bridge
+        .open_side_chat(parent_id.clone(), Some(event_tx.clone()))
+        .await
+        .expect("sidechat factory should build and attach a child");
+    let child_id = child.session.current_typed_session_id().await;
+    let parent_config = parent.current_engine_config().await;
+    let child_config = child.session.current_engine_config().await;
+    assert_eq!(child_config.model_id, parent_config.model_id);
+    assert_eq!(child_config.thinking_level, parent_config.thinking_level);
+    assert_eq!(child_config.permission_mode, parent_config.permission_mode);
+    assert_eq!(child_config.fast_mode, parent_config.fast_mode);
+    assert!(child_config.can_use_tool.is_some());
+    assert!(child_config.require_can_use_tool);
+
+    let mut tui_state = coco_tui::AppState::new();
+    tui_state.session.session_id = Some(parent_id.to_string());
+    tui_state.session.session_usage = Some(parent_usage_before);
+    assert!(tui_state.enter_side_chat(parent_id.clone(), child_id.clone()));
+    let (command_tx, _command_rx) = tokio::sync::mpsc::channel::<coco_tui::UserCommand>(64);
+
+    bridge
+        .start_child_turn(coco_types::TurnStartParams {
+            target: coco_types::InteractiveTarget {
+                session_id: child_id.clone(),
+                surface_id: coco_types::SurfaceId::generate(),
+            },
+            prompt: "sidechat turn".into(),
+            history_override: Vec::new(),
+            images: Vec::new(),
+            slash_metadata: None,
+            model_selection: None,
+            permission_mode: None,
+            thinking_level: None,
+            goal_continuation: false,
+        })
+        .await
+        .expect("child turn should start");
+
+    let mut saw_parent_rollup_event = false;
+    let mut saw_child_usage_event = false;
+    let mut saw_child_turn_end = false;
+    for _ in 0..128 {
+        let event = tokio::time::timeout(Duration::from_secs(3), event_rx.recv())
+            .await
+            .expect("child event stream should remain live")
+            .expect("child event channel should remain open");
+        if let coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SessionScoped {
+            session_id,
+            event: scoped,
+        }) = &event
+            && let coco_types::SessionScopedEvent::Protocol(notification) = scoped.as_ref()
+        {
+            match notification.as_ref() {
+                coco_types::ServerNotification::SessionUsageUpdated(snapshot)
+                    if session_id == &parent_id =>
+                {
+                    saw_parent_rollup_event = true;
+                    assert_eq!(snapshot.session_id, parent_id);
+                }
+                coco_types::ServerNotification::SessionUsageUpdated(snapshot)
+                    if session_id == &child_id =>
+                {
+                    saw_child_usage_event = true;
+                    assert_eq!(snapshot.session_id, child_id);
+                }
+                coco_types::ServerNotification::TurnEnded(_) if session_id == &child_id => {
+                    saw_child_turn_end = true;
+                }
+                _ => {}
+            }
+        }
+        coco_tui::handle_core_event(&mut tui_state, event, &command_tx);
+        assert!(
+            tui_state
+                .session
+                .session_usage
+                .as_ref()
+                .is_none_or(|usage| usage.session_id == child_id),
+            "a parent usage event must never overwrite the active child projection"
+        );
+        if saw_child_turn_end {
+            break;
+        }
+    }
+    assert!(saw_parent_rollup_event);
+    assert!(saw_child_usage_event);
+    assert!(saw_child_turn_end);
+
+    let child_usage = child.session.session_usage_snapshot().await;
+    assert_eq!(child_usage.totals.input_tokens, 1);
+    assert_eq!(child_usage.totals.output_tokens, 1);
+    let parent_usage = parent.session_usage_snapshot().await;
+    assert_eq!(parent_usage.totals.input_tokens, 2);
+    assert_eq!(parent_usage.totals.output_tokens, 2);
+    assert!(parent_usage.source_records.iter().any(|entry| {
+        entry.source == coco_types::UsageSource::Main
+            && entry.input_tokens == 1
+            && entry.output_tokens == 1
+    }));
+    assert!(parent_usage.source_records.iter().any(|entry| {
+        entry.source == coco_types::UsageSource::SideQuery
+            && entry.input_tokens == 1
+            && entry.output_tokens == 1
+    }));
+    assert_eq!(
+        parent.history_messages().await.len(),
+        parent_history_len,
+        "sidechat must not mutate the parent transcript"
+    );
+
+    let store = parent
+        .session_manager_handle()
+        .store_for(parent.original_cwd());
+    let persisted_parent = store
+        .load_usage_snapshot(parent_id.as_str())
+        .expect("load parent usage")
+        .expect("parent usage should be persisted");
+    assert_eq!(persisted_parent.totals, parent_usage.totals);
+    assert_eq!(persisted_parent.source_records, parent_usage.source_records);
+    assert!(
+        store
+            .load_usage_snapshot(child_id.as_str())
+            .expect("load child usage")
+            .is_none(),
+        "ephemeral child usage must not create its own persisted ledger"
+    );
+    assert!(!store.exists(child_id.as_str()));
+
+    bridge
+        .close_child()
+        .await
+        .expect("sidechat close should complete");
+    let mut saw_final_parent_snapshot = false;
+    let mut saw_exit = false;
+    for _ in 0..32 {
+        let event = tokio::time::timeout(Duration::from_secs(3), event_rx.recv())
+            .await
+            .expect("close lifecycle should publish its terminal events")
+            .expect("event channel should remain open");
+        if let coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SessionScoped {
+            session_id,
+            event: scoped,
+        }) = &event
+            && session_id == &parent_id
+            && matches!(
+                scoped.as_ref(),
+                coco_types::SessionScopedEvent::Protocol(notification)
+                    if matches!(notification.as_ref(), coco_types::ServerNotification::SessionUsageUpdated(_))
+            )
+        {
+            saw_final_parent_snapshot = true;
+        }
+        if matches!(
+            &event,
+            coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SideChatExited {
+                parent_id: event_parent,
+                child_id: event_child,
+            }) if event_parent == &parent_id && event_child == &child_id
+        ) {
+            assert!(
+                saw_final_parent_snapshot,
+                "the authoritative parent snapshot must precede view restoration"
+            );
+            saw_exit = true;
+        }
+        coco_tui::handle_core_event(&mut tui_state, event, &command_tx);
+        if saw_exit {
+            break;
+        }
+    }
+    assert!(saw_exit);
+    assert!(!tui_state.is_viewing_side_chat());
+    assert_eq!(
+        tui_state
+            .session
+            .session_usage
+            .as_ref()
+            .expect("restored parent usage")
+            .totals,
+        parent_usage.totals
+    );
+}
+
+#[tokio::test]
+async fn autonomous_side_chat_close_refreshes_parent_and_releases_bridge_authority() {
+    let home = TempDir::new().unwrap();
+    let parent = build_runtime_with_registry(&home, coco_commands::CommandRegistry::new()).await;
+    let parent_id = parent.current_typed_session_id().await;
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(32);
+    let (_current_session, factory, process_runtime, _cwd) = test_resume_context(&parent).await;
+    let mut bridge =
+        local_bridge_for_resume_test(&parent, factory, process_runtime, Some(event_tx.clone()));
+    install_test_session_runtime(&mut bridge, &parent).await;
+    let child = bridge
+        .open_side_chat(parent_id.clone(), Some(event_tx.clone()))
+        .await
+        .expect("open sidechat");
+    let child_id = child.session.current_typed_session_id().await;
+
+    // Close through a separate client, bypassing bridge.close_child. This is
+    // the autonomous/error lifecycle path that still must restore the TUI and
+    // stop advertising the terminal child as live.
+    bridge
+        .client()
+        .session_close(
+            bridge.handler(),
+            coco_types::SessionCloseParams {
+                target: coco_types::SessionCloseTarget::Interactive {
+                    target: child.surface.interactive_target(),
+                },
+            },
+        )
+        .await
+        .expect("autonomous child close");
+
+    let mut saw_parent_snapshot = false;
+    let mut saw_exit = false;
+    for _ in 0..16 {
+        let event = tokio::time::timeout(Duration::from_secs(3), event_rx.recv())
+            .await
+            .expect("lifecycle event should arrive")
+            .expect("event channel should remain open");
+        match event {
+            coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SessionScoped {
+                session_id,
+                event,
+            }) if session_id == parent_id
+                && matches!(
+                    event.as_ref(),
+                    coco_types::SessionScopedEvent::Protocol(notification)
+                        if matches!(notification.as_ref(), coco_types::ServerNotification::SessionUsageUpdated(_))
+                ) =>
+            {
+                saw_parent_snapshot = true;
+            }
+            coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SideChatExited {
+                parent_id: event_parent,
+                child_id: event_child,
+            }) if event_parent == parent_id && event_child == child_id => {
+                assert!(saw_parent_snapshot);
+                saw_exit = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_exit);
+    assert!(
+        bridge.child_interactive_session().is_none(),
+        "a terminal registry slot must not retain bridge authority"
+    );
+
+    let replacement = bridge
+        .open_side_chat(parent_id, Some(event_tx))
+        .await
+        .expect("a new sidechat should open after autonomous termination");
+    assert_ne!(replacement.session.session_id(), &child_id);
+    bridge.close_child().await.expect("close replacement child");
 }
 
 #[tokio::test]

@@ -58,6 +58,7 @@ Each concern has exactly one source of truth.
 | Active TUI identity | `coco-tui` | `ViewMode` |
 | Session event routing | `coco-types` / TUI reducer | `TuiOnlyEvent::SessionScoped` |
 | Local child authority | local AppServer bridge | child interactive surface and event pump |
+| Durable usage ownership | parent `UsageAccounting` | child-local accounting mirrors calls as `UsageSource::SideQuery` |
 
 `ProcessSessionKind` remains the PID/process-launch classification. It is not a
 conversation-topology type.
@@ -89,11 +90,15 @@ Passing the structural gate returns `Ask`, not `Allow`, so ordinary permission
 rules, sensitive-path checks, and approval prompts remain authoritative.
 `require_can_use_tool` prevents a hook auto-approval from bypassing the gate.
 
-### I-4: ephemeral ownership
+### I-4: ephemeral ownership and parent-charged usage
 
-A sidechat owns no transcript, usage, file-history, goal, schedule, PID, title,
-memory, skill-learning, SessionManager, durable sequence, retention, or Hub
-artifact. It is not resumable.
+A sidechat owns no transcript, persisted usage, file-history, goal, schedule,
+PID, title, memory, skill-learning, SessionManager, durable sequence, retention,
+or Hub artifact. It is not resumable. The child keeps an ephemeral in-memory
+usage tracker so its active TUI projection shows sidechat-only spend. Every
+child usage record is also mirrored to the parent's authoritative accounting as
+`UsageSource::SideQuery`, so the hidden parent projection, `/cost`, persisted
+snapshot, and restored main status bar include sidechat spend exactly once.
 
 ### I-5: parent-owned lifetime
 
@@ -159,6 +164,7 @@ requires both the expected parent id and child id.
   -> reserved owner task captures SideChatSeed
   -> factory builds SideChatReadOnly runtime using captured resources
   -> bounded context + enforced boundary are appended silently
+  -> child usage accounting installs a SideQuery mirror to the parent ledger
   -> registry promotes child or honors close-after-load
   -> bridge attaches child interactive authority and tagged pump
   -> TUI receives SideChatEntered(parent, child)
@@ -184,11 +190,25 @@ While the child is open:
 - Ctrl+C during a child turn interrupts that child turn; and
 - Ctrl+C with an empty idle composer, or `/btw --close`, closes the child.
 
+The TUI child projection inherits the parent's model binding, thinking effort,
+permission mode, cwd, and header metadata at entry. Transcript and usage start
+empty. The header marks `SIDECHAT`; the always-visible identity row shows the
+`Ctrl+C` return affordance, while the environment row shows the inherited mode.
+Session-level controls are frozen while sidechat is active, so the UI does not
+advertise model, effort, permission-mode, or fast-mode cycling. Mirroring first
+updates the authoritative parent ledger, then the child ledger. Each ledger
+emits a session-scoped snapshot through the host boundary, so a parent update
+cannot overwrite the active child projection and the event stream stays
+consistent with persistence.
+
 Close is owned by the AppServer lifecycle task. The bridge does not discard its
 surface before the registry transition. Once terminal removal commits, bridge
 authority is cleared even if runtime teardown reported an error. The child pump
-is detached long enough to forward `SessionEnded`, sends
-`SideChatExited(parent, child)`, and terminates.
+is the sole producer of the close transition: when it observes the terminal
+`SessionEnded` lifecycle effect, it sends a final parent-scoped authoritative
+usage snapshot followed by `SideChatExited(parent, child)`, and terminates. The
+bridge waits for that pump before returning from an explicit close, so
+subsequent CLI output is rendered on the restored primary projection.
 
 Parent close and replace use the same close callback for child and parent and
 wait on the child's completion before closing the parent runtime.
@@ -261,6 +281,9 @@ The implementation is covered at the owner boundaries:
 | Local-only sequence and retention behavior | AppServer routing and agent-host local-bridge tests |
 | Parent/child cache detector isolation, including shared agent id | inference cache-detection tests |
 | Tagged projection folding and stale exit rejection | TUI state tests |
+| Child-only display usage and parent SideQuery rollup | query cancellation tests plus CLI factory/turn/persistence/TUI-fold integration test |
+| Explicit and autonomous close refresh parent before restore | CLI local-AppServer lifecycle integration tests |
+| Fork inference exclusion from the interactive ledger | agent-host fork-dispatcher test |
 | Idle Ctrl+C close routing | TUI update tests |
 | Direct `/btw` parsing and non-TUI fallback | command tests |
 | Remote catalog omission and internal-target rejection | command and agent-host bridge tests |

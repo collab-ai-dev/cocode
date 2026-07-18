@@ -64,6 +64,16 @@ fn show_environment_line(state: &AppState) -> bool {
 /// total spend | counts | MCP | LSP. Always rendered.
 fn identity_line(state: &AppState) -> Vec<StatusSpan> {
     let mut spans = Vec::new();
+    // Keep the escape hatch on the always-visible identity row. Usage can add
+    // a third built-in row, and constrained terminals may clip the environment
+    // row; returning to main must remain discoverable in either layout.
+    if state.is_viewing_side_chat() {
+        spans.push(StatusSpan::bold(
+            format!(" {}", t!("status.sidechat_return")),
+            StatusTone::Accent,
+        ));
+        separator(&mut spans);
+    }
     let (provider, model_id) = state
         .session
         .model_by_role
@@ -94,10 +104,11 @@ fn identity_line(state: &AppState) -> Vec<StatusSpan> {
         state.session.thinking_effort.to_string(),
         StatusTone::Dim,
     ));
-    if let Some(hint) = state
-        .ui
-        .kb_handle
-        .display_for(&KeybindingAction::ChatCycleThinking, TuiContext::Chat)
+    if !state.is_viewing_side_chat()
+        && let Some(hint) = state
+            .ui
+            .kb_handle
+            .display_for(&KeybindingAction::ChatCycleThinking, TuiContext::Chat)
     {
         spans.push(StatusSpan::new(" * ", StatusTone::Dim));
         spans.push(StatusSpan::new(format!("{hint} to cycle"), StatusTone::Dim));
@@ -421,13 +432,15 @@ fn permission_and_tasks_line(state: &AppState) -> Vec<StatusSpan> {
     if let Some((symbol, label, tone)) = permission_mode_status(state.session.permission_mode) {
         let lead = if spans.is_empty() { " " } else { " · " };
         spans.push(StatusSpan::new(format!("{lead}{symbol} {label}"), tone));
-        // Every mode shows the cycle gesture, `·`-separated and dimmed, so the
-        // shift+tab affordance is uniform across modes.
-        spans.push(StatusSpan::new(" · ", StatusTone::Dim));
-        spans.push(StatusSpan::new(
-            t!("permission_mode.status.cycle_hint").to_string(),
-            StatusTone::Dim,
-        ));
+        if !state.is_viewing_side_chat() {
+            // The child inherits a frozen mode. Only advertise a gesture when
+            // the corresponding session-level control is available.
+            spans.push(StatusSpan::new(" · ", StatusTone::Dim));
+            spans.push(StatusSpan::new(
+                t!("permission_mode.status.cycle_hint").to_string(),
+                StatusTone::Dim,
+            ));
+        }
     }
     if let Some(goal) = state.session.goal.as_ref() {
         let lead = if spans.is_empty() { " " } else { " · " };

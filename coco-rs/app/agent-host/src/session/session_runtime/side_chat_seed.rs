@@ -18,6 +18,7 @@ pub struct SideChatSeed {
     pub(crate) command_registry: Arc<coco_commands::CommandRegistry>,
     pub(crate) skill_manager: Arc<coco_skills::SkillManager>,
     pub(crate) project_services: Arc<coco_app_runtime::ProjectServices>,
+    pub(crate) parent_usage_accounting: coco_query::usage_accounting::UsageAccounting,
 }
 
 impl SideChatSeed {

@@ -56,6 +56,12 @@ pub(crate) fn header_bar_view(
             styles.dim_style(),
         ));
     }
+    if state.is_viewing_side_chat() {
+        row1_spans.push(Span::styled(
+            "  ·  SIDECHAT",
+            Style::default().fg(styles.accent()).bold(),
+        ));
+    }
     let row1 = Line::from(row1_spans);
 
     let (provider, model_id) = state
@@ -156,6 +162,7 @@ pub(crate) fn header_input_key(state: &AppState, theme_hash: u64, width: u16) ->
     state.session.working_dir.hash(&mut h);
     state.session.git_branch.hash(&mut h);
     state.session.worktree_path.hash(&mut h);
+    state.is_viewing_side_chat().hash(&mut h);
     h.finish()
 }
 
