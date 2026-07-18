@@ -34,6 +34,7 @@ mod provider_wizard;
 // `server_notification_handler::tui_only`) can call into `cycle_model`
 // when `TuiOnlyEvent::OpenModelPicker` arrives. The other `show::*`
 // constructors remain crate-internal helpers.
+mod reader_copy;
 pub(crate) mod show;
 mod skills_dialog;
 mod stash;
@@ -80,14 +81,6 @@ pub async fn handle_command(
     // threading a refresh call through every editing arm.
     let text_before = state.ui.input.text().to_string();
     let cursor_before = state.ui.input.textarea.cursor();
-
-    // Capture a pre-edit snapshot so chat-undo (`UndoInput`) works on the
-    // non-vim edit path. Vim normal-mode dispatch owns its own undo stack (and
-    // the `u` command), so skip there — committing here would double-push or
-    // turn the next undo into a redo-flip. Committed below iff the edit landed.
-    let undo_snapshot = (is_input_mutating_edit(&cmd)
-        && !state.ui.input.vim.normal_dispatch_active())
-    .then(|| state.ui.input.textarea.snapshot());
 
     // Intercept editable-dialog keys before the main dispatch.
     // The skills dialog has a richer state machine (select / filter
@@ -157,6 +150,12 @@ pub async fn handle_command(
     // Inline edits to a shell prompt's editable "always allow" prefix are
     // consumed here so the keystrokes don't leak into the chat composer.
     if crate::bottom_pane::permission::intercept_prefix_edit(state, &cmd) {
+        return true;
+    }
+    // Before the prefix/plan interceptors' siblings and before the y/n/a
+    // hotkeys: with the deny-reason field open the user is typing prose, so an
+    // `n` in "won't work on Windows" must not resolve the prompt.
+    if crate::bottom_pane::permission::intercept_deny_reason_edit(state, &cmd) {
         return true;
     }
     if crate::bottom_pane::permission::intercept_exit_plan_feedback_edit(state, &cmd) {
@@ -663,6 +662,18 @@ pub async fn handle_command(
                 .add_toast(crate::state::ui::Toast::info(msg.to_string()));
             true
         }
+        TuiCommand::RedoInput => {
+            state.ui.input.clear_inline_hint();
+            let msg = if state.ui.input.textarea.redo() {
+                crate::i18n::t!("toast.redo_done")
+            } else {
+                crate::i18n::t!("toast.redo_nothing")
+            };
+            state
+                .ui
+                .add_toast(crate::state::ui::Toast::info(msg.to_string()));
+            true
+        }
 
         // ── Cursor movement ──
         TuiCommand::CursorLeft => {
@@ -1141,6 +1152,56 @@ pub async fn handle_command(
             state.ui.show_system_reminders = !state.ui.show_system_reminders;
             true
         }
+        TuiCommand::TogglePermissionAllowScope => {
+            // Widen an MCP "always allow" from this one tool to the whole
+            // server. The engine already matches `mcp__server` rules; this only
+            // lets the user ask for one, so a twenty-tool server costs one
+            // prompt instead of twenty.
+            let Some(crate::state::PanePromptState::Permission(p)) =
+                state.ui.interaction.active_prompt.as_mut()
+            else {
+                return false;
+            };
+            // Inert for builtin tools: there is no server to widen to.
+            if crate::state::mcp_server_of(&p.tool_name).is_none() {
+                return false;
+            }
+            p.mcp_allow_scope = match p.mcp_allow_scope {
+                crate::state::McpAllowScope::Tool => crate::state::McpAllowScope::Server,
+                crate::state::McpAllowScope::Server => crate::state::McpAllowScope::Tool,
+            };
+            true
+        }
+        TuiCommand::DenyPermissionWithReason => {
+            // Open the deny-reason field. Denying silently makes the model
+            // retry the same call blind; a reason turns the wasted turn into a
+            // corrected one.
+            let mode = state.session.permission_mode;
+            let Some(crate::state::PanePromptState::Permission(p)) =
+                state.ui.interaction.active_prompt.as_mut()
+            else {
+                return false;
+            };
+            if p.choices.is_some() {
+                return false;
+            }
+            if p.deny_reason_input.is_none() {
+                p.deny_reason_input = Some(crate::state::PrefixInputState {
+                    value: String::new(),
+                    cursor: 0,
+                });
+            }
+            // Select the Deny row so that Enter (the "submit" the hint promises)
+            // commits the denial with the reason attached. Without this, Enter
+            // confirms whatever row was selected — the default is ApproveOnce,
+            // so "deny with reason" would APPROVE and drop the reason. The
+            // field also swallows the `n` hotkey, so Enter is the only submit.
+            // Deny is always the last classic action.
+            p.selected_choice = crate::permission_options::classic_actions(p, mode)
+                .len()
+                .saturating_sub(1);
+            true
+        }
         TuiCommand::TogglePermissionExplanation => {
             // Ctrl+E on a permission prompt: toggle the risk-explainer panel.
             // On first open, kick off the lazy LLM fetch; the runner
@@ -1262,6 +1323,8 @@ pub async fn handle_command(
             transcript::toggle_selected_cell(state);
             true
         }
+        TuiCommand::TranscriptCopyCellText => reader_copy::copy_selected_cell_text(state),
+        TuiCommand::TranscriptCopyCellMeta => reader_copy::copy_selected_cell_meta(state),
         TuiCommand::TranscriptScrollLines(delta) => {
             transcript::scroll_lines(state, delta);
             true
@@ -1280,36 +1343,10 @@ pub async fn handle_command(
         }
     };
 
-    // Commit the pre-edit undo snapshot only if the edit actually changed the
-    // buffer (the TextArea dedups consecutive identical snapshots).
-    if let Some(snapshot) = undo_snapshot
-        && state.ui.input.text() != text_before
-    {
-        state.ui.input.textarea.commit_undo(snapshot);
-    }
-
     if state.ui.input.text() != text_before || state.ui.input.textarea.cursor() != cursor_before {
         crate::autocomplete::refresh_suggestions(state);
     }
     changed
-}
-
-/// Composer commands that mutate the input buffer and should push an undo
-/// snapshot. Cursor moves, scrolling, and async paste (whose mutation lands
-/// out-of-band) are intentionally excluded.
-fn is_input_mutating_edit(cmd: &TuiCommand) -> bool {
-    matches!(
-        cmd,
-        TuiCommand::InsertChar(_)
-            | TuiCommand::InsertNewline
-            | TuiCommand::DeleteBackward
-            | TuiCommand::DeleteForward
-            | TuiCommand::DeleteWordBackward
-            | TuiCommand::DeleteWordForward
-            | TuiCommand::KillToEndOfLine
-            | TuiCommand::KillToBeginningOfLine
-            | TuiCommand::Yank
-    )
 }
 
 /// Loose upper bound for the active permission prompt's body scroll offset.

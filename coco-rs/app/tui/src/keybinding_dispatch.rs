@@ -124,6 +124,7 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         // `chat:undo` — restore the previous composer snapshot from the
         // TextArea undo stack (captured per mutating edit in `update.rs`).
         ChatUndo => TuiCommand::UndoInput,
+        ChatRedo => TuiCommand::RedoInput,
         // `chat:messageActions` — message-actions cursor not yet shipped;
         // silently no-op.
         ChatMessageActions => return None,
@@ -166,6 +167,8 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         ConfirmCycleMode => TuiCommand::CyclePermissionMode,
         ConfirmToggle => TuiCommand::SurfaceConfirm,
         ConfirmToggleExplanation => TuiCommand::TogglePermissionExplanation,
+        ConfirmToggleAllowScope => TuiCommand::TogglePermissionAllowScope,
+        ConfirmDenyWithReason => TuiCommand::DenyPermissionWithReason,
         // `PermissionToggleDebug`: no equivalent debug surface.
         PermissionToggleDebug => return None,
 

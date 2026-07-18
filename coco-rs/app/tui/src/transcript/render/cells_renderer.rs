@@ -387,7 +387,7 @@ impl<'a> CellsRenderer<'a> {
             spans.extend(preview_spans);
             spans.push(Span::raw(")").fg(self.styles.text()));
         }
-        spans.push(Span::raw(elapsed).fg(self.styles.dim()).dim());
+        spans.push(Span::raw(elapsed).style(self.styles.dim_style()));
         lines.push(Line::from(spans));
     }
 
@@ -470,7 +470,7 @@ impl<'a> CellsRenderer<'a> {
         Line::from(vec![
             Span::raw("  └ ").fg(tone),
             Span::raw(format!("{glyph} ")).fg(tone),
-            Span::raw(parts.join(" · ")).fg(self.styles.dim()),
+            Span::raw(parts.join(" · ")).style(self.styles.dim_style()),
         ])
     }
 
@@ -550,7 +550,7 @@ impl<'a> CellsRenderer<'a> {
         };
         lines.push(Line::from(vec![
             Span::raw(format!("  # [{category}] ")).fg(self.styles.system_message()),
-            Span::raw(preview).fg(self.styles.dim()).italic(),
+            Span::raw(preview).style(self.styles.dim_style()).italic(),
         ]));
     }
 
@@ -772,8 +772,8 @@ pub(crate) fn mention_summary_lines(
                 }
             };
             Line::from(vec![
-                Span::raw("  └ ").fg(styles.dim()),
-                Span::raw(text).fg(styles.dim()),
+                Span::raw("  └ ").style(styles.dim_style()),
+                Span::raw(text).style(styles.dim_style()),
             ])
         })
         .collect();
@@ -949,13 +949,12 @@ pub(crate) fn in_flight_tool_lines(
             .filter(|preview| !preview.is_empty())
         {
             spans.push(Span::raw("(").fg(styles.text()));
-            spans.push(Span::raw(truncate_chars(preview, 96)).fg(styles.dim()));
+            spans.push(Span::raw(truncate_chars(preview, 96)).style(styles.dim_style()));
             spans.push(Span::raw(")").fg(styles.text()));
         }
         spans.push(
             Span::raw(format!(" ({})", format_duration_seconds(tool.elapsed())))
-                .fg(styles.dim())
-                .dim(),
+                .style(styles.dim_style()),
         );
         lines.push(Line::from(spans));
         if matches!(tool.status, crate::state::session::ToolStatus::Running)
@@ -973,10 +972,8 @@ fn is_backgroundable_tool(tool_name: &str) -> bool {
 
 pub(crate) fn background_hint_line(styles: UiStyles<'_>, indent: &'static str) -> Line<'static> {
     Line::from(vec![
-        Span::raw(indent).fg(styles.dim()).dim(),
-        Span::raw(t!("activity.background_hint").to_string())
-            .fg(styles.dim())
-            .dim(),
+        Span::raw(indent).style(styles.dim_style()),
+        Span::raw(t!("activity.background_hint").to_string()).style(styles.dim_style()),
     ])
 }
 

@@ -3,6 +3,7 @@
 //! Provides terminal initialization/restoration and the [`Tui`] wrapper
 //! that manages the native scrollback terminal surface.
 
+#[cfg(test)]
 use std::fmt;
 use std::io::IsTerminal;
 use std::io::Stdout;
@@ -10,12 +11,13 @@ use std::io::Write;
 use std::io::{self};
 use std::panic;
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
+#[cfg(test)]
 use crossterm::Command;
 use crossterm::cursor::MoveToNextLine;
 use crossterm::cursor::Show;
-use crossterm::event::DisableBracketedPaste;
-use crossterm::event::DisableFocusChange;
 use crossterm::event::EnableBracketedPaste;
 use crossterm::event::EnableFocusChange;
 use crossterm::execute;
@@ -62,6 +64,10 @@ pub(crate) const NATIVE_VIEWPORT_MAX_HEIGHT: u16 = 12;
 /// `SurfaceStreamDriver::prepare`); the markdown commit boundary is untouched.
 pub(crate) const STREAMING_LIVE_TAIL_CAP: u16 = 8;
 
+/// Process-global mirror used only by panic cleanup, where the owning `Tui`
+/// cannot be borrowed. Normal paths still use `Tui::alt_screen_active`.
+static MODAL_ALT_SCREEN_ACTIVE: AtomicBool = AtomicBool::new(false);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg(test)]
 struct EnableAlternateScroll;
@@ -86,8 +92,10 @@ impl Command for EnableAlternateScroll {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 struct DisableAlternateScroll;
 
+#[cfg(test)]
 impl Command for DisableAlternateScroll {
     fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
         write!(f, "\x1b[?1007l")
@@ -123,25 +131,33 @@ pub struct TuiDrawOutcome {
 /// stack, but every `enter` is paired with a `leave` pop on the suspend and
 /// exit paths, so the stack depth stays at one.)
 pub(crate) fn enter_tui_modes(stdout: &mut Stdout) -> io::Result<()> {
+    // Tier 2 of the fault handler: arm FIRST, before any mode is enabled, so a
+    // fault during setup still emits RESTORE_SEQ (ending an open sync-update
+    // window, popping kitty flags, etc.). Every RESTORE_SEQ byte is a
+    // disable/reset that is a harmless no-op if its mode isn't on yet.
+    coco_utils_crash_handler::arm_tui_restore(coco_tui_ui::engine::restore_seq::RESTORE_SEQ);
     enable_raw_mode()?;
     execute!(stdout, EnableBracketedPaste, EnableFocusChange)?;
     crate::keyboard_modes::enable_keyboard_enhancement();
     Ok(())
 }
 
-/// Disable TUI-private terminal modes and leave alt-screen if an state had
-/// entered it. `LeaveAlternateScreen` is intentionally idempotent here so panic
-/// cleanup and suspend/external-process paths share one terminal reset.
+/// Disable every unconditional TUI-private terminal mode in the canonical
+/// ledger order. A modal alternate screen is left only when the process-global
+/// mirror says the production `Tui` actually entered one.
 pub(crate) fn leave_tui_modes() -> io::Result<()> {
-    crate::keyboard_modes::restore_keyboard_enhancement_stack();
+    let mut stdout = io::stdout();
+    stdout.write_all(coco_tui_ui::engine::restore_seq::RESTORE_PREFIX)?;
+    if MODAL_ALT_SCREEN_ACTIVE.swap(false, Ordering::AcqRel) {
+        execute!(stdout, LeaveAlternateScreen)?;
+    }
+    stdout.write_all(coco_tui_ui::engine::restore_seq::RESTORE_SUFFIX)?;
+    stdout.flush()?;
     disable_raw_mode()?;
-    execute!(
-        io::stdout(),
-        DisableAlternateScroll,
-        LeaveAlternateScreen,
-        DisableBracketedPaste,
-        DisableFocusChange,
-    )?;
+    // Disarm LAST — only once the modes are actually torn down. A fault during
+    // teardown then still restores; if teardown errors out early we stay armed,
+    // which is the safe choice (the modes may still be on).
+    coco_utils_crash_handler::disarm_tui_restore();
     Ok(())
 }
 
@@ -178,9 +194,7 @@ pub(crate) fn setup_terminal() -> io::Result<NativeTerminal> {
 /// (`CSI < u`) on top of the stack pop: the parent shell must never inherit
 /// enhanced key reporting even if a terminal missed the pop.
 pub fn restore_terminal() -> io::Result<()> {
-    leave_tui_modes()?;
-    crate::keyboard_modes::reset_keyboard_reporting_after_exit();
-    Ok(())
+    leave_tui_modes()
 }
 
 /// Install the panic hook exactly once across the lifetime of the
@@ -219,12 +233,20 @@ pub struct Tui<B: SurfaceBackend = TerminalBackend> {
     modal_surface: ModalSurfaceState,
     suspend_context: SuspendContext,
     compatibility: TerminalCompatibility,
+    /// Whether another writer (multiplexer, embedded-editor terminal) may
+    /// repaint this pane out of band. Detected once at startup; consumed by the
+    /// focus heal in the shell's event loop.
+    out_of_band_repainter: bool,
     alt_screen_active: bool,
     alt_saved_viewport: Option<Rect>,
     main_screen_viewport_pin: ViewportPin,
     restore_terminal_on_drop: bool,
     #[cfg(test)]
     last_geometry_commit: Option<SeatDecision>,
+    #[cfg(test)]
+    viewport_invalidations: usize,
+    #[cfg(test)]
+    cursor_invalidations: usize,
 }
 
 impl Tui<TerminalBackend> {
@@ -234,10 +256,16 @@ impl Tui<TerminalBackend> {
         Ok(Self::from_terminal(
             terminal,
             TerminalCompatibility::detect(),
+            coco_tui_ui::engine::compatibility::repaints_pane_out_of_band(),
             /*restore_terminal_on_drop*/ true,
         ))
     }
+}
 
+impl<B> Tui<B>
+where
+    B: SurfaceBackend<Error = io::Error>,
+{
     /// Initiate the Ctrl+Z suspend dance. Blocks until SIGCONT delivered
     /// (typically by `fg` in the parent shell), at which point we
     /// re-arm TUI modes and the resume-pending flag is set for the
@@ -246,6 +274,10 @@ impl Tui<TerminalBackend> {
     /// No-op on non-Unix platforms.
     pub fn trigger_suspend(&mut self) -> io::Result<()> {
         self.leave_modal_alt_screen()?;
+        // The shell owns the cursor across the suspend. The resume path
+        // invalidates anyway, but the belief is dropped at the handoff itself so
+        // the invariant does not depend on that ordering.
+        self.terminal.note_external_cursor_move();
         self.suspend_context.suspend()?;
         Ok(())
     }
@@ -256,6 +288,9 @@ impl Tui<TerminalBackend> {
         let mut stdout = io::stdout();
         self.leave_modal_alt_screen()?;
         leave_tui_modes()?;
+        // `MoveToNextLine`/`Show` below, and then the child itself, drive the
+        // cursor outside the engine's diff.
+        self.terminal.note_external_cursor_move();
         if let Err(err) = execute!(stdout, MoveToNextLine(1), Show) {
             let _ = enter_tui_modes(&mut stdout);
             return Err(err);
@@ -280,6 +315,7 @@ where
     fn from_terminal(
         terminal: SurfaceTerminal<B>,
         compatibility: TerminalCompatibility,
+        out_of_band_repainter: bool,
         restore_terminal_on_drop: bool,
     ) -> Self {
         Self {
@@ -288,22 +324,72 @@ where
             modal_surface: ModalSurfaceState::default(),
             suspend_context: SuspendContext::new(),
             compatibility,
+            out_of_band_repainter,
             alt_screen_active: false,
             alt_saved_viewport: None,
             main_screen_viewport_pin: ViewportPin::Flowing,
             restore_terminal_on_drop,
             #[cfg(test)]
             last_geometry_commit: None,
+            #[cfg(test)]
+            viewport_invalidations: 0,
+            #[cfg(test)]
+            cursor_invalidations: 0,
         }
     }
 
+    /// Whether another writer may repaint this pane out of band, so a
+    /// focus-gain must force a full repaint rather than trust the cell diff.
+    pub fn repaints_pane_out_of_band(&self) -> bool {
+        self.out_of_band_repainter
+    }
+
+    /// Force the next frame to repaint the whole retained viewport.
+    pub fn invalidate_viewport(&mut self) {
+        #[cfg(test)]
+        {
+            self.viewport_invalidations = self.viewport_invalidations.saturating_add(1);
+        }
+        self.terminal.invalidate_viewport();
+    }
+
+    /// Drop the engine's cursor belief so the next frame re-asserts the cursor
+    /// claim in full, without forcing a viewport repaint. For focus-gain on
+    /// terminals that move the cursor out of band (iTerm2 / Terminal.app park
+    /// it at the last write position); the idle-frame skip would otherwise
+    /// paint an identical frame and never re-pin.
+    pub fn note_external_cursor_move(&mut self) {
+        #[cfg(test)]
+        {
+            self.cursor_invalidations = self.cursor_invalidations.saturating_add(1);
+        }
+        self.terminal.note_external_cursor_move();
+    }
+
     #[cfg(test)]
-    fn new_for_test(terminal: SurfaceTerminal<B>, compatibility: TerminalCompatibility) -> Self {
+    pub(crate) fn new_for_test(
+        terminal: SurfaceTerminal<B>,
+        compatibility: TerminalCompatibility,
+    ) -> Self {
         Self::from_terminal(
             terminal,
             compatibility,
+            // Detected from env in production; pinned off here so tests never
+            // depend on whether the developer ran them inside tmux.
+            /*out_of_band_repainter*/
+            false,
             /*restore_terminal_on_drop*/ false,
         )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_out_of_band_repainter_for_test(&mut self, value: bool) {
+        self.out_of_band_repainter = value;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn invalidation_counts_for_test(&self) -> (usize, usize) {
+        (self.viewport_invalidations, self.cursor_invalidations)
     }
 
     #[cfg(test)]
@@ -590,9 +676,12 @@ where
 
         if wants_alt && !self.alt_screen_active {
             self.alt_saved_viewport = Some(self.terminal.viewport_area());
-            self.terminal.backend_mut().enter_modal_alt_screen()?;
+            self.terminal.enter_modal_alt_screen()?;
             self.alt_screen_active = true;
-            self.terminal.backend_mut().clear_region(ClearType::All)?;
+            if self.restore_terminal_on_drop {
+                MODAL_ALT_SCREEN_ACTIVE.store(true, Ordering::Release);
+            }
+            self.terminal.clear_region(ClearType::All)?;
             self.terminal.invalidate_viewport();
         } else if !wants_alt && self.alt_screen_active {
             self.leave_modal_alt_screen()?;
@@ -633,8 +722,11 @@ where
 
     fn leave_modal_alt_screen(&mut self) -> Result<(), B::Error> {
         if self.alt_screen_active {
-            self.terminal.backend_mut().leave_modal_alt_screen()?;
+            self.terminal.leave_modal_alt_screen()?;
             self.alt_screen_active = false;
+            if self.restore_terminal_on_drop {
+                MODAL_ALT_SCREEN_ACTIVE.store(false, Ordering::Release);
+            }
         }
         if let Some(saved) = self.alt_saved_viewport.take() {
             self.terminal.set_viewport_area(saved);
@@ -775,17 +867,17 @@ where
         // sequence is unit-testable on a recording backend. Only the non-sink
         // global state stays a free call (below), gated by
         // `restore_terminal_on_drop`.
+        let _ = self.terminal.backend_mut().begin_terminal_restore();
         let _ = self.leave_modal_alt_screen();
-        let _ = self.terminal.backend_mut().leave_terminal_modes();
+        let _ = self.terminal.backend_mut().finish_terminal_restore();
         if self.restore_terminal_on_drop {
             // Process-global, non-sink terminal state: raw-mode termios and the
             // kitty keyboard-enhancement stack / reporting reset. Cursor-neutral,
             // so its position in the sequence is irrelevant; skipped in tests,
             // which own no real terminal. The panic path restores the same state
             // via `restore_terminal`.
-            crate::keyboard_modes::restore_keyboard_enhancement_stack();
             let _ = disable_raw_mode();
-            crate::keyboard_modes::reset_keyboard_reporting_after_exit();
+            MODAL_ALT_SCREEN_ACTIVE.store(false, Ordering::Release);
         }
         let _ = self.terminal.prepare_shell_prompt_after_exit();
         // zsh shows PROMPT_EOL_MARK (`%`) when the command's final output

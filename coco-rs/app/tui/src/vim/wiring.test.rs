@@ -31,6 +31,74 @@ fn dispatch_in_normal_routes_to_state_machine() {
     assert_eq!(ta.cursor(), 1);
 }
 
+// ─────────────────── Undo parity (plan item C1) ───────────────────
+//
+// Vim's operators drive several TextArea verbs, and every verb now
+// self-checkpoints — so dispatch runs inside an `undo_group`. Without it a
+// single `dw` would take several `u` presses to reverse.
+
+#[test]
+fn a_vim_operator_is_one_undo_step() {
+    let (mut ta, mut vim) = setup("alpha beta", 0);
+    dispatch_vim_key('d', &mut ta, &mut vim);
+    dispatch_vim_key('w', &mut ta, &mut vim);
+    assert_ne!(ta.text(), "alpha beta", "dw must have deleted something");
+
+    assert!(ta.undo());
+    assert_eq!(ta.text(), "alpha beta", "dw must undo in one step");
+    assert!(!ta.undo(), "dw must leave exactly one undo entry");
+}
+
+#[test]
+fn a_vim_delete_char_is_one_undo_step() {
+    let (mut ta, mut vim) = setup("hello", 0);
+    dispatch_vim_key('x', &mut ta, &mut vim);
+    assert_eq!(ta.text(), "ello");
+
+    assert!(ta.undo());
+    assert_eq!(ta.text(), "hello");
+    assert!(!ta.undo());
+}
+
+#[test]
+fn a_vim_motion_leaves_no_undo_entry() {
+    // Navigation is not an edit; the group drops itself when nothing changed.
+    let (mut ta, mut vim) = setup("hello", 0);
+    dispatch_vim_key('l', &mut ta, &mut vim);
+    dispatch_vim_key('l', &mut ta, &mut vim);
+    assert!(!ta.undo(), "cursor motion must not be undoable");
+}
+
+#[test]
+fn vim_u_undoes_without_oscillating() {
+    // `u` drives the undo stack itself. If dispatch wrapped it in a group, the
+    // pre-undo text would be pushed back on as a fresh entry and `u` would
+    // flip between two states forever.
+    let (mut ta, mut vim) = setup("hello", 0);
+    dispatch_vim_key('x', &mut ta, &mut vim);
+    assert_eq!(ta.text(), "ello");
+
+    dispatch_vim_key('u', &mut ta, &mut vim);
+    assert_eq!(ta.text(), "hello", "u must undo the x");
+    dispatch_vim_key('u', &mut ta, &mut vim);
+    assert_eq!(
+        ta.text(),
+        "hello",
+        "a second u must not flip back to the undone state"
+    );
+}
+
+#[test]
+fn a_vim_edit_after_undo_kills_the_redo_branch() {
+    let (mut ta, mut vim) = setup("hello", 0);
+    dispatch_vim_key('x', &mut ta, &mut vim);
+    dispatch_vim_key('u', &mut ta, &mut vim);
+    assert_eq!(ta.text(), "hello");
+
+    dispatch_vim_key('x', &mut ta, &mut vim);
+    assert!(!ta.redo(), "a fresh vim edit must discard the redo branch");
+}
+
 // ─────────────────── Normal-mode motions ───────────────────
 
 #[test]

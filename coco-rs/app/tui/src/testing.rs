@@ -44,6 +44,123 @@ pub struct NativeSurfaceTestState {
     modal_surface: ModalSurfaceState,
 }
 
+/// Ctrl+O transcript-reader benchmark (plan item B7).
+///
+/// Exists to make B3 measurable and guard it: the overlay's height cache used
+/// to be flushed on every content-generation bump, so with the reader open
+/// during a turn every change re-rendered every cell in the history. The two
+/// variants below are the paired comparison — `render_with_reset_index`
+/// reproduces the old flush-per-frame behavior, `render_with_retained_index`
+/// is what ships. The gap between them is the win.
+pub struct TranscriptOverlayBench {
+    state: AppState,
+    transcript: crate::state::transcript::TranscriptState,
+    layout_index: crate::widgets::TranscriptLayoutIndex,
+    theme: Theme,
+}
+
+impl TranscriptOverlayBench {
+    /// A synthetic tool-heavy transcript — the dominant production shape, and
+    /// the one whose cells are most expensive to measure.
+    ///
+    /// The reader is pinned to Tail, which is the case B3 is about: resolving
+    /// the bottom needs `total_height()`, so the layout walks and measures
+    /// EVERY cell rather than just the visible window.
+    pub fn new(turns: usize) -> Self {
+        let mut state = AppState::default();
+        for i in 0..turns {
+            state
+                .session
+                .transcript
+                .on_message_appended(Arc::new(create_user_message_with_uuid(
+                    Uuid::new_v4(),
+                    &format!("please inspect overlay case {i}"),
+                )));
+            state
+                .session
+                .transcript
+                .on_message_appended(Arc::new(create_assistant_message(
+                    vec![
+                        AssistantContent::Text(TextContent::new(format!(
+                            "{BENCH_ASSISTANT_BLOCK}\n\nturn: {i}"
+                        ))),
+                        AssistantContent::ToolCall(ToolCallContent::new(
+                            format!("bench-call-{i}"),
+                            "Grep",
+                            serde_json::json!({"pattern": format!("case_{i}"), "path": "src/"}),
+                        )),
+                    ],
+                    "bench-model",
+                    TokenUsage::default(),
+                )));
+            state
+                .session
+                .transcript
+                .on_message_appended(Arc::new(create_tool_result_message(
+                    &format!("bench-call-{i}"),
+                    "Grep",
+                    ToolId::Custom("bench".into()),
+                    &format!("src/lib.rs:{i}:fn case_{i}() {{}}"),
+                    /*is_error*/ false,
+                )));
+        }
+        let mut transcript = crate::state::transcript::TranscriptState::default();
+        transcript.pin_to_tail_for_bench();
+        Self {
+            state,
+            transcript,
+            layout_index: crate::widgets::TranscriptLayoutIndex::default(),
+            theme: Theme::default(),
+        }
+    }
+
+    pub fn cell_count(&self) -> usize {
+        self.state.session.transcript.cells().len()
+    }
+
+    /// Append one turn's assistant message, bumping the content generation the
+    /// way a live turn does.
+    pub fn append_turn(&mut self, index: usize) {
+        self.state
+            .session
+            .transcript
+            .on_message_appended(Arc::new(create_assistant_message(
+                vec![AssistantContent::Text(TextContent::new(format!(
+                    "follow-up reply {index}"
+                )))],
+                "bench-model",
+                TokenUsage::default(),
+            )));
+    }
+
+    /// Paint the reader reusing the height cache — the shipping behavior.
+    pub fn render_with_retained_index(&mut self, width: u16, height: u16) -> usize {
+        self.render(width, height)
+    }
+
+    /// Paint the reader after dropping the height cache — reproduces the
+    /// pre-B3 flush so the two can be compared directly.
+    pub fn render_with_reset_index(&mut self, width: u16, height: u16) -> usize {
+        self.layout_index.reset();
+        self.render(width, height)
+    }
+
+    fn render(&mut self, width: u16, height: u16) -> usize {
+        use ratatui::widgets::Widget;
+
+        let area = Rect::new(0, 0, width, height);
+        let mut buffer = Buffer::empty(area);
+        crate::widgets::TranscriptStateWidget::new(
+            &self.state,
+            &self.transcript,
+            &mut self.layout_index,
+            UiStyles::new(&self.theme),
+        )
+        .render(area, &mut buffer);
+        buffer.content.len()
+    }
+}
+
 /// Benchmark harness for native finalized-history replay.
 ///
 /// Lives behind the `testing` feature so Criterion benches can exercise the

@@ -26,6 +26,7 @@ unicode-width.workspace = true
 coco-tui-mermaid = { workspace = true, optional = true }
 
 [dev-dependencies]
+insta.workspace = true
 pretty_assertions.workspace = true
 # Used only by `examples/measure_grammar.rs` (a dev tool that reads peak RSS via
 # getrusage to size the prewarm grammar list). Not linked into the coco binary.

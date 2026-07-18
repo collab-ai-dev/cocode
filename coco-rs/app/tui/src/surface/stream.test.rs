@@ -369,6 +369,8 @@ fn exit_plan_prompt_state(step_count: usize) -> AppState {
             explanation_visible: false,
             explanation: crate::state::ExplainerFetch::NotFetched,
             prefix_input: None,
+            mcp_allow_scope: Default::default(),
+            deny_reason_input: None,
         }));
     state
 }

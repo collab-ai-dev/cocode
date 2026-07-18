@@ -45,7 +45,7 @@ pub(crate) fn header_bar_view(
             Style::default().fg(styles.text()).bold(),
         ),
         Span::raw(" "),
-        Span::styled(format!("v{VERSION}"), Style::default().fg(styles.dim())),
+        Span::styled(format!("v{VERSION}"), styles.dim_style()),
     ];
     // `pid == 0` is the unset sentinel (tests / pre-bootstrap state); only the
     // real app stamps a live pid in `App::new`. Surfacing it lets concurrent
@@ -53,7 +53,7 @@ pub(crate) fn header_bar_view(
     if state.session.pid != 0 {
         row1_spans.push(Span::styled(
             format!("  ·  pid {}", state.session.pid),
-            Style::default().fg(styles.dim()),
+            styles.dim_style(),
         ));
     }
     let row1 = Line::from(row1_spans);
@@ -67,7 +67,7 @@ pub(crate) fn header_bar_view(
     let row2 = if model_id.is_empty() {
         Line::from(Span::styled(
             t!("status.no_model").to_string(),
-            Style::default().fg(styles.dim()).italic(),
+            styles.dim_style().italic(),
         ))
     } else {
         let model = if provider.is_empty() {
@@ -96,7 +96,7 @@ pub(crate) fn header_bar_view(
         let max_w = info_width.saturating_sub(2) as usize;
         row3_spans.push(Span::styled(
             truncate_path_for_width(&display, max_w),
-            Style::default().fg(styles.dim()),
+            styles.dim_style(),
         ));
     }
     if let Some(ref branch) = state.session.git_branch {
@@ -105,12 +105,12 @@ pub(crate) fn header_bar_view(
         }
         // `git:(branch)` zsh-prompt style, matching the status bar's
         // directory line: dim parens, accent branch.
-        row3_spans.push(Span::styled(" git:(", Style::default().fg(styles.dim())));
+        row3_spans.push(Span::styled(" git:(", styles.dim_style()));
         row3_spans.push(Span::styled(
             branch.clone(),
             Style::default().fg(styles.accent()),
         ));
-        row3_spans.push(Span::styled(")", Style::default().fg(styles.dim())));
+        row3_spans.push(Span::styled(")", styles.dim_style()));
     }
     if let Some(ref wt) = state.session.worktree_path {
         let short = wt.rsplit('/').next().unwrap_or(wt);

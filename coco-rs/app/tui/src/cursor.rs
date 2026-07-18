@@ -107,17 +107,19 @@ fn compute_question_cursor(state: &AppState, area: Rect) -> Option<CursorClaim> 
 /// always has a defined home.
 fn compute_input_xy(state: &AppState, area: Rect) -> (u16, u16) {
     let is_streaming = state.is_streaming();
+    // Built at the composer's real width so the cursor's visual row matches the
+    // rows the renderer painted — the model wraps, so a width mismatch here
+    // would put the cursor on the wrong line.
     let model = InputRenderModel::build(
         &state.ui.input,
         is_streaming,
         state.session.prompt_suggestions.last().map(String::as_str),
         state.session.queued_commands.iter().any(|q| q.editable),
         None,
+        area.width,
     );
 
-    // The gutter ("❯ " / "! " / "~ " on row 0, 2-space indent on continuation
-    // rows) is always 2 cols.
-    let indicator_width: u16 = 2;
+    let indicator_width: u16 = crate::widgets::INPUT_GUTTER_WIDTH;
 
     // Display column (CJK-aware). The command palette mirrors a `/filter`; every
     // other state uses the per-line column computed once in build().
@@ -128,7 +130,9 @@ fn compute_input_xy(state: &AppState, area: Rect) -> (u16, u16) {
 
     // Cursor row, offset by the same scroll the renderer uses so the two agree.
     let content_rows = area.height.saturating_sub(2).max(1) as usize;
-    let total_rows = model.display_text.split('\n').count().max(1);
+    let total_rows = crate::widgets::composer_rows(&model.display_text, area.width)
+        .len()
+        .max(1);
     let scroll = crate::widgets::scroll_offset(model.cursor_row, total_rows, content_rows);
     let row_on_screen = model.cursor_row.saturating_sub(scroll) as u16;
 

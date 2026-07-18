@@ -27,6 +27,16 @@ impl TranscriptState {
         Self::new_with_anchor(None)
     }
 
+    /// Pin the reader to the transcript bottom — the state the B7 bench
+    /// measures, because resolving Tail needs `total_height()` and therefore
+    /// walks every cell.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn pin_to_tail_for_bench(&mut self) {
+        self.scroll = TranscriptScrollPosition::Tail {
+            offset_from_bottom: 0,
+        };
+    }
+
     pub(crate) fn new_with_anchor(anchor_cell_id: Option<TranscriptCellId>) -> Self {
         Self {
             scroll: anchor_cell_id

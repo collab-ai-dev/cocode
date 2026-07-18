@@ -161,6 +161,53 @@ fn sync_main_surface_uses_restored_inline_viewport_baseline() {
 }
 
 #[test]
+fn out_of_band_repainter_flag_is_off_by_default_and_settable() {
+    // The focus heal (A3) is gated on this. It is pinned off in tests so the
+    // suite never depends on whether the developer ran it inside tmux.
+    let backend = TestBackend::new(80, 24);
+    let terminal = SurfaceTerminal::new(backend).expect("terminal");
+    let mut tui = Tui::new_for_test(terminal, TerminalCompatibility::NativeScrollback);
+
+    assert!(!tui.repaints_pane_out_of_band());
+    tui.set_out_of_band_repainter_for_test(true);
+    assert!(tui.repaints_pane_out_of_band());
+}
+
+#[test]
+fn invalidate_viewport_forces_the_next_frame_to_full_repaint() {
+    // The mechanism A3's focus heal drives: content overwritten out of band by
+    // a multiplexer is invisible to the cell diff (its previous buffer still
+    // believes those cells are intact), so the heal must repaint everything
+    // rather than diff against a belief the screen no longer matches.
+    let width = 80;
+    let height = 24;
+    let backend = TestBackend::new(width, height);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.sync_screen_size(Size::new(width, height));
+    terminal.set_viewport_area(Rect::new(0, 19, width, 5));
+    let mut tui = Tui::new_for_test(terminal, TerminalCompatibility::NativeScrollback);
+
+    let state = AppState::new();
+    tui.draw(&state).expect("first draw");
+    // Steady state: an identical frame diffs to nothing.
+    tui.draw(&state).expect("second draw");
+    assert_eq!(
+        tui.terminal().last_viewport_draw_stats().buffer_updates,
+        0,
+        "an unchanged frame must not redraw cells"
+    );
+
+    tui.invalidate_viewport();
+    tui.draw(&state).expect("healed draw");
+    let stats = tui.terminal().last_viewport_draw_stats();
+    assert!(stats.invalidated, "the heal must mark a full repaint");
+    assert!(
+        stats.buffer_updates > 0,
+        "the heal must re-emit viewport cells, got {stats:?}"
+    );
+}
+
+#[test]
 fn tui_alt_screen_leave_uses_restored_inline_viewport_baseline() {
     let width = 80;
     let height = 24;
@@ -309,8 +356,34 @@ fn drop_teardown_routes_four_steps_through_backend_in_order() {
     assert_eq!(
         log.steps(),
         vec![
+            "begin_terminal_restore",
             "leave_modal_alt_screen",
-            "leave_terminal_modes",
+            "finish_terminal_restore",
+            "prepare_shell_prompt",
+            "trailing_newline",
+        ]
+    );
+}
+
+#[test]
+fn drop_teardown_does_not_leave_an_alt_screen_that_was_never_entered() {
+    let log = TeardownLog::default();
+    let backend = RecordingBackend {
+        inner: TestBackend::new(80, 24),
+        log: log.clone(),
+    };
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.sync_screen_size(Size::new(80, 24));
+    terminal.set_viewport_area(Rect::new(0, 6, 80, 4));
+    let tui = Tui::new_for_test(terminal, TerminalCompatibility::NativeScrollback);
+
+    drop(tui);
+
+    assert_eq!(
+        log.steps(),
+        vec![
+            "begin_terminal_restore",
+            "finish_terminal_restore",
             "prepare_shell_prompt",
             "trailing_newline",
         ]
@@ -439,8 +512,13 @@ impl SurfaceBackend for RecordingBackend {
         Ok(())
     }
 
-    fn leave_terminal_modes(&mut self) -> Result<(), Self::Error> {
-        self.log.record("leave_terminal_modes");
+    fn begin_terminal_restore(&mut self) -> Result<(), Self::Error> {
+        self.log.record("begin_terminal_restore");
+        Ok(())
+    }
+
+    fn finish_terminal_restore(&mut self) -> Result<(), Self::Error> {
+        self.log.record("finish_terminal_restore");
         Ok(())
     }
 
@@ -448,4 +526,33 @@ impl SurfaceBackend for RecordingBackend {
         self.log.record("trailing_newline");
         Ok(())
     }
+}
+
+// ── A4: RESTORE_SEQ ledger ties to real teardown command bytes ──────────
+
+/// The raw `RESTORE_SEQ` blob the A5 signal handler writes must match, byte for
+/// byte, what the crossterm/coco teardown commands emit — a signal handler
+/// cannot call crossterm, so the two must never drift.
+#[test]
+fn restore_seq_matches_teardown_command_bytes() {
+    use coco_tui_ui::engine::restore_seq::seq;
+    use crossterm::event::DisableBracketedPaste;
+    use crossterm::event::DisableFocusChange;
+    use crossterm::terminal::EndSynchronizedUpdate;
+
+    fn ansi(cmd: impl crossterm::Command) -> Vec<u8> {
+        let mut s = String::new();
+        let _ = cmd.write_ansi(&mut s);
+        s.into_bytes()
+    }
+
+    assert_eq!(ansi(EndSynchronizedUpdate), seq::END_SYNC_UPDATE);
+    assert_eq!(ansi(DisableBracketedPaste), seq::DISABLE_BRACKETED_PASTE);
+    assert_eq!(ansi(DisableFocusChange), seq::DISABLE_FOCUS_REPORTING);
+    assert_eq!(ansi(Show), seq::SHOW_CURSOR);
+    assert_eq!(ansi(DisableAlternateScroll), seq::DISABLE_ALTERNATE_SCROLL);
+    assert_eq!(
+        ansi(crate::keyboard_modes::DisableModifyOtherKeys),
+        seq::DISABLE_MODIFY_OTHER_KEYS
+    );
 }

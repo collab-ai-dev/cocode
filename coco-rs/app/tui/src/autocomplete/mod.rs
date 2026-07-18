@@ -11,6 +11,7 @@
 
 pub mod agent_search;
 pub mod file_search;
+pub mod history_search;
 pub mod skill_search;
 pub mod slash;
 pub mod symbol_search;

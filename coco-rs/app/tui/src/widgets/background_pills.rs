@@ -147,8 +147,8 @@ impl Widget for BackgroundPills<'_> {
             used = proposed;
         }
         if overflow > 0 {
-            spans.push(Span::raw(PILL_GAP).fg(self.styles.dim()));
-            spans.push(Span::raw(format!("[+{overflow} more]")).fg(self.styles.dim()));
+            spans.push(Span::raw(PILL_GAP).style(self.styles.dim_style()));
+            spans.push(Span::raw(format!("[+{overflow} more]")).style(self.styles.dim_style()));
         }
 
         Paragraph::new(Line::from(spans)).render(area, buf);

@@ -433,10 +433,12 @@ fn map_history_search_key(key: KeyEvent) -> Option<TuiCommand> {
     match key.code {
         KeyCode::Esc => Some(TuiCommand::HistorySearchCancel),
         KeyCode::Enter | KeyCode::Tab => Some(TuiCommand::HistorySearchAccept),
-        KeyCode::Up => Some(TuiCommand::HistorySearchOlder),
-        KeyCode::Char('r' | 'R') if ctrl => Some(TuiCommand::HistorySearchOlder),
-        KeyCode::Down => Some(TuiCommand::HistorySearchNewer),
+        // ↑/Ctrl+S move up the ranked list; ↓/Ctrl+R move down (Ctrl+R keeps its
+        // "cycle to the next match" reflex).
+        KeyCode::Up => Some(TuiCommand::HistorySearchNewer),
         KeyCode::Char('s' | 'S') if ctrl => Some(TuiCommand::HistorySearchNewer),
+        KeyCode::Down => Some(TuiCommand::HistorySearchOlder),
+        KeyCode::Char('r' | 'R') if ctrl => Some(TuiCommand::HistorySearchOlder),
         KeyCode::Backspace => Some(TuiCommand::HistorySearchBackspace),
         KeyCode::Char(c) if !ctrl && !alt => Some(TuiCommand::HistorySearchInput(c)),
         _ => None,

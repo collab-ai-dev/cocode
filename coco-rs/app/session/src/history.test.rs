@@ -68,6 +68,28 @@ fn test_format_pasted_text_ref() {
 }
 
 #[test]
+fn timestamped_history_lazily_resolves_paste_payloads() {
+    let dir = tempfile::tempdir().unwrap();
+    let history = PromptHistory::new(dir.path(), "/project", &test_session_id("session-1"));
+    history
+        .add_with_pastes(
+            "inspect [Pasted text #1]",
+            &std::collections::HashMap::from([(1, "payload".to_string())]),
+        )
+        .unwrap();
+
+    let mut entries = history.get_timestamped_history();
+    let entry = entries.pop().expect("timestamped history row");
+    assert_eq!(entry.display, "inspect [Pasted text #1]");
+    assert!(entry.timestamp > 0);
+    let resolved = (entry.resolve)();
+    assert_eq!(
+        resolved.pasted_contents.get(&1).map(String::as_str),
+        Some("payload")
+    );
+}
+
+#[test]
 fn test_format_image_ref() {
     assert_eq!(format_image_ref(3), "[Image #3]");
 }

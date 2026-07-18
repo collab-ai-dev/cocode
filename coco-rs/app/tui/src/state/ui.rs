@@ -336,8 +336,27 @@ impl UiState {
     /// path so navigating the theme picker doesn't write an INFO line per
     /// keypress; commit/boot paths pass `true`.
     fn install_theme_runtime(&mut self, theme_state: ThemeRuntimeState, log: bool) {
-        self.theme = theme_state.theme.clone();
         let capability = coco_tui_ui::color::color_capability();
+        // On a genuine 16-color terminal, swap a truecolor palette for the
+        // hand-tuned ANSI theme (named colors the terminal maps to its own
+        // palette) instead of quantizing to 16 muddy buckets. The `Terminal`
+        // theme is already named/Reset-only and polarity-safe, so it passes
+        // through untouched — substituting a polarity-biased ANSI theme for it
+        // would reintroduce exactly the wash-out it was built to avoid. `None`
+        // (NO_COLOR / dumb) needs no swap — `downsample` collapses to `Reset`.
+        self.theme = if capability == coco_tui_ui::color::ColorCapability::Basic
+            && theme_state.active_id != coco_tui_ui::theme::ThemeName::Terminal.id()
+        {
+            use coco_tui_ui::theme::ThemeName;
+            let ansi = if theme_state.is_light {
+                ThemeName::LightAnsi
+            } else {
+                ThemeName::DarkAnsi
+            };
+            coco_tui_ui::theme::Theme::from_name(ansi)
+        } else {
+            theme_state.theme.clone()
+        };
         self.theme.downsample(capability);
         if log {
             // Record the resolved theme + color depth + terminal env so the
@@ -663,6 +682,9 @@ pub enum FocusTarget {
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {
     pub text: String,
+    /// Persistence timestamp (Unix milliseconds), when this row came from the
+    /// cross-session history store. In-session drafts may not have one yet.
+    pub timestamp_ms: Option<i64>,
     /// Paste-pill payloads referenced by `text`, snapshotted at submit so
     /// recalling the entry rehydrates the paste manager — without this a
     /// recalled `[Pasted text #N]` is a dangling token (the manager was
@@ -672,23 +694,69 @@ pub struct HistoryEntry {
     pub pastes: Vec<coco_tui_ui::paste::PasteEntry>,
 }
 
-/// Active Ctrl+R reverse-i-search session over the in-memory composer
-/// history. Mirrors codex's inline `reverse-i-search:` UX: typing edits
-/// `query`, Ctrl+R/↑ steps to older matches, ↓ to newer, Enter accepts
-/// the previewed entry into the composer, Esc restores the saved draft.
+impl HistoryEntry {
+    /// Rehydrate one persisted history row, including the exact paste-pill
+    /// labels embedded in its display string.
+    pub fn persisted(
+        text: String,
+        timestamp_ms: i64,
+        pasted_contents: std::collections::HashMap<i32, String>,
+    ) -> Self {
+        let pastes = pasted_contents
+            .into_iter()
+            .filter_map(|(id, content)| {
+                let marker = format!("[Pasted text #{id}");
+                let start = text.find(&marker)?;
+                let relative_end = text[start..].find(']')?;
+                let pill = text[start..=start + relative_end].to_string();
+                Some(coco_tui_ui::paste::PasteEntry {
+                    pill,
+                    content,
+                    is_image: false,
+                    image_bytes: None,
+                    image_mime: None,
+                })
+            })
+            .collect();
+        Self {
+            text,
+            timestamp_ms: Some(timestamp_ms),
+            pastes,
+        }
+    }
+}
+
+/// Active Ctrl+R fuzzy history-search session over the in-memory composer
+/// history. Typing edits `query` and re-ranks a visible list of matches (nucleo
+/// fuzzy, best first); ↑/Ctrl+S move the selection up the list, ↓/Ctrl+R down,
+/// Enter accepts the selected entry into the composer, Esc restores the saved
+/// draft. The ranked list renders through the shared suggestion popup.
 #[derive(Debug, Clone)]
 pub struct HistorySearch {
+    /// Plain-Up browse mode keeps the newest row anchored at the bottom of the
+    /// popup. Typing switches to ranked search and re-anchors at its best hit.
+    pub browse: bool,
     /// Search query shown in the composer's bottom-border footer.
     pub query: String,
-    /// Index into [`InputState::history`] of the currently previewed
-    /// match, or `None` when the query has no match yet.
-    pub matched: Option<usize>,
+    /// Ranked popup rows for the current query (empty query = recent browse).
+    pub results: Vec<crate::widgets::suggestion_popup::SuggestionItem>,
+    /// `InputState::history` index for each row in `results` (same length).
+    pub result_indices: Vec<usize>,
+    /// Selected row (index into `results`) previewed in the composer.
+    pub selected: usize,
     /// Draft text to restore on cancel / no-match.
     pub original_text: String,
     /// Paste-manager snapshot to restore alongside `original_text`.
     pub original_pastes: Vec<coco_tui_ui::paste::PasteEntry>,
     /// `history_index` to restore on cancel.
     pub original_history_index: Option<usize>,
+}
+
+impl HistorySearch {
+    /// History index of the currently selected match, if any.
+    pub fn selected_history_index(&self) -> Option<usize> {
+        self.result_indices.get(self.selected).copied()
+    }
 }
 
 /// Input prefix mode — derived from the leading character of [`InputState::text`].
@@ -871,21 +939,30 @@ impl InputState {
 
     /// Seed history from persistent cross-session storage at startup.
     ///
-    /// `texts` arrives newest-first (as `PromptHistory::get_history`
-    /// returns it). Deduped keeping the first (newest) occurrence and
-    /// capped at [`constants::MAX_HISTORY_ENTRIES`]. Hydrated entries are
-    /// text-only (no paste pills), matching codex's cross-session recall.
+    /// `texts` arrives newest-first. Compatibility helper for callers/tests
+    /// without persistence metadata.
     pub fn hydrate_history(&mut self, texts: Vec<String>) {
+        self.hydrate_history_entries(
+            texts
+                .into_iter()
+                .map(|text| HistoryEntry {
+                    text,
+                    timestamp_ms: None,
+                    pastes: Vec::new(),
+                })
+                .collect(),
+        );
+    }
+
+    /// Seed history from timestamped persistent storage, retaining paste
+    /// payloads so a recalled pill can still resolve after restart.
+    pub fn hydrate_history_entries(&mut self, entries: Vec<HistoryEntry>) {
         let max = constants::MAX_HISTORY_ENTRIES as usize;
         let mut seen = std::collections::HashSet::new();
-        self.history = texts
+        self.history = entries
             .into_iter()
-            .filter(|t| !t.is_empty() && seen.insert(t.clone()))
+            .filter(|entry| !entry.text.is_empty() && seen.insert(entry.text.clone()))
             .take(max)
-            .map(|text| HistoryEntry {
-                text,
-                pastes: Vec::new(),
-            })
             .collect();
     }
 
@@ -913,7 +990,14 @@ impl InputState {
         // Drop any prior occurrence, then prepend so the most recent
         // submission sits at index 0 for up-arrow recall.
         self.history.retain(|h| h.text != text);
-        self.history.insert(0, HistoryEntry { text, pastes });
+        self.history.insert(
+            0,
+            HistoryEntry {
+                text,
+                timestamp_ms: None,
+                pastes,
+            },
+        );
         let max = constants::MAX_HISTORY_ENTRIES as usize;
         if self.history.len() > max {
             self.history.truncate(max);

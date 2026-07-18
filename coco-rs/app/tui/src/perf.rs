@@ -93,6 +93,30 @@ pub(crate) enum MemoryPhase {
 }
 
 impl MemoryPhase {
+    /// Whether this phase drops a large allocation graph at once, making it
+    /// worth an explicit jemalloc purge (see [`crate::jemalloc_purge`]).
+    ///
+    /// The cliffs: a turn's transient allocations are freed and the process is
+    /// about to idle; a resume/replay swaps the whole history; `/clear` and
+    /// rewind drop it; compaction truncates it. The remaining phases are
+    /// observation points (`Startup`, `FirstDraw`, `Periodic`) or precede the
+    /// allocation rather than follow it (`TurnStarted`, `EngineReturned`), so
+    /// purging there would only cost a sweep with nothing to reclaim.
+    pub(crate) fn is_memory_cliff(self) -> bool {
+        match self {
+            Self::TurnEnded
+            | Self::HistoryReplaced
+            | Self::ContextCleared
+            | Self::MessageTruncated
+            | Self::SessionReset => true,
+            Self::Startup
+            | Self::FirstDraw
+            | Self::Periodic
+            | Self::TurnStarted
+            | Self::EngineReturned => false,
+        }
+    }
+
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Startup => "startup",

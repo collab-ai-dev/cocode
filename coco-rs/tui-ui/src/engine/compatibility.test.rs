@@ -50,6 +50,32 @@ fn disables_native_scrollback_when_zellij_version_is_present() {
 }
 
 #[test]
+fn no_out_of_band_repainter_on_a_plain_terminal() {
+    assert!(!repaints_pane_out_of_band_with(|_| None));
+}
+
+#[test]
+fn detects_out_of_band_repainters() {
+    // Each of these can paint over coco's pane while it is unfocused, which the
+    // cell diff cannot see — the focus heal keys on this.
+    for name in ["TMUX", "STY", "ZELLIJ", "ZELLIJ_SESSION_NAME"] {
+        assert!(
+            repaints_pane_out_of_band_with(|probed| (probed == name).then(|| "1".to_string())),
+            "{name} must mark the pane as repainted out of band"
+        );
+    }
+}
+
+#[test]
+fn an_empty_multiplexer_env_var_is_not_a_multiplexer() {
+    // Exported-but-empty is the shell's doing, not a live multiplexer; treating
+    // it as one would force a full repaint on every focus-gain forever.
+    assert!(!repaints_pane_out_of_band_with(
+        |name| (name == "TMUX").then(String::new)
+    ));
+}
+
+#[test]
 fn synchronized_update_defaults_true_and_reflects_probe() {
     // No probe yet → assume supported (BSU emitted, no fallback). This is the
     // only test that writes the process-global cache, so the default holds

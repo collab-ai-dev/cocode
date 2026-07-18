@@ -1,0 +1,14 @@
+---
+source: app/tui/src/presentation/request.test.rs
+expression: body
+---
+Allow this operation?
+
+Send a message
+
+Actions:
+  1/y · Yes, approve once
+▸ 2/s · Yes, allow mcp__slack for this session ◂
+  3/a · Yes, always allow mcp__slack locally
+  4/n · No, deny
+↑/↓ Navigate  Enter Select  1-4 or Y/S/A/N shortcuts  ^s This tool only  ^r Deny with reason

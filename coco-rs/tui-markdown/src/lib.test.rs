@@ -576,8 +576,8 @@ fn mermaid_fence_renders_as_cells() {
 
 #[test]
 fn table_with_wide_cell_keeps_uniform_row_width() {
-    // F3: a CJK cell wider than the column cap must not leave its row a column
-    // short — pad_cell re-pads to the exact column width after truncation.
+    // A CJK cell must not leave its row a column short — `pad_spans` re-pads
+    // every wrapped visual line to the exact column width.
     let md = "| a | b |\n| - | - |\n| 你好世界你好世界 | y |";
     let widths: Vec<usize> = render_text(md)
         .iter()
@@ -589,6 +589,100 @@ fn table_with_wide_cell_keeps_uniform_row_width() {
         widths.windows(2).all(|w| w[0] == w[1]),
         "table rows have differing display widths: {widths:?}"
     );
+}
+
+/// Column content widths parsed from the `┌─┬─┐` top border (dashes − 2 padding).
+fn table_col_widths(lines: &[String]) -> Vec<usize> {
+    let top = lines
+        .iter()
+        .find(|l| l.trim_start().starts_with('┌'))
+        .expect("top border present");
+    top.trim()
+        .trim_start_matches('┌')
+        .trim_end_matches('┐')
+        .split('┬')
+        .map(|seg| seg.chars().filter(|c| *c == '─').count().saturating_sub(2))
+        .collect()
+}
+
+#[test]
+fn table_wraps_long_cell_without_truncating() {
+    // D2: a cell wider than its column wraps across visual rows rather than
+    // silently truncating to an ellipsis (the old clamp(3,40) behavior).
+    let md = "| description |\n| - |\n| the quick brown fox jumps over the lazy dog |";
+    let lines: Vec<String> = render_with_width(md, 30).iter().map(line_text).collect();
+    let joined = lines.join("\n");
+    assert!(!joined.contains('…'), "cell was truncated: {joined}");
+    for word in [
+        "the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog",
+    ] {
+        assert!(joined.contains(word), "dropped word {word}: {joined}");
+    }
+    // Wrapping produced extra grid lines (a non-wrapped grid would be 5 lines:
+    // top + header + sep + one content + bottom).
+    let non_empty = lines.iter().filter(|l| !l.trim().is_empty()).count();
+    assert!(non_empty >= 6, "expected wrapped grid: {lines:?}");
+    for l in lines.iter().filter(|l| !l.trim().is_empty()) {
+        assert!(
+            coco_tui_ui::truncate::display_width(l) <= 30,
+            "row overflows width 30: {l:?}"
+        );
+    }
+}
+
+#[test]
+fn table_preserves_cell_styling() {
+    // D2: inline bold survives into the grid (the old path flattened cells).
+    let lines = render("| head |\n| - |\n| **bold** cell |");
+    let bold = lines
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .find(|s| s.content.as_ref() == "bold")
+        .expect("bold cell span present");
+    assert!(
+        bold.style.add_modifier.contains(Modifier::BOLD),
+        "cell bold styling dropped"
+    );
+}
+
+#[test]
+fn table_columns_are_proportional() {
+    // D2: a content-heavy column claims more width than a narrow one instead of
+    // every column getting an identical slice.
+    let md = "| a | description |\n| - | - |\n| x | word word word word word word word word |";
+    let lines: Vec<String> = render_with_width(md, 40).iter().map(line_text).collect();
+    let widths = table_col_widths(&lines);
+    assert_eq!(widths.len(), 2, "two columns: {widths:?}");
+    assert!(
+        widths[1] > widths[0] * 3,
+        "wide column should dominate: {widths:?}"
+    );
+}
+
+#[test]
+fn table_wide_cjk_cell_wraps_width_aware() {
+    // D2: a CJK run (2 cols/char, no break points) hard-breaks by character and
+    // no visual row exceeds the column width.
+    let md = "| h |\n| - |\n| 你好世界你好世界你好世界 |";
+    let lines: Vec<String> = render_with_width(md, 16).iter().map(line_text).collect();
+    for l in lines.iter().filter(|l| !l.trim().is_empty()) {
+        assert!(
+            coco_tui_ui::truncate::display_width(l) <= 16,
+            "cjk row overflows width 16: {} {l:?}",
+            coco_tui_ui::truncate::display_width(l)
+        );
+    }
+    let joined: String = lines.join("");
+    assert_eq!(joined.matches('你').count(), 3, "lost CJK chars: {joined}");
+}
+
+#[test]
+fn narrow_many_column_table_does_not_panic() {
+    // D2: the floor-overflow branch must survive a budget smaller than the sum
+    // of per-column minimums without deleting cell content.
+    let md = "| a | b | c | d | e |\n| - | - | - | - | - |\n| 1 | 2 | 3 | 4 | 5 |";
+    let lines = render_with_width(md, 12);
+    assert!(!lines.is_empty(), "degenerate table still renders");
 }
 
 #[test]
@@ -759,4 +853,47 @@ fn inline_link_destination_uses_hyperlink_style() {
         .find(|s| s.content.contains("https://example.com"))
         .expect("destination span present");
     assert_eq!(dest_span.style.fg, Some(expected));
+}
+
+#[test]
+fn table_narrow_cjk_column_keeps_border_aligned() {
+    // A CJK cell cannot be represented in one terminal column. Keep its
+    // two-column floor so the glyph survives and the generated grid remains
+    // internally aligned even when the viewport clips its far edge.
+    let md = "| 名 |\n| - |\n| 中文 |";
+    let lines: Vec<String> = render_with_width(md, 5)
+        .iter()
+        .map(line_text)
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    let widths: Vec<usize> = lines
+        .iter()
+        .map(|line| coco_tui_ui::truncate::display_width(line))
+        .collect();
+    assert!(widths.len() >= 4, "expected a full grid: {widths:?}");
+    assert!(
+        widths.windows(2).all(|w| w[0] == w[1]),
+        "ragged row widths (border misaligned): {widths:?}"
+    );
+    let joined = lines.join("\n");
+    assert!(joined.contains('名'), "lost header CJK glyph: {joined}");
+    assert_eq!(joined.matches('中').count(), 1, "lost CJK glyph: {joined}");
+    assert_eq!(joined.matches('文').count(), 1, "lost CJK glyph: {joined}");
+    insta::assert_snapshot!("table_narrow_cjk_wrap", joined);
+}
+
+#[test]
+fn link_labeled_with_inline_code_keeps_url_separator() {
+    // Regression: on_inline_code must feed the link-text accumulator so the
+    // ` (url)` suffix is not dropped / the URL is not concatenated.
+    let text = render_text("[`api`](https://example.com)").join("");
+    assert!(text.contains("api"), "{text}");
+    assert!(
+        text.contains("(https://example.com)"),
+        "URL not separated: {text}"
+    );
+    assert!(
+        !text.contains("apihttps"),
+        "URL concatenated onto text: {text}"
+    );
 }

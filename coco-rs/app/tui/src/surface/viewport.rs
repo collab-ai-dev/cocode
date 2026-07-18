@@ -148,26 +148,35 @@ struct InteractionPaneBottomReservation {
     bottom_height: u16,
 }
 
-fn input_height_for_state(state: &AppState) -> u16 {
+fn input_height_for_state(state: &AppState, width: u16) -> u16 {
     if matches!(
         state.ui.interaction.active_prompt,
         Some(PanePromptState::Question(_))
     ) {
         return 0;
     }
-    // Grow the composer with its hard line breaks (, whose TextInput
-    // expands with content) so recalled multi-message edits and multi-line input
-    // show on separate rows. Capped at MAX_INPUT_HEIGHT content rows (then the
-    // composer scrolls). +2 for the top/bottom borders.
+    // Grow the composer with its VISUAL rows — soft wraps as well as hard line
+    // breaks — so a long prompt gets the rows it needs instead of being clipped
+    // to one. Must wrap the SAME projection the renderer paints (mode-prefix
+    // stripped, placeholder / palette substituted — see `InputRenderModel`),
+    // not the raw buffer: in bash / palette / placeholder modes the two differ,
+    // and reserving from the raw text disagrees with what is drawn. `render_input`
+    // builds the widget with `command_palette_filter(None)`, so this mirrors it.
+    // Capped at MAX_INPUT_HEIGHT content rows (then the composer scrolls); +2 for
+    // the top/bottom borders.
     let max_content = (constants::MAX_INPUT_HEIGHT as usize)
         .saturating_sub(2)
         .max(1);
-    let line_count = state
-        .ui
-        .input
-        .text()
-        .split('\n')
-        .count()
+    let model = crate::widgets::InputRenderModel::build(
+        &state.ui.input,
+        state.is_streaming(),
+        state.session.prompt_suggestions.last().map(String::as_str),
+        state.session.queued_commands.iter().any(|q| q.editable),
+        None,
+        width,
+    );
+    let line_count = crate::widgets::composer_rows(&model.display_text, width)
+        .len()
         .clamp(1, max_content);
     line_count as u16 + 2
 }
@@ -175,7 +184,7 @@ fn input_height_for_state(state: &AppState) -> u16 {
 #[allow(clippy::too_many_arguments)]
 fn interaction_pane_bottom_reservation(
     state: &AppState,
-    _width: u16,
+    width: u16,
     max_height: u16,
     status_indicator_rows: u16,
     background_pills_rows: u16,
@@ -188,10 +197,10 @@ fn interaction_pane_bottom_reservation(
         } else {
             0
         };
-    let input_height = input_height_for_state(state);
+    let input_height = input_height_for_state(state, width);
     let popup_active = inline_popup_view(state).is_some();
     let status_height: u16 = crate::status_bar::status_bar_height(state);
-    let prompt_rows = interaction_prompt_height(state, _width, max_height);
+    let prompt_rows = interaction_prompt_height(state, width, max_height);
     // Match render_live_viewport's avail_below_input base exactly (it subtracts
     // the status-indicator and background-pill rows too) so the sizing pass and
     // the paint pass derive the same bottom_height when a popup is active.
@@ -249,7 +258,7 @@ fn render_live_viewport(
     layout: &mut FrameLayout,
     precomputed_live: Option<Vec<Line<'static>>>,
 ) {
-    let input_height = input_height_for_state(state);
+    let input_height = input_height_for_state(state, area.width);
     let activity = turn_activity_view(state, area.width);
     let activity_rows = inline_activity_height(&activity, area.height, area.width);
     let queue_rows: u16 = crate::widgets::QueueStatusWidget::height(&state.session.queued_commands);
@@ -559,7 +568,7 @@ fn render_input(frame: &mut SurfaceFrame<'_>, state: &AppState, area: Rect, styl
             .as_ref()
             .map(|s| crate::widgets::HistorySearchView {
                 query: s.query.as_str(),
-                matched: s.matched.is_some(),
+                matched: s.selected_history_index().is_some(),
             });
     let input = crate::widgets::InputWidget::new(&state.ui.input, styles)
         .focused(is_focused)

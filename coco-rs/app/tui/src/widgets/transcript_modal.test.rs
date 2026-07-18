@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use crate::i18n::locale_test_guard;
 use crate::state::AppState;
+use crate::state::session::ReasoningMetadata;
 use crate::state::transcript::TranscriptCellId;
 use crate::state::transcript::TranscriptState;
 use crate::theme::Theme;
@@ -72,6 +73,214 @@ fn seeded_app_state() -> AppState {
         ],
     );
     app_state
+}
+
+/// Render one frame through the real widget, reusing `layout` so the height
+/// cache carries across calls exactly as it does between frames.
+fn render_with_layout(
+    state: &AppState,
+    transcript: &TranscriptState,
+    layout: &mut TranscriptLayoutIndex,
+) {
+    let theme = Theme::default();
+    let area = Rect::new(0, 0, 60, 20);
+    let mut buffer = Buffer::empty(area);
+    TranscriptStateWidget::new(state, transcript, layout, UiStyles::new(&theme))
+        .render(area, &mut buffer);
+}
+
+#[test]
+fn test_height_cache_survives_a_generation_bump_from_an_append() {
+    // B3. The generation hash moves on ANY transcript or tool-status change,
+    // and the cache used to be flushed wholesale for it — so with the reader
+    // open during a turn, `total_height()` re-rendered every cell in the
+    // history on every change: O(history) full cell renders per delta.
+    //
+    // Cells are append-only pure derivations (I-2), so an append cannot change
+    // an already-measured cell's height. Those entries must survive.
+    let _locale = locale_test_guard("en");
+    let mut state = seeded_app_state();
+    let transcript = TranscriptState::new();
+    let mut layout = TranscriptLayoutIndex::default();
+
+    render_with_layout(&state, &transcript, &mut layout);
+    let measured: Vec<_> = layout
+        .heights
+        .iter()
+        .map(|(key, height)| (key.clone(), *height))
+        .collect();
+    assert!(
+        !measured.is_empty(),
+        "the first render must measure and cache cell heights"
+    );
+    let generation_before = layout.content_generation;
+
+    push_cells(&mut state, [assistant_text_cell("One more reply.")]);
+    render_with_layout(&state, &transcript, &mut layout);
+
+    assert_ne!(
+        layout.content_generation, generation_before,
+        "an append must bump the content generation (else this test proves nothing)"
+    );
+    for (key, height) in measured {
+        assert_eq!(
+            layout.heights.get(&key),
+            Some(&height),
+            "an append must not discard an already-measured cell's height: {key:?}"
+        );
+    }
+}
+
+#[test]
+fn test_height_cache_key_separates_tool_execution_status() {
+    // The one non-cell input to a cell's height: a tool cell's render reads
+    // live `ToolExecution` state (UI-only, I-3). Now that the map survives a
+    // generation bump, status must be part of the key — otherwise a completed
+    // tool would be served the height it had while running.
+    let _locale = locale_test_guard("en");
+    let mut state = seeded_app_state();
+    state.session.start_tool(
+        "call-1".to_string(),
+        "Grep".to_string(),
+        &serde_json::json!({"pattern": "fn main"}),
+    );
+    let transcript = TranscriptState::new();
+    let mut layout = TranscriptLayoutIndex::default();
+
+    render_with_layout(&state, &transcript, &mut layout);
+    let running: Vec<_> = layout
+        .heights
+        .keys()
+        .filter(|key| key.tool_layout.is_some())
+        .cloned()
+        .collect();
+    assert!(
+        !running.is_empty(),
+        "the tool cell's key must carry its execution status"
+    );
+
+    // Complete the tool: same cell id, different live status.
+    state.session.complete_tool("call-1", /*failed*/ false);
+    render_with_layout(&state, &transcript, &mut layout);
+
+    for key in running {
+        let completed = layout.heights.keys().any(|other| {
+            other.cell_id == key.cell_id
+                && other.width == key.width
+                && other.expanded == key.expanded
+                && other.tool_layout != key.tool_layout
+        });
+        assert!(
+            completed,
+            "a status change must re-measure under a new key rather than reuse {key:?}"
+        );
+    }
+}
+
+#[test]
+fn test_height_cache_key_tracks_elapsed_badge_width() {
+    let _locale = locale_test_guard("en");
+    let mut state = seeded_app_state();
+    state.session.start_tool(
+        "call-1".to_string(),
+        "Grep".to_string(),
+        &serde_json::json!({"pattern": "fn main"}),
+    );
+    let now = std::time::Instant::now();
+    let execution = state
+        .session
+        .tool_executions
+        .iter_mut()
+        .find(|tool| tool.call_id == "call-1")
+        .expect("running tool");
+    execution.started_at = now - std::time::Duration::from_secs(1);
+    execution.completed_at = Some(now);
+
+    let transcript = TranscriptState::new();
+    let mut layout = TranscriptLayoutIndex::default();
+    render_with_layout(&state, &transcript, &mut layout);
+    let short = layout
+        .heights
+        .keys()
+        .find(|key| key.tool_layout.is_some())
+        .cloned()
+        .expect("tool cache key");
+
+    let execution = state
+        .session
+        .tool_executions
+        .iter_mut()
+        .find(|tool| tool.call_id == "call-1")
+        .expect("running tool");
+    execution.started_at = now - std::time::Duration::from_secs(100);
+    render_with_layout(&state, &transcript, &mut layout);
+
+    assert!(layout.heights.keys().any(|key| {
+        key.cell_id == short.cell_id
+            && key.tool_layout.map(|(_, width)| width) != short.tool_layout.map(|(_, width)| width)
+    }));
+}
+
+#[test]
+fn test_height_cache_key_tracks_reasoning_metadata() {
+    let _locale = locale_test_guard("en");
+    let mut state = AppState::default();
+    let thinking = crate::transcript::derive::test_helpers::assistant_thinking_cell("planning");
+    let uuid = thinking.message_uuid;
+    push_cells(&mut state, [thinking]);
+    state.session.reasoning_metadata.insert(
+        uuid,
+        ReasoningMetadata {
+            duration_ms: Some(900),
+            reasoning_tokens: 10,
+        },
+    );
+    let transcript = TranscriptState::new();
+    let mut layout = TranscriptLayoutIndex::default();
+    render_with_layout(&state, &transcript, &mut layout);
+    let before = layout
+        .heights
+        .keys()
+        .find(|key| key.reasoning_metadata.is_some())
+        .cloned()
+        .expect("reasoning cache key");
+
+    state.session.reasoning_metadata.insert(
+        uuid,
+        ReasoningMetadata {
+            duration_ms: Some(1_300),
+            reasoning_tokens: 15,
+        },
+    );
+    render_with_layout(&state, &transcript, &mut layout);
+
+    assert!(layout.heights.keys().any(|key| {
+        key.cell_id == before.cell_id && key.reasoning_metadata != before.reasoning_metadata
+    }));
+}
+
+#[test]
+fn test_height_cache_is_bounded_across_a_truncation() {
+    // Entries whose cells a truncation removed are unreachable rather than
+    // wrong (their ids are gone), but they must not accumulate forever.
+    let _locale = locale_test_guard("en");
+    let mut state = seeded_app_state();
+    let transcript = TranscriptState::new();
+    let mut layout = TranscriptLayoutIndex::default();
+    render_with_layout(&state, &transcript, &mut layout);
+
+    for i in 0..400 {
+        push_cells(&mut state, [assistant_text_cell(&format!("reply {i}"))]);
+        state.session.transcript.on_message_truncated(5);
+        render_with_layout(&state, &transcript, &mut layout);
+    }
+
+    let cells = state.session.transcript.cells().len();
+    assert!(
+        layout.heights.len() <= (cells * 4).max(super::MIN_RETAINED_HEIGHTS),
+        "the retained height map must stay bounded, got {} entries for {cells} cells",
+        layout.heights.len()
+    );
 }
 
 #[test]

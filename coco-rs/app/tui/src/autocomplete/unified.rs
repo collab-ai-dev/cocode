@@ -41,6 +41,7 @@ pub fn seed_agent_items(agents: &[AgentInfo], query: &str) -> Vec<SuggestionItem
         .iter()
         .filter(|a| query_lower.is_empty() || a.name.to_lowercase().contains(&query_lower))
         .map(|a| SuggestionItem {
+            highlight_indices: Vec::new(),
             label: format!("{} (agent)", a.name),
             description: a.description.clone(),
             metadata: Some(SuggestionMeta::Agent { color: a.color }),
@@ -62,6 +63,7 @@ pub fn seed_mcp_resource_items(
                 || resource.server.to_lowercase().contains(&query_lower)
         })
         .map(|resource| SuggestionItem {
+            highlight_indices: Vec::new(),
             label: resource.name.clone(),
             description: resource
                 .description

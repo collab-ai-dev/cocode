@@ -31,6 +31,7 @@ coco-subagent.workspace = true
 coco-tui-markdown = { workspace = true, features = ["mermaid"] }
 coco-tui-ui.workspace = true
 coco-voice.workspace = true
+coco-utils-crash-handler.workspace = true
 coco-utils-image.workspace = true
 coco-utils-jemalloc.workspace = true
 coco-utils-pty.workspace = true
@@ -80,6 +81,7 @@ tempfile.workspace = true
 vt100.workspace = true
 criterion.workspace = true
 image = { workspace = true, features = ["png"] }
+rustix = { workspace = true, features = ["pty"] }
 
 [[bench]]
 name = "native_replay"
@@ -88,5 +90,10 @@ required-features = ["testing"]
 
 [[bench]]
 name = "native_surface_normal"
+harness = false
+required-features = ["testing"]
+
+[[bench]]
+name = "transcript_overlay"
 harness = false
 required-features = ["testing"]

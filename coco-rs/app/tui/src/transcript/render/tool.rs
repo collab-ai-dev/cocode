@@ -39,7 +39,7 @@ pub(super) fn try_render(
             .bold(),
     ];
     if !name_suffix.is_empty() {
-        header.push(Span::raw(name_suffix).fg(w.styles.dim()));
+        header.push(Span::raw(name_suffix).style(w.styles.dim_style()));
     }
     lines.push(Line::from(header));
     // Standalone cell path — no invocation cell here, so the tool input is

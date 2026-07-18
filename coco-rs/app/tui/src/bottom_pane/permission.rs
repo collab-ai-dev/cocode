@@ -59,6 +59,48 @@ pub(crate) fn intercept_prefix_edit(state: &mut AppState, cmd: &crate::events::T
     true
 }
 
+/// Route inline editing to the permission prompt's deny-reason field while it
+/// is open. Cloned from [`intercept_exit_plan_feedback_edit`] below — the same
+/// shape, on the classic tool prompt.
+///
+/// Takes precedence over the y/n/a hotkeys: once the field is open the user is
+/// typing prose, and a `n` in "won't work on Windows" must not deny the call.
+pub(crate) fn intercept_deny_reason_edit(
+    state: &mut AppState,
+    cmd: &crate::events::TuiCommand,
+) -> bool {
+    use crate::events::TuiCommand as C;
+    if !matches!(
+        cmd,
+        C::InsertChar(_)
+            | C::DeleteBackward
+            | C::DeleteWordBackward
+            | C::CursorLeft
+            | C::CursorRight
+            | C::CursorHome
+            | C::CursorEnd
+    ) {
+        return false;
+    }
+    let Some(PanePromptState::Permission(p)) = state.ui.interaction.active_prompt.as_mut() else {
+        return false;
+    };
+    let Some(input) = p.deny_reason_input.as_mut() else {
+        return false;
+    };
+    match cmd {
+        C::InsertChar(c) => input.insert(*c),
+        C::DeleteBackward => input.backspace(),
+        C::DeleteWordBackward => input.delete_word_backward(),
+        C::CursorLeft => input.left(),
+        C::CursorRight => input.right(),
+        C::CursorHome => input.home(),
+        C::CursorEnd => input.end(),
+        _ => return false,
+    }
+    true
+}
+
 /// Route inline editing to ExitPlanMode's "No, keep planning" feedback field
 /// while that row is focused. Mirrors the source UI's input row without
 /// widening the generic permission-choice wire type.
@@ -126,6 +168,16 @@ pub(crate) async fn resolve_classic_permission(
         ),
         PermissionAction::Deny => (false, false, vec![]),
     };
+    // A denial's reason, when the user opened the field and typed one. It
+    // reaches the model as `feedback`, so a denied call can be corrected
+    // instead of blindly retried. Only meaningful on Deny — an approval's
+    // field is never opened.
+    let feedback = (!approved)
+        .then_some(p.deny_reason_input.as_ref())
+        .flatten()
+        .map(|input| input.value.trim())
+        .filter(|reason| !reason.is_empty())
+        .map(str::to_string);
     tracing::info!(
         target: "coco_tui::permission",
         request_id = %p.request_id,
@@ -134,6 +186,7 @@ pub(crate) async fn resolve_classic_permission(
         always_allow,
         rules = permission_updates.len(),
         multi_choice = false,
+        has_deny_reason = feedback.is_some(),
         "user permission decision",
     );
     if let Err(e) = command_tx
@@ -141,7 +194,7 @@ pub(crate) async fn resolve_classic_permission(
             request_id: p.request_id.clone(),
             approved,
             always_allow,
-            feedback: None,
+            feedback,
             updated_input: None,
             resolution_detail: None,
             permission_updates,

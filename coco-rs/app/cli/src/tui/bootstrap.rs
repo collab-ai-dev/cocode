@@ -369,14 +369,24 @@ pub async fn run_tui(
         coco_agent_host::session_dialogs::build_initial_session_ui_flags_payload(runtime);
     app.state_mut().ui.coordinator_mode_active = initial_ui_flags.coordinator_mode_active;
 
-    // Hydrate the composer's up-arrow history from the persistent
-    // cross-session store (`<config_home>/history.jsonl`), project-scoped
-    // to this cwd and newest-first. Text-only recall — paste pills are
-    // re-snapshotted per session, matching codex cross-session behaviour.
+    // Hydrate composer history from the timestamped persistent store. Paste
+    // payloads are resolved off the UI thread and reattached to their exact
+    // pill labels so cross-session recall never produces dangling tokens.
     {
         let project = cwd.to_string_lossy().to_string();
-        let texts = runtime.prompt_history_texts(project).await;
-        app.state_mut().ui.input.hydrate_history(texts);
+        let entries = runtime
+            .prompt_history_entries(project)
+            .await
+            .into_iter()
+            .map(|entry| {
+                coco_tui::HistoryEntry::persisted(
+                    entry.display,
+                    entry.timestamp,
+                    entry.pasted_contents,
+                )
+            })
+            .collect();
+        app.state_mut().ui.input.hydrate_history_entries(entries);
     }
     app = app.with_display_settings_reload(display_settings_rx);
     app = app.with_config_reload_errors(config_reload_errors_rx);

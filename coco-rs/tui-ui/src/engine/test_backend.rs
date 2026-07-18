@@ -182,8 +182,12 @@ impl SurfaceBackend for VT100Backend {
         self.inner.leave_modal_alt_screen()
     }
 
-    fn leave_terminal_modes(&mut self) -> io::Result<()> {
-        self.inner.leave_terminal_modes()
+    fn begin_terminal_restore(&mut self) -> io::Result<()> {
+        self.inner.begin_terminal_restore()
+    }
+
+    fn finish_terminal_restore(&mut self) -> io::Result<()> {
+        self.inner.finish_terminal_restore()
     }
 
     fn write_drop_trailing_newline(&mut self) -> io::Result<()> {

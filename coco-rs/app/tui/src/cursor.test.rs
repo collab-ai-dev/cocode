@@ -85,12 +85,35 @@ fn compute_cursor_returns_none_for_zero_sized_area() {
 }
 
 #[test]
-fn compute_cursor_clamps_to_area_width() {
+fn compute_cursor_follows_a_long_prompt_onto_its_wrapped_row() {
+    // Before the composer wrapped, a long prompt ran off the right edge
+    // (invisible) and the cursor was clamped to the last column — the tell for
+    // text the user could no longer see. Now the text wraps and the cursor
+    // tracks its real position on the wrapped row.
+    //
+    // Content width is 80 - 2 (gutter) = 78, and the buffer has no spaces, so
+    // rows break at 78/156: the caret at byte 200 sits at column 200-156 = 44.
     let state = make_state(&"x".repeat(200));
     let claim = compute_cursor(&state, layout(INPUT_AREA)).unwrap();
-    // max_cursor = width - (indicator_width + 1) = 80 - 3 = 77
-    // cursor_x = area.x + indicator_width + min(raw, 77) = 0 + 2 + 77 = 79
-    assert_eq!(claim.position.x, INPUT_AREA.x + 2 + 77);
+    assert_eq!(claim.position.x, INPUT_AREA.x + 2 + 44);
+    assert!(
+        claim.position.x < INPUT_AREA.x + INPUT_AREA.width,
+        "the caret must stay inside the composer"
+    );
+}
+
+#[test]
+fn compute_cursor_scrolls_a_wrapped_prompt_to_keep_the_caret_visible() {
+    // The composer here has one content row (height 3 = 2 borders + 1), and the
+    // prompt wraps to three. The caret must land on the visible row rather than
+    // below the composer.
+    let state = make_state(&"x".repeat(200));
+    let claim = compute_cursor(&state, layout(INPUT_AREA)).unwrap();
+    assert_eq!(
+        claim.position.y,
+        INPUT_AREA.y + 1,
+        "the scrolled composer must keep the caret on its single content row"
+    );
 }
 
 #[test]

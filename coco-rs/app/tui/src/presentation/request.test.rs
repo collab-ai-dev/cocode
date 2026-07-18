@@ -47,6 +47,8 @@ fn permission_prompt(detail: PermissionDetail) -> PermissionPromptState {
         explanation_visible: false,
         explanation: crate::state::ExplainerFetch::NotFetched,
         prefix_input: None,
+        mcp_allow_scope: Default::default(),
+        deny_reason_input: None,
     }
 }
 
@@ -1328,6 +1330,48 @@ fn permission_content_explainer_panel_snapshot() {
         reasoning: "rm -rf is destructive".to_string(),
         risk: "data loss".to_string(),
     });
+    let (_title, body, _border) = permission_content(
+        &state,
+        coco_types::PermissionMode::Default,
+        UiStyles::new(&theme),
+    );
+    insta::assert_snapshot!(body);
+}
+
+#[test]
+fn permission_content_mcp_server_scope_snapshot() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let mut state = permission_prompt(PermissionDetail::Generic {
+        input_preview: "Send a message".to_string(),
+    });
+    state.tool_name = "mcp__slack__send_message".to_string();
+    state.show_always_allow = true;
+    state.selected_choice = 1;
+    state.mcp_allow_scope = crate::state::McpAllowScope::Server;
+
+    let (_title, body, _border) = permission_content(
+        &state,
+        coco_types::PermissionMode::Default,
+        UiStyles::new(&theme),
+    );
+    insta::assert_snapshot!(body);
+}
+
+#[test]
+fn permission_content_deny_reason_snapshot() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let mut state = permission_prompt(PermissionDetail::Generic {
+        input_preview: "Send a message".to_string(),
+    });
+    state.tool_name = "mcp__slack__send_message".to_string();
+    state.show_always_allow = true;
+    state.selected_choice = 3;
+    state.deny_reason_input = Some(crate::state::PrefixInputState::new(
+        "wrong channel".to_string(),
+    ));
+
     let (_title, body, _border) = permission_content(
         &state,
         coco_types::PermissionMode::Default,

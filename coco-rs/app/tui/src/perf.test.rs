@@ -1,6 +1,71 @@
 use super::*;
 
 #[test]
+fn memory_cliffs_cover_every_phase_that_drops_a_large_graph() {
+    // B4: purging only at TurnEnded left a resumed / cleared / rewound session's
+    // freed pages resident until the next turn ended — which may be minutes away,
+    // or never. Every phase that drops a big allocation graph must purge.
+    for phase in [
+        MemoryPhase::TurnEnded,
+        MemoryPhase::HistoryReplaced,
+        MemoryPhase::ContextCleared,
+        MemoryPhase::MessageTruncated,
+        MemoryPhase::SessionReset,
+    ] {
+        assert!(
+            phase.is_memory_cliff(),
+            "{} drops a large graph and must purge",
+            phase.as_str()
+        );
+    }
+}
+
+#[test]
+fn observation_only_phases_do_not_purge() {
+    // Purging here would pay for an MADV_DONTNEED sweep with nothing to reclaim:
+    // these either observe (Startup/FirstDraw/Periodic) or run BEFORE the
+    // allocations they precede (TurnStarted/EngineReturned).
+    for phase in [
+        MemoryPhase::Startup,
+        MemoryPhase::FirstDraw,
+        MemoryPhase::Periodic,
+        MemoryPhase::TurnStarted,
+        MemoryPhase::EngineReturned,
+    ] {
+        assert!(
+            !phase.is_memory_cliff(),
+            "{} has nothing to reclaim and must not purge",
+            phase.as_str()
+        );
+    }
+}
+
+#[test]
+fn every_memory_phase_has_a_distinct_log_reason() {
+    // `as_str` is the purge log's `reason` field (B4), so a duplicate would
+    // silently merge two sites' attribution.
+    let phases = [
+        MemoryPhase::Startup,
+        MemoryPhase::FirstDraw,
+        MemoryPhase::Periodic,
+        MemoryPhase::TurnStarted,
+        MemoryPhase::EngineReturned,
+        MemoryPhase::HistoryReplaced,
+        MemoryPhase::TurnEnded,
+        MemoryPhase::ContextCleared,
+        MemoryPhase::MessageTruncated,
+        MemoryPhase::SessionReset,
+    ];
+    let reasons: std::collections::HashSet<&str> =
+        phases.iter().map(|phase| phase.as_str()).collect();
+    assert_eq!(
+        reasons.len(),
+        phases.len(),
+        "every phase needs a distinct purge reason"
+    );
+}
+
+#[test]
 fn parses_macos_ps_memory_output_and_converts_kib_to_bytes() {
     let parsed = parse_ps_memory_output("  12345  67890\n").expect("parse ps output");
     let sample = parsed.into_sample(7);

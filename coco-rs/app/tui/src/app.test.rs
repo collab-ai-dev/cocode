@@ -13,7 +13,10 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyEventState;
 use crossterm::event::KeyModifiers;
+use ratatui::layout::Size;
 
+use super::App;
+use super::CORE_EVENT_DRAIN_BATCH_MAX;
 use super::DEFERRED_CORE_EVENT_LIMIT;
 use super::DeferredCoreEvent;
 use super::auto_mode_denied_toast_message;
@@ -27,6 +30,21 @@ use crate::state::PanePromptState;
 use crate::state::PermissionDetail;
 use crate::state::PermissionPromptState;
 use crate::state::ToastSeverity;
+use crate::terminal::Tui;
+use coco_tui_ui::engine::compatibility::TerminalCompatibility;
+use coco_tui_ui::engine::terminal::SurfaceTerminal;
+use coco_tui_ui::engine::test_backend::VT100Backend;
+
+fn test_app(
+    out_of_band_repainter: bool,
+) -> (App<VT100Backend>, tokio::sync::mpsc::Sender<CoreEvent>) {
+    let terminal = SurfaceTerminal::new(VT100Backend::new(80, 24)).expect("test terminal");
+    let mut tui = Tui::new_for_test(terminal, TerminalCompatibility::NativeScrollback);
+    tui.set_out_of_band_repainter_for_test(out_of_band_repainter);
+    let (command_tx, _command_rx, event_tx, event_rx) = super::create_channels();
+    let app = App::with_terminal(tui, command_tx, event_rx, std::path::PathBuf::from("."));
+    (app, event_tx)
+}
 
 fn key(code: KeyCode, modifiers: KeyModifiers, kind: KeyEventKind) -> KeyEvent {
     KeyEvent {
@@ -68,6 +86,8 @@ fn classifier_prompt(request_id: &str) -> PermissionPromptState {
         explanation_visible: false,
         explanation: ExplainerFetch::NotFetched,
         prefix_input: None,
+        mcp_allow_scope: Default::default(),
+        deny_reason_input: None,
     }
 }
 
@@ -224,6 +244,93 @@ fn crossterm_filter_accepts_plain_character_repeat_only() {
             KeyEventKind::Repeat,
         )))
         .is_none()
+    );
+}
+
+#[tokio::test]
+async fn resize_burst_routes_to_one_settled_frame_at_the_latest_size() {
+    let (mut app, _event_tx) = test_app(false);
+    for width in [100, 92, 84, 76] {
+        assert!(
+            !app.handle_event(TuiEvent::Resize { width, height: 30 })
+                .await,
+            "an intermediate resize must not request an immediate frame"
+        );
+    }
+    assert_ne!(app.state.ui.terminal_size, Size::new(76, 30));
+
+    tokio::time::sleep(crate::resize_debounce::RESIZE_QUIET_PERIOD).await;
+    app.redraw().expect("settled resize draw");
+
+    assert_eq!(app.state.ui.terminal_size, Size::new(76, 30));
+    assert_eq!(
+        app.frame_index, 1,
+        "the burst must produce one applied frame"
+    );
+}
+
+#[tokio::test]
+async fn focus_gain_routes_cursor_reassertion_and_gated_viewport_heal() {
+    let (mut plain, _event_tx) = test_app(false);
+    assert!(
+        plain
+            .handle_event(TuiEvent::FocusChanged { focused: true })
+            .await
+    );
+    assert_eq!(plain.tui.invalidation_counts_for_test(), (0, 1));
+
+    let (mut multiplexed, _event_tx) = test_app(true);
+    assert!(
+        multiplexed
+            .handle_event(TuiEvent::FocusChanged { focused: true })
+            .await
+    );
+    assert_eq!(multiplexed.tui.invalidation_counts_for_test(), (1, 1));
+}
+
+#[tokio::test]
+async fn focus_heal_flushes_an_in_flight_resize_before_repaint() {
+    let (mut app, _event_tx) = test_app(true);
+    assert!(
+        !app.handle_event(TuiEvent::Resize {
+            width: 71,
+            height: 19,
+        })
+        .await
+    );
+
+    assert!(
+        app.handle_event(TuiEvent::FocusChanged { focused: true })
+            .await
+    );
+    assert_eq!(app.state.ui.terminal_size, Size::new(71, 19));
+    assert_eq!(app.tui.invalidation_counts_for_test(), (1, 1));
+    assert_eq!(
+        app.resize_debounce.poll(std::time::Instant::now()),
+        crate::resize_debounce::ResizeAction::Idle,
+    );
+}
+
+#[tokio::test]
+async fn core_event_batch_leaves_backlog_for_the_next_select_poll() {
+    let (mut app, event_tx) = test_app(false);
+    let total = CORE_EVENT_DRAIN_BATCH_MAX + 8;
+    for timestamp in 0..total {
+        event_tx
+            .try_send(CoreEvent::Protocol(ServerNotification::KeepAlive {
+                timestamp: timestamp as i64,
+            }))
+            .expect("queue core event");
+    }
+
+    let first = app.notification_rx.recv().await.expect("first core event");
+    app.handle_core_event_batch(first)
+        .await
+        .expect("process bounded batch");
+
+    assert_eq!(
+        app.notification_rx.len(),
+        total - CORE_EVENT_DRAIN_BATCH_MAX
     );
 }
 

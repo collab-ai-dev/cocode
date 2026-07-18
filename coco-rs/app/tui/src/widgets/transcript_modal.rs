@@ -35,6 +35,7 @@ use crate::presentation::transcript::tool_output_preview;
 use crate::presentation::transcript::transcript_presentation_with_cells;
 use crate::state::AppState;
 use crate::state::session::ToolExecution;
+use crate::state::session::ToolStatus;
 use crate::state::transcript::TranscriptCellId;
 use crate::state::transcript::TranscriptScrollPosition;
 use crate::state::transcript::TranscriptState;
@@ -54,7 +55,24 @@ struct TranscriptHeightCacheKey {
     cell_id: TranscriptCellId,
     width: u16,
     expanded: bool,
+    /// Execution status of the tool this cell renders, when it renders one.
+    ///
+    /// A settled cell is a pure, immutable derivation of its message (I-2), so
+    /// its own content cannot change under a stable id. A `ToolUse` cell's
+    /// rendered height additionally depends on live `ToolExecution` state,
+    /// which is UI-only (I-3) and NOT part of the cell — so it belongs in the
+    /// key. Keying on it here is what lets the map survive a generation bump
+    /// instead of being flushed wholesale. Only the elapsed badge's width is
+    /// relevant to height, so ticking within the same width reuses the entry.
+    tool_layout: Option<(ToolStatus, usize)>,
+    /// Thinking header metadata lives in a UI side-cache rather than the
+    /// immutable transcript cell, so it must participate in height identity.
+    reasoning_metadata: Option<(Option<i64>, i64)>,
 }
+
+/// Floor for the [`TranscriptLayoutIndex::heights`] retention bound, so short
+/// transcripts never trip the prune.
+const MIN_RETAINED_HEIGHTS: usize = 256;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TranscriptLayoutIndex {
@@ -74,8 +92,25 @@ impl TranscriptLayoutIndex {
 
     fn begin_frame(&mut self, content_generation: u64, prefix_generation: u64, cell_count: usize) {
         if self.content_generation != Some(content_generation) {
-            self.reset();
             self.content_generation = Some(content_generation);
+            // `heights` is deliberately RETAINED across the bump.
+            //
+            // The generation hash moves on any transcript or tool-status
+            // change, and flushing the whole map for it meant that with the
+            // overlay open during a turn, `total_height()` re-rendered every
+            // cell in the history on every change — O(history) full cell
+            // renders per delta.
+            //
+            // Nothing that a bump signals can invalidate a *keyed* height:
+            // cells are append-only-with-truncation pure derivations, live
+            // cells bypass this cache entirely (see `height`), a width change
+            // is already part of the key, and tool status is now part of it
+            // too. Entries whose cells a truncation removed are unreachable
+            // (their ids are gone) rather than wrong, and the prune below
+            // bounds them.
+            if self.heights.len() > cell_count.saturating_mul(4).max(MIN_RETAINED_HEIGHTS) {
+                self.heights.clear();
+            }
         }
         if self.prefix_generation != Some(prefix_generation) || self.prefix.len() != cell_count + 1
         {
@@ -176,8 +211,10 @@ impl TranscriptStateWidget<'_> {
             presentation.cells.len(),
         );
         if presentation.cells.is_empty() {
-            Line::from(Span::raw(t!("transcript.empty").to_string()).fg(self.styles.dim()))
-                .render(Rect { height: 1, ..area }, buf);
+            Line::from(
+                Span::raw(t!("transcript.empty").to_string()).style(self.styles.dim_style()),
+            )
+            .render(Rect { height: 1, ..area }, buf);
             return;
         }
 
@@ -230,10 +267,11 @@ impl TranscriptStateWidget<'_> {
             .display_for(&KeybindingAction::AppToggleTranscript, TuiContext::Chat)
             .unwrap_or_else(|| "ctrl+o".to_string());
         let nav = t!("transcript.hint_footer_nav", toggle = toggle_chord.as_str()).to_string();
-        Line::from(Span::raw(nav).fg(self.styles.dim())).render(Rect { height: 1, ..area }, buf);
+        Line::from(Span::raw(nav).style(self.styles.dim_style()))
+            .render(Rect { height: 1, ..area }, buf);
         if area.height > 1 {
             let actions = t!("transcript.hint_footer_actions").to_string();
-            Line::from(Span::raw(actions).fg(self.styles.dim())).render(
+            Line::from(Span::raw(actions).style(self.styles.dim_style())).render(
                 Rect {
                     y: area.y.saturating_add(1),
                     height: 1,
@@ -301,6 +339,44 @@ impl<'a> TranscriptCellRenderer<'a> {
     ) -> usize {
         let lines = self.render_cell(cell, expanded, selected);
         wrapped_height(&lines, self.width)
+    }
+
+    /// Live execution status of the tool a cell renders, if it renders one.
+    ///
+    /// UI-only tool state that can affect wrapping. The elapsed badge is live,
+    /// but only its displayed width belongs in a height key; values with the
+    /// same width render to the same number of columns.
+    fn tool_layout_for(&self, cell_id: &TranscriptCellId) -> Option<(ToolStatus, usize)> {
+        let TranscriptCellId::ToolCall { call_id } = cell_id else {
+            return None;
+        };
+        self.tool_executions
+            .iter()
+            .find(|tool| &tool.call_id == call_id)
+            .map(|tool| {
+                (
+                    tool.status,
+                    format_duration_seconds(tool.elapsed()).chars().count(),
+                )
+            })
+    }
+
+    fn reasoning_layout_for(&self, cell: &TranscriptSourceCell<'_>) -> Option<(Option<i64>, i64)> {
+        let TranscriptSourceCell::Committed(TranscriptCell::Cell { index }) = cell else {
+            return None;
+        };
+        let rendered = self.cells.get(*index)?;
+        let metadata_anchor = match &rendered.kind {
+            CellKind::AssistantThinking {
+                metadata_anchor, ..
+            }
+            | CellKind::AssistantRedactedThinking { metadata_anchor } => *metadata_anchor,
+            _ => false,
+        };
+        metadata_anchor
+            .then(|| self.reasoning_metadata.get(&rendered.message_uuid))
+            .flatten()
+            .map(|meta| (meta.duration_ms, meta.reasoning_tokens))
     }
 
     fn render_window(
@@ -526,8 +602,8 @@ impl<'a> TranscriptCellRenderer<'a> {
                 ) {
                     lines.push(Line::from(vec![
                         Span::raw("◇ ").fg(self.styles.accent()).dim(),
-                        Span::raw("Referenced file ").fg(self.styles.dim()),
-                        Span::raw(path).fg(self.styles.dim()).bold(),
+                        Span::raw("Referenced file ").style(self.styles.dim_style()),
+                        Span::raw(path).style(self.styles.dim_style()).bold(),
                     ]));
                 } else if let Some(path) = crate::transcript::render::nested_memory_chip_path(
                     cell.source.as_ref(),
@@ -535,15 +611,15 @@ impl<'a> TranscriptCellRenderer<'a> {
                 ) {
                     lines.push(Line::from(vec![
                         Span::raw("◆ ").fg(self.styles.accent()).dim(),
-                        Span::raw("memory · ").fg(self.styles.dim()),
-                        Span::raw(path).fg(self.styles.dim()),
+                        Span::raw("memory · ").style(self.styles.dim_style()),
+                        Span::raw(path).style(self.styles.dim_style()),
                     ]));
                 } else if let Some(summary) =
                     crate::transcript::render::attachment_summary_text(cell.source.as_ref())
                 {
                     lines.push(Line::from(vec![
                         Span::raw("◇ ").fg(self.styles.accent()).dim(),
-                        Span::raw(summary).fg(self.styles.dim()),
+                        Span::raw(summary).style(self.styles.dim_style()),
                     ]));
                 }
             }
@@ -560,7 +636,8 @@ impl<'a> TranscriptCellRenderer<'a> {
         match kind {
             SystemCellKind::UserInterruption { .. } => {
                 lines.push(Line::from(
-                    Span::raw(t!("chat.interrupted_marker").to_string()).fg(self.styles.dim()),
+                    Span::raw(t!("chat.interrupted_marker").to_string())
+                        .style(self.styles.dim_style()),
                 ));
             }
             SystemCellKind::Informational => {
@@ -648,7 +725,7 @@ impl<'a> TranscriptCellRenderer<'a> {
             spans.extend(preview_spans);
             spans.push(Span::raw(")").fg(self.styles.text()));
         }
-        spans.push(Span::raw(elapsed).fg(self.styles.dim()).dim());
+        spans.push(Span::raw(elapsed).style(self.styles.dim_style()));
         lines.push(Line::from(spans));
     }
 
@@ -767,7 +844,7 @@ impl<'a> TranscriptCellRenderer<'a> {
         let mut iter = text.lines();
         if let Some(first) = iter.next() {
             lines.push(Line::from(vec![
-                Span::raw(format!("{marker} ")).fg(self.styles.dim()),
+                Span::raw(format!("{marker} ")).style(self.styles.dim_style()),
                 Span::raw(transcript_safe_line(first)).fg(self.styles.text()),
             ]));
             for line in iter.take(TRANSCRIPT_EXPANDED_CELL_LINE_CAP.saturating_sub(1)) {
@@ -777,7 +854,7 @@ impl<'a> TranscriptCellRenderer<'a> {
             }
         } else {
             lines.push(Line::from(
-                Span::raw(marker.to_string()).fg(self.styles.dim()),
+                Span::raw(marker.to_string()).style(self.styles.dim_style()),
             ));
         }
     }
@@ -798,7 +875,7 @@ impl<'a> TranscriptCellRenderer<'a> {
         if iter.next().is_some() {
             lines.push(Line::from(
                 Span::raw(format!("{prefix}{TRANSCRIPT_TRUNCATED_HINT}"))
-                    .fg(self.styles.dim())
+                    .style(self.styles.dim_style())
                     .italic(),
             ));
         }
@@ -812,7 +889,7 @@ impl<'a> TranscriptCellRenderer<'a> {
         let preview = truncate_chars(&trimmed, PREVIEW_CHARS);
         lines.push(Line::from(vec![
             Span::raw("  # [meta] ").fg(self.styles.system_message()),
-            Span::raw(preview).fg(self.styles.dim()).italic(),
+            Span::raw(preview).style(self.styles.dim_style()).italic(),
         ]));
     }
 }
@@ -994,6 +1071,8 @@ impl<'cells, 'state, 'r> TranscriptPager<'cells, 'state, 'r> {
             return self.renderer.desired_height(cell, expanded, false).max(1);
         };
         let key = TranscriptHeightCacheKey {
+            tool_layout: self.renderer.tool_layout_for(&id),
+            reasoning_metadata: self.renderer.reasoning_layout_for(cell),
             cell_id: id,
             width: self.renderer.width,
             expanded,
@@ -1049,6 +1128,26 @@ fn transcript_layout_generation(state: &AppState, cells: &[RenderedCell]) -> u64
     for tool in &state.session.tool_executions {
         hash = mix_str(hash, &tool.call_id);
         hash = mix_u64(hash, tool.status as u64);
+        hash = mix_u64(
+            hash,
+            format_duration_seconds(tool.elapsed()).chars().count() as u64,
+        );
+    }
+    for cell in cells {
+        let metadata_anchor = match &cell.kind {
+            CellKind::AssistantThinking {
+                metadata_anchor, ..
+            }
+            | CellKind::AssistantRedactedThinking { metadata_anchor } => *metadata_anchor,
+            _ => false,
+        };
+        if metadata_anchor {
+            hash = mix_str(hash, &cell.message_uuid.to_string());
+            if let Some(meta) = state.session.reasoning_metadata.get(&cell.message_uuid) {
+                hash = mix_u64(hash, meta.duration_ms.unwrap_or(-1) as u64);
+                hash = mix_u64(hash, meta.reasoning_tokens as u64);
+            }
+        }
     }
     hash
 }

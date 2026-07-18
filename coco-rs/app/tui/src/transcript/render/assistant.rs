@@ -409,7 +409,7 @@ pub(super) fn try_render(
                 spans.extend(preview_spans);
                 spans.push(Span::raw(")").fg(w.styles.text()));
             }
-            spans.push(Span::raw(elapsed_badge).fg(w.styles.dim()).dim());
+            spans.push(Span::raw(elapsed_badge).style(w.styles.dim_style()));
             lines.push(Line::from(spans));
             Some(())
         }

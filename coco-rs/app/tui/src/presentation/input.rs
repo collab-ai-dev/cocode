@@ -21,6 +21,17 @@ pub(crate) struct InlinePopupView<'a> {
 /// tokens containing `/`, prose `@word`, a `/usr/...` path typed as a
 /// message) must not materialize a placeholder panel.
 pub(crate) fn inline_popup_view(state: &AppState) -> Option<InlinePopupView<'_>> {
+    // Ctrl+R fuzzy history search renders its ranked list through the same popup
+    // slot. While a search is active it OWNS the slot exclusively — even with
+    // zero matches it returns `None` (empty popup, no autocomplete) so the popup
+    // can never show autocomplete suggestions while every keystroke is editing
+    // the history query (all keys route to the search while it is active).
+    if let Some(search) = state.ui.history_search.as_ref() {
+        return (!search.results.is_empty()).then_some(InlinePopupView {
+            items: &search.results,
+            selected: search.selected,
+        });
+    }
     if state.ui.interaction.active_prompt.is_some() {
         return None;
     }

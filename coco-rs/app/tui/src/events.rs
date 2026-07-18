@@ -126,6 +126,12 @@ pub enum TuiCommand {
     Yank,
     /// Undo the last composer edit (restores the previous input snapshot).
     UndoInput,
+    /// Re-apply the most recently undone composer edit.
+    RedoInput,
+    /// Widen an MCP "always allow" from this tool to the whole server.
+    TogglePermissionAllowScope,
+    /// Open the permission prompt's deny-reason field.
+    DenyPermissionWithReason,
 
     // ── Cursor movement ──
     /// Move cursor left.
@@ -371,6 +377,11 @@ pub enum TuiCommand {
     TranscriptSelectNext,
     /// Expand/collapse the selected transcript cell.
     TranscriptToggleCell,
+    /// Copy the selected transcript cell's text to the clipboard (`y`).
+    TranscriptCopyCellText,
+    /// Copy the selected cell's kind-specific metadata — a shell command,
+    /// a file path, or a URL (`Y`).
+    TranscriptCopyCellMeta,
     /// Scroll the transcript reader by rendered rows.
     TranscriptScrollLines(i32),
     /// Scroll the transcript reader by one viewport page.

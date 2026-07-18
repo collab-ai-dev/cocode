@@ -11,7 +11,7 @@ members = [
     "common/model-card",
     "common/llm-types",
 
-    # ─── utils/ (27) ───
+    # ─── utils/ (28) ───
     "utils/absolute-path",
     "utils/audio-capture",
     "utils/async-utils",
@@ -20,6 +20,7 @@ members = [
     "utils/coco-cron",
     "utils/coco-paths",
     "utils/common",
+    "utils/crash-handler",
     "utils/cursor",
     "utils/download",
     "utils/file-encoding",
@@ -174,6 +175,7 @@ coco-utils-absolute-path = { path = "utils/absolute-path" }
 coco-utils-cache = { path = "utils/cache" }
 coco-utils-cargo-bin = { path = "utils/cargo-bin" }
 coco-utils-common = { path = "utils/common" }
+coco-utils-crash-handler = { path = "utils/crash-handler" }
 coco-utils-download = { path = "utils/download" }
 coco-utils-image = { path = "utils/image" }
 coco-utils-jemalloc = { path = "utils/jemalloc" }
@@ -418,7 +420,7 @@ itertools = "0.14"
 # scrolling-regions for the native scrollback substrate, widget-ref for
 # composable presentation surfaces, and rendered-line-info for measurement.
 # unstable-backend-writer stays off until we need direct writer_mut access.
-ratatui = { version = "0.30", features = [
+ratatui = { version = "=0.30.2", features = [
     "scrolling-regions",
     "unstable-rendered-line-info",
     "unstable-widget-ref",

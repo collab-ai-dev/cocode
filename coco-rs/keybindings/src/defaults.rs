@@ -125,6 +125,9 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 // Undo: dual binding for legacy + kitty-keyboard protocol terminals.
                 ("ctrl+_", KeybindingAction::ChatUndo),
                 ("ctrl+shift+-", KeybindingAction::ChatUndo),
+                // Redo: needs the kitty-keyboard protocol to distinguish
+                // ctrl+shift+z from ctrl+z (suspend) at all.
+                ("ctrl+shift+z", KeybindingAction::ChatRedo),
                 ("ctrl+x ctrl+e", KeybindingAction::ChatExternalEditor),
                 ("ctrl+g", KeybindingAction::ChatExternalEditor),
                 ("ctrl+s", KeybindingAction::ChatStash),
@@ -194,6 +197,8 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("shift+tab", KeybindingAction::ConfirmCycleMode),
                 ("ctrl+e", KeybindingAction::ConfirmToggleExplanation),
                 ("ctrl+d", KeybindingAction::PermissionToggleDebug),
+                ("ctrl+s", KeybindingAction::ConfirmToggleAllowScope),
+                ("ctrl+r", KeybindingAction::ConfirmDenyWithReason),
             ],
         ),
         // ── Tabs ──────────────────────────────────────────────────────

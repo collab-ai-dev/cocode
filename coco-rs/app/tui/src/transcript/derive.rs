@@ -106,6 +106,41 @@ fn extract_user_text(msg: &LlmMessage) -> String {
     buf
 }
 
+/// Concatenate the visible text parts of an assistant message (drops tool
+/// calls / reasoning).
+fn extract_assistant_text(msg: &LlmMessage) -> String {
+    let LlmMessage::Assistant { content, .. } = msg else {
+        return String::new();
+    };
+    let mut buf = String::new();
+    for part in content {
+        if let AssistantContent::Text(t) = part {
+            if !buf.is_empty() {
+                buf.push('\n');
+            }
+            buf.push_str(&t.text);
+        }
+    }
+    buf
+}
+
+/// Best-effort plain-text content of a message for the reader's copy action:
+/// user / assistant prose or a tool result's output. `None` when there is
+/// nothing textual to copy (e.g. a tool-use message, whose copyable content is
+/// its invocation, handled by the caller).
+pub(crate) fn message_plain_text(msg: &Message) -> Option<String> {
+    let text = match msg {
+        Message::User(u) => extract_user_text(&u.message),
+        Message::Assistant(a) => extract_assistant_text(&a.message),
+        Message::ToolResult(_) => tool_result_output(msg)
+            .map(|p| p.output)
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 fn assistant_cells(
     uuid: Uuid,
     msg: &LlmMessage,

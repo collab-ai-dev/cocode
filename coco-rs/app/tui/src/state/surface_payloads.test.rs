@@ -1,118 +1,22 @@
-use super::PlanApprovalPromptState;
-use super::WorkflowAgentStatusFilter;
+use super::*;
 
-fn workflow_agent_event(
-    state: coco_types::WorkflowAgentState,
-    started_at: Option<i64>,
-    queued_at: Option<i64>,
-    skipped: bool,
-) -> coco_types::WorkflowProgressEvent {
-    coco_types::WorkflowProgressEvent::WorkflowAgent {
-        index: 0,
-        state,
-        label: "agent".to_string(),
-        phase_title: None,
-        phase_index: None,
-        agent_id: None,
-        model: None,
-        started_at,
-        queued_at,
-        last_progress_at: None,
-        tokens: None,
-        tool_calls: None,
-        duration_ms: None,
-        cached: false,
-        result_preview: None,
-        prompt_preview: None,
-        error: None,
-        skipped,
-    }
+#[test]
+fn prefix_input_caps_new_and_insert_at_the_context_budget() {
+    let limit = coco_types::MAX_PERMISSION_FEEDBACK_BYTES;
+    let mut input = PrefixInputState::new("a".repeat(limit + 8));
+
+    assert_eq!(input.value.len(), limit);
+    assert_eq!(input.cursor, limit);
+    input.insert('b');
+    assert_eq!(input.value.len(), limit);
 }
 
 #[test]
-fn workflow_agent_status_derives_from_progress_fields_and_task_state() {
-    let queued = workflow_agent_event(
-        coco_types::WorkflowAgentState::Start,
-        None,
-        Some(1_700_000_000_000),
-        false,
-    );
-    let running = workflow_agent_event(
-        coco_types::WorkflowAgentState::Progress,
-        Some(1_700_000_000_100),
-        Some(1_700_000_000_000),
-        false,
-    );
-    let skipped = workflow_agent_event(coco_types::WorkflowAgentState::Error, None, None, true);
-    let failed = workflow_agent_event(coco_types::WorkflowAgentState::Error, None, None, false);
-    let interrupted =
-        workflow_agent_event(coco_types::WorkflowAgentState::Progress, None, None, false);
+fn prefix_input_cap_preserves_utf8_boundaries() {
+    let mut input = PrefixInputState::new("🙂".repeat(300));
 
-    assert_eq!(
-        WorkflowAgentStatusFilter::from_progress_event(&queued, true),
-        Some(WorkflowAgentStatusFilter::Queued)
-    );
-    assert_eq!(
-        WorkflowAgentStatusFilter::from_progress_event(&running, true),
-        Some(WorkflowAgentStatusFilter::Running)
-    );
-    assert_eq!(
-        WorkflowAgentStatusFilter::from_progress_event(&skipped, true),
-        Some(WorkflowAgentStatusFilter::Skipped)
-    );
-    assert_eq!(
-        WorkflowAgentStatusFilter::from_progress_event(&failed, true),
-        Some(WorkflowAgentStatusFilter::Failed)
-    );
-    assert_eq!(
-        WorkflowAgentStatusFilter::from_progress_event(&interrupted, false),
-        Some(WorkflowAgentStatusFilter::Interrupted)
-    );
+    assert!(input.value.len() <= coco_types::MAX_PERMISSION_FEEDBACK_BYTES);
+    assert!(input.value.chars().all(|ch| ch == '🙂'));
+    input.insert('🙂');
+    assert!(input.value.len() <= coco_types::MAX_PERMISSION_FEEDBACK_BYTES);
 }
-
-#[test]
-fn plan_approval_toggles_between_approve_and_deny() {
-    let mut o = PlanApprovalPromptState::new(
-        "req-1".into(),
-        "alice".into(),
-        None,
-        "# Plan\n- step 1\n- step 2".into(),
-    );
-    assert!(o.is_approve_focused(), "initial focus should be Approve");
-    o.toggle_focus();
-    assert!(!o.is_approve_focused());
-    o.toggle_focus();
-    assert!(o.is_approve_focused());
-}
-
-#[test]
-fn plan_approval_prompt_gets_awaiting_input_priority() {
-    let prompt = crate::state::PanePromptState::PlanApproval(PlanApprovalPromptState::new(
-        "req".into(),
-        "alice".into(),
-        None,
-        "".into(),
-    ));
-    // Priority 2 — same as Question / Elicitation / McpServerApproval.
-    // Plan approval blocks the teammate, so it can't be out-prioritized
-    // by user-triggered pickers (priority 7+).
-    assert_eq!(prompt.priority(), 2);
-}
-
-#[test]
-fn plan_approval_preserves_from_field_for_response_routing() {
-    // The teammate agent name carried in `from` must survive so the
-    // UserCommand::PlanApprovalResponse handler in tui_runner knows
-    // which inbox to write the response to.
-    let o = PlanApprovalPromptState::new(
-        "req-42".into(),
-        "teammate-delta".into(),
-        Some("/plans/delta.md".into()),
-        "plan".into(),
-    );
-    assert_eq!(o.from, "teammate-delta");
-    assert_eq!(o.request_id, "req-42");
-    assert_eq!(o.plan_file_path.as_deref(), Some("/plans/delta.md"));
-}
-
-// === AskUserQuestion footer feedback synthesizers ===

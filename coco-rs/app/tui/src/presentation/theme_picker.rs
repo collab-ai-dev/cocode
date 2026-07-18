@@ -73,9 +73,14 @@ pub(crate) fn theme_picker_lines(
     // Diff preview box — dashed top/bottom rules. Rendered with the live theme
     // so it previews the focused palette's diff + syntax colors.
     let rule = "╌".repeat(width.max(1) as usize);
-    let rule_style = Style::default().fg(styles.dim());
+    let rule_style = styles.dim_style();
     lines.push(Line::from(Span::styled(rule.clone(), rule_style)));
-    lines.extend(render_diff_lines(DEMO_DIFF, styles, width));
+    lines.extend(render_diff_lines(
+        DEMO_DIFF,
+        styles,
+        width,
+        coco_tui_ui::widgets::diff_display::DiffHighlight::default(),
+    ));
     lines.push(Line::from(Span::styled(rule, rule_style)));
 
     // Syntax-highlight status line (ctrl+t cycles off → lite → full).
@@ -86,7 +91,7 @@ pub(crate) fn theme_picker_lines(
     };
     lines.push(Line::from(Span::styled(
         format!(" {syntax_text}"),
-        Style::default().fg(styles.dim()),
+        styles.dim_style(),
     )));
 
     lines.push(Line::default());
@@ -94,9 +99,7 @@ pub(crate) fn theme_picker_lines(
     // Footer.
     lines.push(Line::from(Span::styled(
         t!("dialog.theme_hint").to_string(),
-        Style::default()
-            .fg(styles.dim())
-            .add_modifier(Modifier::ITALIC),
+        styles.dim_style().add_modifier(Modifier::ITALIC),
     )));
 
     lines

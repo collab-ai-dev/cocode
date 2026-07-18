@@ -4,6 +4,7 @@ use std::hash::Hash;
 use std::hash::Hasher;
 
 use ratatui::style::Color;
+use ratatui::style::Modifier;
 use ratatui::style::Style;
 
 use crate::theme::Theme;
@@ -57,6 +58,19 @@ impl<'a> UiStyles<'a> {
 
     pub fn dim(self) -> Color {
         self.theme.text_dim
+    }
+
+    /// Secondary-text style. The terminal-native theme inherits the user's
+    /// foreground (`Reset`) and uses the DIM attribute for contrast; palette
+    /// themes already provide a dedicated dim color and must not be dimmed a
+    /// second time.
+    pub fn dim_style(self) -> Style {
+        let style = Style::default().fg(self.theme.text_dim);
+        if self.theme.text_dim == Color::Reset {
+            style.add_modifier(Modifier::DIM)
+        } else {
+            style
+        }
     }
 
     pub fn success(self) -> Color {
@@ -133,6 +147,14 @@ impl<'a> UiStyles<'a> {
 
     pub fn diff_added(self) -> Color {
         self.theme.diff_added
+    }
+
+    pub fn diff_removed_bg(self) -> Option<Color> {
+        self.theme.diff_removed_bg
+    }
+
+    pub fn diff_added_bg(self) -> Option<Color> {
+        self.theme.diff_added_bg
     }
 
     pub fn table_border(self) -> Color {

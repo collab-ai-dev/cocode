@@ -75,6 +75,7 @@ pub enum KeybindingAction {
     ChatSubmit,
     ChatNewline,
     ChatUndo,
+    ChatRedo,
     ChatExternalEditor,
     ChatStash,
     ChatImagePaste,
@@ -103,6 +104,10 @@ pub enum KeybindingAction {
     ConfirmCycleMode,
     ConfirmToggle,
     ConfirmToggleExplanation,
+    /// Widen an MCP "always allow" from this tool to the whole server.
+    ConfirmToggleAllowScope,
+    /// Open the deny-reason field so the denial can carry a why.
+    ConfirmDenyWithReason,
 
     // ── Tabs ─────────────────────────────────────────────────────────
     TabsNext,
@@ -251,6 +256,7 @@ impl KeybindingAction {
             Self::ChatSubmit => Cow::Borrowed("chat:submit"),
             Self::ChatNewline => Cow::Borrowed("chat:newline"),
             Self::ChatUndo => Cow::Borrowed("chat:undo"),
+            Self::ChatRedo => Cow::Borrowed("chat:redo"),
             Self::ChatExternalEditor => Cow::Borrowed("chat:externalEditor"),
             Self::ChatStash => Cow::Borrowed("chat:stash"),
             Self::ChatImagePaste => Cow::Borrowed("chat:imagePaste"),
@@ -272,6 +278,8 @@ impl KeybindingAction {
             Self::ConfirmCycleMode => Cow::Borrowed("confirm:cycleMode"),
             Self::ConfirmToggle => Cow::Borrowed("confirm:toggle"),
             Self::ConfirmToggleExplanation => Cow::Borrowed("confirm:toggleExplanation"),
+            Self::ConfirmToggleAllowScope => Cow::Borrowed("confirm:toggleAllowScope"),
+            Self::ConfirmDenyWithReason => Cow::Borrowed("confirm:denyWithReason"),
 
             Self::TabsNext => Cow::Borrowed("tabs:next"),
             Self::TabsPrevious => Cow::Borrowed("tabs:previous"),
@@ -463,6 +471,7 @@ impl FromStr for KeybindingAction {
             "chat:submit" => Self::ChatSubmit,
             "chat:newline" => Self::ChatNewline,
             "chat:undo" => Self::ChatUndo,
+            "chat:redo" => Self::ChatRedo,
             "chat:externalEditor" => Self::ChatExternalEditor,
             "chat:stash" => Self::ChatStash,
             "chat:imagePaste" => Self::ChatImagePaste,
@@ -484,6 +493,8 @@ impl FromStr for KeybindingAction {
             "confirm:cycleMode" => Self::ConfirmCycleMode,
             "confirm:toggle" => Self::ConfirmToggle,
             "confirm:toggleExplanation" => Self::ConfirmToggleExplanation,
+            "confirm:toggleAllowScope" => Self::ConfirmToggleAllowScope,
+            "confirm:denyWithReason" => Self::ConfirmDenyWithReason,
 
             "tabs:next" => Self::TabsNext,
             "tabs:previous" => Self::TabsPrevious,

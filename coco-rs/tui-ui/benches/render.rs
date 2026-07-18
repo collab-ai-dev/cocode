@@ -22,6 +22,8 @@
 //!   re-parses the visible buffer today (no incremental cache). A future
 //!   incremental-markdown checkpoint should shrink this group for the same
 //!   input.
+
+#![allow(clippy::expect_used)]
 //!
 //! Run: `cargo bench -p coco-tui-ui --bench render`. Fast smoke: append `-- --quick`.
 //! (Target `--bench render` explicitly — a bare `cargo bench` also runs the lib
@@ -185,6 +187,9 @@ fn bench_surface_paint(c: &mut Criterion) {
         b.iter(|| {
             term.draw_viewport(|f: &mut SurfaceFrame| f.render_widget(&para, f.area()))
                 .expect("draw");
+            let stats = term.last_viewport_draw_stats();
+            assert!(stats.frame_skipped, "an unchanged frame must be elided");
+            black_box(stats.skipped_frames_total);
         });
     });
     group.finish();

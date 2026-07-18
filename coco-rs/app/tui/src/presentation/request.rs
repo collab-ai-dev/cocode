@@ -159,7 +159,7 @@ pub(crate) fn permission_styled_content(
         .bg(styles.selection_bg())
         .add_modifier(Modifier::BOLD);
     let text_style = Style::default().fg(styles.text());
-    let dim_style = Style::default().fg(styles.dim());
+    let dim_style = styles.dim_style();
     let lines = body
         .lines()
         .map(|line| {
@@ -250,7 +250,7 @@ pub(crate) fn exit_plan_prompt_lines(
 
     lines.push(Line::from(Span::styled(
         t!("dialog.hints_nav_select").to_string(),
-        Style::default().fg(styles.dim()),
+        styles.dim_style(),
     )));
     lines
 }
@@ -300,7 +300,7 @@ pub(crate) fn exit_plan_pending_history_lines(
 
     if *outcome == coco_types::ExitPlanModeOutcome::NoImplementationPlan {
         return vec![Line::from(vec![
-            Span::styled("• ", Style::default().fg(styles.dim())),
+            Span::styled("• ", styles.dim_style()),
             Span::styled(
                 t!("dialog.no_plan_heading").to_string(),
                 Style::default()
@@ -313,7 +313,7 @@ pub(crate) fn exit_plan_pending_history_lines(
     let plan_body = plan.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let Some(body) = plan_body else {
         return vec![Line::from(vec![
-            Span::styled("• ", Style::default().fg(styles.dim())),
+            Span::styled("• ", styles.dim_style()),
             Span::styled(
                 t!("dialog.no_plan_heading").to_string(),
                 Style::default()
@@ -329,7 +329,7 @@ pub(crate) fn exit_plan_pending_history_lines(
     // the title.
     let mut lines = vec![
         Line::from(vec![
-            Span::styled("• ", Style::default().fg(styles.dim())),
+            Span::styled("• ", styles.dim_style()),
             Span::styled(
                 t!("dialog.ready_to_code").to_string(),
                 Style::default()
@@ -352,19 +352,19 @@ pub(crate) fn exit_plan_pending_history_lines(
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             t!("dialog.plan_file", path = path).to_string(),
-            Style::default().fg(styles.dim()),
+            styles.dim_style(),
         )));
     }
     if !allowed_prompts.is_empty() {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             t!("dialog.plan_requested_permissions").to_string(),
-            Style::default().fg(styles.dim()),
+            styles.dim_style(),
         )));
         for prompt in allowed_prompts {
             lines.push(Line::from(Span::styled(
                 format!("  - {}: {}", prompt.tool, prompt.prompt),
-                Style::default().fg(styles.dim()),
+                styles.dim_style(),
             )));
         }
     }
@@ -394,18 +394,29 @@ fn classic_permission_actions(
         // Every row shows its direct-commit hotkeys (digit + letter) so the
         // mapping is visible: `y`/`a`/`n` commit their OWN row, not the
         // highlighted one (Enter commits the highlight).
+        // The allow rows name what they will actually grant: this tool, or the
+        // whole MCP server once the user widened the scope.
+        let grant_target = crate::permission_options::allow_grant_target(p);
         let (letter, mut label) = match action {
             PermissionAction::ApproveOnce => ("y", t!("dialog.action_approve_once").to_string()),
             PermissionAction::AllowSession => (
                 if has_local { "s" } else { "a" },
-                t!("dialog.action_allow_session", tool = p.tool_name.as_str()).to_string(),
+                t!("dialog.action_allow_session", tool = grant_target.as_str()).to_string(),
             ),
             PermissionAction::AllowLocal => (
                 "a",
-                t!("dialog.action_allow_local", tool = p.tool_name.as_str()).to_string(),
+                t!("dialog.action_allow_local", tool = grant_target.as_str()).to_string(),
             ),
             PermissionAction::Deny => ("n", t!("dialog.action_deny").to_string()),
         };
+        // Deny row: show the reason field once it is open, with a cursor on the
+        // focused row exactly like the editable allow prefix above.
+        if action == PermissionAction::Deny
+            && let Some(input) = p.deny_reason_input.as_ref()
+        {
+            let shown = render_prefix_with_cursor(&input.value, input.cursor, idx == selected);
+            label = format!("{label}: {shown}");
+        }
         // Shell tools: append the editable rule prefix to the allow rows. The
         // focused row shows a cursor and accepts typed edits.
         if matches!(
@@ -423,7 +434,10 @@ fn classic_permission_actions(
     lines.push_str("  ");
     // An editable allow row is focused → the shortcut letters become text, so
     // show the edit hint instead of the y/a/s/n shortcut list.
-    if p.prefix_input.is_some()
+    if p.deny_reason_input.is_some() {
+        // The reason field owns the keyboard: the shortcut letters are text now.
+        lines.push_str(t!("dialog.hints_deny_reason_edit").as_ref());
+    } else if p.prefix_input.is_some()
         && matches!(
             crate::permission_options::classic_action_at(p, current_mode, selected),
             PermissionAction::AllowSession | PermissionAction::AllowLocal
@@ -439,6 +453,20 @@ fn classic_permission_actions(
             )
             .as_ref(),
         );
+        // Advertise the scope toggle only where it does something: a many-tool
+        // MCP server is exactly where per-tool prompting gets tiresome.
+        if crate::permission_options::can_widen_to_server(p) {
+            lines.push_str("  ");
+            lines.push_str(
+                t!(match p.mcp_allow_scope {
+                    crate::state::McpAllowScope::Tool => "dialog.hints_widen_to_server",
+                    crate::state::McpAllowScope::Server => "dialog.hints_narrow_to_tool",
+                })
+                .as_ref(),
+            );
+        }
+        lines.push_str("  ");
+        lines.push_str(t!("dialog.hints_deny_with_reason").as_ref());
     }
     lines
 }

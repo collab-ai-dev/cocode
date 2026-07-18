@@ -512,6 +512,8 @@ fn test_snapshot_with_permission_prompt() {
                 explanation_visible: false,
                 explanation: crate::state::ExplainerFetch::NotFetched,
                 prefix_input: None,
+                mcp_allow_scope: Default::default(),
+                deny_reason_input: None,
             },
         ));
     mark_retained_surface_visible(&mut state);
@@ -955,11 +957,13 @@ fn test_snapshot_command_palette_inline_popup() {
         kind: SuggestionKind::SlashCommand,
         items: vec![
             crate::widgets::suggestion_popup::SuggestionItem {
+                highlight_indices: Vec::new(),
                 label: "/clear".into(),
                 description: Some("Clear conversation".into()),
                 metadata: None,
             },
             crate::widgets::suggestion_popup::SuggestionItem {
+                highlight_indices: Vec::new(),
                 label: "/compact".into(),
                 description: Some("Compact conversation".into()),
                 metadata: None,
@@ -984,9 +988,14 @@ fn test_snapshot_reverse_search_footer_match() {
     state.ui.input.add_to_history("git status".to_string());
     state.ui.input.add_to_history("cargo build".to_string());
     state.ui.input.textarea.set_text("git status");
+    let ranked =
+        crate::autocomplete::history_search::search_history(&state.ui.input.history, "git");
     state.ui.history_search = Some(crate::state::HistorySearch {
+        browse: false,
         query: "git".into(),
-        matched: Some(1),
+        result_indices: ranked.indices,
+        results: ranked.items,
+        selected: 0,
         original_text: String::new(),
         original_pastes: Vec::new(),
         original_history_index: None,
@@ -1004,8 +1013,11 @@ fn test_snapshot_reverse_search_footer_no_match() {
     state.ui.input.add_to_history("git status".to_string());
     state.ui.input.textarea.set_text("draft text");
     state.ui.history_search = Some(crate::state::HistorySearch {
+        browse: false,
         query: "zzz".into(),
-        matched: None,
+        results: Vec::new(),
+        result_indices: Vec::new(),
+        selected: 0,
         original_text: "draft text".into(),
         original_pastes: Vec::new(),
         original_history_index: None,

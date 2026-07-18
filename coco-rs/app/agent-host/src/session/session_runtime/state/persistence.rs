@@ -36,14 +36,14 @@ impl SessionRuntime {
             .session_env_vars()
             .map(coco_shell::SessionEnvVars::snapshot)
     }
-    pub async fn prompt_history_texts(&self, project: String) -> Vec<String> {
+    pub async fn prompt_history_entries(&self, project: String) -> Vec<coco_session::HistoryEntry> {
         let config_home = self.config_home().clone();
         let session_id = self.current_typed_session_id().await;
         tokio::task::spawn_blocking(move || {
             coco_session::PromptHistory::new(&config_home, &project, &session_id)
-                .get_history()
+                .get_timestamped_history()
                 .into_iter()
-                .map(|entry| entry.display)
+                .map(|entry| (entry.resolve)())
                 .collect()
         })
         .await
@@ -53,12 +53,13 @@ impl SessionRuntime {
         &self,
         project: String,
         display: String,
+        pasted_contents: std::collections::HashMap<i32, String>,
     ) -> anyhow::Result<()> {
         let config_home = self.config_home().clone();
         let session_id = self.current_typed_session_id().await;
         tokio::task::spawn_blocking(move || {
             coco_session::PromptHistory::new(&config_home, &project, &session_id)
-                .add(&display)
+                .add_with_pastes(&display, &pasted_contents)
                 .map_err(anyhow::Error::from)
         })
         .await?

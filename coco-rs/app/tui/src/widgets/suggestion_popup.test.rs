@@ -13,11 +13,111 @@ use ratatui::layout::Rect;
 
 use super::SuggestionItem;
 use super::SuggestionPopup;
+use super::highlighted_label_spans;
 use crate::theme::Theme;
 use coco_tui_ui::style::UiStyles;
+use ratatui::style::Modifier;
+use ratatui::style::Style;
+
+/// The (text, is_highlighted) runs `highlighted_label_spans` produces, using a
+/// bold marker style so the two are distinguishable without asserting colors.
+fn highlight_runs(label: &str, indices: &[i32]) -> Vec<(String, bool)> {
+    let base = Style::default();
+    let highlight = Style::default().add_modifier(Modifier::BOLD);
+    highlighted_label_spans(label, indices, base, highlight)
+        .into_iter()
+        .map(|span| {
+            (
+                span.content.to_string(),
+                span.style.add_modifier.contains(Modifier::BOLD),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn label_without_match_indices_stays_one_span() {
+    assert_eq!(
+        highlight_runs("readme.md", &[]),
+        vec![("readme.md".to_string(), false)],
+        "an unmatched label must not be split into runs"
+    );
+}
+
+#[test]
+fn matched_chars_split_into_alternating_runs() {
+    // `rdm` fuzzy-matched against `readme.md`: r_e_a_d_me.md → 0, 3, 4.
+    assert_eq!(
+        highlight_runs("readme.md", &[0, 3, 4]),
+        vec![
+            ("r".to_string(), true),
+            ("ea".to_string(), false),
+            ("dm".to_string(), true),
+            ("e.md".to_string(), false),
+        ]
+    );
+}
+
+#[test]
+fn a_contiguous_prefix_match_is_one_highlighted_run() {
+    // The slash-ranker shape: `/cle` against `/clear`.
+    assert_eq!(
+        highlight_runs("/clear", &[1, 2, 3]),
+        vec![
+            ("/".to_string(), false),
+            ("cle".to_string(), true),
+            ("ar".to_string(), false),
+        ]
+    );
+}
+
+#[test]
+fn a_fully_matched_label_is_a_single_highlighted_run() {
+    assert_eq!(
+        highlight_runs("abc", &[0, 1, 2]),
+        vec![("abc".to_string(), true)]
+    );
+}
+
+#[test]
+fn indices_past_the_truncated_label_are_ignored() {
+    // The care point: indices are char positions into the UNTRUNCATED label, so
+    // the renderer truncates first and lets the out-of-range ones fall away.
+    // Shifting them onto the shorter string instead is how highlight drift gets
+    // in. Here the label was cut to "read" but the matcher reported a hit at 7.
+    assert_eq!(
+        highlight_runs("read", &[0, 7]),
+        vec![("r".to_string(), true), ("ead".to_string(), false)],
+        "an index past the end must be dropped, not wrapped onto another char"
+    );
+}
+
+#[test]
+fn out_of_range_and_duplicate_indices_do_not_panic() {
+    // Indices come from matchers this widget does not own.
+    assert_eq!(
+        highlight_runs("ab", &[-1, 0, 0, 99]),
+        vec![("a".to_string(), true), ("b".to_string(), false)]
+    );
+}
+
+#[test]
+fn highlight_indices_are_char_positions_not_bytes() {
+    // A multi-byte label: index 1 must mark the SECOND character, not a byte
+    // inside the first one.
+    assert_eq!(
+        highlight_runs("中文ab", &[1]),
+        vec![
+            ("中".to_string(), false),
+            ("文".to_string(), true),
+            ("ab".to_string(), false),
+        ]
+    );
+}
 
 fn item(label: &str, description: Option<&str>) -> SuggestionItem {
     SuggestionItem {
+        highlight_indices: Vec::new(),
         label: label.to_string(),
         description: description.map(ToString::to_string),
         metadata: None,
@@ -153,6 +253,7 @@ fn mixed_popup_keeps_icon_column() {
     // When any row carries an icon the column is reserved for every row,
     // so labels stay aligned: the agent `*` sits at col 2, label at col 4.
     let items = vec![SuggestionItem {
+        highlight_indices: Vec::new(),
         label: "Plan (agent)".into(),
         description: None,
         metadata: Some(SuggestionMeta::Agent { color: None }),
@@ -186,6 +287,7 @@ fn snapshot_unified_mixed_icons() {
     // grid.
     let items = vec![
         SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "Plan (agent)".into(),
             description: Some("Software architect agent".into()),
             metadata: Some(SuggestionMeta::Agent {
@@ -193,6 +295,7 @@ fn snapshot_unified_mixed_icons() {
             }),
         },
         SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "Explore (agent)".into(),
             description: Some("Fast read-only search".into()),
             metadata: Some(SuggestionMeta::Agent {
@@ -200,6 +303,7 @@ fn snapshot_unified_mixed_icons() {
             }),
         },
         SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "src/lib.rs".into(),
             description: None,
             metadata: Some(SuggestionMeta::Path {
@@ -207,6 +311,7 @@ fn snapshot_unified_mixed_icons() {
             }),
         },
         SuggestionItem {
+            highlight_indices: Vec::new(),
             label: "docs/".into(),
             description: None,
             metadata: Some(SuggestionMeta::Path { is_directory: true }),

@@ -68,6 +68,34 @@ fn test_search_alias() {
 }
 
 #[test]
+fn name_match_highlight_indices_land_on_the_slash_label() {
+    // C6: the name-match indices must be mapped onto the rendered `/name`
+    // label — index 0 is the leading slash, so a name hit starts at 1.
+    let mgr = SkillSearchManager::new(sample_skills());
+    let hit = mgr
+        .search("config")
+        .into_iter()
+        .find(|r| r.label == "/config")
+        .expect("config must match");
+    // `/config`: c=1 o=2 n=3 f=4 i=5 g=6 — a full-name match highlights 1..=6.
+    assert_eq!(hit.highlight_indices, vec![1, 2, 3, 4, 5, 6]);
+}
+
+#[test]
+fn a_description_only_hit_leaves_the_label_unhighlighted() {
+    // "usage" matches the description of `/cost` ("token usage and cost") but
+    // nothing in `/cost` itself — marking arbitrary label chars would lie.
+    let mgr = SkillSearchManager::new(sample_skills());
+    let hit = mgr.search("usage").into_iter().find(|r| r.label == "/cost");
+    if let Some(hit) = hit {
+        assert!(
+            hit.highlight_indices.is_empty(),
+            "a description-only hit must not highlight the label"
+        );
+    }
+}
+
+#[test]
 fn test_empty_query_returns_all() {
     let mgr = SkillSearchManager::new(sample_skills());
     let results = mgr.search("");

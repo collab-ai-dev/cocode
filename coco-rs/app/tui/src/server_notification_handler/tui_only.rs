@@ -137,6 +137,8 @@ pub(super) fn handle(
                     explanation_visible: false,
                     explanation: crate::state::ExplainerFetch::NotFetched,
                     prefix_input,
+                    mcp_allow_scope: crate::state::McpAllowScope::default(),
+                    deny_reason_input: None,
                 },
                 std::time::Instant::now(),
             );

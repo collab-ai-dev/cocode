@@ -236,11 +236,12 @@ pub enum CompactTrigger {
 // Permission types
 pub use permission::{
     AdditionalWorkingDir, ClassifierBehavior, ClassifierMode, ClassifierUsage, ExitPlanChoice,
-    ExitPlanModeAllowedPrompt, ExitPlanModeOutcome, PendingClassifierCheck, PermissionAbortReason,
-    PermissionAskChoice, PermissionBehavior, PermissionDecision, PermissionDecisionReason,
-    PermissionRequestDetail, PermissionResolutionDetail, PermissionRule, PermissionRuleSource,
-    PermissionRuleValue, PermissionRulesBySource, PermissionUpdate, PermissionUpdateDestination,
-    ToolCheckResult, ToolPermissionContext, WorkingDirectorySource, content_matches, matches_rule,
+    ExitPlanModeAllowedPrompt, ExitPlanModeOutcome, MAX_PERMISSION_FEEDBACK_BYTES,
+    PendingClassifierCheck, PermissionAbortReason, PermissionAskChoice, PermissionBehavior,
+    PermissionDecision, PermissionDecisionReason, PermissionRequestDetail,
+    PermissionResolutionDetail, PermissionRule, PermissionRuleSource, PermissionRuleValue,
+    PermissionRulesBySource, PermissionUpdate, PermissionUpdateDestination, ToolCheckResult,
+    ToolPermissionContext, WorkingDirectorySource, content_matches, matches_rule,
     parse_rule_pattern, tool_matches_pattern,
 };
 

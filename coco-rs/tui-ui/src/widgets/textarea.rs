@@ -107,28 +107,63 @@ pub enum EolBehavior {
     WrapDown,
 }
 
-/// Snapshot of editable state for the undo stack. Opaque to callers —
-/// captured via [`TextArea::snapshot`] and consumed by
-/// [`TextArea::commit_undo`].
+/// Snapshot of editable state for the undo/redo stacks. Internal: mutating
+/// verbs checkpoint themselves, so callers never build or hold one.
 #[derive(Debug, Clone)]
-pub struct UndoSnapshot {
+struct UndoSnapshot {
     text: String,
     cursor: usize,
-}
-
-impl UndoSnapshot {
-    /// The text content this snapshot will restore. Used by the vim
-    /// wiring layer to detect whether the dispatched key actually mutated
-    /// the buffer (cheap pointer-aware string comparison).
-    #[must_use]
-    pub fn text(&self) -> &str {
-        &self.text
-    }
 }
 
 /// Maximum size of the undo stack. Keeps memory bounded for very long
 /// editing sessions; vim's default is 1000 — composer use justifies less.
 const UNDO_STACK_CAP: usize = 64;
+
+/// What kind of edit a mutation is, for undo-entry batching.
+///
+/// Typing should undo a word at a time, not a keystroke at a time, so a run of
+/// same-kind single-grapheme edits collapses into one entry. Anything coarser —
+/// a paste, a word kill, a programmatic splice — is its own entry: the user
+/// performed one action and expects one undo to reverse it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MutationKind {
+    /// One grapheme typed at the cursor.
+    InsertChar,
+    /// A multi-grapheme or off-cursor insertion — paste, yank, splice.
+    InsertBlock,
+    /// Backspace.
+    DeleteBackward,
+    /// Forward delete.
+    DeleteForward,
+    /// A word- or line-granularity kill.
+    Kill,
+    /// An arbitrary range replacement.
+    Replace,
+}
+
+impl MutationKind {
+    /// Whether a contiguous run of this kind collapses into one undo entry.
+    /// The coarse kinds do not: each already corresponds to one user action.
+    fn coalesces(self) -> bool {
+        match self {
+            Self::InsertChar | Self::DeleteBackward | Self::DeleteForward => true,
+            Self::InsertBlock | Self::Kill | Self::Replace => false,
+        }
+    }
+}
+
+/// The previous mutation, for deciding whether the next one continues its run.
+#[derive(Debug, Clone, Copy)]
+struct LastMutation {
+    kind: MutationKind,
+    /// Where the mutation left the cursor. A run is contiguous only when the
+    /// next edit starts exactly here, so moving the cursor away and editing
+    /// elsewhere starts a fresh entry. (A round-trip that lands back on the
+    /// same offset does *not* break the run — deliberately: it is
+    /// indistinguishable from never having moved, and undo still fully
+    /// reverses either way.)
+    cursor: usize,
+}
 
 /// Editable text with byte-offset cursor and a single-entry kill buffer.
 #[derive(Debug)]
@@ -148,10 +183,20 @@ pub struct TextArea {
     /// to `kill_buffer` (readline / emacs parity); any non-kill mutation
     /// resets the flag so a subsequent kill starts a fresh buffer.
     last_op_was_kill: bool,
-    /// Bounded undo stack of (text, cursor) snapshots. Callers (e.g. the
-    /// vim wiring layer) push before each text-changing command; `undo()`
-    /// restores the last snapshot.
+    /// Bounded undo stack of (text, cursor) snapshots. Every mutating verb
+    /// self-checkpoints through [`TextArea::pre_mutate`]; `undo()` restores
+    /// the last snapshot.
     undo_stack: Vec<UndoSnapshot>,
+    /// Snapshots popped by `undo`, restorable by `redo`. Any fresh mutation
+    /// clears it — once the buffer moves somewhere new, the redo branch is no
+    /// longer reachable and offering it would resurrect unrelated text.
+    redo_stack: Vec<UndoSnapshot>,
+    /// The previous mutation, for undo-entry batching. `None` breaks the run,
+    /// so the next edit starts a fresh entry.
+    last_mutation: Option<LastMutation>,
+    /// Nesting depth of [`TextArea::undo_group`]. Non-zero suppresses per-verb
+    /// checkpoints so a compound edit commits exactly one entry.
+    group_depth: usize,
 }
 
 impl TextArea {
@@ -164,26 +209,25 @@ impl TextArea {
             kill_buffer: String::new(),
             last_op_was_kill: false,
             undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            last_mutation: None,
+            group_depth: 0,
         }
     }
 
     // ──────────────────────────── Undo ───────────────────────────────
 
-    /// Capture the current `(text, cursor)` for later restoration. Returns
-    /// a snapshot that the caller can either commit to the stack (via
-    /// [`commit_undo`]) after a successful mutation or discard otherwise.
-    #[must_use]
-    pub fn snapshot(&self) -> UndoSnapshot {
+    /// Capture the current `(text, cursor)`.
+    fn snapshot(&self) -> UndoSnapshot {
         UndoSnapshot {
             text: self.text.clone(),
             cursor: self.cursor_pos,
         }
     }
 
-    /// Commit a previously-captured snapshot onto the undo stack. Drops
-    /// duplicates (consecutive snapshots with the same text and cursor)
-    /// and bounds the stack to `UNDO_STACK_CAP`.
-    pub fn commit_undo(&mut self, snap: UndoSnapshot) {
+    /// Push onto the undo stack, dropping consecutive duplicates and bounding
+    /// the stack to `UNDO_STACK_CAP`.
+    fn push_undo(&mut self, snap: UndoSnapshot) {
         if let Some(top) = self.undo_stack.last()
             && top.text == snap.text
             && top.cursor == snap.cursor
@@ -196,17 +240,99 @@ impl TextArea {
         }
     }
 
-    /// Restore the most recent committed snapshot. Returns `true` if one
-    /// was applied. No-op when the stack is empty.
-    pub fn undo(&mut self) -> bool {
-        let Some(snap) = self.undo_stack.pop() else {
-            return false;
+    /// Checkpoint before a mutation, unless it continues an existing run or an
+    /// [`undo_group`](Self::undo_group) owns the checkpointing.
+    ///
+    /// `at` is the cursor position BEFORE the edit: a run is contiguous only
+    /// when this edit starts exactly where the previous one left the cursor.
+    fn pre_mutate(&mut self, kind: MutationKind, at: usize) {
+        // A fresh edit invalidates the redo branch: the state redo would return
+        // to is no longer reachable from here.
+        self.redo_stack.clear();
+        if self.group_depth > 0 {
+            return;
+        }
+        let continues_run = self
+            .last_mutation
+            .is_some_and(|last| last.kind == kind && kind.coalesces() && last.cursor == at);
+        if continues_run {
+            return;
+        }
+        let snap = self.snapshot();
+        self.push_undo(snap);
+    }
+
+    /// Record what a mutation was, so the next one can tell whether it
+    /// continues the run. `ends_run` breaks the batch even on a matching kind —
+    /// used at a typed word boundary so undo steps land on words.
+    fn note_mutation(&mut self, kind: MutationKind, ends_run: bool) {
+        self.last_mutation = (!ends_run).then_some(LastMutation {
+            kind,
+            cursor: self.cursor_pos,
+        });
+    }
+
+    /// Run `edit` as ONE atomic undo step: every mutation inside collapses into
+    /// a single entry, and a group that changes nothing leaves none behind.
+    ///
+    /// This is the seam for compound edits whose intermediate states the user
+    /// never saw and should never land on — a vim operator, a chip expansion.
+    /// Nesting is safe; only the outermost group commits.
+    pub fn undo_group<R>(&mut self, edit: impl FnOnce(&mut Self) -> R) -> R {
+        let before = self.snapshot();
+        self.group_depth = self.group_depth.saturating_add(1);
+        // Restore the depth even if `edit` panics, so a recovered panic cannot
+        // leave `group_depth` stuck above zero and silently suppress every
+        // future checkpoint. `AssertUnwindSafe` is sound here: on the unwind
+        // path the only state touched is `group_depth` (decremented) before
+        // re-raising — no half-updated buffer is ever observed.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| edit(self)));
+        self.group_depth = self.group_depth.saturating_sub(1);
+        let out = match result {
+            Ok(out) => out,
+            Err(payload) => std::panic::resume_unwind(payload),
         };
+        if self.group_depth == 0 && self.text != before.text {
+            self.push_undo(before);
+            // A group is one deliberate action; never let the next keystroke
+            // batch into it.
+            self.last_mutation = None;
+        }
+        out
+    }
+
+    fn restore(&mut self, snap: UndoSnapshot) {
         self.text = snap.text;
         self.cursor_pos = self.clamp_pos_to_char_boundary(snap.cursor.min(self.text.len()));
         self.wrap_cache.replace(WrapCache::dirty());
         self.preferred_col = None;
         self.last_op_was_kill = false;
+        // Undo/redo is not itself an edit run.
+        self.last_mutation = None;
+    }
+
+    /// Restore the most recent undo entry, making the current state redoable.
+    /// Returns `true` if one was applied.
+    pub fn undo(&mut self) -> bool {
+        let Some(snap) = self.undo_stack.pop() else {
+            return false;
+        };
+        let current = self.snapshot();
+        self.restore(snap);
+        self.redo_stack.push(current);
+        true
+    }
+
+    /// Re-apply the most recently undone entry. Returns `true` if one was
+    /// applied. The redo stack is cleared by any fresh mutation, so this only
+    /// ever replays states the user actually undid.
+    pub fn redo(&mut self) -> bool {
+        let Some(snap) = self.redo_stack.pop() else {
+            return false;
+        };
+        let current = self.snapshot();
+        self.restore(snap);
+        self.push_undo(current);
         true
     }
 
@@ -242,6 +368,22 @@ impl TextArea {
         self.wrap_cache.replace(WrapCache::dirty());
         self.preferred_col = None;
         self.last_op_was_kill = false;
+        self.reset_edit_history();
+    }
+
+    /// Drop the undo/redo history at a wholesale buffer swap.
+    ///
+    /// `set_text` / `take_text` load a *different* buffer (history recall,
+    /// reverse-search preview, stash restore, submit) rather than edit the
+    /// current one, so they are an edit-history boundary. Leaving the stacks
+    /// intact lets `redo` resurrect text from the prior buffer and lets `undo`
+    /// cross the swap — both violate the redo-stack invariant. They bypass
+    /// [`pre_mutate`] (the only other place the stacks are cleared), so the
+    /// reset is explicit here.
+    fn reset_edit_history(&mut self) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.last_mutation = None;
     }
 
     /// Replace the entire buffer and return the previous contents. Resets
@@ -253,6 +395,7 @@ impl TextArea {
         self.wrap_cache.replace(WrapCache::dirty());
         self.preferred_col = None;
         self.last_op_was_kill = false;
+        self.reset_edit_history();
         prev
     }
 
@@ -267,6 +410,16 @@ impl TextArea {
             return;
         }
         let pos = self.clamp_pos_to_char_boundary(pos.min(self.text.len()));
+        // Typing is one grapheme landing at the cursor; anything else (a paste,
+        // a yank, an off-cursor splice) is one deliberate action and gets its
+        // own undo entry.
+        let single_grapheme = s.graphemes(true).count() == 1;
+        let kind = if pos == self.cursor_pos && single_grapheme {
+            MutationKind::InsertChar
+        } else {
+            MutationKind::InsertBlock
+        };
+        self.pre_mutate(kind, self.cursor_pos);
         self.text.insert_str(pos, s);
         self.wrap_cache.replace(WrapCache::dirty());
         if pos <= self.cursor_pos {
@@ -274,9 +427,19 @@ impl TextArea {
         }
         self.preferred_col = None;
         self.last_op_was_kill = false;
+        // Whitespace closes the run, so undo steps land on word boundaries:
+        // typing "hello world" undoes to "hello ", then to "".
+        let ends_run = s.chars().all(char::is_whitespace);
+        self.note_mutation(kind, ends_run);
     }
 
     pub fn replace_range(&mut self, range: Range<usize>, s: &str) {
+        self.replace_range_as(range, s, MutationKind::Replace);
+    }
+
+    /// `replace_range` with an explicit mutation kind, so the deletion verbs
+    /// built on it batch as themselves rather than as opaque replacements.
+    fn replace_range_as(&mut self, range: Range<usize>, s: &str, kind: MutationKind) {
         let start = self.clamp_pos_to_char_boundary(range.start.min(self.text.len()));
         let end = self.clamp_pos_to_char_boundary(range.end.min(self.text.len()));
         if start > end {
@@ -289,6 +452,7 @@ impl TextArea {
         }
         let diff = inserted_len as isize - removed_len as isize;
 
+        self.pre_mutate(kind, self.cursor_pos);
         self.text.replace_range(start..end, s);
         self.wrap_cache.replace(WrapCache::dirty());
         self.preferred_col = None;
@@ -304,6 +468,7 @@ impl TextArea {
         }
         .min(self.text.len());
         self.cursor_pos = self.clamp_pos_to_char_boundary(self.cursor_pos);
+        self.note_mutation(kind, /*ends_run*/ false);
     }
 
     // ─────────────────────────── Deletion ────────────────────────────
@@ -320,7 +485,7 @@ impl TextArea {
                 break;
             }
         }
-        self.replace_range(target..self.cursor_pos, "");
+        self.replace_range_as(target..self.cursor_pos, "", MutationKind::DeleteBackward);
     }
 
     /// Delete `n` grapheme clusters after the cursor.
@@ -335,7 +500,7 @@ impl TextArea {
                 break;
             }
         }
-        self.replace_range(self.cursor_pos..target, "");
+        self.replace_range_as(self.cursor_pos..target, "", MutationKind::DeleteForward);
     }
 
     /// Kill (cut → kill buffer) from the cursor back to the start of the
@@ -409,7 +574,7 @@ impl TextArea {
         // Capture the accumulation flag before `replace_range` resets it,
         // then re-mark this op as a kill afterwards.
         let appending = self.last_op_was_kill;
-        self.replace_range(start..end, "");
+        self.replace_range_as(start..end, "", MutationKind::Kill);
         if appending {
             self.kill_buffer.push_str(&removed);
         } else {
@@ -832,6 +997,18 @@ impl Default for TextArea {
 /// - `width == 0` degenerates to one range per logical line.
 /// - An empty buffer returns a single `0..0` range so the cursor still
 /// has a valid line to land on.
+/// Soft-wrap `text` into visual rows at `width` columns, as byte ranges that
+/// exactly tile the input.
+///
+/// Public because the composer wraps a *projection* of the buffer (mode-prefix
+/// stripped, placeholder or palette filter substituted) rather than the buffer
+/// itself, and its render, its cursor placement, and its height reservation
+/// must all agree on the same rows. Sharing this one function is what keeps
+/// them from drifting.
+pub fn wrap_ranges(text: &str, width: u16) -> Vec<Range<usize>> {
+    compute_wrapped_lines(text, width)
+}
+
 fn compute_wrapped_lines(text: &str, width: u16) -> Vec<Range<usize>> {
     if text.is_empty() {
         // `vec![0..0]` trips the `single_range_in_vec_init` lint (which
@@ -866,6 +1043,17 @@ fn compute_wrapped_lines(text: &str, width: u16) -> Vec<Range<usize>> {
     lines
 }
 
+/// Soft-wrap one logical line into visual rows, breaking at word boundaries.
+///
+/// Emits byte ranges that **exactly tile** `start..end` — every byte lands in
+/// exactly one row, including the whitespace at a break. That total-coverage
+/// contract is what `cursor_pos` maps a byte offset through, and it is why this
+/// is not `textwrap::wrap` despite the crate convention: textwrap returns
+/// trimmed `Cow<str>` segments that cannot be mapped back to source offsets, so
+/// a cursor sitting on a trimmed space would have nowhere to render.
+///
+/// Greedy first-fit, width-aware (CJK = 2 columns). A word longer than `width`
+/// falls back to breaking mid-word — otherwise it could never be shown at all.
 fn wrap_logical_line(
     text: &str,
     start: usize,
@@ -889,14 +1077,34 @@ fn wrap_logical_line(
     let limit = width as usize;
     let mut col = 0usize;
     let mut chunk_start = 0usize;
-    for (idx, g) in slice.grapheme_indices(true) {
-        let gw = UnicodeWidthStr::width(g);
-        if col + gw > limit && idx > chunk_start {
-            out.push(start + chunk_start..start + idx);
-            chunk_start = idx;
-            col = gw;
+    // Byte index (within `slice`) of the most recent point a new row could
+    // start — i.e. just past a whitespace run. `None` while no break
+    // opportunity exists in the current row, which is exactly the
+    // unbreakably-long-word case.
+    let mut break_at: Option<usize> = None;
+    for (idx, grapheme) in slice.grapheme_indices(true) {
+        let grapheme_width = UnicodeWidthStr::width(grapheme);
+        if col + grapheme_width > limit && idx > chunk_start {
+            // Prefer the word boundary; fall back to a mid-word break when the
+            // word alone overflows the row.
+            let cut = break_at
+                .filter(|cut| *cut > chunk_start)
+                // Only honor the boundary if the word carried onto the next row
+                // actually fits there. Otherwise the new row starts already
+                // overflowing and emits an oversized range — the exact way a
+                // row wider than the viewport (and thus clipped) gets built.
+                .filter(|cut| UnicodeWidthStr::width(&slice[*cut..idx]) + grapheme_width <= limit)
+                .unwrap_or(idx);
+            out.push(start + chunk_start..start + cut);
+            chunk_start = cut;
+            // The carried-over head of the word still occupies the new row.
+            col = UnicodeWidthStr::width(&slice[cut..idx]) + grapheme_width;
+            break_at = None;
         } else {
-            col += gw;
+            col += grapheme_width;
+        }
+        if grapheme.chars().all(char::is_whitespace) {
+            break_at = Some(idx + grapheme.len());
         }
     }
     if chunk_start < slice.len() {

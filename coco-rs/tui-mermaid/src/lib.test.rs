@@ -45,9 +45,59 @@ fn flowchart_renders_nodes_and_box_drawing() {
 }
 
 #[test]
+fn sequence_diagram_renders_participants_and_arrows() {
+    let out = render(
+        "sequenceDiagram\n  Alice->>Bob: Hello\n  Bob-->>Alice: Hi there\n",
+        80,
+    )
+    .expect("a sequence diagram renders to cells");
+    let joined = out.join("\n");
+    assert!(
+        joined.contains("Alice"),
+        "participant Alice missing:\n{joined}"
+    );
+    assert!(joined.contains("Bob"), "participant Bob missing:\n{joined}");
+    assert!(
+        joined.chars().any(|c| matches!(c, '→' | '←' | '↑' | '↓')),
+        "expected a message arrowhead:\n{joined}"
+    );
+    assert!(
+        joined.chars().any(|c| matches!(c, '│' | '─' | '╭' | '╮')),
+        "expected box-drawing / lifeline glyphs:\n{joined}"
+    );
+}
+
+#[test]
+fn sequence_renders_group_frame_sections_and_autonumbers() {
+    let out = render(
+        "sequenceDiagram\n  autonumber\n  box Aqua Core group\n  participant Alice\n  participant Bob\n  end\n  alt accepted\n    Alice->>Bob: Ping\n  else rejected\n    Bob-->>Alice: Pong\n  end\n",
+        100,
+    )
+    .expect("sequence extensions render");
+    let joined = out.join("\n");
+    assert!(
+        joined.contains("Core group"),
+        "sequence box label missing:\n{joined}"
+    );
+    assert!(joined.contains("alt"), "frame label missing:\n{joined}");
+    assert!(
+        joined.contains("accepted"),
+        "first frame section missing:\n{joined}"
+    );
+    assert!(
+        joined.contains("rejected"),
+        "alternate section missing:\n{joined}"
+    );
+    assert!(joined.contains("1."), "autonumber missing:\n{joined}");
+    assert!(
+        joined.contains("2."),
+        "second autonumber missing:\n{joined}"
+    );
+    insta::assert_snapshot!("sequence_frames_boxes_numbers", joined);
+}
+
+#[test]
 fn unsupported_diagram_type_falls_back() {
-    // Sequence diagrams are not box-and-arrow graphs → verbatim fence.
-    assert!(render("sequenceDiagram\n  Alice->>Bob: Hi\n", 80).is_none());
     // Pie charts carry continuous geometry → verbatim fence.
     assert!(render("pie\n  \"A\" : 50\n  \"B\" : 50\n", 80).is_none());
 }

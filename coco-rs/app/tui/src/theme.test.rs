@@ -33,6 +33,7 @@ fn test_theme_runtime_resolves_custom_theme_extending_builtin() -> anyhow::Resul
     let state = ThemeRuntimeState::from_config(PathBuf::from("theme.json"), config)?;
 
     assert_eq!(state.active_id, "my_dark");
+    assert!(!state.is_light);
     assert_eq!(state.theme.primary, Color::Rgb(1, 2, 3));
     assert_eq!(state.theme.secondary, Color::DarkGray);
     assert_eq!(state.theme.accent, Color::LightRed);
@@ -81,7 +82,27 @@ fn test_theme_definition_mode_selects_base_without_extends() -> anyhow::Result<(
     let state = ThemeRuntimeState::from_config(PathBuf::from("theme.json"), config)?;
 
     assert_eq!(state.active_id, "my_light");
+    assert!(state.is_light);
     assert_eq!(state.theme.selection_bg, Color::Rgb(180, 213, 255));
+    Ok(())
+}
+
+#[test]
+fn custom_theme_polarity_is_inherited_not_guessed_from_its_id() -> anyhow::Result<()> {
+    let config: ThemeConfig = serde_json::from_str(
+        r#"{
+          "version": 1,
+          "active": "starlight",
+          "themes": {
+            "starlight": { "extends": "dark" }
+          }
+        }"#,
+    )?;
+    let state = ThemeRuntimeState::from_config(PathBuf::from("theme.json"), config)?;
+    assert!(
+        !state.is_light,
+        "the id substring must not determine polarity"
+    );
     Ok(())
 }
 

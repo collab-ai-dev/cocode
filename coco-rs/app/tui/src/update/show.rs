@@ -309,6 +309,7 @@ pub(super) fn command_palette(state: &mut AppState) {
         .available_commands
         .iter()
         .map(|cmd| crate::widgets::suggestion_popup::SuggestionItem {
+            highlight_indices: Vec::new(),
             label: format!("/{}", cmd.name),
             description: cmd.description.clone(),
             metadata: None,

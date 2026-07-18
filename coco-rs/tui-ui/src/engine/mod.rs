@@ -6,6 +6,7 @@
 pub mod compatibility;
 pub mod history_insert;
 pub mod history_reflow;
+pub mod restore_seq;
 pub mod seat;
 pub mod terminal;
 

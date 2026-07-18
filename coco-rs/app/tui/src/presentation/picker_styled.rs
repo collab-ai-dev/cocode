@@ -36,7 +36,7 @@ use coco_tui_ui::widgets::render_select_list;
 
 /// A dim chrome line (intro / filter / hint).
 fn dim_line(text: impl Into<String>, styles: UiStyles<'_>) -> Line<'static> {
-    Line::from(Span::styled(text.into(), Style::default().fg(styles.dim())))
+    Line::from(Span::styled(text.into(), styles.dim_style()))
 }
 
 /// A body-text line (default foreground).
@@ -140,7 +140,7 @@ pub(crate) fn team_roster_lines(
     lines.push(Line::from(vec![
         Span::styled(
             t!("dialog.team_roster_set_mode").to_string(),
-            Style::default().fg(styles.dim()),
+            styles.dim_style(),
         ),
         Span::styled(
             crate::update::permission_mode_label(focused_mode),
@@ -535,20 +535,14 @@ fn background_task_row(
             ));
         }
         TaskEntryKind::Workflow => {
-            spans.push(Span::styled(
-                "wf ".to_string(),
-                Style::default().fg(styles.dim()),
-            ));
+            spans.push(Span::styled("wf ".to_string(), styles.dim_style()));
             spans.push(Span::styled(
                 truncate_to_width(&task.description, 52),
                 Style::default().fg(label_color),
             ));
         }
         TaskEntryKind::Shell | TaskEntryKind::Other => {
-            spans.push(Span::styled(
-                "$ ".to_string(),
-                Style::default().fg(styles.dim()),
-            ));
+            spans.push(Span::styled("$ ".to_string(), styles.dim_style()));
             spans.push(Span::styled(
                 truncate_to_width(&task.description, 52),
                 Style::default().fg(label_color),
@@ -558,7 +552,7 @@ fn background_task_row(
 
     spans.push(Span::styled(
         format!("  {}", format_runtime(now_ms - task.started_at_ms)),
-        Style::default().fg(styles.dim()),
+        styles.dim_style(),
     ));
 
     // Latest tool activity for agents (live feed; shells have none plumbed).
@@ -566,7 +560,7 @@ fn background_task_row(
         let activity = act.summary.clone().unwrap_or_else(|| act.tool_name.clone());
         spans.push(Span::styled(
             format!(" · {}", truncate_to_width(&activity, 28)),
-            Style::default().fg(styles.dim()),
+            styles.dim_style(),
         ));
     }
     Line::from(spans)
@@ -616,13 +610,13 @@ fn background_tasks_detail_lines(
             } else {
                 for act in activities {
                     let mut spans = vec![
-                        Span::styled(" · ".to_string(), Style::default().fg(styles.dim())),
+                        Span::styled(" · ".to_string(), styles.dim_style()),
                         Span::styled(act.tool_name.clone(), Style::default().fg(styles.text())),
                     ];
                     if let Some(summary) = &act.summary {
                         spans.push(Span::styled(
                             format!("  {}", truncate_to_width(summary, 40)),
-                            Style::default().fg(styles.dim()),
+                            styles.dim_style(),
                         ));
                     }
                     lines.push(Line::from(spans));
@@ -695,18 +689,15 @@ fn workflow_progress_line(
 ) -> Line<'static> {
     match event {
         coco_types::WorkflowProgressEvent::WorkflowPhase { title, .. } => Line::from(vec![
-            Span::styled(" · ".to_string(), Style::default().fg(styles.dim())),
+            Span::styled(" · ".to_string(), styles.dim_style()),
             Span::styled(
                 format!("▸ {}", truncate_to_width(title, 52)),
                 Style::default().fg(styles.text()),
             ),
         ]),
         coco_types::WorkflowProgressEvent::WorkflowLog { message } => Line::from(vec![
-            Span::styled(" · ".to_string(), Style::default().fg(styles.dim())),
-            Span::styled(
-                truncate_to_width(message, 64),
-                Style::default().fg(styles.dim()),
-            ),
+            Span::styled(" · ".to_string(), styles.dim_style()),
+            Span::styled(truncate_to_width(message, 64), styles.dim_style()),
         ]),
         coco_types::WorkflowProgressEvent::WorkflowAgent {
             label,
@@ -808,18 +799,18 @@ fn workflow_progress_line(
             }
 
             let mut spans = vec![
-                Span::styled(" · ".to_string(), Style::default().fg(styles.dim())),
+                Span::styled(" · ".to_string(), styles.dim_style()),
                 Span::styled(format!("{icon} "), Style::default().fg(color)),
                 Span::styled(
                     truncate_to_width(label, 32),
                     Style::default().fg(styles.text()),
                 ),
-                Span::styled(format!("  {state_text}"), Style::default().fg(styles.dim())),
+                Span::styled(format!("  {state_text}"), styles.dim_style()),
             ];
             if !tail.is_empty() {
                 spans.push(Span::styled(
                     format!(" · {}", tail.join(" · ")),
-                    Style::default().fg(styles.dim()),
+                    styles.dim_style(),
                 ));
             }
             Line::from(spans)

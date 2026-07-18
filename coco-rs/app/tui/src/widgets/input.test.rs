@@ -8,6 +8,89 @@ fn input(text: &str) -> InputState {
     input
 }
 
+// ─── Composer soft wrap (plan item C2) ────────────────────────────────────
+
+/// Render the composer into a `width × height` slot and return its rows.
+fn render_composer(state: &InputState, width: u16, height: u16) -> Vec<String> {
+    use ratatui::buffer::Buffer;
+    use ratatui::widgets::Widget;
+
+    let theme = Theme::default();
+    let area = Rect::new(0, 0, width, height);
+    let mut buffer = Buffer::empty(area);
+    InputWidget::new(state, UiStyles::new(&theme))
+        .focused(true)
+        .render(area, &mut buffer);
+    (0..height)
+        .map(|y| {
+            (0..width)
+                .map(|x| buffer[(x, y)].symbol().to_string())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect()
+}
+
+#[test]
+fn a_long_single_line_prompt_wraps_instead_of_being_clipped() {
+    // The bug this fixes: the composer rendered an unwrapped `Paragraph`, so a
+    // long prompt with no newline ran past the right edge and the tail was
+    // simply invisible — the user could not see what they had typed or pasted.
+    let text = "the quick brown fox jumps over the lazy dog and keeps running";
+    let state = input(text);
+    let rows = render_composer(&state, 30, 6);
+    let painted: String = rows.join(" ");
+
+    for word in ["quick", "jumps", "keeps", "running"] {
+        assert!(
+            painted.contains(word),
+            "{word:?} must be visible somewhere in the composer, got {rows:?}"
+        );
+    }
+}
+
+#[test]
+fn wrapped_composer_rows_break_at_words_and_align_under_the_gutter() {
+    let state = input("the quick brown fox jumps");
+    // Row 0 is the block's top border; content starts at row 1.
+    let rows = render_composer(&state, 16, 6);
+
+    assert!(
+        rows[1].starts_with('❯'),
+        "the first content row wears the indicator: {rows:?}"
+    );
+    // Continuation rows indent under the indicator instead of re-wearing it.
+    assert!(
+        rows[2].starts_with("  ") && !rows[2].contains('❯'),
+        "continuation rows align under the gutter: {rows:?}"
+    );
+    // Word-boundary wrapping: no row ends mid-word, and nothing is lost.
+    let content: Vec<String> = rows[1..]
+        .iter()
+        .take_while(|row| !row.is_empty())
+        .map(|row| row.trim_start_matches('❯').trim().to_string())
+        .collect();
+    assert_eq!(
+        content.join(" "),
+        "the quick brown fox jumps",
+        "the wrapped rows must reconstruct the prompt: {rows:?}"
+    );
+}
+
+#[test]
+fn a_short_prompt_still_uses_the_single_row_path() {
+    // The rich single-row path carries the inline ghost / hint affordances, so
+    // short input must keep taking it.
+    let state = input("hi");
+    let rows = render_composer(&state, 40, 3);
+    assert!(rows[1].contains("hi"), "{rows:?}");
+    assert!(
+        rows[2].is_empty() || !rows[2].contains("hi"),
+        "short input must not spill onto a second row: {rows:?}"
+    );
+}
+
 #[test]
 fn btw_trigger_highlight_matches_start_only_word_boundary() {
     assert_eq!(btw_trigger_len("/btw"), Some(4));
@@ -50,7 +133,7 @@ fn styled_display_text_spans_leaves_non_btw_text_plain() {
 fn input_render_model_strips_bash_prefix_for_display() {
     let input = input("! cargo test");
 
-    let model = InputRenderModel::build(&input, false, None, false, None);
+    let model = InputRenderModel::build(&input, false, None, false, None, /*width*/ 80);
 
     assert_eq!(model.prompt_mode, PromptMode::Bash);
     assert_eq!(model.prefix_consumed, 2);
@@ -63,7 +146,7 @@ fn input_render_model_strips_bash_prefix_for_display() {
 fn input_render_model_empty_default_has_no_placeholder_text() {
     let input = InputState::new();
 
-    let model = InputRenderModel::build(&input, false, None, false, None);
+    let model = InputRenderModel::build(&input, false, None, false, None, /*width*/ 80);
 
     assert_eq!(model.display_text, "");
     assert!(!model.is_placeholder);
@@ -75,7 +158,14 @@ fn input_render_model_queued_placeholder_wins_over_suggestion() {
     // a prompt suggestion is also present.
     let input = InputState::new();
 
-    let model = InputRenderModel::build(&input, false, Some("Try this prompt"), true, None);
+    let model = InputRenderModel::build(
+        &input,
+        false,
+        Some("Try this prompt"),
+        true,
+        None,
+        /*width*/ 80,
+    );
 
     assert_eq!(model.display_text, "Press up to edit queued messages");
     assert!(model.is_placeholder);
@@ -85,7 +175,14 @@ fn input_render_model_queued_placeholder_wins_over_suggestion() {
 fn input_render_model_command_palette_filter_wins_over_placeholder() {
     let input = InputState::new();
 
-    let model = InputRenderModel::build(&input, false, Some("ignored"), false, Some("config"));
+    let model = InputRenderModel::build(
+        &input,
+        false,
+        Some("ignored"),
+        false,
+        Some("config"),
+        /*width*/ 80,
+    );
 
     assert_eq!(model.display_text, "/config");
     assert_eq!(model.command_palette_filter.as_deref(), Some("config"));
@@ -96,7 +193,7 @@ fn input_render_model_command_palette_filter_wins_over_placeholder() {
 fn input_render_model_streaming_forces_normal_prompt_and_no_title() {
     let input = input("! cargo test");
 
-    let model = InputRenderModel::build(&input, true, None, false, None);
+    let model = InputRenderModel::build(&input, true, None, false, None, /*width*/ 80);
 
     assert_eq!(model.prompt_mode, PromptMode::Normal);
     assert_eq!(model.prefix_consumed, 0);
@@ -111,7 +208,7 @@ fn input_render_model_appends_inline_hint_after_text() {
     let mut input = input("/add-dir ");
     input.set_inline_hint(" <path>");
 
-    let model = InputRenderModel::build(&input, false, None, false, None);
+    let model = InputRenderModel::build(&input, false, None, false, None, /*width*/ 80);
 
     assert_eq!(model.display_text, "/add-dir ");
     assert_eq!(model.inline_hint.as_deref(), Some(" <path>"));
@@ -131,7 +228,7 @@ fn input_render_model_places_inline_ghost_at_cursor() {
         cursor_after_accept: 6,
     });
 
-    let model = InputRenderModel::build(&input, false, None, false, None);
+    let model = InputRenderModel::build(&input, false, None, false, None, /*width*/ 80);
 
     assert_eq!(model.display_text, "abc xyz");
     let ghost = model.inline_ghost.expect("rendered ghost");
@@ -152,7 +249,7 @@ fn input_render_model_hides_stale_inline_ghost() {
         cursor_after_accept: 4,
     });
 
-    let model = InputRenderModel::build(&input, false, None, false, None);
+    let model = InputRenderModel::build(&input, false, None, false, None, /*width*/ 80);
 
     assert!(model.inline_ghost.is_none());
 }
@@ -162,7 +259,7 @@ fn input_render_model_multiline_tracks_cursor_row_and_col() {
     let mut input = input("ab\ncde");
     input.textarea.set_cursor(input.text().len());
 
-    let model = InputRenderModel::build(&input, false, None, false, None);
+    let model = InputRenderModel::build(&input, false, None, false, None, /*width*/ 80);
 
     assert_eq!(model.display_text, "ab\ncde");
     assert_eq!(model.cursor_row, 1, "cursor is on the second line");
@@ -174,7 +271,7 @@ fn input_render_model_multiline_cursor_on_first_line() {
     let mut input = input("ab\ncde");
     input.textarea.set_cursor(1); // after 'a'
 
-    let model = InputRenderModel::build(&input, false, None, false, None);
+    let model = InputRenderModel::build(&input, false, None, false, None, /*width*/ 80);
 
     assert_eq!(model.cursor_row, 0);
     assert_eq!(model.cursor_col, 1);

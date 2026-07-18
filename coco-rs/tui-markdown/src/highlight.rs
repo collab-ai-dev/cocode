@@ -312,6 +312,18 @@ fn highlight_cache() -> &'static Mutex<HighlightCache> {
     CACHE.get_or_init(|| Mutex::new(HighlightCache::default()))
 }
 
+/// The identity of a highlight result: the inputs that fully determine its
+/// spans — content, language, and the active theme's palette — but NOT width
+/// (syntect highlighting is width-independent). Shared by the committed LRU and
+/// the streaming memo so the two agree on what "the same block" means.
+fn highlight_key(code: &str, lang: &str, theme_hash: u64) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    code.hash(&mut h);
+    lang.hash(&mut h);
+    theme_hash.hash(&mut h);
+    h.finish()
+}
+
 /// How the highlighted block is being rendered. Chosen by the caller because
 /// it decides the caching strategy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -351,16 +363,9 @@ pub(crate) fn highlight_code(
     if mode == HighlightMode::Streaming {
         return highlight_streaming(code, lang, styles);
     }
-    // Key on the inputs that change the highlighted spans — content, language,
-    // and the active theme's palette — but NOT width. A lock-poison or a fresh
-    // cache simply recomputes; the cache never affects correctness.
-    let key = {
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        code.hash(&mut h);
-        lang.hash(&mut h);
-        styles.theme_hash().hash(&mut h);
-        h.finish()
-    };
+    // A lock-poison or a fresh cache simply recomputes; the cache never affects
+    // correctness.
+    let key = highlight_key(code, lang, styles.theme_hash());
     if let Some(hit) = highlight_cache().lock().ok().and_then(|mut c| c.get(key)) {
         return Some(hit);
     }
@@ -438,6 +443,73 @@ fn streaming_fence_slot() -> &'static Mutex<Option<StreamingFenceSlot>> {
     SLOT.get_or_init(|| Mutex::new(None))
 }
 
+/// Byte budget for [`ClosedFenceMemo`], counted in memoized *source* bytes —
+/// the same unit as [`MAX_HIGHLIGHT_BYTES`], and a proxy for the retained span
+/// memory (which runs a small multiple of it).
+const CLOSED_MEMO_CAP_BYTES: usize = 1024 * 1024;
+
+/// Memo of fences already tokenized on the streaming path, keyed exactly like
+/// the committed LRU via [`highlight_key`].
+///
+/// Why this exists beside [`StreamingFenceSlot`]: the slot holds ONE fence, but
+/// a mutable tail routinely carries several — the common shape being an
+/// already-closed fence inside a still-open list plus the growing open fence.
+/// Those calls alternate, each stealing the slot from the other, so before this
+/// memo every fence re-tokenized in full on every frame: the exact O(block²)
+/// pathology the slot exists to prevent.
+///
+/// **A memo hit returns without touching the slot.** That is the load-bearing
+/// property: closed fences are served from here, so the open fence keeps the
+/// slot and its checkpoint keeps extending O(delta).
+///
+/// Insertion is confined to the rebuild path. The incumbent fence's per-frame
+/// extension never inserts — its snapshots are dead on arrival (every frame is
+/// a new key) and would evict the closed fences this memo exists to serve,
+/// which is the same reason streaming bypasses the committed LRU.
+#[derive(Default)]
+struct ClosedFenceMemo {
+    /// key → (spans, source bytes charged against the budget).
+    map: HashMap<u64, (Highlighted, usize)>,
+    lru: VecDeque<u64>,
+    bytes: usize,
+}
+
+impl ClosedFenceMemo {
+    fn touch(&mut self, key: u64) {
+        if let Some(pos) = self.lru.iter().position(|&k| k == key) {
+            self.lru.remove(pos);
+        }
+        self.lru.push_back(key);
+    }
+
+    fn get(&mut self, key: u64) -> Option<Highlighted> {
+        let hit = self.map.get(&key).map(|(spans, _)| Arc::clone(spans))?;
+        self.touch(key);
+        Some(hit)
+    }
+
+    fn put(&mut self, key: u64, value: Highlighted, bytes: usize) {
+        if let Some((_, replaced)) = self.map.insert(key, (value, bytes)) {
+            self.bytes -= replaced;
+        }
+        self.bytes += bytes;
+        self.touch(key);
+        while self.bytes > CLOSED_MEMO_CAP_BYTES {
+            let Some(evicted) = self.lru.pop_front() else {
+                break;
+            };
+            if let Some((_, freed)) = self.map.remove(&evicted) {
+                self.bytes -= freed;
+            }
+        }
+    }
+}
+
+fn closed_fence_memo() -> &'static Mutex<ClosedFenceMemo> {
+    static MEMO: OnceLock<Mutex<ClosedFenceMemo>> = OnceLock::new();
+    MEMO.get_or_init(|| Mutex::new(ClosedFenceMemo::default()))
+}
+
 fn highlight_streaming(code: &str, lang: &str, styles: UiStyles<'_>) -> Option<Highlighted> {
     let ss = syntax_set();
     let theme_hash = styles.theme_hash();
@@ -460,27 +532,39 @@ fn highlight_streaming(code: &str, lang: &str, styles: UiStyles<'_>) -> Option<H
             }
         }
     };
-    if let Some(cause) = rebuild_cause {
-        tracing::debug!(
-            target: "tui::perf::highlight",
-            cause,
-            lang,
-            code_bytes = code.len(),
-            "streaming highlight slot rebuilt",
-        );
-        let syntax_ref = find_syntax(ss, lang)?;
-        *guard = Some(StreamingFenceSlot {
-            lang: lang.to_string(),
-            theme_hash,
-            content: String::new(),
-            state: ParseState::new(syntax_ref),
-            stack: ScopeStack::new(),
-            lines: Vec::new(),
-        });
-    }
+    // A rebuild means this call is NOT the slot's incumbent fence, so consult
+    // the memo before disturbing anything: a hit returns the closed fence's
+    // spans and leaves the slot with its current owner, which is what keeps the
+    // open fence extending O(delta) instead of the two thrashing the slot.
+    // `Some(key)` here doubles as "this call rebuilt", gating the insert below.
+    let rebuild_key = match rebuild_cause {
+        None => None,
+        Some(cause) => {
+            let key = highlight_key(code, lang, theme_hash);
+            if let Some(hit) = closed_fence_memo().lock().ok().and_then(|mut m| m.get(key)) {
+                return Some(hit);
+            }
+            tracing::debug!(
+                target: "tui::perf::highlight",
+                cause,
+                lang,
+                code_bytes = code.len(),
+                "streaming highlight slot rebuilt",
+            );
+            let syntax_ref = find_syntax(ss, lang)?;
+            *guard = Some(StreamingFenceSlot {
+                lang: lang.to_string(),
+                theme_hash,
+                content: String::new(),
+                state: ParseState::new(syntax_ref),
+                stack: ScopeStack::new(),
+                lines: Vec::new(),
+            });
+            Some(key)
+        }
+    };
     let slot = guard.as_mut()?;
-    let result = extend_streaming_slot(slot, code, ss, styles);
-    if result.is_none() {
+    let Some(result) = extend_streaming_slot(slot, code, ss, styles) else {
         // A parser error mid-extension leaves the slot half-updated; drop it
         // so the next frame rebuilds from scratch instead of trusting a
         // checkpoint that no longer matches its content.
@@ -491,8 +575,14 @@ fn highlight_streaming(code: &str, lang: &str, styles: UiStyles<'_>) -> Option<H
             "streaming highlight slot dropped after parser error",
         );
         *guard = None;
+        return None;
+    };
+    if let Some(key) = rebuild_key
+        && let Ok(mut memo) = closed_fence_memo().lock()
+    {
+        memo.put(key, Arc::clone(&result), code.len());
     }
-    result
+    Some(result)
 }
 
 fn extend_streaming_slot(

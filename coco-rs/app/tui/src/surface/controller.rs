@@ -459,6 +459,8 @@ impl NativeSurfaceController {
                 duration_us = crate::perf::duration_us(elapsed),
                 buffer_updates = stats.buffer_updates,
                 invalidated = stats.invalidated,
+                frame_skipped = stats.frame_skipped,
+                skipped_frames_total = stats.skipped_frames_total,
                 input_bottom = layout.input.bottom(),
                 viewport_bottom = terminal.viewport_area().bottom(),
                 render_us = crate::perf::duration_us(stats.render_elapsed),
