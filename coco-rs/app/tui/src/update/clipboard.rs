@@ -69,9 +69,9 @@ pub(super) fn copy_last_message_with(
 }
 
 /// Read an image from the system clipboard and insert a `[Image #N]` pill
-/// at the cursor. On submit, `PasteManager::resolve_structured` pulls the
-/// bytes out of the pill and attaches them to `UserCommand::SubmitInput.images`
-/// so a multimodal agent sees the screenshot alongside the user's prompt.
+/// at the cursor. On submit, the element-aware paste resolver pulls the bytes
+/// out of the pill and attaches them to `UserCommand::SubmitInput.images` so a
+/// multimodal agent sees the screenshot alongside the user's prompt.
 ///
 /// Text paste intentionally stays with the terminal's bracketed-paste flow
 /// (handled by `TuiEvent::Paste`) — this path is image-only.
@@ -89,12 +89,17 @@ where
     match read_fn().await {
         Ok(Some(image)) => {
             let size_kb = image.bytes.len().div_ceil(1024);
-            let pill = state
+            if exit_plan_feedback_is_active(state) {
+                attach_exit_plan_feedback_image(state, image);
+            } else if let Err(error) = state
                 .ui
-                .paste_manager
-                .add_image_data(image.bytes, image.mime);
-            if !insert_exit_plan_feedback_image_pill(state, &pill) {
-                state.ui.input.textarea.insert_str(&pill);
+                .input
+                .insert_image_attachment(image.bytes, image.mime)
+            {
+                state.ui.add_toast(Toast::error(format!(
+                    "Cannot attach clipboard image: {error:?}"
+                )));
+                return;
             }
             state.ui.add_toast(Toast::success(
                 t!("toast.image_attached", size_kb = size_kb).to_string(),
@@ -113,7 +118,16 @@ where
     }
 }
 
-fn insert_exit_plan_feedback_image_pill(state: &mut AppState, pill: &str) -> bool {
+fn exit_plan_feedback_is_active(state: &AppState) -> bool {
+    let Some(crate::state::PanePromptState::Permission(prompt)) =
+        state.ui.interaction.active_prompt.as_ref()
+    else {
+        return false;
+    };
+    crate::bottom_pane::permission::exit_plan_feedback_editing(prompt)
+}
+
+fn attach_exit_plan_feedback_image(state: &mut AppState, image: ImageData) -> bool {
     let Some(crate::state::PanePromptState::Permission(prompt)) =
         state.ui.interaction.active_prompt.as_mut()
     else {
@@ -122,13 +136,16 @@ fn insert_exit_plan_feedback_image_pill(state: &mut AppState, pill: &str) -> boo
     if !crate::bottom_pane::permission::exit_plan_feedback_editing(prompt) {
         return false;
     }
-    let crate::state::PermissionDetail::ExitPlanMode { feedback_input, .. } = &mut prompt.detail
+    let crate::state::PermissionDetail::ExitPlanMode {
+        feedback_images, ..
+    } = &mut prompt.detail
     else {
         return false;
     };
-    for c in pill.chars() {
-        feedback_input.insert(c);
-    }
+    feedback_images.push(crate::state::FeedbackImage {
+        bytes: std::sync::Arc::from(image.bytes),
+        mime: image.mime,
+    });
     true
 }
 

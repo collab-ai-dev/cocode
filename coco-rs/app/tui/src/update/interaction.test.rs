@@ -148,6 +148,7 @@ fn permission_with_allowed_prompts(values: &[&str], selected: usize) -> AppState
             plan: Some("# Plan".into()),
             edited_plan: None,
             feedback_input: crate::state::PrefixInputState::new(String::new()),
+            feedback_images: Vec::new(),
             plan_file_path: Some("/tmp/plan.md".into()),
             allowed_prompts: vec![coco_types::ExitPlanModeAllowedPrompt {
                 tool: "Bash".into(),
@@ -370,14 +371,15 @@ async fn confirm_with_no_choice_sends_feedback_image_blocks() {
         &["yes-accept-edits-keep-context", "yes-accept-edits", "no"],
         2,
     );
-    let pill =
-        s.ui.paste_manager
-            .add_image_data(vec![0x89, 0x50], "image/png".to_string());
     if let Some(PanePromptState::Permission(p)) = s.ui.interaction.active_prompt.as_mut()
-        && let PermissionDetail::ExitPlanMode { feedback_input, .. } = &mut p.detail
+        && let PermissionDetail::ExitPlanMode {
+            feedback_images, ..
+        } = &mut p.detail
     {
-        feedback_input.value = pill;
-        feedback_input.cursor = feedback_input.value.len();
+        feedback_images.push(crate::state::FeedbackImage {
+            bytes: std::sync::Arc::from(vec![0x89, 0x50]),
+            mime: "image/png".into(),
+        });
     }
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
     confirm(&mut s, &tx).await;
@@ -412,14 +414,15 @@ async fn confirm_with_no_choice_normalizes_feedback_image_blocks() {
         coco_utils_image::MAX_WIDTH + 64,
         coco_utils_image::MAX_HEIGHT + 64,
     );
-    let pill =
-        s.ui.paste_manager
-            .add_image_data(original, "image/png".to_string());
     if let Some(PanePromptState::Permission(p)) = s.ui.interaction.active_prompt.as_mut()
-        && let PermissionDetail::ExitPlanMode { feedback_input, .. } = &mut p.detail
+        && let PermissionDetail::ExitPlanMode {
+            feedback_images, ..
+        } = &mut p.detail
     {
-        feedback_input.value = pill;
-        feedback_input.cursor = feedback_input.value.len();
+        feedback_images.push(crate::state::FeedbackImage {
+            bytes: std::sync::Arc::from(original),
+            mime: "image/png".into(),
+        });
     }
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
     confirm(&mut s, &tx).await;

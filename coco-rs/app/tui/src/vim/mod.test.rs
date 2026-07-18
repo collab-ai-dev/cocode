@@ -11,7 +11,10 @@ use crate::vim::operators;
 use crate::vim::text_objects::{self};
 use crate::vim::transitions::VimAction;
 use crate::vim::transitions::{self};
+use coco_tui_ui::widgets::ElementDisplay;
+use coco_tui_ui::widgets::ElementKind;
 use coco_tui_ui::widgets::TextArea;
+use ratatui::style::Style;
 
 fn textarea_with(text: &str, cursor: usize) -> TextArea {
     let mut ta = TextArea::new();
@@ -86,7 +89,7 @@ fn test_operator_delete_word() {
     let mut persistent = PersistentState::default();
     // dw deletes [0..6) which is "hello ".
     let deleted = operators::apply_operator(&mut ta, Operator::Delete, 0..6, &mut persistent);
-    assert_eq!(deleted, "hello ");
+    assert_eq!(deleted.as_deref(), Some("hello "));
     assert_eq!(ta.text(), "world");
     assert_eq!(persistent.register, "hello ");
 }
@@ -227,4 +230,36 @@ fn x_register_capture() {
     transitions::process_normal_key('x', &mut ta, &mut cmd, &mut persistent);
     assert_eq!(ta.text(), "ello");
     assert_eq!(persistent.register, "h");
+}
+
+#[test]
+fn vim_plain_text_register_operations_reject_atomic_elements() {
+    let mut ta = TextArea::new();
+    ta.insert_element(
+        "[Image #1]",
+        ElementKind::Image,
+        ElementDisplay::new("Image #1", Style::default()),
+    )
+    .unwrap();
+    ta.set_cursor(0);
+    let original = ta.snapshot();
+    let mut command = CommandState::Idle;
+    let mut persistent = PersistentState {
+        register: "safe".to_string(),
+        ..Default::default()
+    };
+
+    transitions::process_normal_key('x', &mut ta, &mut command, &mut persistent);
+    assert_eq!(ta.snapshot(), original);
+    assert_eq!(persistent.register, "safe");
+
+    transitions::process_normal_key('d', &mut ta, &mut command, &mut persistent);
+    transitions::process_normal_key('d', &mut ta, &mut command, &mut persistent);
+    assert_eq!(ta.snapshot(), original);
+    assert_eq!(persistent.register, "safe");
+
+    transitions::process_normal_key('r', &mut ta, &mut command, &mut persistent);
+    transitions::process_normal_key('X', &mut ta, &mut command, &mut persistent);
+    assert_eq!(ta.snapshot(), original);
+    assert_eq!(persistent.register, "safe");
 }

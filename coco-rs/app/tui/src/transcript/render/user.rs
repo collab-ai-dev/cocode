@@ -46,10 +46,12 @@ pub(super) fn try_render(
                 lines.push(Line::from(spans));
                 return Some(());
             }
+            let display_text =
+                crate::transcript::derive::user_display_text(cell.source.as_ref(), text);
             if let Some(rendered) =
                 crate::presentation::slash_command::render_slash_command_user_text(
                     cell.source.as_ref(),
-                    text,
+                    &display_text,
                     crate::presentation::slash_command::SlashCommandRenderOptions {
                         styles: w.styles,
                         width: w.width,
@@ -69,7 +71,7 @@ pub(super) fn try_render(
             // Subtle background tint behind user prompt rows. The background must
             // paint the full row width rather than just the glyphs — the bg must
             // therefore live on the `Line`, not on individual spans.
-            for (idx, line) in text.lines().enumerate() {
+            for (idx, line) in display_text.lines().enumerate() {
                 let gutter = if idx == 0 { "❯ " } else { "  " };
                 let span = Span::raw(format!("{gutter}{line}")).fg(w.styles.user_message());
                 let mut chat_line = Line::from(span);
@@ -81,7 +83,7 @@ pub(super) fn try_render(
             // Hang a `⎿ [Image #N]` confirmation row under the prompt for each
             // pasted image, so an attachment that lives only as an inline
             // placeholder still reads as a distinct, attached artifact.
-            for pill in image_pill_refs(text) {
+            for pill in crate::transcript::derive::user_image_labels(cell.source.as_ref()) {
                 lines.push(Line::from(vec![
                     Span::raw("  ⎿ ").style(w.styles.dim_style()),
                     Span::raw(pill).style(w.styles.dim_style()),
@@ -182,24 +184,6 @@ pub(super) fn try_render(
         }
         _ => None,
     }
-}
-
-/// Extract every `[Image #N]` placeholder (in order) from a user prompt so the
-/// renderer can hang a `⎿ [Image #N]` confirmation row under the `❯` text. Only
-/// well-formed pills (a non-empty all-digit `N`) match, so literal user text
-/// like `[Image #foo]` is ignored.
-fn image_pill_refs(text: &str) -> Vec<String> {
-    let mut refs = Vec::new();
-    for (start, _) in text.match_indices("[Image #") {
-        let rest = &text[start..];
-        if let Some(close) = rest.find(']') {
-            let num = &rest["[Image #".len()..close];
-            if !num.is_empty() && num.bytes().all(|b| b.is_ascii_digit()) {
-                refs.push(rest[..=close].to_string());
-            }
-        }
-    }
-    refs
 }
 
 /// Extract the plan-file basename from the clear-context implement message

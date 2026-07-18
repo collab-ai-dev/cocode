@@ -6,6 +6,7 @@ use std::cell::Cell;
 use std::fs::File;
 use std::io;
 use std::io::Read;
+use std::io::Write;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -15,15 +16,20 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crossterm::cursor::SetCursorStyle;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
+use crossterm::event::KeyEventState;
+use crossterm::event::KeyModifiers;
 use ratatui::backend::Backend;
 use ratatui::backend::ClearType;
 use ratatui::backend::CrosstermBackend;
 use ratatui::backend::WindowSize;
-use ratatui::buffer::Buffer;
 use ratatui::buffer::Cell as BufferCell;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
 use ratatui::layout::Size;
+use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
 use super::App;
@@ -31,20 +37,28 @@ use crate::events::TuiEvent;
 use crate::terminal::Tui;
 use coco_tui_ui::engine::CursorClaim;
 use coco_tui_ui::engine::compatibility::TerminalCompatibility;
+use coco_tui_ui::engine::frame_backend::FrameCrosstermBackend;
+use coco_tui_ui::engine::frame_writer::FrameWriterOptions;
+use coco_tui_ui::engine::history_insert::render_history_rows;
+use coco_tui_ui::engine::terminal::DirectHistoryInsert;
 use coco_tui_ui::engine::terminal::SurfaceBackend;
 use coco_tui_ui::engine::terminal::SurfaceTerminal;
+use coco_tui_ui::engine::terminal::TerminalWriteStats;
 use coco_types::CoreEvent;
 
 /// Crossterm's normal cursor query reads process-global stdin. This wrapper
 /// keeps the production ANSI writer but tracks cursor/size locally so the app
 /// can be driven against an isolated PTY without a DSR response pump.
-struct PtyBackend {
-    inner: CrosstermBackend<File>,
+struct PtyBackend<B = CrosstermBackend<File>> {
+    inner: B,
     size: Rc<Cell<Size>>,
     cursor: Position,
 }
 
-impl Backend for PtyBackend {
+impl<B> Backend for PtyBackend<B>
+where
+    B: Backend<Error = io::Error>,
+{
     type Error = io::Error;
 
     fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
@@ -116,7 +130,10 @@ impl Backend for PtyBackend {
     }
 }
 
-impl SurfaceBackend for PtyBackend {
+impl<B> SurfaceBackend for PtyBackend<B>
+where
+    B: SurfaceBackend<Error = io::Error>,
+{
     fn clear_scrollback_and_screen(&mut self) -> io::Result<()> {
         self.inner.clear_scrollback_and_screen()
     }
@@ -153,21 +170,19 @@ impl SurfaceBackend for PtyBackend {
         self.inner.write_drop_trailing_newline()
     }
 
+    fn drain_output(&mut self, timeout: Duration) -> io::Result<bool> {
+        self.inner.drain_output(timeout)
+    }
+
+    fn terminal_write_stats(&self) -> Option<TerminalWriteStats> {
+        self.inner.terminal_write_stats()
+    }
+
     fn insert_history_rows_direct(
         &mut self,
-        rendered: &Buffer,
-        source_start_row: u16,
-        row_count: u16,
-        target_top: u16,
-        scratch: &mut String,
+        request: DirectHistoryInsert<'_>,
     ) -> io::Result<Option<usize>> {
-        self.inner.insert_history_rows_direct(
-            rendered,
-            source_start_row,
-            row_count,
-            target_top,
-            scratch,
-        )
+        self.inner.insert_history_rows_direct(request)
     }
 }
 
@@ -182,7 +197,7 @@ struct TestPty {
 /// Open a real kernel PTY without adding unsafe code to the TUI. `rustix`
 /// owns the platform FFI; the slave receives production ANSI and the
 /// non-blocking master captures exactly what a terminal sees.
-fn test_pty(width: u16, height: u16) -> (TestPty, SurfaceTerminal<PtyBackend>) {
+fn open_test_pty(width: u16, height: u16) -> (TestPty, File, Rc<Cell<Size>>) {
     use rustix::fs::Mode;
     use rustix::fs::OFlags;
     use rustix::pty::OpenptFlags;
@@ -230,22 +245,86 @@ fn test_pty(width: u16, height: u16) -> (TestPty, SurfaceTerminal<PtyBackend>) {
         })
     };
     let size = Rc::new(Cell::new(Size::new(width, height)));
-    let backend = PtyBackend {
-        inner: CrosstermBackend::new(File::from(slave)),
-        size: Rc::clone(&size),
-        cursor: Position::ORIGIN,
-    };
-    let terminal = SurfaceTerminal::new(backend).expect("build PTY terminal");
     (
         TestPty {
             resize_fd,
-            size,
+            size: Rc::clone(&size),
             output,
             stop,
             reader: Some(reader),
         },
-        terminal,
+        File::from(slave),
+        size,
     )
+}
+
+fn test_pty(width: u16, height: u16) -> (TestPty, SurfaceTerminal<PtyBackend>) {
+    let (pty, slave, size) = open_test_pty(width, height);
+    let backend = PtyBackend {
+        inner: CrosstermBackend::new(slave),
+        size,
+        cursor: Position::ORIGIN,
+    };
+    let terminal = SurfaceTerminal::new(backend).expect("build PTY terminal");
+    (pty, terminal)
+}
+
+struct GatedWriter {
+    inner: File,
+    entered: Option<std::sync::mpsc::SyncSender<()>>,
+    release: std::sync::mpsc::Receiver<()>,
+}
+
+struct GatedTestPty {
+    pty: TestPty,
+    terminal: SurfaceTerminal<PtyBackend<FrameCrosstermBackend<GatedWriter>>>,
+    write_entered: std::sync::mpsc::Receiver<()>,
+    release_write: std::sync::mpsc::SyncSender<()>,
+}
+
+impl Write for GatedWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        if let Some(entered) = self.entered.take() {
+            entered
+                .send(())
+                .map_err(|_| io::Error::other("write-gate observer dropped"))?;
+            self.release
+                .recv()
+                .map_err(|_| io::Error::other("write gate dropped"))?;
+        }
+        self.inner.write(buffer)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+fn gated_test_pty(width: u16, height: u16) -> GatedTestPty {
+    let (pty, slave, size) = open_test_pty(width, height);
+    let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(0);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
+    let inner = FrameCrosstermBackend::new(
+        GatedWriter {
+            inner: slave,
+            entered: Some(entered_tx),
+            release: release_rx,
+        },
+        FrameWriterOptions::default(),
+    )
+    .expect("start gated PTY writer");
+    let backend = PtyBackend {
+        inner,
+        size,
+        cursor: Position::ORIGIN,
+    };
+    let terminal = SurfaceTerminal::new(backend).expect("build delayed PTY terminal");
+    GatedTestPty {
+        pty,
+        terminal,
+        write_entered: entered_rx,
+        release_write: release_tx,
+    }
 }
 
 fn set_winsize(fd: &impl rustix::fd::AsFd, width: u16, height: u16) {
@@ -378,5 +457,139 @@ async fn real_pty_focus_gain_forces_full_repaint_only_when_gated() {
         "gated heal must repaint cells: plain={} healed={}",
         plain_bytes.len(),
         healed_bytes.len(),
+    );
+}
+
+#[test]
+fn real_pty_history_insert_emits_balanced_osc8() {
+    let (mut pty, mut terminal) = test_pty(48, 8);
+    terminal.set_viewport_area(Rect::new(0, 2, 48, 2));
+    terminal.set_hyperlinks_enabled(true);
+
+    terminal
+        .insert_history_rows(&render_history_rows(
+            vec![Line::from("open https://example.com/docs")],
+            48,
+        ))
+        .expect("insert linked history into PTY");
+
+    let bytes = pty.drain();
+    let open = b"\x1b]8;;https://example.com/docs\x1b\\";
+    let close = b"\x1b]8;;\x1b\\";
+    assert_eq!(
+        bytes
+            .windows(open.len())
+            .filter(|window| *window == open)
+            .count(),
+        1,
+        "one OSC 8 open expected in {bytes:?}"
+    );
+    assert_eq!(
+        bytes
+            .windows(close.len())
+            .filter(|window| *window == close)
+            .count(),
+        1,
+        "one OSC 8 close expected in {bytes:?}"
+    );
+}
+
+#[test]
+fn real_pty_blocked_writer_keeps_frame_submission_non_blocking() {
+    let GatedTestPty {
+        mut pty,
+        mut terminal,
+        write_entered,
+        release_write,
+    } = gated_test_pty(48, 8);
+    terminal.set_viewport_area(Rect::new(0, 0, 48, 3));
+
+    terminal
+        .begin_synchronized_update()
+        .expect("begin delayed frame");
+    terminal
+        .draw_viewport(|frame| {
+            frame.render_widget(Paragraph::new("responsive delayed frame"), frame.area());
+        })
+        .expect("draw delayed frame");
+    terminal
+        .end_synchronized_update()
+        .expect("enqueue gated frame");
+
+    write_entered
+        .recv()
+        .expect("writer reached physical PTY write");
+    let counters = terminal.backend().inner.drain_barrier().counters();
+    assert!(
+        counters.queued > counters.written,
+        "submission must return while the physical writer is still gated: {counters:?}"
+    );
+    release_write.send(()).expect("release physical PTY write");
+    assert!(
+        terminal
+            .drain_output(Duration::from_secs(1))
+            .expect("drain gated PTY writer"),
+        "gated writer must eventually drain"
+    );
+    let stats = terminal
+        .terminal_write_stats()
+        .expect("physical write latency stats");
+    assert!(stats.through_sequence > 0, "{stats:?}");
+    let bytes = pty.drain();
+    assert!(
+        bytes
+            .windows(b"responsive delayed frame".len())
+            .any(|window| window == b"responsive delayed frame"),
+        "accepted frame must reach the real PTY: {bytes:?}"
+    );
+}
+
+#[tokio::test]
+async fn alt_e_reprints_committed_tool_output_through_the_app_draw_path() {
+    let (mut app, _event_tx, mut pty) = pty_test_app(false);
+    crate::transcript::derive::test_helpers::push_tool_use(
+        &mut app.state.session,
+        "expand-call",
+        "Bash",
+        "printf lines",
+    );
+    let output = (0..40)
+        .map(|line| format!("app-expanded-line-{line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    crate::transcript::derive::test_helpers::push_tool_result(
+        &mut app.state.session,
+        "expand-call",
+        "Bash",
+        &output,
+        false,
+    );
+
+    app.redraw().expect("commit collapsed tool output");
+    let initial = pty.drain();
+    assert!(
+        !initial
+            .windows(b"app-expanded-line-20".len())
+            .any(|window| window == b"app-expanded-line-20"),
+        "collapsed commit unexpectedly contained a middle line"
+    );
+
+    let redraw = app
+        .handle_event(TuiEvent::Key(KeyEvent {
+            code: KeyCode::Char('e'),
+            modifiers: KeyModifiers::ALT,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }))
+        .await;
+    assert!(redraw, "Alt+E should request a committed-tool reprint");
+    app.redraw().expect("draw committed-tool reprint");
+
+    let expanded = pty.drain();
+    assert!(
+        expanded
+            .windows(b"app-expanded-line-20".len())
+            .any(|window| window == b"app-expanded-line-20"),
+        "Alt+E app path did not emit the full committed output: {expanded:?}"
     );
 }

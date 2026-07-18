@@ -12,9 +12,8 @@
 //! paint time (`Paragraph::wrap`). Code fences are the exception: their guttered
 //! body rows wrap internally so the frame stays within the configured width.
 
-use std::collections::HashSet;
-
 use coco_tui_ui::display::SyntaxHighlighting;
+use coco_tui_ui::engine::history_links::HistoryLinkHint;
 use coco_tui_ui::style::UiStyles;
 use pulldown_cmark::Alignment;
 use pulldown_cmark::BlockQuoteKind;
@@ -34,8 +33,19 @@ use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
 mod highlight;
+mod stable;
 
 pub use highlight::prewarm_highlighting;
+pub use stable::StablePrefixTracker;
+pub use stable::stable_prefix_end;
+
+pub type LinkSpan = HistoryLinkHint;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkdownRender {
+    pub lines: Vec<Line<'static>>,
+    pub links: Vec<LinkSpan>,
+}
 
 /// A turn-boundary marker placed at column 0 of the first rendered line (e.g.
 /// the assistant `⏺` dot). The glyph plus a trailing space occupy exactly
@@ -100,7 +110,24 @@ pub fn render_markdown(
     opts: MarkdownOptions<'_>,
     marker: Option<&LeadMarker>,
 ) -> Vec<Line<'static>> {
-    let mut writer = Writer::new(opts, marker);
+    render_markdown_with_mode(text, opts, marker, LinkPresentation::Fallback).lines
+}
+
+pub fn render_markdown_with_links(
+    text: &str,
+    opts: MarkdownOptions<'_>,
+    marker: Option<&LeadMarker>,
+) -> MarkdownRender {
+    render_markdown_with_mode(text, opts, marker, LinkPresentation::Sidecar)
+}
+
+fn render_markdown_with_mode(
+    text: &str,
+    opts: MarkdownOptions<'_>,
+    marker: Option<&LeadMarker>,
+    link_presentation: LinkPresentation,
+) -> MarkdownRender {
+    let mut writer = Writer::new(opts, marker, link_presentation);
     let mut parser_opts = Options::empty();
     parser_opts.insert(Options::ENABLE_STRIKETHROUGH);
     parser_opts.insert(Options::ENABLE_TABLES);
@@ -133,331 +160,6 @@ pub fn highlight_code_lines(
     )
 }
 
-/// Return the byte index of the longest conservative Markdown source prefix
-/// whose finalized render should remain a line prefix after more source arrives.
-///
-/// This is intentionally conservative: returning too little only keeps more text
-/// in the mutable streaming tail, while returning too much can commit rows whose
-/// Markdown interpretation later changes.
-pub fn stable_prefix_end(source: &str) -> usize {
-    let Some(scan_end) = source.rfind('\n').map(|idx| idx + 1) else {
-        return 0;
-    };
-
-    let mut offset = 0usize;
-    let mut safe_end = 0usize;
-    let mut fence_open: Option<FenceMarker> = None;
-    // A trailing list that can still grow is held back entirely: a later
-    // sibling item separated by a blank line flips the WHOLE list from tight
-    // to loose (CommonMark), retroactively rewriting items that were already
-    // rendered. `list_guard` remembers the last safe boundary before the open
-    // list began; it caps the result only while the list can still continue
-    // past the end of the scanned source.
-    let mut in_list_tail = false;
-    let mut list_guard = 0usize;
-    let mut prev_blank = false;
-    for line in source[..scan_end].split_inclusive('\n') {
-        let trimmed = line.trim();
-        let mut closed_fence = false;
-        let fence_line = fence_marker(line).is_some();
-        if let Some(marker) = fence_marker(line) {
-            match fence_open {
-                Some(open) if marker.closes(open) => {
-                    fence_open = None;
-                    closed_fence = true;
-                }
-                None => {
-                    fence_open = Some(marker);
-                    // A top-level fence interrupts a list.
-                    in_list_tail = false;
-                }
-                Some(_) => {}
-            }
-        }
-        if fence_line || fence_open.is_some() {
-            if trimmed.is_empty() && fence_open.is_some() {
-                // Blank lines inside a fence are code, not block separators.
-            } else {
-                prev_blank = false;
-            }
-        } else if trimmed.is_empty() {
-            prev_blank = true;
-        } else {
-            if thematic_break_marker(trimmed) || atx_heading_marker(trimmed) {
-                in_list_tail = false;
-            } else if list_item_marker(line) && (in_list_tail || line_indent(line) <= 3) {
-                if !in_list_tail {
-                    in_list_tail = true;
-                    list_guard = safe_end;
-                }
-            } else if in_list_tail && prev_blank && line_indent(line) < 2 {
-                // An unindented paragraph after a blank line ends the list;
-                // anything else (lazy continuation, indented item content)
-                // keeps it open.
-                in_list_tail = false;
-            }
-            prev_blank = false;
-        }
-
-        offset += line.len();
-        if fence_open.is_none()
-            && (trimmed.is_empty() || closed_fence || atx_heading_marker(trimmed))
-            && stable_prefix_is_context_free(&source[..offset])
-        {
-            safe_end = offset;
-        }
-    }
-
-    if in_list_tail {
-        // The unterminated tail can already prove the list closed: after a
-        // blank line, an unindented line whose first character can never form
-        // a list-item marker is a paragraph that interrupts the list. The
-        // ambiguous starters (`-`, `+`, `*`, digits) could still grow into a
-        // sibling item, so they keep the hold.
-        let partial = &source[scan_end..];
-        let partial_ends_list = prev_blank
-            && line_indent(partial) < 2
-            && partial
-                .trim_start_matches(' ')
-                .chars()
-                .next()
-                .is_some_and(|ch| !matches!(ch, '-' | '+' | '*') && !ch.is_ascii_digit());
-        if !partial_ends_list {
-            return list_guard.min(safe_end);
-        }
-    }
-    safe_end
-}
-
-fn line_indent(line: &str) -> usize {
-    line.len() - line.trim_start_matches(' ').len()
-}
-
-/// `---` / `***` / `___` style thematic break (3+ of one marker char, spaces
-/// allowed between). Checked before the list-item marker so `- - -` is a
-/// break, not a bullet.
-fn thematic_break_marker(trimmed: &str) -> bool {
-    let mut marker = None;
-    let mut count = 0usize;
-    for ch in trimmed.chars() {
-        match (marker, ch) {
-            (_, ' ' | '\t') => {}
-            (None, '-' | '_' | '*') => {
-                marker = Some(ch);
-                count = 1;
-            }
-            (Some(open), _) if ch == open => count += 1,
-            _ => return false,
-        }
-    }
-    count >= 3
-}
-
-/// A line that starts a bullet (`-`/`+`/`*`) or ordered (`1.` / `1)`) list
-/// item. Operates on the raw line; the caller decides how much indent is
-/// allowed in context.
-fn list_item_marker(line: &str) -> bool {
-    let content = line.trim_end_matches(['\n', '\r']).trim_start_matches(' ');
-    let mut chars = content.chars();
-    match chars.next() {
-        Some('-' | '+' | '*') => matches!(chars.next(), None | Some(' ' | '\t')),
-        Some(ch) if ch.is_ascii_digit() => {
-            let digits = content.chars().take_while(char::is_ascii_digit).count();
-            if digits > 9 {
-                return false;
-            }
-            let mut rest = content[digits..].chars();
-            matches!(rest.next(), Some('.' | ')')) && matches!(rest.next(), None | Some(' ' | '\t'))
-        }
-        _ => false,
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct FenceMarker {
-    ch: char,
-    len: usize,
-    can_close: bool,
-}
-
-impl FenceMarker {
-    fn closes(self, open: Self) -> bool {
-        self.can_close && self.ch == open.ch && self.len >= open.len
-    }
-}
-
-fn fence_marker(trimmed: &str) -> Option<FenceMarker> {
-    let candidate = trimmed.strip_suffix('\n').unwrap_or(trimmed);
-    let candidate = candidate.strip_suffix('\r').unwrap_or(candidate);
-    let indent = candidate.len() - candidate.trim_start_matches(' ').len();
-    if indent > 3 {
-        return None;
-    }
-
-    let candidate = &candidate[indent..];
-    let mut chars = candidate.chars();
-    let ch = chars.next()?;
-    if ch != '`' && ch != '~' {
-        return None;
-    }
-    let len = candidate
-        .chars()
-        .take_while(|candidate| *candidate == ch)
-        .count();
-    if len < 3 {
-        return None;
-    }
-    let rest = &candidate[len..];
-    let can_close = rest.chars().all(char::is_whitespace);
-
-    // Opening backtick fences cannot contain backticks in the info string.
-    if !can_close && ch == '`' && rest.contains('`') {
-        return None;
-    }
-
-    Some(FenceMarker { ch, len, can_close })
-}
-
-fn atx_heading_marker(trimmed: &str) -> bool {
-    let marker_len = trimmed.chars().take_while(|ch| *ch == '#').count();
-    (1..=6).contains(&marker_len)
-        && trimmed
-            .chars()
-            .nth(marker_len)
-            .is_none_or(char::is_whitespace)
-}
-
-fn stable_prefix_is_context_free(prefix: &str) -> bool {
-    // Link reference definitions are global in CommonMark, so later stream
-    // bytes can change unresolved reference-style links. Hold only actual
-    // reference candidates; harmless brackets such as task-list checkboxes and
-    // inline links may still commit.
-    let definitions = reference_definitions(prefix);
-    let mut fence_open: Option<FenceMarker> = None;
-    for line in prefix.split_inclusive('\n') {
-        if let Some(marker) = fence_marker(line) {
-            match fence_open {
-                Some(open) if marker.closes(open) => {
-                    fence_open = None;
-                }
-                None => {
-                    fence_open = Some(marker);
-                }
-                Some(_) => {}
-            }
-            continue;
-        }
-        if fence_open.is_some() || reference_definition_label(line).is_some() {
-            continue;
-        }
-        if contains_unresolved_reference_candidate(line, &definitions) {
-            return false;
-        }
-    }
-    true
-}
-
-fn reference_definitions(source: &str) -> HashSet<String> {
-    source
-        .lines()
-        .filter_map(reference_definition_label)
-        .collect()
-}
-
-fn reference_definition_label(line: &str) -> Option<String> {
-    let candidate = line.strip_prefix("   ").or_else(|| {
-        line.strip_prefix("  ")
-            .or_else(|| line.strip_prefix(' ').or(Some(line)))
-    })?;
-    let rest = candidate.strip_prefix('[')?;
-    let close = rest.find("]:")?;
-    normalize_reference_label(&rest[..close])
-}
-
-fn contains_unresolved_reference_candidate(line: &str, definitions: &HashSet<String>) -> bool {
-    let bytes = line.as_bytes();
-    let mut idx = 0usize;
-    while idx < bytes.len() {
-        let Some(rel_open) = line[idx..].find('[') else {
-            return false;
-        };
-        let open = idx + rel_open;
-        if is_task_marker_at(line, open) {
-            idx = open + 3;
-            continue;
-        }
-
-        let label_start = open + 1;
-        let Some(rel_close) = line[label_start..].find(']') else {
-            return false;
-        };
-        let close = label_start + rel_close;
-        let Some(label) = normalize_reference_label(&line[label_start..close]) else {
-            idx = close + 1;
-            continue;
-        };
-
-        let after_close = close + 1;
-        match line[after_close..].chars().next() {
-            Some('(') => {
-                idx = after_close + 1;
-            }
-            Some('[') => {
-                let target_start = after_close + 1;
-                let Some(rel_target_close) = line[target_start..].find(']') else {
-                    return false;
-                };
-                let target_close = target_start + rel_target_close;
-                let target = if target_start == target_close {
-                    label
-                } else if let Some(target) =
-                    normalize_reference_label(&line[target_start..target_close])
-                {
-                    target
-                } else {
-                    idx = target_close + 1;
-                    continue;
-                };
-                if !definitions.contains(&target) {
-                    return true;
-                }
-                idx = target_close + 1;
-            }
-            _ => {
-                if !definitions.contains(&label) {
-                    return true;
-                }
-                idx = after_close;
-            }
-        }
-    }
-    false
-}
-
-fn is_task_marker_at(line: &str, open: usize) -> bool {
-    let before = line[..open].trim();
-    let has_list_marker = before == "-"
-        || before == "+"
-        || before == "*"
-        || before.strip_suffix('.').is_some_and(|digits| {
-            !digits.is_empty() && digits.chars().all(|ch| ch.is_ascii_digit())
-        });
-    has_list_marker
-        && matches!(
-            line[open..].chars().take(3).collect::<Vec<_>>().as_slice(),
-            ['[', ' ', ']'] | ['[', 'x' | 'X', ']']
-        )
-}
-
-fn normalize_reference_label(label: &str) -> Option<String> {
-    let normalized = label.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.is_empty() || normalized.len() > 999 {
-        None
-    } else {
-        Some(normalized.to_ascii_lowercase())
-    }
-}
-
 // ─────────────────────────────────────────────────────────────────────────
 // Writer
 // ─────────────────────────────────────────────────────────────────────────
@@ -468,9 +170,29 @@ struct LinkRender {
     text: String,
 }
 
-/// One table cell holds its styled inline content (bold / italic / code /
-/// link spans preserved), not a flattened string.
-type TableCell = Vec<Span<'static>>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LinkPresentation {
+    /// Preserve the destination as visible text for renderers that cannot
+    /// consume OSC 8 geometry (reader, modal, live viewport, unsupported tty).
+    Fallback,
+    /// Keep visible geometry label-only and emit a separate LinkSpan.
+    Sidecar,
+}
+
+#[derive(Clone)]
+struct LinkedSpan {
+    span: Span<'static>,
+    target: Option<String>,
+}
+
+impl LinkedSpan {
+    fn plain(span: Span<'static>) -> Self {
+        Self { span, target: None }
+    }
+}
+
+/// One table cell holds styled inline content plus its link target sidecar.
+type TableCell = Vec<LinkedSpan>;
 
 struct TableBuilder {
     aligns: Vec<Alignment>,
@@ -493,6 +215,9 @@ struct Writer<'a> {
 
     lines: Vec<Line<'static>>,
     spans: Vec<Span<'static>>,
+    span_links: Vec<Option<String>>,
+    links: Vec<LinkSpan>,
+    link_presentation: LinkPresentation,
 
     cur_style: Style,
     style_stack: Vec<Style>,
@@ -510,9 +235,8 @@ struct Writer<'a> {
     code_buf: String,
 
     table: Option<TableBuilder>,
-    /// Active inline link: destination + accumulated display text. Closing the
-    /// link appends the destination inline (see `finish_link`) so the URL is
-    /// not silently dropped.
+    /// Active inline link: destination + display text used to suppress a
+    /// duplicate fallback for autolinks.
     link: Option<LinkRender>,
 
     lead_marker: Option<Span<'static>>,
@@ -525,7 +249,11 @@ struct Writer<'a> {
 }
 
 impl<'a> Writer<'a> {
-    fn new(opts: MarkdownOptions<'a>, marker: Option<&LeadMarker>) -> Self {
+    fn new(
+        opts: MarkdownOptions<'a>,
+        marker: Option<&LeadMarker>,
+        link_presentation: LinkPresentation,
+    ) -> Self {
         let lead_marker = marker.map(|m| Span::styled(format!("{} ", m.glyph), m.style));
         let lead_marker_width = lead_marker
             .as_ref()
@@ -539,6 +267,9 @@ impl<'a> Writer<'a> {
             streaming: opts.streaming,
             lines: Vec::new(),
             spans: Vec::new(),
+            span_links: Vec::new(),
+            links: Vec::new(),
+            link_presentation,
             cur_style: Style::default(),
             style_stack: Vec::new(),
             list_stack: Vec::new(),
@@ -558,7 +289,7 @@ impl<'a> Writer<'a> {
         }
     }
 
-    fn finish(mut self) -> Vec<Line<'static>> {
+    fn finish(mut self) -> MarkdownRender {
         // Flush any dangling inline content.
         if !self.spans.is_empty() {
             self.flush_line();
@@ -568,7 +299,10 @@ impl<'a> Writer<'a> {
         {
             self.lines.push(Line::from(vec![marker]));
         }
-        self.lines
+        MarkdownRender {
+            lines: self.lines,
+            links: self.links,
+        }
     }
 
     fn list_depth(&self) -> usize {
@@ -651,7 +385,41 @@ impl<'a> Writer<'a> {
     /// Finish the current logical line (content in `self.spans`).
     fn flush_line(&mut self) {
         let mut line_spans = self.leading();
+        let leading_len = line_spans
+            .iter()
+            .map(|span| span.content.len())
+            .sum::<usize>();
+        let line_index = self.lines.len();
+        let mut byte_offset = leading_len;
+        let mut active: Option<(usize, String)> = None;
+        for (span, target) in self.spans.iter().zip(&self.span_links) {
+            let span_end = byte_offset.saturating_add(span.content.len());
+            match (active.as_mut(), target) {
+                (Some((_, active_target)), Some(target)) if active_target == target => {}
+                (Some((start, active_target)), target) => {
+                    self.links.push(LinkSpan {
+                        line: line_index,
+                        start_byte: *start,
+                        end_byte: byte_offset,
+                        target: std::mem::take(active_target),
+                    });
+                    active = target.clone().map(|target| (byte_offset, target));
+                }
+                (None, Some(target)) => active = Some((byte_offset, target.clone())),
+                (None, None) => {}
+            }
+            byte_offset = span_end;
+        }
+        if let Some((start, target)) = active {
+            self.links.push(LinkSpan {
+                line: line_index,
+                start_byte: start,
+                end_byte: byte_offset,
+                target,
+            });
+        }
         line_spans.append(&mut self.spans);
+        self.span_links.clear();
         self.lines.push(Line::from(line_spans));
         // The current item has now emitted at least one line; later lines are
         // continuations and hang-indent under the item text.
@@ -669,6 +437,16 @@ impl<'a> Writer<'a> {
             self.flush_line();
         }
         self.spans = content;
+        self.span_links = vec![None; self.spans.len()];
+        self.flush_line();
+    }
+
+    fn emit_linked_raw_line(&mut self, content: Vec<LinkedSpan>) {
+        if !self.spans.is_empty() {
+            self.flush_line();
+        }
+        self.span_links = content.iter().map(|span| span.target.clone()).collect();
+        self.spans = content.into_iter().map(|span| span.span).collect();
         self.flush_line();
     }
 
@@ -926,47 +704,58 @@ impl<'a> Writer<'a> {
         // Table cells keep their styled spans so bold/italic/code/link styling
         // survives into the grid (the old path flattened to a plain string).
         let style = self.cur_style;
+        let target = self.active_link_target();
         if let Some(t) = self.table.as_mut() {
-            t.cur_cell.push(Span::styled(text.to_string(), style));
+            t.cur_cell.push(LinkedSpan {
+                span: Span::styled(text.to_string(), style),
+                target,
+            });
             return;
         }
         self.spans.push(Span::styled(text.to_string(), style));
+        self.span_links.push(self.active_link_target());
     }
 
-    /// Append the link destination inline at `TagEnd::Link` so the URL is not
-    /// silently dropped.
-    ///
-    /// coco's native paint engine has no OSC 8 plumbing — embedding escape
-    /// sequences in span content would corrupt width-aware wrapping — so links
-    /// terminal-fallback form when hyperlinks
-    /// are unsupported: the destination is shown. A `mailto:` shows the bare
-    /// address; an autolink / bare URL (display text already equal to the
-    /// destination) is not duplicated.
+    /// Keep link destinations out of visible prose and record them as geometry
+    /// sidecars when the logical line flushes. Visible span text never carries
+    /// the destination or terminal escapes, so wrapping geometry stays exact.
     fn finish_link(&mut self) {
         let Some(link) = self.link.take() else {
             return;
         };
-        let dest = link.dest_url.trim();
-        if dest.is_empty() {
+        if self.link_presentation == LinkPresentation::Sidecar {
             return;
         }
-        let display_dest = dest.strip_prefix("mailto:").unwrap_or(dest);
-        let text = link.text.trim();
-        if text == display_dest {
+        let destination = link.dest_url.trim();
+        if destination.is_empty() {
             return;
         }
-        let suffix = if text.is_empty() {
-            display_dest.to_string()
+        let display_destination = destination.strip_prefix("mailto:").unwrap_or(destination);
+        let display_text = link.text.trim();
+        if display_text == display_destination {
+            return;
+        }
+        let suffix = if display_text.is_empty() {
+            display_destination.to_string()
         } else {
-            format!(" ({display_dest})")
+            format!(" ({display_destination})")
         };
-        let span = Span::styled(suffix, Style::default().fg(self.styles.hyperlink()));
-        // Inside a table the suffix belongs to the cell, not the main line
-        // buffer (otherwise the URL leaks out below the grid).
-        if let Some(t) = self.table.as_mut() {
-            t.cur_cell.push(span);
+        let span = LinkedSpan::plain(Span::styled(
+            suffix,
+            Style::default().fg(self.styles.hyperlink()),
+        ));
+        if let Some(table) = self.table.as_mut() {
+            table.cur_cell.push(span);
         } else {
-            self.spans.push(span);
+            self.spans.push(span.span);
+            self.span_links.push(None);
+        }
+    }
+
+    fn active_link_target(&self) -> Option<String> {
+        match self.link_presentation {
+            LinkPresentation::Fallback => None,
+            LinkPresentation::Sidecar => self.link.as_ref().map(|link| link.dest_url.clone()),
         }
     }
 
@@ -977,18 +766,19 @@ impl<'a> Writer<'a> {
         let style = self
             .cur_style
             .patch(Style::default().fg(self.styles.code_inline()));
-        // Feed the link-text accumulator like `on_text` does, so a link whose
-        // display text is (or contains) inline code — `` [`api`](url) `` — is
-        // not mis-detected as empty in `finish_link` (which would drop the
-        // ` (url)` separator or defeat autolink de-duplication).
         if let Some(link) = self.link.as_mut() {
             link.text.push_str(code);
         }
+        let target = self.active_link_target();
         if let Some(t) = self.table.as_mut() {
-            t.cur_cell.push(Span::styled(code.to_string(), style));
+            t.cur_cell.push(LinkedSpan {
+                span: Span::styled(code.to_string(), style),
+                target,
+            });
             return;
         }
         self.spans.push(Span::styled(code.to_string(), style));
+        self.span_links.push(self.active_link_target());
     }
 
     fn on_task_marker(&mut self, checked: bool) {
@@ -1002,6 +792,7 @@ impl<'a> Writer<'a> {
         };
         self.spans
             .push(Span::styled(glyph.to_string(), Style::default().fg(color)));
+        self.span_links.push(None);
     }
 
     fn on_rule(&mut self) {
@@ -1166,16 +957,16 @@ impl<'a> Writer<'a> {
         let border = Style::default().fg(self.styles.table_border());
         // Wrap each cell to its column width; the row is as tall as its tallest
         // cell and shorter cells pad with blank visual lines.
-        let wrapped: Vec<Vec<Vec<Span<'static>>>> = (0..widths.len())
+        let wrapped: Vec<Vec<Vec<LinkedSpan>>> = (0..widths.len())
             .map(|i| {
-                let cell: &[Span<'static>] = cells.get(i).map(Vec::as_slice).unwrap_or(&[]);
+                let cell: &[LinkedSpan] = cells.get(i).map(Vec::as_slice).unwrap_or(&[]);
                 let mut lines = wrap_styled_cell(cell, widths[i]);
                 // Headers read bold but keep the terminal foreground (TS does not
                 // brand-tint header cells).
                 if header {
                     for line in &mut lines {
                         for span in line {
-                            span.style = span.style.add_modifier(Modifier::BOLD);
+                            span.span.style = span.span.style.add_modifier(Modifier::BOLD);
                         }
                     }
                 }
@@ -1185,16 +976,16 @@ impl<'a> Writer<'a> {
 
         let height = wrapped.iter().map(Vec::len).max().unwrap_or(1).max(1);
         for row_idx in 0..height {
-            let mut spans = vec![Span::styled("│".to_string(), border)];
+            let mut spans = vec![LinkedSpan::plain(Span::styled("│".to_string(), border))];
             for (i, width) in widths.iter().enumerate() {
                 let line = wrapped[i].get(row_idx).cloned().unwrap_or_default();
                 let align = aligns.get(i).copied().unwrap_or(Alignment::None);
-                spans.push(Span::raw(" "));
+                spans.push(LinkedSpan::plain(Span::raw(" ")));
                 spans.extend(pad_spans(line, *width, align));
-                spans.push(Span::raw(" "));
-                spans.push(Span::styled("│".to_string(), border));
+                spans.push(LinkedSpan::plain(Span::raw(" ")));
+                spans.push(LinkedSpan::plain(Span::styled("│".to_string(), border)));
             }
-            self.emit_raw_line(spans);
+            self.emit_linked_raw_line(spans);
         }
     }
 }
@@ -1299,17 +1090,17 @@ fn table_rule(widths: &[usize], left: char, mid: char, right: char) -> String {
 }
 
 /// Total display width of a cell's spans.
-fn cell_width(cell: &[Span<'static>]) -> usize {
+fn cell_width(cell: &[LinkedSpan]) -> usize {
     cell.iter()
-        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .map(|s| UnicodeWidthStr::width(s.span.content.as_ref()))
         .sum()
 }
 
 /// Width of the widest glyph in a cell. A column may hard-wrap a long word, but
 /// it must never be narrower than a glyph or the glyph would be dropped.
-fn widest_glyph_width(cell: &[Span<'static>]) -> usize {
+fn widest_glyph_width(cell: &[LinkedSpan]) -> usize {
     cell.iter()
-        .flat_map(|span| span.content.chars())
+        .flat_map(|span| span.span.content.chars())
         .filter_map(UnicodeWidthChar::width)
         .max()
         .unwrap_or(0)
@@ -1388,25 +1179,28 @@ fn column_widths(
 /// Wrap a styled cell to `width` columns at word boundaries, returning one span
 /// vector per visual line. Word styling (bold/italic/code/link) is preserved;
 /// words wider than the column are hard-broken by character so nothing is lost.
-fn wrap_styled_cell(cell: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
+fn wrap_styled_cell(cell: &[LinkedSpan], width: usize) -> Vec<Vec<LinkedSpan>> {
     let width = width.max(1);
-    let chars: Vec<(char, Style)> = cell
+    let chars: Vec<(char, Style, Option<String>)> = cell
         .iter()
         .flat_map(|span| {
-            let style = span.style;
-            span.content.chars().map(move |ch| (ch, style))
+            let style = span.span.style;
+            span.span
+                .content
+                .chars()
+                .map(move |ch| (ch, style, span.target.clone()))
         })
         .collect();
     if chars.is_empty() {
         return vec![Vec::new()];
     }
 
-    let mut rows: Vec<Vec<(char, Style)>> = Vec::new();
-    let mut cur: Vec<(char, Style)> = Vec::new();
+    let mut rows: Vec<Vec<(char, Style, Option<String>)>> = Vec::new();
+    let mut cur: Vec<(char, Style, Option<String>)> = Vec::new();
     let mut cur_w = 0usize;
     let char_w = |ch: char| UnicodeWidthChar::width(ch).unwrap_or(0);
-    let trim_trailing = |row: &mut Vec<(char, Style)>| {
-        while row.last().is_some_and(|(c, _)| *c == ' ') {
+    let trim_trailing = |row: &mut Vec<(char, Style, Option<String>)>| {
+        while row.last().is_some_and(|(c, _, _)| *c == ' ') {
             row.pop();
         }
     };
@@ -1437,7 +1231,7 @@ fn wrap_styled_cell(cell: &[Span<'static>], width: usize) -> Vec<Vec<Span<'stati
             i += 1;
         }
         let word = &chars[start..i];
-        let word_w: usize = word.iter().map(|(c, _)| char_w(*c)).sum();
+        let word_w: usize = word.iter().map(|(c, _, _)| char_w(*c)).sum();
 
         if cur_w + word_w <= width {
             cur.extend_from_slice(word);
@@ -1455,8 +1249,8 @@ fn wrap_styled_cell(cell: &[Span<'static>], width: usize) -> Vec<Vec<Span<'stati
                 rows.push(std::mem::take(&mut cur));
                 cur_w = 0;
             }
-            for &(c, st) in word {
-                let cw = char_w(c);
+            for (c, st, target) in word {
+                let cw = char_w(*c);
                 if cur_w > 0 && cur_w + cw > width {
                     rows.push(std::mem::take(&mut cur));
                     cur_w = 0;
@@ -1465,11 +1259,11 @@ fn wrap_styled_cell(cell: &[Span<'static>], width: usize) -> Vec<Vec<Span<'stati
                 // allocation keeps a glyph-width floor. Retain the glyph on
                 // its own visual row instead of silently deleting it.
                 if cur_w == 0 && cw > width {
-                    cur.push((c, st));
+                    cur.push((*c, *st, target.clone()));
                     cur_w = cw;
                     continue;
                 }
-                cur.push((c, st));
+                cur.push((*c, *st, target.clone()));
                 cur_w += cw;
             }
         }
@@ -1481,34 +1275,40 @@ fn wrap_styled_cell(cell: &[Span<'static>], width: usize) -> Vec<Vec<Span<'stati
 }
 
 /// Coalesce a run of `(char, style)` into the minimal set of styled spans.
-fn group_chars(row: &[(char, Style)]) -> Vec<Span<'static>> {
-    let mut spans: Vec<Span<'static>> = Vec::new();
+fn group_chars(row: &[(char, Style, Option<String>)]) -> Vec<LinkedSpan> {
+    let mut spans: Vec<LinkedSpan> = Vec::new();
     let mut buf = String::new();
-    let mut cur_style: Option<Style> = None;
-    for &(ch, style) in row {
-        if cur_style == Some(style) {
-            buf.push(ch);
+    let mut current: Option<(Style, Option<String>)> = None;
+    for (ch, style, target) in row {
+        if current.as_ref() == Some(&(*style, target.clone())) {
+            buf.push(*ch);
         } else {
-            if let Some(st) = cur_style {
-                spans.push(Span::styled(std::mem::take(&mut buf), st));
+            if let Some((style, target)) = current.take() {
+                spans.push(LinkedSpan {
+                    span: Span::styled(std::mem::take(&mut buf), style),
+                    target,
+                });
             }
-            buf.push(ch);
-            cur_style = Some(style);
+            buf.push(*ch);
+            current = Some((*style, target.clone()));
         }
     }
-    if let Some(st) = cur_style
+    if let Some((style, target)) = current
         && !buf.is_empty()
     {
-        spans.push(Span::styled(buf, st));
+        spans.push(LinkedSpan {
+            span: Span::styled(buf, style),
+            target,
+        });
     }
     spans
 }
 
 /// Pad an already-wrapped cell line to exactly `width` columns per `align`.
-fn pad_spans(line: Vec<Span<'static>>, width: usize, align: Alignment) -> Vec<Span<'static>> {
+fn pad_spans(line: Vec<LinkedSpan>, width: usize, align: Alignment) -> Vec<LinkedSpan> {
     let content: usize = line
         .iter()
-        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .map(|s| UnicodeWidthStr::width(s.span.content.as_ref()))
         .sum();
     let pad = width.saturating_sub(content);
     let (left, right) = match align {
@@ -1518,11 +1318,11 @@ fn pad_spans(line: Vec<Span<'static>>, width: usize, align: Alignment) -> Vec<Sp
     };
     let mut out = Vec::with_capacity(line.len() + 2);
     if left > 0 {
-        out.push(Span::raw(" ".repeat(left)));
+        out.push(LinkedSpan::plain(Span::raw(" ".repeat(left))));
     }
     out.extend(line);
     if right > 0 {
-        out.push(Span::raw(" ".repeat(right)));
+        out.push(LinkedSpan::plain(Span::raw(" ".repeat(right))));
     }
     out
 }

@@ -68,6 +68,9 @@ pub struct QueuedCommand {
     /// queue items, which is the common case.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<QueuedImage>,
+    /// Lossless atomic composer shape retained for edit/rewind restoration.
+    #[serde(default)]
+    pub editable_composer: coco_types::SubmittedComposer,
     /// Structured task notification payload paired with the model-facing XML
     /// prompt. Present only for `QueueOrigin::TaskNotification` entries whose
     /// producer had typed task metadata.
@@ -84,6 +87,8 @@ pub struct QueuedImage {
     pub media_type: String,
     /// Base64-encoded image payload.
     pub data_base64: String,
+    /// Byte position in `QueuedCommand::prompt` where the image appeared.
+    pub insertion_offset: i64,
 }
 
 impl QueuedCommand {
@@ -97,6 +102,7 @@ impl QueuedCommand {
             is_slash_command: is_slash,
             origin: None,
             images: Vec::new(),
+            editable_composer: Default::default(),
             task_notification: None,
         }
     }
@@ -110,6 +116,12 @@ impl QueuedCommand {
             .as_ref()
             .map(|payload| payload.summary.as_str())
             .unwrap_or(&self.prompt);
+        if text.is_empty() && !self.images.is_empty() {
+            return match self.images.len() {
+                1 => "[Image]".to_string(),
+                count => format!("[{count} images]"),
+            };
+        }
         let mut out = String::with_capacity(80);
         for c in text.chars().take(80) {
             out.push(c);
@@ -132,6 +144,11 @@ impl QueuedCommand {
     /// Attach images to the queued command.
     pub fn with_images(mut self, images: Vec<QueuedImage>) -> Self {
         self.images = images;
+        self
+    }
+
+    pub fn with_editable_composer(mut self, composer: coco_types::SubmittedComposer) -> Self {
+        self.editable_composer = composer;
         self
     }
 

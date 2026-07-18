@@ -34,11 +34,18 @@ impl<'a> StashNotice<'a> {
     /// Centralizes the visibility check so callers stay in sync with the
     /// widget's own opinion of when it is renderable.
     pub fn should_display(stash: Option<&StashedInput>) -> bool {
-        stash.is_some_and(|s| !s.text.trim().is_empty())
+        stash.is_some_and(|s| !s.composer.text().trim().is_empty())
     }
 
     fn truncated_preview(&self) -> String {
-        let single_line: String = self.stash.text.lines().next().unwrap_or("").into();
+        let single_line: String = self
+            .stash
+            .composer
+            .text()
+            .lines()
+            .next()
+            .unwrap_or("")
+            .into();
         if single_line.chars().count() <= PREVIEW_CHARS {
             single_line
         } else {

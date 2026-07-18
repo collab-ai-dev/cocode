@@ -24,11 +24,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 manifest="tui-ui/Cargo.toml"
-# `vt100` is a domain-free terminal emulator, optional + pulled only by the
-# `testing` feature (the `VT100Backend` test sink). It never ships in a
-# production build and carries no AppState/messages/config/i18n, so it belongs
-# on the presentational allowlist alongside ratatui/crossterm/unicode-*.
-allow_re='^(ratatui|crossterm|unicode-width|unicode-segmentation|tracing|base64|tokio|arboard|libc|vt100|coco-utils-string|coco-utils-common)$'
+# `vt100` is a domain-free terminal emulator used by the test sink. `linkify`
+# and `url` provide pure text/URI parsing for the OSC 8 geometry sidecar. None
+# carries AppState/messages/config/i18n, so they remain inside this seam.
+allow_re='^(ratatui|crossterm|unicode-width|unicode-segmentation|tracing|base64|tokio|arboard|libc|vt100|linkify|url|coco-utils-string|coco-utils-common)$'
 
 deps=$(awk '
     # Section headers decide whether we are inside a checked dependency

@@ -347,6 +347,7 @@ fn exit_plan_prompt_state(step_count: usize) -> AppState {
                     plan: Some(plan),
                     edited_plan: None,
                     feedback_input: crate::state::PrefixInputState::new(String::new()),
+                    feedback_images: Vec::new(),
                     plan_file_path: Some("/tmp/plan.md".into()),
                     allowed_prompts: vec![],
                 },

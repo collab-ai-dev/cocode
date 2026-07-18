@@ -3,7 +3,9 @@
 //! This module contains logical interaction state only. Render/layout
 //! measurement caches live in the surface renderer, outside `AppState`.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::ops::Range;
 
 /// Transcript state — cell-level reader for `Ctrl+O`.
 #[derive(Debug, Clone, Default)]
@@ -18,6 +20,8 @@ pub struct TranscriptState {
     /// Transcript opens expanded by default; this set records opt-in
     /// collapses instead of opt-in expansion.
     pub(crate) collapsed_cell_ids: HashSet<TranscriptCellId>,
+    /// Full-text search state belongs to the reader overlay (I-3).
+    pub(crate) search: TranscriptSearch,
 }
 
 impl TranscriptState {
@@ -45,7 +49,69 @@ impl TranscriptState {
                 .unwrap_or_default(),
             selected_cell_id: anchor_cell_id,
             collapsed_cell_ids: HashSet::new(),
+            search: TranscriptSearch::default(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TranscriptSearchRevision {
+    pub(crate) transcript: u64,
+    pub(crate) stream: Option<u64>,
+    pub(crate) width: u16,
+    pub(crate) side_caches: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TranscriptSearchEntry {
+    pub(crate) cell_id: TranscriptCellId,
+    pub(crate) lines: Vec<TranscriptSearchLine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TranscriptSearchLine {
+    pub(crate) text: String,
+    pub(crate) row_offset: usize,
+    pub(crate) source_rows: Vec<Option<usize>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TranscriptSearchMatch {
+    pub(crate) cell_id: TranscriptCellId,
+    pub(crate) line_index: usize,
+    /// Exact wrapped row within the expanded cell projection.
+    pub(crate) row_offset: usize,
+    pub(crate) byte_range: Range<usize>,
+}
+
+/// Search query, cached rendered corpus, and match navigation state.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct TranscriptSearch {
+    /// Whether keystrokes currently edit the search field.
+    pub(crate) editing: bool,
+    pub(crate) query: String,
+    pub(crate) matches: Vec<TranscriptSearchMatch>,
+    pub(crate) cursor: Option<usize>,
+    pub(crate) indexed_revision: Option<TranscriptSearchRevision>,
+    pub(crate) entries: Vec<TranscriptSearchEntry>,
+    /// Per-cell render identity for `entries`. Existing entries are moved into
+    /// the next index build when this fingerprint is unchanged, so an append
+    /// or streaming-tail update only renders the new/changed cells.
+    pub(crate) entry_revisions: HashMap<TranscriptCellId, u64>,
+    #[cfg(test)]
+    pub(crate) reused_entries_last_build: usize,
+}
+
+impl TranscriptSearch {
+    pub(crate) fn current_match(&self) -> Option<&TranscriptSearchMatch> {
+        self.cursor.and_then(|cursor| self.matches.get(cursor))
+    }
+
+    pub(crate) fn status(&self) -> (usize, usize) {
+        (
+            self.cursor.map_or(0, |cursor| cursor.saturating_add(1)),
+            self.matches.len(),
+        )
     }
 }
 
@@ -73,6 +139,14 @@ impl TranscriptScrollPosition {
         Self::Anchor {
             cell_id,
             offset_rows: Self::ANCHOR_CONTEXT_ROWS,
+        }
+    }
+
+    pub(crate) fn anchor_line(cell_id: TranscriptCellId, line_index: usize) -> Self {
+        let line_offset = i32::try_from(line_index).unwrap_or(i32::MAX);
+        Self::Anchor {
+            cell_id,
+            offset_rows: line_offset.saturating_add(Self::ANCHOR_CONTEXT_ROWS),
         }
     }
 

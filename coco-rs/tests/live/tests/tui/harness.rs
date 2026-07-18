@@ -436,7 +436,7 @@ impl TuiHarness {
     /// `MessageAppended` which the transcript view picks up.
     pub async fn submit(&mut self, text: &str) {
         // Set the input buffer so `TuiCommand::SubmitInput` picks it up.
-        self.state.ui.input.textarea.insert_str(text);
+        self.state.ui.input.set_text(text);
         let _ = handle_command(&mut self.state, TuiCommand::SubmitInput, &self.command_tx).await;
     }
 

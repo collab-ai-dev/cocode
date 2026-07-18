@@ -85,6 +85,7 @@ pub(super) fn read_transcript_metadata(
 /// already holds the entries in memory.
 pub fn fold_transcript_metadata(entries: &[Entry], session_id: &SessionId) -> TranscriptMetadata {
     let mut first_prompt = String::new();
+    let mut last_message_preview: Option<String> = None;
     let mut custom_title: Option<String> = None;
     let mut ai_title: Option<String> = None;
     let mut agent_name: Option<String> = None;
@@ -107,6 +108,10 @@ pub fn fold_transcript_metadata(entries: &[Entry], session_id: &SessionId) -> Tr
             Entry::Transcript(t) => {
                 if t.entry_type == entry_kind::USER || t.entry_type == entry_kind::ASSISTANT {
                     message_count += 1;
+                    let preview = extract_text_content(t);
+                    if !preview.is_empty() {
+                        last_message_preview = Some(preview);
+                    }
                 }
                 if first_prompt.is_empty() && t.entry_type == entry_kind::USER {
                     let candidate = extract_text_content(t);
@@ -229,6 +234,7 @@ pub fn fold_transcript_metadata(entries: &[Entry], session_id: &SessionId) -> Tr
     TranscriptMetadata {
         session_id: session_id.clone(),
         first_prompt,
+        last_message_preview,
         message_count,
         custom_title,
         ai_title,

@@ -2606,6 +2606,7 @@ export type ProviderUnavailableReason = {
  */
 export interface QueuedCommandEditImage {
   data_base64: string;
+  insertion_offset?: number;
   media_type: string;
 }
 
@@ -3535,6 +3536,32 @@ export interface SubagentStopInput {
 }
 
 /**
+ * Lossless, payload-light description of a composer after it has been
+ * resolved into the model-facing prompt. Paste payloads are addressed by
+ * ranges in that prompt; image bytes remain in typed file parts.
+ */
+export interface SubmittedComposer {
+  elements?: Array<SubmittedComposerElement>;
+  next_attachment_label: number;
+}
+
+export type SubmittedComposerElement = {
+  end: number;
+  kind: "paste";
+  label: string;
+  start: number;
+} | {
+  image_index: number;
+  insertion_offset: number;
+  kind: "image";
+  label: string;
+} | {
+  end: number;
+  kind: "file_ref";
+  start: number;
+};
+
+/**
  * Severity of a context suggestion. `Warning` sorts before `Info`.
  */
 export type SuggestionSeverity = "warning" | "info";
@@ -4337,12 +4364,13 @@ export type TuiOnlyEvent = {
   entries: Array<ModelCatalogInfo>;
   type: "model_catalog_refreshed";
 } | {
+  composer: SubmittedComposer;
   id: string;
   images?: Array<QueuedCommandEditImage>;
   prompt: string;
   type: "queued_command_edit_ready";
 } | {
-  cursor: number;
+  composer: SubmittedComposer;
   ids: Array<string>;
   images?: Array<QueuedCommandEditImage>;
   prompt: string;
@@ -4518,6 +4546,14 @@ export type TuiOnlyEvent = {
 } | {
   failure: JourneyMutationFailed;
   type: "journey_mutation_failed";
+} | {
+  child_id: SessionId;
+  parent_id: SessionId;
+  type: "side_chat_entered";
+} | {
+  child_id: SessionId;
+  parent_id: SessionId;
+  type: "side_chat_exited";
 };
 
 /**
@@ -4590,6 +4626,7 @@ export type TurnOutcome = {
  * Params for `turn/start`.
  */
 export interface TurnStartParams {
+  composer: SubmittedComposer;
   history_override?: Array<unknown>;
   images?: Array<QueuedCommandEditImage>;
   model_selection?: ProviderModelSelection | null;

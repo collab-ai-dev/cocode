@@ -17,6 +17,7 @@ mod attachment_kind;
 mod cache;
 mod client_request;
 mod command;
+mod composer;
 pub mod context_usage;
 mod event;
 mod extended;
@@ -60,6 +61,11 @@ mod tool_wire_name;
 mod wire_tagged;
 
 // === Re-exports ===
+
+pub use composer::{
+    PersistedComposer, PersistedComposerElement, QueuedCommandEditImage, SubmittedComposer,
+    SubmittedComposerElement,
+};
 
 // App-state (cross-turn shared state carried on ToolUseContext)
 pub use app_state::{
@@ -120,7 +126,7 @@ pub use event::{
     PersistedFileInfo, PlanApprovalRequestedParams, PluginDialogAction, PluginDialogErrorRow,
     PluginDialogInstalledRow, PluginDialogMarketplaceRow, PluginDialogMcpServerRow,
     PluginDialogMcpToolRow, PluginDialogOptionRow, PluginDialogPayload, PluginDialogSkillRow,
-    PluginDialogSkillUsage, PluginInit, QueuedCommandEditImage, RateLimitParams, RateLimitStatus,
+    PluginDialogSkillUsage, PluginInit, RateLimitParams, RateLimitStatus,
     ReasoningMetadataAttachedParams, RewindCompletedParams, RewindDiffStatsPayload,
     RewindRowMetadata, SESSION_EVENT_METHOD, SESSION_LIFECYCLE_METHOD, SandboxStateChangedParams,
     ServerNotification, ServerNotificationIdentity, SessionEndedParams, SessionEnvelope,
@@ -184,9 +190,10 @@ pub use server_request::{
     RequestElicitationParams as ServerRequestElicitationParams,
     RequestUserInputParams as ServerRequestUserInputParams, RewindFilesResult,
     ServerCancelRequestParams, ServerRequest, ServerRequestMethod, SessionListResult,
-    SessionReadResult, SessionReplaceResult, SessionResumeResult, SessionStartResult,
-    SessionSubscribeEnvelope, SessionSubscribeResult, SessionSummary, SessionTurnSummary,
-    SessionTurnsListResult, SetModelRoleResult, ToolTypeBreakdown, TurnStartResult,
+    SessionReadResult, SessionReplaceResult, SessionResumeResult, SessionSearchHit,
+    SessionStartResult, SessionSubscribeEnvelope, SessionSubscribeResult, SessionSummary,
+    SessionTurnSummary, SessionTurnsListResult, SetModelRoleResult, ToolTypeBreakdown,
+    TurnStartResult,
 };
 
 // JSON-RPC envelope types (Phase 2 — wire format)

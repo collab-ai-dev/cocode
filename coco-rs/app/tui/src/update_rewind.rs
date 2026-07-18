@@ -21,38 +21,6 @@ use crate::state::rewind::build_restore_options;
 use crate::transcript::cells::CellKind;
 use crate::transcript::cells::RenderedCell;
 
-/// Format an epoch-ms timestamp as a relative-time English phrase
-/// against a reference `now` (also epoch-ms). Exact text is
-/// locale-resolved later via the `t!` macro on display.
-pub fn format_relative_time_ago(now_ms: i64, then_ms: i64) -> String {
-    let delta_secs = ((now_ms - then_ms).max(0) / 1000) as u64;
-    if delta_secs < 60 {
-        return "just now".to_string();
-    }
-    if delta_secs < 60 * 60 {
-        let m = delta_secs / 60;
-        return if m == 1 {
-            "1 minute ago".to_string()
-        } else {
-            format!("{m} minutes ago")
-        };
-    }
-    if delta_secs < 60 * 60 * 24 {
-        let h = delta_secs / 3600;
-        return if h == 1 {
-            "1 hour ago".to_string()
-        } else {
-            format!("{h} hours ago")
-        };
-    }
-    let d = delta_secs / (60 * 60 * 24);
-    if d == 1 {
-        "1 day ago".to_string()
-    } else {
-        format!("{d} days ago")
-    }
-}
-
 /// Synthetic XML-tag substrings that mark non-user-authored content.
 /// Tags may appear anywhere in the text, not just at the start, because
 /// user-visible messages can carry composed envelopes (e.g. queued-command
@@ -305,7 +273,10 @@ fn build_rewind_state_internal(state: &AppState) -> RewindState {
             message_id: user.uuid,
             message_index: i as i32,
             display_text,
-            relative_time: format_relative_time_ago(now, timestamp_to_ms(&user.timestamp)),
+            relative_time: crate::presentation::time::format_age(
+                now,
+                timestamp_to_ms(&user.timestamp),
+            ),
             permission_mode: user.permission_mode,
             diff_stats: None,
             can_restore_code: Some(false),
@@ -336,7 +307,10 @@ fn build_rewind_state_internal(state: &AppState) -> RewindState {
             message_id: cell.message_uuid,
             message_index: pre_clear_count + i as i32,
             display_text,
-            relative_time: format_relative_time_ago(now, timestamp_to_ms(&user.timestamp)),
+            relative_time: crate::presentation::time::format_age(
+                now,
+                timestamp_to_ms(&user.timestamp),
+            ),
             permission_mode: user.permission_mode,
             // Per-row `+X -Y` rides on `RewindRowMetadataReady`
             // emitted by the CLI driver — see module-level note. The

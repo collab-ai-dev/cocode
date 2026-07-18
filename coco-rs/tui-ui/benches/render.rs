@@ -18,10 +18,10 @@
 //!   paint) vs `repaint_unchanged` (identical content → the diff finds ~no
 //!   changed cells). The gap is the per-tick win the engine already delivers
 //!   and the floor a spinner fast-path would build on.
-//! - `markdown_streaming` — re-parse cost of a growing live cell: every frame
-//!   re-parses the visible buffer today (no incremental cache). A future
-//!   incremental-markdown checkpoint should shrink this group for the same
-//!   input.
+//! - `markdown_streaming` — raw full-prefix parser baseline. The shipping
+//!   append-only controller is benchmarked in
+//!   `app/tui/benches/streaming_markdown.rs`; keep this group as the quadratic
+//!   comparison path.
 
 #![allow(clippy::expect_used)]
 //!
@@ -195,8 +195,7 @@ fn bench_surface_paint(c: &mut Criterion) {
     group.finish();
 }
 
-/// Re-parse cost of a live streaming cell: render growing prefixes at a fixed
-/// width (each frame re-parses the visible buffer — no incremental cache today).
+/// Raw full-prefix comparison path: render growing prefixes at a fixed width.
 fn bench_markdown_streaming(c: &mut Criterion) {
     let theme = Theme::default();
     let full = sample_doc(12);

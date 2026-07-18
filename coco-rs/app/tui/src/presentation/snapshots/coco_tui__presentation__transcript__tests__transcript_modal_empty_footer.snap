@@ -8,5 +8,5 @@ expression: "render_transcript_text(&app_state, &state, 72, 8)"
 │                                                                      │
 │                                                                      │
 │ctrl+o toggle · ↑/↓ scroll · PgUp/PgDn page · Home/End jump           │
-│Tab select · Enter expand/collapse · Esc/q quit                       │
+│Tab select · Enter fold · / search · n/N · Esc/q quit                 │
 └──────────────────────────────────────────────────────────────────────┘

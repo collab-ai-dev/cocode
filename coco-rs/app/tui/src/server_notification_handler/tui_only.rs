@@ -294,56 +294,81 @@ pub(super) fn handle(
             true
         }
         TuiOnlyEvent::QueuedCommandEditReady {
-            id: _,
+            id,
             prompt,
             images,
+            composer,
         } => {
-            state.ui.paste_manager.clear();
-            let text = append_queued_edit_images(state, prompt, images);
-            state.ui.input.set_text(&text);
-            state.ui.input.textarea.set_cursor(text.len());
+            restore_queued_edit(state, vec![id], prompt, images, composer, false, command_tx);
             true
         }
         TuiOnlyEvent::QueuedCommandsEditReady {
-            ids: _,
+            ids,
             prompt,
-            cursor,
             images,
+            composer,
         } => {
-            let text = append_queued_edit_images(state, prompt, images);
-            state.ui.input.set_text(&text);
-            state.ui.input.textarea.set_cursor(cursor);
+            restore_queued_edit(state, ids, prompt, images, composer, true, command_tx);
             true
         }
         TuiOnlyEvent::QueuedCommandEditUnavailable { id: _, reason } => {
+            if let Some(pending) = state.ui.pending_queued_edit.take() {
+                let live = state.ui.input.take_composer();
+                let draft = append_nonempty(pending, live.clone()).unwrap_or_else(|error| {
+                    tracing::error!(%error, "could not merge queue-edit recovery drafts");
+                    live
+                });
+                state.ui.input.restore_composer(draft);
+            }
             state.ui.add_toast(Toast::warning(
                 t!("toast.queued_edit_unavailable", reason = reason.as_str()).to_string(),
             ));
             true
         }
         TuiOnlyEvent::OpenSessionBrowser { sessions } => {
+            let picker_sessions = sessions
+                .iter()
+                .map(|session| {
+                    let id = session.session_id.as_str().to_string();
+                    SessionOption {
+                        id: id.clone(),
+                        label: session
+                            .title
+                            .clone()
+                            .or_else(|| {
+                                (!session.first_prompt.is_empty())
+                                    .then(|| session.first_prompt.clone())
+                            })
+                            .unwrap_or(id),
+                        message_count: session.message_count,
+                        created_at: session.created_at.clone(),
+                        updated_at: session.updated_at.clone(),
+                        cwd: session.cwd.clone(),
+                        first_prompt: session.first_prompt.clone(),
+                        last_message_preview: session.last_message_preview.clone(),
+                    }
+                })
+                .collect();
             let saved_sessions = sessions
                 .into_iter()
                 .map(|session| {
                     let session_id = session.session_id.into_inner();
+                    let label = session
+                        .title
+                        .clone()
+                        .or_else(|| {
+                            (!session.first_prompt.is_empty()).then(|| session.first_prompt.clone())
+                        })
+                        .unwrap_or_else(|| session_id.clone());
                     SavedSession {
-                        id: session_id.clone(),
-                        label: session.title.unwrap_or_else(|| session_id.clone()),
+                        id: session_id,
+                        label,
                         message_count: session.message_count,
                         created_at: session.created_at,
                         model: Some(session.model),
                     }
                 })
                 .collect::<Vec<_>>();
-            let picker_sessions = saved_sessions
-                .iter()
-                .map(|session| SessionOption {
-                    id: session.id.clone(),
-                    label: session.label.clone(),
-                    message_count: session.message_count,
-                    created_at: session.created_at.clone(),
-                })
-                .collect();
             state.session.saved_sessions = saved_sessions;
             state
                 .ui
@@ -351,7 +376,30 @@ pub(super) fn handle(
                     sessions: picker_sessions,
                     filter: String::new(),
                     selected: 0,
+                    current_cwd: state.session.working_dir.clone().unwrap_or_default(),
+                    content_hits: std::collections::HashMap::new(),
+                    is_searching: false,
+                    search_request_id: SessionBrowserState::next_search_request_id(),
                 }));
+            true
+        }
+        TuiOnlyEvent::SessionSearchResults {
+            query,
+            request_id,
+            hits,
+            complete,
+        } => {
+            let Some(ModalState::SessionBrowser(browser)) = state.ui.modal.as_mut() else {
+                return true;
+            };
+            if browser.filter != query || browser.search_request_id != request_id {
+                return true;
+            }
+            browser.apply_content_hits(
+                hits.into_iter()
+                    .map(|hit| (hit.session_id.into_inner(), hit.snippet)),
+                complete,
+            );
             true
         }
         // === Compaction / speculation toasts ===
@@ -796,8 +844,22 @@ pub(super) fn handle(
         }
         TuiOnlyEvent::ExternalEditorPrepare { .. } => false,
         TuiOnlyEvent::PromptEditorCompleted { content, modified } => {
-            state.ui.input.set_text(&content);
-            state.ui.input.textarea.set_cursor(content.len());
+            let Some(session) = state.ui.pending_external_editor.take() else {
+                state.ui.add_toast(Toast::warning(
+                    "Ignored completion from a stale prompt editor",
+                ));
+                return true;
+            };
+            match session.finish(content, modified) {
+                Ok(composer) => state.ui.input.restore_composer(composer),
+                Err(error) => {
+                    state.ui.input.restore_composer(session.original());
+                    state.ui.add_toast(Toast::warning(format!(
+                        "External editor result was rejected: {error}"
+                    )));
+                    return true;
+                }
+            }
             let text = if modified {
                 t!("toast.prompt_editor_updated")
             } else {
@@ -808,6 +870,7 @@ pub(super) fn handle(
             true
         }
         TuiOnlyEvent::PromptEditorFailed { error } => {
+            state.ui.pending_external_editor = None;
             state.ui.add_toast(Toast::warning(
                 t!("toast.prompt_editor_failed", error = error.as_str()).to_string(),
             ));
@@ -952,6 +1015,7 @@ fn permission_detail_for_approval(
             plan,
             edited_plan: None,
             feedback_input: crate::state::PrefixInputState::new(String::new()),
+            feedback_images: Vec::new(),
             plan_file_path,
             allowed_prompts,
         };
@@ -961,38 +1025,80 @@ fn permission_detail_for_approval(
     }
 }
 
-fn append_queued_edit_images(
+fn restore_queued_edit(
     state: &mut AppState,
-    mut text: String,
+    ids: Vec<String>,
+    prompt: String,
     images: Vec<coco_types::QueuedCommandEditImage>,
-) -> String {
-    for image in images {
-        match base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            image.data_base64.as_bytes(),
-        ) {
-            Ok(bytes) => {
-                let pill = state
-                    .ui
-                    .paste_manager
-                    .add_image_data(bytes, image.media_type);
-                if !text.is_empty() {
-                    text.push(' ');
-                }
-                text.push_str(&pill);
-            }
-            Err(e) => {
+    composer: coco_types::SubmittedComposer,
+    merge_pending: bool,
+    command_tx: &tokio::sync::mpsc::Sender<crate::command::UserCommand>,
+) {
+    let pending = merge_pending
+        .then(|| state.ui.pending_queued_edit.take())
+        .flatten();
+    let live = state.ui.input.take_composer();
+    let initial_label = pending
+        .as_ref()
+        .map_or(0, crate::composer::ComposerSnapshot::next_attachment_label)
+        .max(live.next_attachment_label());
+    let fallback = match pending.clone() {
+        Some(pending) => append_nonempty(pending, live.clone()),
+        None => Ok(live.clone()),
+    }
+    .unwrap_or_else(|error| {
+        tracing::error!(%error, "could not merge queue-edit fallback drafts");
+        live.clone()
+    });
+    let mut composer = composer;
+    composer.next_attachment_label = composer.next_attachment_label.max(initial_label);
+    let restored = crate::composer::ComposerSnapshot::from_submitted(prompt, images, composer)
+        .and_then(|queued| match pending {
+            Some(pending) => append_nonempty(queued, pending),
+            None => Ok(queued),
+        })
+        .and_then(|combined| append_nonempty(combined, live));
+    match restored {
+        Ok(composer) => {
+            if command_tx
+                .try_send(crate::command::UserCommand::ResolveQueuedCommandEdits {
+                    ids,
+                    accept: true,
+                })
+                .is_ok()
+            {
+                state.ui.input.restore_composer(composer);
+            } else {
+                state.ui.input.restore_composer(fallback);
                 state.ui.add_toast(Toast::warning(
-                    t!(
-                        "toast.queued_edit_image_failed",
-                        error = e.to_string().as_str()
-                    )
-                    .to_string(),
+                    "Could not acknowledge queued-command editing; the queue was left unchanged",
                 ));
             }
         }
+        Err(error) => {
+            let _ = command_tx.try_send(crate::command::UserCommand::ResolveQueuedCommandEdits {
+                ids,
+                accept: false,
+            });
+            state.ui.input.restore_composer(fallback);
+            state.ui.add_toast(Toast::warning(format!(
+                "Cannot restore queued command for editing: {error}"
+            )));
+        }
     }
-    text
+}
+
+fn append_nonempty(
+    prefix: crate::composer::ComposerSnapshot,
+    suffix: crate::composer::ComposerSnapshot,
+) -> Result<crate::composer::ComposerSnapshot, crate::composer::ComposerBuildError> {
+    if suffix.is_empty() {
+        Ok(prefix)
+    } else if prefix.is_empty() {
+        Ok(suffix)
+    } else {
+        prefix.merged_with(suffix)
+    }
 }
 
 /// Handle `TuiOnlyEvent::OpenRewindPicker`.
@@ -1181,7 +1287,8 @@ fn on_rewind_completed(
     let mut restored_permission_mode = None;
     let mut restored_input_text = None;
 
-    let mut restored_image: Option<(Vec<u8>, String)> = None;
+    let mut restored_images = Vec::new();
+    let mut restored_submitted = None;
     if !target_message_id.is_empty() {
         // Search the engine-authoritative cell list for the rewound
         // message. UI restoration reads `cell.source` directly.
@@ -1201,24 +1308,12 @@ fn on_rewind_completed(
             };
             let stripped = crate::update_rewind::strip_ide_context_tags(raw);
             restored_input_text = Some(stripped).filter(|s| !s.is_empty());
-            // Restore pasted images from the rewound message. Pasted images
-            // live on `UserContentPart::File` (`image/*` media type) as
-            // bytes/base64 — `to_bytes()` covers both; a remote URL cannot
-            // be re-attached as a paste pill (pills without bytes are dropped
-            // at submit), so it is skipped. Only the first image is surfaced.
-            if let coco_messages::Message::User(u) = target_cell.source.as_ref()
-                && let coco_messages::LlmMessage::User { content, .. } = &u.message
-            {
-                for part in content {
-                    if let coco_messages::UserContent::File(f) = part
-                        && f.media_type.starts_with("image/")
-                        && let Some(data) = f.data.as_data()
-                        && let Some(bytes) = data.to_bytes()
-                    {
-                        restored_image = Some((bytes, f.media_type.clone()));
-                        break;
-                    }
-                }
+            if let coco_messages::Message::User(u) = target_cell.source.as_ref() {
+                restored_images = crate::composer::images_from_user_message(u);
+                restored_submitted = crate::composer::submitted_composer_for_restored_text(
+                    u,
+                    restored_input_text.as_deref().unwrap_or_default(),
+                );
             }
         }
         if restored_input_text.is_none()
@@ -1239,18 +1334,11 @@ fn on_rewind_completed(
             );
             let stripped = crate::update_rewind::strip_ide_context_tags(&raw);
             restored_input_text = Some(stripped).filter(|s| !s.is_empty());
-            if let coco_messages::LlmMessage::User { content, .. } = &u.message {
-                for part in content {
-                    if let coco_messages::UserContent::File(f) = part
-                        && f.media_type.starts_with("image/")
-                        && let Some(data) = f.data.as_data()
-                        && let Some(bytes) = data.to_bytes()
-                    {
-                        restored_image = Some((bytes, f.media_type.clone()));
-                        break;
-                    }
-                }
-            }
+            restored_images = crate::composer::images_from_user_message(u);
+            restored_submitted = crate::composer::submitted_composer_for_restored_text(
+                u,
+                restored_input_text.as_deref().unwrap_or_default(),
+            );
         }
     }
 
@@ -1262,11 +1350,7 @@ fn on_rewind_completed(
         state.session.permission_mode = mode;
     }
 
-    if let Some(text) = restored_input_text {
-        state.ui.input.textarea.set_text(&text);
-        let eol = state.ui.input.textarea.end_of_current_line();
-        state.ui.input.textarea.set_cursor(eol);
-    }
+    let restored_text = restored_input_text.unwrap_or_default();
 
     // Rotate conversation_id on truncate so the next request breaks
     // any prior cache key.
@@ -1278,15 +1362,34 @@ fn on_rewind_completed(
     // earlier turns are no longer valid in the rewound conversation.
     state.session.prompt_suggestions.clear();
 
-    // Paste buffer handling — rebuild from the rewound message's image
-    // blocks. Each user message carries at most one image; if present,
-    // re-attach it WITH its bytes (a path-only pill stores
-    // `image_bytes: None` and `resolve_structured` silently drops it at
-    // submit); otherwise clear any leftover paste-buffer state so it
-    // doesn't leak into the new turn.
-    state.ui.paste_manager.clear();
-    if let Some((bytes, mime)) = restored_image {
-        state.ui.paste_manager.add_image_data(bytes, mime);
+    for image in &mut restored_images {
+        let valid = usize::try_from(image.insertion_offset)
+            .ok()
+            .is_some_and(|offset| {
+                offset <= restored_text.len() && restored_text.is_char_boundary(offset)
+            });
+        if !valid {
+            image.insertion_offset = i64::try_from(restored_text.len()).unwrap_or(i64::MAX);
+        }
+    }
+    let restored = match restored_submitted {
+        Some(submitted) => crate::composer::ComposerSnapshot::from_submitted(
+            restored_text,
+            restored_images,
+            submitted,
+        ),
+        None => {
+            crate::composer::ComposerSnapshot::from_queued_edit(restored_text, restored_images, 0)
+        }
+    };
+    match restored {
+        Ok(composer) => state.ui.input.restore_composer(composer),
+        Err(error) => {
+            state.ui.input.set_text("");
+            state.ui.add_toast(Toast::warning(format!(
+                "Could not restore rewound composer attachments: {error}"
+            )));
+        }
     }
 
     state.ui.scroll_offset = 0;

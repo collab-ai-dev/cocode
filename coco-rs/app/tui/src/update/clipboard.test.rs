@@ -96,8 +96,8 @@ async fn paste_inserts_pill_at_cursor_and_registers_image() {
     let mut state = AppState::new();
     // Pre-position the cursor in the middle of existing text so we verify
     // the pill is inserted at the cursor, not appended.
-    state.ui.input.textarea.set_text("prefix suffix");
-    state.ui.input.textarea.set_cursor(7); // between "prefix " and "suffix"
+    state.ui.input.textarea_mut().set_text("prefix suffix");
+    state.ui.input.textarea_mut().set_cursor(7); // between "prefix " and "suffix"
 
     let image = ImageData {
         bytes: vec![0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], // PNG magic
@@ -109,9 +109,12 @@ async fn paste_inserts_pill_at_cursor_and_registers_image() {
     assert_eq!(state.ui.input.text(), "prefix [Image #1]suffix");
     // Cursor advanced past the inserted pill (byte offset == char count
     // for ASCII pill label).
-    assert_eq!(state.ui.input.textarea.cursor(), "prefix [Image #1]".len());
+    assert_eq!(
+        state.ui.input.textarea().cursor(),
+        "prefix [Image #1]".len()
+    );
     // The bytes were registered so resolve_structured can later detach them.
-    assert_eq!(state.ui.paste_manager.entries().len(), 1);
+    assert_eq!(state.ui.input.attachment_count(), 1);
     assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Success);
     assert!(state.ui.toasts[0].message.starts_with("Attached image"));
 }
@@ -135,15 +138,13 @@ async fn paste_pill_round_trips_through_resolve_structured() {
     .await;
 
     // Simulate what `edit::submit` does with the composed prompt.
-    let prompt = format!("{} please analyze", state.ui.input.text());
-    let resolved = state.ui.paste_manager.resolve_structured(&prompt);
+    state.ui.input.textarea_mut().insert_str(" please analyze");
+    let resolved = state.ui.input.resolve().unwrap();
 
-    // The `[Image #N]` placeholder is kept inline (so the transcript can echo
-    // it); the image bytes are extracted into the separate content block.
-    assert_eq!(resolved.text, "[Image #1] please analyze");
+    assert_eq!(resolved.text, " please analyze");
     assert_eq!(resolved.images.len(), 1);
     assert_eq!(resolved.images[0].mime, "image/png");
-    assert_eq!(resolved.images[0].bytes, png);
+    assert_eq!(resolved.images[0].bytes.as_ref(), png.as_slice());
 }
 
 #[tokio::test]
@@ -160,6 +161,7 @@ async fn paste_image_on_exit_plan_no_row_inserts_feedback_pill() {
                 plan: Some("# Plan".into()),
                 edited_plan: None,
                 feedback_input: PrefixInputState::new(String::new()),
+                feedback_images: Vec::new(),
                 plan_file_path: None,
                 allowed_prompts: vec![],
             },
@@ -198,11 +200,17 @@ async fn paste_image_on_exit_plan_no_row_inserts_feedback_pill() {
     else {
         panic!("expected permission prompt")
     };
-    let PermissionDetail::ExitPlanMode { feedback_input, .. } = &prompt.detail else {
+    let PermissionDetail::ExitPlanMode {
+        feedback_input,
+        feedback_images,
+        ..
+    } = &prompt.detail
+    else {
         panic!("expected ExitPlanMode detail")
     };
-    assert_eq!(feedback_input.value, "[Image #1]");
-    assert_eq!(state.ui.paste_manager.entries().len(), 1);
+    assert!(feedback_input.value.is_empty());
+    assert_eq!(feedback_images.len(), 1);
+    assert!(state.ui.input.attachments_empty());
 }
 
 #[tokio::test]
@@ -211,7 +219,7 @@ async fn paste_shows_info_toast_when_clipboard_has_no_image() {
     paste_from_clipboard_with(&mut state, || async { Ok(None) }).await;
 
     assert!(state.ui.input.is_empty());
-    assert!(state.ui.paste_manager.entries().is_empty());
+    assert!(state.ui.input.attachments_empty());
     assert_eq!(state.ui.toasts.len(), 1);
     assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Info);
     // Tells the user *why* nothing happened + points at the alternative.
@@ -231,7 +239,7 @@ async fn paste_shows_error_toast_when_backend_fails() {
     .await;
 
     assert!(state.ui.input.is_empty());
-    assert!(state.ui.paste_manager.entries().is_empty());
+    assert!(state.ui.input.attachments_empty());
     assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Error);
     assert!(
         state.ui.toasts[0].message.contains("xclip not installed"),

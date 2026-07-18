@@ -44,6 +44,75 @@ where
         .any(|name| get_env(name).is_some_and(|value| !value.is_empty()))
 }
 
+/// Whether finalized history may safely emit OSC 8 hyperlinks.
+///
+/// OSC 8 has no useful feature probe, so this deliberately recognizes only
+/// terminals with established support. Multiplexers are rejected unless tmux
+/// itself reports a passthrough-capable version; emitting an unknown OSC into
+/// screen/Zellij is worse than leaving an ordinary, copyable URL visible.
+pub fn osc8_hyperlinks_supported() -> bool {
+    osc8_hyperlinks_supported_with(env_lookup)
+}
+
+pub fn osc8_hyperlinks_supported_with<F>(get_env: F) -> bool
+where
+    F: Fn(&str) -> Option<String>,
+{
+    if ["STY", "ZELLIJ", "ZELLIJ_SESSION_NAME"]
+        .into_iter()
+        .any(|name| get_env(name).is_some_and(|value| !value.is_empty()))
+    {
+        return false;
+    }
+
+    let term_program = get_env("TERM_PROGRAM").unwrap_or_default();
+    let term_program_lower = term_program.to_ascii_lowercase();
+    if get_env("TMUX").is_some_and(|value| !value.is_empty()) {
+        return term_program_lower == "tmux"
+            && get_env("TERM_PROGRAM_VERSION")
+                .as_deref()
+                .is_some_and(|version| version_at_least(version, 3, 4));
+    }
+
+    if ["iterm", "wezterm", "kitty", "ghostty"]
+        .into_iter()
+        .any(|known| term_program_lower.contains(known))
+    {
+        return true;
+    }
+    if [
+        "WEZTERM_EXECUTABLE",
+        "WEZTERM_PANE",
+        "KITTY_WINDOW_ID",
+        "GHOSTTY_RESOURCES_DIR",
+        "GHOSTTY_BIN_DIR",
+    ]
+    .into_iter()
+    .any(|name| get_env(name).is_some_and(|value| !value.is_empty()))
+    {
+        return true;
+    }
+
+    get_env("VTE_VERSION")
+        .and_then(|version| version.parse::<u32>().ok())
+        .is_some_and(|version| version >= 5_000)
+}
+
+fn version_at_least(version: &str, required_major: u32, required_minor: u32) -> bool {
+    let mut components = version.split('.');
+    let Some(major) = components
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+    else {
+        return false;
+    };
+    let minor = components
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or_default();
+    (major, minor) >= (required_major, required_minor)
+}
+
 impl TerminalCompatibility {
     pub fn detect() -> Self {
         Self::detect_with(env_lookup)

@@ -81,6 +81,185 @@ fn list_walks_every_project() {
 }
 
 #[test]
+fn search_content_emits_one_snippet_per_matching_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let mgr = SessionManager::new(dir.path().to_path_buf());
+    let paths = seed_transcript(dir.path(), "sess-search");
+    let store = TranscriptStore::new(paths);
+    store
+        .append_message(
+            "sess-search",
+            &TranscriptEntry {
+                entry_type: "assistant".to_string(),
+                uuid: "sess-search-a1".to_string(),
+                parent_uuid: Some("sess-search-u1".to_string()),
+                logical_parent_uuid: None,
+                session_id: Some(test_session_id("sess-search")),
+                cwd: TEST_CWD.to_string(),
+                timestamp: "2025-01-15T10:00:01Z".to_string(),
+                version: Some("1.0.0".to_string()),
+                git_branch: None,
+                is_sidechain: false,
+                agent_id: None,
+                message: Some(serde_json::json!({
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Deep Needle in RÉSUMÉ transcript"}],
+                })),
+                usage: None,
+                model: Some("test".to_string()),
+                request_id: None,
+                cost_usd: None,
+                extra: serde_json::Map::new(),
+            },
+        )
+        .unwrap();
+
+    let mut hits = Vec::new();
+    let count = mgr
+        .search_content("needle", || false, |hit| hits.push(hit))
+        .unwrap();
+
+    assert_eq!(count, 1);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].session_id, "sess-search");
+    assert_eq!(hits[0].snippet, "Deep Needle in RÉSUMÉ transcript");
+
+    let mut unicode_hits = Vec::new();
+    let unicode_count = mgr
+        .search_content("résumé", || false, |hit| unicode_hits.push(hit))
+        .unwrap();
+    assert_eq!(unicode_count, 1);
+    assert_eq!(unicode_hits[0].session_id, "sess-search");
+}
+
+#[test]
+fn search_content_centers_snippet_on_a_late_long_line_match() {
+    let dir = tempfile::tempdir().unwrap();
+    let mgr = SessionManager::new(dir.path().to_path_buf());
+    let paths = seed_transcript(dir.path(), "sess-long-search");
+    let store = TranscriptStore::new(paths);
+    let long_line = format!("{} TAIL-NEEDLE {}", "界".repeat(180), "suffix".repeat(60));
+    store
+        .append_message(
+            "sess-long-search",
+            &TranscriptEntry {
+                entry_type: "assistant".to_string(),
+                uuid: "sess-long-search-a1".to_string(),
+                parent_uuid: Some("sess-long-search-u1".to_string()),
+                logical_parent_uuid: None,
+                session_id: Some(test_session_id("sess-long-search")),
+                cwd: TEST_CWD.to_string(),
+                timestamp: "2025-01-15T10:00:01Z".to_string(),
+                version: Some("1.0.0".to_string()),
+                git_branch: None,
+                is_sidechain: false,
+                agent_id: None,
+                message: Some(serde_json::json!({
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": long_line}],
+                })),
+                usage: None,
+                model: Some("test".to_string()),
+                request_id: None,
+                cost_usd: None,
+                extra: serde_json::Map::new(),
+            },
+        )
+        .unwrap();
+
+    let mut hits = Vec::new();
+    mgr.search_content("tail-needle", || false, |hit| hits.push(hit))
+        .unwrap();
+
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].snippet.to_lowercase().contains("tail-needle"));
+    assert!(hits[0].snippet.starts_with("..."));
+    assert!(hits[0].snippet.ends_with("..."));
+    assert!(hits[0].snippet.len() <= 180);
+}
+
+#[test]
+fn search_content_stops_before_loading_sessions_after_cancellation() {
+    let dir = tempfile::tempdir().unwrap();
+    let mgr = SessionManager::new(dir.path().to_path_buf());
+    seed_transcript(dir.path(), "sess-a");
+    seed_transcript(dir.path(), "sess-b");
+    let mut cancellation_checks = 0usize;
+    let mut hits = Vec::new();
+
+    let count = mgr
+        .search_content(
+            "hello",
+            || {
+                cancellation_checks += 1;
+                cancellation_checks > 1
+            },
+            |hit| hits.push(hit),
+        )
+        .unwrap();
+
+    assert_eq!(count, 0);
+    assert!(hits.is_empty());
+    assert!(cancellation_checks >= 2);
+}
+
+#[test]
+fn transcript_search_cancels_between_messages_inside_one_jsonl_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = project_paths(dir.path());
+    let store = TranscriptStore::new(paths);
+    let content = (0..100)
+        .map(|index| {
+            serde_json::json!({
+                "type": "tool_result",
+                "tool_use_id": format!("call-{index}"),
+                "tool_name": "Read",
+                "content": if index == 99 { "late needle" } else { "ordinary output" },
+                "is_error": false,
+            })
+        })
+        .collect::<Vec<_>>();
+    store
+        .append_message(
+            "sess-one-record",
+            &TranscriptEntry {
+                entry_type: "user".to_string(),
+                uuid: "sess-one-record-user".to_string(),
+                parent_uuid: None,
+                logical_parent_uuid: None,
+                session_id: Some(test_session_id("sess-one-record")),
+                cwd: TEST_CWD.to_string(),
+                timestamp: "2026-07-18T00:00:00Z".to_string(),
+                version: Some("test".to_string()),
+                git_branch: None,
+                is_sidechain: false,
+                agent_id: None,
+                message: Some(serde_json::json!({ "role": "user", "content": content })),
+                usage: None,
+                model: None,
+                request_id: None,
+                cost_usd: None,
+                extra: serde_json::Map::new(),
+            },
+        )
+        .unwrap();
+
+    let mut checks = 0usize;
+    let result = store
+        .find_transcript_text("sess-one-record", "needle", &mut || {
+            checks += 1;
+            checks >= 3
+        })
+        .unwrap();
+
+    assert!(result.is_none());
+    assert_eq!(
+        checks, 3,
+        "cancellation must be checked between decoded messages"
+    );
+}
+
+#[test]
 fn resume_is_equivalent_to_load() {
     let dir = tempfile::tempdir().unwrap();
     let mgr = SessionManager::new(dir.path().to_path_buf());

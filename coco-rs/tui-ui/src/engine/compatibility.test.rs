@@ -76,6 +76,44 @@ fn an_empty_multiplexer_env_var_is_not_a_multiplexer() {
 }
 
 #[test]
+fn osc8_support_uses_a_conservative_terminal_allowlist() {
+    for program in ["iTerm.app", "WezTerm", "kitty", "ghostty"] {
+        assert!(osc8_hyperlinks_supported_with(|name| {
+            (name == "TERM_PROGRAM").then(|| program.to_string())
+        }));
+    }
+    assert!(osc8_hyperlinks_supported_with(|name| {
+        (name == "VTE_VERSION").then(|| "5000".to_string())
+    }));
+    assert!(!osc8_hyperlinks_supported_with(|_| None));
+}
+
+#[test]
+fn osc8_support_rejects_unknown_or_old_multiplexers() {
+    fn tmux_env(version: &str, name: &str) -> Option<String> {
+        match name {
+            "TMUX" => Some("/tmp/tmux,1,0".to_string()),
+            "TERM_PROGRAM" => Some("tmux".to_string()),
+            "TERM_PROGRAM_VERSION" => Some(version.to_string()),
+            _ => None,
+        }
+    }
+    assert!(!osc8_hyperlinks_supported_with(|name| {
+        tmux_env("3.3", name)
+    }));
+    assert!(osc8_hyperlinks_supported_with(|name| {
+        tmux_env("3.4", name)
+    }));
+    assert!(!osc8_hyperlinks_supported_with(|name| {
+        match name {
+            "STY" => Some("123.screen".to_string()),
+            "TERM_PROGRAM" => Some("iTerm.app".to_string()),
+            _ => None,
+        }
+    }));
+}
+
+#[test]
 fn synchronized_update_defaults_true_and_reflects_probe() {
     // No probe yet → assume supported (BSU emitted, no fallback). This is the
     // only test that writes the process-global cache, so the default holds

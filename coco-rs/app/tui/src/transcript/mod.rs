@@ -18,6 +18,8 @@ pub(crate) mod cells;
 pub(crate) mod derive;
 pub(crate) mod emission;
 pub(crate) mod render;
+pub(crate) mod search;
+pub(crate) mod search_index;
 pub(crate) mod stream;
 
 #[cfg(feature = "testing")]

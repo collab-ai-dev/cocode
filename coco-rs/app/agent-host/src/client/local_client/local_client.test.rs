@@ -131,6 +131,7 @@ fn minimal_turn_params(prompt: &str) -> TurnStartParams {
         prompt: prompt.to_string(),
         history_override: Vec::new(),
         images: Vec::new(),
+        composer: Default::default(),
         slash_metadata: None,
         model_selection: None,
         permission_mode: None,

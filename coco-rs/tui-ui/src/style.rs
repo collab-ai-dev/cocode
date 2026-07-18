@@ -228,4 +228,8 @@ impl<'a> UiStyles<'a> {
     pub fn hyperlink(self) -> Color {
         self.theme.hyperlink
     }
+
+    pub fn search_match(self) -> Color {
+        self.theme.search_match
+    }
 }

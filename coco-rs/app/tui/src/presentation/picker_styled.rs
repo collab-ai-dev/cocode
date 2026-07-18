@@ -20,7 +20,6 @@ use crate::state::ExportState;
 use crate::state::GlobalSearchState;
 use crate::state::MemoryDialogState;
 use crate::state::QuickOpenState;
-use crate::state::SessionBrowserState;
 use crate::state::TeamRosterState;
 use crate::state::WorkflowAgentStatusFilter;
 use crate::state::WorkflowPickerEntry;
@@ -282,52 +281,6 @@ pub(crate) fn quick_open_lines(
         lines,
         styles.primary(),
     )
-}
-
-/// `/resume` — session browser. Filtered flat list.
-pub(crate) fn session_browser_lines(
-    s: &SessionBrowserState,
-    styles: UiStyles<'_>,
-    list_budget: usize,
-) -> (String, Vec<Line<'static>>, Color) {
-    let title = t!("dialog.title_sessions").to_string();
-    let filter_lower = s.filter.to_lowercase();
-    let items: Vec<SelectItem> = s
-        .sessions
-        .iter()
-        .filter(|sess| filter_lower.is_empty() || sess.label.to_lowercase().contains(&filter_lower))
-        .map(|session| {
-            SelectItem::new(format!(
-                "{} — {}{} — {}",
-                session.label,
-                session.message_count,
-                t!("dialog.sessions_item_suffix"),
-                session.created_at
-            ))
-        })
-        .collect();
-    if items.is_empty() {
-        return (
-            title,
-            vec![dim_line(t!("dialog.no_saved_sessions"), styles)],
-            styles.primary(),
-        );
-    }
-    let filter = if s.filter.is_empty() {
-        dim_line(t!("dialog.type_filter_sessions"), styles)
-    } else {
-        dim_line(t!("dialog.filter_prefix", text = s.filter.as_str()), styles)
-    };
-    let mut lines = vec![filter, Line::default()];
-    lines.extend(render_select_list(
-        &items,
-        s.selected.max(0) as usize,
-        &list_style(list_budget),
-        styles,
-    ));
-    lines.push(Line::default());
-    lines.push(dim_line(t!("dialog.hints_nav_resume_cancel"), styles));
-    (title, lines, styles.primary())
 }
 
 /// `/search` — global search. Query line + status + flat result list (cap 20).

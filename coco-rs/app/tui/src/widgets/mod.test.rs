@@ -936,8 +936,8 @@ fn test_snapshot_autocomplete_popup() {
             ..Default::default()
         },
     ];
-    state.ui.input.textarea.set_text("/c");
-    state.ui.input.textarea.set_cursor(2);
+    state.ui.input.textarea_mut().set_text("/c");
+    state.ui.input.textarea_mut().set_cursor(2);
     crate::autocomplete::refresh_suggestions(&mut state);
 
     let output = render_to_string(&state, 80, 24);
@@ -951,8 +951,8 @@ fn test_snapshot_command_palette_inline_popup() {
     // mirrors `/<filter>` so the user can see what they typed.
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
-    state.ui.input.textarea.set_text("/c");
-    state.ui.input.textarea.set_cursor(2);
+    state.ui.input.textarea_mut().set_text("/c");
+    state.ui.input.textarea_mut().set_cursor(2);
     state.ui.completion.active = Some(crate::state::ActiveSuggestions {
         kind: SuggestionKind::SlashCommand,
         items: vec![
@@ -987,7 +987,7 @@ fn test_snapshot_reverse_search_footer_match() {
     let mut state = AppState::new();
     state.ui.input.add_to_history("git status".to_string());
     state.ui.input.add_to_history("cargo build".to_string());
-    state.ui.input.textarea.set_text("git status");
+    state.ui.input.textarea_mut().set_text("git status");
     let ranked =
         crate::autocomplete::history_search::search_history(&state.ui.input.history, "git");
     state.ui.history_search = Some(crate::state::HistorySearch {
@@ -996,8 +996,7 @@ fn test_snapshot_reverse_search_footer_match() {
         result_indices: ranked.indices,
         results: ranked.items,
         selected: 0,
-        original_text: String::new(),
-        original_pastes: Vec::new(),
+        original_composer: crate::composer::ComposerSnapshot::plain(String::new(), 0),
         original_history_index: None,
     });
 
@@ -1011,15 +1010,17 @@ fn test_snapshot_reverse_search_footer_no_match() {
     // the footer shows the `no match` warning instead of the accept hint.
     let mut state = AppState::new();
     state.ui.input.add_to_history("git status".to_string());
-    state.ui.input.textarea.set_text("draft text");
+    state.ui.input.textarea_mut().set_text("draft text");
     state.ui.history_search = Some(crate::state::HistorySearch {
         browse: false,
         query: "zzz".into(),
         results: Vec::new(),
         result_indices: Vec::new(),
         selected: 0,
-        original_text: "draft text".into(),
-        original_pastes: Vec::new(),
+        original_composer: crate::composer::ComposerSnapshot::plain(
+            "draft text".into(),
+            "draft text".len(),
+        ),
         original_history_index: None,
     });
 

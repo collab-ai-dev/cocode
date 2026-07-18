@@ -13,6 +13,7 @@ fn prompt_text_surface_skips_exit_plan_mode_permission() {
             plan: Some("- step".into()),
             edited_plan: None,
             feedback_input: crate::state::PrefixInputState::new(String::new()),
+            feedback_images: Vec::new(),
             plan_file_path: Some("/tmp/plan.md".into()),
             allowed_prompts: vec![],
         },

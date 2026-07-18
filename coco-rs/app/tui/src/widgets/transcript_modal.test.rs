@@ -14,6 +14,7 @@ use uuid::Uuid;
 use crate::i18n::locale_test_guard;
 use crate::state::AppState;
 use crate::state::session::ReasoningMetadata;
+use crate::state::session::SubagentRunSummary;
 use crate::state::transcript::TranscriptCellId;
 use crate::state::transcript::TranscriptState;
 use crate::theme::Theme;
@@ -322,5 +323,60 @@ fn test_reader_window_survives_short_viewport() {
     insta::assert_snapshot!(
         "transcript_modal_short_viewport",
         render_to_text(&app_state, &transcript, 60, 6)
+    );
+}
+
+#[test]
+fn test_reader_never_hides_markdown_link_destination() {
+    let _locale = locale_test_guard("en");
+    let mut app_state = AppState::default();
+    push_cells(
+        &mut app_state,
+        [assistant_text_cell(
+            "Read [the docs](https://example.com/docs) before editing.",
+        )],
+    );
+
+    let rendered = render_to_text(&app_state, &TranscriptState::new(), 100, 8);
+    assert!(rendered.contains("https://example.com/docs"), "{rendered}");
+}
+
+#[test]
+fn test_reader_uses_agent_type_and_committed_run_summary() {
+    let _locale = locale_test_guard("en");
+    let mut app_state = AppState::default();
+    push_cells(
+        &mut app_state,
+        [
+            tool_use_cell(
+                "call-agent",
+                "Agent",
+                serde_json::json!({
+                    "description": "Map the architecture",
+                    "subagent_type": "Explore"
+                }),
+            ),
+            tool_result_cell("call-agent", "Agent", "Architecture mapped."),
+        ],
+    );
+    app_state.session.insert_subagent_summary(
+        "call-agent".to_string(),
+        SubagentRunSummary {
+            agent_type: "Explore".to_string(),
+            tool_count: 7,
+            duration_ms: 12_000,
+            input_tokens: 1_200,
+            output_tokens: 300,
+            cache_read_tokens: 600,
+            cost_usd: 0.04,
+            succeeded: true,
+        },
+    );
+
+    let rendered = render_to_text(&app_state, &TranscriptState::new(), 100, 10);
+    assert!(rendered.contains("● Explore"), "{rendered}");
+    assert!(
+        rendered.contains("✓ 7 tools · 12.0s · ↑1.2k ↓300 · cache 50% · $0.04"),
+        "{rendered}"
     );
 }

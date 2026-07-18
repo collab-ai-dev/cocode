@@ -83,7 +83,7 @@ pub(crate) fn tool_output_preview(output: &str, max_rows: usize) -> ToolOutputPr
 
 /// One transcript-presentation cell. Indices point into the
 /// `&[RenderedCell]` slice passed to `transcript_projection`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum TranscriptCell {
     /// Collapsed system-reminder preview row.
     MetaPreview { index: usize },

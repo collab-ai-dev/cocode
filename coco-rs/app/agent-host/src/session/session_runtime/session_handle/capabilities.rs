@@ -75,11 +75,10 @@ impl SessionHandle {
     pub async fn persist_prompt_history_entry(
         &self,
         project: String,
-        display: String,
-        pasted_contents: std::collections::HashMap<i32, String>,
+        composer: coco_types::PersistedComposer,
     ) -> anyhow::Result<()> {
         self.runtime
-            .persist_prompt_history_entry(project, display, pasted_contents)
+            .persist_prompt_history_entry(project, composer)
             .await
     }
 
@@ -261,7 +260,26 @@ impl SessionHandle {
                 created_at: timestamp.clone(),
                 updated_at: Some(timestamp),
                 title: None,
-                message_count: history.len() as i32,
+                first_prompt: history
+                    .iter()
+                    .filter(|message| matches!(message.as_ref(), coco_messages::Message::User(_)))
+                    .filter_map(session_message_preview)
+                    .find(|text| !is_synthetic_prompt(text))
+                    .unwrap_or_default(),
+                last_message_preview: history
+                    .iter()
+                    .rev()
+                    .filter_map(session_message_preview)
+                    .next(),
+                message_count: history
+                    .iter()
+                    .filter(|message| {
+                        matches!(
+                            message.as_ref(),
+                            coco_messages::Message::User(_) | coco_messages::Message::Assistant(_)
+                        )
+                    })
+                    .count() as i32,
                 total_tokens: usage
                     .totals
                     .input_tokens
@@ -411,6 +429,26 @@ impl SessionHandle {
     pub fn callback_requirements(&self) -> coco_types::SessionCallbackRequirements {
         self.callback_requirements.clone()
     }
+}
+
+fn session_message_preview(message: &Arc<coco_messages::Message>) -> Option<String> {
+    if !matches!(
+        message.as_ref(),
+        coco_messages::Message::User(_) | coco_messages::Message::Assistant(_)
+    ) {
+        return None;
+    }
+    let text = coco_messages::wrapping::extract_text_from_message(message);
+    let flat = text.replace('\n', " ");
+    let preview = coco_utils_string::truncate_str(flat.trim(), 200);
+    (!preview.is_empty()).then_some(preview)
+}
+
+fn is_synthetic_prompt(text: &str) -> bool {
+    let text = text.trim();
+    text == coco_messages::INTERRUPT_MESSAGE
+        || text == coco_messages::INTERRUPT_MESSAGE_FOR_TOOL_USE
+        || text.starts_with("[Request interrupted by user")
 }
 
 fn agent_definition_to_initialize_agent(

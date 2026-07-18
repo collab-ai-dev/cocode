@@ -62,15 +62,15 @@ fn input_state_prompt_mode_tracks_text() {
     let mut state = InputState::new();
     assert_eq!(state.prompt_mode(), PromptMode::Normal);
 
-    state.textarea.insert_str("!");
+    state.textarea_mut().insert_str("!");
     assert_eq!(state.prompt_mode(), PromptMode::Bash);
 
-    state.textarea.insert_str("ls");
+    state.textarea_mut().insert_str("ls");
     assert_eq!(state.prompt_mode(), PromptMode::Bash);
 
     // Delete the prefix (move home, forward-delete) — back to Normal.
-    state.textarea.set_cursor(0);
-    state.textarea.delete_forward(1);
+    state.textarea_mut().set_cursor(0);
+    state.textarea_mut().delete_forward(1);
     assert_eq!(state.prompt_mode(), PromptMode::Normal);
     assert_eq!(state.text(), "ls");
 }
@@ -78,13 +78,13 @@ fn input_state_prompt_mode_tracks_text() {
 #[test]
 fn input_state_prompt_mode_hash_is_normal_then_swap_to_bang() {
     let mut state = InputState::new();
-    state.textarea.insert_str("#");
+    state.textarea_mut().insert_str("#");
     assert_eq!(state.prompt_mode(), PromptMode::Normal);
 
-    state.textarea.set_cursor(0);
-    state.textarea.delete_forward(1);
-    state.textarea.set_cursor(0);
-    state.textarea.insert_str("!");
+    state.textarea_mut().set_cursor(0);
+    state.textarea_mut().delete_forward(1);
+    state.textarea_mut().set_cursor(0);
+    state.textarea_mut().insert_str("!");
     assert_eq!(state.prompt_mode(), PromptMode::Bash);
 }
 

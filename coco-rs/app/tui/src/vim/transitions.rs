@@ -87,11 +87,11 @@ pub fn process_normal_key(
         CommandState::OperatorFind { op, count: _, find } => {
             let op = *op;
             let find = *find;
-            if let Some(range) = find_operator_range(textarea, find, ch) {
-                operators::apply_operator(textarea, op, range, persistent);
-            }
+            let applied = find_operator_range(textarea, find, ch)
+                .and_then(|range| operators::apply_operator(textarea, op, range, persistent))
+                .is_some();
             command.reset();
-            if op == Operator::Change {
+            if op == Operator::Change && applied {
                 VimAction::EnterInsert
             } else {
                 VimAction::Handled
@@ -104,12 +104,11 @@ pub fn process_normal_key(
         } => {
             let op = *op;
             let scope = *scope;
-            if let Some(range) = resolve_text_object(ch, textarea.text(), textarea.cursor(), scope)
-            {
-                operators::apply_operator(textarea, op, range, persistent);
-            }
+            let applied = resolve_text_object(ch, textarea.text(), textarea.cursor(), scope)
+                .and_then(|range| operators::apply_operator(textarea, op, range, persistent))
+                .is_some();
             command.reset();
-            if op == Operator::Change {
+            if op == Operator::Change && applied {
                 VimAction::EnterInsert
             } else {
                 VimAction::Handled
@@ -124,14 +123,16 @@ pub fn process_normal_key(
         }
         CommandState::OperatorG { op, count: _ } => {
             let op = *op;
-            if ch == 'g' {
+            let applied = if ch == 'g' {
                 let cursor = textarea.cursor();
                 let target = motions::go_to_top(textarea.text());
                 let range = target.min(cursor)..cursor.max(target);
-                operators::apply_operator(textarea, op, range, persistent);
-            }
+                operators::apply_operator(textarea, op, range, persistent).is_some()
+            } else {
+                false
+            };
             command.reset();
-            if op == Operator::Change {
+            if op == Operator::Change && applied {
                 VimAction::EnterInsert
             } else {
                 VimAction::Handled
@@ -139,8 +140,9 @@ pub fn process_normal_key(
         }
         CommandState::Replace { count } => {
             let count = *count;
-            operators::replace_char(textarea, ch);
-            persistent.last_change = Some(super::RecordedChange::ReplaceChar { ch, count });
+            if operators::replace_char(textarea, ch) {
+                persistent.last_change = Some(super::RecordedChange::ReplaceChar { ch, count });
+            }
             command.reset();
             VimAction::Handled
         }
@@ -242,11 +244,14 @@ fn process_idle_key(
             let cursor = textarea.cursor();
             let end = next_char_boundary(textarea.text(), cursor);
             if end > cursor {
-                let ch = textarea.text()[cursor..end].to_string();
-                textarea.replace_range(cursor..end, "");
-                persistent.register = ch;
-                persistent.register_is_linewise = false;
-                persistent.last_change = Some(super::RecordedChange::DeleteChar { count: 1 });
+                let range = textarea.expanded_edit_range(cursor..end);
+                if !textarea.range_overlaps_element(range.clone()) {
+                    let deleted = textarea.text()[range.clone()].to_string();
+                    textarea.replace_range(range, "");
+                    persistent.register = deleted;
+                    persistent.register_is_linewise = false;
+                    persistent.last_change = Some(super::RecordedChange::DeleteChar { count: 1 });
+                }
             }
             VimAction::Handled
         }
@@ -384,14 +389,16 @@ fn process_operator_motion(
             let start = textarea.cursor();
             let target = apply_motion_count(textarea.text(), start, ch, count.max(1));
             let range = motion_range(textarea.text(), start, target, ch);
-            operators::apply_operator(textarea, op, range, persistent);
-            persistent.last_change = Some(super::RecordedChange::OperatorMotion {
-                op,
-                motion: ch,
-                count,
-            });
+            let applied = operators::apply_operator(textarea, op, range, persistent).is_some();
+            if applied {
+                persistent.last_change = Some(super::RecordedChange::OperatorMotion {
+                    op,
+                    motion: ch,
+                    count,
+                });
+            }
             command.reset();
-            if op == Operator::Change {
+            if op == Operator::Change && applied {
                 VimAction::EnterInsert
             } else {
                 VimAction::Handled
@@ -399,29 +406,37 @@ fn process_operator_motion(
         }
         // Doubled operator = linewise (dd / cc / yy)
         'd' if op == Operator::Delete => {
-            operators::delete_line(textarea, persistent);
-            persistent.last_change = Some(super::RecordedChange::OperatorLine {
-                op: Operator::Delete,
-                count,
-            });
+            if operators::delete_line(textarea, persistent) {
+                persistent.last_change = Some(super::RecordedChange::OperatorLine {
+                    op: Operator::Delete,
+                    count,
+                });
+            }
             command.reset();
             VimAction::Handled
         }
         'c' if op == Operator::Change => {
-            operators::change_line(textarea, persistent);
-            persistent.last_change = Some(super::RecordedChange::OperatorLine {
-                op: Operator::Change,
-                count,
-            });
+            let applied = operators::change_line(textarea, persistent);
+            if applied {
+                persistent.last_change = Some(super::RecordedChange::OperatorLine {
+                    op: Operator::Change,
+                    count,
+                });
+            }
             command.reset();
-            VimAction::EnterInsert
+            if applied {
+                VimAction::EnterInsert
+            } else {
+                VimAction::Handled
+            }
         }
         'y' if op == Operator::Yank => {
-            operators::yank_line(textarea, persistent);
-            persistent.last_change = Some(super::RecordedChange::OperatorLine {
-                op: Operator::Yank,
-                count,
-            });
+            if operators::yank_line(textarea, persistent) {
+                persistent.last_change = Some(super::RecordedChange::OperatorLine {
+                    op: Operator::Yank,
+                    count,
+                });
+            }
             command.reset();
             VimAction::Handled
         }
@@ -605,20 +620,25 @@ fn replay_change(
             let range = motion_range(textarea.text(), start, target, *motion);
             operators::apply_operator(textarea, *op, range, persistent);
         }
-        RecordedChange::OperatorLine { op, count: _ } => match op {
-            Operator::Delete => operators::delete_line(textarea, persistent),
-            Operator::Change => operators::change_line(textarea, persistent),
-            Operator::Yank => operators::yank_line(textarea, persistent),
-        },
+        RecordedChange::OperatorLine { op, count: _ } => {
+            match op {
+                Operator::Delete => operators::delete_line(textarea, persistent),
+                Operator::Change => operators::change_line(textarea, persistent),
+                Operator::Yank => operators::yank_line(textarea, persistent),
+            };
+        }
         RecordedChange::DeleteChar { count } => {
             for _ in 0..(*count).max(1) {
                 let cursor = textarea.cursor();
                 let end = next_char_boundary(textarea.text(), cursor);
                 if end > cursor {
-                    let ch = textarea.text()[cursor..end].to_string();
-                    textarea.replace_range(cursor..end, "");
-                    persistent.register = ch;
-                    persistent.register_is_linewise = false;
+                    let range = textarea.expanded_edit_range(cursor..end);
+                    if !textarea.range_overlaps_element(range.clone()) {
+                        let ch = textarea.text()[range.clone()].to_string();
+                        textarea.replace_range(range, "");
+                        persistent.register = ch;
+                        persistent.register_is_linewise = false;
+                    }
                 }
             }
         }

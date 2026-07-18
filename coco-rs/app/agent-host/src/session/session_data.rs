@@ -39,6 +39,8 @@ pub(crate) fn session_record_to_summary(
         created_at: session.created_at.clone(),
         updated_at: session.updated_at.clone(),
         title: session.title.clone(),
+        first_prompt: session.first_prompt.clone(),
+        last_message_preview: session.last_message_preview.clone(),
         message_count: session.message_count,
         total_tokens: session.total_tokens,
     })

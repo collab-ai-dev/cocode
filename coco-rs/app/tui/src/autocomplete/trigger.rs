@@ -86,7 +86,7 @@ fn classify_at_trigger(tail: &str) -> (SuggestionKind, String) {
 /// items inline; async sources leave `items` empty pending a search result.
 pub fn refresh_suggestions(state: &mut AppState) {
     let text = state.ui.input.text().to_string();
-    let cursor = state.ui.input.textarea.cursor();
+    let cursor = state.ui.input.textarea().cursor();
     let trigger = detect_bash_path_trigger(&text, cursor)
         .or_else(|| detect_command_directory_trigger(state, &text, cursor))
         .or_else(|| detect(&text, cursor));
@@ -309,7 +309,7 @@ fn refresh_inline_ghost(state: &mut AppState) {
     }
 
     let text = state.ui.input.text();
-    let cursor = state.ui.input.textarea.cursor();
+    let cursor = state.ui.input.textarea().cursor();
     if let Some(ghost) = mid_input_slash_ghost(text, cursor, state) {
         state.ui.input.set_inline_ghost(ghost);
         return;
@@ -353,7 +353,7 @@ fn shell_history_ghost(text: &str, cursor: usize, state: &AppState) -> Option<In
         .input
         .history
         .iter()
-        .map(|entry| entry.text.as_str())
+        .map(crate::state::HistoryEntry::text)
         .find(|entry| entry.starts_with(text) && entry.len() > text.len())
         .map(|entry| {
             let suffix = entry[text.len()..].to_string();

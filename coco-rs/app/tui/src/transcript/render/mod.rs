@@ -17,8 +17,10 @@
 //! contributes one increment, never three.
 pub(crate) mod assistant;
 mod cells_renderer;
+pub(crate) mod reader;
+mod reader_helpers;
 mod system;
-mod tool;
+pub(crate) mod tool;
 pub(crate) mod tool_result;
 mod user;
 
@@ -62,7 +64,7 @@ use crate::transcript::cells::RenderedCell;
 use crate::transcript::cells::SystemCellKind;
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::engine::history_insert::HistoryRows;
-use coco_tui_ui::engine::history_insert::render_history_rows;
+use coco_tui_ui::engine::history_insert::render_history_rows_with_links;
 use coco_tui_ui::style::UiStyles;
 
 pub(crate) const DEFAULT_MAX_REFLOW_ROWS: usize = 9_000;
@@ -105,6 +107,9 @@ pub(crate) struct HistoryLineRenderOptions<'a> {
     pub(crate) syntax_highlighting: SyntaxHighlighting,
     pub(crate) show_system_reminders: bool,
     pub(crate) show_thinking: bool,
+    /// Whether native history can consume Markdown LinkSpan sidecars as OSC 8.
+    /// False keeps destinations visible as ` (url)` fallback text.
+    pub(crate) hyperlinks_enabled: bool,
     /// Session working directory for relative memory-chip paths (`None` ⇒ absolute).
     pub(crate) cwd: Option<&'a str>,
     pub(crate) kb_handle: Option<&'a KeybindingHandle>,
@@ -187,6 +192,7 @@ struct HistoryReplayCacheKey {
     syntax: SyntaxHighlighting,
     show_thinking: bool,
     show_system_reminders: bool,
+    hyperlinks_enabled: bool,
     theme_hash: u64,
     cell_count: usize,
     content_digest: [u8; 32],
@@ -311,16 +317,24 @@ impl HistoryReplayCache {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn render_finalized_history_lines(
     cells: &[RenderedCell],
     options: HistoryLineRenderOptions<'_>,
 ) -> Vec<Line<'static>> {
+    render_finalized_history_document(cells, options).lines
+}
+
+pub(crate) fn render_finalized_history_document(
+    cells: &[RenderedCell],
+    options: HistoryLineRenderOptions<'_>,
+) -> coco_tui_markdown::MarkdownRender {
     let mut chat = CellsRenderer::new(cells, options.styles)
         .show_system_reminders(options.show_system_reminders)
         .show_thinking(options.show_thinking)
         .width(options.width)
         .syntax_highlighting(options.syntax_highlighting)
-        .native_history_presentation()
+        .native_history_presentation(options.hyperlinks_enabled)
         .cwd(options.cwd);
     if let Some(kb_handle) = options.kb_handle {
         chat = chat.kb_handle(kb_handle);
@@ -331,7 +345,59 @@ pub(crate) fn render_finalized_history_lines(
     if let Some(summaries) = options.subagent_summaries {
         chat = chat.subagent_summaries(summaries);
     }
-    chat.build_lines_owned()
+    chat.build_history_document()
+}
+
+/// Render one committed tool pair in isolation. `expanded` uses the same rich
+/// per-tool renderer as normal history but relaxes its row caps; no reader-only
+/// widget or second rendering stack is involved.
+pub(crate) fn render_committed_tool_pair_lines(
+    cells: &[RenderedCell],
+    invocation: usize,
+    result: usize,
+    options: HistoryLineRenderOptions<'_>,
+    expanded: bool,
+) -> Vec<Line<'static>> {
+    render_committed_tool_pair(cells, invocation, result, options, expanded).lines
+}
+
+pub(crate) struct CommittedToolPairRender {
+    pub(crate) lines: Vec<Line<'static>>,
+    pub(crate) truncated: bool,
+}
+
+pub(crate) fn render_committed_tool_pair(
+    cells: &[RenderedCell],
+    invocation: usize,
+    result: usize,
+    options: HistoryLineRenderOptions<'_>,
+    expanded: bool,
+) -> CommittedToolPairRender {
+    let mut renderer = CellsRenderer::new(cells, options.styles)
+        .show_system_reminders(options.show_system_reminders)
+        .show_thinking(options.show_thinking)
+        .width(options.width)
+        .syntax_highlighting(options.syntax_highlighting)
+        .native_history_presentation(options.hyperlinks_enabled)
+        .cwd(options.cwd);
+    if let Some(kb_handle) = options.kb_handle {
+        renderer = renderer.kb_handle(kb_handle);
+    }
+    if let Some(meta) = options.reasoning_metadata {
+        renderer = renderer.reasoning_metadata(meta);
+    }
+    if let Some(summaries) = options.subagent_summaries {
+        renderer = renderer.subagent_summaries(summaries);
+    }
+    if expanded {
+        renderer = renderer.expanded_tool_results();
+    }
+    renderer.reset_truncation_observed();
+    let lines = renderer.render_tool_pair_lines(invocation, result);
+    CommittedToolPairRender {
+        lines,
+        truncated: renderer.truncation_observed(),
+    }
 }
 
 pub(crate) fn render_replay_history_lines(
@@ -341,7 +407,12 @@ pub(crate) fn render_replay_history_lines(
 ) -> HistoryReplayLines {
     let mut stats = HistoryReplayRenderStats::default();
     let replay = render_replay_history_lines_uncached(cells, options, max_rows, &mut stats);
-    let rows = Arc::new(render_history_rows(replay.lines.clone(), options.width));
+    let rows = Arc::new(render_history_rows_with_links(
+        replay.lines.clone(),
+        options.width,
+        options.cwd.map(std::path::Path::new),
+        replay.links,
+    ));
     HistoryReplayLines {
         lines: Arc::from(replay.lines),
         rows,
@@ -448,6 +519,7 @@ pub(crate) fn render_replay_history_lines_cached(
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct UncachedHistoryReplayLines {
     lines: Vec<Line<'static>>,
+    links: Vec<coco_tui_markdown::LinkSpan>,
     omitted_messages: usize,
 }
 
@@ -457,10 +529,11 @@ fn render_replay_history_lines_uncached(
     max_rows: usize,
     stats: &mut HistoryReplayRenderStats,
 ) -> UncachedHistoryReplayLines {
-    let all_lines = render_counted(cells, options, stats);
-    if rendered_line_row_count(&all_lines, options.width) <= max_rows || cells.is_empty() {
+    let all = render_counted(cells, options, stats);
+    if rendered_line_row_count(&all.lines, options.width) <= max_rows || cells.is_empty() {
         return UncachedHistoryReplayLines {
-            lines: all_lines,
+            lines: all.lines,
+            links: all.links,
             omitted_messages: 0,
         };
     }
@@ -482,7 +555,7 @@ fn render_replay_history_lines_uncached(
     let mut fits = |omitted: usize| -> bool {
         let start = message_starts[omitted];
         let mut lines = replay_truncation_marker(omitted);
-        lines.extend(render_counted(&cells[start..], options, stats));
+        lines.extend(render_counted(&cells[start..], options, stats).lines);
         rendered_line_row_count(&lines, options.width) <= max_rows
     };
 
@@ -501,9 +574,15 @@ fn render_replay_history_lines_uncached(
     if lo < n {
         let start = message_starts[lo];
         let mut lines = replay_truncation_marker(lo);
-        lines.extend(render_counted(&cells[start..], options, stats));
+        let marker_lines = lines.len();
+        let mut rendered = render_counted(&cells[start..], options, stats);
+        for link in &mut rendered.links {
+            link.line = link.line.saturating_add(marker_lines);
+        }
+        lines.extend(rendered.lines);
         UncachedHistoryReplayLines {
             lines,
+            links: rendered.links,
             omitted_messages: lo,
         }
     } else {
@@ -511,6 +590,7 @@ fn render_replay_history_lines_uncached(
         // the marker (matches the prior fallback behaviour).
         UncachedHistoryReplayLines {
             lines: replay_truncation_marker(n),
+            links: Vec::new(),
             omitted_messages: n,
         }
     }
@@ -520,10 +600,10 @@ fn render_counted(
     cells: &[RenderedCell],
     options: HistoryLineRenderOptions<'_>,
     stats: &mut HistoryReplayRenderStats,
-) -> Vec<Line<'static>> {
+) -> coco_tui_markdown::MarkdownRender {
     stats.finalized_render_calls += 1;
     stats.cells_rendered += cells.len();
-    render_finalized_history_lines(cells, options)
+    render_finalized_history_document(cells, options)
 }
 
 fn rendered_line_row_count(lines: &[Line<'static>], width: u16) -> usize {
@@ -572,6 +652,7 @@ fn replay_cache_key(
         syntax: options.syntax_highlighting,
         show_thinking: options.show_thinking,
         show_system_reminders: options.show_system_reminders,
+        hyperlinks_enabled: options.hyperlinks_enabled,
         theme_hash: options.styles.theme_hash(),
         cell_count: cells.len(),
         content_digest,
@@ -588,7 +669,10 @@ fn hash_cacheable_cell(
     match &cell.kind {
         CellKind::UserText { text } => {
             hash_u8(hasher, 0);
-            hash_str(hasher, text);
+            hash_str(
+                hasher,
+                &crate::transcript::derive::user_display_text(cell.source.as_ref(), text),
+            );
         }
         CellKind::AssistantText { text, model } => {
             hash_u8(hasher, 1);

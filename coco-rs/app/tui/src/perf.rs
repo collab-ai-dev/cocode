@@ -2,6 +2,8 @@ use std::time::Duration;
 
 use coco_types::AgentStreamEvent;
 use coco_types::CoreEvent;
+use coco_utils_jemalloc::JemallocStats;
+use serde::Serialize;
 
 use crate::display_settings::TuiPerformanceConfig;
 use crate::state::AppState;
@@ -72,13 +74,15 @@ fn sampled(config: TuiPerformanceConfig, frame_index: u64) -> bool {
         && frame_index.is_multiple_of(config.frame_sample_every_n_frames)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum MemorySampleKind {
     Lifecycle,
     Periodic,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum MemoryPhase {
     Startup,
     FirstDraw,
@@ -140,6 +144,17 @@ pub(crate) struct ProcessMemorySample {
     pub(crate) physical_footprint_bytes: Option<u64>,
     pub(crate) physical_footprint_peak_bytes: Option<u64>,
     pub(crate) sample_ms: u128,
+    pub(crate) source: ProcessMemorySource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProcessMemorySource {
+    #[cfg(any(target_os = "macos", test))]
+    MacOsPs,
+    #[cfg(any(target_os = "macos", test))]
+    MacOsTaskInfoAndPs,
+    #[cfg(target_os = "linux")]
+    LinuxProcStatm,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -152,6 +167,21 @@ pub(crate) struct RetainedMemoryStats {
     pub(crate) last_markdown_bytes: usize,
     pub(crate) markdown_memo_cache_bytes: usize,
     pub(crate) history_replay_cache_bytes: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MemoryObservation {
+    pub(crate) process: Option<ProcessMemorySample>,
+    pub(crate) jemalloc: Option<JemallocStats>,
+    pub(crate) retained: RetainedMemoryStats,
+}
+
+pub(crate) fn capture_memory_observation(retained: RetainedMemoryStats) -> MemoryObservation {
+    MemoryObservation {
+        process: sample_current_process_memory().ok(),
+        jemalloc: coco_utils_jemalloc::stats_snapshot(),
+        retained,
+    }
 }
 
 impl RetainedMemoryStats {
@@ -187,20 +217,21 @@ impl MemoryPerfTracker {
         Duration::from_secs(config.memory_sample_interval_secs.max(1))
     }
 
-    pub(crate) fn maybe_log(
+    pub(crate) fn maybe_log_observation(
         &mut self,
         config: TuiPerformanceConfig,
         phase: MemoryPhase,
         sample_kind: MemorySampleKind,
-        retained: RetainedMemoryStats,
+        observation: MemoryObservation,
     ) {
         if !Self::enabled(config) {
             return;
         }
 
-        let Ok(sample) = sample_current_process_memory() else {
+        let Some(sample) = observation.process else {
             return;
         };
+        let retained = observation.retained;
 
         let previous_rss = self.last_logged_rss_bytes;
         let rss_delta_bytes = previous_rss
@@ -231,7 +262,7 @@ impl MemoryPerfTracker {
         // jemalloc's own view (`None` on non-jemalloc builds). `allocated` is
         // live application data — the ground truth separating real retention
         // growth from allocator page overhead (`resident - allocated`).
-        let jemalloc = coco_utils_jemalloc::stats_snapshot();
+        let jemalloc = observation.jemalloc;
         let jemalloc_allocated_delta_bytes = jemalloc
             .zip(self.last_logged_jemalloc_allocated_bytes)
             .map(|(stats, previous)| stats.allocated as i128 - previous as i128)
@@ -287,13 +318,14 @@ impl MemoryPerfTracker {
 }
 
 impl ProcessMemorySample {
-    fn source_label(self) -> &'static str {
-        if self.physical_footprint_bytes.is_some() {
-            "macos_task_info+ps"
-        } else if self.rss_bytes != 0 || self.vsz_bytes != 0 {
-            "macos_ps"
-        } else {
-            "unknown"
+    pub(crate) fn source_label(self) -> &'static str {
+        match self.source {
+            #[cfg(any(target_os = "macos", test))]
+            ProcessMemorySource::MacOsPs => "macos_ps",
+            #[cfg(any(target_os = "macos", test))]
+            ProcessMemorySource::MacOsTaskInfoAndPs => "macos_task_info+ps",
+            #[cfg(target_os = "linux")]
+            ProcessMemorySource::LinuxProcStatm => "linux_proc_statm",
         }
     }
 }
@@ -323,6 +355,7 @@ impl PsMemoryKb {
             physical_footprint_bytes: None,
             physical_footprint_peak_bytes: None,
             sample_ms,
+            source: ProcessMemorySource::MacOsPs,
         }
     }
 }
@@ -345,11 +378,31 @@ fn sample_current_process_memory() -> Result<ProcessMemorySample, ()> {
         if let Some(footprint) = sample_current_process_footprint() {
             sample.physical_footprint_bytes = Some(footprint.physical_footprint_bytes);
             sample.physical_footprint_peak_bytes = Some(footprint.physical_footprint_peak_bytes);
+            sample.source = ProcessMemorySource::MacOsTaskInfoAndPs;
         }
         sample.sample_ms = started.elapsed().as_millis();
         Ok(sample)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        let started = std::time::Instant::now();
+        let statm = std::fs::read_to_string("/proc/self/statm").map_err(|_| ())?;
+        let mut pages = statm
+            .split_whitespace()
+            .filter_map(|value| value.parse::<u64>().ok());
+        let vsz_pages = pages.next().ok_or(())?;
+        let rss_pages = pages.next().ok_or(())?;
+        let page_size = rustix::param::page_size() as u64;
+        Ok(ProcessMemorySample {
+            rss_bytes: rss_pages.saturating_mul(page_size),
+            vsz_bytes: vsz_pages.saturating_mul(page_size),
+            physical_footprint_bytes: None,
+            physical_footprint_peak_bytes: None,
+            sample_ms: started.elapsed().as_millis(),
+            source: ProcessMemorySource::LinuxProcStatm,
+        })
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         Err(())
     }

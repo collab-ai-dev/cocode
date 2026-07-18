@@ -143,6 +143,61 @@ fn queued_command_to_message_human_is_raw_user_message() {
 }
 
 #[test]
+fn queued_image_message_carries_composer_anchor_metadata() {
+    let cmd = QueuedCommand::new("ab".into(), QueuePriority::Next)
+        .with_origin(QueueOrigin::Human)
+        .with_images(vec![crate::command_queue::QueuedImage {
+            media_type: "image/png".into(),
+            data_base64: "AQI=".into(),
+            insertion_offset: 1,
+        }]);
+    let Message::User(user) = queued_command_to_message(&cmd) else {
+        panic!("expected user message");
+    };
+    let coco_messages::LlmMessage::User { content, .. } = user.message else {
+        panic!("expected user LLM message");
+    };
+    let coco_messages::UserContent::File(file) = &content[1] else {
+        panic!("expected image file part");
+    };
+    assert_eq!(
+        file.provider_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("coco_composer_insertion_offset"))
+            .and_then(serde_json::Value::as_i64),
+        Some(1)
+    );
+}
+
+#[test]
+fn queued_file_reference_message_carries_typed_range_metadata() {
+    let cmd = QueuedCommand::new("see @src/lib.rs".into(), QueuePriority::Next)
+        .with_origin(QueueOrigin::Human)
+        .with_editable_composer(coco_types::SubmittedComposer {
+            next_attachment_label: 0,
+            elements: vec![coco_types::SubmittedComposerElement::FileRef { start: 4, end: 15 }],
+        });
+    let Message::User(user) = queued_command_to_message(&cmd) else {
+        panic!("expected user message");
+    };
+    let coco_messages::LlmMessage::User { content, .. } = user.message else {
+        panic!("expected user LLM message");
+    };
+    let coco_messages::UserContent::Text(text) = &content[0] else {
+        panic!("expected text part");
+    };
+    let restored: coco_types::SubmittedComposer = serde_json::from_value(
+        text.provider_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("coco_submitted_composer"))
+            .cloned()
+            .expect("file reference metadata"),
+    )
+    .unwrap();
+    assert_eq!(restored, cmd.editable_composer);
+}
+
+#[test]
 fn queued_command_to_message_none_origin_is_raw_user_message() {
     // No explicit origin == human-typed; still a raw steering user message.
     let cmd = QueuedCommand::new("hi".into(), QueuePriority::Next);

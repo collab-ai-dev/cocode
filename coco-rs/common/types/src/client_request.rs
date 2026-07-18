@@ -17,8 +17,8 @@ use std::{
 use crate::{
     AgentColorName, GoalCreateParams, GoalEditParams, GoalSetStatusParams, HookEventType,
     ModelRole, PermissionMode, PermissionUpdate, ProviderModelSelection, QueuedCommandEditImage,
-    ReasoningEffort, SessionId, SessionUsageSnapshot, SurfaceId, TaskStateBase, ThinkingLevel,
-    wire_tagged::wire_tagged_enum,
+    ReasoningEffort, SessionId, SessionUsageSnapshot, SubmittedComposer, SurfaceId, TaskStateBase,
+    ThinkingLevel, wire_tagged::wire_tagged_enum,
 };
 
 wire_tagged_enum! {
@@ -782,6 +782,8 @@ pub struct TurnStartParams {
     /// Optional clipboard/paste images to include on the user message.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<QueuedCommandEditImage>,
+    /// Lossless atomic composer description relative to `prompt`.
+    pub composer: SubmittedComposer,
     /// Optional slash-command metadata to prepend as a model-visible
     /// attachment before the user prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]

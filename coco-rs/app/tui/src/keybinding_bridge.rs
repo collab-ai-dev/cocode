@@ -286,7 +286,9 @@ fn resolve_key(
         if matches!(key.code, KeyCode::BackTab) {
             return (None, "transcript_backtab");
         }
-        if let Some(cmd) = crate::modal_pane::transcript_map_key(key) {
+        if let Some(cmd) =
+            crate::modal_pane::transcript_map_key(transcript_search_editing(state), key)
+        {
             return (Some(cmd), "transcript");
         }
     }
@@ -355,7 +357,9 @@ fn resolve_key(
         KeybindingContext::TeamRoster => crate::modal_pane::team_roster::map_key(key),
         KeybindingContext::Picker => crate::modal_pane::picker_map_key(key),
         KeybindingContext::Scrollable => crate::modal_pane::scrollable_map_key(key),
-        KeybindingContext::Transcript => crate::modal_pane::transcript_map_key(key),
+        KeybindingContext::Transcript => {
+            crate::modal_pane::transcript_map_key(transcript_search_editing(state), key)
+        }
         // Autocomplete intercepts navigation keys only; other keys fall
         // through to input editing so the user keeps typing and the
         // suggestion popup refreshes reactively.
@@ -375,6 +379,13 @@ fn resolve_key(
     };
     let source = if cmd.is_some() { "cascade" } else { "unmapped" };
     (cmd, source)
+}
+
+fn transcript_search_editing(state: &AppState) -> bool {
+    matches!(
+        state.ui.modal.as_ref(),
+        Some(ModalState::Transcript(transcript)) if transcript.search.editing
+    )
 }
 
 /// Keys for the editable always-allow prefix field on a shell permission

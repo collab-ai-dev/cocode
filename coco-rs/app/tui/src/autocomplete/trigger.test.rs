@@ -107,8 +107,8 @@ fn test_refresh_installs_slash_suggestions() {
         slash("clear", None),
         slash("config", Some("Edit settings")),
     ];
-    state.ui.input.textarea.set_text("/c");
-    state.ui.input.textarea.set_cursor(2);
+    state.ui.input.textarea_mut().set_text("/c");
+    state.ui.input.textarea_mut().set_cursor(2);
 
     refresh_suggestions(&mut state);
 
@@ -123,8 +123,8 @@ fn test_refresh_installs_slash_suggestions() {
 fn test_refresh_installs_mid_input_slash_ghost() {
     let mut state = AppState::new();
     state.session.available_commands = vec![slash("clear", None)];
-    state.ui.input.textarea.set_text("then /cl");
-    state.ui.input.textarea.set_cursor("then /cl".len());
+    state.ui.input.textarea_mut().set_text("then /cl");
+    state.ui.input.textarea_mut().set_cursor("then /cl".len());
 
     refresh_suggestions(&mut state);
 
@@ -142,8 +142,8 @@ fn test_refresh_installs_mid_input_slash_ghost() {
 fn test_refresh_leading_slash_uses_popup_not_ghost() {
     let mut state = AppState::new();
     state.session.available_commands = vec![slash("clear", None)];
-    state.ui.input.textarea.set_text("/cl");
-    state.ui.input.textarea.set_cursor(3);
+    state.ui.input.textarea_mut().set_text("/cl");
+    state.ui.input.textarea_mut().set_cursor(3);
 
     refresh_suggestions(&mut state);
 
@@ -158,8 +158,8 @@ fn at_popup_retains_prior_items_across_keystroke_until_async_lands() {
     // The previously-shown rows are retained until apply_async_result swaps in
     // the new results, eliminating the per-keystroke empty frame.
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("@src/fo");
-    state.ui.input.textarea.set_cursor("@src/fo".len());
+    state.ui.input.textarea_mut().set_text("@src/fo");
+    state.ui.input.textarea_mut().set_cursor("@src/fo".len());
     refresh_suggestions(&mut state);
 
     // Simulate the FileSearchManager result for the first query landing.
@@ -181,8 +181,8 @@ fn at_popup_retains_prior_items_across_keystroke_until_async_lands() {
     }
 
     // User types one more character of the SAME @-token.
-    state.ui.input.textarea.set_text("@src/foo");
-    state.ui.input.textarea.set_cursor("@src/foo".len());
+    state.ui.input.textarea_mut().set_text("@src/foo");
+    state.ui.input.textarea_mut().set_cursor("@src/foo".len());
     refresh_suggestions(&mut state);
 
     let active = state
@@ -206,8 +206,8 @@ fn at_popup_retains_prior_items_across_keystroke_until_async_lands() {
 fn test_refresh_installs_shell_history_ghost() {
     let mut state = AppState::new();
     state.ui.input.add_to_history("!cargo test".into());
-    state.ui.input.textarea.set_text("!cargo");
-    state.ui.input.textarea.set_cursor("!cargo".len());
+    state.ui.input.textarea_mut().set_text("!cargo");
+    state.ui.input.textarea_mut().set_cursor("!cargo".len());
 
     refresh_suggestions(&mut state);
 
@@ -223,13 +223,13 @@ fn test_refresh_installs_shell_history_ghost() {
 fn test_refresh_dismisses_when_space_typed() {
     let mut state = AppState::new();
     state.session.available_commands = vec![slash("help", None)];
-    state.ui.input.textarea.set_text("/help");
-    state.ui.input.textarea.set_cursor(5);
+    state.ui.input.textarea_mut().set_text("/help");
+    state.ui.input.textarea_mut().set_cursor(5);
     refresh_suggestions(&mut state);
     assert!(state.ui.completion.active.is_some());
 
-    state.ui.input.textarea.set_text("/help ");
-    state.ui.input.textarea.set_cursor(6);
+    state.ui.input.textarea_mut().set_text("/help ");
+    state.ui.input.textarea_mut().set_cursor(6);
     refresh_suggestions(&mut state);
     assert!(state.ui.completion.active.is_none());
 }
@@ -252,8 +252,8 @@ fn test_refresh_seeds_at_trigger_with_agents() {
             color: None,
         },
     ];
-    state.ui.input.textarea.set_text("@pl");
-    state.ui.input.textarea.set_cursor(3);
+    state.ui.input.textarea_mut().set_text("@pl");
+    state.ui.input.textarea_mut().set_cursor(3);
     refresh_suggestions(&mut state);
 
     let sug = state.ui.completion.active.expect("popup installed");
@@ -271,8 +271,8 @@ fn test_apply_async_result_merges_files_after_agents() {
         description: Some("Source explorer".into()),
         color: None,
     }];
-    state.ui.input.textarea.set_text("@src");
-    state.ui.input.textarea.set_cursor(4);
+    state.ui.input.textarea_mut().set_text("@src");
+    state.ui.input.textarea_mut().set_cursor(4);
     refresh_suggestions(&mut state);
     // Popup seeded with 1 agent already.
     assert_eq!(state.ui.completion.active.as_ref().unwrap().items.len(), 1);
@@ -319,8 +319,8 @@ fn test_apply_async_result_merges_directory_rows_after_agents() {
         description: Some("Source explorer".into()),
         color: None,
     }];
-    state.ui.input.textarea.set_text("@src");
-    state.ui.input.textarea.set_cursor(4);
+    state.ui.input.textarea_mut().set_text("@src");
+    state.ui.input.textarea_mut().set_cursor(4);
     refresh_suggestions(&mut state);
 
     let file_results = vec![
@@ -427,8 +427,8 @@ fn test_explicit_at_path_uses_path_kind_and_drops_fuzzy_result() {
     let input = format!("@{}/a", dir.display());
 
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text(&input);
-    state.ui.input.textarea.set_cursor(input.len());
+    state.ui.input.textarea_mut().set_text(&input);
+    state.ui.input.textarea_mut().set_cursor(input.len());
     refresh_suggestions(&mut state);
 
     let sug = state.ui.completion.active.as_ref().expect("path request");
@@ -468,8 +468,8 @@ fn test_explicit_at_path_uses_path_kind_and_drops_fuzzy_result() {
 fn test_bash_mode_path_token_uses_bash_path_kind() {
     let input = "!cat src/ma";
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text(input);
-    state.ui.input.textarea.set_cursor(input.len());
+    state.ui.input.textarea_mut().set_text(input);
+    state.ui.input.textarea_mut().set_cursor(input.len());
 
     refresh_suggestions(&mut state);
 
@@ -489,8 +489,8 @@ fn test_bash_mode_path_token_uses_bash_path_kind() {
 fn test_bash_mode_path_token_after_prefix_uses_command_offset() {
     let input = "!./sr";
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text(input);
-    state.ui.input.textarea.set_cursor(input.len());
+    state.ui.input.textarea_mut().set_text(input);
+    state.ui.input.textarea_mut().set_cursor(input.len());
 
     refresh_suggestions(&mut state);
 
@@ -508,13 +508,13 @@ fn test_bash_mode_path_token_after_prefix_uses_command_offset() {
 #[test]
 fn test_bash_mode_plain_command_keeps_history_ghost_available() {
     let mut state = AppState::new();
-    state.ui.input.history.push(crate::state::ui::HistoryEntry {
-        text: "!cargo test --all".to_string(),
-        timestamp_ms: None,
-        pastes: Vec::new(),
-    });
-    state.ui.input.textarea.set_text("!cargo");
-    state.ui.input.textarea.set_cursor("!cargo".len());
+    state
+        .ui
+        .input
+        .history
+        .push(crate::state::ui::HistoryEntry::plain("!cargo test --all"));
+    state.ui.input.textarea_mut().set_text("!cargo");
+    state.ui.input.textarea_mut().set_cursor("!cargo".len());
 
     refresh_suggestions(&mut state);
 
@@ -531,8 +531,8 @@ fn test_bash_mode_plain_command_keeps_history_ghost_available() {
 fn test_bash_path_result_drops_stale_at_result() {
     let input = "!cat src/ma";
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text(input);
-    state.ui.input.textarea.set_cursor(input.len());
+    state.ui.input.textarea_mut().set_text(input);
+    state.ui.input.textarea_mut().set_cursor(input.len());
     refresh_suggestions(&mut state);
 
     let adopted = apply_async_result(
@@ -558,8 +558,8 @@ fn test_bash_path_result_drops_stale_at_result() {
 #[test]
 fn test_same_query_different_token_range_gets_fresh_request_key() {
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("@src then @src");
-    state.ui.input.textarea.set_cursor("@src".len());
+    state.ui.input.textarea_mut().set_text("@src then @src");
+    state.ui.input.textarea_mut().set_cursor("@src".len());
     refresh_suggestions(&mut state);
     let first = state
         .ui
@@ -568,7 +568,11 @@ fn test_same_query_different_token_range_gets_fresh_request_key() {
         .clone()
         .expect("first request key");
 
-    state.ui.input.textarea.set_cursor("@src then @src".len());
+    state
+        .ui
+        .input
+        .textarea_mut()
+        .set_cursor("@src then @src".len());
     refresh_suggestions(&mut state);
     let second = state
         .ui
@@ -586,8 +590,8 @@ fn test_same_query_different_token_range_gets_fresh_request_key() {
 #[test]
 fn test_keyed_async_result_drops_stale_same_query_different_range() {
     let mut state = AppState::new();
-    state.ui.input.textarea.set_text("@src then @src");
-    state.ui.input.textarea.set_cursor("@src".len());
+    state.ui.input.textarea_mut().set_text("@src then @src");
+    state.ui.input.textarea_mut().set_cursor("@src".len());
     refresh_suggestions(&mut state);
     let first = state
         .ui
@@ -596,7 +600,11 @@ fn test_keyed_async_result_drops_stale_same_query_different_range() {
         .clone()
         .expect("first request key");
 
-    state.ui.input.textarea.set_cursor("@src then @src".len());
+    state
+        .ui
+        .input
+        .textarea_mut()
+        .set_cursor("@src then @src".len());
     refresh_suggestions(&mut state);
     let second = state
         .ui
@@ -641,8 +649,8 @@ fn test_keyed_async_result_drops_stale_same_query_different_range() {
 fn test_explicit_at_path_prefixes_use_path_kind() {
     for input in ["@~/", "@./", "@../", "@/"] {
         let mut state = AppState::new();
-        state.ui.input.textarea.set_text(input);
-        state.ui.input.textarea.set_cursor(input.len());
+        state.ui.input.textarea_mut().set_text(input);
+        state.ui.input.textarea_mut().set_cursor(input.len());
 
         refresh_suggestions(&mut state);
 
@@ -678,8 +686,8 @@ fn test_directory_command_detection_uses_typed_argument_kind() {
         argument_kind: CommandArgumentKind::DirectoryPath,
         ..SlashCommandInfo::default()
     }];
-    state.ui.input.textarea.set_text(&input);
-    state.ui.input.textarea.set_cursor(input.len());
+    state.ui.input.textarea_mut().set_text(&input);
+    state.ui.input.textarea_mut().set_cursor(input.len());
     refresh_suggestions(&mut state);
 
     let sug = state
@@ -706,8 +714,8 @@ fn test_file_command_detection_uses_files_and_directories_path_kind() {
         argument_kind: CommandArgumentKind::FilePath,
         ..SlashCommandInfo::default()
     }];
-    state.ui.input.textarea.set_text(&input);
-    state.ui.input.textarea.set_cursor(input.len());
+    state.ui.input.textarea_mut().set_text(&input);
+    state.ui.input.textarea_mut().set_cursor(input.len());
     refresh_suggestions(&mut state);
 
     let sug = state
@@ -731,8 +739,8 @@ fn test_mcp_resources_are_seeded_with_server_metadata() {
         name: "Guide".into(),
         description: Some("Project guide".into()),
     }];
-    state.ui.input.textarea.set_text("@guide");
-    state.ui.input.textarea.set_cursor("@guide".len());
+    state.ui.input.textarea_mut().set_text("@guide");
+    state.ui.input.textarea_mut().set_cursor("@guide".len());
 
     refresh_suggestions(&mut state);
 
@@ -766,8 +774,12 @@ fn test_resume_command_detection_uses_session_id_argument_kind() {
         created_at: "today".into(),
         model: None,
     }];
-    state.ui.input.textarea.set_text("/resume auth");
-    state.ui.input.textarea.set_cursor("/resume auth".len());
+    state.ui.input.textarea_mut().set_text("/resume auth");
+    state
+        .ui
+        .input
+        .textarea_mut()
+        .set_cursor("/resume auth".len());
 
     refresh_suggestions(&mut state);
 
@@ -789,8 +801,8 @@ fn test_directory_command_detection_ignores_hint_without_typed_kind() {
         argument_kind: CommandArgumentKind::FreeText,
         ..SlashCommandInfo::default()
     }];
-    state.ui.input.textarea.set_text(&input);
-    state.ui.input.textarea.set_cursor(input.len());
+    state.ui.input.textarea_mut().set_text(&input);
+    state.ui.input.textarea_mut().set_cursor(input.len());
     refresh_suggestions(&mut state);
 
     assert!(state.ui.completion.active.is_none());

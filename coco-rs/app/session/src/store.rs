@@ -95,6 +95,12 @@ pub trait TranscriptIo: Send + Sync {
 
     fn load_entries(&self, session_id: &str) -> crate::Result<Vec<Entry>>;
     fn load_transcript_messages(&self, session_id: &str) -> crate::Result<Vec<TranscriptEntry>>;
+    fn find_transcript_text(
+        &self,
+        session_id: &str,
+        needle_lowercase: &str,
+        is_cancelled: &mut dyn FnMut() -> bool,
+    ) -> crate::Result<Option<crate::storage::TranscriptTextMatch>>;
     fn load_content_replacements(
         &self,
         session_id: &str,
@@ -331,6 +337,14 @@ impl TranscriptIo for TranscriptStore {
     }
     fn load_transcript_messages(&self, session_id: &str) -> crate::Result<Vec<TranscriptEntry>> {
         TranscriptStore::load_transcript_messages(self, session_id)
+    }
+    fn find_transcript_text(
+        &self,
+        session_id: &str,
+        needle_lowercase: &str,
+        is_cancelled: &mut dyn FnMut() -> bool,
+    ) -> crate::Result<Option<crate::storage::TranscriptTextMatch>> {
+        TranscriptStore::find_transcript_text(self, session_id, needle_lowercase, is_cancelled)
     }
     fn load_content_replacements(
         &self,
@@ -755,6 +769,44 @@ impl TranscriptIo for InMemoryStore {
                 _ => None,
             })
             .collect())
+    }
+
+    fn find_transcript_text(
+        &self,
+        session_id: &str,
+        needle_lowercase: &str,
+        is_cancelled: &mut dyn FnMut() -> bool,
+    ) -> crate::Result<Option<crate::storage::TranscriptTextMatch>> {
+        let state = self.lock();
+        let Some(session) = state.sessions.get(session_id) else {
+            return Ok(None);
+        };
+        for entry in &session.entries {
+            if is_cancelled() {
+                return Ok(None);
+            }
+            let Entry::Transcript(entry) = entry else {
+                continue;
+            };
+            for message in crate::storage::messages_from_transcript_entry(entry) {
+                let text = coco_messages::wrapping::extract_text_from_message(&message);
+                if let Some((line, match_range)) = text
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .find_map(|line| {
+                        crate::storage::case_insensitive_match_range(line, needle_lowercase)
+                            .map(|match_range| (line, match_range))
+                    })
+                {
+                    return Ok(Some(crate::storage::TranscriptTextMatch {
+                        line: line.to_string(),
+                        match_range,
+                    }));
+                }
+            }
+        }
+        Ok(None)
     }
 
     fn load_content_replacements(

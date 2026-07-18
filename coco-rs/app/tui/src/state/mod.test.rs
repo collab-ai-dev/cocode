@@ -500,21 +500,21 @@ fn test_begin_tool_stream_suppresses_overlay_tools() {
 fn test_input_editing() {
     let mut state = AppState::new();
 
-    state.ui.input.textarea.insert_str("h");
-    state.ui.input.textarea.insert_str("i");
+    state.ui.input.textarea_mut().insert_str("h");
+    state.ui.input.textarea_mut().insert_str("i");
     assert_eq!(state.ui.input.text(), "hi");
-    assert_eq!(state.ui.input.textarea.cursor(), 2);
+    assert_eq!(state.ui.input.textarea().cursor(), 2);
 
-    state.ui.input.textarea.move_cursor_left();
-    assert_eq!(state.ui.input.textarea.cursor(), 1);
+    state.ui.input.textarea_mut().move_cursor_left();
+    assert_eq!(state.ui.input.textarea().cursor(), 1);
 
-    state.ui.input.textarea.insert_str("!");
+    state.ui.input.textarea_mut().insert_str("!");
     assert_eq!(state.ui.input.text(), "h!i");
 
     let taken = state.ui.input.take_input();
     assert_eq!(taken, "h!i");
     assert!(state.ui.input.is_empty());
-    assert_eq!(state.ui.input.textarea.cursor(), 0);
+    assert_eq!(state.ui.input.textarea().cursor(), 0);
 }
 
 #[test]
@@ -525,15 +525,15 @@ fn test_input_history_most_recent_first() {
     state.ui.input.add_to_history("second".to_string());
     assert_eq!(state.ui.input.history.len(), 2);
     // Newest submission sits at the front for up-arrow recall.
-    assert_eq!(state.ui.input.history[0].text, "second");
-    assert_eq!(state.ui.input.history[1].text, "first");
+    assert_eq!(state.ui.input.history[0].text(), "second");
+    assert_eq!(state.ui.input.history[1].text(), "first");
 
     // Re-submitting an existing entry moves it to the front without
     // creating a duplicate.
     state.ui.input.add_to_history("first".to_string());
     assert_eq!(state.ui.input.history.len(), 2);
-    assert_eq!(state.ui.input.history[0].text, "first");
-    assert_eq!(state.ui.input.history[1].text, "second");
+    assert_eq!(state.ui.input.history[0].text(), "first");
+    assert_eq!(state.ui.input.history[1].text(), "second");
 }
 
 #[test]
@@ -550,21 +550,63 @@ fn test_hydrate_history_dedups_newest_first() {
     ]);
 
     assert_eq!(state.ui.input.history.len(), 2);
-    assert_eq!(state.ui.input.history[0].text, "newest");
-    assert_eq!(state.ui.input.history[1].text, "older");
+    assert_eq!(state.ui.input.history[0].text(), "newest");
+    assert_eq!(state.ui.input.history[1].text(), "older");
 }
 
 #[test]
 fn test_persisted_history_rehydrates_exact_paste_pill() {
+    let label = "[Pasted text #7]";
+    let text = format!("review {label}");
     let entry = crate::state::HistoryEntry::persisted(
-        "review [Pasted text #7 +3 lines]".to_string(),
+        coco_types::PersistedComposer {
+            text,
+            next_attachment_label: 7,
+            elements: vec![coco_types::PersistedComposerElement::Paste {
+                start: 7,
+                end: i64::try_from(7 + label.len()).unwrap(),
+                content: "full payload".into(),
+            }],
+        },
         123,
-        std::collections::HashMap::from([(7, "full payload".to_string())]),
-    );
+    )
+    .unwrap();
     assert_eq!(entry.timestamp_ms, Some(123));
-    assert_eq!(entry.pastes.len(), 1);
-    assert_eq!(entry.pastes[0].pill, "[Pasted text #7 +3 lines]");
-    assert_eq!(entry.pastes[0].content, "full payload");
+    let mut input = crate::state::InputState::new();
+    input.restore_composer(entry.composer);
+    assert_eq!(input.resolve().unwrap().text, "review full payload");
+}
+
+#[test]
+fn typed_history_deduplicates_payload_identity_not_display_text() {
+    use base64::Engine as _;
+
+    fn image_entry(byte: u8, timestamp: i64) -> crate::state::HistoryEntry {
+        crate::state::HistoryEntry::persisted(
+            coco_types::PersistedComposer {
+                text: "inspect [Image #1]".into(),
+                next_attachment_label: 1,
+                elements: vec![coco_types::PersistedComposerElement::Image {
+                    start: 8,
+                    end: 18,
+                    media_type: "image/png".into(),
+                    data_base64: base64::engine::general_purpose::STANDARD.encode([byte]),
+                }],
+            },
+            timestamp,
+        )
+        .unwrap()
+    }
+
+    let first = image_entry(1, 1);
+    let exact_duplicate = image_entry(1, 2);
+    let different_payload = image_entry(2, 3);
+    let mut input = crate::state::InputState::new();
+    input.hydrate_history_entries(vec![first, exact_duplicate, different_payload]);
+
+    assert_eq!(input.history.len(), 2);
+    assert_eq!(input.history[0].timestamp_ms, Some(1));
+    assert_eq!(input.history[1].timestamp_ms, Some(3));
 }
 
 #[test]

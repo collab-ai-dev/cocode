@@ -332,7 +332,7 @@ tikv-jemallocator = { version = "0.7.0", features = ["unprefixed_malloc_on_suppo
 # write helpers can't express — jemalloc rejects a non-NULL `newp`). Both resolve
 # to the same jemalloc-sys 0.7 the allocator already links. Only pulled in behind
 # `coco-utils-jemalloc`'s `jemalloc` feature. See utils/jemalloc.
-tikv-jemalloc-ctl = { version = "0.7.0", features = ["stats"] }
+tikv-jemalloc-ctl = { version = "0.7.0", features = ["stats", "use_std"] }
 tikv-jemalloc-sys = "0.7"
 # `event` feature gates `rustix::event::poll`, used for the bounded OSC 11
 # terminal-background read (`auto` theme). Pinned to the version crossterm
@@ -403,6 +403,7 @@ sha2 = "0.10"
 tiny_http = "0.12"
 url = "2"
 urlencoding = "2"
+linkify = "0.10"
 webbrowser = "1"
 which = "7"
 arboard = "3"
@@ -419,7 +420,8 @@ itertools = "0.14"
 # the dep tree stays single-version. Ratatui features are enabled by ROI:
 # scrolling-regions for the native scrollback substrate, widget-ref for
 # composable presentation surfaces, and rendered-line-info for measurement.
-# unstable-backend-writer stays off until we need direct writer_mut access.
+# `unstable-backend-writer` exposes the owned writer for coco's frame-buffered
+# terminal backend and the VT100 test backend.
 ratatui = { version = "=0.30.2", features = [
     "scrolling-regions",
     "unstable-rendered-line-info",

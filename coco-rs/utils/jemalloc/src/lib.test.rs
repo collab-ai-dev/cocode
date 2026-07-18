@@ -20,6 +20,7 @@ fn purge_is_ok_regardless_of_backend() {
 #[test]
 fn stats_snapshot_is_none_without_backend() {
     assert_eq!(stats_snapshot(), None);
+    assert_eq!(stats_print(), None);
 }
 
 #[cfg(all(feature = "jemalloc", not(target_os = "windows")))]
@@ -29,6 +30,7 @@ fn stats_snapshot_reads_succeed_with_backend() {
     // asserted (they depend on live heap state), only that the snapshot is
     // populated rather than failing mid-read.
     assert!(stats_snapshot().is_some());
+    assert!(stats_print().is_some());
 }
 
 #[cfg(not(all(feature = "jemalloc", not(target_os = "windows"))))]

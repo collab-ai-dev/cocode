@@ -63,6 +63,7 @@ fn progressive_sources() -> &'static [&'static str] {
         "- alpha\n\n- beta\n\n- gamma\n\nnext\n\n",
         "intro\n\n1. first\n\n2. second\n\n---\n\nafter\n\n",
         "- outer\n  - inner\n  continuation\n\n",
+        "- outer\n\n  ```rust\n  let nested = true;\n  ```\n\n- sibling\n\nafter\n\n",
         "> quoted\n> continuation\n\noutside\n\n",
         "lazy\ncontinuation\n\nnext\n\n",
         "- [ ] todo\n\nnext\n\n",
@@ -71,6 +72,9 @@ fn progressive_sources() -> &'static [&'static str] {
         "```rust\nfn main() {}\n```\nafter\n\n",
         "[label]\n\n[label]: https://example.com\n\n",
         "<div>\nraw html\n</div>\n\nafter\n\n",
+        "    indented code\n\n    continues\n\nafter\n\n",
+        "<script>\nconst first = 1;\n\nconst second = 2;\n</script>\n\nafter\n\n",
+        "See [a multiline\nlabel][target].\n\n[target]: https://example.com\n\n",
         "```mermaid\nflowchart LR\n  A[Start] --> B[Finish]\n```\n\nafter\n\n",
     ]
 }
@@ -438,6 +442,32 @@ fn stable_prefix_holds_back_open_code_fence() {
 }
 
 #[test]
+fn stable_prefix_holds_back_blank_inside_indented_code() {
+    let prefix = "    first line\n\n";
+    assert_eq!(stable_prefix_end(prefix), 0);
+    let source = format!("{prefix}    second line\n\nafter\n\n");
+    assert_eq!(stable_prefix_end(&source), source.len());
+}
+
+#[test]
+fn stable_prefix_holds_back_blank_inside_raw_html_block() {
+    let prefix = "<script>\nconst first = 1;\n\n";
+    assert_eq!(stable_prefix_end(prefix), 0);
+    let closed = format!("{prefix}const second = 2;\n</script>\n");
+    assert_eq!(stable_prefix_end(&closed), closed.len());
+}
+
+#[test]
+fn stable_prefix_tracks_multiline_reference_candidate() {
+    assert_eq!(
+        stable_prefix_end("See [a multiline\nlabel][target].\n\n"),
+        0
+    );
+    let source = "See [a multiline\nlabel][target].\n\n[target]: /url\n\n";
+    assert_eq!(stable_prefix_end(source), source.len());
+}
+
+#[test]
 fn stable_prefix_holds_back_trailing_open_list() {
     // A later sibling item would flip the list tight→loose and rewrite the
     // already-rendered items, so a still-growing trailing list never commits.
@@ -502,6 +532,34 @@ fn stable_prefix_render_matches_finalized_line_prefix() {
             );
         }
     }
+}
+
+#[test]
+fn stable_prefix_tracker_matches_fresh_scan_across_chunk_boundaries() {
+    for source in progressive_sources() {
+        let mut tracker = StablePrefixTracker::default();
+        let mut previous = 0;
+        for end in source
+            .char_indices()
+            .map(|(idx, ch)| idx + ch.len_utf8())
+            .step_by(3)
+            .chain(std::iter::once(source.len()))
+        {
+            let actual = tracker.push(&source[previous..end]);
+            assert_eq!(
+                actual,
+                stable_prefix_end(&source[..end]),
+                "incremental scan diverged at byte {end} for {source:?}"
+            );
+            previous = end;
+        }
+    }
+}
+
+#[test]
+fn reference_definition_inside_fence_does_not_resolve_outer_candidate() {
+    let source = "[label][target]\n\n```text\n[target]: https://example.com\n```\n\n";
+    assert_eq!(stable_prefix_end(source), 0);
 }
 
 #[test]
@@ -783,20 +841,47 @@ fn streaming_suppresses_mermaid_diagram() {
     );
 }
 
-// ── Inline link destination rendering (G1 regression) ──
-//
-// Mirrors codex tui/src/markdown_render_tests.rs link coverage. coco has no
-// OSC 8 plumbing, so links degrade to the terminal-fallback form (the URL is
-// shown inline) rather than being silently dropped.
+// ── Inline link sidecars (D3 regression) ──
 
 #[test]
 fn inline_link_preserves_destination_url() {
-    let text = render_text("[click here](https://example.com/path)").join("\n");
+    let theme = Theme::default();
+    let rendered = render_markdown_with_links(
+        "[click here](https://example.com/path)",
+        MarkdownOptions::new(UiStyles::new(&theme), 80, SyntaxHighlighting::Full),
+        None,
+    );
+    let text = rendered
+        .lines
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(text.contains("click here"), "missing link text: {text:?}");
     assert!(
-        text.contains("https://example.com/path"),
-        "link destination dropped: {text:?}"
+        !text.contains("https://example.com/path"),
+        "URL consumes columns: {text:?}"
     );
+    assert_eq!(rendered.links.len(), 1);
+    assert_eq!(rendered.links[0].target, "https://example.com/path");
+}
+
+#[test]
+fn plain_renderer_keeps_visible_destination_fallback() {
+    let text = render_text("[click here](https://example.com/path)").join("\n");
+
+    assert!(
+        text.contains("click here (https://example.com/path)"),
+        "non-sidecar renderer dropped destination: {text:?}"
+    );
+}
+
+#[test]
+fn plain_table_renderer_keeps_destination_inside_cell() {
+    let text = render_text("| link |\n| --- |\n| [docs](https://example.com/docs) |").join("\n");
+
+    assert!(text.contains("https://example.com/docs"), "{text}");
+    assert_eq!(text.matches("https://example.com/docs").count(), 1);
 }
 
 #[test]
@@ -826,33 +911,43 @@ fn bare_url_keeps_single_destination() {
 
 #[test]
 fn mailto_link_shows_bare_address_without_scheme() {
-    let text = render_text("[Email me](mailto:user@example.com)").join("\n");
+    let theme = Theme::default();
+    let rendered = render_markdown_with_links(
+        "[Email me](mailto:user@example.com)",
+        MarkdownOptions::new(UiStyles::new(&theme), 80, SyntaxHighlighting::Full),
+        None,
+    );
+    let text = rendered
+        .lines
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(text.contains("Email me"), "missing link text: {text:?}");
     assert!(
-        text.contains("user@example.com"),
-        "email address dropped: {text:?}"
+        !text.contains("user@example.com"),
+        "destination consumes columns: {text:?}"
     );
-    assert!(
-        !text.contains("mailto:"),
-        "mailto scheme leaked into output: {text:?}"
-    );
+    assert_eq!(rendered.links[0].target, "mailto:user@example.com");
 }
 
 #[test]
 fn inline_link_destination_uses_hyperlink_style() {
     let theme = Theme::default();
     let expected = UiStyles::new(&theme).hyperlink();
-    let lines = render_markdown(
+    let rendered = render_markdown_with_links(
         "[click](https://example.com)",
         MarkdownOptions::new(UiStyles::new(&theme), 80, SyntaxHighlighting::Full),
         None,
     );
-    let dest_span = lines
+    let label_span = rendered
+        .lines
         .iter()
         .flat_map(|l| l.spans.iter())
-        .find(|s| s.content.contains("https://example.com"))
-        .expect("destination span present");
-    assert_eq!(dest_span.style.fg, Some(expected));
+        .find(|s| s.content.contains("click"))
+        .expect("label span present");
+    assert_eq!(label_span.style.fg, Some(expected));
+    assert_eq!(rendered.links[0].target, "https://example.com");
 }
 
 #[test]
@@ -883,17 +978,38 @@ fn table_narrow_cjk_column_keeps_border_aligned() {
 }
 
 #[test]
-fn link_labeled_with_inline_code_keeps_url_separator() {
-    // Regression: on_inline_code must feed the link-text accumulator so the
-    // ` (url)` suffix is not dropped / the URL is not concatenated.
-    let text = render_text("[`api`](https://example.com)").join("");
+fn link_labeled_with_inline_code_keeps_sidecar() {
+    let theme = Theme::default();
+    let rendered = render_markdown_with_links(
+        "[`api`](https://example.com)",
+        MarkdownOptions::new(UiStyles::new(&theme), 80, SyntaxHighlighting::Full),
+        None,
+    );
+    let text = rendered.lines.iter().map(line_text).collect::<String>();
     assert!(text.contains("api"), "{text}");
-    assert!(
-        text.contains("(https://example.com)"),
-        "URL not separated: {text}"
+    assert!(!text.contains("https://"), "URL consumes columns: {text}");
+    assert_eq!(rendered.links[0].target, "https://example.com");
+}
+
+#[test]
+fn table_link_keeps_post_layout_sidecar_without_visible_destination() {
+    let theme = Theme::default();
+    let rendered = render_markdown_with_links(
+        "| link |\n| --- |\n| [docs](https://example.com/docs) |",
+        MarkdownOptions::new(UiStyles::new(&theme), 40, SyntaxHighlighting::Full),
+        None,
     );
+    let text = rendered
+        .lines
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("docs"));
     assert!(
-        !text.contains("apihttps"),
-        "URL concatenated onto text: {text}"
+        !text.contains("https://"),
+        "URL consumes table columns: {text}"
     );
+    assert_eq!(rendered.links.len(), 1);
+    assert_eq!(rendered.links[0].target, "https://example.com/docs");
 }

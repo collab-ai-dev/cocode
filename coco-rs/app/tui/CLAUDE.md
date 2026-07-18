@@ -33,7 +33,7 @@ animation ticks.
 | `server_notification_handler::handle_core_event` | Fold `CoreEvent` into `AppState` |
 | `render` | Pure `(&AppState, &mut Frame) → ()` — ratatui view |
 | `Theme`, `ThemeName` | Owned by the `coco-tui-ui` crate, re-exported here; built-in themes plus custom `~/.coco/theme.json` palettes; hot-reloaded |
-| `PasteManager`, `ImageData`, `ResolvedInput` | Paste buffering + image attachment |
+| `composer::{ComposerSnapshot, AttachmentStore, ResolvedInput}` | App-owned atomic composer state, attachment payloads, queue/history/editor restoration |
 
 See `docs/internal/crate-coco-tui.md` for widget taxonomy, modal catalog, and
 snapshot-testing conventions (`insta`).
@@ -57,7 +57,10 @@ boundary), `derive` (`Message` → cells), `render/` (the ONLY renderer home:
 `cells_renderer.rs` — `CellsRenderer`, the `&[RenderedCell]` → `Vec<Line>`
 projection — plus per-category cell renderers, the committed-history
 renderer, and the replay cache), `stream` (stable/tail splitter, render key,
-watermark), `emission` (exactly-once tracker + anchored finalize). The
+watermark; incrementally scans appended source and renders only newly stable
+slices, with an authoritative full-prefix fallback for document-global
+reference definitions), `emission` (exactly-once tracker + anchored finalize).
+The
 finalize anchors streamed scrollback rows at the SOURCE level
 (`text.starts_with(source_prefix)` + render-key gate) and appends only the
 committed render's suffix — no rasterized per-row reconciliation; soundness

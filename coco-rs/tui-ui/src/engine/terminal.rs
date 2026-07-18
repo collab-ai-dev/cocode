@@ -29,6 +29,17 @@ use std::time::Instant;
 
 use super::CursorClaim;
 use super::history_insert::HistoryRows;
+use super::history_links::HistoryLinkRun;
+
+pub struct DirectHistoryInsert<'a> {
+    pub rendered: &'a Buffer,
+    pub links: &'a [HistoryLinkRun],
+    pub hyperlinks_enabled: bool,
+    pub source_start_row: u16,
+    pub row_count: u16,
+    pub target_top: u16,
+    pub scratch: &'a mut String,
+}
 
 pub trait SurfaceBackend: Backend {
     fn clear_scrollback_and_screen(&mut self) -> Result<(), Self::Error> {
@@ -88,16 +99,31 @@ pub trait SurfaceBackend: Backend {
         Ok(())
     }
 
+    /// Present any buffered bytes and wait for writes queued before this call.
+    /// Synchronous/test backends are already drained after `flush`.
+    fn drain_output(&mut self, _timeout: Duration) -> Result<bool, Self::Error> {
+        self.flush()?;
+        Ok(true)
+    }
+
+    /// Latest completed physical terminal write, when the backend owns an
+    /// asynchronous writer thread.
+    fn terminal_write_stats(&self) -> Option<TerminalWriteStats> {
+        None
+    }
+
     fn insert_history_rows_direct(
         &mut self,
-        _rendered: &Buffer,
-        _source_start_row: u16,
-        _row_count: u16,
-        _target_top: u16,
-        _scratch: &mut String,
+        _request: DirectHistoryInsert<'_>,
     ) -> Result<Option<usize>, Self::Error> {
         Ok(None)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalWriteStats {
+    pub through_sequence: u64,
+    pub elapsed: Duration,
 }
 
 impl<W> SurfaceBackend for CrosstermBackend<W>
@@ -154,12 +180,17 @@ where
 
     fn insert_history_rows_direct(
         &mut self,
-        rendered: &Buffer,
-        source_start_row: u16,
-        row_count: u16,
-        target_top: u16,
-        scratch: &mut String,
+        request: DirectHistoryInsert<'_>,
     ) -> Result<Option<usize>, Self::Error> {
+        let DirectHistoryInsert {
+            rendered,
+            links,
+            hyperlinks_enabled,
+            source_start_row,
+            row_count,
+            target_top,
+            scratch,
+        } = request;
         // No DECSC/DECRC bracket: every row is absolutely addressed and the
         // engine re-parks the cursor from app-tracked state after the insert
         // (`SurfaceTerminal::insert_history_rows`), so the terminal's shared
@@ -178,18 +209,45 @@ where
             // space (`skip == false`), so width tracking — not `cell.skip` —
             // is what keeps a `运` from being emitted as `运 `.
             let mut to_skip = 0usize;
+            let row_links = if hyperlinks_enabled {
+                links_for_row(links, source_y)
+            } else {
+                &[]
+            };
+            let mut link_index = 0usize;
+            let mut link_open = false;
             for x in 0..rendered.area.width {
                 let index = rendered.index_of(x, source_y);
                 let cell = &rendered.content[index];
                 if !matches!(cell.diff_option, CellDiffOption::Skip) && to_skip == 0 {
+                    let cell_width = cell.cell_width().max(1);
                     let next_style = CellStyleKey::from(cell);
                     if current_style != Some(next_style) {
                         push_ansi_style_prefix(scratch, next_style);
                         current_style = Some(next_style);
                     }
+                    if row_links
+                        .get(link_index)
+                        .is_some_and(|link| link.start_col == x)
+                    {
+                        link_open = push_osc8_open(scratch, &row_links[link_index].target);
+                    }
                     scratch.push_str(cell.symbol());
+                    if row_links
+                        .get(link_index)
+                        .is_some_and(|link| link.end_col == x + cell_width)
+                    {
+                        if link_open {
+                            scratch.push_str("\x1b]8;;\x1b\\");
+                            link_open = false;
+                        }
+                        link_index += 1;
+                    }
                 }
                 to_skip = usize::from(cell.cell_width().max(1)).saturating_sub(1);
+            }
+            if link_open {
+                scratch.push_str("\x1b]8;;\x1b\\");
             }
         }
         scratch.push_str("\x1b[0m");
@@ -243,6 +301,7 @@ pub struct SurfaceTerminal<B: SurfaceBackend> {
     sync_update_requested: bool,
     sync_update_started: bool,
     perf_stats_enabled: bool,
+    hyperlinks_enabled: bool,
     history_row_scratch: String,
     update_index_scratch: Vec<usize>,
     skipped_frames_total: u64,
@@ -345,6 +404,7 @@ where
             sync_update_requested: false,
             sync_update_started: false,
             perf_stats_enabled: false,
+            hyperlinks_enabled: false,
             history_row_scratch: String::new(),
             update_index_scratch: Vec::new(),
             skipped_frames_total: 0,
@@ -403,6 +463,27 @@ where
 
     pub fn set_perf_stats_enabled(&mut self, enabled: bool) {
         self.perf_stats_enabled = enabled;
+    }
+
+    /// Enable OSC 8 only after the application has made its terminal
+    /// capability decision. Tests and unknown backends remain plain-text by
+    /// default.
+    pub fn set_hyperlinks_enabled(&mut self, enabled: bool) {
+        self.hyperlinks_enabled = enabled;
+    }
+
+    pub fn hyperlinks_enabled(&self) -> bool {
+        self.hyperlinks_enabled
+    }
+
+    /// Flush buffered output and wait for the backend's bounded tty-handoff
+    /// barrier. Returns `false` on timeout.
+    pub fn drain_output(&mut self, timeout: Duration) -> Result<bool, B::Error> {
+        self.backend.drain_output(timeout)
+    }
+
+    pub fn terminal_write_stats(&self) -> Option<TerminalWriteStats> {
+        self.backend.terminal_write_stats()
     }
 
     /// Rows of finalized history known to be visible above the viewport.
@@ -652,7 +733,7 @@ where
         if gap_below_history > 0 {
             let rows_to_draw = rows.min(gap_below_history);
             let target_top = self.history_bottom_y;
-            let draw = self.draw_history_rows(rendered.buffer(), 0, rows_to_draw, target_top)?;
+            let draw = self.draw_history_rows(rendered, 0, rows_to_draw, target_top)?;
             buffer_updates += draw.buffer_updates;
             bytes_written += draw.bytes_written;
             draw_elapsed += draw.elapsed;
@@ -664,8 +745,7 @@ where
             let chunk_rows = (rows - start_row).min(viewport_top);
             self.backend.scroll_region_up(0..viewport_top, chunk_rows)?;
             let target_top = viewport_top - chunk_rows;
-            let draw =
-                self.draw_history_rows(rendered.buffer(), start_row, chunk_rows, target_top)?;
+            let draw = self.draw_history_rows(rendered, start_row, chunk_rows, target_top)?;
             buffer_updates += draw.buffer_updates;
             bytes_written += draw.bytes_written;
             draw_elapsed += draw.elapsed;
@@ -709,19 +789,25 @@ where
 
     fn draw_history_rows(
         &mut self,
-        rendered: &Buffer,
+        rendered_rows: &HistoryRows,
         source_start_row: u16,
         row_count: u16,
         target_top: u16,
     ) -> Result<HistoryRowsDraw, B::Error> {
         let draw_start = self.perf_stats_enabled.then(Instant::now);
-        if let Some(bytes_written) = self.backend.insert_history_rows_direct(
-            rendered,
-            source_start_row,
-            row_count,
-            target_top,
-            &mut self.history_row_scratch,
-        )? {
+        let rendered = rendered_rows.buffer();
+        if let Some(bytes_written) =
+            self.backend
+                .insert_history_rows_direct(DirectHistoryInsert {
+                    rendered,
+                    links: rendered_rows.links(),
+                    hyperlinks_enabled: self.hyperlinks_enabled,
+                    source_start_row,
+                    row_count,
+                    target_top,
+                    scratch: &mut self.history_row_scratch,
+                })?
+        {
             let elapsed = draw_start.map(|start| start.elapsed()).unwrap_or_default();
             return Ok(HistoryRowsDraw {
                 buffer_updates: 0,
@@ -1052,6 +1138,22 @@ where
         self.current = 1 - self.current;
         self.current_buffer_mut().reset();
     }
+}
+
+fn links_for_row(links: &[HistoryLinkRun], row: u16) -> &[HistoryLinkRun] {
+    let start = links.partition_point(|link| link.row < row);
+    let end = links[start..].partition_point(|link| link.row == row) + start;
+    &links[start..end]
+}
+
+fn push_osc8_open(out: &mut String, target: &str) -> bool {
+    if target.chars().any(char::is_control) {
+        return false;
+    }
+    out.push_str("\x1b]8;;");
+    out.push_str(target);
+    out.push_str("\x1b\\");
+    true
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

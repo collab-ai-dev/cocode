@@ -23,6 +23,8 @@ use crate::state::ModalState;
 use crate::state::PanePromptState;
 use crate::state::PermissionDetail;
 use crate::state::PermissionPromptState;
+use crate::state::SessionBrowserState;
+use crate::state::SessionOption;
 use crate::state::SuggestionKind;
 use crate::state::rewind::RestoreType;
 use crate::state::ui::ToastSeverity;
@@ -117,6 +119,44 @@ fn user_message(id: Uuid, text: &str) -> Message {
     })
 }
 
+fn typed_user_message(id: Uuid) -> Message {
+    let prompt = "see @src/lib.rs";
+    let mut text = coco_messages::TextContent::new(prompt);
+    let mut text_metadata = text.provider_metadata.take().unwrap_or_default();
+    text_metadata.set(
+        "coco_submitted_composer",
+        serde_json::to_value(coco_types::SubmittedComposer {
+            next_attachment_label: 1,
+            elements: vec![
+                coco_types::SubmittedComposerElement::FileRef { start: 4, end: 15 },
+                coco_types::SubmittedComposerElement::Image {
+                    insertion_offset: 15,
+                    image_index: 0,
+                    label: "[Image #1]".into(),
+                },
+            ],
+        })
+        .unwrap(),
+    );
+    text.provider_metadata = Some(text_metadata);
+    let mut image = coco_messages::FileContent::image(vec![4, 5], "image/png");
+    let mut image_metadata = image.provider_metadata.take().unwrap_or_default();
+    image_metadata.set(
+        "coco_composer_insertion_offset",
+        serde_json::json!(prompt.len()),
+    );
+    image.provider_metadata = Some(image_metadata);
+    let mut message = coco_messages::create_user_message_with_parts_and_uuid(
+        id,
+        vec![UserContent::Text(text), UserContent::File(image)],
+    );
+    let Message::User(user) = &mut message else {
+        unreachable!();
+    };
+    user.permission_mode = Some(coco_types::PermissionMode::AcceptEdits);
+    message
+}
+
 #[test]
 fn available_commands_refreshed_overwrites_slot() {
     let mut state = AppState::new();
@@ -174,6 +214,40 @@ fn rewind_completed_restores_prompt_from_pre_clear_snapshot() {
 }
 
 #[test]
+fn rewind_completed_restores_typed_image_and_file_reference_atoms() {
+    let mut state = AppState::new();
+    let (tx, _rx) = channel();
+    let id = Uuid::new_v4();
+    handle(
+        &mut state,
+        TuiOnlyEvent::RewindPreClearSnapshot {
+            messages: vec![std::sync::Arc::new(typed_user_message(id))],
+        },
+        &tx,
+    );
+
+    handle(
+        &mut state,
+        TuiOnlyEvent::RewindCompleted {
+            target_message_id: id.to_string(),
+            files_changed: 0,
+        },
+        &tx,
+    );
+
+    let resolved = state.ui.input.resolve().unwrap();
+    assert_eq!(resolved.text, "see @src/lib.rs");
+    assert_eq!(resolved.images[0].bytes.as_ref(), [4, 5]);
+    assert!(matches!(
+        resolved.submitted.elements.as_slice(),
+        [
+            coco_types::SubmittedComposerElement::FileRef { start: 4, end: 15 },
+            coco_types::SubmittedComposerElement::Image { .. }
+        ]
+    ));
+}
+
+#[test]
 fn open_goal_status_opens_goal_modal() {
     let mut state = AppState::new();
     let (tx, _rx) = channel();
@@ -209,44 +283,102 @@ fn queued_command_edit_ready_restores_prompt_and_image_pill() {
             images: vec![coco_types::QueuedCommandEditImage {
                 media_type: "image/png".to_string(),
                 data_base64: base64::engine::general_purpose::STANDARD.encode(b"img"),
+                insertion_offset: 5,
             }],
+            composer: coco_types::SubmittedComposer {
+                next_attachment_label: 1,
+                elements: vec![coco_types::SubmittedComposerElement::Image {
+                    insertion_offset: 5,
+                    image_index: 0,
+                    label: "[Image #1]".into(),
+                }],
+            },
         },
         &tx,
     );
 
     assert!(consumed);
-    assert_eq!(state.ui.input.text(), "look at this [Image #1]");
-    let resolved = state
-        .ui
-        .paste_manager
-        .resolve_structured(state.ui.input.text());
-    // The `[Image #N]` placeholder is preserved inline (so the transcript can
-    // echo it); the bytes are extracted into the separate image block.
-    assert_eq!(resolved.text, "look at this [Image #1]");
+    assert_eq!(state.ui.input.text(), "look [Image #1]at this");
+    let resolved = state.ui.input.resolve().unwrap();
+    assert_eq!(resolved.text, "look at this");
     assert_eq!(resolved.images.len(), 1);
-    assert_eq!(resolved.images[0].bytes, b"img");
+    assert_eq!(resolved.images[0].bytes.as_ref(), b"img");
 }
 
 #[test]
-fn queued_commands_edit_ready_preserves_existing_paste_manager() {
+fn rewind_extracts_every_image_and_preserves_known_offsets() {
+    let mut anchored = coco_messages::FileContent::image(vec![1, 2], "image/png");
+    anchored.provider_metadata = Some(Default::default());
+    anchored
+        .provider_metadata
+        .as_mut()
+        .unwrap()
+        .set("coco_composer_insertion_offset", serde_json::json!(1));
+    let unanchored = coco_messages::FileContent::image(vec![3], "image/jpeg");
+    let user = UserMessage {
+        message: LlmMessage::user(vec![
+            UserContent::text("ab"),
+            UserContent::File(anchored),
+            UserContent::File(unanchored),
+        ]),
+        uuid: Uuid::new_v4(),
+        timestamp: String::new(),
+        is_visible_in_transcript_only: false,
+        is_virtual: false,
+        is_compact_summary: false,
+        permission_mode: None,
+        origin: None,
+        parent_tool_use_id: None,
+    };
+
+    let images = crate::composer::images_from_user_message(&user);
+    assert_eq!(images.len(), 2);
+    assert_eq!(images[0].insertion_offset, 1);
+    assert_eq!(images[1].insertion_offset, i64::MAX);
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(&images[0].data_base64)
+            .unwrap(),
+        [1, 2]
+    );
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(&images[1].data_base64)
+            .unwrap(),
+        [3]
+    );
+}
+
+#[test]
+fn queued_commands_edit_ready_merges_existing_composer_snapshot() {
     let mut state = AppState::new();
     let (tx, _rx) = channel();
-    let existing = state
+    state.ui.input.set_text("draft ");
+    state
         .ui
-        .paste_manager
-        .add_image_data(b"existing".to_vec(), "image/png".to_string());
-    state.ui.input.set_text(&format!("draft {existing}"));
+        .input
+        .insert_image_attachment(b"existing".to_vec(), "image/png".into())
+        .unwrap();
+    state.ui.pending_queued_edit = Some(state.ui.input.take_composer());
 
     let consumed = handle(
         &mut state,
         TuiOnlyEvent::QueuedCommandsEditReady {
             ids: vec!["queued-1".to_string(), "queued-2".to_string()],
-            prompt: format!("queued one\nqueued two\ndraft {existing}"),
-            cursor: "queued one\nqueued two\ndraft".len(),
+            prompt: "queued one\nqueued two".into(),
             images: vec![coco_types::QueuedCommandEditImage {
                 media_type: "image/png".to_string(),
                 data_base64: base64::engine::general_purpose::STANDARD.encode(b"queued"),
+                insertion_offset: "queued one".len() as i64,
             }],
+            composer: coco_types::SubmittedComposer {
+                next_attachment_label: 1,
+                elements: vec![coco_types::SubmittedComposerElement::Image {
+                    insertion_offset: "queued one".len() as i64,
+                    image_index: 0,
+                    label: "[Image #1]".into(),
+                }],
+            },
         },
         &tx,
     );
@@ -254,13 +386,74 @@ fn queued_commands_edit_ready_preserves_existing_paste_manager() {
     assert!(consumed);
     assert!(state.ui.input.text().contains("[Image #1]"));
     assert!(state.ui.input.text().contains("[Image #2]"));
-    let resolved = state
-        .ui
-        .paste_manager
-        .resolve_structured(state.ui.input.text());
+    let resolved = state.ui.input.resolve().unwrap();
     assert_eq!(resolved.images.len(), 2);
-    assert_eq!(resolved.images[0].bytes, b"existing");
-    assert_eq!(resolved.images[1].bytes, b"queued");
+    assert_eq!(resolved.images[0].bytes.as_ref(), b"queued");
+    assert_eq!(resolved.images[1].bytes.as_ref(), b"existing");
+}
+
+#[test]
+fn queued_edit_ready_preserves_typing_that_arrived_while_the_lease_was_in_flight() {
+    let mut state = AppState::new();
+    let (tx, mut rx) = channel();
+    state.ui.input.set_text("typed while waiting");
+
+    handle(
+        &mut state,
+        TuiOnlyEvent::QueuedCommandEditReady {
+            id: "queued-1".into(),
+            prompt: "queued".into(),
+            images: Vec::new(),
+            composer: Default::default(),
+        },
+        &tx,
+    );
+
+    assert_eq!(
+        state.ui.input.resolve().unwrap().text,
+        "queued\ntyped while waiting"
+    );
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(crate::command::UserCommand::ResolveQueuedCommandEdits { ids, accept: true })
+            if ids == ["queued-1"]
+    ));
+}
+
+#[test]
+fn malformed_queued_edit_rolls_back_live_draft_and_rejects_the_lease() {
+    let mut state = AppState::new();
+    let (tx, mut rx) = channel();
+    state.ui.input.set_text("live draft");
+
+    handle(
+        &mut state,
+        TuiOnlyEvent::QueuedCommandEditReady {
+            id: "queued-1".into(),
+            prompt: "queued".into(),
+            images: vec![coco_types::QueuedCommandEditImage {
+                media_type: "image/png".into(),
+                data_base64: "not base64".into(),
+                insertion_offset: 0,
+            }],
+            composer: coco_types::SubmittedComposer {
+                next_attachment_label: 1,
+                elements: vec![coco_types::SubmittedComposerElement::Image {
+                    insertion_offset: 0,
+                    image_index: 0,
+                    label: "[Image #1]".into(),
+                }],
+            },
+        },
+        &tx,
+    );
+
+    assert_eq!(state.ui.input.resolve().unwrap().text, "live draft");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(crate::command::UserCommand::ResolveQueuedCommandEdits { ids, accept: false })
+            if ids == ["queued-1"]
+    ));
 }
 
 #[test]
@@ -271,8 +464,8 @@ fn available_commands_refreshed_repopulates_open_popup() {
     let mut state = AppState::new();
     let (tx, _rx) = channel();
     state.session.available_commands = vec![slash("old-cmd")];
-    state.ui.input.textarea.set_text("/");
-    state.ui.input.textarea.set_cursor(1);
+    state.ui.input.textarea_mut().set_text("/");
+    state.ui.input.textarea_mut().set_cursor(1);
     crate::autocomplete::refresh_suggestions(&mut state);
     // Sanity check: the old list is shown.
     let initial_labels: Vec<String> = state
@@ -321,6 +514,8 @@ fn open_session_browser_populates_resume_picker() {
                 created_at: "2026-05-23T00:00:00Z".to_string(),
                 updated_at: None,
                 title: Some("Auth refactor".to_string()),
+                first_prompt: "Fix auth".to_string(),
+                last_message_preview: Some("Tests pass".to_string()),
                 message_count: 12,
                 total_tokens: 345,
             }],
@@ -336,6 +531,76 @@ fn open_session_browser_populates_resume_picker() {
     };
     assert_eq!(browser.sessions[0].id, "s1");
     assert_eq!(browser.sessions[0].label, "Auth refactor");
+    assert_eq!(browser.sessions[0].cwd, "/repo");
+    assert_eq!(browser.sessions[0].first_prompt, "Fix auth");
+}
+
+#[test]
+fn session_search_results_require_the_active_query_generation() {
+    let mut state = AppState::new();
+    state
+        .ui
+        .show_modal(ModalState::SessionBrowser(SessionBrowserState {
+            sessions: vec![SessionOption {
+                id: "s1".to_string(),
+                label: "Auth".to_string(),
+                message_count: 2,
+                created_at: "0".to_string(),
+                updated_at: None,
+                cwd: "/repo".to_string(),
+                first_prompt: String::new(),
+                last_message_preview: None,
+            }],
+            filter: "needle".to_string(),
+            selected: 0,
+            current_cwd: "/repo".to_string(),
+            content_hits: std::collections::HashMap::new(),
+            is_searching: true,
+            search_request_id: 42,
+        }));
+    let (tx, _rx) = channel();
+
+    handle(
+        &mut state,
+        TuiOnlyEvent::SessionSearchResults {
+            query: "needle".to_string(),
+            request_id: 41,
+            hits: vec![coco_types::SessionSearchHit {
+                session_id: test_session_id("s1"),
+                snippet: "ignored".to_string(),
+            }],
+            complete: true,
+        },
+        &tx,
+    );
+    let Some(ModalState::SessionBrowser(browser)) = state.ui.modal.as_ref() else {
+        panic!("expected session browser");
+    };
+    assert!(browser.content_hits.is_empty());
+    assert!(browser.is_searching);
+
+    handle(
+        &mut state,
+        TuiOnlyEvent::SessionSearchResults {
+            query: "needle".to_string(),
+            request_id: 42,
+            hits: vec![coco_types::SessionSearchHit {
+                session_id: test_session_id("s1"),
+                snippet: "deep needle".to_string(),
+            }],
+            complete: true,
+        },
+        &tx,
+    );
+
+    let Some(ModalState::SessionBrowser(browser)) = state.ui.modal.as_ref() else {
+        panic!("expected session browser");
+    };
+    assert_eq!(
+        browser.content_hits.get("s1").map(String::as_str),
+        Some("deep needle")
+    );
+    assert!(!browser.is_searching);
 }
 
 #[test]
@@ -792,7 +1057,11 @@ fn prompt_editor_completed_replaces_input_and_moves_cursor_to_end() {
     let mut state = AppState::new();
     let (tx, _rx) = channel();
     state.ui.input.set_text("old");
-    state.ui.input.textarea.set_cursor(0);
+    state.ui.input.textarea_mut().set_cursor(0);
+    let (session, _) =
+        crate::composer::ExternalEditorSession::prepare(state.ui.input.composer_snapshot())
+            .unwrap();
+    state.ui.pending_external_editor = Some(session);
 
     let consumed = handle(
         &mut state,
@@ -805,7 +1074,7 @@ fn prompt_editor_completed_replaces_input_and_moves_cursor_to_end() {
 
     assert!(consumed);
     assert_eq!(state.ui.input.text(), "edited prompt");
-    assert_eq!(state.ui.input.textarea.cursor(), "edited prompt".len());
+    assert_eq!(state.ui.input.textarea().cursor(), "edited prompt".len());
     assert_eq!(state.ui.toasts.len(), 1);
     assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Info);
 }
@@ -824,6 +1093,7 @@ fn exit_plan_prompt_editor_completed_updates_active_prompt_plan() {
                 plan: Some("# Original".into()),
                 edited_plan: None,
                 feedback_input: crate::state::PrefixInputState::new(String::new()),
+                feedback_images: Vec::new(),
                 plan_file_path: Some("/tmp/plan.md".into()),
                 allowed_prompts: vec![],
             },

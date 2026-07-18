@@ -66,6 +66,7 @@ fn render_ex_width_with_display(
         plan_editor_hint: "ctrl+g to edit".to_string(),
         expand_hint: "(ctrl+o to expand)".to_string(),
         expanded,
+        truncation_observed: None,
     };
     let mut lines = Vec::new();
     render_tool_result_body(

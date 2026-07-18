@@ -92,6 +92,7 @@ fn memory_sample_source_prefers_physical_footprint() {
 
     sample.physical_footprint_bytes = Some(123);
     sample.physical_footprint_peak_bytes = Some(456);
+    sample.source = ProcessMemorySource::MacOsTaskInfoAndPs;
     assert_eq!(sample.source_label(), "macos_task_info+ps");
 }
 

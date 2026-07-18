@@ -13,6 +13,13 @@ use std::panic;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
+
+mod direct_restore;
+#[cfg(all(test, any(unix, windows)))]
+use direct_restore::DirectRestoreOptions;
+#[cfg(all(test, any(unix, windows)))]
+use direct_restore::write_direct_restore_tail;
 
 #[cfg(test)]
 use crossterm::Command;
@@ -25,7 +32,6 @@ use crossterm::terminal::LeaveAlternateScreen;
 use crossterm::terminal::disable_raw_mode;
 use crossterm::terminal::enable_raw_mode;
 use ratatui::backend::ClearType;
-use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 #[cfg(any(test, feature = "testing"))]
 use ratatui::layout::Size;
@@ -40,21 +46,27 @@ use crate::surface::modal::ModalSurfaceState;
 use crate::surface::modal::SurfaceFramePlan;
 use crate::surface::stream::PreparedStreamAppend;
 use crate::surface::viewport::interactive_viewport_desired_height;
+use coco_config::env::EnvKey;
 use coco_tui_ui::engine::compatibility::TerminalCompatibility;
+use coco_tui_ui::engine::frame_backend::FrameCrosstermBackend;
+use coco_tui_ui::engine::frame_writer::FrameWriterOptions;
 use coco_tui_ui::engine::seat::SeatDecision;
 use coco_tui_ui::engine::seat::SeatInputs;
 use coco_tui_ui::engine::seat::ViewportPin;
 use coco_tui_ui::engine::terminal::SurfaceBackend;
 use coco_tui_ui::engine::terminal::SurfaceTerminal;
 
-/// Type alias for the terminal backend.
-pub type TerminalBackend = CrosstermBackend<Stdout>;
+/// Type alias for the terminal backend. Frame bytes are written off the tokio
+/// event-loop thread; tty handoffs use the backend's drain barrier.
+pub type TerminalBackend = FrameCrosstermBackend<Stdout>;
 
 /// Type alias for the native surface terminal.
 pub(crate) type NativeTerminal = SurfaceTerminal<TerminalBackend>;
 
 pub(crate) const NATIVE_VIEWPORT_MIN_HEIGHT: u16 = 4;
 pub(crate) const NATIVE_VIEWPORT_MAX_HEIGHT: u16 = 12;
+const TERMINAL_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+const TERMINAL_TEARDOWN_DEADLINE: Duration = Duration::from_secs(6);
 /// Max rendered rows the *streaming* live tail may occupy in the inline
 /// viewport. Bounding it keeps the per-turn growth phase short (≤ this many
 /// repaints, once) and the viewport height constant for the rest of the turn —
@@ -119,6 +131,7 @@ pub struct TuiDrawOutcome {
     pub layout: FrameLayout,
     pub retained_surface_visible: bool,
     pub attention_requested: bool,
+    pub follow_up_frame_requested: bool,
 }
 
 /// Enable the TUI-private terminal modes (raw mode, bracketed paste,
@@ -181,10 +194,74 @@ pub(crate) fn setup_terminal() -> io::Result<NativeTerminal> {
     let mut stdout = io::stdout();
     enter_tui_modes(&mut stdout)?;
 
-    install_panic_hook_once();
+    complete_terminal_setup(
+        || {
+            install_panic_hook_once();
 
-    let backend = CrosstermBackend::new(stdout);
-    SurfaceTerminal::new(backend)
+            let write_delay = coco_config::env::var(EnvKey::CocoTuiTestWriteDelayMs)
+                .ok()
+                .and_then(|raw| raw.parse::<u64>().ok())
+                .map(|millis| Duration::from_millis(millis.min(60_000)))
+                .unwrap_or_default();
+            let backend = FrameCrosstermBackend::new(stdout, FrameWriterOptions { write_delay })?;
+            SurfaceTerminal::new(backend)
+        },
+        leave_tui_modes,
+    )
+}
+
+/// Finish setup after terminal-private modes have been entered.
+///
+/// Backend construction can fail (notably when spawning the frame-writer
+/// thread). Until a [`Tui`] owns the terminal there is no drop path to restore
+/// those modes, so keep a rollback guard armed across every fallible step.
+fn complete_terminal_setup<T>(
+    setup: impl FnOnce() -> io::Result<T>,
+    rollback: impl FnOnce() -> io::Result<()>,
+) -> io::Result<T> {
+    let guard = TerminalModeRollback::new(rollback);
+    let value = setup()?;
+    guard.disarm();
+    Ok(value)
+}
+
+struct TerminalModeRollback<F>
+where
+    F: FnOnce() -> io::Result<()>,
+{
+    rollback: Option<F>,
+}
+
+impl<F> TerminalModeRollback<F>
+where
+    F: FnOnce() -> io::Result<()>,
+{
+    fn new(rollback: F) -> Self {
+        Self {
+            rollback: Some(rollback),
+        }
+    }
+
+    fn disarm(mut self) {
+        self.rollback = None;
+    }
+}
+
+impl<F> Drop for TerminalModeRollback<F>
+where
+    F: FnOnce() -> io::Result<()>,
+{
+    fn drop(&mut self) {
+        let Some(rollback) = self.rollback.take() else {
+            return;
+        };
+        if let Err(error) = rollback() {
+            // Preserve the primary setup error returned by `?`. The crash
+            // restore remains armed when normal teardown fails, so a later
+            // fault/exit still gets the last-resort restore sequence.
+            tracing::error!(%error, "failed to roll back terminal modes after setup error");
+        }
+    }
 }
 
 /// Restore the terminal to its original state — leaves alt-screen and
@@ -220,7 +297,7 @@ fn install_panic_hook_once() {
                 );
                 return;
             }
-            let _ = restore_terminal();
+            direct_restore::after_panic();
             original_hook(panic_info);
         }));
     });
@@ -241,6 +318,7 @@ pub struct Tui<B: SurfaceBackend = TerminalBackend> {
     alt_saved_viewport: Option<Rect>,
     main_screen_viewport_pin: ViewportPin,
     restore_terminal_on_drop: bool,
+    last_terminal_write_sequence: u64,
     #[cfg(test)]
     last_geometry_commit: Option<SeatDecision>,
     #[cfg(test)]
@@ -252,7 +330,10 @@ pub struct Tui<B: SurfaceBackend = TerminalBackend> {
 impl Tui<TerminalBackend> {
     /// Create a new Tui with a fresh terminal.
     pub fn new() -> io::Result<Self> {
-        let terminal = setup_terminal()?;
+        let mut terminal = setup_terminal()?;
+        terminal.set_hyperlinks_enabled(
+            coco_tui_ui::engine::compatibility::osc8_hyperlinks_supported(),
+        );
         Ok(Self::from_terminal(
             terminal,
             TerminalCompatibility::detect(),
@@ -274,6 +355,7 @@ where
     /// No-op on non-Unix platforms.
     pub fn trigger_suspend(&mut self) -> io::Result<()> {
         self.leave_modal_alt_screen()?;
+        self.drain_terminal_output()?;
         // The shell owns the cursor across the suspend. The resume path
         // invalidates anyway, but the belief is dropped at the handoff itself so
         // the invariant does not depend on that ordering.
@@ -287,6 +369,7 @@ where
     pub fn prepare_external_process(&mut self) -> io::Result<()> {
         let mut stdout = io::stdout();
         self.leave_modal_alt_screen()?;
+        self.drain_terminal_output()?;
         leave_tui_modes()?;
         // `MoveToNextLine`/`Show` below, and then the child itself, drive the
         // cursor outside the engine's diff.
@@ -306,21 +389,58 @@ where
         self.leave_modal_alt_screen()?;
         self.clear_surface_after_resume()
     }
+
+    fn drain_terminal_output(&mut self) -> io::Result<()> {
+        if self.terminal.drain_output(TERMINAL_DRAIN_TIMEOUT)? {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "timed out draining terminal frames before tty handoff",
+            ))
+        }
+    }
 }
 
 impl<B> Tui<B>
 where
     B: SurfaceBackend,
 {
+    /// Final teardown waits in bounded chunks, with a finite total deadline.
+    /// `Ok(false)` lets Drop take its direct-restore fallback instead of
+    /// hanging forever on a permanently wedged tty.
+    fn drain_terminal_output_for_teardown(&mut self) -> Result<bool, B::Error> {
+        let deadline = std::time::Instant::now() + TERMINAL_TEARDOWN_DEADLINE;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Ok(false);
+            }
+            if self
+                .terminal
+                .drain_output(remaining.min(TERMINAL_DRAIN_TIMEOUT))?
+            {
+                return Ok(true);
+            }
+            tracing::warn!(
+                target: crate::perf::TARGET,
+                timeout_ms = TERMINAL_DRAIN_TIMEOUT.as_millis(),
+                "terminal output still draining during teardown"
+            );
+        }
+    }
+
     fn from_terminal(
         terminal: SurfaceTerminal<B>,
         compatibility: TerminalCompatibility,
         out_of_band_repainter: bool,
         restore_terminal_on_drop: bool,
     ) -> Self {
+        let mut surface = NativeSurfaceController::default();
+        surface.set_hyperlinks_enabled(terminal.hyperlinks_enabled());
         Self {
             terminal,
-            surface: NativeSurfaceController::default(),
+            surface,
             modal_surface: ModalSurfaceState::default(),
             suspend_context: SuspendContext::new(),
             compatibility,
@@ -329,6 +449,7 @@ where
             alt_saved_viewport: None,
             main_screen_viewport_pin: ViewportPin::Flowing,
             restore_terminal_on_drop,
+            last_terminal_write_sequence: 0,
             #[cfg(test)]
             last_geometry_commit: None,
             #[cfg(test)]
@@ -414,6 +535,11 @@ where
         self.surface.history_replay_cache_estimated_bytes()
     }
 
+    pub(crate) fn request_expand_committed_tool(&mut self, state: &AppState) -> bool {
+        self.surface
+            .request_expand_committed_tool(state.session.transcript.cells())
+    }
+
     /// Draw one native surface frame.
     pub fn draw(&mut self, state: &AppState) -> Result<TuiDrawOutcome, B::Error> {
         self.draw_with_frame_index(state, 0)
@@ -482,9 +608,8 @@ where
         // and the viewport draw; the single ESU flush presents the composed
         // frame. ESU is emitted even when the inner draw errors so the terminal
         // never stays stuck in deferred-present.
-        // Timed separately: this is a small stdout write, so a slow reading
-        // here means terminal backpressure (the kernel pipe is full and the
-        // emulator hasn't drained prior frames), not CPU work.
+        // Timed separately. With A6 this measures enqueue overhead; physical
+        // terminal latency is sampled from the writer thread below.
         let bsu_started = std::time::Instant::now();
         self.terminal.begin_synchronized_update()?;
         let bsu_elapsed = bsu_started.elapsed();
@@ -506,7 +631,7 @@ where
                 tracing::debug!(
                     target: crate::perf::TARGET,
                     frame_index,
-                    stage = "present_flush",
+                    stage = "present_enqueue",
                     duration_us = crate::perf::duration_us(elapsed),
                     "tui frame stage completed",
                 );
@@ -516,10 +641,26 @@ where
             (Ok(outcome), Ok(())) => outcome,
             (Err(err), _) | (Ok(_), Err(err)) => return Err(err),
         };
+        if let Some(stats) = self.terminal.terminal_write_stats()
+            && stats.through_sequence > self.last_terminal_write_sequence
+        {
+            self.last_terminal_write_sequence = stats.through_sequence;
+            if crate::perf::should_log_stage(perf_config, frame_index, stats.elapsed) {
+                tracing::debug!(
+                    target: crate::perf::TARGET,
+                    frame_index,
+                    stage = "terminal_write",
+                    duration_us = crate::perf::duration_us(stats.elapsed),
+                    through_sequence = stats.through_sequence,
+                    "tui frame stage completed",
+                );
+            }
+        }
         Ok(TuiDrawOutcome {
             layout: outcome.layout,
             retained_surface_visible: self.retained_surface_visible(),
             attention_requested: plan.attention_requested,
+            follow_up_frame_requested: outcome.follow_up_frame_requested,
         })
     }
 
@@ -867,15 +1008,25 @@ where
         // sequence is unit-testable on a recording backend. Only the non-sink
         // global state stays a free call (below), gated by
         // `restore_terminal_on_drop`.
-        let _ = self.terminal.backend_mut().begin_terminal_restore();
+        let alt_screen_was_active = self.alt_screen_active;
         let _ = self.leave_modal_alt_screen();
+        // A late frame must never land after the restore sequence or on the
+        // shell's prompt. Present any modal-leave bytes and drain first.
+        if !matches!(self.terminal.drain_output(TERMINAL_DRAIN_TIMEOUT), Ok(true)) {
+            tracing::warn!("terminal writer failed or timed out before teardown restore");
+        }
+        // Even after a timeout, enqueue the restore/prompt tail on the same
+        // writer. If a blocked write later resumes, this tail is necessarily
+        // last; a direct fallback can therefore never be overwritten by an
+        // old frame without the queued restore repairing terminal state.
+        let _ = self.terminal.backend_mut().begin_terminal_restore();
         let _ = self.terminal.backend_mut().finish_terminal_restore();
         if self.restore_terminal_on_drop {
             // Process-global, non-sink terminal state: raw-mode termios and the
             // kitty keyboard-enhancement stack / reporting reset. Cursor-neutral,
             // so its position in the sequence is irrelevant; skipped in tests,
             // which own no real terminal. The panic path restores the same state
-            // via `restore_terminal`.
+            // through an independent terminal handle.
             let _ = disable_raw_mode();
             MODAL_ALT_SCREEN_ACTIVE.store(false, Ordering::Release);
         }
@@ -883,6 +1034,12 @@ where
         // zsh shows PROMPT_EOL_MARK (`%`) when the command's final output
         // does not end in a newline; emit it last so nothing follows it.
         let _ = self.terminal.backend_mut().write_drop_trailing_newline();
+        if !matches!(self.drain_terminal_output_for_teardown(), Ok(true)) {
+            tracing::warn!("terminal writer failed or timed out during teardown restore");
+            if self.restore_terminal_on_drop {
+                direct_restore::after_writer_timeout(alt_screen_was_active);
+            }
+        }
     }
 }
 

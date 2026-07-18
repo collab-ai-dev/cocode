@@ -26,6 +26,7 @@ use ratatui::layout::Position;
 use ratatui::layout::Size;
 use std::io;
 
+use super::terminal::DirectHistoryInsert;
 use super::terminal::SurfaceBackend;
 
 /// A terminal-emulator-backed [`SurfaceBackend`]. Construct it, hand it to
@@ -196,18 +197,8 @@ impl SurfaceBackend for VT100Backend {
 
     fn insert_history_rows_direct(
         &mut self,
-        rendered: &ratatui::buffer::Buffer,
-        source_start_row: u16,
-        row_count: u16,
-        target_top: u16,
-        scratch: &mut String,
+        request: DirectHistoryInsert<'_>,
     ) -> io::Result<Option<usize>> {
-        self.inner.insert_history_rows_direct(
-            rendered,
-            source_start_row,
-            row_count,
-            target_top,
-            scratch,
-        )
+        self.inner.insert_history_rows_direct(request)
     }
 }

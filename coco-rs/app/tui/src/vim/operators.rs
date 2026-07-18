@@ -15,17 +15,22 @@ use coco_tui_ui::widgets::TextArea;
 /// Apply an operator to a half-open byte range.
 ///
 /// `range.start..range.end` is the slice the motion produced; `apply_operator`
-/// canonicalizes it (clamp + swap if reversed). Returns the operated text
-/// so transitions.rs can record it for dot-repeat if needed.
+/// canonicalizes it (clamp + swap if reversed). Returns the operated text, or
+/// `None` when the range intersects an atomic composer element. Vim's register
+/// stores plain text only, so rejecting that operation avoids silently turning
+/// an attachment into an inert lookalike label on a later put.
 pub(super) fn apply_operator(
     textarea: &mut TextArea,
     op: Operator,
     range: Range<usize>,
     persistent: &mut PersistentState,
-) -> String {
-    let text_len = textarea.text().len();
-    let lo = range.start.min(range.end).min(text_len);
-    let hi = range.start.max(range.end).min(text_len);
+) -> Option<String> {
+    let range = textarea.expanded_edit_range(range);
+    if textarea.range_overlaps_element(range.clone()) {
+        return None;
+    }
+    let lo = range.start;
+    let hi = range.end;
     let operated = textarea.text()[lo..hi].to_string();
 
     match op {
@@ -44,7 +49,7 @@ pub(super) fn apply_operator(
         }
     }
 
-    operated
+    Some(operated)
 }
 
 /// Delete the entire current line (vim `dd`).
@@ -53,26 +58,35 @@ pub(super) fn apply_operator(
 /// to include the trailing newline; if on the LAST line (no trailing
 /// newline) include the preceding newline instead so the line above
 /// becomes the new "current" line.
-pub(super) fn delete_line(textarea: &mut TextArea, persistent: &mut PersistentState) {
+pub(super) fn delete_line(textarea: &mut TextArea, persistent: &mut PersistentState) -> bool {
     let (range, operated) = compute_line_range(textarea);
+    if textarea.range_overlaps_element(range.clone()) {
+        return false;
+    }
     persistent.register = operated;
     persistent.register_is_linewise = true;
     let target_cursor = range.start;
     textarea.replace_range(range, "");
     textarea.set_cursor(target_cursor.min(textarea.text().len()));
+    true
 }
 
 /// Change the entire current line (vim `cc`). Identical to `delete_line`
 /// in effect — transitions.rs handles the mode switch to Insert.
-pub(super) fn change_line(textarea: &mut TextArea, persistent: &mut PersistentState) {
-    delete_line(textarea, persistent);
+pub(super) fn change_line(textarea: &mut TextArea, persistent: &mut PersistentState) -> bool {
+    delete_line(textarea, persistent)
 }
 
 /// Yank the entire current line (vim `yy`).
-pub(super) fn yank_line(textarea: &mut TextArea, persistent: &mut PersistentState) {
+pub(super) fn yank_line(textarea: &mut TextArea, persistent: &mut PersistentState) -> bool {
+    let range = textarea.beginning_of_current_line()..textarea.end_of_current_line();
+    if textarea.range_overlaps_element(range) {
+        return false;
+    }
     let line = current_line_content(textarea);
     persistent.register = line;
     persistent.register_is_linewise = true;
+    true
 }
 
 fn current_line_content(textarea: &TextArea) -> String {
@@ -146,14 +160,19 @@ pub(super) fn put_before(textarea: &mut TextArea, persistent: &PersistentState) 
 }
 
 /// Replace the character under the cursor with `ch` (vim `r<char>`).
-pub(super) fn replace_char(textarea: &mut TextArea, ch: char) {
+pub(super) fn replace_char(textarea: &mut TextArea, ch: char) -> bool {
     let cursor = textarea.cursor();
     let text_len = textarea.text().len();
     if cursor >= text_len {
-        return;
+        return false;
     }
     let end = next_char_boundary(textarea.text(), cursor);
+    let range = textarea.expanded_edit_range(cursor..end);
+    if textarea.range_overlaps_element(range.clone()) {
+        return false;
+    }
     let mut buf = [0u8; 4];
-    textarea.replace_range(cursor..end, ch.encode_utf8(&mut buf));
-    textarea.set_cursor(cursor);
+    textarea.replace_range(range.clone(), ch.encode_utf8(&mut buf));
+    textarea.set_cursor(range.start);
+    true
 }

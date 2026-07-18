@@ -106,6 +106,88 @@ fn extract_user_text(msg: &LlmMessage) -> String {
     buf
 }
 
+/// Render-only projection of a user message that places typed image parts at
+/// their composer byte anchors. The canonical cell text remains model-facing
+/// plain text so rewind/auto-restore cannot mistake a display chip for input.
+pub(crate) fn user_display_text(source: &Message, text: &str) -> String {
+    let mut buf = text.to_string();
+    let fallback = buf.len();
+    let mut images = user_image_anchors(source)
+        .into_iter()
+        .map(|(offset, label)| {
+            let offset = offset
+                .filter(|offset| *offset <= buf.len() && buf.is_char_boundary(*offset))
+                .unwrap_or(fallback);
+            (offset, label)
+        })
+        .collect::<Vec<_>>();
+    images.sort_by_key(|(offset, _)| *offset);
+    for (offset, label) in images.into_iter().rev() {
+        buf.insert_str(offset, &label);
+    }
+    buf
+}
+
+pub(crate) fn user_image_labels(source: &Message) -> Vec<String> {
+    user_image_anchors(source)
+        .into_iter()
+        .map(|(_, label)| label)
+        .collect()
+}
+
+fn user_image_anchors(source: &Message) -> Vec<(Option<usize>, String)> {
+    let fallback_offsets = user_image_offsets(source);
+    if let Message::User(user) = source
+        && let Some(submitted) = crate::composer::submitted_composer_from_user_message(user)
+    {
+        let anchors: Vec<_> = submitted
+            .elements
+            .into_iter()
+            .filter_map(|element| match element {
+                coco_types::SubmittedComposerElement::Image {
+                    insertion_offset,
+                    label,
+                    ..
+                } => Some((usize::try_from(insertion_offset).ok(), label)),
+                coco_types::SubmittedComposerElement::Paste { .. }
+                | coco_types::SubmittedComposerElement::FileRef { .. } => None,
+            })
+            .collect();
+        if anchors.len() == fallback_offsets.len() && !anchors.is_empty() {
+            return anchors;
+        }
+    }
+    fallback_offsets
+        .into_iter()
+        .enumerate()
+        .map(|(index, offset)| (offset, format!("[Image #{}]", index + 1)))
+        .collect()
+}
+
+fn user_image_offsets(source: &Message) -> Vec<Option<usize>> {
+    let Message::User(user) = source else {
+        return Vec::new();
+    };
+    let LlmMessage::User { content, .. } = &user.message else {
+        return Vec::new();
+    };
+    content
+        .iter()
+        .filter_map(|part| {
+            let UserContent::File(file) = part else {
+                return None;
+            };
+            file.media_type.starts_with("image/").then(|| {
+                file.provider_metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("coco_composer_insertion_offset"))
+                    .and_then(serde_json::Value::as_i64)
+                    .and_then(|offset| usize::try_from(offset).ok())
+            })
+        })
+        .collect()
+}
+
 /// Concatenate the visible text parts of an assistant message (drops tool
 /// calls / reasoning).
 fn extract_assistant_text(msg: &LlmMessage) -> String {

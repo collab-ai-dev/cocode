@@ -6,9 +6,9 @@ use super::export_lines;
 use super::global_search_lines;
 use super::memory_dialog_lines;
 use super::quick_open_lines;
-use super::session_browser_lines;
 use super::workflow_picker_lines;
 use crate::i18n::locale_test_guard;
+use crate::presentation::session_picker::session_browser_lines;
 use crate::state::CopyPickerCodeBlock;
 use crate::state::CopyPickerSelection;
 use crate::state::CopyPickerState;
@@ -236,6 +236,10 @@ fn session_browser_lines_filter_and_empty() {
             sessions: Vec::new(),
             filter: String::new(),
             selected: 0,
+            current_cwd: String::new(),
+            content_hits: std::collections::HashMap::new(),
+            is_searching: false,
+            search_request_id: 0,
         },
         styles,
         60,
@@ -248,13 +252,75 @@ fn session_browser_lines_filter_and_empty() {
             label: "Morning".to_string(),
             message_count: 7,
             created_at: "2026-05-14".to_string(),
+            updated_at: None,
+            cwd: "/repo".to_string(),
+            first_prompt: "Morning task".to_string(),
+            last_message_preview: Some("Finished work".to_string()),
         }],
         filter: String::new(),
         selected: 0,
+        current_cwd: "/repo".to_string(),
+        content_hits: std::collections::HashMap::new(),
+        is_searching: false,
+        search_request_id: 0,
     };
     let (_, lines, _) = session_browser_lines(&state, styles, 60);
-    assert!(joined(&lines).contains("Type to filter sessions..."));
-    assert!(cursor_row(&lines, "Morning").contains("Morning — 7 msgs — 2026-05-14"));
+    assert!(joined(&lines).contains("Type to search sessions..."));
+    assert!(cursor_row(&lines, "Morning").contains("Morning · 7 msgs · 2026-05-14"));
+    assert!(joined(&lines).contains("repo (current)"));
+    assert!(joined(&lines).contains("first: Morning task"));
+}
+
+#[test]
+fn session_browser_groups_current_cwd_formats_epoch_age_and_anchors_selection() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_millis() as i64;
+    let mut state = SessionBrowserState {
+        sessions: vec![
+            SessionOption {
+                id: "current-hit".into(),
+                label: "Unrelated".into(),
+                message_count: 1,
+                created_at: (now_ms - 7_200_000).to_string(),
+                updated_at: None,
+                cwd: "/current".into(),
+                first_prompt: String::new(),
+                last_message_preview: None,
+            },
+            SessionOption {
+                id: "selected".into(),
+                label: "needle metadata".into(),
+                message_count: 2,
+                created_at: (now_ms - 7_200_000).to_string(),
+                updated_at: None,
+                cwd: "/other".into(),
+                first_prompt: String::new(),
+                last_message_preview: None,
+            },
+        ],
+        filter: "needle".into(),
+        selected: 0,
+        current_cwd: "/current".into(),
+        content_hits: std::collections::HashMap::new(),
+        is_searching: true,
+        search_request_id: 1,
+    };
+
+    state.apply_content_hits([("current-hit".into(), "deep needle".into())], false);
+
+    assert_eq!(
+        state.display_sessions()[state.selected as usize].id,
+        "selected"
+    );
+    let (_, lines, _) = session_browser_lines(&state, styles, 60);
+    let text = joined(&lines);
+    assert!(text.find("current (current)").unwrap() < text.find("other").unwrap());
+    assert!(text.contains("2 hours ago"), "{text}");
 }
 
 #[test]

@@ -264,11 +264,20 @@ pub enum PermissionDetail {
         plan: Option<String>,
         edited_plan: Option<String>,
         feedback_input: PrefixInputState,
+        /// Images attached to the rejection feedback. They are owned by the
+        /// prompt itself so queued or replaced prompts cannot steal them.
+        feedback_images: Vec<FeedbackImage>,
         plan_file_path: Option<String>,
         allowed_prompts: Vec<coco_types::ExitPlanModeAllowedPrompt>,
     },
     /// Generic fallback — plain text description.
     Generic { input_preview: String },
+}
+
+#[derive(Debug, Clone)]
+pub struct FeedbackImage {
+    pub bytes: std::sync::Arc<[u8]>,
+    pub mime: String,
 }
 
 /// Cost warning state.
@@ -387,23 +396,6 @@ pub struct ModelEntry {
     pub is_current_for_role: bool,
     /// Provider config issues that prevent this row from being selected.
     pub unavailable_reasons: Vec<ProviderUnavailableReason>,
-}
-
-/// Session browser state (list of saved sessions).
-#[derive(Debug, Clone)]
-pub struct SessionBrowserState {
-    pub sessions: Vec<SessionOption>,
-    pub filter: String,
-    pub selected: i32,
-}
-
-/// A selectable session option.
-#[derive(Debug, Clone)]
-pub struct SessionOption {
-    pub id: String,
-    pub label: String,
-    pub message_count: i32,
-    pub created_at: String,
 }
 
 #[cfg(test)]

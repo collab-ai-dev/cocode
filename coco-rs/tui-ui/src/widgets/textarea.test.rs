@@ -1,9 +1,9 @@
 //! Tests for the [`TextArea`] widget. Covers CJK / wide-char rendering,
 //! grapheme-aware delete, kill ring, multi-line wrap, and word movement.
 
-use ratatui::layout::Rect;
-
 use super::*;
+use crate::widgets::wrap_ranges_with_elements;
+use ratatui::layout::Rect;
 
 fn ta_with(text: &str, cursor: usize) -> TextArea {
     let mut ta = TextArea::new();
@@ -320,6 +320,230 @@ fn take_text_returns_previous_buffer_and_clears() {
     assert_eq!(ta.cursor(), 0);
 }
 
+// ───────────────── Atomic text elements (plan item C3) ─────────────
+
+fn insert_test_element(ta: &mut TextArea, source: &str, display: &str) -> ElementId {
+    ta.insert_element(
+        source,
+        ElementKind::Paste,
+        ElementDisplay::new(display, ratatui::style::Style::default().cyan()),
+    )
+    .expect("element ID available")
+}
+
+#[test]
+fn cursor_motion_treats_an_element_as_one_unit() {
+    let mut ta = ta_with("ab", 1);
+    let id = insert_test_element(&mut ta, "[Pasted text #1]", "Pasted #1");
+    let element = ta
+        .elements()
+        .iter()
+        .find(|element| element.id == id)
+        .expect("inserted element");
+    let start = element.range.start;
+    let end = element.range.end;
+
+    assert_eq!(ta.cursor(), end);
+    ta.move_cursor_left();
+    assert_eq!(ta.cursor(), start);
+    ta.move_cursor_right();
+    assert_eq!(ta.cursor(), end);
+}
+
+#[test]
+fn elements_reject_empty_or_multiline_content() {
+    let mut ta = TextArea::new();
+    assert!(
+        ta.insert_element(
+            "",
+            ElementKind::Paste,
+            ElementDisplay::new("chip", ratatui::style::Style::default()),
+        )
+        .is_err()
+    );
+    assert!(
+        ta.insert_element(
+            "two\nlines",
+            ElementKind::Paste,
+            ElementDisplay::new("chip", ratatui::style::Style::default()),
+        )
+        .is_err()
+    );
+    assert!(
+        ta.insert_element(
+            "token",
+            ElementKind::Paste,
+            ElementDisplay::new("two\nlines", ratatui::style::Style::default()),
+        )
+        .is_err()
+    );
+    assert!(ta.text().is_empty());
+    assert!(ta.elements().is_empty());
+}
+
+#[test]
+fn backspace_and_delete_remove_a_whole_element() {
+    let mut backward = ta_with("x", 1);
+    insert_test_element(&mut backward, "[Pasted text #1]", "Pasted #1");
+    backward.delete_backward(1);
+    assert_eq!(backward.text(), "x");
+    assert!(backward.elements().is_empty());
+
+    let mut forward = ta_with("x", 0);
+    insert_test_element(&mut forward, "[Pasted text #1]", "Pasted #1");
+    forward.set_cursor(0);
+    forward.delete_forward(1);
+    assert_eq!(forward.text(), "x");
+    assert!(forward.elements().is_empty());
+}
+
+#[test]
+fn adjacent_elements_remain_independent_atomic_cursor_steps() {
+    let mut ta = TextArea::new();
+    ta.insert_str("你");
+    insert_test_element(&mut ta, "[Image #1]", "Image #1");
+    insert_test_element(&mut ta, "[Pasted text #2]", "Pasted #2");
+    ta.insert_str("界");
+    let ranges: Vec<_> = ta
+        .elements()
+        .iter()
+        .map(|element| element.range().clone())
+        .collect();
+
+    ta.set_cursor(ranges[0].start);
+    ta.move_cursor_right();
+    assert_eq!(ta.cursor(), ranges[0].end);
+    ta.move_cursor_right();
+    assert_eq!(ta.cursor(), ranges[1].end);
+    ta.move_cursor_left();
+    assert_eq!(ta.cursor(), ranges[1].start);
+    ta.move_cursor_left();
+    assert_eq!(ta.cursor(), ranges[0].start);
+}
+
+#[test]
+fn unicode_edit_across_adjacent_elements_removes_each_payload_atomically() {
+    let mut ta = TextArea::new();
+    ta.insert_str("你");
+    insert_test_element(&mut ta, "[Image #1]", "Image #1");
+    insert_test_element(&mut ta, "[Pasted text #2]", "Pasted #2");
+    ta.insert_str("界");
+    let first_start = ta.elements()[0].range().start;
+    let second_end = ta.elements()[1].range().end;
+
+    ta.replace_range(first_start + 1..second_end - 1, "🙂");
+
+    assert_eq!(ta.text(), "你🙂界");
+    assert!(ta.elements().is_empty());
+    assert!(ta.undo());
+    assert_eq!(ta.elements().len(), 2);
+}
+
+#[test]
+fn insertion_and_replacement_cannot_split_an_element() {
+    let mut ta = TextArea::new();
+    insert_test_element(&mut ta, "[Pasted text #1]", "Pasted #1");
+    let range = ta.elements()[0].range.clone();
+
+    ta.insert_str_at(range.start + 2, "before");
+    assert!(ta.text().starts_with("before[Pasted text #1]"));
+    assert_eq!(ta.elements()[0].range.start, "before".len());
+
+    let range = ta.elements()[0].range.clone();
+    ta.replace_range(range.start + 1..range.start + 2, "expanded");
+    assert_eq!(ta.text(), "beforeexpanded");
+    assert!(ta.elements().is_empty());
+}
+
+#[test]
+fn reversed_replacement_ranges_still_expand_over_elements() {
+    let mut ta = ta_with("xy", 1);
+    insert_test_element(&mut ta, "[Pasted text #1]", "Pasted #1");
+    ta.set_cursor(ta.text().len());
+    let element = ta.elements()[0].range().clone();
+    ta.replace_range(ta.text().len()..element.start + 1, "z");
+    assert_eq!(ta.text(), "xz");
+    assert!(ta.elements().is_empty());
+}
+
+#[test]
+fn undo_and_redo_restore_element_metadata_atomically() {
+    let mut ta = TextArea::new();
+    let id = insert_test_element(&mut ta, "[Pasted text #1]", "Pasted #1");
+    assert!(ta.undo());
+    assert!(ta.text().is_empty());
+    assert!(ta.elements().is_empty());
+
+    assert!(ta.redo());
+    assert_eq!(ta.text(), "[Pasted text #1]");
+    assert_eq!(ta.elements()[0].id, id);
+}
+
+#[test]
+fn replacing_an_element_range_is_one_undo_step() {
+    let mut ta = TextArea::new();
+    let id = insert_test_element(&mut ta, "[Pasted text #1]", "Pasted #1");
+    let range = ta.elements()[0].range().clone();
+    ta.replace_range(range, "full pasted payload");
+    assert_eq!(ta.text(), "full pasted payload");
+    assert!(ta.elements().is_empty());
+
+    assert!(ta.undo());
+    assert_eq!(ta.text(), "[Pasted text #1]");
+    assert_eq!(ta.elements()[0].id, id);
+}
+
+#[test]
+fn projection_and_wrap_use_element_display_width() {
+    let mut ta = ta_with("ab cd", 3);
+    insert_test_element(&mut ta, "[a deliberately long source token]", "chip");
+    let projection = ta.display_projection_with_width(0..ta.text().len(), u16::MAX);
+    assert_eq!(projection.text(), "ab chipcd");
+    assert_eq!(projection.elements()[0].range(), &(3..7));
+
+    let rows = wrap_ranges_with_elements(projection.text(), 7, projection.elements());
+    let rendered = rows
+        .iter()
+        .filter_map(|range| projection.text().get(range.clone()).map(str::to_string))
+        .collect::<Vec<_>>();
+    assert_eq!(rendered, vec!["ab ", "chipcd"]);
+}
+
+#[test]
+fn narrow_projection_fits_an_atomic_label_without_splitting_it() {
+    let mut ta = TextArea::new();
+    insert_test_element(
+        &mut ta,
+        "[a deliberately long source token]",
+        "long chip label",
+    );
+    let projection = ta.display_projection_with_width(0..ta.text().len(), 5);
+    assert_eq!(projection.text(), "long…");
+    assert_eq!(projection.elements().len(), 1);
+    assert_eq!(projection.elements()[0].range(), &(0.."long…".len()));
+    assert_eq!(unicode_width::UnicodeWidthStr::width(projection.text()), 5);
+    assert_eq!(
+        wrap_ranges_with_elements(projection.text(), 5, projection.elements()),
+        vec![0.."long…".len()]
+    );
+}
+
+#[test]
+fn width_aware_vertical_motion_works_before_any_render() {
+    let mut ta = TextArea::new();
+    insert_test_element(&mut ta, "[long source token]", "long chip label");
+    ta.insert_str("abcdef");
+    ta.set_cursor(ta.text().len());
+
+    ta.move_cursor_up_at_width(5);
+    assert_eq!(ta.cursor(), "[long source token]".len() + 1);
+    ta.move_cursor_up_at_width(5);
+    assert_eq!(ta.cursor(), 0, "the first visual row starts at the chip");
+    ta.move_cursor_down_at_width(5);
+    assert!(ta.cursor() >= "[long source token]".len());
+    assert!(ta.text().is_char_boundary(ta.cursor()));
+}
+
 #[test]
 fn cursor_lands_at_byte_boundary_in_cjk() {
     // "你好" is 2 chars, 6 bytes (3 each). Cursor at byte 6 is past "好".
@@ -412,6 +636,27 @@ fn kill_to_end_then_yank_round_trips() {
     assert_eq!(ta.text(), "hello ");
     ta.yank();
     assert_eq!(ta.text(), "hello world");
+}
+
+#[test]
+fn plain_text_kill_ring_rejects_atomic_elements() {
+    let mut ta = ta_with("seed", 4);
+    ta.kill_to_beginning_of_line();
+    ta.set_text("a");
+    ta.set_cursor(1);
+    insert_test_element(&mut ta, "[Image #1]", "Image #1");
+    ta.insert_str("b");
+    ta.set_cursor(0);
+    let before = ta.text().to_string();
+
+    ta.kill_to_end_of_line();
+    assert_eq!(ta.text(), before);
+    assert_eq!(ta.elements().len(), 1);
+
+    ta.set_cursor(ta.text().len());
+    ta.yank();
+    assert!(ta.text().ends_with("seed"));
+    assert_eq!(ta.elements().len(), 1);
 }
 
 #[test]

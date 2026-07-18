@@ -91,6 +91,9 @@ pub(crate) struct ToolResultRenderCtx<'a> {
     pub(crate) expand_hint: String,
     /// Full-detail surface (the reader): relax row caps so nothing re-truncates.
     pub(crate) expanded: bool,
+    /// Optional render-local signal used by E4 to index only tool outputs that
+    /// actually emitted a truncation row, without rendering the pair twice.
+    pub(crate) truncation_observed: Option<&'a std::cell::Cell<bool>>,
 }
 
 impl ToolResultRenderCtx<'_> {
@@ -116,6 +119,9 @@ impl ToolResultRenderCtx<'_> {
     }
 
     fn truncation_text(&self, omitted: usize) -> String {
+        if let Some(observed) = self.truncation_observed {
+            observed.set(true);
+        }
         if self.expand_hint.is_empty() {
             format!("… +{omitted} lines")
         } else {

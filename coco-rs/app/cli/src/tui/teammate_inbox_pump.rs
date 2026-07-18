@@ -308,6 +308,7 @@ async fn inject_and_wait(
         content: framed,
         display_text: None,
         images: Vec::new(),
+        composer: Default::default(),
     };
 
     // Async send → backpressures on a momentarily-full channel; an error means

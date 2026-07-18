@@ -11,7 +11,6 @@
 //! verbs).
 //! - `pub fn input(&mut self, event: KeyEvent)` — never call; the bridge
 //! owns key→verb mapping.
-//! - `TextElement` / placeholder ranges (paste pills live at `paste.rs`).
 //! - `StatefulWidgetRef` / viewport scroll (the single-line composer
 //! doesn't need it yet; multi-line callers can read `wrapped_lines`
 //! and render themselves).
@@ -30,41 +29,27 @@ use unicode_segmentation::GraphemeCursor;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-/// Punctuation characters that split an alphanumeric word run into pieces
-/// for emacs-style word movement (Alt+B / Alt+F). Mirrors codex-rs's
-/// `WORD_SEPARATORS`.
-const WORD_SEPARATORS: &str = "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?";
+use super::textarea_elements::ElementDisplay;
+use super::textarea_elements::ElementId;
+use super::textarea_elements::ElementKind;
+use super::textarea_elements::ProjectedTextElement;
+use super::textarea_elements::TextAreaSnapshot;
+use super::textarea_elements::TextElement;
+use super::textarea_elements::TextProjection;
+use super::textarea_layout::WrapAtom;
+use super::textarea_layout::compute_wrapped_lines;
 
-fn is_word_separator(ch: char) -> bool {
-    WORD_SEPARATORS.contains(ch)
-}
-
-/// Split a contiguous run of non-whitespace bytes into "pieces" that share
-/// the same separator/non-separator category. Returns `(byte_offset_in_run,
-/// piece_slice)` pairs in source order. Mirrors codex-rs.
-fn split_word_pieces(run: &str) -> Vec<(usize, &str)> {
-    let mut pieces = Vec::new();
-    for (segment_start, segment) in run.split_word_bound_indices() {
-        let mut piece_start = 0;
-        let mut chars = segment.char_indices();
-        let Some((_, first_char)) = chars.next() else {
-            continue;
-        };
-        let mut in_separator = is_word_separator(first_char);
-
-        for (idx, ch) in chars {
-            let is_separator = is_word_separator(ch);
-            if is_separator == in_separator {
-                continue;
-            }
-            pieces.push((segment_start + piece_start, &segment[piece_start..idx]));
-            piece_start = idx;
-            in_separator = is_separator;
-        }
-
-        pieces.push((segment_start + piece_start, &segment[piece_start..]));
-    }
-    pieces
+/// Validation failures for atomic textarea elements and snapshots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ElementError {
+    EmptySource,
+    MultilineSource,
+    MultilineDisplay,
+    InvalidRange,
+    OverlappingRange,
+    DuplicateId,
+    InvalidCursor,
+    IdExhausted,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -113,6 +98,7 @@ pub enum EolBehavior {
 struct UndoSnapshot {
     text: String,
     cursor: usize,
+    elements: Vec<TextElement>,
 }
 
 /// Maximum size of the undo stack. Keeps memory bounded for very long
@@ -171,6 +157,10 @@ pub struct TextArea {
     text: String,
     /// Byte offset; always at a UTF-8 char boundary and `<= text.len()`.
     cursor_pos: usize,
+    /// Atomic regions sorted by source-buffer position.
+    elements: Vec<TextElement>,
+    /// Monotonic allocator; IDs are never reused, including across undo.
+    next_element_id: i64,
     /// Lazily-recomputed wrapped-line ranges (cleared on every edit).
     wrap_cache: RefCell<WrapCache>,
     /// Remembered display column for vertical movement (`up` / `down`).
@@ -204,6 +194,8 @@ impl TextArea {
         Self {
             text: String::new(),
             cursor_pos: 0,
+            elements: Vec::new(),
+            next_element_id: 1,
             wrap_cache: RefCell::new(WrapCache::dirty()),
             preferred_col: None,
             kill_buffer: String::new(),
@@ -218,10 +210,11 @@ impl TextArea {
     // ──────────────────────────── Undo ───────────────────────────────
 
     /// Capture the current `(text, cursor)`.
-    fn snapshot(&self) -> UndoSnapshot {
+    fn undo_snapshot(&self) -> UndoSnapshot {
         UndoSnapshot {
             text: self.text.clone(),
             cursor: self.cursor_pos,
+            elements: self.elements.clone(),
         }
     }
 
@@ -231,6 +224,7 @@ impl TextArea {
         if let Some(top) = self.undo_stack.last()
             && top.text == snap.text
             && top.cursor == snap.cursor
+            && top.elements == snap.elements
         {
             return;
         }
@@ -258,7 +252,7 @@ impl TextArea {
         if continues_run {
             return;
         }
-        let snap = self.snapshot();
+        let snap = self.undo_snapshot();
         self.push_undo(snap);
     }
 
@@ -279,7 +273,7 @@ impl TextArea {
     /// never saw and should never land on — a vim operator, a chip expansion.
     /// Nesting is safe; only the outermost group commits.
     pub fn undo_group<R>(&mut self, edit: impl FnOnce(&mut Self) -> R) -> R {
-        let before = self.snapshot();
+        let before = self.undo_snapshot();
         self.group_depth = self.group_depth.saturating_add(1);
         // Restore the depth even if `edit` panics, so a recovered panic cannot
         // leave `group_depth` stuck above zero and silently suppress every
@@ -292,7 +286,7 @@ impl TextArea {
             Ok(out) => out,
             Err(payload) => std::panic::resume_unwind(payload),
         };
-        if self.group_depth == 0 && self.text != before.text {
+        if self.group_depth == 0 && (self.text != before.text || self.elements != before.elements) {
             self.push_undo(before);
             // A group is one deliberate action; never let the next keystroke
             // batch into it.
@@ -303,6 +297,7 @@ impl TextArea {
 
     fn restore(&mut self, snap: UndoSnapshot) {
         self.text = snap.text;
+        self.elements = snap.elements;
         self.cursor_pos = self.clamp_pos_to_char_boundary(snap.cursor.min(self.text.len()));
         self.wrap_cache.replace(WrapCache::dirty());
         self.preferred_col = None;
@@ -317,7 +312,7 @@ impl TextArea {
         let Some(snap) = self.undo_stack.pop() else {
             return false;
         };
-        let current = self.snapshot();
+        let current = self.undo_snapshot();
         self.restore(snap);
         self.redo_stack.push(current);
         true
@@ -330,7 +325,7 @@ impl TextArea {
         let Some(snap) = self.redo_stack.pop() else {
             return false;
         };
-        let current = self.snapshot();
+        let current = self.undo_snapshot();
         self.restore(snap);
         self.push_undo(current);
         true
@@ -352,7 +347,8 @@ impl TextArea {
     }
 
     pub fn set_cursor(&mut self, pos: usize) {
-        self.cursor_pos = self.clamp_pos_to_char_boundary(pos.min(self.text.len()));
+        let pos = self.clamp_pos_to_char_boundary(pos.min(self.text.len()));
+        self.cursor_pos = self.clamp_pos_to_element_boundary(pos);
         self.preferred_col = None;
         self.last_op_was_kill = false;
     }
@@ -363,6 +359,7 @@ impl TextArea {
     pub fn set_text(&mut self, text: &str) {
         self.text.clear();
         self.text.push_str(text);
+        self.elements.clear();
         self.cursor_pos = self.cursor_pos.min(self.text.len());
         self.cursor_pos = self.clamp_pos_to_char_boundary(self.cursor_pos);
         self.wrap_cache.replace(WrapCache::dirty());
@@ -391,6 +388,7 @@ impl TextArea {
     /// buffer. Like `set_text`, preserves the kill buffer.
     pub fn take_text(&mut self) -> String {
         let prev = std::mem::take(&mut self.text);
+        self.elements.clear();
         self.cursor_pos = 0;
         self.wrap_cache.replace(WrapCache::dirty());
         self.preferred_col = None;
@@ -409,7 +407,7 @@ impl TextArea {
         if s.is_empty() {
             return;
         }
-        let pos = self.clamp_pos_to_char_boundary(pos.min(self.text.len()));
+        let pos = self.clamp_insertion_pos(pos);
         // Typing is one grapheme landing at the cursor; anything else (a paste,
         // a yank, an off-cursor splice) is one deliberate action and gets its
         // own undo entry.
@@ -421,6 +419,7 @@ impl TextArea {
         };
         self.pre_mutate(kind, self.cursor_pos);
         self.text.insert_str(pos, s);
+        self.shift_elements_after_edit(pos, pos, s.len());
         self.wrap_cache.replace(WrapCache::dirty());
         if pos <= self.cursor_pos {
             self.cursor_pos += s.len();
@@ -437,11 +436,44 @@ impl TextArea {
         self.replace_range_as(range, s, MutationKind::Replace);
     }
 
+    /// Canonical range a replacement will affect after expanding across
+    /// indivisible elements and snapping to UTF-8 boundaries.
+    #[must_use]
+    pub fn expanded_edit_range(&self, range: Range<usize>) -> Range<usize> {
+        let raw_start = range.start.min(self.text.len());
+        let raw_end = range.end.min(self.text.len());
+        let range = if raw_start == raw_end {
+            let pos = self.clamp_insertion_pos(raw_start);
+            pos..pos
+        } else {
+            self.expand_range_to_elements(raw_start.min(raw_end)..raw_start.max(raw_end))
+        };
+        let start = self.clamp_pos_to_char_boundary(range.start);
+        let end = self.clamp_pos_to_char_boundary(range.end);
+        start..end
+    }
+
+    /// Whether a non-empty edit range intersects an indivisible element.
+    ///
+    /// Callers with plain-text-only registers (notably Vim) use this to reject
+    /// operations that could delete or yank an attachment without also being
+    /// able to retain its app-owned payload.
+    #[must_use]
+    pub fn range_overlaps_element(&self, range: Range<usize>) -> bool {
+        let range = self.expanded_edit_range(range);
+        range.start < range.end
+            && self
+                .elements
+                .iter()
+                .any(|element| ranges_overlap(&element.range, &range))
+    }
+
     /// `replace_range` with an explicit mutation kind, so the deletion verbs
     /// built on it batch as themselves rather than as opaque replacements.
     fn replace_range_as(&mut self, range: Range<usize>, s: &str, kind: MutationKind) {
-        let start = self.clamp_pos_to_char_boundary(range.start.min(self.text.len()));
-        let end = self.clamp_pos_to_char_boundary(range.end.min(self.text.len()));
+        let range = self.expanded_edit_range(range);
+        let start = range.start;
+        let end = range.end;
         if start > end {
             return;
         }
@@ -454,6 +486,7 @@ impl TextArea {
 
         self.pre_mutate(kind, self.cursor_pos);
         self.text.replace_range(start..end, s);
+        self.shift_elements_after_edit(start, end, inserted_len);
         self.wrap_cache.replace(WrapCache::dirty());
         self.preferred_col = None;
         self.last_op_was_kill = false;
@@ -562,9 +595,16 @@ impl TextArea {
     }
 
     fn kill_range(&mut self, range: Range<usize>) {
-        let start = self.clamp_pos_to_char_boundary(range.start.min(self.text.len()));
-        let end = self.clamp_pos_to_char_boundary(range.end.min(self.text.len()));
+        let range = self.expanded_edit_range(range);
+        let start = range.start;
+        let end = range.end;
         if start >= end {
+            return;
+        }
+        // The kill ring is deliberately plain text. Deleting an app-owned
+        // element into it would leave only its display token, so a later yank
+        // could resurrect an inert lookalike without the attachment payload.
+        if self.range_overlaps_element(start..end) {
             return;
         }
         let removed = self.text[start..end].to_string();
@@ -581,222 +621,6 @@ impl TextArea {
             self.kill_buffer = removed;
         }
         self.last_op_was_kill = true;
-    }
-
-    // ─────────────────────────── Movement ────────────────────────────
-
-    pub fn move_cursor_left(&mut self) {
-        self.cursor_pos = self.prev_atomic_boundary(self.cursor_pos);
-        self.preferred_col = None;
-        self.last_op_was_kill = false;
-    }
-
-    pub fn move_cursor_right(&mut self) {
-        self.cursor_pos = self.next_atomic_boundary(self.cursor_pos);
-        self.preferred_col = None;
-        self.last_op_was_kill = false;
-    }
-
-    pub fn move_cursor_up(&mut self) {
-        self.last_op_was_kill = false;
-        // Prefer wrapped-line navigation if we have a cache.
-        let Some((target_col, prev_line)) = self.line_above_cursor() else {
-            // Fall back to logical-line navigation.
-            if let Some(prev_nl) = self.text[..self.cursor_pos].rfind('\n') {
-                let target_col = self.acquire_preferred_col();
-                let prev_line_start = self.text[..prev_nl].rfind('\n').map(|i| i + 1).unwrap_or(0);
-                self.move_to_display_col_on_line(prev_line_start, prev_nl, target_col);
-            } else {
-                self.cursor_pos = 0;
-                self.preferred_col = None;
-            }
-            return;
-        };
-        match prev_line {
-            Some((line_start, line_end)) => {
-                if self.preferred_col.is_none() {
-                    self.preferred_col = Some(target_col);
-                }
-                self.move_to_display_col_on_line(line_start, line_end, target_col);
-            }
-            None => {
-                self.cursor_pos = 0;
-                self.preferred_col = None;
-            }
-        }
-    }
-
-    pub fn move_cursor_down(&mut self) {
-        self.last_op_was_kill = false;
-        let Some((target_col, next_line)) = self.line_below_cursor() else {
-            // Fall back to logical-line navigation.
-            let target_col = self.acquire_preferred_col();
-            if let Some(next_nl) = self.text[self.cursor_pos..]
-                .find('\n')
-                .map(|i| i + self.cursor_pos)
-            {
-                let next_line_start = next_nl + 1;
-                let next_line_end = self.text[next_line_start..]
-                    .find('\n')
-                    .map(|i| i + next_line_start)
-                    .unwrap_or(self.text.len());
-                self.move_to_display_col_on_line(next_line_start, next_line_end, target_col);
-            } else {
-                self.cursor_pos = self.text.len();
-                self.preferred_col = None;
-            }
-            return;
-        };
-        match next_line {
-            Some((line_start, line_end)) => {
-                if self.preferred_col.is_none() {
-                    self.preferred_col = Some(target_col);
-                }
-                self.move_to_display_col_on_line(line_start, line_end, target_col);
-            }
-            None => {
-                self.cursor_pos = self.text.len();
-                self.preferred_col = None;
-            }
-        }
-    }
-
-    /// `Home` semantics: move to the beginning of the current logical line.
-    /// `BolBehavior::WrapUp` makes a second press (already at BOL) move to
-    /// the previous logical line's BOL.
-    pub fn move_cursor_to_beginning_of_line(&mut self, behavior: BolBehavior) {
-        let bol = self.beginning_of_current_line();
-        if behavior == BolBehavior::WrapUp && self.cursor_pos == bol {
-            self.set_cursor(self.beginning_of_line(self.cursor_pos.saturating_sub(1)));
-        } else {
-            self.set_cursor(bol);
-        }
-        self.preferred_col = None;
-    }
-
-    /// `End` semantics, symmetric with `move_cursor_to_beginning_of_line`.
-    pub fn move_cursor_to_end_of_line(&mut self, behavior: EolBehavior) {
-        let eol = self.end_of_current_line();
-        if behavior == EolBehavior::WrapDown && self.cursor_pos == eol {
-            let next_pos = (self.cursor_pos.saturating_add(1)).min(self.text.len());
-            self.set_cursor(self.end_of_line(next_pos));
-        } else {
-            self.set_cursor(eol);
-        }
-    }
-
-    // ─────────────────────── Word boundaries ─────────────────────────
-
-    /// Beginning of the previous word (emacs `Alt+B`).
-    #[must_use]
-    pub fn beginning_of_previous_word(&self) -> usize {
-        let prefix = &self.text[..self.cursor_pos];
-        let Some((first_non_ws_idx, ch)) = prefix
-            .char_indices()
-            .rev()
-            .find(|&(_, ch)| !ch.is_whitespace())
-        else {
-            return 0;
-        };
-        let run_start = prefix[..first_non_ws_idx]
-            .char_indices()
-            .rev()
-            .find(|&(_, ch)| ch.is_whitespace())
-            .map_or(0, |(idx, ch)| idx + ch.len_utf8());
-        let run_end = first_non_ws_idx + ch.len_utf8();
-        let pieces = split_word_pieces(&prefix[run_start..run_end]);
-        let mut pieces = pieces.into_iter().rev().peekable();
-        let Some((piece_start, piece)) = pieces.next() else {
-            return run_start;
-        };
-        let mut start = run_start + piece_start;
-
-        if piece.chars().all(is_word_separator) {
-            while let Some((idx, piece)) = pieces.peek() {
-                if !piece.chars().all(is_word_separator) {
-                    break;
-                }
-                start = run_start + *idx;
-                pieces.next();
-            }
-        }
-        start
-    }
-
-    /// End of the next word (emacs `Alt+F`).
-    #[must_use]
-    pub fn end_of_next_word(&self) -> usize {
-        let suffix = &self.text[self.cursor_pos..];
-        let Some(first_non_ws) = suffix.find(|ch: char| !ch.is_whitespace()) else {
-            return self.text.len();
-        };
-        let run = &suffix[first_non_ws..];
-        let run = &run[..run.find(char::is_whitespace).unwrap_or(run.len())];
-        let mut pieces = split_word_pieces(run).into_iter().peekable();
-        let Some((start, piece)) = pieces.next() else {
-            return self.cursor_pos + first_non_ws;
-        };
-        let word_start = self.cursor_pos + first_non_ws + start;
-        let mut end = word_start + piece.len();
-        if piece.chars().all(is_word_separator) {
-            while let Some((idx, piece)) = pieces.peek() {
-                if !piece.chars().all(is_word_separator) {
-                    break;
-                }
-                end = self.cursor_pos + first_non_ws + *idx + piece.len();
-                pieces.next();
-            }
-        }
-        end
-    }
-
-    /// Beginning of the next word (used by some readline configurations).
-    #[must_use]
-    pub fn beginning_of_next_word(&self) -> usize {
-        let Some(first_non_ws) = self.text[self.cursor_pos..].find(|c: char| !c.is_whitespace())
-        else {
-            return self.text.len();
-        };
-        let word_start = self.cursor_pos + first_non_ws;
-        if word_start != self.cursor_pos {
-            return word_start;
-        }
-        let end = self.end_of_next_word();
-        if end >= self.text.len() {
-            return self.text.len();
-        }
-        let Some(next_non_ws) = self.text[end..].find(|c: char| !c.is_whitespace()) else {
-            return self.text.len();
-        };
-        end + next_non_ws
-    }
-
-    // ─────────────────────── Line boundaries ─────────────────────────
-
-    #[must_use]
-    pub fn beginning_of_line(&self, pos: usize) -> usize {
-        self.text[..pos.min(self.text.len())]
-            .rfind('\n')
-            .map(|i| i + 1)
-            .unwrap_or(0)
-    }
-
-    #[must_use]
-    pub fn beginning_of_current_line(&self) -> usize {
-        self.beginning_of_line(self.cursor_pos)
-    }
-
-    #[must_use]
-    pub fn end_of_line(&self, pos: usize) -> usize {
-        self.text[pos.min(self.text.len())..]
-            .find('\n')
-            .map(|i| i + pos)
-            .unwrap_or(self.text.len())
-    }
-
-    #[must_use]
-    pub fn end_of_current_line(&self) -> usize {
-        self.end_of_line(self.cursor_pos)
     }
 
     // ────────────────────────── Rendering ────────────────────────────
@@ -818,8 +642,14 @@ impl TextArea {
         let idx =
             Self::wrapped_line_index_by_start(&lines, self.cursor_pos).unwrap_or(lines.len() - 1);
         let ls = &lines[idx];
-        let col = UnicodeWidthStr::width(&self.text[ls.start..self.cursor_pos.min(self.text.len())])
-            as u16;
+        let col = UnicodeWidthStr::width(
+            self.display_projection_with_width(
+                ls.start..self.cursor_pos.min(self.text.len()),
+                area.width,
+            )
+            .text
+            .as_str(),
+        ) as u16;
         let screen_row = (idx as u16).min(area.height.saturating_sub(1));
         Some((area.x + col, area.y + screen_row))
     }
@@ -829,133 +659,18 @@ impl TextArea {
     /// back to a single line.
     pub fn wrapped_lines(&self, width: u16) -> Ref<'_, Vec<Range<usize>>> {
         if self.wrap_cache.borrow().width != width {
-            let lines = compute_wrapped_lines(&self.text, width);
+            let atoms = self
+                .elements
+                .iter()
+                .map(|element| WrapAtom {
+                    range: element.range.clone(),
+                    display_width: element.display_width().min(usize::from(width.max(1))),
+                })
+                .collect::<Vec<_>>();
+            let lines = compute_wrapped_lines(&self.text, width, &atoms);
             *self.wrap_cache.borrow_mut() = WrapCache { width, lines };
         }
         Ref::map(self.wrap_cache.borrow(), |c| &c.lines)
-    }
-
-    // ───────────────────────── Internal helpers ──────────────────────
-
-    /// Display column of the cursor relative to the start of its logical
-    /// line. Used for vertical-movement column preservation.
-    fn current_display_col(&self) -> usize {
-        let bol = self.beginning_of_current_line();
-        UnicodeWidthStr::width(&self.text[bol..self.cursor_pos])
-    }
-
-    fn acquire_preferred_col(&mut self) -> usize {
-        match self.preferred_col {
-            Some(c) => c,
-            None => {
-                let c = self.current_display_col();
-                self.preferred_col = Some(c);
-                c
-            }
-        }
-    }
-
-    /// Set cursor to the position on `[line_start, line_end)` whose
-    /// display column is closest to (but not exceeding) `target_col`.
-    fn move_to_display_col_on_line(
-        &mut self,
-        line_start: usize,
-        line_end: usize,
-        target_col: usize,
-    ) {
-        let line_start = self.clamp_pos_to_char_boundary(line_start.min(self.text.len()));
-        let line_end = self.clamp_pos_to_char_boundary(line_end.min(self.text.len()));
-        if line_start >= line_end {
-            self.cursor_pos = line_start;
-            return;
-        }
-        let mut width_so_far = 0usize;
-        for (i, g) in self.text[line_start..line_end].grapheme_indices(true) {
-            width_so_far += UnicodeWidthStr::width(g);
-            if width_so_far > target_col {
-                self.cursor_pos = line_start + i;
-                return;
-            }
-        }
-        self.cursor_pos = line_end;
-    }
-
-    /// Index into `lines` of the wrapped line that contains `pos`.
-    fn wrapped_line_index_by_start(lines: &[Range<usize>], pos: usize) -> Option<usize> {
-        let idx = lines.partition_point(|r| r.start <= pos);
-        if idx == 0 { None } else { Some(idx - 1) }
-    }
-
-    /// Compute the target column + previous-line range for vertical-up.
-    /// Returns `None` if no wrap cache exists yet — caller falls back to
-    /// logical-line nav.
-    fn line_above_cursor(&self) -> Option<(usize, Option<(usize, usize)>)> {
-        let cache = self.wrap_cache.borrow();
-        if cache.lines.is_empty() {
-            return None;
-        }
-        let lines = &cache.lines;
-        let idx = Self::wrapped_line_index_by_start(lines, self.cursor_pos)?;
-        let cur = &lines[idx];
-        let target_col = self
-            .preferred_col
-            .unwrap_or_else(|| UnicodeWidthStr::width(&self.text[cur.start..self.cursor_pos]));
-        if idx == 0 {
-            Some((target_col, None))
-        } else {
-            let prev = &lines[idx - 1];
-            let line_start = prev.start;
-            let line_end = prev.end.saturating_sub(1).max(prev.start);
-            Some((target_col, Some((line_start, line_end))))
-        }
-    }
-
-    fn line_below_cursor(&self) -> Option<(usize, Option<(usize, usize)>)> {
-        let cache = self.wrap_cache.borrow();
-        if cache.lines.is_empty() {
-            return None;
-        }
-        let lines = &cache.lines;
-        let idx = Self::wrapped_line_index_by_start(lines, self.cursor_pos)?;
-        let cur = &lines[idx];
-        let target_col = self
-            .preferred_col
-            .unwrap_or_else(|| UnicodeWidthStr::width(&self.text[cur.start..self.cursor_pos]));
-        if idx + 1 >= lines.len() {
-            Some((target_col, None))
-        } else {
-            let next = &lines[idx + 1];
-            let line_start = next.start;
-            let line_end = next.end.saturating_sub(1).max(next.start);
-            Some((target_col, Some((line_start, line_end))))
-        }
-    }
-
-    /// Walk back one grapheme cluster from `pos`. Returns the new byte
-    /// offset (always at a UTF-8 char boundary).
-    fn prev_atomic_boundary(&self, pos: usize) -> usize {
-        if pos == 0 {
-            return 0;
-        }
-        let mut gc = GraphemeCursor::new(pos, self.text.len(), false);
-        match gc.prev_boundary(&self.text, 0) {
-            Ok(Some(b)) => b,
-            Ok(None) => 0,
-            Err(_) => pos.saturating_sub(1),
-        }
-    }
-
-    /// Walk forward one grapheme cluster from `pos`.
-    fn next_atomic_boundary(&self, pos: usize) -> usize {
-        if pos >= self.text.len() {
-            return self.text.len();
-        }
-        let mut gc = GraphemeCursor::new(pos, self.text.len(), false);
-        match gc.next_boundary(&self.text, 0) {
-            Ok(Some(b)) => b,
-            Ok(None) => self.text.len(),
-            Err(_) => pos.saturating_add(1),
-        }
     }
 
     /// Snap `pos` to the nearest UTF-8 char boundary in the buffer.
@@ -978,6 +693,74 @@ impl TextArea {
             next
         }
     }
+
+    fn clamp_pos_to_element_boundary(&self, pos: usize) -> usize {
+        let Some(element) = self
+            .elements
+            .iter()
+            .find(|element| pos > element.range.start && pos < element.range.end)
+        else {
+            return pos;
+        };
+        let to_start = pos - element.range.start;
+        let to_end = element.range.end - pos;
+        if to_start <= to_end {
+            element.range.start
+        } else {
+            element.range.end
+        }
+    }
+
+    fn clamp_insertion_pos(&self, pos: usize) -> usize {
+        let pos = self.clamp_pos_to_char_boundary(pos.min(self.text.len()));
+        self.clamp_pos_to_element_boundary(pos)
+    }
+
+    fn element_boundary_for_word_motion(&self, pos: usize, toward_start: bool) -> usize {
+        let Some(element) = self
+            .elements
+            .iter()
+            .find(|element| pos > element.range.start && pos < element.range.end)
+        else {
+            return pos;
+        };
+        if toward_start {
+            element.range.start
+        } else {
+            element.range.end
+        }
+    }
+
+    fn expand_range_to_elements(&self, range: Range<usize>) -> Range<usize> {
+        let mut range = range.start.min(self.text.len())..range.end.min(self.text.len());
+        loop {
+            let mut changed = false;
+            for element in &self.elements {
+                if ranges_overlap(&element.range, &range) {
+                    let start = range.start.min(element.range.start);
+                    let end = range.end.max(element.range.end);
+                    changed |= start != range.start || end != range.end;
+                    range = start..end;
+                }
+            }
+            if !changed {
+                return range;
+            }
+        }
+    }
+
+    fn shift_elements_after_edit(&mut self, start: usize, end: usize, inserted_len: usize) {
+        let removed_len = end.saturating_sub(start);
+        let delta = inserted_len as isize - removed_len as isize;
+        self.elements
+            .retain(|element| !ranges_overlap(&element.range, &(start..end)));
+        for element in &mut self.elements {
+            if element.range.start >= end {
+                element.range.start = element.range.start.saturating_add_signed(delta);
+                element.range.end = element.range.end.saturating_add_signed(delta);
+            }
+        }
+    }
 }
 
 impl Default for TextArea {
@@ -986,132 +769,16 @@ impl Default for TextArea {
     }
 }
 
-/// Compute wrapped-line byte ranges for `text` at `width` display columns.
-/// - Logical lines (delimited by `\n`) are processed independently. Each
-/// wrapped range's `end` points just past the line's last byte (i.e.
-/// the newline itself, if present, is NOT included — `partition_point`
-/// logic in cursor positioning relies on this).
-/// - Wrapping is grapheme-aware via `unicode-segmentation` and
-/// display-column-aware via `unicode-width`. CJK fullwidth characters
-/// correctly take 2 columns.
-/// - `width == 0` degenerates to one range per logical line.
-/// - An empty buffer returns a single `0..0` range so the cursor still
-/// has a valid line to land on.
-/// Soft-wrap `text` into visual rows at `width` columns, as byte ranges that
-/// exactly tile the input.
-///
-/// Public because the composer wraps a *projection* of the buffer (mode-prefix
-/// stripped, placeholder or palette filter substituted) rather than the buffer
-/// itself, and its render, its cursor placement, and its height reservation
-/// must all agree on the same rows. Sharing this one function is what keeps
-/// them from drifting.
-pub fn wrap_ranges(text: &str, width: u16) -> Vec<Range<usize>> {
-    compute_wrapped_lines(text, width)
-}
-
-fn compute_wrapped_lines(text: &str, width: u16) -> Vec<Range<usize>> {
-    if text.is_empty() {
-        // `vec![0..0]` trips the `single_range_in_vec_init` lint (which
-        // would prefer a value range or `vec![0; 0]` — both wrong here).
-        // Use iter-once so we get exactly one `Range<usize>` element.
-        return std::iter::once(0..0).collect();
-    }
-    let mut lines = Vec::new();
-    let mut logical_start = 0usize;
-
-    while logical_start <= text.len() {
-        let logical_end = text[logical_start..]
-            .find('\n')
-            .map(|i| logical_start + i)
-            .unwrap_or(text.len());
-        wrap_logical_line(text, logical_start, logical_end, width, &mut lines);
-        if logical_end == text.len() {
-            break;
-        }
-        // Skip the '\n' itself; if the input ends in '\n' add a trailing
-        // empty wrapped line so the cursor can land past the final newline.
-        logical_start = logical_end + 1;
-        if logical_start == text.len() {
-            lines.push(text.len()..text.len());
-            break;
-        }
-    }
-
-    if lines.is_empty() {
-        lines.push(0..0);
-    }
-    lines
-}
-
-/// Soft-wrap one logical line into visual rows, breaking at word boundaries.
-///
-/// Emits byte ranges that **exactly tile** `start..end` — every byte lands in
-/// exactly one row, including the whitespace at a break. That total-coverage
-/// contract is what `cursor_pos` maps a byte offset through, and it is why this
-/// is not `textwrap::wrap` despite the crate convention: textwrap returns
-/// trimmed `Cow<str>` segments that cannot be mapped back to source offsets, so
-/// a cursor sitting on a trimmed space would have nowhere to render.
-///
-/// Greedy first-fit, width-aware (CJK = 2 columns). A word longer than `width`
-/// falls back to breaking mid-word — otherwise it could never be shown at all.
-fn wrap_logical_line(
-    text: &str,
-    start: usize,
-    end: usize,
-    width: u16,
-    out: &mut Vec<Range<usize>>,
-) {
-    if start == end {
-        out.push(start..end);
-        return;
-    }
-    if width == 0 {
-        out.push(start..end);
-        return;
-    }
-    let slice = &text[start..end];
-    if UnicodeWidthStr::width(slice) <= width as usize {
-        out.push(start..end);
-        return;
-    }
-    let limit = width as usize;
-    let mut col = 0usize;
-    let mut chunk_start = 0usize;
-    // Byte index (within `slice`) of the most recent point a new row could
-    // start — i.e. just past a whitespace run. `None` while no break
-    // opportunity exists in the current row, which is exactly the
-    // unbreakably-long-word case.
-    let mut break_at: Option<usize> = None;
-    for (idx, grapheme) in slice.grapheme_indices(true) {
-        let grapheme_width = UnicodeWidthStr::width(grapheme);
-        if col + grapheme_width > limit && idx > chunk_start {
-            // Prefer the word boundary; fall back to a mid-word break when the
-            // word alone overflows the row.
-            let cut = break_at
-                .filter(|cut| *cut > chunk_start)
-                // Only honor the boundary if the word carried onto the next row
-                // actually fits there. Otherwise the new row starts already
-                // overflowing and emits an oversized range — the exact way a
-                // row wider than the viewport (and thus clipped) gets built.
-                .filter(|cut| UnicodeWidthStr::width(&slice[*cut..idx]) + grapheme_width <= limit)
-                .unwrap_or(idx);
-            out.push(start + chunk_start..start + cut);
-            chunk_start = cut;
-            // The carried-over head of the word still occupies the new row.
-            col = UnicodeWidthStr::width(&slice[cut..idx]) + grapheme_width;
-            break_at = None;
-        } else {
-            col += grapheme_width;
-        }
-        if grapheme.chars().all(char::is_whitespace) {
-            break_at = Some(idx + grapheme.len());
-        }
-    }
-    if chunk_start < slice.len() {
-        out.push(start + chunk_start..end);
-    }
+fn ranges_overlap(left: &Range<usize>, right: &Range<usize>) -> bool {
+    left.start < right.end && left.end > right.start
 }
 
 #[cfg(test)]
 #[path = "textarea.test.rs"]
 mod tests;
+
+#[path = "textarea_atomic.rs"]
+mod atomic;
+
+#[path = "textarea_navigation.rs"]
+mod navigation;

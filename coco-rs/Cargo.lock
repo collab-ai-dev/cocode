@@ -2447,6 +2447,7 @@ dependencies = [
 name = "coco-session"
 version = "0.1.1"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "coco-config",
  "coco-error",
@@ -2964,12 +2965,14 @@ dependencies = [
  "crossterm",
  "insta",
  "libc",
+ "linkify",
  "pretty_assertions",
  "ratatui",
  "tokio",
  "tracing",
  "unicode-segmentation",
  "unicode-width 0.2.2",
+ "url",
  "vt100",
 ]
 
@@ -5683,6 +5686,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f50e8f47623268b5407192d26876c4d7f89d686ca130fdc53bced4814cd29f8"
 dependencies = [
  "bitflags 2.13.1",
+]
+
+[[package]]
+name = "linkify"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1dfa36d52c581e9ec783a7ce2a5e0143da6237be5811a0b3153fedfdbe9f780"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]

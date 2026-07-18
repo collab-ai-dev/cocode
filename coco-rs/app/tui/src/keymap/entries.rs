@@ -257,6 +257,14 @@ pub const KEYMAP: &[KeymapEntry] = &[
         description_key: "keymap.global.toggle_transcript",
     },
     KeymapEntry {
+        id: "global:expand_committed_tool",
+        combo: "Alt+E",
+        alternates: &[],
+        group: KeymapGroup::GlobalHotkey,
+        binding: action(KeybindingAction::AppExpandCommittedTool),
+        description_key: "keymap.global.expand_committed_tool",
+    },
+    KeymapEntry {
         id: "global:command_palette",
         combo: "Ctrl+P",
         alternates: &[],

@@ -24,6 +24,7 @@ fn finalized_history_lines_render_committed_assistant_message() {
             syntax_highlighting: SyntaxHighlighting::Off,
             show_system_reminders: false,
             show_thinking: false,
+            hyperlinks_enabled: true,
             cwd: None,
             kb_handle: None,
             replay_cache_policy: HistoryReplayCachePolicy::default(),
@@ -55,6 +56,75 @@ fn committed_assistant_markdown_helper_matches_finalized_history_cell() {
 }
 
 #[test]
+fn explicit_markdown_link_reaches_native_history_osc8_sidecar() {
+    let theme = Theme::default();
+    let render_options = options(&theme, 48);
+    let cells = vec![test_helpers::assistant_text_cell(
+        "Read the [architecture notes](https://example.com/architecture).",
+    )];
+
+    let document = render_finalized_history_document(&cells, render_options);
+    let plain = plain_lines(&document.lines).join("\n");
+    assert!(plain.contains("architecture notes"));
+    assert!(
+        !plain.contains("https://example.com/architecture"),
+        "destination must not consume visible columns: {plain}"
+    );
+    let rows = coco_tui_ui::engine::history_insert::render_history_rows_with_links(
+        document.lines,
+        48,
+        None,
+        document.links,
+    );
+
+    assert_eq!(rows.hyperlink_run_count(), 1);
+    let run = &rows.hyperlink_runs()[0];
+    assert_eq!(run.target, "https://example.com/architecture");
+    let linked_text = (run.start_col..run.end_col)
+        .map(|col| rows.buffer()[(col, run.row)].symbol())
+        .collect::<String>();
+    assert_eq!(linked_text, "architecture notes");
+}
+
+#[test]
+fn explicit_markdown_url_label_keeps_explicit_destination() {
+    let theme = Theme::default();
+    let render_options = options(&theme, 60);
+    let cells = vec![test_helpers::assistant_text_cell(
+        "[https://label.example](https://destination.example)",
+    )];
+    let document = render_finalized_history_document(&cells, render_options);
+    let rows = coco_tui_ui::engine::history_insert::render_history_rows_with_links(
+        document.lines,
+        60,
+        None,
+        document.links,
+    );
+
+    assert_eq!(rows.hyperlink_runs().len(), 1);
+    assert_eq!(
+        rows.hyperlink_runs()[0].target,
+        "https://destination.example"
+    );
+}
+
+#[test]
+fn native_history_without_osc8_keeps_visible_link_destination() {
+    let theme = Theme::default();
+    let mut render_options = options(&theme, 80);
+    render_options.hyperlinks_enabled = false;
+    let cells = vec![test_helpers::assistant_text_cell(
+        "Read the [architecture notes](https://example.com/architecture).",
+    )];
+
+    let document = render_finalized_history_document(&cells, render_options);
+    let plain = plain_lines(&document.lines).join("\n");
+
+    assert!(plain.contains("architecture notes (https://example.com/architecture)"));
+    assert!(document.links.is_empty());
+}
+
+#[test]
 fn finalized_history_lines_do_not_emit_active_busy_tail() {
     let theme = Theme::default();
     let cells = vec![test_helpers::user_text_cell(Uuid::new_v4(), "hello")];
@@ -67,6 +137,7 @@ fn finalized_history_lines_do_not_emit_active_busy_tail() {
             syntax_highlighting: SyntaxHighlighting::Off,
             show_system_reminders: false,
             show_thinking: false,
+            hyperlinks_enabled: true,
             cwd: None,
             kb_handle: None,
             replay_cache_policy: HistoryReplayCachePolicy::default(),
@@ -104,6 +175,7 @@ fn finalized_history_lines_hide_compact_boundary_and_summary_by_default() {
             syntax_highlighting: SyntaxHighlighting::Off,
             show_system_reminders: false,
             show_thinking: false,
+            hyperlinks_enabled: true,
             cwd: None,
             kb_handle: None,
             replay_cache_policy: HistoryReplayCachePolicy::default(),
@@ -132,6 +204,7 @@ fn finalized_history_lines_collapse_meta_by_default() {
             syntax_highlighting: SyntaxHighlighting::Off,
             show_system_reminders: false,
             show_thinking: false,
+            hyperlinks_enabled: true,
             cwd: None,
             kb_handle: None,
             replay_cache_policy: HistoryReplayCachePolicy::default(),
@@ -162,6 +235,7 @@ fn finalized_history_lines_render_empty_title_info_as_markdown() {
             syntax_highlighting: SyntaxHighlighting::Off,
             show_system_reminders: false,
             show_thinking: false,
+            hyperlinks_enabled: true,
             cwd: None,
             kb_handle: None,
             replay_cache_policy: HistoryReplayCachePolicy::default(),
@@ -199,6 +273,7 @@ fn finalized_history_lines_show_collapsed_thinking_with_toggle_hint() {
             syntax_highlighting: SyntaxHighlighting::Off,
             show_system_reminders: false,
             show_thinking: false,
+            hyperlinks_enabled: true,
             cwd: None,
             kb_handle: Some(&kb_handle),
             replay_cache_policy: HistoryReplayCachePolicy::default(),
@@ -946,6 +1021,7 @@ fn options_with_syntax(
         syntax_highlighting,
         show_system_reminders: false,
         show_thinking: false,
+        hyperlinks_enabled: true,
         cwd: None,
         kb_handle: None,
         replay_cache_policy: HistoryReplayCachePolicy::default(),

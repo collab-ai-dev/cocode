@@ -4,11 +4,7 @@ use crate::state::HistoryEntry;
 fn history(texts: &[&str]) -> Vec<HistoryEntry> {
     texts
         .iter()
-        .map(|t| HistoryEntry {
-            text: (*t).to_string(),
-            timestamp_ms: None,
-            pastes: Vec::new(),
-        })
+        .map(|text| HistoryEntry::plain(*text))
         .collect()
 }
 

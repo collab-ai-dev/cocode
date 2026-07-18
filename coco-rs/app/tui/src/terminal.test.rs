@@ -36,6 +36,22 @@ use coco_tui_ui::engine::terminal::SurfaceTerminal;
 use super::*;
 
 #[test]
+fn terminal_constructor_failure_rolls_back_entered_modes() {
+    let rollback_called = std::cell::Cell::new(false);
+    let error = complete_terminal_setup(
+        || Err::<(), _>(io::Error::other("injected frame-writer spawn failure")),
+        || {
+            rollback_called.set(true);
+            Ok(())
+        },
+    )
+    .expect_err("injected constructor failure must propagate");
+
+    assert_eq!(error.kind(), io::ErrorKind::Other);
+    assert!(rollback_called.get());
+}
+
+#[test]
 fn interactive_viewport_max_height_grows_for_active_prompt() {
     use crate::state::PanePromptState;
     use crate::state::PlanEntryPromptState;
@@ -328,19 +344,20 @@ fn alternate_scroll_commands_emit_xterm_private_mode_bytes() {
 }
 
 #[test]
-fn drop_teardown_routes_four_steps_through_backend_in_order() {
+fn drop_teardown_drains_modal_leave_before_restore_and_prompt() {
     // Regression: the exit sequence must leave the alt-screen / restore terminal
     // modes (the `CSI ?1049l` DECRC) BEFORE parking the shell-prompt cursor,
     // else the DECRC yanks the cursor up into finalized history and the resume
-    // hint printed next overprints the transcript. All four teardown steps now
-    // route through the surface backend, so the order is observable here rather
-    // than relying on a shared-global-stdout assumption.
+    // hint printed next overprints the transcript. Teardown and both drain
+    // barriers route through the surface backend, so the order is observable
+    // here rather than relying on a shared-global-stdout assumption.
     let width = 80;
     let height = 24;
     let log = TeardownLog::default();
     let backend = RecordingBackend {
         inner: TestBackend::new(width, height),
         log: log.clone(),
+        drain_results: Default::default(),
     };
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.sync_screen_size(Size::new(width, height));
@@ -356,11 +373,13 @@ fn drop_teardown_routes_four_steps_through_backend_in_order() {
     assert_eq!(
         log.steps(),
         vec![
-            "begin_terminal_restore",
             "leave_modal_alt_screen",
+            "drain_output",
+            "begin_terminal_restore",
             "finish_terminal_restore",
             "prepare_shell_prompt",
             "trailing_newline",
+            "drain_output",
         ]
     );
 }
@@ -371,6 +390,7 @@ fn drop_teardown_does_not_leave_an_alt_screen_that_was_never_entered() {
     let backend = RecordingBackend {
         inner: TestBackend::new(80, 24),
         log: log.clone(),
+        drain_results: Default::default(),
     };
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.sync_screen_size(Size::new(80, 24));
@@ -382,10 +402,45 @@ fn drop_teardown_does_not_leave_an_alt_screen_that_was_never_entered() {
     assert_eq!(
         log.steps(),
         vec![
+            "drain_output",
             "begin_terminal_restore",
             "finish_terminal_restore",
             "prepare_shell_prompt",
             "trailing_newline",
+            "drain_output",
+        ]
+    );
+}
+
+#[test]
+fn drop_teardown_queues_restore_after_a_slow_initial_drain() {
+    let log = TeardownLog::default();
+    let drain_results = Rc::new(RefCell::new(std::collections::VecDeque::from([
+        false, true, true,
+    ])));
+    let backend = RecordingBackend {
+        inner: TestBackend::new(80, 24),
+        log: log.clone(),
+        drain_results,
+    };
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.sync_screen_size(Size::new(80, 24));
+    terminal.set_viewport_area(Rect::new(0, 6, 80, 4));
+
+    drop(Tui::new_for_test(
+        terminal,
+        TerminalCompatibility::NativeScrollback,
+    ));
+
+    assert_eq!(
+        log.steps(),
+        vec![
+            "drain_output",
+            "begin_terminal_restore",
+            "finish_terminal_restore",
+            "prepare_shell_prompt",
+            "trailing_newline",
+            "drain_output",
         ]
     );
 }
@@ -444,6 +499,7 @@ impl TeardownLog {
 struct RecordingBackend {
     inner: TestBackend,
     log: TeardownLog,
+    drain_results: Rc<RefCell<std::collections::VecDeque<bool>>>,
 }
 
 impl Backend for RecordingBackend {
@@ -526,6 +582,11 @@ impl SurfaceBackend for RecordingBackend {
         self.log.record("trailing_newline");
         Ok(())
     }
+
+    fn drain_output(&mut self, _timeout: Duration) -> Result<bool, Self::Error> {
+        self.log.record("drain_output");
+        Ok(self.drain_results.borrow_mut().pop_front().unwrap_or(true))
+    }
 }
 
 // ── A4: RESTORE_SEQ ledger ties to real teardown command bytes ──────────
@@ -555,4 +616,37 @@ fn restore_seq_matches_teardown_command_bytes() {
         ansi(crate::keyboard_modes::DisableModifyOtherKeys),
         seq::DISABLE_MODIFY_OTHER_KEYS
     );
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn direct_panic_restore_tail_does_not_wait_for_stdout_lock() {
+    use std::sync::mpsc;
+
+    let stdout = io::stdout();
+    let _stdout_lock = stdout.lock();
+    let (tx, rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let mut direct_sink = Vec::new();
+        let wrote_all = write_direct_restore_tail(
+            &mut direct_sink,
+            DirectRestoreOptions {
+                leave_alt_screen: true,
+                trailing_newline: false,
+            },
+        );
+        tx.send((wrote_all, direct_sink)).expect("test receiver");
+    });
+
+    let (wrote_all, direct_sink) = rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("direct restore must not acquire stdout");
+    worker.join().expect("restore worker");
+    assert!(wrote_all);
+    assert!(
+        direct_sink
+            .windows(b"\x1b[?1049l".len())
+            .any(|window| window == b"\x1b[?1049l")
+    );
+    assert!(!direct_sink.ends_with(b"\r\n"));
 }

@@ -62,7 +62,9 @@ pub async fn handle_command(
     // ran. InsertChar / SurfaceFilter fire per-keystroke and would flood
     // debug at typing rate — drop them to trace.
     match &cmd {
-        TuiCommand::InsertChar(_) | TuiCommand::SurfaceFilter(_) => {
+        TuiCommand::InsertChar(_)
+        | TuiCommand::SurfaceFilter(_)
+        | TuiCommand::TranscriptSearchInsert(_) => {
             tracing::trace!(target: "coco_tui::command", cmd = ?cmd, "TuiCommand dispatch");
         }
         _ => {
@@ -80,7 +82,7 @@ pub async fn handle_command(
     // autocomplete popup whenever input text or cursor moves, without
     // threading a refresh call through every editing arm.
     let text_before = state.ui.input.text().to_string();
-    let cursor_before = state.ui.input.textarea.cursor();
+    let cursor_before = state.ui.input.textarea().cursor();
 
     // Intercept editable-dialog keys before the main dispatch.
     // The skills dialog has a richer state machine (select / filter
@@ -406,9 +408,13 @@ pub async fn handle_command(
             // A trailing backslash + Enter inserts a newline instead of
             // submitting (poor-man's line-continuation). Match here so the
             // heredoc-style escape works in both ordinary and vim-Insert mode.
-            if state.ui.input.textarea.text().ends_with('\\') {
-                let len = state.ui.input.textarea.text().len();
-                state.ui.input.textarea.replace_range(len - 1..len, "\n");
+            if state.ui.input.textarea().text().ends_with('\\') {
+                let len = state.ui.input.textarea().text().len();
+                state
+                    .ui
+                    .input
+                    .textarea_mut()
+                    .replace_range(len - 1..len, "\n");
                 return true;
             }
             edit::submit(state, command_tx).await
@@ -454,10 +460,7 @@ pub async fn handle_command(
             // not a UI dismissal. Gated on `vim.enabled` so non-vim
             // users keep the standard Esc → Cancel behavior.
             if state.ui.input.vim.insert_escape_active()
-                && crate::vim::wiring::handle_insert_escape(
-                    &mut state.ui.input.textarea,
-                    &mut state.ui.input.vim,
-                )
+                && state.ui.input.handle_vim_insert_escape()
             {
                 return true;
             }
@@ -505,12 +508,7 @@ pub async fn handle_command(
             if !state.ui.has_blocking_interaction()
                 && state.session.queued_commands.iter().any(|q| q.editable)
             {
-                let _ = command_tx
-                    .send(UserCommand::EditQueuedCommands {
-                        current_input: state.ui.input.text().to_string(),
-                        current_cursor: state.ui.input.textarea.cursor(),
-                    })
-                    .await;
+                request_queued_commands_for_edit(state, command_tx).await;
                 return true;
             }
             // No state + active suggestions + text present → ESC
@@ -522,21 +520,8 @@ pub async fn handle_command(
             {
                 use coco_tui_ui::double_press::Outcome;
                 if state.ui.esc_tracker.poll((), std::time::Instant::now()) == Outcome::Double {
-                    let taken = state.ui.input.take_input();
-                    // Move the draft's paste payloads into the history entry
-                    // (and out of the live manager): the cleared draft no
-                    // longer references them, and stale image entries would
-                    // otherwise still attach to the next unrelated submit.
-                    let pastes: Vec<_> = state
-                        .ui
-                        .paste_manager
-                        .entries()
-                        .iter()
-                        .filter(|e| taken.contains(&e.pill))
-                        .cloned()
-                        .collect();
-                    state.ui.paste_manager.clear();
-                    state.ui.input.add_to_history_with_pastes(taken, pastes);
+                    let composer = state.ui.input.take_composer();
+                    state.ui.input.add_composer_to_history(composer);
                     state.ui.input.history_index = None;
                 } else {
                     state.ui.add_toast(crate::state::ui::Toast::info(
@@ -601,16 +586,7 @@ pub async fn handle_command(
                 // Mirrors codex-rs textarea.rs:518-530 pattern. Gated on
                 // `vim.enabled` so non-vim users insert characters as
                 // typed instead of triggering vim motions.
-                let action = crate::vim::wiring::dispatch_vim_key(
-                    c,
-                    &mut state.ui.input.textarea,
-                    &mut state.ui.input.vim,
-                );
-                let should_submit = crate::vim::wiring::apply_action(
-                    action,
-                    &mut state.ui.input.textarea,
-                    &mut state.ui.input.vim,
-                );
+                let should_submit = state.ui.input.dispatch_and_apply_vim_key(c);
                 if should_submit {
                     // Vim `Enter` in Normal mode submits — delegate to
                     // the same path Enter takes in non-vim mode.
@@ -618,13 +594,17 @@ pub async fn handle_command(
                 }
             } else {
                 let mut buf = [0u8; 4];
-                state.ui.input.textarea.insert_str(c.encode_utf8(&mut buf));
+                state
+                    .ui
+                    .input
+                    .textarea_mut()
+                    .insert_str(c.encode_utf8(&mut buf));
             }
             true
         }
         TuiCommand::InsertNewline => {
             state.ui.input.clear_inline_hint();
-            state.ui.input.textarea.insert_str("\n");
+            state.ui.input.textarea_mut().insert_str("\n");
             true
         }
         TuiCommand::DeleteBackward => {
@@ -634,13 +614,13 @@ pub async fn handle_command(
             {
                 r.summarize_feedback.pop();
             } else {
-                state.ui.input.textarea.delete_backward(1);
+                state.ui.input.textarea_mut().delete_backward(1);
             }
             true
         }
         TuiCommand::DeleteForward => {
             state.ui.input.clear_inline_hint();
-            state.ui.input.textarea.delete_forward(1);
+            state.ui.input.textarea_mut().delete_forward(1);
             true
         }
         TuiCommand::DeleteWordBackward => {
@@ -670,7 +650,7 @@ pub async fn handle_command(
         }
         TuiCommand::UndoInput => {
             state.ui.input.clear_inline_hint();
-            let msg = if state.ui.input.textarea.undo() {
+            let msg = if state.ui.input.textarea_mut().undo() {
                 crate::i18n::t!("toast.undo_done")
             } else {
                 crate::i18n::t!("toast.undo_nothing")
@@ -682,7 +662,7 @@ pub async fn handle_command(
         }
         TuiCommand::RedoInput => {
             state.ui.input.clear_inline_hint();
-            let msg = if state.ui.input.textarea.redo() {
+            let msg = if state.ui.input.textarea_mut().redo() {
                 crate::i18n::t!("toast.redo_done")
             } else {
                 crate::i18n::t!("toast.redo_nothing")
@@ -696,24 +676,19 @@ pub async fn handle_command(
         // ── Cursor movement ──
         TuiCommand::CursorLeft => {
             state.ui.input.clear_inline_hint();
-            state.ui.input.textarea.move_cursor_left();
+            state.ui.input.textarea_mut().move_cursor_left();
             true
         }
         TuiCommand::CursorRight => {
             state.ui.input.clear_inline_hint();
-            state.ui.input.textarea.move_cursor_right();
+            state.ui.input.textarea_mut().move_cursor_right();
             true
         }
         TuiCommand::CursorUp => {
             state.ui.input.clear_inline_hint();
             if state.ui.input.is_empty() && state.session.queued_commands.iter().any(|q| q.editable)
             {
-                let _ = command_tx
-                    .send(UserCommand::EditQueuedCommands {
-                        current_input: String::new(),
-                        current_cursor: 0,
-                    })
-                    .await;
+                request_queued_commands_for_edit(state, command_tx).await;
                 return true;
             }
             edit::history_up(state);
@@ -757,7 +732,7 @@ pub async fn handle_command(
             state
                 .ui
                 .input
-                .textarea
+                .textarea_mut()
                 .move_cursor_to_beginning_of_line(coco_tui_ui::widgets::BolBehavior::StayPut);
             true
         }
@@ -766,7 +741,7 @@ pub async fn handle_command(
             state
                 .ui
                 .input
-                .textarea
+                .textarea_mut()
                 .move_cursor_to_end_of_line(coco_tui_ui::widgets::EolBehavior::StayPut);
             true
         }
@@ -929,11 +904,13 @@ pub async fn handle_command(
             };
             if !handled_question_digit {
                 interaction::filter(state, c);
+                request_session_search(state, command_tx).await;
             }
             true
         }
         TuiCommand::SurfaceFilterBackspace => {
             interaction::filter_backspace(state);
+            request_session_search(state, command_tx).await;
             true
         }
         TuiCommand::SurfaceNext => {
@@ -1180,6 +1157,9 @@ pub async fn handle_command(
             }
             true
         }
+        // Owned by `App` because the bounded commit ring lives beside the
+        // single native-history writer, not in serializable UI state.
+        TuiCommand::ExpandCommittedTool => false,
         TuiCommand::ToggleSystemReminders => {
             state.ui.show_system_reminders = !state.ui.show_system_reminders;
             true
@@ -1270,11 +1250,28 @@ pub async fn handle_command(
                 ));
                 return true;
             }
-            let _ = command_tx
-                .send(UserCommand::OpenPromptEditor {
-                    initial_content: state.ui.input.text().to_string(),
-                })
-                .await;
+            let (session, initial_content) = match crate::composer::ExternalEditorSession::prepare(
+                state.ui.input.composer_snapshot(),
+            ) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    state.ui.add_toast(crate::state::Toast::error(format!(
+                        "Cannot prepare composer for external editor: {error}"
+                    )));
+                    return true;
+                }
+            };
+            if command_tx
+                .send(UserCommand::OpenPromptEditor { initial_content })
+                .await
+                .is_ok()
+            {
+                state.ui.pending_external_editor = Some(session);
+            } else {
+                state.ui.add_toast(crate::state::Toast::warning(
+                    "Could not open the external editor because the command channel closed",
+                ));
+            }
             true
         }
         TuiCommand::OpenPlanEditor => {
@@ -1355,6 +1352,12 @@ pub async fn handle_command(
             transcript::toggle_selected_cell(state);
             true
         }
+        TuiCommand::TranscriptSearchStart => transcript::search_start(state),
+        TuiCommand::TranscriptSearchInsert(c) => transcript::search_insert(state, c),
+        TuiCommand::TranscriptSearchBackspace => transcript::search_backspace(state),
+        TuiCommand::TranscriptSearchSubmit => transcript::search_submit(state),
+        TuiCommand::TranscriptSearchDismiss => transcript::search_dismiss(state),
+        TuiCommand::TranscriptSearchNavigate(delta) => transcript::search_navigate(state, delta),
         TuiCommand::TranscriptCopyCellText => reader_copy::copy_selected_cell_text(state),
         TuiCommand::TranscriptCopyCellMeta => reader_copy::copy_selected_cell_meta(state),
         TuiCommand::TranscriptScrollLines(delta) => {
@@ -1375,10 +1378,25 @@ pub async fn handle_command(
         }
     };
 
-    if state.ui.input.text() != text_before || state.ui.input.textarea.cursor() != cursor_before {
+    if state.ui.input.text() != text_before {
+        state.ui.input.prune_attachments();
+    }
+    if state.ui.input.text() != text_before || state.ui.input.textarea().cursor() != cursor_before {
         crate::autocomplete::refresh_suggestions(state);
     }
     changed
+}
+
+async fn request_session_search(state: &AppState, command_tx: &mpsc::Sender<UserCommand>) {
+    let Some(ModalState::SessionBrowser(browser)) = state.ui.modal.as_ref() else {
+        return;
+    };
+    let _ = command_tx
+        .send(UserCommand::SearchSessions {
+            query: browser.filter.clone(),
+            request_id: browser.search_request_id,
+        })
+        .await;
 }
 
 /// Loose upper bound for the active permission prompt's body scroll offset.
@@ -1405,11 +1423,8 @@ fn accept_prompt_suggestion(state: &mut AppState) -> bool {
         return false;
     }
     state.ui.input.set_text(&suggestion);
-    state
-        .ui
-        .input
-        .textarea
-        .set_cursor(state.ui.input.text().len());
+    let cursor = state.ui.input.text().len();
+    state.ui.input.textarea_mut().set_cursor(cursor);
     state.session.prompt_suggestions.clear();
     true
 }
@@ -1483,8 +1498,8 @@ async fn apply_exit_effect(
             // Idle Ctrl+C with text in the input: clear + save to history.
             // The exit hint is already armed by `on_interrupt`, so the
             // *next* Ctrl+C within the window goes through the Quit path.
-            let taken = state.ui.input.take_input();
-            state.ui.input.add_to_history(taken);
+            let composer = state.ui.input.take_composer();
+            state.ui.input.add_composer_to_history(composer);
             state.ui.input.history_index = None;
             let prompt = state
                 .ui
@@ -1560,23 +1575,57 @@ pub(super) async fn shutdown_via_slash_command(
 }
 
 async fn queue_current_input(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) -> bool {
-    let text = state.ui.input.take_input();
-    if text.is_empty() {
+    if state.ui.input.is_empty() {
         return true;
     }
     let Some(session_id) = state.active_session_id() else {
         return false;
     };
-    let resolved = state.ui.paste_manager.resolve_structured(&text);
-    let _ = command_tx
+    let resolved = match state.ui.input.resolve() {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            state.ui.add_toast(crate::state::Toast::error(format!(
+                "Cannot queue inconsistent composer state: {error}"
+            )));
+            return true;
+        }
+    };
+    let composer = state.ui.input.take_composer();
+    if command_tx
         .send(UserCommand::QueueCommand {
             session_id,
             prompt: resolved.text,
             images: resolved.images,
+            composer: resolved.submitted,
         })
-        .await;
-    state.ui.paste_manager.clear();
+        .await
+        .is_err()
+    {
+        state.ui.input.restore_composer(composer);
+        state.ui.add_toast(crate::state::Toast::warning(
+            "Could not queue input because the command channel closed",
+        ));
+    }
     true
+}
+
+async fn request_queued_commands_for_edit(
+    state: &mut AppState,
+    command_tx: &mpsc::Sender<UserCommand>,
+) {
+    if state.ui.pending_queued_edit.is_some() {
+        return;
+    }
+    state.ui.pending_queued_edit =
+        Some(state.ui.input.take_composer_preserving_attachment_labels());
+    if command_tx
+        .send(UserCommand::EditQueuedCommands)
+        .await
+        .is_err()
+        && let Some(snapshot) = state.ui.pending_queued_edit.take()
+    {
+        state.ui.input.restore_composer(snapshot);
+    }
 }
 
 /// Whether any foreground tools / subagents are still running. Drives

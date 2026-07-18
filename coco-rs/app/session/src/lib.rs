@@ -35,6 +35,7 @@ pub use storage::ModelCostEntry;
 pub use storage::TranscriptEntry;
 pub use storage::TranscriptMetadata;
 pub use storage::TranscriptStore;
+pub use storage::TranscriptTextMatch;
 pub use storage::TranscriptUsage;
 pub use storage::build_file_history_snapshot_chain;
 pub use storage::latest_goal_snapshot;
@@ -83,6 +84,12 @@ pub struct Session {
     pub working_dir: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// First user prompt and latest visible message, pre-truncated by the
+    /// lightweight metadata scan for picker previews.
+    #[serde(default)]
+    pub first_prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_message_preview: Option<String>,
     /// Number of messages in the session.
     #[serde(default)]
     pub message_count: i32,
@@ -97,6 +104,12 @@ pub struct Session {
     /// metadata, used to skip-ahead the seq counter on resume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_seq_watermark: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionContentMatch {
+    pub session_id: String,
+    pub snippet: String,
 }
 
 impl Session {
@@ -115,6 +128,8 @@ impl Session {
             model: String::new(),
             working_dir,
             title,
+            first_prompt: meta.first_prompt,
+            last_message_preview: meta.last_message_preview,
             message_count: meta.message_count,
             total_tokens: 0,
             tags: meta.tag.map(|t| vec![t]).unwrap_or_default(),
@@ -195,6 +210,8 @@ impl SessionManager {
             model: model.to_string(),
             working_dir: cwd.to_path_buf(),
             title: None,
+            first_prompt: String::new(),
+            last_message_preview: None,
             message_count: 0,
             total_tokens: 0,
             tags: Vec::new(),
@@ -341,6 +358,53 @@ impl SessionManager {
             .into_iter()
             .map(Session::from_transcript_metadata)
             .collect())
+    }
+
+    /// Scan persisted transcript text and emit at most one match per session.
+    /// The caller controls batching/streaming; this synchronous API is intended
+    /// to run inside `spawn_blocking` and never on a UI event loop.
+    pub fn search_content(
+        &self,
+        query: &str,
+        mut is_cancelled: impl FnMut() -> bool,
+        mut emit: impl FnMut(SessionContentMatch),
+    ) -> crate::Result<usize> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Ok(0);
+        }
+        let needle = query.to_lowercase();
+        let mut count = 0usize;
+        for session in self.list()? {
+            if is_cancelled() {
+                break;
+            }
+            let store = self.store_for(&session.working_dir);
+            let matched = match store.find_transcript_text(&session.id, &needle, &mut is_cancelled)
+            {
+                Ok(matched) => matched,
+                Err(error) => {
+                    tracing::debug!(
+                        session_id = %session.id,
+                        %error,
+                        "session content search skipped unreadable transcript",
+                    );
+                    continue;
+                }
+            };
+            let Some(matched) = matched else {
+                if is_cancelled() {
+                    break;
+                }
+                continue;
+            };
+            emit(SessionContentMatch {
+                session_id: session.id,
+                snippet: match_centered_snippet(&matched.line, matched.match_range, 180),
+            });
+            count = count.saturating_add(1);
+        }
+        Ok(count)
     }
 
     /// Snapshot the session's coordinator-mode state into the transcript
@@ -601,6 +665,42 @@ impl SessionManager {
         }
         Ok(removed)
     }
+}
+
+fn match_centered_snippet(
+    line: &str,
+    match_range: std::ops::Range<usize>,
+    max_bytes: usize,
+) -> String {
+    const ELLIPSIS: &str = "...";
+    if line.len() <= max_bytes {
+        return line.to_string();
+    }
+    let matched = &line[match_range.clone()];
+    if matched.len() >= max_bytes {
+        return matched.to_string();
+    }
+
+    let before = &line[..match_range.start];
+    let after = &line[match_range.end..];
+    let prefix_marker = if before.is_empty() { "" } else { ELLIPSIS };
+    let suffix_marker = if after.is_empty() { "" } else { ELLIPSIS };
+    let context_budget = max_bytes
+        .saturating_sub(matched.len())
+        .saturating_sub(prefix_marker.len() + suffix_marker.len());
+    let mut prefix_budget = context_budget / 2;
+    let mut suffix_budget = context_budget.saturating_sub(prefix_budget);
+    if before.len() < prefix_budget {
+        suffix_budget = suffix_budget.saturating_add(prefix_budget - before.len());
+        prefix_budget = before.len();
+    }
+    if after.len() < suffix_budget {
+        prefix_budget = prefix_budget.saturating_add(suffix_budget - after.len());
+        suffix_budget = after.len();
+    }
+    let prefix = coco_utils_string::take_last_bytes_at_char_boundary(before, prefix_budget);
+    let suffix = coco_utils_string::take_bytes_at_char_boundary(after, suffix_budget);
+    format!("{prefix_marker}{prefix}{matched}{suffix}{suffix_marker}")
 }
 
 /// Default cleanup retention period (30 days).

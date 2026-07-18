@@ -925,6 +925,7 @@ async fn local_app_server_turn_writes_back_runtime_history() {
                 prompt: "write back runtime history".into(),
                 history_override: Vec::new(),
                 images: Vec::new(),
+                composer: Default::default(),
                 slash_metadata: None,
                 model_selection: None,
                 permission_mode: None,
@@ -1030,6 +1031,7 @@ async fn btw_dispatch_supports_open_only_and_preserves_images() {
     let input_images = vec![coco_types::QueuedCommandEditImage {
         media_type: "image/png".to_string(),
         data_base64: "aW1hZ2U=".to_string(),
+        insertion_offset: 0,
     }];
     let ask = super::dispatch_slash_command(
         "btw",
@@ -1267,6 +1269,7 @@ async fn side_chat_runtime_accounts_usage_without_persisting_transcript() {
                 prompt: "account this ephemeral sidechat turn".into(),
                 history_override: Vec::new(),
                 images: Vec::new(),
+                composer: Default::default(),
                 slash_metadata: None,
                 model_selection: None,
                 permission_mode: None,
@@ -1310,6 +1313,7 @@ async fn side_chat_factory_routes_rolls_up_persists_and_restores_usage() {
                 prompt: "main turn".into(),
                 history_override: Vec::new(),
                 images: Vec::new(),
+                composer: Default::default(),
                 slash_metadata: None,
                 model_selection: None,
                 permission_mode: None,
@@ -1379,6 +1383,7 @@ async fn side_chat_factory_routes_rolls_up_persists_and_restores_usage() {
             prompt: "sidechat turn".into(),
             history_override: Vec::new(),
             images: Vec::new(),
+            composer: Default::default(),
             slash_metadata: None,
             model_selection: None,
             permission_mode: None,

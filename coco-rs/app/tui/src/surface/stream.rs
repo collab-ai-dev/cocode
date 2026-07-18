@@ -24,7 +24,7 @@ use crate::transcript::stream::StreamRenderController;
 use crate::transcript::stream::StreamRenderInput;
 use crate::transcript::stream::streaming_cursor_line;
 use coco_tui_ui::engine::history_insert::HistoryRows;
-use coco_tui_ui::engine::history_insert::render_history_rows;
+use coco_tui_ui::engine::history_insert::render_history_rows_with_links;
 
 // Deliberately NOT Clone: `committed` is the single scrollback-commit owner
 // (tui-v2 §6.7-10); a clone would be the forbidden second copy.
@@ -82,11 +82,22 @@ impl PreparedStreamAppend {
 }
 
 impl SurfaceStreamDriver {
+    #[cfg(test)]
     pub(crate) fn prepare(
         &mut self,
         state: &AppState,
         width: u16,
         plan: SurfaceFramePlan,
+    ) -> PreparedLiveTail {
+        self.prepare_with_hyperlinks(state, width, plan, false)
+    }
+
+    pub(crate) fn prepare_with_hyperlinks(
+        &mut self,
+        state: &AppState,
+        width: u16,
+        plan: SurfaceFramePlan,
+        hyperlinks_enabled: bool,
     ) -> PreparedLiveTail {
         let styles = UiStyles::new(&state.ui.theme);
         if active_exit_plan_prompt(state).is_none() {
@@ -130,6 +141,7 @@ impl SurfaceStreamDriver {
             styles,
             width,
             syntax_highlighting: state.ui.display_settings.syntax_highlighting,
+            hyperlinks_enabled,
         };
         let projection = self.controller.render_projection(render_key_input);
         let projection_cache_hit = projection.cache_hit;
@@ -158,8 +170,22 @@ impl SurfaceStreamDriver {
             && projection.stable_source_len > emitted_source_len
         {
             let append_rows_started = std::time::Instant::now();
-            let rows =
-                render_history_rows(projection.stable_lines[emitted_line_len..].to_vec(), width);
+            let explicit_links = projection
+                .stable_links
+                .iter()
+                .filter(|link| link.line >= emitted_line_len)
+                .map(|link| {
+                    let mut link = link.clone();
+                    link.line -= emitted_line_len;
+                    link
+                })
+                .collect();
+            let rows = render_history_rows_with_links(
+                projection.stable_lines[emitted_line_len..].to_vec(),
+                width,
+                None,
+                explicit_links,
+            );
             let append_rows_elapsed = append_rows_started.elapsed();
             if !rows.is_empty() {
                 tracing::debug!(
@@ -348,6 +374,7 @@ fn pending_plan_detail_hash(prompt: &PermissionPromptState) -> u64 {
         feedback_input,
         plan_file_path,
         allowed_prompts,
+        ..
     } = &prompt.detail
     {
         outcome.hash(&mut hasher);

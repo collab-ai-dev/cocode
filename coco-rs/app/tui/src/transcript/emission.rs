@@ -20,8 +20,8 @@ use crate::transcript::cells::RenderedCell;
 use crate::transcript::cells::engine_message_starts;
 use crate::transcript::render::HistoryLineRenderOptions;
 use crate::transcript::render::assistant::CommittedAssistantMarkdownOptions;
-use crate::transcript::render::assistant::render_committed_assistant_markdown;
-use crate::transcript::render::render_finalized_history_lines;
+use crate::transcript::render::assistant::render_committed_assistant_markdown_with_links;
+use crate::transcript::render::render_finalized_history_document;
 use crate::transcript::stream::ScrollbackStreamCommit;
 use crate::transcript::stream::StreamRenderKey;
 
@@ -221,7 +221,7 @@ pub(crate) fn finalize_after_stream_prefix(
     end: usize,
     options: HistoryLineRenderOptions<'_>,
     commit: &ScrollbackStreamCommit,
-) -> Option<Vec<Line<'static>>> {
+) -> Option<coco_tui_markdown::MarkdownRender> {
     // Mirror `push_text_first_assistant_group`: a message's leading
     // thinking cells render AFTER its text under the native presentation,
     // so the streamed text rows already in scrollback are the leading rows
@@ -284,8 +284,12 @@ pub(crate) fn finalize_after_stream_prefix(
         );
         return None;
     }
-    let render_key =
-        StreamRenderKey::committed(options.styles, options.width, options.syntax_highlighting);
+    let render_key = StreamRenderKey::committed(
+        options.styles,
+        options.width,
+        options.syntax_highlighting,
+        options.hyperlinks_enabled,
+    );
     if render_key != commit.render_key {
         tracing::debug!(
             target: "tui::surface::replay",
@@ -299,7 +303,7 @@ pub(crate) fn finalize_after_stream_prefix(
     // `[..line_prefix_len]` are already in scrollback; the source anchor plus
     // the render-key gate above prove the leading rows agree, so finalize
     // appends only the suffix `[line_prefix_len..]`.
-    let assistant_lines = render_committed_assistant_markdown(
+    let assistant = render_committed_assistant_markdown_with_links(
         text,
         CommittedAssistantMarkdownOptions {
             styles: options.styles,
@@ -307,35 +311,59 @@ pub(crate) fn finalize_after_stream_prefix(
             syntax_highlighting: options.syntax_highlighting,
         },
     );
-    if commit.line_len > assistant_lines.len() {
+    if commit.line_len > assistant.lines.len() {
         tracing::debug!(
             target: "tui::surface::replay",
             cause = "stream_commit_line_len_exceeds_final",
             commit_line_len = commit.line_len,
-            final_lines = assistant_lines.len(),
+            final_lines = assistant.lines.len(),
             "history full replay required",
         );
         return None;
     }
 
-    let mut lines = assistant_lines[commit.line_len..].to_vec();
-    lines.push(Line::default());
+    let mut output = coco_tui_markdown::MarkdownRender {
+        lines: assistant.lines[commit.line_len..].to_vec(),
+        links: assistant
+            .links
+            .into_iter()
+            .filter_map(|mut link| {
+                (link.line >= commit.line_len).then(|| {
+                    link.line -= commit.line_len;
+                    link
+                })
+            })
+            .collect(),
+    };
+    output.lines.push(Line::default());
     // Presentation order: the message's leading thinking cells render
     // after its text, then everything past the text cell (tool calls,
     // following messages) renders normally.
     if start < text_idx {
-        lines.extend(render_finalized_history_lines(
-            &cells[start..text_idx],
-            options,
-        ));
+        append_markdown_render(
+            &mut output,
+            render_finalized_history_document(&cells[start..text_idx], options),
+        );
     }
     if text_idx + 1 < end {
-        lines.extend(render_finalized_history_lines(
-            &cells[text_idx + 1..end],
-            options,
-        ));
+        append_markdown_render(
+            &mut output,
+            render_finalized_history_document(&cells[text_idx + 1..end], options),
+        );
     }
-    Some(lines)
+    Some(output)
+}
+
+fn append_markdown_render(
+    output: &mut coco_tui_markdown::MarkdownRender,
+    mut suffix: coco_tui_markdown::MarkdownRender,
+) {
+    let line_offset = output.lines.len();
+    for link in &mut suffix.links {
+        link.line = link.line.saturating_add(line_offset);
+    }
+    output.lines.extend(suffix.lines);
+    output.links.extend(suffix.links);
 }
 
 #[cfg(test)]

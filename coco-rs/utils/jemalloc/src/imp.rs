@@ -42,6 +42,16 @@ pub(crate) fn stats_snapshot() -> Option<JemallocStats> {
     })
 }
 
+pub(crate) fn stats_print() -> Option<String> {
+    let mut output = Vec::new();
+    tikv_jemalloc_ctl::stats_print::stats_print(
+        &mut output,
+        tikv_jemalloc_ctl::stats_print::Options::default(),
+    )
+    .ok()?;
+    String::from_utf8(output).ok()
+}
+
 pub(crate) fn purge_all_arenas() -> Result<(), JemallocError> {
     // The purge ctl is write-only with a NULL value; jemalloc rejects any
     // non-NULL `newp` with EINVAL, so it cannot go through the typed ctl write

@@ -2625,6 +2625,39 @@ SlashCommandStatusKind = Annotated[
 ]
 
 
+class SubmittedComposerElementPaste(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal["paste"] = Field(default="paste", alias="kind")
+    end: int
+    label: str
+    start: int
+
+
+class SubmittedComposerElementImage(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal["image"] = Field(default="image", alias="kind")
+    image_index: int
+    insertion_offset: int
+    label: str
+
+
+class SubmittedComposerElementFileRef(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal["file_ref"] = Field(default="file_ref", alias="kind")
+    end: int
+    start: int
+
+
+SubmittedComposerElement = Annotated[
+    Union[
+        SubmittedComposerElementPaste,
+        SubmittedComposerElementImage,
+        SubmittedComposerElementFileRef,
+    ],
+    Field(discriminator="kind"),
+]
+
+
 class ToolAbortReasonPayloadTurn(BaseModel):
     model_config = {"populate_by_name": True}
     kind: Literal["turn"] = Field(default="turn", alias="kind")
@@ -2950,6 +2983,7 @@ class TuiOnlyEventQueuedCommandEditReady(BaseModel):
     type_: Literal["queued_command_edit_ready"] = Field(
         default="queued_command_edit_ready", alias="type"
     )
+    composer: SubmittedComposer
     id: str
     prompt: str
     images: list[QueuedCommandEditImage] | None = None
@@ -2960,7 +2994,7 @@ class TuiOnlyEventQueuedCommandsEditReady(BaseModel):
     type_: Literal["queued_commands_edit_ready"] = Field(
         default="queued_commands_edit_ready", alias="type"
     )
-    cursor: int
+    composer: SubmittedComposer
     ids: list[str]
     prompt: str
     images: list[QueuedCommandEditImage] | None = None
@@ -2981,6 +3015,17 @@ class TuiOnlyEventOpenSessionBrowser(BaseModel):
         default="open_session_browser", alias="type"
     )
     sessions: list[SessionSummary]
+
+
+class TuiOnlyEventSessionSearchResults(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal["session_search_results"] = Field(
+        default="session_search_results", alias="type"
+    )
+    complete: bool
+    hits: list[SessionSearchHit]
+    query: str
+    request_id: int
 
 
 class TuiOnlyEventRewindRowMetadataReady(BaseModel):
@@ -3423,6 +3468,7 @@ TuiOnlyEvent = Annotated[
         TuiOnlyEventQueuedCommandsEditReady,
         TuiOnlyEventQueuedCommandEditUnavailable,
         TuiOnlyEventOpenSessionBrowser,
+        TuiOnlyEventSessionSearchResults,
         TuiOnlyEventRewindRowMetadataReady,
         TuiOnlyEventRewindRestorePreviewReady,
         TuiOnlyEventRewindPreClearSnapshot,
@@ -4345,6 +4391,8 @@ class SessionSummary(BaseModel):
     cwd: str
     model: str
     session_id: SessionId
+    first_prompt: str = ""
+    last_message_preview: str | None = None
     message_count: int = 0
     title: str | None = None
     total_tokens: int = 0
@@ -4582,6 +4630,7 @@ class TaskDetailParams(BaseModel):
 
 
 class TurnStartParams(BaseModel):
+    composer: SubmittedComposer
     prompt: str
     target: InteractiveTarget
     history_override: list[Any] | None = None
@@ -6248,6 +6297,7 @@ class ProviderStatusInfo(BaseModel):
 class QueuedCommandEditImage(BaseModel):
     data_base64: str
     media_type: str
+    insertion_offset: int = 0
 
 
 class ReasoningFilePart(BaseModel):
@@ -6339,6 +6389,11 @@ class SessionReadResult(BaseModel):
 class SessionResumeResult(BaseModel):
     session: SessionSummary
     surface_id: SurfaceId
+
+
+class SessionSearchHit(BaseModel):
+    session_id: SessionId
+    snippet: str
 
 
 class SessionStartInput(BaseModel):
@@ -6533,6 +6588,11 @@ class SubagentStopInput(BaseModel):
     last_assistant_message: str | None = None
     permission_mode: str | None = None
     transcript_path: str = ""
+
+
+class SubmittedComposer(BaseModel):
+    next_attachment_label: int
+    elements: list[SubmittedComposerElement] | None = None
 
 
 class SystemAgentsKilledMessage(BaseModel):

@@ -538,3 +538,77 @@ fn deferred_event_buffer_processes_non_lossy_when_no_lossy_slot_exists() {
         }))
     ));
 }
+
+#[tokio::test]
+async fn production_memory_trace_wiring_records_lifecycle_and_ordered_purge() {
+    let (mut app, _event_tx) = test_app(false);
+    let dir = tempfile::tempdir().expect("tempdir");
+    app.memory_trace = crate::memory_trace::MemoryTrace::open_for_test(dir.path(), 321, 1 << 20)
+        .expect("memory trace");
+
+    app.record_memory_sample(
+        crate::perf::MemoryPhase::Startup,
+        crate::perf::MemorySampleKind::Lifecycle,
+        true,
+        false,
+    );
+    app.note_lifecycle_memory_phase(crate::perf::MemoryPhase::ContextCleared);
+
+    // A later sequencer ticket is a deterministic barrier for both detached
+    // sample jobs and the purge reserved between them.
+    let barrier = app
+        .memory_trace
+        .sample_job(
+            crate::perf::MemoryPhase::Periodic,
+            crate::perf::MemorySampleKind::Periodic,
+        )
+        .expect("barrier job");
+    tokio::task::spawn_blocking(move || {
+        barrier.run(Some(crate::perf::MemoryObservation {
+            process: None,
+            jemalloc: None,
+            retained: crate::perf::RetainedMemoryStats::default(),
+        }));
+    })
+    .await
+    .expect("barrier worker");
+
+    let content =
+        std::fs::read_to_string(dir.path().join("coco.321.jsonl")).expect("trace artifact");
+    let events = content
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("trace event"))
+        .map(|event| {
+            (
+                event["event"].as_str().unwrap_or_default().to_string(),
+                event["phase"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        events,
+        [
+            ("sample".to_string(), "startup".to_string()),
+            ("sample".to_string(), "context_cleared".to_string()),
+            ("purge".to_string(), "context_cleared".to_string()),
+            ("sample".to_string(), "periodic".to_string()),
+        ]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn production_memory_trace_timer_starts_at_the_fixed_cadence() {
+    let started = tokio::time::Instant::now();
+    let mut interval = super::memory_trace_interval();
+
+    tokio::time::advance(crate::memory_trace::SAMPLE_INTERVAL).await;
+
+    assert_eq!(
+        interval.tick().await,
+        started + crate::memory_trace::SAMPLE_INTERVAL
+    );
+    assert_eq!(
+        interval.missed_tick_behavior(),
+        tokio::time::MissedTickBehavior::Skip
+    );
+}

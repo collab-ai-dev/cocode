@@ -41,10 +41,20 @@ pub(super) async fn run_agent_driver(
     // reach their arms without waiting for the engine to finish.
     let active_turn: Arc<Mutex<Option<ActiveTurn>>> = Arc::new(Mutex::new(None));
     let mut pending_editor_requests: HashMap<String, PendingEditorRequest> = HashMap::new();
+    let mut pending_queue_edits: HashMap<
+        String,
+        (
+            crate::session_runtime::SessionHandle,
+            coco_query::QueuedCommand,
+        ),
+    > = HashMap::new();
     let mut explicit_shutdown = false;
     let (turn_done_tx, mut turn_done_rx) = mpsc::channel::<uuid::Uuid>(16);
     let (bash_response_tx, mut bash_response_rx) =
         mpsc::channel::<Vec<Arc<coco_messages::Message>>>(16);
+    // A picker keystroke supersedes the previous disk scan. Stale tasks stop
+    // at the next transcript entry instead of piling up blocking work.
+    let session_search = super::session_search::SessionSearchGate::default();
 
     // Observe SIGINT/SIGTERM for the whole driver lifetime. The TUI runs in raw
     // mode, so Ctrl+C never arrives as SIGINT (it is a key event); this arm is
@@ -140,9 +150,10 @@ pub(super) async fn run_agent_driver(
                 user_message_id,
                 content,
                 images,
+                composer,
                 ..
             } => {
-                if content.is_empty() {
+                if content.is_empty() && images.is_empty() {
                     continue;
                 }
                 let Some(session) = local_app_server_bridge.session_by_id(&origin_session_id)
@@ -157,6 +168,7 @@ pub(super) async fn run_agent_driver(
                 // resolve through `runtime.command_registry` BEFORE handing
                 // raw text to the model.
                 let mut effective_content = content;
+                let mut effective_composer = composer;
                 let mut slash_metadata = None;
                 let mut slash_thinking_level = None;
                 let mut slash_model_runtime_source = None;
@@ -199,6 +211,7 @@ pub(super) async fn run_agent_driver(
                             model_runtime_source,
                         } => {
                             effective_content = content;
+                            effective_composer = Default::default();
                             slash_metadata = metadata;
                             slash_thinking_level = thinking_level;
                             slash_model_runtime_source = model_runtime_source;
@@ -224,6 +237,7 @@ pub(super) async fn run_agent_driver(
                         prompt: effective_content,
                         history_override: Vec::new(),
                         images: image_data_to_turn_start(&images),
+                        composer: effective_composer.clone(),
                         slash_metadata,
                         model_selection: model_runtime_source_to_turn_start_selection(
                             slash_model_runtime_source,
@@ -273,6 +287,7 @@ pub(super) async fn run_agent_driver(
                     prompt: effective_content,
                     history_override: Vec::new(),
                     images: image_data_to_turn_start(&images),
+                    composer: effective_composer.clone(),
                     slash_metadata,
                     model_selection: model_runtime_source_to_turn_start_selection(
                         slash_model_runtime_source,
@@ -298,6 +313,7 @@ pub(super) async fn run_agent_driver(
                             &session,
                             params.prompt,
                             image_data_to_queued(&images),
+                            effective_composer,
                         )
                         .await;
                         tracing::warn!(
@@ -391,10 +407,7 @@ pub(super) async fn run_agent_driver(
                 });
             }
 
-            UserCommand::PersistPromptHistory {
-                display,
-                pasted_contents,
-            } => {
+            UserCommand::PersistPromptHistory { composer } => {
                 // Append to the cross-session composer history off the
                 // dispatch thread — the JSONL append takes an advisory file
                 // lock.
@@ -402,13 +415,21 @@ pub(super) async fn run_agent_driver(
                 let project = cwd.to_string_lossy().to_string();
                 tokio::spawn(async move {
                     if let Err(e) = runtime_t
-                        .persist_prompt_history_entry(project, display, pasted_contents)
+                        .persist_prompt_history_entry(project, composer)
                         .await
                     {
                         warn!(target: "coco_agent_host::history", error = %e,
                             "failed to persist prompt history");
                     }
                 });
+            }
+            UserCommand::SearchSessions { query, request_id } => {
+                std::mem::drop(session_search.spawn(
+                    runtime.session_manager_handle(),
+                    event_tx.clone(),
+                    query,
+                    request_id,
+                ));
             }
 
             UserCommand::OpenMemoryFile { path } => {
@@ -1031,6 +1052,7 @@ pub(super) async fn run_agent_driver(
                 session_id: origin_session_id,
                 prompt,
                 images,
+                composer,
             } => {
                 let Some(session) = local_app_server_bridge.session_by_id(&origin_session_id)
                 else {
@@ -1068,6 +1090,7 @@ pub(super) async fn run_agent_driver(
                     &session,
                     prompt,
                     image_data_to_queued(&images),
+                    composer,
                 )
                 .await
                 else {
@@ -1109,29 +1132,26 @@ pub(super) async fn run_agent_driver(
                     }
                 };
                 let id = queued.id.clone();
-                let _ = event_tx
-                    .send(CoreEvent::Protocol(ServerNotification::CommandDequeued {
-                        id: id.clone(),
-                    }))
-                    .await;
-                let _ = event_tx
+                if event_tx
                     .send(CoreEvent::Tui(TuiOnlyEvent::QueuedCommandEditReady {
-                        id,
+                        id: id.clone(),
                         prompt: queued.prompt,
                         images: queued.images,
+                        composer: queued.composer,
                     }))
-                    .await;
+                    .await
+                    .is_ok()
+                {
+                    pending_queue_edits.insert(id, (session.clone(), queued.original));
+                } else {
+                    session.command_queue().enqueue(queued.original).await;
+                }
             }
 
-            UserCommand::EditQueuedCommands {
-                current_input,
-                current_cursor,
-            } => {
+            UserCommand::EditQueuedCommands => {
                 let queued =
                     match coco_agent_host::session_queue::dequeue_editable_commands_for_edit(
                         &session,
-                        &current_input,
-                        current_cursor,
                     )
                     .await
                     {
@@ -1147,24 +1167,50 @@ pub(super) async fn run_agent_driver(
                         }
                     };
 
-                for id in &queued.ids {
-                    let _ = event_tx
-                        .send(CoreEvent::Protocol(ServerNotification::CommandDequeued {
-                            id: id.clone(),
-                        }))
-                        .await;
-                }
-                let _ = event_tx
-                    .send(CoreEvent::Protocol(ServerNotification::QueueStateChanged {
-                        queued: queued.remaining_queued as i32,
-                    }))
-                    .await;
-                let _ = event_tx
+                if event_tx
                     .send(CoreEvent::Tui(TuiOnlyEvent::QueuedCommandsEditReady {
                         ids: queued.ids,
                         prompt: queued.prompt,
-                        cursor: queued.cursor,
                         images: queued.images,
+                        composer: queued.composer,
+                    }))
+                    .await
+                    .is_ok()
+                {
+                    for command in queued.originals {
+                        pending_queue_edits
+                            .insert(command.id.to_string(), (session.clone(), command));
+                    }
+                } else {
+                    for command in queued.originals {
+                        session.command_queue().enqueue(command).await;
+                    }
+                }
+            }
+
+            UserCommand::ResolveQueuedCommandEdits { ids, accept } => {
+                let mut resolved = Vec::new();
+                for id in ids {
+                    if let Some((leased_session, command)) = pending_queue_edits.remove(&id) {
+                        if accept {
+                            resolved.push(id);
+                        } else {
+                            leased_session.command_queue().enqueue(command).await;
+                        }
+                    }
+                }
+                if accept {
+                    for id in resolved {
+                        let _ = event_tx
+                            .send(CoreEvent::Protocol(ServerNotification::CommandDequeued {
+                                id,
+                            }))
+                            .await;
+                    }
+                }
+                let _ = event_tx
+                    .send(CoreEvent::Protocol(ServerNotification::QueueStateChanged {
+                        queued: session.command_queue().len().await as i32,
                     }))
                     .await;
             }
@@ -1666,6 +1712,13 @@ pub(super) async fn run_agent_driver(
                 info!(?other, "Unhandled UserCommand in agent driver");
             }
         }
+    }
+
+    // An edit response is a lease, not a destructive dequeue. If the TUI or
+    // command channel disappears before it acknowledges the restore, put every
+    // outstanding command back on the exact session it came from.
+    for (_, (leased_session, command)) in pending_queue_edits.drain() {
+        leased_session.command_queue().enqueue(command).await;
     }
 
     // Driver loop exited (sender dropped or Shutdown). Drain any

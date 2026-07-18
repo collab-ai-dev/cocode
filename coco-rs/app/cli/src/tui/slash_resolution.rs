@@ -502,6 +502,7 @@ pub(super) async fn drain_queued_slash_commands(
             .map(|image| coco_types::QueuedCommandEditImage {
                 media_type: image.media_type,
                 data_base64: image.data_base64,
+                insertion_offset: image.insertion_offset,
             })
             .collect();
         let outcome = dispatch_slash_command(

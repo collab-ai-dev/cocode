@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable
 
 from pydantic import BaseModel, TypeAdapter
 
+from coco_sdk._composer import build_plain_text_turn_start
 from coco_sdk._internal.transport import Transport
 from coco_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
 from coco_sdk._message_router import MessageRouter
@@ -65,7 +66,6 @@ from coco_sdk.generated.protocol import (
     ThinkingLevel,
     TurnEndedParams,
     TurnInterruptRequest,
-    TurnStartRequest,
     UpdateEnvRequest,
     UserInputResolveRequest,
 )
@@ -368,10 +368,9 @@ class CocoClient:
         self._surface_id = result.surface_id
 
     async def _send_turn_start(self, prompt: str) -> None:
-        request = TurnStartRequest(
-            params=TurnStartRequest.TurnStartRequestParams(
-                target=self._interactive_target(), prompt=prompt
-            )
+        request = build_plain_text_turn_start(
+            self._interactive_target(),
+            prompt,
         )
         await self._request(request)
 
@@ -414,10 +413,9 @@ class CocoClient:
 
     async def send(self, text: str) -> AsyncIterator[ServerNotification]:
         """Send a follow-up message and yield events from the new turn."""
-        request = TurnStartRequest(
-            params=TurnStartRequest.TurnStartRequestParams(
-                target=self._interactive_target(), prompt=text
-            )
+        request = build_plain_text_turn_start(
+            self._interactive_target(),
+            text,
         )
         await self._start_turn_with_retry(request)
         async for event in self.events():

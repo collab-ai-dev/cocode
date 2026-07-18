@@ -46,6 +46,12 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         // transcript state. Pressing it again from inside the state closes
         // it (handled in the state branch below).
         AppToggleTranscript => TuiCommand::ToggleTranscript,
+        AppExpandCommittedTool => {
+            if state.ui.modal.is_some() {
+                return None;
+            }
+            TuiCommand::ExpandCommittedTool
+        }
         // `app:toggleTeammatePreview` (Ctrl+Shift+O) — toggle teammate
         // spinner-line message previews on/off.
         AppToggleTeammatePreview => TuiCommand::ToggleTeammateMessagePreview,

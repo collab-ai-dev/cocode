@@ -27,7 +27,8 @@ Enforced by `scripts/check-tui-ui-seam.sh` (wired into `just check-seam` →
 | `diff` | `DiffLineView` / `diff_line_views` row model for `diff_display`. |
 | `truncate` | Display-width-aware (CJK/emoji-safe) truncation (absorbed from jcode). |
 | `clock`, `frame_rate_limiter`, `double_press`, `constants` | Timing / UI primitives. |
-| `clipboard` / `clipboard_copy` / `paste` | Clipboard image capture (async subprocess, `io::Result`), text copy (arboard / OSC-52 / WSL), and the paste buffer (`PasteManager` / `ImageData` / `ResolvedInput`). |
+| `clipboard` / `clipboard_copy` / `paste` | Clipboard image capture (async subprocess, `io::Result`) and text copy (arboard / OSC-52 / WSL). Attachment ownership stays in `coco-tui`. |
+| `widgets::textarea*` | Editable buffer split into core editing, atomic elements/snapshots, width-aware layout, and navigation modules. Atomic elements carry display metadata only, never app payloads. |
 
 ## Invariants
 

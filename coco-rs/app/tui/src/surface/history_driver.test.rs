@@ -19,6 +19,7 @@ use crate::transcript::derive::message_to_cells;
 use crate::transcript::derive::test_helpers;
 use crate::transcript::emission::HistoryEmissionOutcome;
 use crate::transcript::render::HistoryReplayCachePolicy;
+use crate::transcript::render::render_finalized_history_lines;
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::engine::history_reflow::HistoryViewportChange;
 use coco_tui_ui::style::UiStyles;
@@ -58,6 +59,59 @@ fn driver_emit_append_only_uses_finalized_transcript_renderer() {
             "view    "
         ]
     );
+}
+
+#[test]
+fn committed_tool_expand_ring_reprints_full_output_through_history_owner() {
+    let theme = Theme::default();
+    let width = 64;
+    let backend = TestBackend::new(width, 40);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 30, width, 10));
+    let invocation = single_tool_use_cells("call-1", "Bash", "printf lines");
+    let output = (0..20)
+        .map(|line| format!("expanded-line-{line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let result = vec![tool_result_cell("call-1", "Bash", &output)];
+    let cells = cells_from_parts(&[&invocation, &result]);
+    let mut driver = SurfaceHistoryDriver::default();
+
+    driver
+        .emit_append_only(&mut terminal, header(), &cells, 1, options(&theme, width))
+        .expect("initial collapsed commit");
+    assert!(driver.request_expand_committed_tool(&cells));
+
+    let prepared = driver
+        .prepare_pending_reprint(&cells, options(&theme, width))
+        .expect("prepared re-print");
+    let rendered = prepared
+        .rows
+        .buffer()
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect::<String>();
+    assert!(rendered.contains("re-printed from turn 1"), "{rendered}");
+    assert!(rendered.contains("expanded-line-19"), "{rendered}");
+
+    driver
+        .commit_prepared_reprint(&mut terminal, &prepared)
+        .expect("commit re-print");
+    assert!(
+        !driver.request_expand_committed_tool(&cells),
+        "an expanded item must not be offered twice"
+    );
+}
+
+#[test]
+fn short_committed_tool_output_is_not_added_to_expand_ring() {
+    let theme = Theme::default();
+    let invocation = single_tool_use_cells("call-1", "Bash", "echo short");
+    let result = vec![tool_result_cell("call-1", "Bash", "short")];
+    let cells = cells_from_parts(&[&invocation, &result]);
+
+    assert!(collapsed_tool_keys(&cells, 0, cells.len(), options(&theme, 80)).is_empty());
 }
 
 #[test]
@@ -1069,6 +1123,7 @@ fn options(theme: &Theme, width: u16) -> HistoryLineRenderOptions<'_> {
         syntax_highlighting: SyntaxHighlighting::Off,
         show_system_reminders: false,
         show_thinking: false,
+        hyperlinks_enabled: false,
         cwd: None,
         kb_handle: None,
         replay_cache_policy: HistoryReplayCachePolicy::default(),
