@@ -38,10 +38,16 @@ Delete the worktree for branch `$ARGUMENTS` and remove the associated local bran
 
 ### Step 4: Check Integration Status (local `main` + `origin/main`)
 
-`git branch -d` only tests the *local* `main`/upstream, so it wrongly reports
-"not fully merged" for a branch that was already **squash-merged** into
-`origin/main` via a PR (the squash commit has a different hash). Determine real
-integration before deciding how to delete.
+`git branch -d` only tests the *local* `main`/upstream, and a merged PR lands on
+`origin/main` with **different commit hashes** than the branch:
+
+- **Merge-commit / fast-forward** keeps the original hashes.
+- **Squash-merge** collapses the whole branch into one new commit.
+- **Rebase-merge** re-applies each branch commit as a new, separate commit.
+
+So every hash-based check (`-d`, `--is-ancestor`, `git log --not`) wrongly
+reports "not merged" for squash- and rebase-merged branches. Decide integration
+by **patch content**, not by hash.
 
 1. Refresh the remote (best-effort — continue on failure, e.g. offline / no
    remote): `git fetch origin main` (updates the `origin/main` tracking ref).
@@ -50,30 +56,56 @@ integration before deciding how to delete.
 2. Build the list of integration refs to test — whichever of `main` (local) and
    `origin/main` exist.
 
-3. For each integration ref `REF`, test whether `$ARGUMENTS` is already in it.
-   The branch counts as **integrated** if *any* ref passes *either* test:
-   - **Direct / rebase / fast-forward merge** (commit is present as-is):
+3. For each integration ref `REF`, the branch counts as **integrated** if ANY
+   test passes. Run them in order and stop at the first hit:
+   - **(a) Merge-commit / fast-forward** — commits present as-is:
      `git merge-base --is-ancestor $ARGUMENTS REF` (exit 0 = every branch commit
      is already reachable from `REF`).
-   - **Squash merge** (patch-equivalent, different hash): if the ancestor test
-     fails, squash the branch to one commit and ask whether `REF` already
-     contains that combined patch:
+   - **(b) Rebase-merge / cherry-pick** — each commit re-applied under a new
+     hash. `git cherry` compares by *patch*: it prints `+` for a branch commit
+     whose patch is NOT in `REF` and `-` for one already there. Integrated ⇔
+     **no `+` line**:
+     ```bash
+     git cherry REF "$ARGUMENTS" | grep -q '^+' || echo "all patches already in REF"
+     ```
+     This is the case the old skill missed: a rebase-merged PR puts N *separate*
+     patch-equivalent commits on `main`, so the single-commit squash test in (c)
+     never matches even though every commit is upstream.
+   - **(c) Squash-merge** — all commits collapsed into one new hash. Squash the
+     branch to one commit and ask whether `REF` already contains that combined
+     patch:
      ```bash
      MB=$(git merge-base "$ARGUMENTS" REF)
      SQUASH=$(git commit-tree "$ARGUMENTS^{tree}" -p "$MB" -m _)
-     git cherry REF "$SQUASH" | grep -q '^-'   # a '-' line => patch already in REF
+     git cherry REF "$SQUASH" | grep -q '^-'   # a '-' line => combined patch already in REF
      ```
+
+   When a PR number is known, `gh pr view <n> --json state,mergedAt,mergeCommit`
+   is a fast confirmation — but the patch tests above are authoritative and work
+   offline.
 
 ### Step 5: Delete Local Branch
 
 - **Integrated** (safe — no work lost): delete with `git branch -D $ARGUMENTS`
-  (use `-D`; `-d` does not recognize squash-merges, and safety is already
-  proven). Report which ref it was integrated into (e.g. "already in
-  `origin/main`").
+  (use `-D`; `-d` recognizes neither squash- nor rebase-merges, and safety is
+  already proven). Report which ref it was integrated into and by which path
+  (merge / rebase / squash), e.g. "rebase-merged into `origin/main` via PR #53".
 - **NOT integrated** (branch has unique, unmerged work): do **NOT** auto
   force-delete.
-  1. List exactly what would be lost — commits on the branch not on any
-     integration ref: `git log --oneline $ARGUMENTS --not main origin/main`.
+  1. List exactly what would be lost — branch commits whose **patch** is on
+     *no* integration ref. Use `git cherry` (patch-equivalence), NOT
+     `git log --not` (hash-reachability), or you will list rebased /
+     cherry-picked commits that are already upstream. A commit is truly lost
+     only if it is `+` against **every** ref that exists (intersection):
+     ```bash
+     # both refs exist: keep commits that are '+' on main AND on origin/main
+     comm -12 \
+       <(git cherry main        "$ARGUMENTS" | awk '/^\+/{print $2}' | sort) \
+       <(git cherry origin/main "$ARGUMENTS" | awk '/^\+/{print $2}' | sort) \
+       | xargs -r -n1 git show -s --oneline
+     ```
+     With only one ref available, just list that ref's `+` commits:
+     `git cherry <ref> "$ARGUMENTS" | awk '/^\+/{print $2}' | xargs -r -n1 git show -s --oneline`.
   2. Ask the user to confirm force deletion.
   3. Only on explicit confirmation: `git branch -D $ARGUMENTS`.
 
