@@ -58,7 +58,7 @@ pub(crate) fn header_bar_view(
     }
     if state.is_viewing_side_chat() {
         row1_spans.push(Span::styled(
-            "  ·  SIDECHAT",
+            "  ·  Side chat",
             Style::default().fg(styles.accent()).bold(),
         ));
     }

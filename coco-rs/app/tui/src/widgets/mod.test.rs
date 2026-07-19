@@ -83,6 +83,20 @@ fn test_snapshot_status_bar_full() {
 }
 
 #[test]
+fn test_snapshot_side_chat_idle() {
+    let mut state = AppState::new();
+    state.session.model = "deepseek-v4-flash".to_string();
+    state.session.provider = "deepseek-openai".to_string();
+    let parent_id = coco_types::SessionId::try_new("parent").expect("valid parent session id");
+    let child_id = coco_types::SessionId::try_new("child").expect("valid child session id");
+    state.session.session_id = Some(parent_id.as_str().to_string());
+    assert!(state.enter_side_chat(parent_id, child_id));
+
+    let output = render_to_string(&state, 100, 16);
+    insta::assert_snapshot!("side_chat_idle", output);
+}
+
+#[test]
 fn test_snapshot_with_messages() {
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();

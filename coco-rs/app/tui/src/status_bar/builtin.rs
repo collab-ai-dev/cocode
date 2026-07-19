@@ -64,16 +64,6 @@ fn show_environment_line(state: &AppState) -> bool {
 /// total spend | counts | MCP | LSP. Always rendered.
 fn identity_line(state: &AppState) -> Vec<StatusSpan> {
     let mut spans = Vec::new();
-    // Keep the escape hatch on the always-visible identity row. Usage can add
-    // a third built-in row, and constrained terminals may clip the environment
-    // row; returning to main must remain discoverable in either layout.
-    if state.is_viewing_side_chat() {
-        spans.push(StatusSpan::bold(
-            format!(" {}", t!("status.sidechat_return")),
-            StatusTone::Accent,
-        ));
-        separator(&mut spans);
-    }
     let (provider, model_id) = state
         .session
         .model_by_role

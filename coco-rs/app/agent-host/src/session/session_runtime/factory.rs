@@ -245,7 +245,7 @@ impl SessionRuntimeFactory {
         let super::SideChatSeed {
             context,
             runtime_config,
-            engine_config,
+            mut engine_config,
             permissions,
             model_runtimes,
             tools,
@@ -283,6 +283,7 @@ impl SessionRuntimeFactory {
             callback_requirements,
         })
         .await?;
+        scope_side_chat_wire_dump(&mut engine_config, handle.session_id());
         handle
             .apply_side_chat_parent_state(engine_config, permissions)
             .await;
@@ -350,4 +351,14 @@ impl SessionRuntimeFactory {
         })
         .await
     }
+}
+
+pub(super) fn scope_side_chat_wire_dump(
+    engine_config: &mut coco_query::QueryEngineConfig,
+    child_session_id: &SessionId,
+) {
+    engine_config.wire_dump = engine_config
+        .wire_dump
+        .as_ref()
+        .and_then(|wire_dump| wire_dump.for_side_chat(child_session_id));
 }

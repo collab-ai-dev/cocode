@@ -1,0 +1,13 @@
+---
+source: app/tui/src/widgets/mod.test.rs
+expression: output
+---
+ ╭─╮ ╭─╮  COCODE v0.1.1  ·  Side chat                                                               
+ │●│ │●│  deepseek-openai/deepseek-v4-flash  *  auto                                                
+ ╰─╯ ╰─╯                                                                                            
+                                                                                                    
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯                                                                                                   
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ deepseek-openai/deepseek-v4-flash * auto | ctx -- | →0 ←0              Side chat · Ctrl+C to return
+ ⏯ manual mode on

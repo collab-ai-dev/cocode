@@ -263,7 +263,9 @@ Inside, `index.jsonl` always gets one line per call — that is your index even 
 `error` level. Each persisted call additionally writes a triplet named
 `<seq>-turn-<n>-<provider>` with a `.req.json`, `.resp.txt`, and `.meta.json`
 alongside it. Subagent traffic is nested under `wire/subagents/agent-<id>/`, so
-a misbehaving subagent's calls stay separate from the parent's.
+a misbehaving subagent's calls stay separate from the parent's. Ephemeral
+`/btw` traffic is nested under `wire/sidechats/session-<child-id>/`; this keeps
+each Side chat isolated without creating a resumable child-session directory.
 
 Two behaviors worth knowing. A retried call captures the **final** attempt
 rather than a concatenation of all of them, because each new request resets the

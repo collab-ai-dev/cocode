@@ -69,7 +69,13 @@ capture + sink.
   0003-turn-3-openai.req.json  # redacted request body (on failure, or level=all)
   0003-turn-3-openai.resp.txt  # raw response bytes (redacted)
   0003-turn-3-openai.meta.json # status / outcome / redacted headers / sizes
+  subagents/agent-<id>/...     # independent subagent sequence + index
+  sidechats/session-<id>/...   # ephemeral child dump owned by the parent
 ```
+
+Side-chat diagnostics stay below the parent session's `wire/` directory. They
+must not create `<project>/<child-session-id>/`, because `/btw` children remain
+non-resumable and have no durable transcript/usage artifact of their own.
 
 `error` persists the body triplet only on failure (every call still gets
 an `index.jsonl` line); `all` persists every call; `off` means no

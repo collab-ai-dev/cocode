@@ -224,6 +224,40 @@ fn sequence_counter_increments_per_call() {
 }
 
 #[test]
+fn side_chat_config_stays_under_parent_diagnostics_namespace() {
+    let tmp = tempfile::tempdir().unwrap();
+    let child_id = coco_types::SessionId::try_new("child-123").unwrap();
+    let config = cfg(tmp.path(), WireDumpLevel::All)
+        .for_side_chat(&child_id)
+        .expect("filesystem-backed config can derive a side-chat sink");
+    let rec = config.begin(ctx());
+    rec.on_request("https://api/responses", &HashMap::new(), b"{}");
+    rec.on_response_chunk(b"ok");
+    rec.finish(WireOutcome::Success);
+
+    let side_chat_dir = tmp
+        .path()
+        .join("wire")
+        .join("sidechats")
+        .join("session-child-123");
+    assert!(side_chat_dir.join("index.jsonl").is_file());
+    assert!(side_chat_dir.join("0001-turn-3-openai.req.json").is_file());
+    assert!(
+        !tmp.path().join("child-123").exists(),
+        "an ephemeral side chat must not gain a top-level session artifact directory"
+    );
+}
+
+#[test]
+fn side_chat_config_does_not_assume_a_layout_for_custom_sinks() {
+    let sink = Arc::new(VecSink::default());
+    let config = WireDumpConfig::with_sink(sink, WireDumpLevel::All, 1024, true);
+    let child_id = coco_types::SessionId::try_new("child-123").unwrap();
+
+    assert!(config.for_side_chat(&child_id).is_none());
+}
+
+#[test]
 fn custom_sink_receives_an_already_redacted_record() {
     let sink = Arc::new(VecSink::default());
     let config =

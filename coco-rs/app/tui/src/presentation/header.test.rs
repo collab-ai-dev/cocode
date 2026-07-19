@@ -44,6 +44,6 @@ fn header_marks_sidechat_without_losing_parent_model() {
     assert!(state.enter_side_chat(parent_id, child_id));
 
     let view = header_bar_view(&state, UiStyles::new(&theme), 80);
-    assert!(line_text(&view.info_lines[0]).contains("SIDECHAT"));
+    assert!(line_text(&view.info_lines[0]).contains("Side chat"));
     assert_eq!(line_text(&view.info_lines[1]), "openai/gpt-5.4  *  auto");
 }

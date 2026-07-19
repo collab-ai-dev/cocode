@@ -69,12 +69,6 @@ pub(crate) fn status_bar_view(state: &AppState) -> StatusBarView {
         let padding = status_line.as_command().padding.max(0) as usize;
         let mut line = " ".repeat(padding);
         let custom = state.ui.status_line.last_success().unwrap_or("");
-        if state.is_viewing_side_chat() {
-            line.push_str(&crate::i18n::t!("status.sidechat_return"));
-            if !custom.is_empty() {
-                line.push_str(" | ");
-            }
-        }
         line.push_str(custom);
         return StatusBarView::Custom { line };
     }
