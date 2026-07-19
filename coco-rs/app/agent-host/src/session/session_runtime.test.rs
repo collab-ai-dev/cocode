@@ -19,6 +19,8 @@ use super::SessionRuntimeBootstrap;
 use super::SessionRuntimeBootstrapSource;
 use super::SessionRuntimeFactory;
 use super::SessionRuntimeFactoryOpts;
+use super::SessionTurnEngineConfigRequest;
+use super::factory::scope_side_chat_wire_dump;
 use super::resolve_model_selection_from_runtime_config;
 use super::thinking_level_for_effort_from;
 use crate::AgentHostOptions;
@@ -261,6 +263,54 @@ async fn main_runtime_snapshot_uses_main_model_context_metadata() {
 
     assert_eq!(info.context_window.get(), 1_000_000);
     assert_eq!(info.max_output_tokens.get(), 12_288);
+}
+
+#[tokio::test]
+async fn turn_engine_reports_the_model_bound_to_the_selected_runtime() {
+    let home = TempDir::new().expect("home tempdir");
+    let runtime = build_runtime_with_main(&home, "deepseek-openai", "deepseek-v4-flash").await;
+
+    // AppServer session/start historically writes its lifecycle default into
+    // the scalar config without rebinding the role runtime. Reproduce that
+    // split source of truth and require the turn identity to follow the same
+    // runtime that will serve the request.
+    runtime.set_model_id("claude-opus-4-6".to_string()).await;
+    let turn_engine = runtime
+        .build_turn_engine(
+            SessionTurnEngineConfigRequest {
+                model_selection: None,
+                permission_mode: None,
+                thinking_level: None,
+                max_turns: None,
+                system_prompt: None,
+            },
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+
+    assert_eq!(turn_engine.model_id, "deepseek-v4-flash");
+}
+
+#[test]
+fn side_chat_scopes_parent_wire_diagnostics_to_the_child() {
+    let home = TempDir::new().expect("home tempdir");
+    let mut config = coco_query::QueryEngineConfig {
+        wire_dump: Some(coco_query::WireDumpConfig::new(
+            home.path().join("parent-session"),
+            coco_config::WireDumpLevel::All,
+            1024,
+            true,
+        )),
+        ..Default::default()
+    };
+    let child_id = SessionId::try_new("child-123").expect("valid child id");
+
+    scope_side_chat_wire_dump(&mut config, &child_id);
+
+    assert!(
+        config.wire_dump.is_some(),
+        "operator-enabled parent diagnostics must reach the ephemeral child"
+    );
 }
 
 #[tokio::test]

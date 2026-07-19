@@ -1169,10 +1169,11 @@ fn identical_frame_emits_no_cursor_escapes_and_no_buffer_writes() {
 }
 
 #[test]
-fn repeated_spinner_frames_preserve_cursor_blink() {
+fn repeated_spinner_frames_restore_cursor_without_reemitting_style_or_visibility() {
     // The realistic shape: the viewport keeps changing (a spinner glyph) while
-    // the cursor claim does not. Cells must repaint; the cursor must not be
-    // re-asserted, or the blink dies for the whole turn.
+    // the cursor claim does not. Cell draws move the physical cursor, so each
+    // changed frame must restore its position without re-emitting style or
+    // visibility.
     let capture = CapturedWriter::default();
     let backend = CrosstermBackend::new(capture.clone());
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
@@ -1208,8 +1209,8 @@ fn repeated_spinner_frames_preserve_cursor_blink() {
         "an unchanged claim must not re-set the cursor style: {bytes:?}"
     );
     assert!(
-        !bytes.contains("\x1b[2;4H"),
-        "an unchanged claim must not re-move the cursor: {bytes:?}"
+        bytes.contains("\x1b[2;4H"),
+        "each cell repaint must restore the claimed cursor position: {bytes:?}"
     );
 }
 

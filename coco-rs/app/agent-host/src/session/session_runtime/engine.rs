@@ -189,10 +189,19 @@ impl SessionRuntime {
             .unwrap_or(coco_inference::ModelRuntimeSource::Role(
                 coco_types::ModelRole::Main,
             ));
+        let model_runtime_snapshot = self
+            .model_runtimes()
+            .snapshot_for_source(model_runtime_source.clone())
+            .ok();
         let model_id = request
             .model_selection
             .as_ref()
             .map(|selection| selection.model_id.clone())
+            .or_else(|| {
+                model_runtime_snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.model_id.clone())
+            })
             .unwrap_or_else(|| current_engine_config.model_id.clone());
         let plan_mode_settings = current_engine_config.plan_mode_settings.clone();
         let config = QueryEngineConfig {
@@ -206,10 +215,7 @@ impl SessionRuntime {
             total_token_budget: current_engine_config
                 .total_token_budget
                 .or_else(|| runtime_config.loop_config.total_token_budget.map(i64::from)),
-            prompt_cache: self
-                .model_runtimes()
-                .snapshot_for_source(model_runtime_source.clone())
-                .ok()
+            prompt_cache: model_runtime_snapshot
                 .is_some_and(|snapshot| snapshot.supports_prompt_cache)
                 .then(|| coco_types::PromptCacheConfig {
                     mode: coco_types::PromptCacheMode::Auto,

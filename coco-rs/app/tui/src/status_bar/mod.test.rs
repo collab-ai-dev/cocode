@@ -288,7 +288,7 @@ fn status_bar_surfaces_manual_mode_and_cycle_hint_in_default_state() {
 }
 
 #[test]
-fn status_bar_marks_sidechat_and_shows_return_key_with_inherited_mode() {
+fn status_bar_sidechat_keeps_inherited_mode_without_left_hint() {
     let _locale = locale_test_guard("en");
     let mut state = AppState::default();
     let parent_id = test_session_id("parent");
@@ -305,7 +305,7 @@ fn status_bar_marks_sidechat_and_shows_return_key_with_inherited_mode() {
         .flatten()
         .map(|span| span.text.as_str())
         .collect::<String>();
-    assert!(text.contains("ctrl+c ↩ main"));
+    assert!(!text.contains("Ctrl+C"));
     assert!(text.contains("▸▸ auto mode on"));
     assert!(!text.contains("to cycle"));
 }
@@ -517,7 +517,7 @@ fn custom_status_line_replaces_built_in_segments() {
 }
 
 #[test]
-fn custom_status_line_keeps_sidechat_return_affordance() {
+fn custom_status_line_keeps_padding_for_right_aligned_sidechat_affordance() {
     let _locale = locale_test_guard("en");
     let mut state = AppState::default();
     let parent_id = test_session_id("parent");
@@ -539,7 +539,7 @@ fn custom_status_line_keeps_sidechat_return_affordance() {
         panic!("expected custom status bar");
     };
 
-    assert_eq!(line, " ctrl+c ↩ main | custom");
+    assert_eq!(line, " custom");
 }
 
 #[test]

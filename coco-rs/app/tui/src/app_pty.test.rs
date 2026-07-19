@@ -406,6 +406,38 @@ fn real_pty_idle_frame_emits_zero_bytes() {
     );
 }
 
+#[test]
+fn real_pty_changed_cells_restore_unchanged_cursor_position() {
+    let (mut pty, mut terminal) = test_pty(40, 6);
+    terminal.set_viewport_area(Rect::new(0, 0, 40, 3));
+
+    let draw = |terminal: &mut SurfaceTerminal<PtyBackend>, text| {
+        terminal.begin_synchronized_update()?;
+        let draw_result = terminal.draw_viewport(|frame| {
+            frame.render_widget(Paragraph::new(text), frame.area());
+            frame.set_cursor_claim(CursorClaim {
+                position: Position { x: 4, y: 1 },
+                style: SetCursorStyle::SteadyBar,
+            });
+        });
+        draw_result.and(terminal.end_synchronized_update())
+    };
+
+    draw(&mut terminal, "status one").expect("first PTY frame");
+    assert!(!pty.drain().is_empty(), "first frame must paint the PTY");
+    draw(&mut terminal, "status two").expect("changed PTY frame");
+
+    let bytes = pty.drain();
+    let cursor_move = b"\x1b[2;5H";
+    assert!(
+        bytes
+            .windows(cursor_move.len())
+            .any(|window| window == cursor_move),
+        "a changed cell frame must restore the unchanged input cursor: {:?}",
+        String::from_utf8_lossy(&bytes)
+    );
+}
+
 #[tokio::test]
 async fn real_pty_resize_burst_paints_only_the_settled_size() {
     let (mut app, _event_tx, mut pty) = pty_test_app(false);

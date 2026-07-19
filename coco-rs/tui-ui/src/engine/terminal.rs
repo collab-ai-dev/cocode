@@ -286,14 +286,13 @@ pub struct SurfaceTerminal<B: SurfaceBackend> {
     /// DECSC/DECRC save register, which is shared, hidden state with
     /// per-terminal semantics.
     last_parked_cursor: Position,
-    /// What the terminal's cursor was last driven to, while that is still
-    /// trustworthy — `None` means trust is lost and the next claim re-emits in
-    /// full. Compared against each frame's claim so an unchanged cursor emits
-    /// nothing: terminals restart the blink timer on every `Show`/`MoveTo`, so
-    /// re-asserting at spinner cadence pins the composer cursor permanently
-    /// solid. Cleared by [`Self::forget_cursor`] wherever the engine writes raw
-    /// VT outside the diff.
+    /// What the terminal's cursor was last driven to. `None` means all cursor
+    /// state is unknown and the next claim re-emits in full.
     last_cursor: Option<AppliedCursor>,
+    /// Whether [`Self::last_cursor`]'s position still matches the physical
+    /// cursor. Drawing changed cells moves the terminal cursor without changing
+    /// the logical claim, so only the position becomes unknown in that case.
+    cursor_position_known: bool,
     invalidated: bool,
     /// A requested synchronized-update window is opened lazily on the first
     /// terminal write. A completely unchanged frame therefore emits neither
@@ -400,6 +399,7 @@ where
             history_bottom_y: viewport_area.top(),
             last_parked_cursor: Position { x: 0, y: 0 },
             last_cursor: None,
+            cursor_position_known: false,
             invalidated: true,
             sync_update_requested: false,
             sync_update_started: false,
@@ -978,6 +978,9 @@ where
             }))?;
         }
         let draw_elapsed = draw_start.map(|start| start.elapsed()).unwrap_or_default();
+        if buffer_updates > 0 {
+            self.cursor_position_known = false;
+        }
         self.apply_cursor_claim(cursor_claim)?;
         let flush_start = self.perf_stats_enabled.then(Instant::now);
         self.backend.flush()?;
@@ -1032,7 +1035,7 @@ where
 
     /// Whether applying `claim` would emit any escape at all.
     fn cursor_claim_differs(&self, claim: Option<CursorClaim>) -> bool {
-        self.last_cursor != Some(self.resolve_cursor_claim(claim))
+        self.last_cursor != Some(self.resolve_cursor_claim(claim)) || !self.cursor_position_known
     }
 
     /// Drop the engine's belief about where the terminal's cursor is, forcing
@@ -1044,6 +1047,7 @@ where
     /// leaves a stale belief and a cursor that never gets corrected.
     fn forget_cursor(&mut self) {
         self.last_cursor = None;
+        self.cursor_position_known = false;
     }
 
     fn apply_cursor_claim(&mut self, claim: Option<CursorClaim>) -> Result<(), B::Error> {
@@ -1064,8 +1068,11 @@ where
                 self.backend.hide_cursor()?;
             }
         }
-        if previous.map(|applied| applied.position) != Some(next.position) {
+        if !self.cursor_position_known
+            || previous.map(|applied| applied.position) != Some(next.position)
+        {
             self.backend.set_cursor_position(next.position)?;
+            self.cursor_position_known = true;
         }
         self.last_cursor = Some(next);
         self.last_parked_cursor = next.position;

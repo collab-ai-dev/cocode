@@ -36,6 +36,7 @@ impl SessionHandle {
                 config.thinking_level = parent_config.thinking_level;
                 config.fast_mode = parent_config.fast_mode;
                 config.permission_mode = parent_config.permission_mode;
+                config.wire_dump = parent_config.wire_dump;
             })
             .await;
         self.runtime.app_state().write().await.permissions = permissions;

@@ -5,8 +5,9 @@ Status: implemented and adversarially re-reviewed on 2026-07-18.
 `/btw` is a local TUI feature that opens one ephemeral, multi-turn child
 session. The child has independent admission, history, cancellation, UI state,
 and lifecycle. It inherits bounded committed context from the parent, permits
-only structurally read-only model tools, and never participates in persistence,
-public session APIs, durable event sequencing, or Hub egress.
+only structurally read-only model tools, and never participates in session
+persistence, public session APIs, durable event sequencing, or Hub egress.
+Operator-enabled raw-wire capture remains a parent-owned diagnostic artifact.
 
 Backward compatibility with the former sentinel and one-turn fork is not a
 goal. Those paths must not be reintroduced.
@@ -94,11 +95,15 @@ rules, sensitive-path checks, and approval prompts remain authoritative.
 
 A sidechat owns no transcript, persisted usage, file-history, goal, schedule,
 PID, title, memory, skill-learning, SessionManager, durable sequence, retention,
-or Hub artifact. It is not resumable. The child keeps an ephemeral in-memory
-usage tracker so its active TUI projection shows sidechat-only spend. Every
-child usage record is also mirrored to the parent's authoritative accounting as
-`UsageSource::SideQuery`, so the hidden parent projection, `/cost`, persisted
-snapshot, and restored main status bar include sidechat spend exactly once.
+or Hub artifact. It is not resumable. Operator-enabled raw-wire diagnostics are
+owned by the parent and scoped to
+`<parent-session-dir>/wire/sidechats/session-<child-id>/`; they never create a
+top-level child session artifact directory. The child keeps an ephemeral
+in-memory usage tracker so its active TUI projection shows sidechat-only spend.
+Every child usage record is also mirrored to the parent's authoritative
+accounting as `UsageSource::SideQuery`, so the hidden parent projection, `/cost`,
+persisted snapshot, and restored main status bar include sidechat spend exactly
+once.
 
 ### I-5: parent-owned lifetime
 
@@ -208,7 +213,7 @@ overwrite each other's command context.
 
 The TUI child projection inherits the parent's model binding, thinking effort,
 permission mode, cwd, and header metadata at entry. Transcript and usage start
-empty. The header marks `SIDECHAT`; the always-visible identity row shows the
+empty. The header marks `Side chat`; the always-visible identity row shows the
 `Ctrl+C` return affordance, while the environment row shows the inherited mode.
 Session-level controls are frozen while sidechat is active, so the UI does not
 advertise model, effort, permission-mode, or fast-mode cycling. Mirroring first
@@ -298,6 +303,7 @@ The implementation is covered at the owner boundaries:
 | Parent/child cache detector isolation, including shared agent id | inference cache-detection tests |
 | Tagged projection folding and stale exit rejection | TUI state tests |
 | Child-only display usage and parent SideQuery rollup | query cancellation tests plus CLI factory/turn/persistence/TUI-fold integration test |
+| Parent-owned, child-scoped raw-wire diagnostics | `coco-wire-dump` layout tests plus agent-host sidechat config-routing test |
 | Explicit and autonomous close refresh parent before restore | CLI local-AppServer lifecycle integration tests |
 | Fork inference exclusion from the interactive ledger | agent-host fork-dispatcher test |
 | Idle Ctrl+C close routing | TUI update tests |

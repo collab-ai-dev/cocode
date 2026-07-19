@@ -119,6 +119,34 @@ impl WireDumpConfig {
         })
     }
 
+    /// Build a child config that writes under the authoritative parent
+    /// session's diagnostic namespace:
+    /// `<session_dir>/wire/sidechats/session-<child_session_id>/`.
+    ///
+    /// Side chats remain ephemeral sessions: this path deliberately avoids a
+    /// top-level `<project>/<child_session_id>/` artifact directory while still
+    /// keeping repeated `/btw` calls isolated from each other and from the
+    /// parent's sequence counter.
+    ///
+    /// Returns `None` for custom sinks, where the filesystem layout is
+    /// caller-defined.
+    pub fn for_side_chat(&self, child_session_id: &coco_types::SessionId) -> Option<Self> {
+        let session_dir = self.session_dir.as_ref()?;
+        Some(Self {
+            level: self.level,
+            max_body_bytes: self.max_body_bytes,
+            redact: self.redact,
+            seq: Arc::new(AtomicU64::new(0)),
+            sink: Arc::new(FileSink::new(
+                session_dir
+                    .join("wire")
+                    .join("sidechats")
+                    .join(format!("session-{child_session_id}")),
+            )),
+            session_dir: Some(session_dir.clone()),
+        })
+    }
+
     /// Begin capturing one LLM call. The consumer feeds the returned
     /// recorder and drives it to completion via `finish`; `Drop` is a
     /// fallback.
