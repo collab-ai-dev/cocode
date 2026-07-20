@@ -25,10 +25,6 @@ mod tasks;
 pub struct SessionHandle {
     session_id: SessionId,
     runtime: Arc<SessionRuntime>,
-    /// Immutable callback requirements this session was constructed with.
-    /// Set once at construction (empty for local surfaces, the connection
-    /// profile's set for AppServer/SDK sessions); never installed late.
-    callback_requirements: coco_types::SessionCallbackRequirements,
 }
 
 pub struct QueuedCommandStatus {
@@ -207,22 +203,17 @@ impl SessionHandle {
         }
     }
 
-    pub fn new(
-        runtime: Arc<SessionRuntime>,
-        callback_requirements: coco_types::SessionCallbackRequirements,
-    ) -> Self {
+    pub fn new(runtime: Arc<SessionRuntime>) -> Self {
         let session_id = runtime.current_typed_session_id_snapshot();
         Self {
             session_id,
             runtime,
-            callback_requirements,
         }
     }
 
     pub async fn build(opts: SessionRuntimeBuildOpts<'_>) -> Result<Self> {
-        let callback_requirements = opts.callback_requirements.clone();
         let runtime = SessionRuntime::build(opts).await?;
-        Ok(Self::new(runtime, callback_requirements))
+        Ok(Self::new(runtime))
     }
 
     pub fn session_id(&self) -> &SessionId {

@@ -12,6 +12,7 @@ from typing import Any, AsyncIterator
 import pytest
 
 from coco_sdk._internal.transport import Transport
+from coco_sdk._message_router import MessageRouter
 from coco_sdk.client import CocoClient
 from coco_sdk.errors import ProcessError
 from coco_sdk.generated.protocol import (
@@ -110,12 +111,42 @@ def _sent_methods(transport: MockTransport) -> list[str]:
     return [json.loads(line)["method"] for line in transport.sent_lines]
 
 
-def _mark_started(
-    client: CocoClient, session_id: str = "s1", surface_id: str = "surface-1"
-) -> None:
+def _mark_started(client: CocoClient, session_id: str = "s1") -> None:
     client._started = True
     client._session_id = session_id
-    client._surface_id = surface_id
+
+
+@pytest.mark.asyncio
+async def test_router_cancels_active_server_request_handler() -> None:
+    transport = MockTransport(
+        responses=[
+            _server_request(
+                ServerRequestMethod.INPUT_REQUEST_USER_INPUT,
+                _wire_request_id="srv-cancel",
+                request_id="input-cancel",
+            ),
+            {
+                "jsonrpc": "2.0",
+                "method": ServerRequestMethod.CONTROL_CANCEL_REQUEST.value,
+                "params": {"request_id": "srv-cancel"},
+            },
+        ]
+    )
+    cancelled = asyncio.Event()
+
+    async def handler(_request: dict[str, Any]) -> bool:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    router = MessageRouter(transport, server_request_handler=handler)
+    router.start()
+
+    await asyncio.wait_for(cancelled.wait(), timeout=1)
+    assert transport.sent_lines == []
+    await router.close()
 
 
 @pytest.mark.asyncio
@@ -123,7 +154,7 @@ async def test_client_sends_initialize_session_start_turn_start() -> None:
     transport = MockTransport(
         responses=[
             _response(1, {}),
-            _response(2, {"session_id": "s1", "surface_id": "surface-1"}),
+            _response(2, {"session_id": "s1"}),
             _response(3, {"turn_id": "t1"}),
             _session_started(session_id="s1"),
             _notif(
@@ -155,6 +186,40 @@ async def test_client_sends_initialize_session_start_turn_start() -> None:
     assert len(events) == 2
     assert events[0].method == NotificationMethod.SESSION_STARTED
     assert events[1].method == NotificationMethod.TURN_ENDED
+
+
+@pytest.mark.asyncio
+async def test_client_routes_json_schema_and_prompts_to_session_start() -> None:
+    """`json_schema` / system-prompt overrides ride `session/start`
+    (per Rust `SessionStartParams`), never `initialize` — the generated
+    `InitializeParams` has no such fields and would silently drop them."""
+    schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+    transport = MockTransport(
+        responses=[
+            _response(1, {}),
+            _response(2, {"session_id": "s1"}),
+            _response(3, {"turn_id": "t1"}),
+        ]
+    )
+    client = CocoClient(
+        prompt="hello",
+        transport=transport,
+        json_schema=schema,
+        system_prompt="be terse",
+        append_system_prompt="and safe",
+    )
+    await client.start()
+
+    init = json.loads(transport.sent_lines[0])
+    assert init["method"] == ClientRequestMethod.INITIALIZE
+    for field in ("json_schema", "system_prompt", "append_system_prompt"):
+        assert field not in init.get("params", {})
+
+    session_start = json.loads(transport.sent_lines[1])
+    assert session_start["method"] == ClientRequestMethod.SESSION_START
+    assert session_start["params"]["json_schema"] == schema
+    assert session_start["params"]["system_prompt"] == "be terse"
+    assert session_start["params"]["append_system_prompt"] == "and safe"
 
 
 @pytest.mark.asyncio
@@ -262,11 +327,13 @@ async def test_client_auto_approval() -> None:
 
 
 @pytest.mark.asyncio
-async def test_client_denies_approval_without_callback() -> None:
-    # With no `can_use_tool` callback the client must still RESPOND to an
-    # approval request (denying it), or the server hangs waiting for a reply.
-    # Regression: AskUserQuestion now always asks, so a headless session that
-    # didn't set a callback used to hang on it.
+async def test_client_withdraws_from_approval_without_callback() -> None:
+    # With no `can_use_tool` callback the client replies with a JSON-RPC
+    # ERROR, not a `deny`: approvals are broadcast to all Full connections
+    # and the first VALID reply wins, so a deny would consume the broadcast
+    # and cancel a human peer's prompt. The error reply only withdraws this
+    # client; if it was the sole recipient the server cancels the request
+    # (tool denied) — same observable outcome for single-client headless.
     transport = MockTransport(
         responses=[
             _server_request(
@@ -298,8 +365,9 @@ async def test_client_denies_approval_without_callback() -> None:
         approval_sent["id"]
         == f"srv_{ServerRequestMethod.APPROVAL_ASK_FOR_APPROVAL.value}"
     )
-    assert approval_sent["result"]["decision"] == "deny"
-    assert approval_sent["result"]["request_id"] == "r1"
+    assert "result" not in approval_sent
+    assert approval_sent["error"]["code"] == -32601
+    assert approval_sent["error"]["message"] == "no approval handler configured"
 
 
 @pytest.mark.asyncio
@@ -388,19 +456,6 @@ async def test_client_hook_callback_output_serializes_camelcase_wire_shape() -> 
 
 
 @pytest.mark.asyncio
-async def test_client_respond_to_question_uses_answer_field() -> None:
-    transport = MockTransport()
-    client = CocoClient(prompt="test", transport=transport)
-    _mark_started(client)
-    await client.respond_to_question("r1", "yes")
-
-    sent = json.loads(transport.sent_lines[0])
-    assert sent["method"] == ClientRequestMethod.INPUT_RESOLVE_USER_INPUT
-    assert sent["params"]["answer"] == "yes"
-    assert sent["params"]["request_id"] == "r1"
-
-
-@pytest.mark.asyncio
 async def test_client_cancel_request() -> None:
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
@@ -479,24 +534,6 @@ async def test_client_mcp_toggle() -> None:
 
 
 @pytest.mark.asyncio
-async def test_client_resolve_elicitation() -> None:
-    transport = MockTransport()
-    client = CocoClient(prompt="test", transport=transport)
-    _mark_started(client)
-    await client.resolve_elicitation(
-        request_id="elic_1",
-        mcp_server_name="github",
-        approved=True,
-        values={"token": "secret"},
-    )
-
-    sent = json.loads(transport.sent_lines[0])
-    assert sent["method"] == ClientRequestMethod.ELICITATION_RESOLVE
-    assert sent["params"]["mcp_server_name"] == "github"
-    assert sent["params"]["values"] == {"token": "secret"}
-
-
-@pytest.mark.asyncio
 async def test_client_initialize_includes_hooks_map() -> None:
     from coco_sdk import hook
 
@@ -509,7 +546,7 @@ async def test_client_initialize_includes_hooks_map() -> None:
     transport = MockTransport(
         responses=[
             _response(1, {}),
-            _response(2, {"session_id": "s1", "surface_id": "surface-1"}),
+            _response(2, {"session_id": "s1"}),
             _response(3, {"turn_id": "t1"}),
         ]
     )
@@ -539,7 +576,7 @@ async def test_client_waits_for_client_mcp_servers_after_session_start() -> None
     transport = MockTransport(
         responses=[
             _response(1, {}),
-            _response(2, {"session_id": "s1", "surface_id": "surface-1"}),
+            _response(2, {"session_id": "s1"}),
             _response(
                 3, {"mcpServers": [{"name": ping.server_name, "status": "pending"}]}
             ),
@@ -566,7 +603,7 @@ async def test_client_context_manager() -> None:
     transport = MockTransport(
         responses=[
             _response(1, {}),
-            _response(2, {"session_id": "s1", "surface_id": "surface-1"}),
+            _response(2, {"session_id": "s1"}),
             _response(3, {"turn_id": "t1"}),
             _session_started(session_id="s1"),
             _notif(
@@ -639,19 +676,9 @@ async def test_client_update_env() -> None:
 
 
 @pytest.mark.asyncio
-async def test_client_keep_alive_with_timestamp() -> None:
-    transport = MockTransport()
-    client = CocoClient(prompt="test", transport=transport)
-    _mark_started(client)
-    await client.keep_alive(timestamp=1700000000)
-
-    sent = json.loads(transport.sent_lines[0])
-    assert sent["method"] == ClientRequestMethod.CONTROL_KEEP_ALIVE
-    assert sent["params"]["timestamp"] == 1700000000
-
-
-@pytest.mark.asyncio
-async def test_client_keep_alive_without_timestamp() -> None:
+async def test_client_keep_alive_sends_no_params() -> None:
+    """Rust `KeepAlive` is a unit variant — the wire frame carries no
+    meaningful params (empty object only)."""
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
     _mark_started(client)
@@ -659,8 +686,7 @@ async def test_client_keep_alive_without_timestamp() -> None:
 
     sent = json.loads(transport.sent_lines[0])
     assert sent["method"] == ClientRequestMethod.CONTROL_KEEP_ALIVE
-    # Optional field is omitted from the wire when not provided.
-    assert "timestamp" not in sent.get("params", {})
+    assert sent.get("params", {}) == {}
 
 
 @pytest.mark.asyncio
@@ -693,11 +719,12 @@ async def test_client_list_sessions_returns_typed_response() -> None:
     )
     client = CocoClient(prompt="test", transport=transport)
     _mark_started(client)
-    result = await client.list_sessions(limit=10)
+    result = await client.list_sessions()
 
     sent = json.loads(transport.sent_lines[0])
     assert sent["method"] == ClientRequestMethod.SESSION_LIST
-    assert sent["params"]["limit"] == 10
+    # Rust `SessionList` is a unit variant — no filtering params exist.
+    assert sent.get("params", {}) == {}
     assert isinstance(result, SessionListResult)
     assert result.sessions[0].session_id == "s1"
 
@@ -743,11 +770,8 @@ async def test_client_close_session() -> None:
 
     sent = json.loads(transport.sent_lines[0])
     assert sent["method"] == ClientRequestMethod.SESSION_CLOSE
-    assert sent["params"]["target"]["kind"] == "interactive"
-    assert sent["params"]["target"]["target"]["session_id"] == "s1"
-    assert sent["params"]["target"]["target"]["surface_id"] == "surface-1"
+    assert sent["params"]["target"] == {"session_id": "s1"}
     assert client._session_id is None
-    assert client._surface_id is None
 
 
 @pytest.mark.asyncio
@@ -1253,7 +1277,6 @@ async def test_resume_emits_session_resume_then_streams() -> None:
                         "cwd": "/",
                         "created_at": "2025-01-01T00:00:00Z",
                     },
-                    "surface_id": "surface-old",
                 },
             ),
             _session_started(session_id="s_old"),

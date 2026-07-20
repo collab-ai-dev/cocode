@@ -16,8 +16,8 @@ use coco_app_server_transport::{
 };
 use coco_types::{
     ClientRequest, CoreEvent, RequestId, RequestScope, SESSION_EVENT_METHOD,
-    SESSION_LIFECYCLE_METHOD, ServerRequest, ServerRequestDelivery, SessionId, SurfaceDelivery,
-    SurfaceId, SurfaceLifecycleEffect, SurfaceLifecycleEffectKind, error_codes, request_scope,
+    SESSION_LIFECYCLE_METHOD, ServerRequest, ServerRequestDelivery, SessionDelivery, SessionId,
+    SessionLifecycleEffect, SessionLifecycleEffectKind, error_codes, request_scope,
 };
 use futures::{SinkExt, StreamExt};
 use snafu::{ResultExt, Snafu};
@@ -28,8 +28,8 @@ use tokio::{
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message as WebSocketMessage};
 
 use crate::{
-    AppServer, AppServerError, ConnectionKey, DisconnectOutcome, ResolvedServerRequest,
-    ServerRequestErrorReply, ServerRequestReply,
+    AppServer, AppServerError, ConnectionKey, DisconnectOutcome, ServerRequestErrorReply,
+    ServerRequestReply, ServerRequestResolution,
 };
 
 const DEFAULT_JSON_RPC_CHANNEL_CAPACITY: usize = 128;
@@ -319,12 +319,12 @@ impl<H: Clone> JsonRpcAdapter<H> {
     }
 }
 
-pub struct JsonRpcAdapterConnection<H> {
+pub struct JsonRpcAdapterConnection<H: Clone> {
     server: Arc<AppServer<H>>,
     connection: ConnectionKey,
-    events: tokio::sync::mpsc::Receiver<SurfaceDelivery>,
+    events: tokio::sync::mpsc::Receiver<SessionDelivery>,
     server_requests: tokio::sync::mpsc::Receiver<ServerRequestDelivery>,
-    lifecycle: tokio::sync::mpsc::Receiver<SurfaceLifecycleEffect>,
+    lifecycle: tokio::sync::mpsc::Receiver<SessionLifecycleEffect>,
     pending_server_requests: HashMap<JsonRpcId, PendingJsonRpcServerRequest>,
     write_timeout: Duration,
 }
@@ -338,7 +338,7 @@ impl<H: Clone> JsonRpcAdapterConnection<H> {
         self.connection
     }
 
-    pub fn events_mut(&mut self) -> &mut tokio::sync::mpsc::Receiver<SurfaceDelivery> {
+    pub fn events_mut(&mut self) -> &mut tokio::sync::mpsc::Receiver<SessionDelivery> {
         &mut self.events
     }
 
@@ -348,7 +348,7 @@ impl<H: Clone> JsonRpcAdapterConnection<H> {
         &mut self.server_requests
     }
 
-    pub fn lifecycle_mut(&mut self) -> &mut tokio::sync::mpsc::Receiver<SurfaceLifecycleEffect> {
+    pub fn lifecycle_mut(&mut self) -> &mut tokio::sync::mpsc::Receiver<SessionLifecycleEffect> {
         &mut self.lifecycle
     }
 
@@ -358,11 +358,16 @@ impl<H: Clone> JsonRpcAdapterConnection<H> {
     ) -> Result<JsonRpcFrame, JsonRpcAdapterError> {
         let id = json_rpc_id_from_request_id(&delivery.request_id);
         let (method, params) = server_request_method_and_params(&delivery.request)?;
+        if matches!(delivery.request, ServerRequest::CancelRequest(_)) {
+            self.pending_server_requests.remove(&id);
+            return Ok(JsonRpcFrame::Notification(JsonRpcNotification::new(
+                method, params,
+            )));
+        }
         self.pending_server_requests.insert(
             id.clone(),
             PendingJsonRpcServerRequest {
                 session_id: delivery.session_id,
-                surface_id: delivery.surface_id,
                 request_id: delivery.request_id,
                 request: delivery.request,
             },
@@ -398,16 +403,19 @@ impl<H: Clone> JsonRpcAdapterConnection<H> {
     pub fn resolve_server_request_response(
         &mut self,
         frame: JsonRpcFrame,
-    ) -> Result<ResolvedServerRequest, JsonRpcAdapterError> {
+    ) -> Result<ServerRequestResolution, JsonRpcAdapterError> {
         let response = self.complete_server_request_response(frame)?;
-        let (request_id, reply) = match response {
+        let (session_id, request_id, reply) = match response {
             JsonRpcServerRequestResponse::Success { pending, result } => {
+                let session_id = pending.session_id.clone();
                 let reply = server_request_reply_from_success(&pending, result)?;
-                (pending.request_id, reply)
+                (session_id, pending.request_id, reply)
             }
             JsonRpcServerRequestResponse::Error { pending, error } => {
+                let session_id = pending.session_id.clone();
                 let request_id = pending.request_id.as_display();
                 (
+                    session_id,
                     pending.request_id,
                     ServerRequestReply::Error(ServerRequestErrorReply {
                         request_id,
@@ -419,7 +427,7 @@ impl<H: Clone> JsonRpcAdapterConnection<H> {
             }
         };
         self.server
-            .resolve_server_request_by_id(&request_id, reply)
+            .resolve_server_request_for_connection(self.connection, &session_id, &request_id, reply)
             .context(ResolveServerRequestSnafu)
     }
 
@@ -586,7 +594,7 @@ impl<H: Clone> JsonRpcAdapterConnection<H> {
                     let Some(delivery) = delivery else {
                         break Ok(());
                     };
-                    let frame = match encode_surface_delivery(delivery) {
+                    let frame = match encode_session_delivery(delivery) {
                         Ok(frame) => frame,
                         Err(error) => break Err(error),
                     };
@@ -716,6 +724,12 @@ impl<H: Clone> JsonRpcAdapterConnection<H> {
     }
 }
 
+impl<H: Clone> Drop for JsonRpcAdapterConnection<H> {
+    fn drop(&mut self) {
+        self.server.disconnect(self.connection);
+    }
+}
+
 /// After this many consecutive `accept()` failures the listener supervisor
 /// stops instead of hot-looping on a permanently broken listener. Transient
 /// errors (EMFILE / ECONNABORTED) reset the counter on the next success.
@@ -788,7 +802,6 @@ async fn dispatch_client_request_for_connection(
 #[derive(Debug, Clone)]
 pub struct PendingJsonRpcServerRequest {
     pub session_id: SessionId,
-    pub surface_id: SurfaceId,
     pub request_id: RequestId,
     pub request: ServerRequest,
 }
@@ -1028,7 +1041,6 @@ where
             "target".to_string(),
             serde_json::json!({
                 "session_id": pending.session_id,
-                "surface_id": pending.surface_id,
             }),
         );
     }
@@ -1128,7 +1140,7 @@ async fn send_json_rpc_frame_with_timeout(
     }
 }
 
-fn encode_surface_delivery(delivery: SurfaceDelivery) -> Result<JsonRpcFrame, JsonRpcAdapterError> {
+fn encode_session_delivery(delivery: SessionDelivery) -> Result<JsonRpcFrame, JsonRpcAdapterError> {
     let envelope = delivery.envelope;
     let layer = envelope.event.layer().as_str();
     let event = match envelope.event {
@@ -1146,7 +1158,6 @@ fn encode_surface_delivery(delivery: SurfaceDelivery) -> Result<JsonRpcFrame, Js
         }),
     };
     let params = serde_json::to_value(serde_json::json!({
-        "surface_id": delivery.surface_id,
         "envelope": {
             "session_id": envelope.session_id,
             "agent_id": envelope.agent_id,
@@ -1162,15 +1173,15 @@ fn encode_surface_delivery(delivery: SurfaceDelivery) -> Result<JsonRpcFrame, Js
     )))
 }
 
-fn encode_lifecycle_delivery(delivery: SurfaceLifecycleEffect) -> JsonRpcFrame {
+fn encode_lifecycle_delivery(delivery: SessionLifecycleEffect) -> JsonRpcFrame {
     let kind = match delivery.kind {
-        SurfaceLifecycleEffectKind::SessionStarted { session_id } => {
+        SessionLifecycleEffectKind::SessionStarted { session_id } => {
             serde_json::json!({
                 "type": "session_started",
                 "session_id": session_id,
             })
         }
-        SurfaceLifecycleEffectKind::SessionReplaced {
+        SessionLifecycleEffectKind::SessionReplaced {
             old_session_id,
             new_session_id,
         } => {
@@ -1180,7 +1191,7 @@ fn encode_lifecycle_delivery(delivery: SurfaceLifecycleEffect) -> JsonRpcFrame {
                 "new_session_id": new_session_id,
             })
         }
-        SurfaceLifecycleEffectKind::SessionEnded { session_id } => {
+        SessionLifecycleEffectKind::SessionEnded { session_id } => {
             serde_json::json!({
                 "type": "session_ended",
                 "session_id": session_id,
@@ -1189,10 +1200,7 @@ fn encode_lifecycle_delivery(delivery: SurfaceLifecycleEffect) -> JsonRpcFrame {
     };
     JsonRpcFrame::Notification(JsonRpcNotification::new(
         SESSION_LIFECYCLE_METHOD,
-        Some(serde_json::json!({
-            "surface_id": delivery.surface_id,
-            "effect": kind,
-        })),
+        Some(serde_json::json!({ "effect": kind })),
     ))
 }
 

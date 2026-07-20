@@ -52,9 +52,6 @@ impl SessionRuntime {
             session_id_override,
             is_non_interactive,
             execution_profile,
-            // Owned by `SessionHandle`, not the runtime — read off `opts` in
-            // `SessionHandle::build` before this destructure.
-            callback_requirements: _,
         } = opts;
 
         let config_home = coco_config::global_config::config_home();

@@ -1,20 +1,21 @@
 use std::{sync::Arc, time::Duration};
 
 use coco_app_server::{AppServer, ConnectionKey};
-use coco_types::{SessionResumeResult, SurfaceId};
+use coco_types::SessionResumeResult;
 
 use crate::app_server_host::connection_runtime_binding::{
     build_connection_runtime_for_resume, configure_connection_mcp_bridge,
-    install_app_server_session_runtime_state, touch_runtime_backed_resumed_session_activity,
+    install_app_server_session_runtime_state, install_connection_runtime_callbacks,
+    register_connection_callback_owners, touch_runtime_backed_resumed_session_activity,
 };
 use crate::app_server_host::{AppServerHostState, RuntimeReplacementContext};
 use crate::app_session::AppSessionHandle;
 use crate::session_resume::SessionResumeInput;
 
+use super::session_connections::attach_local_app_server_session;
 use super::session_loading::load_local_app_server_session_with_retrying_factory_parts;
 use super::session_operation_error::SessionOperationError;
 use super::session_registry::restore_session_seq_from_watermark;
-use super::session_surfaces::attach_local_app_server_surface;
 
 pub(crate) async fn load_app_server_resume_session(
     input: SessionResumeInput,
@@ -64,21 +65,27 @@ pub(crate) async fn resume_app_server_session_with_runtime_replacement(
 
     if let Some(handle) = app_server.registry().get(&resumed_session_id) {
         let runtime = handle.into_session();
-        if !runtime
-            .callback_requirements()
-            .is_satisfied_by(&connection_profile)
-        {
-            return Err(SessionOperationError::invalid_request(
-                "connection profile does not satisfy the live session callback requirements",
-                Some(serde_json::json!({
-                    "kind": "connection_profile_mismatch",
-                    "session_id": resumed_session_id,
-                })),
-            ));
-        }
-        let surface_id =
-            attach_local_app_server_surface(&app_server, connection, resumed_session_id)?;
-        return build_session_resume_result(&loaded.session, surface_id);
+        attach_local_app_server_session(&app_server, connection, resumed_session_id)?;
+        install_connection_runtime_callbacks(
+            &connection_profile,
+            &runtime,
+            Arc::clone(&app_server),
+            connection,
+        )
+        .map_err(|error| {
+            SessionOperationError::internal(
+                format!("register live resume callback owners: {error}"),
+                Some(serde_json::json!({ "kind": "callback_owner_registration_failed" })),
+            )
+        })?;
+        configure_connection_mcp_bridge(
+            &connection_profile,
+            &runtime,
+            Arc::clone(&app_server),
+            connection,
+        )
+        .await;
+        return build_session_resume_result(&loaded.session);
     }
 
     let make_factory = || {
@@ -126,14 +133,29 @@ pub(crate) async fn resume_app_server_session_with_runtime_replacement(
     .await;
     touch_runtime_backed_resumed_session_activity(&state, resumed_session_id.clone());
 
-    let surface_id = attach_local_app_server_surface(&app_server, connection, resumed_session_id)?;
-    configure_connection_mcp_bridge(&connection_profile, &runtime, Arc::clone(&app_server)).await;
-    build_session_resume_result(&loaded.session, surface_id)
+    attach_local_app_server_session(&app_server, connection, resumed_session_id)?;
+    register_connection_callback_owners(&connection_profile, &runtime, &app_server, connection)
+        .map_err(|error| {
+            SessionOperationError::internal(
+                format!("register session/resume callback owners: {error}"),
+                Some(serde_json::json!({ "kind": "callback_owner_registration_failed" })),
+            )
+        })?;
+    runtime
+        .fire_session_start_hooks(coco_hooks::orchestration::SessionStartSource::Resume)
+        .await;
+    configure_connection_mcp_bridge(
+        &connection_profile,
+        &runtime,
+        Arc::clone(&app_server),
+        connection,
+    )
+    .await;
+    build_session_resume_result(&loaded.session)
 }
 
 pub(crate) fn build_session_resume_result(
     session: &coco_session::Session,
-    surface_id: SurfaceId,
 ) -> Result<SessionResumeResult, SessionOperationError> {
     let summary = crate::session_data::session_record_to_summary(session).map_err(|error| {
         SessionOperationError::internal(
@@ -141,8 +163,5 @@ pub(crate) fn build_session_resume_result(
             None,
         )
     })?;
-    Ok(SessionResumeResult {
-        session: summary,
-        surface_id,
-    })
+    Ok(SessionResumeResult { session: summary })
 }

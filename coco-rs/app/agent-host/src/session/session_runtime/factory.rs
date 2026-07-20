@@ -177,47 +177,34 @@ impl SessionRuntimeFactory {
     }
 
     pub async fn build_fresh(&self) -> Result<SessionHandle> {
-        self.build(None, Default::default()).await
+        self.build(None).await
     }
 
-    pub async fn build_with_session_id(
-        &self,
-        session_id: SessionId,
-        callback_requirements: coco_types::SessionCallbackRequirements,
-    ) -> Result<SessionHandle> {
-        self.build(Some(session_id), callback_requirements).await
+    pub async fn build_with_session_id(&self, session_id: SessionId) -> Result<SessionHandle> {
+        self.build(Some(session_id)).await
     }
 
-    pub async fn build(
-        &self,
-        session_id_override: Option<SessionId>,
-        callback_requirements: coco_types::SessionCallbackRequirements,
-    ) -> Result<SessionHandle> {
+    pub async fn build(&self, session_id_override: Option<SessionId>) -> Result<SessionHandle> {
         let cwd = self.opts.cwd.clone();
-        self.build_for_cwd(session_id_override, cwd, callback_requirements)
-            .await
+        self.build_for_cwd(session_id_override, cwd).await
     }
 
     pub async fn build_with_session_id_and_cwd(
         &self,
         session_id: SessionId,
         cwd: PathBuf,
-        callback_requirements: coco_types::SessionCallbackRequirements,
     ) -> Result<SessionHandle> {
-        self.build_for_cwd(Some(session_id), cwd, callback_requirements)
-            .await
+        self.build_for_cwd(Some(session_id), cwd).await
     }
 
     pub async fn build_for_cwd(
         &self,
         session_id_override: Option<SessionId>,
         cwd: PathBuf,
-        callback_requirements: coco_types::SessionCallbackRequirements,
     ) -> Result<SessionHandle> {
         self.build_with_profile(
             session_id_override,
             cwd,
-            callback_requirements,
             super::SessionExecutionProfile::Primary,
         )
         .await
@@ -237,7 +224,6 @@ impl SessionRuntimeFactory {
         &self,
         session_id_override: Option<SessionId>,
         cwd: PathBuf,
-        callback_requirements: coco_types::SessionCallbackRequirements,
         seed: super::SideChatSeed,
     ) -> Result<SessionHandle> {
         use coco_context::side_chat::ContextualUserFragment;
@@ -280,7 +266,6 @@ impl SessionRuntimeFactory {
             session_id_override,
             is_non_interactive: opts.is_non_interactive,
             execution_profile: super::SessionExecutionProfile::SideChatReadOnly,
-            callback_requirements,
         })
         .await?;
         scope_side_chat_wire_dump(&mut engine_config, handle.session_id());
@@ -305,7 +290,6 @@ impl SessionRuntimeFactory {
         &self,
         session_id_override: Option<SessionId>,
         cwd: PathBuf,
-        callback_requirements: coco_types::SessionCallbackRequirements,
         execution_profile: super::SessionExecutionProfile,
     ) -> Result<SessionHandle> {
         let opts = self.opts.as_ref();
@@ -347,7 +331,6 @@ impl SessionRuntimeFactory {
             session_id_override,
             is_non_interactive: opts.is_non_interactive,
             execution_profile,
-            callback_requirements,
         })
         .await
     }

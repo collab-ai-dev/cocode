@@ -31,12 +31,6 @@ pub async fn run(provider: &str, model: &str) -> Result<()> {
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("session/start response missing session_id; resp={start_resp}"))?
         .to_string();
-    let surface_id = start_resp
-        .get("surface_id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("session/start response missing surface_id; resp={start_resp}"))?
-        .to_string();
-
     // One turn so the aggregate carries non-zero `total_turns`.
     let (_r1, n1) = send_turn(&server, 2, "Reply with one word: ok").await?;
     assert!(
@@ -53,11 +47,7 @@ pub async fn run(provider: &str, model: &str) -> Result<()> {
             ClientRequestMethod::SessionClose.as_str(),
             serde_json::json!({
                 "target": {
-                    "kind": "interactive",
-                    "target": {
-                        "session_id": session_id,
-                        "surface_id": surface_id,
-                    }
+                    "session_id": session_id,
                 }
             }),
         ))

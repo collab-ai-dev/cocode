@@ -16,6 +16,7 @@ async fn unscoped_handler_context_cannot_resolve_session_workspace() {
             ConnectionProfile::try_from(InitializeParams::default()).unwrap(),
         ),
         app_server: None,
+        connection: None,
         target_session_id: None,
         session: None,
     };

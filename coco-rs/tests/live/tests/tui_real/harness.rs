@@ -356,7 +356,6 @@ impl RealTuiHarness {
             session_id_override: None,
             is_non_interactive: false,
             execution_profile: coco_agent_host::session_runtime::SessionExecutionProfile::Primary,
-            callback_requirements: Default::default(),
         })
         .await
         .with_context(|| "SessionRuntime::build")?;

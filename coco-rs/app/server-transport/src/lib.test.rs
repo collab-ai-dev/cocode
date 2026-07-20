@@ -32,7 +32,7 @@ fn request_round_trips_with_string_id_and_params() {
 fn notification_has_no_id() {
     let frame = JsonRpcFrame::Notification(JsonRpcNotification::new(
         "session/event",
-        Some(json!({ "surfaceId": "surface-1" })),
+        Some(json!({ "sessionId": "session-1" })),
     ));
 
     let encoded = serde_json::to_value(&frame).expect("encode frame");
@@ -42,7 +42,7 @@ fn notification_has_no_id() {
         json!({
             "jsonrpc": "2.0",
             "method": "session/event",
-            "params": { "surfaceId": "surface-1" }
+            "params": { "sessionId": "session-1" }
         })
     );
 }

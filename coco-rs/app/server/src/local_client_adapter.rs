@@ -1,13 +1,13 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
 use coco_types::{
-    ClientRequest, RequestScope, ServerRequestDelivery, SessionEnvelope, SessionId,
-    SurfaceDelivery, SurfaceId, SurfaceLifecycleEffect, request_scope,
+    ClientRequest, RequestScope, ServerRequestDelivery, SessionDelivery, SessionEnvelope,
+    SessionId, SessionLifecycleEffect, request_scope,
 };
 
 use crate::{
-    AppLiveSessionSummary, AppServer, AttachError, AttachSurfaceOptions, ConnectionKey,
-    DetachSurfaceOutcome, DisconnectOutcome, SubscribeReplay,
+    AppLiveSessionSummary, AppServer, AttachError, AttachSessionOptions, ConnectionKey,
+    DetachSessionOutcome, DisconnectOutcome, SubscribeReplay,
 };
 
 const DEFAULT_LOCAL_CHANNEL_CAPACITY: usize = 128;
@@ -91,35 +91,115 @@ impl<H: Clone> LocalClientAdapter<H> {
             lifecycle_tx,
         );
         LocalClientConnection {
-            server: Arc::clone(&self.server),
-            connection,
+            handle: LocalClientHandle {
+                server: Arc::clone(&self.server),
+                connection,
+            },
             events,
             server_requests,
             lifecycle,
+            disconnected: false,
+        }
+    }
+
+    pub fn channel_capacity(&self) -> usize {
+        self.channel_capacity
+    }
+}
+
+pub struct LocalClientConnection<H: Clone> {
+    handle: LocalClientHandle<H>,
+    events: tokio::sync::mpsc::Receiver<SessionDelivery>,
+    server_requests: tokio::sync::mpsc::Receiver<ServerRequestDelivery>,
+    lifecycle: tokio::sync::mpsc::Receiver<SessionLifecycleEffect>,
+    disconnected: bool,
+}
+
+pub struct LocalClientHandle<H> {
+    server: Arc<AppServer<H>>,
+    connection: ConnectionKey,
+}
+
+impl<H> Clone for LocalClientHandle<H> {
+    fn clone(&self) -> Self {
+        Self {
+            server: Arc::clone(&self.server),
+            connection: self.connection,
         }
     }
 }
 
-pub struct LocalClientConnection<H> {
-    server: Arc<AppServer<H>>,
-    connection: ConnectionKey,
-    events: tokio::sync::mpsc::Receiver<SurfaceDelivery>,
-    server_requests: tokio::sync::mpsc::Receiver<ServerRequestDelivery>,
-    lifecycle: tokio::sync::mpsc::Receiver<SurfaceLifecycleEffect>,
-}
-
 /// A live delivery received by a local in-process connection.
 ///
-/// Keeping ordinary session events and surface lifecycle effects in one typed
+/// Keeping ordinary session events and lifecycle effects in one typed
 /// receive path prevents event pumps from silently missing server-driven
 /// close/replace transitions.
 #[derive(Debug, Clone)]
 pub enum LocalClientInbound {
-    Event(Box<SurfaceDelivery>),
-    Lifecycle(SurfaceLifecycleEffect),
+    Event(Box<SessionDelivery>),
+    ServerRequest(Box<ServerRequestDelivery>),
+    Lifecycle(SessionLifecycleEffect),
 }
 
 impl<H: Clone> LocalClientConnection<H> {
+    pub fn connection_key(&self) -> ConnectionKey {
+        self.handle.connection
+    }
+
+    pub fn handle(&self) -> LocalClientHandle<H> {
+        self.handle.clone()
+    }
+
+    pub fn events_mut(&mut self) -> &mut tokio::sync::mpsc::Receiver<SessionDelivery> {
+        &mut self.events
+    }
+
+    pub fn server_requests_mut(
+        &mut self,
+    ) -> &mut tokio::sync::mpsc::Receiver<ServerRequestDelivery> {
+        &mut self.server_requests
+    }
+
+    pub fn lifecycle_mut(&mut self) -> &mut tokio::sync::mpsc::Receiver<SessionLifecycleEffect> {
+        &mut self.lifecycle
+    }
+
+    pub async fn recv(&mut self) -> Option<LocalClientInbound> {
+        loop {
+            if self.events.is_closed()
+                && self.server_requests.is_closed()
+                && self.lifecycle.is_closed()
+            {
+                return None;
+            }
+            tokio::select! {
+                event = self.events.recv(), if !self.events.is_closed() => {
+                    if let Some(event) = event {
+                        return Some(LocalClientInbound::Event(Box::new(event)));
+                    }
+                }
+                request = self.server_requests.recv(), if !self.server_requests.is_closed() => {
+                    if let Some(request) = request {
+                        return Some(LocalClientInbound::ServerRequest(Box::new(request)));
+                    }
+                }
+                lifecycle = self.lifecycle.recv(), if !self.lifecycle.is_closed() => {
+                    if let Some(lifecycle) = lifecycle {
+                        return Some(LocalClientInbound::Lifecycle(lifecycle));
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn disconnect(mut self) -> DisconnectOutcome {
+        let outcome = self.handle.server.disconnect(self.handle.connection);
+        self.disconnected = true;
+        outcome
+    }
+}
+
+impl<H: Clone> LocalClientHandle<H> {
     pub fn connection_key(&self) -> ConnectionKey {
         self.connection
     }
@@ -141,34 +221,24 @@ impl<H: Clone> LocalClientConnection<H> {
             .await
     }
 
-    pub fn attach_surface(
+    pub fn attach_session(
         &self,
         session_id: SessionId,
-        options: AttachSurfaceOptions,
-    ) -> Result<LocalClientSurface, AttachError> {
-        let surface_id = SurfaceId::generate();
-        self.server.attach_surface_with_options(
-            self.connection,
-            surface_id.clone(),
-            session_id.clone(),
-            options,
-        )?;
-        Ok(LocalClientSurface {
-            surface_id,
-            session_id,
-        })
+        options: AttachSessionOptions,
+    ) -> Result<LocalClientSession, AttachError> {
+        self.server
+            .attach_live_session(self.connection, session_id.clone(), options)?;
+        Ok(LocalClientSession { session_id })
     }
 
-    pub fn subscribe_surface(
+    pub fn subscribe_session(
         &self,
         session_id: SessionId,
         after_seq: Option<i64>,
-        options: AttachSurfaceOptions,
+        options: AttachSessionOptions,
     ) -> Result<LocalClientSubscribeOutcome, AttachError> {
-        let surface_id = SurfaceId::generate();
-        let replay = self.server.subscribe_surface_with_options(
+        let replay = self.server.subscribe_live_session(
             self.connection,
-            surface_id.clone(),
             session_id.clone(),
             after_seq,
             options,
@@ -176,7 +246,6 @@ impl<H: Clone> LocalClientConnection<H> {
         match replay {
             SubscribeReplay::Replayed(replayed) => Ok(LocalClientSubscribeOutcome::Attached(
                 LocalClientSubscription {
-                    surface_id,
                     session_id,
                     replayed,
                 },
@@ -185,64 +254,22 @@ impl<H: Clone> LocalClientConnection<H> {
         }
     }
 
-    pub fn events_mut(&mut self) -> &mut tokio::sync::mpsc::Receiver<SurfaceDelivery> {
-        &mut self.events
-    }
-
-    pub fn server_requests_mut(
-        &mut self,
-    ) -> &mut tokio::sync::mpsc::Receiver<ServerRequestDelivery> {
-        &mut self.server_requests
-    }
-
-    /// Transfer ownership of the actionable request stream to a dedicated
-    /// callback task while retaining this connection for ordinary requests.
-    pub fn take_server_requests(&mut self) -> tokio::sync::mpsc::Receiver<ServerRequestDelivery> {
-        let (_sender, replacement) = tokio::sync::mpsc::channel(1);
-        std::mem::replace(&mut self.server_requests, replacement)
-    }
-
-    pub fn lifecycle_mut(&mut self) -> &mut tokio::sync::mpsc::Receiver<SurfaceLifecycleEffect> {
-        &mut self.lifecycle
-    }
-
-    pub async fn recv(&mut self) -> Option<LocalClientInbound> {
-        loop {
-            if self.events.is_closed() && self.lifecycle.is_closed() {
-                return None;
-            }
-            tokio::select! {
-                event = self.events.recv(), if !self.events.is_closed() => {
-                    if let Some(event) = event {
-                        return Some(LocalClientInbound::Event(Box::new(event)));
-                    }
-                }
-                lifecycle = self.lifecycle.recv(), if !self.lifecycle.is_closed() => {
-                    if let Some(lifecycle) = lifecycle {
-                        return Some(LocalClientInbound::Lifecycle(lifecycle));
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn detach_surface(&self, surface_id: &SurfaceId) -> DetachSurfaceOutcome {
+    pub fn detach_session(&self, session_id: &SessionId) -> DetachSessionOutcome {
         self.server
-            .detach_surface_for_connection(self.connection, surface_id)
+            .detach_session_for_connection(self.connection, session_id)
     }
 
     pub fn list_live_sessions(&self) -> Vec<AppLiveSessionSummary> {
         self.server.list_live_sessions()
     }
 
-    pub fn disconnect(self) -> DisconnectOutcome {
+    pub fn disconnect(&self) -> DisconnectOutcome {
         self.server.disconnect(self.connection)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalClientSurface {
-    pub surface_id: SurfaceId,
+pub struct LocalClientSession {
     pub session_id: SessionId,
 }
 
@@ -254,9 +281,17 @@ pub enum LocalClientSubscribeOutcome {
 
 #[derive(Debug, Clone)]
 pub struct LocalClientSubscription {
-    pub surface_id: SurfaceId,
     pub session_id: SessionId,
     pub replayed: Vec<SessionEnvelope>,
+}
+
+impl<H: Clone> Drop for LocalClientConnection<H> {
+    fn drop(&mut self) {
+        if !self.disconnected {
+            self.handle.server.disconnect(self.handle.connection);
+            self.disconnected = true;
+        }
+    }
 }
 
 #[cfg(test)]

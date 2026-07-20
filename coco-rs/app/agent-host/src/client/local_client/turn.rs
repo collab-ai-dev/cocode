@@ -1,6 +1,6 @@
 use super::*;
 
-impl<H: Clone> LocalServerClient<H> {
+impl<H: Clone + Send + Sync + 'static> LocalServerClient<H> {
     pub async fn turn_start<Handler>(
         &self,
         handler: &Handler,
@@ -16,7 +16,7 @@ impl<H: Clone> LocalServerClient<H> {
     pub async fn turn_interrupt<Handler>(
         &self,
         handler: &Handler,
-        target: InteractiveTarget,
+        target: SessionTarget,
     ) -> Result<(), ClientError>
     where
         Handler: LocalClientRequestHandler,
@@ -34,7 +34,7 @@ impl<H: Clone> LocalServerClient<H> {
     where
         Handler: LocalClientRequestHandler,
     {
-        params.target = session.interactive_target();
+        params.target = session.session_target();
         self.turn_start(handler, params).await
     }
 
@@ -46,7 +46,6 @@ impl<H: Clone> LocalServerClient<H> {
     where
         Handler: LocalClientRequestHandler,
     {
-        self.turn_interrupt(handler, session.interactive_target())
-            .await
+        self.turn_interrupt(handler, session.session_target()).await
     }
 }

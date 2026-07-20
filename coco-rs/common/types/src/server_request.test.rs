@@ -5,7 +5,7 @@ use super::*;
 
 #[test]
 fn ask_for_approval_wire_method() {
-    let req = ServerRequest::AskForApproval(AskForApprovalParams {
+    let req = ServerRequest::AskForApproval(Box::new(AskForApprovalParams {
         request_id: "req-1".into(),
         tool_name: "Bash".into(),
         input: json!({ "command": "ls" }),
@@ -18,7 +18,10 @@ fn ask_for_approval_wire_method() {
         agent_id: None,
         cwd: None,
         permission_suggestions: vec![],
-    });
+        choices: None,
+        detail: None,
+        worker_badge: None,
+    }));
     let j = serde_json::to_value(&req).unwrap();
     assert_eq!(j["method"], "approval/askForApproval");
     assert_eq!(j["params"]["tool_name"], "Bash");

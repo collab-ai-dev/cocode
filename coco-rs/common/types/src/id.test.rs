@@ -1,24 +1,6 @@
 use super::*;
 
 #[test]
-fn surface_id_serializes_as_plain_string() {
-    let id = SurfaceId::from("surface-1");
-
-    let json = serde_json::to_value(&id).unwrap();
-    assert_eq!(json, serde_json::json!("surface-1"));
-
-    let back: SurfaceId = serde_json::from_value(json).unwrap();
-    assert_eq!(back.as_str(), "surface-1");
-}
-
-#[test]
-fn generated_surface_id_is_non_empty() {
-    let id = SurfaceId::generate();
-
-    assert!(!id.as_str().is_empty());
-}
-
-#[test]
 fn generated_session_id_is_uuid_string() {
     let id = SessionId::generate();
 

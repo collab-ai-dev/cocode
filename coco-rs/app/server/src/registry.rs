@@ -329,7 +329,7 @@ impl<H: Clone> LiveSessionRegistry<H> {
         &self,
         session_id: &SessionId,
         handle: H,
-    ) -> Result<(), RegistryError> {
+    ) -> Result<(), CompleteLoadFailure<H>> {
         let mut inner = self
             .sessions
             .write()
@@ -351,16 +351,22 @@ impl<H: Clone> LiveSessionRegistry<H> {
                 }))
             );
             if !parent_accepts_child && !close_was_recorded {
-                return OldNotReadySnafu { session_id: parent }.fail();
+                return Err(CompleteLoadFailure {
+                    error: OldNotReadySnafu { session_id: parent }.build(),
+                    handle,
+                });
             }
         }
         // Same key is re-inserted by `promote`; policy/index stay intact.
         let Some(SessionSlot::Loading(load)) = inner.slots.remove(session_id) else {
-            return SlotConflictSnafu {
-                session_id: session_id.clone(),
-                expected: "Loading",
-            }
-            .fail();
+            return Err(CompleteLoadFailure {
+                error: SlotConflictSnafu {
+                    session_id: session_id.clone(),
+                    expected: "Loading",
+                }
+                .build(),
+                handle,
+            });
         };
         inner.slots.insert(session_id.clone(), load.promote(handle));
         Ok(())
@@ -755,6 +761,16 @@ pub enum ReplaceStart<H> {
         new_completion: LoadCompletion<H>,
         child: Option<(SessionId, CloseStart<H>)>,
     },
+}
+
+/// Failure of `complete_load_success` that hands the constructed handle back
+/// so the load owner can run the runtime teardown instead of dropping it
+/// (dropping would leak the runtime: SessionEnd hooks never fire and its
+/// session tasks never join). Same rationale as `ReplaceCommitFailure`.
+#[derive(Debug)]
+pub struct CompleteLoadFailure<H> {
+    pub error: RegistryError,
+    pub handle: H,
 }
 
 #[derive(Debug, Clone)]

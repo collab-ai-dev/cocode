@@ -226,16 +226,14 @@ pub(super) async fn run_agent_driver(
                 // entirely when no child is open, so the primary path is
                 // unchanged.)
                 if local_app_server_bridge.is_child_session(&session_id) {
-                    let Some(surface) =
-                        local_app_server_bridge.interactive_session_by_id(&session_id)
+                    let Some(surface) = local_app_server_bridge.full_session_by_id(&session_id)
                     else {
                         warn!(%session_id, "dropping input for a stale sidechat surface");
                         continue;
                     };
                     let params = coco_types::TurnStartParams {
-                        target: surface.interactive_target(),
+                        target: surface.session_target(),
                         prompt: effective_content,
-                        history_override: Vec::new(),
                         images: image_data_to_turn_start(&images),
                         composer: effective_composer.clone(),
                         slash_metadata,
@@ -260,32 +258,20 @@ pub(super) async fn run_agent_driver(
                 drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
 
                 let turn_id = uuid::Uuid::new_v4();
-                if let Err(error) = local_app_server_bridge.activate_existing_interactive_session(
-                    session_id.clone(),
-                    Some(event_tx.clone()),
-                ) {
+                if let Err(error) = local_app_server_bridge
+                    .activate_existing_full_session(session_id.clone(), Some(event_tx.clone()))
+                {
                     tracing::warn!(%error, "TUI SubmitInput could not activate local AppServer session");
                     continue;
                 }
                 let mut monitor_client = local_app_server_bridge.connect_local_client();
-                // live-only tail attach with no replay cursor. `Some (0)`
-                // falls out of the retention ring on any long-lived/resumed
-                // session and returns `SnapshotRequired`, which would drop the
-                // submit before `start_turn`. The monitor only needs live events
-                // for a turn that hasn't produced output yet.
-                let passive_surface = match monitor_client
-                    .attach_passive_session(session_id.clone())
-                {
-                    Ok(surface) => surface,
-                    Err(error) => {
-                        tracing::warn!(%error, "TUI SubmitInput could not attach AppServer completion monitor");
-                        continue;
-                    }
-                };
+                // This is an in-memory observer on the bridge's one connection,
+                // registered before turn/start so even an immediate TurnEnded is
+                // visible to the completion task.
+                let observed_session = monitor_client.observe_session(session_id.clone());
                 let params = coco_types::TurnStartParams {
-                    target: interactive_target(&local_app_server_bridge),
+                    target: session_target(&local_app_server_bridge),
                     prompt: effective_content,
-                    history_override: Vec::new(),
                     images: image_data_to_turn_start(&images),
                     composer: effective_composer.clone(),
                     slash_metadata,
@@ -349,7 +335,7 @@ pub(super) async fn run_agent_driver(
                     let mut auto_title_client = Some(auto_title_client);
                     let mut auto_title_handler = Some(auto_title_handler);
                     while let Some(envelope) =
-                        monitor_client.next_passive_event(&passive_surface).await
+                        monitor_client.next_session_event(&observed_session).await
                     {
                         if let CoreEvent::Protocol(ServerNotification::TurnEnded(ended)) =
                             envelope.event
@@ -380,7 +366,7 @@ pub(super) async fn run_agent_driver(
                     cancel: ActiveTurnCancel {
                         client: interrupt_client,
                         handler,
-                        target: interactive_target(&local_app_server_bridge),
+                        target: session_target(&local_app_server_bridge),
                     },
                 });
             }
@@ -851,7 +837,7 @@ pub(super) async fn run_agent_driver(
                 Err(error) => {
                     tracing::warn!(%error, "Ctrl+C sidechat close failed");
                     if let Some(child_id) = local_app_server_bridge
-                        .child_interactive_session()
+                        .child_full_session()
                         .map(|surface| surface.session_id().clone())
                     {
                         emit_slash_text(
@@ -867,10 +853,7 @@ pub(super) async fn run_agent_driver(
             },
 
             UserCommand::Interrupt(_reason) => {
-                if local_app_server_bridge
-                    .child_interactive_session()
-                    .is_some()
-                {
+                if local_app_server_bridge.child_full_session().is_some() {
                     match local_app_server_bridge.interrupt_child_turn().await {
                         Ok(true) => info!("Interrupt: cancelled sidechat turn"),
                         Ok(false) => {}
@@ -917,7 +900,7 @@ pub(super) async fn run_agent_driver(
 
             UserCommand::InterruptAgentCurrentWork { agent_id } => {
                 if let Err(error) = local_app_server_bridge
-                    .activate_existing_interactive_session(session.session_id().clone(), None)
+                    .activate_existing_full_session(session.session_id().clone(), None)
                 {
                     tracing::warn!(%agent_id, %error, "Interrupt: could not activate local AppServer session");
                     continue;
@@ -927,7 +910,7 @@ pub(super) async fn run_agent_driver(
                     .agent_interrupt_current_work(
                         local_app_server_bridge.handler(),
                         coco_types::AgentInterruptCurrentWorkParams {
-                            target: interactive_target(&local_app_server_bridge),
+                            target: session_target(&local_app_server_bridge),
                             agent_id: agent_id.clone(),
                         },
                     )
@@ -1023,7 +1006,7 @@ pub(super) async fn run_agent_driver(
                 // tab refreshes on the next frame. No additional event
                 // wiring needed here.
                 if let Err(error) = local_app_server_bridge
-                    .activate_existing_interactive_session(session.session_id().clone(), None)
+                    .activate_existing_full_session(session.session_id().clone(), None)
                 {
                     tracing::warn!(%task_id, %error, "CancelSubagent: could not activate local AppServer session");
                     continue;
@@ -1033,7 +1016,7 @@ pub(super) async fn run_agent_driver(
                     .stop_task(
                         local_app_server_bridge.handler(),
                         coco_types::StopTaskParams {
-                            target: interactive_target(&local_app_server_bridge),
+                            target: session_target(&local_app_server_bridge),
                             task_id: task_id.clone(),
                         },
                     )
@@ -1241,7 +1224,7 @@ pub(super) async fn run_agent_driver(
                     );
                     continue;
                 }
-                if let Err(error) = local_app_server_bridge.activate_existing_interactive_session(
+                if let Err(error) = local_app_server_bridge.activate_existing_full_session(
                     session.session_id().clone(),
                     Some(event_tx.clone()),
                 ) {
@@ -1257,7 +1240,7 @@ pub(super) async fn run_agent_driver(
                     .set_permission_mode(
                         local_app_server_bridge.handler(),
                         coco_types::SetPermissionModeParams {
-                            target: interactive_target(&local_app_server_bridge),
+                            target: session_target(&local_app_server_bridge),
                             mode,
                         },
                     )
@@ -1745,7 +1728,7 @@ pub(super) async fn run_agent_driver(
     // don't propagate out of the driver.
     {
         let session = current_session.read().await.clone();
-        coco_agent_host::shutdown::flush_interactive_session_exit_checkpoint(&session).await;
+        coco_agent_host::shutdown::flush_full_session_exit_checkpoint(&session).await;
     }
     let shutdown = shutdown_coordinator
         .finish_after_app_server(

@@ -1,7 +1,7 @@
 //! AppServer-routed hook callback bridge.
 //!
-//! Wires agent-side hook orchestration to the active interactive surface
-//! through AppServer server requests. The bridge:
+//! Wires agent-side hook orchestration to Full AppServer clients through
+//! server requests. The bridge:
 //!
 //! 1. Installs a runtime callback on `HookRegistry` that, when invoked,
 //!    sends a `hook/callback` server request and awaits the reply.
@@ -70,6 +70,17 @@ async fn route_hook_callback(
     session: SessionHandle,
     request: coco_hooks::ClientHookCallbackRequest,
 ) -> coco_hooks::Result<coco_types::HookCallbackOutput> {
+    let connection = app_server
+        .connection_callback_owner(
+            session.session_id(),
+            &coco_app_server::ConnectionCallback::Hook(request.callback_id.clone()),
+        )
+        .ok_or_else(|| {
+            coco_hooks::HooksError::generic(format!(
+                "hook callback {} has no connected owner",
+                request.callback_id
+            ))
+        })?;
     let params = coco_types::ServerHookCallbackParams {
         callback_id: request.callback_id,
         event_type: request.event,
@@ -77,9 +88,9 @@ async fn route_hook_callback(
         tool_use_id: request.tool_use_id,
     };
     let reply = app_server
-        .route_server_request_with_reply(
+        .route_server_request_with_reply_to_connection(
+            connection,
             session.session_id().clone(),
-            coco_app_server::SurfaceCapability::Interactive,
             session.active_turn_id(),
             coco_types::ServerRequest::HookCallback(params),
         )

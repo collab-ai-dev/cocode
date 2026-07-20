@@ -26,6 +26,7 @@ fn build_route(
 pub async fn register_and_connect(
     session: crate::session_runtime::SessionHandle,
     app_server: Arc<coco_app_server::AppServer<crate::app_session::AppSessionHandle>>,
+    connection: coco_app_server::ConnectionKey,
     server_names: Vec<String>,
 ) -> Result<(), String> {
     let route = build_route(Arc::clone(&app_server), session.session_id().clone());
@@ -37,10 +38,18 @@ pub async fn register_and_connect(
     }
 
     for name in server_names {
+        app_server
+            .register_connection_callback(
+                connection,
+                session.session_id().clone(),
+                coco_app_server::ConnectionCallback::McpServer(name.clone()),
+            )
+            .map_err(|error| format!("register client MCP owner: {error}"))?;
         let send_elicitation =
             crate::app_server_host::request_handlers::mcp::build_send_elicitation_for_session(
                 session.clone(),
                 Arc::clone(&app_server),
+                Some(connection),
                 name.clone(),
             )
             .await;
@@ -82,6 +91,12 @@ async fn route_message(
     server_name: String,
     message: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    let connection = app_server
+        .connection_callback_owner(
+            &session_id,
+            &coco_app_server::ConnectionCallback::McpServer(server_name.clone()),
+        )
+        .ok_or_else(|| format!("client MCP server {server_name} has no connected owner"))?;
     let params = coco_types::ServerMcpRouteMessageParams {
         server_name,
         message,
@@ -94,9 +109,9 @@ async fn route_message(
         .get(&session_id)
         .and_then(|handle| handle.into_session().active_turn_id());
     let reply = app_server
-        .route_server_request_with_reply(
+        .route_server_request_with_reply_to_connection(
+            connection,
             session_id,
-            coco_app_server::SurfaceCapability::Interactive,
             turn_id,
             coco_types::ServerRequest::McpRouteMessage(params),
         )

@@ -83,7 +83,7 @@ pub(super) async fn apply_role_through_app_server(
         .set_model_role(
             local_app_server_bridge.handler(),
             coco_types::SetModelRoleParams {
-                target: interactive_target(local_app_server_bridge),
+                target: session_target(local_app_server_bridge),
                 role,
                 provider: provider.clone(),
                 model_id: model_id.clone(),
@@ -145,5 +145,5 @@ pub(super) async fn apply_role_through_app_server(
     )
     .await;
 }
-use super::interactive_target;
+use super::session_target;
 use coco_types::{CoreEvent, ServerNotification};

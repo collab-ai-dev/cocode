@@ -161,7 +161,6 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         session_id_override: None,
         is_non_interactive: false,
         execution_profile: crate::session_runtime::SessionExecutionProfile::Primary,
-        callback_requirements: Default::default(),
     })
     .await
     .expect("build SessionRuntime")
@@ -178,10 +177,7 @@ async fn dispatch_with_parent_history_uses_no_event_message_path() {
     let home = TempDir::new().expect("home tempdir");
     let runtime = build_runtime(&home).await;
     let usage_before = runtime.session_usage_snapshot().await;
-    let dispatcher = SessionRuntimeForkDispatcher::new(SessionHandle::new(
-        Arc::clone(&runtime),
-        Default::default(),
-    ));
+    let dispatcher = SessionRuntimeForkDispatcher::new(SessionHandle::new(Arc::clone(&runtime)));
     let cache = CacheSafeParams {
         rendered_system_prompt: "test".into(),
         model_id: "mock-model".into(),
@@ -228,8 +224,7 @@ async fn compact_sidechain_transcript_writes_agent_store_only() {
     );
     runtime.attach_agent_transcript_store(agent_store).await;
 
-    let dispatcher =
-        SessionRuntimeForkDispatcher::new(SessionHandle::new(runtime, Default::default()));
+    let dispatcher = SessionRuntimeForkDispatcher::new(SessionHandle::new(runtime));
     let cache = CacheSafeParams {
         rendered_system_prompt: "test".into(),
         model_id: "mock-model".into(),

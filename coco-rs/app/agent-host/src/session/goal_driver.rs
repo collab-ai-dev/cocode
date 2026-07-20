@@ -196,7 +196,7 @@ impl SessionGoalTurnPort {
             .await;
 
         // Drain the engine's event stream; the durable history commit below is what
-        // persists the turn (live surface routing of autonomous turns is a
+        // persists the turn (live client routing of autonomous turns is a
         // follow-up).
         let (event_tx, mut event_rx) = mpsc::channel::<coco_types::CoreEvent>(256);
         let drain = tokio::spawn(async move { while event_rx.recv().await.is_some() {} });

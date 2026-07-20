@@ -7,10 +7,9 @@ import {
   type HookCallbackParams,
   type HookCallbackOutput,
   type InitializeParams,
-  type InteractiveTarget,
   type McpRouteMessageParams,
   type PermissionMode,
-  type SessionCloseTarget,
+  type SessionTarget,
   type SessionStartResult,
   type ServerNotification,
   type ThinkingLevel,
@@ -21,7 +20,11 @@ import { ProcessError } from "./errors.js";
 import { modelSpecToCliArg, type ModelSpec } from "./types.js";
 import { SubprocessCLITransport, type JsonObject, type Transport } from "./transport.js";
 
-export type CanUseTool = (toolName: string, input: Record<string, unknown>) => Promise<ApprovalDecision>;
+export type CanUseTool = (
+  toolName: string,
+  input: Record<string, unknown>,
+  signal?: AbortSignal,
+) => Promise<ApprovalDecision>;
 export type HookHandler = (
   callbackId: string,
   eventType: string,
@@ -73,7 +76,6 @@ export class CocoClient {
   private router: MessageRouter | null = null;
   private started = false;
   private sessionId: string | null = null;
-  private surfaceId: string | null = null;
 
   constructor(options: CocoClientOptions) {
     this.initialPrompt = options.prompt;
@@ -104,7 +106,9 @@ export class CocoClient {
     try {
       throwIfAborted(this.options.signal);
       await this.transport.start();
-      this.router = new MessageRouter(this.transport, (message) => this.handleServerRequest(message));
+      this.router = new MessageRouter(this.transport, (message, signal) =>
+        this.handleServerRequest(message, signal),
+      );
       this.router.start();
       await this.sendInitialize();
       await this.sendSessionStart();
@@ -130,7 +134,11 @@ export class CocoClient {
     await this.startTurnWithRetry(
       {
         method: ClientRequestMethod.TURN_START,
-        params: { target: this.interactiveTarget(), prompt: text },
+        params: {
+          target: this.sessionTarget(),
+          prompt: text,
+          composer: { next_attachment_label: 0 },
+        },
       },
       options.signal,
     );
@@ -168,21 +176,21 @@ export class CocoClient {
   async interrupt(): Promise<void> {
     await this.notify({
       method: ClientRequestMethod.TURN_INTERRUPT,
-      params: this.interactiveTarget(),
+      params: this.sessionTarget(),
     });
   }
 
   async setPermissionMode(mode: PermissionMode): Promise<void> {
     await this.notify({
       method: ClientRequestMethod.CONTROL_SET_PERMISSION_MODE,
-      params: { target: this.interactiveTarget(), mode },
+      params: { target: this.sessionTarget(), mode },
     });
   }
 
   async setThinking(level: ThinkingLevel | null): Promise<void> {
     await this.notify({
       method: ClientRequestMethod.CONTROL_SET_THINKING,
-      params: { target: this.interactiveTarget(), thinking_level: level },
+      params: { target: this.sessionTarget(), thinking_level: level },
     });
   }
 
@@ -197,7 +205,6 @@ export class CocoClient {
     });
     if (targetSessionId === this.sessionId) {
       this.sessionId = null;
-      this.surfaceId = null;
     }
   }
 
@@ -225,7 +232,6 @@ export class CocoClient {
     }
     this.started = false;
     this.sessionId = null;
-    this.surfaceId = null;
   }
 
   private async sendInitialize(): Promise<void> {
@@ -256,28 +262,28 @@ export class CocoClient {
       },
     })) as unknown as SessionStartResult;
     this.sessionId = result.session_id;
-    this.surfaceId = result.surface_id ?? null;
   }
 
   private async sendTurnStart(prompt: string): Promise<void> {
     await this.request({
       method: ClientRequestMethod.TURN_START,
-      params: { target: this.interactiveTarget(), prompt },
+      params: {
+        target: this.sessionTarget(),
+        prompt,
+        composer: { next_attachment_label: 0 },
+      },
     });
   }
 
-  private interactiveTarget(): InteractiveTarget {
-    if (!this.sessionId || !this.surfaceId) {
-      throw new Error("no active interactive session target");
+  private sessionTarget(): SessionTarget {
+    if (!this.sessionId) {
+      throw new Error("no active session target");
     }
-    return { session_id: this.sessionId, surface_id: this.surfaceId };
+    return { session_id: this.sessionId };
   }
 
-  private closeTarget(sessionId: string): SessionCloseTarget {
-    if (sessionId === this.sessionId && this.surfaceId) {
-      return { kind: "interactive", target: this.interactiveTarget() };
-    }
-    return { kind: "orphaned", target: { session_id: sessionId } };
+  private closeTarget(sessionId: string): SessionTarget {
+    return { session_id: sessionId };
   }
 
   private async startTurnWithRetry(request: ClientRequest, signal?: AbortSignal): Promise<void> {
@@ -312,13 +318,15 @@ export class CocoClient {
 
   private requireRouter(): MessageRouter {
     if (!this.router) {
-      this.router = new MessageRouter(this.transport, (message) => this.handleServerRequest(message));
+      this.router = new MessageRouter(this.transport, (message, signal) =>
+        this.handleServerRequest(message, signal),
+      );
       this.router.start();
     }
     return this.router;
   }
 
-  private async handleServerRequest(message: JsonObject): Promise<boolean> {
+  private async handleServerRequest(message: JsonObject, signal: AbortSignal): Promise<boolean> {
     const method = message.method;
     const id = message.id as number | string | undefined;
     const params = (message.params ?? {}) as Record<string, unknown>;
@@ -326,16 +334,24 @@ export class CocoClient {
 
     if (method === ServerRequestMethod.APPROVAL_ASK_FOR_APPROVAL) {
       if (!this.canUseTool) {
-        await this.requireRouter().respond(id, {
-          request_id: params.request_id ?? "",
-          decision: "deny",
-        });
+        // No permission callback configured: reply with a JSON-RPC error,
+        // NOT a `deny`. Approvals are broadcast to all Full connections and
+        // the first VALID reply wins — a deny here would consume the
+        // broadcast and cancel a human peer's prompt in multi-client
+        // sessions. An error reply only withdraws this client. Single-client
+        // headless keeps the same observable outcome: sole recipient errors
+        // → the server cancels the request → the tool is denied.
+        await this.requireRouter().respondError(id, "no approval handler configured", -32601);
         return true;
       }
+      // Pass the broadcast-cancellation signal so a losing client can
+      // dismiss an in-flight prompt.
       const decision = await this.canUseTool(
         String(params.tool_name ?? ""),
         asRecord(params.input),
+        signal,
       );
+      if (signal.aborted) return true;
       await this.requireRouter().respond(id, {
         request_id: params.request_id ?? "",
         decision,
@@ -351,6 +367,7 @@ export class CocoClient {
             await handler(hookParams.callback_id, hookParams.event_type, hookParams.input),
           )
         : {};
+      if (signal.aborted) return true;
       await this.requireRouter().respond(id, { output });
       return true;
     }
@@ -361,6 +378,7 @@ export class CocoClient {
       const response = handler
         ? await handler(routeParams.server_name, routeParams.message)
         : unsupportedMcpResponse(routeParams.message, routeParams.server_name);
+      if (signal.aborted) return true;
       await this.requireRouter().respond(id, { message: response });
       return true;
     }

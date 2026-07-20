@@ -82,7 +82,6 @@ fn run_turn_with_session(
     let prompt = params.prompt;
     let images = params.images;
     let composer = params.composer;
-    let history_override = params.history_override;
     // A `GoalSupervisor`-driven autonomous continuation (§10.3): no user prompt,
     // the materialized goal context drives the turn, and the engine defers
     // after-turn finalization/continuation to the supervisor.
@@ -118,9 +117,12 @@ fn run_turn_with_session(
             "SessionTurnExecutor: run_turn"
         );
 
-        let mut engine = turn_engine.engine.with_permission_bridge(Arc::new(
-            super::AppServerPermissionBridge::new(Arc::clone(&app_server), session.clone()),
-        ));
+        let mut engine = turn_engine.engine;
+        if !turn_engine.has_session_permission_bridge {
+            engine = engine.with_permission_bridge(Arc::new(
+                super::AppServerPermissionBridge::new(Arc::clone(&app_server), session.clone()),
+            ));
+        }
         if goal_continuation {
             engine = engine.with_goal_supervisor_owned_finalize();
         }
@@ -151,7 +153,7 @@ fn run_turn_with_session(
             session
                 .append_arc_messages_to_history_and_snapshot(Vec::new())
                 .await
-        } else if history_override.is_empty() {
+        } else if !prompt.is_empty() || !images.is_empty() {
             // Fire UserPromptSubmit hooks BEFORE the LLM call. Output
             // surfaces as `hook_*` reminders on the next reminder pass;
             // a blocking_error suppresses the turn (warns instead);
@@ -268,13 +270,15 @@ fn run_turn_with_session(
             // instead of the file's contents (the `at_mentioned_files`
             // reminder body claims content is "loaded into context" —
             // this is what makes that true).
-            let inputs = crate::at_mention_turn::resolve_turn_inputs(
+            let mention_tool_context = engine.build_base_tool_context().await;
+            let inputs = crate::at_mention_turn::resolve_turn_inputs_with_permissions(
                 &prompt,
                 &images,
                 &composer,
                 &turn_cwd,
                 uuid::Uuid::new_v4(),
                 session.file_read_state(),
+                &mention_tool_context,
             )
             .await;
             let mut new_msgs = Vec::new();
@@ -311,17 +315,7 @@ fn run_turn_with_session(
             }
             combined
         } else {
-            let override_messages: Vec<std::sync::Arc<coco_messages::Message>> = history_override
-                .into_iter()
-                .map(serde_json::from_value::<coco_messages::Message>)
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .map(std::sync::Arc::new)
-                .collect();
-            session
-                .replace_history_with_arc_messages(override_messages.clone())
-                .await;
-            override_messages
+            session.history_messages().await
         };
 
         // Clone the event channel so we can still emit on the
@@ -420,7 +414,7 @@ fn run_turn_with_session(
                     // Defensive: the engine returned Ok without ever emitting a
                     // terminal (a degenerate / custom runner path). Synthesize a
                     // completed terminal so `start_turn_and_wait_for_end` and the
-                    // passive completion monitor never hang. The executor owns
+                    // completion monitor never hangs. The executor owns
                     // exactly one terminal on every exit path.
                     let _ = event_tx_for_error
                         .send(CoreEvent::Protocol(

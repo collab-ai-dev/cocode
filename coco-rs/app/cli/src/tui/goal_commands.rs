@@ -5,7 +5,7 @@ pub(super) async fn run_goal_command(
 ) -> SlashFollowup {
     let is_status = matches!(request, coco_commands::GoalCommandRequest::Status);
     let args = goal_command::goal_display_args(&request).to_string();
-    // Trust is required only interactively; the TUI is the interactive surface.
+    // Trust is required only in the interactive TUI.
     let outcome = goal_command::resolve_goal_request_for_session(
         session,
         request,

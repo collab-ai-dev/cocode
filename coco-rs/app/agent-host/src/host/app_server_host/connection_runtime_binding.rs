@@ -17,6 +17,7 @@ pub(crate) async fn configure_connection_mcp_bridge(
     profile: &coco_types::ConnectionProfile,
     session: &crate::session_runtime::SessionHandle,
     app_server: Arc<AppServer<AppSessionHandle>>,
+    connection: coco_app_server::ConnectionKey,
 ) {
     let Some(server_names) = profile
         .client_mcp_server_names()
@@ -30,6 +31,7 @@ pub(crate) async fn configure_connection_mcp_bridge(
     if let Err(error) = crate::app_server_host::client_mcp_bridge::register_and_connect(
         session.clone(),
         app_server,
+        connection,
         server_names,
     )
     .await
@@ -52,14 +54,11 @@ pub(crate) async fn build_connection_runtime_for_start(
         prepared.plan_mode_custom_instructions.clone(),
     );
     let session = build_app_session_runtime_for_start(&binding, &profile, &prepared).await?;
-    install_connection_runtime_callbacks(&connection_profile, &session, app_server);
+    install_runtime_callbacks(&connection_profile, &session, app_server);
     install_app_session_integrations(&binding, session.clone()).await?;
     hydrate_app_session_history(&session, &prepared.session_id, &prepared.initial_messages).await;
-    session
-        .fire_session_start_hooks(coco_hooks::orchestration::SessionStartSource::Startup)
-        .await;
     // Configure model/permission/accounting on the still-unpublished runtime so
-    // it is fully configured before promotion and surface attachment (CS-1 §0.1
+    // it is fully configured before promotion and connection attachment (CS-1 §0.1
     // item 5). apply_session_start_config merges (Option/true-gated), so this
     // does not clobber the profile-applied structured-output/plan-mode state.
     crate::session_start::apply_prepared_session_start(&prepared, &session).await;
@@ -97,12 +96,9 @@ pub(crate) async fn build_connection_runtime_for_resume(
     let session =
         build_app_session_runtime_for_resume(&binding, &profile, session_id.clone(), cwd).await?;
     restrict_session_mcp_tool_exposure(&session, persisted_mcp_tool_exposure).await;
-    install_connection_runtime_callbacks(&connection_profile, &session, app_server);
+    install_runtime_callbacks(&connection_profile, &session, app_server);
     install_app_session_integrations(&binding, session.clone()).await?;
     hydrate_app_session_history(&session, &session_id, &prior_messages).await;
-    session
-        .fire_session_start_hooks(coco_hooks::orchestration::SessionStartSource::Resume)
-        .await;
     Ok(session)
 }
 
@@ -143,19 +139,12 @@ pub(crate) async fn build_connection_runtime_for_clear(
     );
     let session = binding
         .runtime_factory
-        .build_with_session_id_and_cwd(
-            session_id,
-            binding.cwd.clone(),
-            profile.callback_requirements.clone(),
-        )
+        .build_with_session_id_and_cwd(session_id, binding.cwd.clone())
         .await?;
     crate::app_session_runtime::apply_app_session_runtime_profile(&profile, &session).await;
-    install_connection_runtime_callbacks(&connection_profile, &session, app_server);
+    install_runtime_callbacks(&connection_profile, &session, app_server);
     session.apply_clear_replacement_snapshot(snapshot).await;
     install_app_session_integrations(&binding, session.clone()).await?;
-    session
-        .fire_session_start_hooks(coco_hooks::orchestration::SessionStartSource::Clear)
-        .await;
     Ok(session)
 }
 
@@ -187,25 +176,61 @@ fn runtime_profile_from_connection(
     // `session/start` / `session/resume` (threaded in by the caller), not on the
     // connection's `initialize`.
     AppSessionRuntimeProfile {
-        callback_requirements: connection_profile.callback_requirements(),
         plan_mode_custom_instructions,
         supplied_agents,
         requires_structured_output,
     }
 }
 
-fn install_connection_runtime_callbacks(
+pub(crate) fn install_connection_runtime_callbacks(
+    connection_profile: &coco_types::ConnectionProfile,
+    session: &crate::session_runtime::SessionHandle,
+    app_server: Arc<AppServer<AppSessionHandle>>,
+    connection: coco_app_server::ConnectionKey,
+) -> Result<(), coco_app_server::SessionAccessError> {
+    install_runtime_callbacks(connection_profile, session, Arc::clone(&app_server));
+    register_connection_callback_owners(connection_profile, session, &app_server, connection)
+}
+
+/// Install callback execution support in an unpublished runtime.
+///
+/// This deliberately does not mutate AppServer connection ownership: a load
+/// factory may still fail, and the session cannot route a callback until it is
+/// live and the initiating connection is attached.
+fn install_runtime_callbacks(
     connection_profile: &coco_types::ConnectionProfile,
     session: &crate::session_runtime::SessionHandle,
     app_server: Arc<AppServer<AppSessionHandle>>,
 ) {
-    crate::app_server_host::hook_callback_bridge::install_runtime_callback(
-        Arc::clone(&app_server),
-        session,
-    );
+    crate::app_server_host::hook_callback_bridge::install_runtime_callback(app_server, session);
     if let Some(hooks) = &connection_profile.initialize().hooks {
         crate::app_server_host::hook_callback_bridge::register_initialize_hooks(session, hooks);
     }
+}
+
+/// Bind callback ids to a connection only after the session is live and that
+/// connection has a Full attachment.
+pub(crate) fn register_connection_callback_owners(
+    connection_profile: &coco_types::ConnectionProfile,
+    session: &crate::session_runtime::SessionHandle,
+    app_server: &AppServer<AppSessionHandle>,
+    connection: coco_app_server::ConnectionKey,
+) -> Result<(), coco_app_server::SessionAccessError> {
+    let Some(hooks) = &connection_profile.initialize().hooks else {
+        return Ok(());
+    };
+    for matchers in hooks.values() {
+        for matcher in matchers {
+            for callback_id in &matcher.hook_callback_ids {
+                app_server.register_connection_callback(
+                    connection,
+                    session.session_id().clone(),
+                    coco_app_server::ConnectionCallback::Hook(callback_id.clone()),
+                )?;
+            }
+        }
+    }
+    Ok(())
 }
 
 pub async fn install_app_server_session_runtime_state(
@@ -213,10 +238,6 @@ pub async fn install_app_server_session_runtime_state(
     session: crate::session_runtime::SessionHandle,
     app_server: Arc<AppServer<AppSessionHandle>>,
 ) {
-    crate::app_server_host::hook_callback_bridge::install_runtime_callback(
-        Arc::clone(&app_server),
-        &session,
-    );
     let session_manager = session.session_manager_handle();
     install_app_server_sandbox_reload_subscription(&session, app_server).await;
     let _ = session;

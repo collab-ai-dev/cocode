@@ -51,6 +51,17 @@ async fn try_build_runtime_with_main(
     model_id: &str,
     session_id_override: Option<SessionId>,
 ) -> anyhow::Result<SessionHandle> {
+    try_build_runtime_with_main_and_bridge(home, provider, model_id, session_id_override, None)
+        .await
+}
+
+async fn try_build_runtime_with_main_and_bridge(
+    home: &TempDir,
+    provider: &str,
+    model_id: &str,
+    session_id_override: Option<SessionId>,
+    permission_bridge: Option<coco_tool_runtime::ToolPermissionBridgeRef>,
+) -> anyhow::Result<SessionHandle> {
     let settings = SettingsWithSource {
         merged: Settings {
             models: coco_config::ModelSelectionSettings {
@@ -103,12 +114,12 @@ async fn try_build_runtime_with_main(
             home.path().join("sessions"),
         )),
         fast_model_spec: None,
-        permission_bridge: None,
+        permission_bridge,
         process_runtime: coco_app_runtime::ProcessRuntime::global(),
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         is_non_interactive: false,
     });
-    factory.build(session_id_override, Default::default()).await
+    factory.build(session_id_override).await
 }
 
 #[tokio::test]
@@ -289,6 +300,42 @@ async fn turn_engine_reports_the_model_bound_to_the_selected_runtime() {
         .await;
 
     assert_eq!(turn_engine.model_id, "deepseek-v4-flash");
+    assert!(!turn_engine.has_session_permission_bridge);
+}
+
+#[tokio::test]
+async fn turn_engine_reports_an_in_process_permission_bridge() {
+    let home = TempDir::new().expect("home tempdir");
+    let (notification_tx, _notification_rx) = tokio::sync::mpsc::channel(1);
+    let permission_bridge: coco_tool_runtime::ToolPermissionBridgeRef =
+        Arc::new(crate::tui_permission_bridge::TuiPermissionBridge::new(
+            notification_tx,
+            crate::tui_permission_bridge::new_pending_map(),
+        ));
+    let runtime = try_build_runtime_with_main_and_bridge(
+        &home,
+        "anthropic",
+        "claude-opus-4-7",
+        None,
+        Some(permission_bridge),
+    )
+    .await
+    .expect("build runtime with in-process permission bridge");
+
+    let turn_engine = runtime
+        .build_turn_engine(
+            SessionTurnEngineConfigRequest {
+                model_selection: None,
+                permission_mode: None,
+                thinking_level: None,
+                max_turns: None,
+                system_prompt: None,
+            },
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+
+    assert!(turn_engine.has_session_permission_bridge);
 }
 
 #[test]
@@ -461,10 +508,7 @@ async fn model_role_selection_keeps_moa_display_binding_for_main() {
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         is_non_interactive: false,
     });
-    let runtime = factory
-        .build(None, Default::default())
-        .await
-        .expect("build SessionRuntime");
+    let runtime = factory.build(None).await.expect("build SessionRuntime");
 
     let change = runtime
         .apply_model_role_selection(super::SessionModelRoleSelection {

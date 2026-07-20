@@ -92,7 +92,6 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         session_id_override: None,
         is_non_interactive: false,
         execution_profile: crate::session_runtime::SessionExecutionProfile::Primary,
-        callback_requirements: Default::default(),
     })
     .await
     .expect("build SessionRuntime")
@@ -104,15 +103,9 @@ async fn install_session_late_binds_populates_every_slot_without_mcp() {
     let runtime = build_runtime(&home).await;
     let cwd = home.path().to_path_buf();
 
-    install_session_late_binds(
-        SessionHandle::new(runtime.clone(), Default::default()),
-        &cwd,
-        None,
-        None,
-        None,
-    )
-    .await
-    .expect("install_session_late_binds");
+    install_session_late_binds(SessionHandle::new(runtime.clone()), &cwd, None, None, None)
+        .await
+        .expect("install_session_late_binds");
 
     assert!(
         runtime.current_task_runtime().await.is_some(),
@@ -146,7 +139,7 @@ async fn install_session_late_binds_attaches_mcp_when_some() {
     let mcp_handle: coco_tool_runtime::McpHandleRef = Arc::new(coco_tool_runtime::NoOpMcpHandle);
 
     install_session_late_binds(
-        SessionHandle::new(runtime.clone(), Default::default()),
+        SessionHandle::new(runtime.clone()),
         &cwd,
         Some(mcp_handle),
         None,
@@ -171,7 +164,7 @@ async fn bootstrap_session_mcp_attaches_handle_and_manager_with_no_servers() {
     // still attach the manager + an `McpManagerAdapter` handle (the background
     // connect pass simply has nothing to connect).
     crate::session_bootstrap::bootstrap_session_mcp(
-        &SessionHandle::new(runtime.clone(), Default::default()),
+        &SessionHandle::new(runtime.clone()),
         &cwd,
         None,
         /*await_connect*/ true,
@@ -198,7 +191,7 @@ async fn install_session_late_binds_attaches_lsp_when_some() {
     let lsp_handle: coco_tool_runtime::LspHandleRef = Arc::new(coco_tool_runtime::NoOpLspHandle);
 
     install_session_late_binds(
-        SessionHandle::new(runtime.clone(), Default::default()),
+        SessionHandle::new(runtime.clone()),
         &cwd,
         None,
         Some(lsp_handle),

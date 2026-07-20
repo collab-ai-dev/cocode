@@ -50,12 +50,15 @@ impl ToolPermissionBridge for AppServerPermissionBridge {
                 .iter()
                 .filter_map(|suggestion| serde_json::to_value(suggestion).ok())
                 .collect(),
+            choices: request.choices.clone(),
+            detail: request.detail.clone(),
+            worker_badge: request.worker_badge.clone(),
         };
         debug!(
             session_id = %self.session.session_id(),
             request_id = %request.id,
             tool = %request.tool_name,
-            "asking targeted AppServer surface for approval"
+            "asking Full AppServer clients for approval"
         );
         let title = format!("Permission request: {}", request.tool_name);
         self.session
@@ -69,9 +72,8 @@ impl ToolPermissionBridge for AppServerPermissionBridge {
             .app_server
             .route_server_request_with_reply(
                 self.session.session_id().clone(),
-                coco_app_server::SurfaceCapability::Interactive,
                 self.session.active_turn_id(),
-                coco_types::ServerRequest::AskForApproval(params),
+                coco_types::ServerRequest::AskForApproval(Box::new(params)),
             )
             .map_err(|error| format!("route approval request failed: {error:?}"))?
             .await
@@ -84,17 +86,18 @@ impl ToolPermissionBridge for AppServerPermissionBridge {
                 } else {
                     ToolPermissionDecision::Rejected
                 };
-                let applied_updates = match (approved, parsed.permission_update) {
-                    (true, Some(update)) => {
+                let applied_updates = if approved {
+                    for update in &parsed.permission_updates {
                         crate::session_controls::apply_permission_update(
                             Some(self.session.clone()),
                             update.clone(),
                         )
                         .await
                         .map_err(|error| format!("apply permission update: {error}"))?;
-                        vec![update]
                     }
-                    _ => Vec::new(),
+                    parsed.permission_updates
+                } else {
+                    Vec::new()
                 };
                 Ok(ToolPermissionResolution {
                     decision,
@@ -102,7 +105,7 @@ impl ToolPermissionBridge for AppServerPermissionBridge {
                     applied_updates,
                     updated_input: parsed.updated_input,
                     content_blocks: parsed.content_blocks,
-                    detail: None,
+                    detail: parsed.resolution_detail,
                 })
             }
             coco_app_server::ServerRequestReply::Error(error) => {
@@ -111,7 +114,7 @@ impl ToolPermissionBridge for AppServerPermissionBridge {
                     request_id = %request.id,
                     code = error.code,
                     message = %error.message,
-                    "AppServer approval surface returned error"
+                    "AppServer approval client returned error"
                 );
                 Ok(ToolPermissionResolution {
                     decision: ToolPermissionDecision::Rejected,

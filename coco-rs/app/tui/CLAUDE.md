@@ -2,8 +2,9 @@
 
 Terminal UI using ratatui with The Elm Architecture (TEA). Consumes
 `CoreEvent`; emits `UserCommand` back to the host. Events arrive via the
-local AppServer bridge's passive event pump (see `app/agent-host`
-`local_bridge`), not direct coco-query channel wiring.
+local AppServer bridge's in-memory event observer (see `app/agent-host`
+`local_bridge`), which shares the bridge's one connection rather than wiring
+directly to coco-query.
 
 ## Architecture (TEA)
 

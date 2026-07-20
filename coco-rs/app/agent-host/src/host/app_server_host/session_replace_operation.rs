@@ -1,12 +1,13 @@
 use std::{future::Future, sync::Arc, time::Duration};
 
 use coco_app_server::{AppReplaceStart, AppServer, ConnectionKey};
-use coco_types::{SessionReplaceResult, SurfaceId};
+use coco_types::{SessionAccess, SessionReplaceResult};
 
 use crate::app_server_host::connection_runtime_binding::{
     build_connection_runtime_for_clear, build_connection_runtime_for_resume,
     build_connection_runtime_for_start, configure_connection_mcp_bridge,
-    install_app_server_sandbox_reload_subscription,
+    install_app_server_sandbox_reload_subscription, install_connection_runtime_callbacks,
+    register_connection_callback_owners,
 };
 use crate::app_server_host::{AppServerHostState, RuntimeReplacementContext};
 use crate::app_session::AppSessionHandle;
@@ -33,12 +34,13 @@ pub(crate) async fn replace_app_server_session_with_runtime(
     turn_drain_timeout: Duration,
 ) -> Result<SessionReplaceResult, SessionOperationError> {
     app_server
-        .validate_interactive_target(connection, &input.source)
+        .validate_session_target(connection, &input.source, SessionAccess::Full)
         .map_err(|error| app_server_lifecycle_error_parts("validate replacement source", error))?;
     let source_session_id = input.source.session_id.clone();
-    let source_surface_id = input.source.surface_id.clone();
 
-    let (destination_id, destination_handle, needs_live_repoint) = match input.destination {
+    let (destination_id, destination_handle, needs_live_repoint, start_source) = match input
+        .destination
+    {
         SessionReplaceDestination::Fresh(start_input) => {
             let prepared =
                 prepare_app_server_session_start(*start_input, &state, &connection_profile).await?;
@@ -65,7 +67,6 @@ pub(crate) async fn replace_app_server_session_with_runtime(
                         Arc::clone(&app_server),
                     )
                     .await;
-                    configure_connection_mcp_bridge(&profile, &runtime, app_server).await;
                     Ok::<_, coco_app_server::RegistryError>(AppSessionHandle::from_runtime(runtime))
                 }
             };
@@ -75,14 +76,19 @@ pub(crate) async fn replace_app_server_session_with_runtime(
                     state: Arc::clone(&state),
                     source_session_id: source_session_id.clone(),
                     destination_id: destination_id.clone(),
-                    source_surface_id: source_surface_id.clone(),
+                    connection,
                     close_reason: coco_hooks::orchestration::ExitReason::Other,
                     turn_drain_timeout,
                 },
                 factory,
             )
             .await?;
-            (destination_id, handle, false)
+            (
+                destination_id,
+                handle,
+                false,
+                Some(coco_hooks::orchestration::SessionStartSource::Startup),
+            )
         }
         SessionReplaceDestination::Resume(target) => {
             if target.session_id == source_session_id {
@@ -109,20 +115,7 @@ pub(crate) async fn replace_app_server_session_with_runtime(
                 );
             }
             if let Some(handle) = app_server.registry().get(&destination_id) {
-                let runtime = handle.clone().into_session();
-                if !runtime
-                    .callback_requirements()
-                    .is_satisfied_by(&connection_profile)
-                {
-                    return Err(SessionOperationError::invalid_request(
-                        "connection profile does not satisfy the live destination callback requirements",
-                        Some(serde_json::json!({
-                            "kind": "connection_profile_mismatch",
-                            "session_id": destination_id,
-                        })),
-                    ));
-                }
-                (destination_id, handle, true)
+                (destination_id, handle, true, None)
             } else {
                 let cwd = loaded.session.working_dir.clone();
                 let prior_messages = loaded.conversation.messages.clone();
@@ -158,7 +151,6 @@ pub(crate) async fn replace_app_server_session_with_runtime(
                             Arc::clone(&app_server),
                         )
                         .await;
-                        configure_connection_mcp_bridge(&profile, &runtime, app_server).await;
                         Ok::<_, coco_app_server::RegistryError>(AppSessionHandle::from_runtime(
                             runtime,
                         ))
@@ -170,14 +162,19 @@ pub(crate) async fn replace_app_server_session_with_runtime(
                         state: Arc::clone(&state),
                         source_session_id: source_session_id.clone(),
                         destination_id: destination_id.clone(),
-                        source_surface_id: source_surface_id.clone(),
+                        connection,
                         close_reason: coco_hooks::orchestration::ExitReason::Other,
                         turn_drain_timeout,
                     },
                     factory,
                 )
                 .await?;
-                (destination_id, handle, false)
+                (
+                    destination_id,
+                    handle,
+                    false,
+                    Some(coco_hooks::orchestration::SessionStartSource::Resume),
+                )
             }
         }
         SessionReplaceDestination::Clear => {
@@ -224,18 +221,23 @@ pub(crate) async fn replace_app_server_session_with_runtime(
                     state: Arc::clone(&state),
                     source_session_id: source_session_id.clone(),
                     destination_id: destination_id.clone(),
-                    source_surface_id: source_surface_id.clone(),
+                    connection,
                     close_reason: coco_hooks::orchestration::ExitReason::Clear,
                     turn_drain_timeout,
                 },
                 factory,
             )
             .await?;
-            (destination_id, handle, false)
+            (
+                destination_id,
+                handle,
+                false,
+                Some(coco_hooks::orchestration::SessionStartSource::Clear),
+            )
         }
     };
 
-    let _destination_runtime = destination_handle.into_session();
+    let destination_runtime = destination_handle.into_session();
 
     if needs_live_repoint {
         // Run the whole commit + source-close through the AppServer owner-task
@@ -261,16 +263,49 @@ pub(crate) async fn replace_app_server_session_with_runtime(
             .spawn_replace_to_live(
                 source_session_id.clone(),
                 destination_id.clone(),
-                source_surface_id.clone(),
+                connection,
                 close_old,
             )
             .map_err(|error| app_server_lifecycle_error_parts("commit replacement", error))?;
+        install_connection_runtime_callbacks(
+            &connection_profile,
+            &destination_runtime,
+            Arc::clone(&app_server),
+            connection,
+        )
+        .map_err(callback_owner_registration_error)?;
+    } else {
+        register_connection_callback_owners(
+            &connection_profile,
+            &destination_runtime,
+            &app_server,
+            connection,
+        )
+        .map_err(callback_owner_registration_error)?;
     }
+    if let Some(source) = start_source {
+        destination_runtime.fire_session_start_hooks(source).await;
+    }
+    configure_connection_mcp_bridge(
+        &connection_profile,
+        &destination_runtime,
+        Arc::clone(&app_server),
+        connection,
+    )
+    .await;
 
     Ok(SessionReplaceResult {
         session_id: destination_id,
-        surface_id: source_surface_id,
     })
+}
+
+fn callback_owner_registration_error(
+    error: coco_app_server::SessionAccessError,
+) -> SessionOperationError {
+    SessionOperationError::internal(
+        format!("register session/replace callback owners: {error}"),
+        Some(serde_json::json!({ "kind": "callback_owner_registration_failed" })),
+    )
 }
 
 struct ReplacementReservation {
@@ -278,7 +313,7 @@ struct ReplacementReservation {
     state: Arc<AppServerHostState>,
     source_session_id: coco_types::SessionId,
     destination_id: coco_types::SessionId,
-    source_surface_id: SurfaceId,
+    connection: ConnectionKey,
     close_reason: coco_hooks::orchestration::ExitReason,
     turn_drain_timeout: Duration,
 }
@@ -298,7 +333,7 @@ where
         .spawn_replace(
             reservation.source_session_id,
             reservation.destination_id,
-            reservation.source_surface_id,
+            reservation.connection,
             factory,
             move |handle| {
                 let close_state = Arc::clone(&close_state);

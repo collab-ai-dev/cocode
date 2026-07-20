@@ -3,6 +3,19 @@ use std::io::Write;
 use super::*;
 use crate::ReadEvidence;
 
+async fn resolve_mentions(
+    mentions: &[Mention],
+    state: &mut FileReadState,
+    options: &MentionResolveOptions<'_>,
+) -> Vec<Attachment> {
+    let shared = std::sync::Arc::new(tokio::sync::RwLock::new(std::mem::take(state)));
+    let attachments = super::resolve_mentions(mentions, &shared, options).await;
+    *state = std::sync::Arc::try_unwrap(shared)
+        .expect("test owns mention state")
+        .into_inner();
+    attachments
+}
+
 fn make_mention(text: &str, mention_type: MentionType) -> Mention {
     Mention {
         text: text.to_string(),
@@ -188,6 +201,41 @@ async fn test_resolve_nonexistent_file() {
     let mentions = vec![make_mention("nonexistent.rs", MentionType::FilePath)];
     let attachments = resolve_mentions(&mentions, &mut state, &options).await;
     assert!(attachments.is_empty());
+}
+
+#[tokio::test]
+async fn oversized_text_mention_is_skipped_without_touching_read_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("oversized.txt");
+    std::fs::write(&file, vec![b'x'; 256 * 1024 + 1]).unwrap();
+    let state = Arc::new(RwLock::new(FileReadState::new()));
+    let mentions = vec![Mention {
+        text: file.to_string_lossy().into_owned(),
+        mention_type: MentionType::FilePath,
+        start: 0,
+        end: file.to_string_lossy().len(),
+        line_start: None,
+        line_end: None,
+    }];
+
+    let attachments = super::resolve_mentions(
+        &mentions,
+        &state,
+        &MentionResolveOptions {
+            cwd: dir.path(),
+            max_dir_entries: 100,
+        },
+    )
+    .await;
+
+    assert!(attachments.is_empty());
+    assert!(
+        state
+            .read()
+            .await
+            .peek(&std::fs::canonicalize(file).unwrap())
+            .is_none()
+    );
 }
 
 #[tokio::test]

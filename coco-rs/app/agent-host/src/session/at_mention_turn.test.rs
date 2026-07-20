@@ -274,6 +274,42 @@ async fn resolve_turn_inputs_loads_at_mentioned_file_content() {
 }
 
 #[tokio::test]
+async fn second_turn_with_a_file_mention_is_resolved_after_a_plain_first_turn() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("mentioned-on-second-turn.txt");
+    std::fs::write(&file, "second turn file body").expect("write mention fixture");
+    let file_reads = Arc::new(RwLock::new(FileReadState::new()));
+
+    let first = resolve_turn_inputs(
+        "plain first turn",
+        &[],
+        &Default::default(),
+        dir.path(),
+        uuid::Uuid::new_v4(),
+        &file_reads,
+    )
+    .await;
+    assert!(first.attachment_messages.is_empty());
+
+    let second = resolve_turn_inputs(
+        &format!("inspect @{}", file.display()),
+        &[],
+        &Default::default(),
+        dir.path(),
+        uuid::Uuid::new_v4(),
+        &file_reads,
+    )
+    .await;
+
+    assert_eq!(second.mentioned_paths, vec![file]);
+    assert!(
+        second.attachment_messages.iter().any(|message| {
+            extract_text_from_message(message).contains("second turn file body")
+        })
+    );
+}
+
+#[tokio::test]
 async fn resolve_turn_inputs_dedups_same_file_across_calls() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("dup.txt");

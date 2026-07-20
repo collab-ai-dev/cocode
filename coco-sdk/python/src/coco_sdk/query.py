@@ -11,12 +11,12 @@ from coco_sdk._message_router import MessageRouter
 from coco_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
 from coco_sdk.generated.protocol import (
     InitializeRequest,
-    InteractiveTarget,
     NotificationMethod,
     PermissionMode,
     ServerNotification,
     SessionStartRequest,
     SessionStartResult,
+    SessionTarget,
 )
 from coco_sdk.types import ModelSpec
 
@@ -117,10 +117,7 @@ async def query(
         #    notification stream.
         await router.request(
             build_plain_text_turn_start(
-                InteractiveTarget(
-                    session_id=session.session_id,
-                    surface_id=session.surface_id,
-                ),
+                SessionTarget(session_id=session.session_id),
                 prompt,
             )
         )

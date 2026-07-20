@@ -1,6 +1,6 @@
 use super::*;
 
-impl<H: Clone> LocalServerClient<H> {
+impl<H: Clone + Send + Sync + 'static> LocalServerClient<H> {
     pub async fn session_list<Handler>(
         &self,
         handler: &Handler,
@@ -36,10 +36,10 @@ impl<H: Clone> LocalServerClient<H> {
             .await
     }
 
-    pub async fn read_passive_session<Handler>(
+    pub async fn read_read_only_session<Handler>(
         &self,
         handler: &Handler,
-        session: &LocalPassiveSessionClient,
+        session: &LocalReadOnlySessionClient,
         cursor: Option<String>,
         limit: Option<i32>,
     ) -> Result<SessionReadResult, ClientError>
@@ -57,10 +57,10 @@ impl<H: Clone> LocalServerClient<H> {
         .await
     }
 
-    pub async fn list_passive_session_turns<Handler>(
+    pub async fn list_read_only_session_turns<Handler>(
         &self,
         handler: &Handler,
-        session: &LocalPassiveSessionClient,
+        session: &LocalReadOnlySessionClient,
         cursor: Option<String>,
         limit: Option<i32>,
     ) -> Result<SessionTurnsListResult, ClientError>

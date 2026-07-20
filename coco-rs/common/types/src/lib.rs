@@ -46,10 +46,10 @@ mod provider_auth_status;
 mod rate_limit;
 mod sandbox;
 mod server_request;
+mod session_access;
 pub mod side_query;
 mod stream;
 mod stream_accumulator;
-mod surface;
 mod task;
 mod task_list;
 mod thinking;
@@ -142,9 +142,10 @@ pub use event::{
 };
 pub use stream_accumulator::StreamAccumulator;
 
-// Surface delivery DTOs shared by server routing and client adapters.
-pub use surface::{
-    ServerRequestDelivery, SurfaceDelivery, SurfaceLifecycleEffect, SurfaceLifecycleEffectKind,
+// Session delivery DTOs shared by server routing and client adapters.
+pub use session_access::{
+    ServerRequestDelivery, SessionAccess, SessionDelivery, SessionLifecycleEffect,
+    SessionLifecycleEffectKind,
 };
 
 // Client request types (Phase 2 — SDK control protocol, SDK → agent)
@@ -153,10 +154,9 @@ pub use client_request::{
     ApprovalResolveParams, BackgroundAllTasksResult, CancelRequestParams, ClientAgentDefinition,
     ClientRequest, ClientRequestMethod, ConfigApplyFlagsParams, ConfigReadParams, ConfigReadTarget,
     ConfigWriteParams, ConfigWriteTarget, ConnectionProfile, ConnectionProfileError,
-    ElicitationResolveParams, HookCallbackMatcher, InitializeParams, InteractiveTarget,
-    McpReconnectParams, McpSetServersParams, McpToggleParams, RequestScope,
-    ResetSessionPermissionRulesResult, RewindFilesParams, SessionCallbackRequirements,
-    SessionCloseParams, SessionCloseTarget, SessionCostResult, SessionDeleteParams,
+    ElicitationResolveParams, HookCallbackMatcher, InitializeParams, McpReconnectParams,
+    McpSetServersParams, McpToggleParams, RequestScope, ResetSessionPermissionRulesResult,
+    RewindFilesParams, SessionCloseParams, SessionCostResult, SessionDeleteParams,
     SessionReadParams, SessionRenameParams, SessionRenameResult, SessionReplaceParams,
     SessionReplacement, SessionResumeParams, SessionStartParams, SessionStatusResult,
     SessionSubscribeParams, SessionTarget, SessionToggleTagParams, SessionToggleTagResult,
@@ -213,7 +213,7 @@ pub use command::{
 pub use hook::{HookEventType, HookOutcome, HookScope};
 
 // ID types
-pub use id::{AgentId, SessionId, SurfaceId, TaskId, TurnId};
+pub use id::{AgentId, SessionId, TaskId, TurnId};
 
 // Journey (learning-timeline) event schema + node addressing
 pub use journey::{JourneyAction, JourneyEvent, JourneyNodeId, JourneyRecord, SkillRetireReason};

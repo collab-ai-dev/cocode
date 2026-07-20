@@ -39,8 +39,9 @@ pub struct ResolvedTurnInputs {
     /// in `<system-reminder>` (image blocks pass through unwrapped).
     /// See [`attachment_to_messages`].
     pub attachment_messages: Vec<Message>,
-    /// Query-owned changed-file reminders. CLI mention resolution leaves
-    /// this empty because it has no ToolUseContext sandbox/permission gate.
+    /// Query-owned changed-file reminders. Mention resolution leaves this
+    /// empty; production callers pass a `ToolUseContext` and file mentions
+    /// are permission-filtered before any content is loaded.
     pub changed_file_messages: Vec<Message>,
     /// Absolute paths of files this turn either loaded or recognized as
     /// already-loaded. Engine consumers thread this into
@@ -59,6 +60,7 @@ const MAX_DIR_ENTRIES: i32 = 1000;
 /// directory listings, with `FileReadState` dedup.
 /// 3. Build the user message (text + optional image parts) with
 /// `user_uuid`, then per-attachment reminder messages.
+#[cfg(test)]
 pub async fn resolve_turn_inputs(
     content: &str,
     images: &[coco_types::QueuedCommandEditImage],
@@ -67,16 +69,86 @@ pub async fn resolve_turn_inputs(
     user_uuid: Uuid,
     file_read_state: &Arc<RwLock<FileReadState>>,
 ) -> ResolvedTurnInputs {
-    let processed = coco_context::process_user_input(content);
+    resolve_turn_inputs_inner(
+        content,
+        images,
+        composer,
+        cwd,
+        user_uuid,
+        file_read_state,
+        None,
+    )
+    .await
+}
 
-    let file_attachments = {
-        let mut frs = file_read_state.write().await;
-        let opts = MentionResolveOptions {
-            cwd,
-            max_dir_entries: MAX_DIR_ENTRIES,
-        };
-        coco_context::resolve_mentions(&processed.mentions, &mut frs, &opts).await
+pub async fn resolve_turn_inputs_with_permissions(
+    content: &str,
+    images: &[coco_types::QueuedCommandEditImage],
+    composer: &coco_types::SubmittedComposer,
+    cwd: &Path,
+    user_uuid: Uuid,
+    file_read_state: &Arc<RwLock<FileReadState>>,
+    tool_context: &coco_tool_runtime::ToolUseContext,
+) -> ResolvedTurnInputs {
+    resolve_turn_inputs_inner(
+        content,
+        images,
+        composer,
+        cwd,
+        user_uuid,
+        file_read_state,
+        Some(tool_context),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn resolve_turn_inputs_inner(
+    content: &str,
+    images: &[coco_types::QueuedCommandEditImage],
+    composer: &coco_types::SubmittedComposer,
+    cwd: &Path,
+    user_uuid: Uuid,
+    file_read_state: &Arc<RwLock<FileReadState>>,
+    tool_context: Option<&coco_tool_runtime::ToolUseContext>,
+) -> ResolvedTurnInputs {
+    let mut processed = coco_context::process_user_input(content);
+
+    if let Some(tool_context) = tool_context {
+        let mut allowed = Vec::with_capacity(processed.mentions.len());
+        for mention in processed.mentions {
+            if mention.mention_type != coco_context::user_input::MentionType::FilePath {
+                allowed.push(mention);
+                continue;
+            }
+            let path = Path::new(&mention.text);
+            let path = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                cwd.join(path)
+            };
+            let decision =
+                coco_tools::tools::read_permissions::check_background_read_permission_with_sandbox(
+                    &path,
+                    tool_context,
+                )
+                .await;
+            if !matches!(
+                decision,
+                coco_types::ToolCheckResult::Ask { .. } | coco_types::ToolCheckResult::Deny { .. }
+            ) {
+                allowed.push(mention);
+            }
+        }
+        processed.mentions = allowed;
+    }
+
+    let opts = MentionResolveOptions {
+        cwd,
+        max_dir_entries: MAX_DIR_ENTRIES,
     };
+    let file_attachments =
+        coco_context::resolve_mentions(&processed.mentions, file_read_state, &opts).await;
 
     let mentioned_paths: Vec<std::path::PathBuf> = file_attachments
         .iter()

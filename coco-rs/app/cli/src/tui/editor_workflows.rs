@@ -238,7 +238,7 @@ pub(super) async fn apply_and_persist_permission_update(
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> bool {
-    let Some(surface) = interactive_session_for(local_app_server_bridge, session_id) else {
+    let Some(surface) = full_session_for(local_app_server_bridge, session_id) else {
         emit_session_control_error(
             event_tx,
             session_id,
@@ -253,7 +253,7 @@ pub(super) async fn apply_and_persist_permission_update(
         .apply_permission_update(
             local_app_server_bridge.handler(),
             coco_types::ApplyPermissionUpdateParams {
-                target: surface.interactive_target(),
+                target: surface.session_target(),
                 update: update.clone(),
             },
         )
@@ -277,7 +277,7 @@ pub(super) async fn reset_session_permission_rules(
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> bool {
-    let Some(surface) = interactive_session_for(local_app_server_bridge, session_id) else {
+    let Some(surface) = full_session_for(local_app_server_bridge, session_id) else {
         emit_session_control_error(
             event_tx,
             session_id,
@@ -310,7 +310,7 @@ pub(super) async fn set_agent_color(
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> bool {
-    let Some(surface) = interactive_session_for(local_app_server_bridge, session_id) else {
+    let Some(surface) = full_session_for(local_app_server_bridge, session_id) else {
         emit_session_control_error(
             event_tx,
             session_id,
@@ -325,7 +325,7 @@ pub(super) async fn set_agent_color(
         .set_agent_color(
             local_app_server_bridge.handler(),
             coco_types::SetAgentColorParams {
-                target: surface.interactive_target(),
+                target: surface.session_target(),
                 color,
             },
         )
@@ -533,4 +533,4 @@ use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use super::{PendingEditorRequest, interactive_session_for};
+use super::{PendingEditorRequest, full_session_for};

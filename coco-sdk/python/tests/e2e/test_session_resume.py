@@ -50,7 +50,7 @@ async def test_list_then_resume(live_deepseek, isolated_cwd) -> None:
                     pytest.fail(f"turn failed: {event.params}")
 
         # 1) list_sessions surfaces the just-saved session.
-        listing = await client.list_sessions(limit=20)
+        listing = await client.list_sessions()
         assert listing.sessions, (
             f"expected list_sessions to report at least one saved session "
             f"after a completed turn; got: {listing!r}"

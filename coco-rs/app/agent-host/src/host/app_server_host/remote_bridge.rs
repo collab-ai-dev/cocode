@@ -6,9 +6,7 @@ use coco_types::CoreEvent;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use super::config::{
-    server_config_duration_secs, server_config_surface_limits, server_config_usize,
-};
+use super::config::{server_config_duration_secs, server_config_usize};
 use super::{
     AppServerHostHandler, AppServerHostState, OutboundMessage, ProcessEvent,
     install_session_seq_durability, shutdown_local_app_server_sessions,
@@ -115,11 +113,27 @@ pub(crate) fn build_remote_app_server_runtime_binding(
     );
     install_session_seq_durability(state, event_retention_per_session as i64);
 
-    let app_server = Arc::new(RemoteAppServer::new_with_surface_limits(
-        server_config_usize(server_config.max_sessions, REMOTE_APP_SERVER_MAX_SESSIONS),
-        event_retention_per_session,
-        server_config_surface_limits(server_config),
-    ));
+    let app_server = Arc::new(
+        RemoteAppServer::with_connection_limits_and_server_request_timeout(
+            server_config_usize(server_config.max_sessions, REMOTE_APP_SERVER_MAX_SESSIONS),
+            event_retention_per_session,
+            coco_app_server::ConnectionLimits {
+                max_attached_sessions_per_connection: server_config_usize(
+                    server_config.max_attached_sessions_per_connection,
+                    coco_app_server::ConnectionLimits::default()
+                        .max_attached_sessions_per_connection,
+                ),
+                max_connections_per_session: server_config_usize(
+                    server_config.max_connections_per_session,
+                    coco_app_server::ConnectionLimits::default().max_connections_per_session,
+                ),
+            },
+            server_config_duration_secs(
+                server_config.server_request_timeout_secs,
+                Duration::from_secs(15 * 60),
+            ),
+        ),
+    );
     let adapter = RemoteJsonRpcAdapter::with_channel_capacity(
         Arc::clone(&app_server),
         server_config_usize(

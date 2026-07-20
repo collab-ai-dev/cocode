@@ -832,9 +832,9 @@ def collect_definitions(schema_dir: Path) -> dict[str, dict]:
             #     (e.g. `RequestId = int | str` from
             #     `pub enum RequestId { Int(i64), String(String) }`)
             #   * `type: string|integer|number|boolean` (no constraints)
-            #     → transparent scalar newtype alias (e.g. `SurfaceId =
-            #     str`). Bundle-only scalars must be kept or classes that
-            #     reference them fail Pydantic forward-ref resolution.
+            #     → transparent scalar newtype alias. Bundle-only scalars
+            #     must be kept or classes that reference them fail Pydantic
+            #     forward-ref resolution.
             if (
                 entry.get("type") == "object"
                 or "oneOf" in entry
@@ -1002,7 +1002,7 @@ def _derive_request_wrapper_name(variant: dict) -> str:
     # Target-only params are intentionally shared by many wire methods. Name
     # those wrappers from the method so every generated class stays unique
     # (`TurnInterruptRequest`, `McpStatusRequest`, etc.).
-    if params_ref and params_ref not in {"InteractiveTarget", "SessionTarget"}:
+    if params_ref and params_ref != "SessionTarget":
         base = params_ref.removesuffix("Params")
     else:
         wire = variant["wire"]

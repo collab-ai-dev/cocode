@@ -216,19 +216,21 @@ returns `NotSupported("local session json store is read-only")`
 `app/`+`core/`+`services/` returns **zero non-test hits**. So the hub today =
 browse-your-own-finished-transcripts, not a live multi-client server.
 
-### (2) SDK AppServer — multi-slot routing, partial execution isolation
+### (2) SDK AppServer — multi-session routing and isolated execution
 
-SDK mode now runs stdio NDJSON plus optional Unix/named-pipe/WebSocket
-connections through a shared `AppServer`. `LiveSessionRegistry` and
-`RoutingState` support multiple live slots, multiple surfaces per connection,
-passive subscribers, replay, and interactive-owner validation.
+SDK mode runs stdio NDJSON plus optional Unix/named-pipe/WebSocket connections
+through a shared `AppServer`. `LiveSessionRegistry` owns independent live
+session slots. `RoutingState` separately tracks physical connections,
+per-session `ReadOnly`/`Full` grants, live event attachments, replay, and
+connection-owned callbacks. Multiple `Full` connections may control the same
+session concurrently; human requests are broadcast and the first valid reply
+wins.
 
-The remaining gap is above routing: several session requests still lack an
-explicit target, and SDK host state retains process-singleton runtime, MCP,
-file-history, and reload slots. The production turn runner can therefore use
-the last installed runtime even when request handoff state was resolved for a
-different session. See `docs/internal/multi-session-app-server/review.md` for the
-verified call paths.
+Every session operation carries an explicit target and resolves exactly one
+session-owned runtime. Runtime MCP, file history, reload state, active-turn
+cancellation, and event sequencing are session scoped rather than selected
+from process-global mutable state. The current contract and its regression
+evidence are documented in `docs/internal/multi-session-app-server/README.md`.
 
 ### (3) `coco-remote` — client to Anthropic cloud CCR (designed)
 

@@ -81,35 +81,20 @@ pub(crate) fn app_server_lifecycle_error_parts(
         AppServerError::Registry { source, .. } => {
             return registry_lifecycle_error_parts(operation, source.clone());
         }
-        AppServerError::CallingSurfaceNotAttached { surface_id, .. } => (
+        AppServerError::Attach { source, .. } => {
+            return attach_lifecycle_error_parts(operation, source.clone());
+        }
+        AppServerError::SessionNotAttached { session_id, .. } => (
             LifecycleErrorKind::InvalidParams,
-            serde_json::json!({ "kind": "surface_not_attached", "surface_id": surface_id }),
+            serde_json::json!({ "kind": "session_not_attached", "session_id": session_id }),
         ),
-        AppServerError::CallingSurfaceWrongSession {
-            surface_id,
-            expected_session_id,
-            actual_session_id,
-            ..
-        } => (
-            LifecycleErrorKind::InvalidParams,
-            serde_json::json!({
-                "kind": "surface_wrong_session",
-                "surface_id": surface_id,
-                "expected_session_id": expected_session_id,
-                "actual_session_id": actual_session_id,
-            }),
-        ),
-        AppServerError::CallingSurfaceWrongConnection { surface_id, .. } => (
+        AppServerError::SessionGrantMissing { session_id, .. } => (
             LifecycleErrorKind::PermissionDenied,
-            serde_json::json!({ "kind": "surface_wrong_connection", "surface_id": surface_id }),
+            serde_json::json!({ "kind": "session_grant_missing", "session_id": session_id }),
         ),
-        AppServerError::CallingSurfaceNotInteractive { surface_id, .. } => (
-            LifecycleErrorKind::InvalidParams,
-            serde_json::json!({ "kind": "surface_not_interactive", "surface_id": surface_id }),
-        ),
-        AppServerError::InteractiveOwnerConflict { session_id, .. } => (
-            LifecycleErrorKind::InvalidRequest,
-            serde_json::json!({ "kind": "interactive_owner_conflict", "session_id": session_id }),
+        AppServerError::SessionGrantReadOnly { session_id, .. } => (
+            LifecycleErrorKind::PermissionDenied,
+            serde_json::json!({ "kind": "session_grant_read_only", "session_id": session_id }),
         ),
         AppServerError::TargetSessionNotLive {
             session_id, state, ..
@@ -135,23 +120,26 @@ pub(crate) fn app_server_lifecycle_error_parts(
                 "actual_session_id": actual_session_id,
             }),
         ),
-        AppServerError::ServerRequestWrongSurface {
-            request_id,
-            expected_surface_id,
-            actual_surface_id,
-            ..
-        } => (
+        AppServerError::ServerRequestNotRecipient { request_id, .. } => (
             LifecycleErrorKind::PermissionDenied,
             serde_json::json!({
-                "kind": "server_request_wrong_surface",
+                "kind": "server_request_not_recipient",
                 "request_id": request_id,
-                "expected_surface_id": expected_surface_id,
-                "actual_surface_id": actual_surface_id,
             }),
         ),
-        AppServerError::ServerRequestWrongConnection { request_id, .. } => (
-            LifecycleErrorKind::PermissionDenied,
-            serde_json::json!({ "kind": "server_request_wrong_connection", "request_id": request_id }),
+        AppServerError::ServerRequestWrongReplyKind {
+            request_id,
+            expected,
+            actual,
+            ..
+        } => (
+            LifecycleErrorKind::InvalidParams,
+            serde_json::json!({
+                "kind": "server_request_wrong_reply_kind",
+                "request_id": request_id,
+                "expected": format!("{expected:?}"),
+                "actual": format!("{actual:?}"),
+            }),
         ),
     };
     lifecycle_error(kind, message, Some(data))
@@ -163,13 +151,31 @@ pub(crate) fn attach_lifecycle_error_parts(
 ) -> LifecycleError {
     let message = format!("local AppServer {operation} failed: {error}");
     let (kind, data) = match &error {
-        coco_app_server::AttachError::InteractiveOwnerConflict { session_id, .. } => (
-            LifecycleErrorKind::InvalidRequest,
-            serde_json::json!({ "kind": "interactive_owner_conflict", "session_id": session_id }),
+        coco_app_server::AttachError::ConnectionNotRegistered { .. } => (
+            LifecycleErrorKind::InvalidParams,
+            serde_json::json!({ "kind": "connection_not_registered" }),
         ),
-        coco_app_server::AttachError::SurfaceLimit { .. } => (
+        coco_app_server::AttachError::ConnectionAttachmentLimit {
+            max_attached_sessions_per_connection,
+            ..
+        } => (
             LifecycleErrorKind::InvalidRequest,
-            serde_json::json!({ "kind": "surface_limit" }),
+            serde_json::json!({
+                "kind": "connection_attachment_limit",
+                "max_attached_sessions_per_connection": max_attached_sessions_per_connection,
+            }),
+        ),
+        coco_app_server::AttachError::SessionConnectionLimit {
+            session_id,
+            max_connections_per_session,
+            ..
+        } => (
+            LifecycleErrorKind::InvalidRequest,
+            serde_json::json!({
+                "kind": "session_connection_limit",
+                "session_id": session_id,
+                "max_connections_per_session": max_connections_per_session,
+            }),
         ),
         coco_app_server::AttachError::SessionClosing { session_id, .. } => (
             LifecycleErrorKind::InvalidRequest,
@@ -178,6 +184,10 @@ pub(crate) fn attach_lifecycle_error_parts(
         coco_app_server::AttachError::SessionNotFound { session_id, .. } => (
             LifecycleErrorKind::InvalidRequest,
             serde_json::json!({ "kind": "target_session_not_live", "session_id": session_id, "state": "missing" }),
+        ),
+        coco_app_server::AttachError::ReplayQueueUnavailable { session_id, .. } => (
+            LifecycleErrorKind::InvalidRequest,
+            serde_json::json!({ "kind": "replay_queue_unavailable", "session_id": session_id }),
         ),
     };
     lifecycle_error(kind, message, Some(data))

@@ -1,6 +1,6 @@
 # coco-app-server
 
-App-server ownership and routing layer: connection/surface routing, replay
+App-server ownership and routing layer: connection/session routing, replay
 rings, lifecycle slots, protocol adapters, listener supervision. Runtime
 construction stays behind higher-layer handler/factory traits. Test suites
 live beside their modules (`routing.test.rs`, `app_server.test.rs`,
@@ -14,15 +14,15 @@ live beside their modules (`routing.test.rs`, `app_server.test.rs`,
 | `SessionSeqAllocator` | Process-shared durable `session_seq` allocator: strictly monotonic per session across every forwarder path; watermark persist hook + `initialize_after_watermark` skip-ahead for cross-restart continuity |
 | `LiveSessionRegistry` | Slot-state registry for root sessions: `Loading` / `Live` / `Closing` |
 | `SessionRegistrationPolicy` (`SessionTopology` / `SessionVisibility` / `SessionEgress`) | Product-neutral immutable per-slot metadata fixed at reservation (`root()` → Root/Public/DurableHub; `side_chat_child(parent)` → Child/Internal/LocalOnly). This is the authoritative AppServer topology model. |
-| `RoutingState` | Single-lock state for connection/surface indexes and per-session durable rings |
-| `SurfaceAttachment`, `SurfaceRole` | Attachment metadata (role, capabilities, notification prefs, delivery cursor, state); `Interactive` or `Passive`, at most one interactive owner per session |
-| `AttachError` | Snafu-backed attach failure (`InteractiveOwnerConflict`, `SurfaceLimit`, `SessionClosing`, `SessionNotFound`) |
-| `ReplaceCommitFailure<H>` | `commit_replace_for_surface` failure carrying the error + un-committed new handle for teardown |
+| `RoutingState` | Single-lock state for grants, live attachments, durable rings, and pending requests |
+| `SessionGrant`, `SessionAccess` | Per-connection authorization for one session (`ReadOnly` or `Full`); retained across close |
+| `SessionAttachment` | Live event preferences and delivery cursor; contains no authorization |
+| `AttachError` | Snafu-backed live-attach failure (`SessionClosing`, `SessionNotFound`) |
+| `ReplaceCommitFailure<H>` | Replacement commit failure carrying the error + uncommitted new handle for teardown |
 | `LocalClientAdapter` | Typed in-process adapter registering real AppServer connections/channels |
 | `JsonRpcAdapter` | Remote adapter: same registration, owns JSON-RPC server-request correlation |
 | `ConnectionKey` | Private in-process transport key. Never serialize or persist |
 | `AppSessionDataRequest` / `AppSessionDataSource` / `AppSessionDataHandle` | `session/list` / `session/read` / `session/turns/list` composition over persisted-storage callbacks + live registry handles |
-| `SurfaceLimits` | Per-connection and per-session passive-surface guards |
 
 ## Registry Slots
 
@@ -36,7 +36,7 @@ live beside their modules (`routing.test.rs`, `app_server.test.rs`,
   factory future; later callers observe the same completion signal (their
   factories dropped unpolled).
 - `spawn_close`: marks `Live -> Closing`, runs the cascade in a spawned task,
-  closes routed surfaces, removes the slot. On a `Loading` slot it records
+  closes routed attachments, removes the slot. On a `Loading` slot it records
   close-after-load (load failure completes the close signal immediately;
   success moves straight to `Closing` under a single close owner).
 - `spawn_shutdown` snapshots every closable slot and starts/observes
@@ -45,8 +45,6 @@ live beside their modules (`routing.test.rs`, `app_server.test.rs`,
 - `SessionActivityTracker` — lost-wakeup-safe activity clock for lifecycle
   supervisors (updated by load/replace success, attach/detach/disconnect,
   routed events; forgotten on close). Subscribe via `AppServer`, never poll.
-- `AppServer::new` uses default `SurfaceLimits`; callers with resolved
-  runtime config must use `new_with_surface_limits`.
 
 ## Replace / Close Ownership
 
@@ -54,54 +52,60 @@ live beside their modules (`routing.test.rs`, `app_server.test.rs`,
   `max_sessions` by exactly one slot), runs construction, commits the
   registry+routing swap, then runs the old handle's close cascade.
   Construction failure removes only the replacement slot. **Commit failure**
-  (surface disconnected mid-construction) returns the un-committed new handle
+  (connection disconnected mid-construction) returns the uncommitted new handle
   via `ReplaceCommitFailure<H>`, and the owner task runs `close_handle` on it
   so the runtime's SessionEnd hooks fire and its tasks are joined — **never
   dropped** (that would leak the runtime + tasks for the process lifetime).
-- `spawn_replace_to_live` repoints a caller surface to an already-live orphan
+- `spawn_replace_to_live` repoints a caller connection to an already-live
   destination (no factory), moves the source to `Closing`, runs its close
   cascade under an `OwnerGuard` in a tracked task. Hosts must route through
   it, **never a bare `tokio::spawn`**.
-- `commit_replace_for_surface` takes registry before routing lock and does
+- `commit_replace_for_connection` takes registry before routing lock and does
   the combined commit in one synchronous section: new `Loading -> Live`, old
-  `Live -> Closing`, routing caller old -> new + peer closure.
+  `Live -> Closing`, routing caller old -> new + detaching old-session peers.
   (`complete_replace_success` is the registry-only half, no await.)
   `complete_session_close` requires `Closing`, takes registry then routing
-  locks, closes routed surfaces, completes the signal, removes the slot.
-- Commit methods return `SurfaceLifecycleEffect`s (started/replaced/ended);
+  locks, closes routed attachments, completes the signal, removes the slot.
+- Commit methods return `SessionLifecycleEffect`s (started/replaced/ended);
   `route_lifecycle_effects` sends them over a separate per-connection
   lifecycle channel **after commit locks are released** — replace emits
   started/replaced before the old close cascade, close emits ended after the
-  close commit. Effects can still target `SessionClosed` surfaces because
-  connection cleanup metadata survives until disconnect.
-- `replace_calling_surface` re-points only the caller; old peers move to
-  `SessionClosed`, never auto-attached. `close_session_surfaces` moves every
-  live surface to `SessionClosed`, removed from fan-out, connection-side
-  cleanup still possible.
+  close commit.
+- Replacement grants/attaches the calling connection with `Full` access to the
+  new session and detaches every connection from the terminal old session.
+  Close removes live attachments while retaining grants for durable read and
+  explicit delete.
 
 ## Routing / Lock Order
 
 - Lock order is **registry -> routing -> waiters**; the routing lock is
   always dropped before the `server_request_waiters` mutex is taken.
-- Keep the four routing maps in sync: `SurfaceId -> SessionId`,
-  `SessionId -> SurfaceId set`, `SurfaceId -> ConnectionKey`,
-  `ConnectionKey -> SurfaceId set` — plus `SurfaceAttachment` and
-  `interactive_owners`. A second interactive attach returns
-  `InteractiveOwnerConflict` with owner metadata (takeover not implemented).
+- Keep the two live-routing indexes and attachment map in sync:
+  `SessionId -> ConnectionKey set`, `ConnectionKey -> SessionId set`, and
+  `(ConnectionKey, SessionId) -> SessionAttachment`.
+- Grants live in a separate `(ConnectionKey, SessionId) -> SessionGrant` map.
+  Disconnect/detach revoke them; close retains them; successful delete revokes
+  every grant for the deleted identity.
+- Capacity limits are resource policy only: one connection has a bounded number
+  of attached sessions and one session has a bounded number of connections.
+  They never elect an owner or serialize Full mutations.
 - Session commands carry an explicit typed target — validate against
-  connection, surface role, attachment, and live registry entry; never derive
+  the connection's session grant and live registry entry; never derive
   from a connection-level active-session default.
-- `subscribe` must read the retention ring and attach the surface in **one**
+- Connection-owned callback registration requires a live Full attachment.
+  A retained post-close grant is not sufficient, and unpublished runtime
+  construction must not create callback ownership.
+- `subscribe` must read the retention ring and attach the connection in **one**
   `RoutingState` mutation so replay-to-live has no gap. Only durable
   `SessionEnvelope`s enter the ring; ephemeral envelopes are live-only.
-  Honor per-surface `NotificationPrefs` before queueing.
-- `attach_live_surface_with_options` / `subscribe_live_surface_with_options`
+  Honor per-attachment `NotificationPrefs` before queueing. A read-only
+  subscribe must never downgrade an existing Full grant.
+- `attach_live_session` / `subscribe_live_session`
   validate against the registry (`Live` proceeds, `Closing` ->
   `SessionClosing`, missing/`Loading` -> `SessionNotFound`), holding the
-  registry read lock across the routing attach so a concurrent close can't
-  orphan the fresh surface. Hosts route `session/subscribe` and interactive
-  attach through the `_live_` variants — a bare attach **silently attaches to
-  a dead session and hangs the client**.
+  registry read lock across the routing attach so a concurrent close cannot
+  create a dead attachment. Hosts route lifecycle operations through these
+  live-checked variants.
 - Outbound queues are bounded by their transport owner; `RoutingState` uses
   `try_send`, and a full/closed queue disconnects the whole `ConnectionKey`.
   `RouteOutcome`-family results fold that connection's `cancelled_requests`
@@ -110,23 +114,26 @@ live beside their modules (`routing.test.rs`, `app_server.test.rs`,
 
 ## Server-Initiated Requests
 
-- Routed only to the interactive surface declaring the required
-  `SurfaceCapability`, over a separate per-connection request channel;
-  `route_server_request` records pending ownership and `try_send`s. Payloads
-  are retained while pending ownership is open so late attach/replay can
-  reconstruct actionable requests; complete/cancel removes the payload.
-- `resolve_server_request` validates the reply `(connection, surface,
-  session, request_id)` against pending ownership and clears pending indexes
-  before returning the payload to the runtime/adapter bridge.
-- `route_server_request` + `pending_server_request_replays_for_surface` are
-  the adapter-facing bridge — adapters must not split delivery/replay
-  ownership outside AppServer. Production path for approval, user-input,
-  elicitation, MCP-route, and hook callbacks.
-- Keep pending indexes in sync by request, session, surface, and turn;
-  detach, connection close, turn transition, replace, and session close
-  cancel the precise affected ids. `cancel_turn_server_requests(turn_id)` is
+- Broadcast to every Full connection for the session over the separate
+  per-connection request channel. ReadOnly connections never receive
+  actionable requests.
+- `resolve_server_request` validates `(connection, session, request_id)` and
+  atomically removes the pending entry. Therefore concurrent valid responders
+  use first-response-wins semantics; later replies receive NotFound.
+- Keep pending indexes in sync by request, session, and turn. Turn transition,
+  replace, and session close cancel the precise affected ids; disconnecting one
+  Full connection does not invalidate requests still answerable by peers.
+  `cancel_turn_server_requests(turn_id)` is
   the turn-scoped hook (bridges tag requests with the active turn id via the
   connection's `SessionHandle`).
+- Install response waiters before publication. Completion, timeout, turn end,
+  replace, and close purge the same indexes and notify aborted/losing
+  recipients with `control/cancelRequest`. A client cancellation withdraws
+  only that recipient from a broadcast; the waiter is cancelled only when its
+  last eligible recipient withdraws.
+- The request timeout is configured by the host (15 minutes by default), so a
+  vanished responder cannot leak a waiter while normal human input is not
+  constrained to a one-minute window.
 
 ## Adapters
 
@@ -135,15 +142,15 @@ live beside their modules (`routing.test.rs`, `app_server.test.rs`,
   subscribes through the same routing rules as remote adapters.
   `dispatch_client_request` delegates canonical `ClientRequest`s to a
   runtime-supplied `LocalClientRequestHandler` — the local typed seam for
-  TUI/headless clients; must not serialize through JSON-RPC.
-- `LocalClientConnection::subscribe_surface` returns `SnapshotRequired`
-  without a surface id when the replay cursor can't attach; clients
-  re-snapshot and resubscribe — never a fake handle. `detach_surface`
-  removes only that connection's surface (no session/connection close).
+  TUI/headless clients; must not serialize through JSON-RPC. One local client
+  instance owns one AppServer connection; client clones are in-memory views.
+- `LocalClientHandle::subscribe_session` returns `SnapshotRequired` when the
+  replay cursor is unavailable; clients re-snapshot and resubscribe.
+  `detach_session` removes only that connection's attachment and grant.
 - `JsonRpcAdapter` registers the same channels but keeps wire framing and
   response correlation in JSON-RPC space; delegates decoded `ClientRequest`s
   to a `JsonRpcRequestHandler`; owns no runtime construction or transcript
-  parsing. `encode_server_request` records `JsonRpcId -> (SurfaceId,
+  parsing. `encode_server_request` records `JsonRpcId -> (SessionId,
   RequestId)`; responses resolve through AppServer's typed
   `ServerRequestReply` bridge. `JsonRpcAdapterConnection::app_server`
   exposes the owning `Arc<AppServer<_>>` so bridges stay on the same
@@ -167,7 +174,7 @@ live beside their modules (`routing.test.rs`, `app_server.test.rs`,
 ## Session Data
 
 - `list_live_sessions`: live-only projection (registry live slots + routing
-  surface counts, registry-then-routing lock order).
+  Full/ReadOnly connection counts, registry-then-routing lock order).
 - `handle_session_data_request` owns `session/list` / `session/read` /
   `session/turns/list` composition over an `AppSessionDataSource`: persisted
   data layered with live registry handles, live-snapshot fallback for
@@ -181,5 +188,5 @@ This crate owns generic registry, routing, lifecycle coordination, callback
 correlation, replay, and pure session-data projection. It deliberately does not
 depend on `coco-session` or construct/close application runtimes. Host adapters
 supply runtime factories and close cascades to `spawn_load`, `spawn_replace`,
-`spawn_close`, and `spawn_shutdown`; interactive takeover and product-specific
-listener policy also stay above this crate.
+`spawn_close`, and `spawn_shutdown`; product-specific listener policy stays
+above this crate.

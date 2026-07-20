@@ -305,73 +305,6 @@ fn test_server_config_ignores_non_positive_max_sessions() {
 }
 
 #[test]
-fn test_server_config_defaults_surface_limits() {
-    let config = ServerConfig::resolve(&Settings::default(), &EnvSnapshot::default());
-
-    assert_eq!(config.max_surfaces_per_connection, 8);
-    assert_eq!(config.max_passive_surfaces_per_session, 16);
-}
-
-#[test]
-fn test_server_config_resolves_surface_limits_from_settings() {
-    let settings = Settings {
-        server: PartialServerSettings {
-            max_surfaces_per_connection: Some(4),
-            max_passive_surfaces_per_session: Some(10),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    let config = ServerConfig::resolve(&settings, &EnvSnapshot::default());
-
-    assert_eq!(config.max_surfaces_per_connection, 4);
-    assert_eq!(config.max_passive_surfaces_per_session, 10);
-}
-
-#[test]
-fn test_server_config_env_overrides_settings_surface_limits() {
-    let settings = Settings {
-        server: PartialServerSettings {
-            max_surfaces_per_connection: Some(4),
-            max_passive_surfaces_per_session: Some(10),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let env = EnvSnapshot::from_pairs([
-        (EnvKey::CocoServerMaxSurfacesPerConnection, "6"),
-        (EnvKey::CocoServerMaxPassiveSurfacesPerSession, "12"),
-    ]);
-
-    let config = ServerConfig::resolve(&settings, &env);
-
-    assert_eq!(config.max_surfaces_per_connection, 6);
-    assert_eq!(config.max_passive_surfaces_per_session, 12);
-}
-
-#[test]
-fn test_server_config_ignores_non_positive_surface_limits() {
-    let settings = Settings {
-        server: PartialServerSettings {
-            max_surfaces_per_connection: Some(4),
-            max_passive_surfaces_per_session: Some(10),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let env = EnvSnapshot::from_pairs([
-        (EnvKey::CocoServerMaxSurfacesPerConnection, "0"),
-        (EnvKey::CocoServerMaxPassiveSurfacesPerSession, "-1"),
-    ]);
-
-    let config = ServerConfig::resolve(&settings, &env);
-
-    assert_eq!(config.max_surfaces_per_connection, 8);
-    assert_eq!(config.max_passive_surfaces_per_session, 16);
-}
-
-#[test]
 fn test_server_config_defaults_retention_and_outbound_queue() {
     let config = ServerConfig::resolve(&Settings::default(), &EnvSnapshot::default());
 
@@ -432,6 +365,49 @@ fn test_server_config_ignores_non_positive_retention_and_outbound_queue() {
 
     assert_eq!(config.event_retention_per_session, 1024);
     assert_eq!(config.outbound_queue_frames, 1024);
+}
+
+#[test]
+fn test_server_config_resolves_connection_limits_and_request_timeout() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            max_attached_sessions_per_connection: Some(3),
+            max_connections_per_session: Some(5),
+            server_request_timeout_secs: Some(1200),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let env = EnvSnapshot::from_pairs([
+        (EnvKey::CocoServerMaxAttachedSessionsPerConnection, "4"),
+        (EnvKey::CocoServerMaxConnectionsPerSession, "6"),
+        (EnvKey::CocoServerRequestTimeoutSecs, "1800"),
+    ]);
+
+    let config = ServerConfig::resolve(&settings, &env);
+
+    assert_eq!(config.max_attached_sessions_per_connection, 4);
+    assert_eq!(config.max_connections_per_session, 6);
+    assert_eq!(config.server_request_timeout_secs, 1800);
+}
+
+#[test]
+fn test_server_config_connection_policy_defaults_and_rejects_non_positive_values() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            max_attached_sessions_per_connection: Some(0),
+            max_connections_per_session: Some(-1),
+            server_request_timeout_secs: Some(0),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let config = ServerConfig::resolve(&settings, &EnvSnapshot::default());
+
+    assert_eq!(config.max_attached_sessions_per_connection, 8);
+    assert_eq!(config.max_connections_per_session, 16);
+    assert_eq!(config.server_request_timeout_secs, 900);
 }
 
 #[test]

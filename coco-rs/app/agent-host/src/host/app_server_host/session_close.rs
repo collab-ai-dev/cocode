@@ -109,26 +109,6 @@ pub(crate) async fn close_local_app_server_session_and_emit_result(
         turn_drain_timeout,
         notif_tx,
         "close session",
-        false,
-    )
-    .await
-}
-
-pub(crate) async fn close_orphan_local_app_server_session_and_emit_result(
-    app_server: Arc<AppServer<AppSessionHandle>>,
-    state: Arc<AppServerHostState>,
-    session_id: SessionId,
-    turn_drain_timeout: Duration,
-    notif_tx: mpsc::Sender<OutboundMessage>,
-) -> Result<(), LifecycleError> {
-    close_app_server_session_with_callback(
-        app_server,
-        state,
-        session_id,
-        turn_drain_timeout,
-        notif_tx,
-        "close orphan session",
-        true,
     )
     .await
 }
@@ -140,12 +120,11 @@ async fn close_app_server_session_with_callback(
     turn_drain_timeout: Duration,
     notif_tx: mpsc::Sender<OutboundMessage>,
     operation: &'static str,
-    orphan: bool,
 ) -> Result<(), LifecycleError> {
     let close_state = Arc::clone(&state);
     let close_notif_tx = notif_tx.clone();
-    let start = if orphan {
-        app_server.spawn_close_orphan(session_id, move |handle| {
+    let start = app_server
+        .spawn_close(session_id, move |handle| {
             let close_state = Arc::clone(&close_state);
             let close_notif_tx = close_notif_tx.clone();
             async move {
@@ -155,19 +134,7 @@ async fn close_app_server_session_with_callback(
                 Ok(())
             }
         })
-    } else {
-        app_server.spawn_close(session_id, move |handle| {
-            let close_state = Arc::clone(&close_state);
-            let close_notif_tx = close_notif_tx.clone();
-            async move {
-                close_app_server_session_state(&close_state, handle.session_id()).await;
-                close_local_session_handle(handle.clone(), turn_drain_timeout).await?;
-                emit_final_session_result(&close_notif_tx, &handle).await;
-                Ok(())
-            }
-        })
-    }
-    .map_err(|error| app_server_lifecycle_error_parts(operation, error))?;
+        .map_err(|error| app_server_lifecycle_error_parts(operation, error))?;
 
     let mut completion = match start {
         AppCloseStart::Started { completion }

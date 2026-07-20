@@ -271,9 +271,8 @@ async fn shutdown_drain_aborts_stuck_active_turn_after_timeout() {
         cancel: ActiveTurnCancel {
             client: bridge.connect_local_client(),
             handler: bridge.handler().clone(),
-            target: coco_types::InteractiveTarget {
+            target: coco_types::SessionTarget {
                 session_id: coco_types::SessionId::generate(),
-                surface_id: coco_types::SurfaceId::generate(),
             },
         },
     })));
@@ -556,7 +555,6 @@ async fn build_runtime_with_profile(
         session_id_override: None,
         is_non_interactive: false,
         execution_profile,
-        callback_requirements: Default::default(),
     })
     .await
     .expect("build runtime")
@@ -655,9 +653,9 @@ async fn install_test_session_runtime(
     runtime: &crate::session_runtime::SessionHandle,
 ) {
     bridge
-        .bind_interactive_session(runtime.clone(), None)
+        .bind_full_session(runtime.clone(), None)
         .await
-        .expect("test runtime should bind to an interactive AppServer surface");
+        .expect("test runtime should receive a full AppServer session attachment");
 }
 
 async fn dispatch_slash_command_for_test(
@@ -918,12 +916,10 @@ async fn local_app_server_turn_writes_back_runtime_history() {
         .start_turn_and_wait_for_end(
             session_id.clone(),
             coco_types::TurnStartParams {
-                target: coco_types::InteractiveTarget {
+                target: coco_types::SessionTarget {
                     session_id: session_id.clone(),
-                    surface_id: coco_types::SurfaceId::generate(),
                 },
                 prompt: "write back runtime history".into(),
-                history_override: Vec::new(),
                 images: Vec::new(),
                 composer: Default::default(),
                 slash_metadata: None,
@@ -950,6 +946,59 @@ async fn local_app_server_turn_writes_back_runtime_history() {
         runtime.last_assistant_text().await.as_deref(),
         Some("queued turn complete")
     );
+}
+
+#[tokio::test]
+async fn local_app_server_completes_plain_then_file_mention_turn() {
+    let home = TempDir::new().expect("temp home");
+    let mentioned = home.path().join("mentioned-on-second-turn.txt");
+    std::fs::write(&mentioned, "second turn mention body").expect("write mention fixture");
+    let runtime = build_runtime_with_registry(&home, coco_commands::CommandRegistry::new()).await;
+    let session_id = runtime.current_typed_session_id().await;
+    let mut bridge = coco_agent_host::app_server_host::AppServerLocalBridge::new(Arc::new(
+        coco_agent_host::app_server_host::AppServerHostState::default(),
+    ));
+    install_test_session_runtime(&mut bridge, &runtime).await;
+
+    let turn = |prompt: String| coco_types::TurnStartParams {
+        target: coco_types::SessionTarget {
+            session_id: session_id.clone(),
+        },
+        prompt,
+        images: Vec::new(),
+        composer: Default::default(),
+        slash_metadata: None,
+        model_selection: None,
+        permission_mode: None,
+        thinking_level: None,
+        goal_continuation: false,
+    };
+    let first = tokio::time::timeout(
+        Duration::from_secs(3),
+        bridge
+            .start_turn_and_wait_for_end(session_id.clone(), turn("plain first turn".to_string())),
+    )
+    .await
+    .expect("first turn must not hang")
+    .expect("first turn completes");
+    let second = tokio::time::timeout(
+        Duration::from_secs(3),
+        bridge.start_turn_and_wait_for_end(
+            session_id.clone(),
+            turn(format!("inspect @{}", mentioned.display())),
+        ),
+    )
+    .await
+    .expect("second mention turn must not hang")
+    .expect("second mention turn completes");
+
+    assert_eq!(first.session_result.total_turns, 1);
+    assert_eq!(second.session_result.total_turns, 1);
+    assert_ne!(first.started.turn_id, second.started.turn_id);
+    assert!(runtime.history_messages().await.iter().any(|message| {
+        coco_messages::wrapping::extract_text_from_message(message)
+            .contains("second turn mention body")
+    }));
 }
 
 #[tokio::test]
@@ -1150,9 +1199,8 @@ async fn btw_does_not_disturb_active_parent_turn() {
         cancel: ActiveTurnCancel {
             client: local_app_server_bridge.connect_local_client(),
             handler: local_app_server_bridge.handler().clone(),
-            target: coco_types::InteractiveTarget {
+            target: coco_types::SessionTarget {
                 session_id: coco_types::SessionId::generate(),
-                surface_id: coco_types::SurfaceId::generate(),
             },
         },
     })));
@@ -1262,12 +1310,8 @@ async fn side_chat_runtime_accounts_usage_without_persisting_transcript() {
         .start_turn_and_wait_for_end(
             session_id.clone(),
             coco_types::TurnStartParams {
-                target: coco_types::InteractiveTarget {
-                    session_id,
-                    surface_id: coco_types::SurfaceId::generate(),
-                },
+                target: coco_types::SessionTarget { session_id },
                 prompt: "account this ephemeral sidechat turn".into(),
-                history_override: Vec::new(),
                 images: Vec::new(),
                 composer: Default::default(),
                 slash_metadata: None,
@@ -1306,12 +1350,10 @@ async fn side_chat_factory_routes_rolls_up_persists_and_restores_usage() {
         .start_turn_and_wait_for_end(
             parent_id.clone(),
             coco_types::TurnStartParams {
-                target: coco_types::InteractiveTarget {
+                target: coco_types::SessionTarget {
                     session_id: parent_id.clone(),
-                    surface_id: coco_types::SurfaceId::generate(),
                 },
                 prompt: "main turn".into(),
-                history_override: Vec::new(),
                 images: Vec::new(),
                 composer: Default::default(),
                 slash_metadata: None,
@@ -1336,16 +1378,16 @@ async fn side_chat_factory_routes_rolls_up_persists_and_restores_usage() {
         .expect("sidechat factory should build and attach a child");
     let child_id = child.session.current_typed_session_id().await;
     let child_surface = bridge
-        .interactive_session_by_id(&child_id)
+        .full_session_by_id(&child_id)
         .expect("child surface must resolve by its exact session id");
     assert_eq!(child_surface.session_id(), &child_id);
     assert_ne!(
         bridge
-            .interactive_session()
+            .full_session()
             .expect("primary surface remains attached")
             .session_id(),
         &child_id,
-        "the generic interactive surface is primary and must not drive child follow-ups"
+        "the primary session must not drive child follow-ups"
     );
     let child_registry = child.session.current_command_registry().await;
     let mut child_commands: Vec<&str> = child_registry
@@ -1376,12 +1418,10 @@ async fn side_chat_factory_routes_rolls_up_persists_and_restores_usage() {
 
     bridge
         .start_child_turn(coco_types::TurnStartParams {
-            target: coco_types::InteractiveTarget {
+            target: coco_types::SessionTarget {
                 session_id: child_id.clone(),
-                surface_id: coco_types::SurfaceId::generate(),
             },
             prompt: "sidechat turn".into(),
-            history_override: Vec::new(),
             images: Vec::new(),
             composer: Default::default(),
             slash_metadata: None,
@@ -1562,9 +1602,7 @@ async fn autonomous_side_chat_close_refreshes_parent_and_releases_bridge_authori
         .session_close(
             bridge.handler(),
             coco_types::SessionCloseParams {
-                target: coco_types::SessionCloseTarget::Interactive {
-                    target: child.surface.interactive_target(),
-                },
+                target: child.client.session_target(),
             },
         )
         .await
@@ -1603,7 +1641,7 @@ async fn autonomous_side_chat_close_refreshes_parent_and_releases_bridge_authori
     }
     assert!(saw_exit);
     assert!(
-        bridge.child_interactive_session().is_none(),
+        bridge.child_full_session().is_none(),
         "a terminal registry slot must not retain bridge authority"
     );
 
@@ -1832,7 +1870,7 @@ async fn startup_resume_plan_uses_local_app_server_session_resume() {
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
     local_app_server_bridge
-        .ensure_interactive_surface(old_session_id)
+        .ensure_full_session(old_session_id)
         .expect("attach old surface");
     let reload_subscriptions = test_runtime_reload_subscriptions(&current_session, &tx);
 
@@ -1913,7 +1951,7 @@ async fn resume_slash_uses_local_app_server_session_resume() {
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
     local_app_server_bridge
-        .ensure_interactive_surface(old_session_id)
+        .ensure_full_session(old_session_id)
         .expect("attach old surface");
     let reload_subscriptions = test_runtime_reload_subscriptions(&current_session, &tx);
 
@@ -1991,7 +2029,7 @@ async fn branch_slash_switches_to_fork_through_local_app_server() {
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
     local_app_server_bridge
-        .ensure_interactive_surface(old_session_id.clone())
+        .ensure_full_session(old_session_id.clone())
         .expect("attach old surface");
     let reload_subscriptions = test_runtime_reload_subscriptions(&current_session, &tx);
 
@@ -2070,7 +2108,7 @@ async fn clear_slash_refreshes_local_app_server_session() {
     );
     install_test_session_runtime(&mut local_app_server_bridge, &runtime).await;
     local_app_server_bridge
-        .ensure_interactive_surface(old_session_id.clone())
+        .ensure_full_session(old_session_id.clone())
         .expect("attach old surface");
 
     let (turn_done_tx, _turn_done_rx) = tokio::sync::mpsc::channel(1);

@@ -151,17 +151,17 @@ pub async fn run_tui(
     // TuiPermissionBridge. Pane workers install the mailbox bridge, the
     // leader uses ToolUseConfirm. In-process teammates instead inherit the
     // leader's bridge via `wire_engine` and never reach this branch.
-    let session_permission_bridge: coco_tool_runtime::ToolPermissionBridgeRef =
+    let session_permission_bridge: Option<coco_tool_runtime::ToolPermissionBridgeRef> =
         match coco_coordinator::identity::resolve_teammate_identity() {
             Some(identity) => {
                 // Bounded by MailboxPermissionBridge's internal timeout, so a
                 // silent/absent leader fails closed rather than hanging.
                 let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
-                Arc::new(coco_coordinator::MailboxPermissionBridge::new(
+                Some(Arc::new(coco_coordinator::MailboxPermissionBridge::new(
                     identity, cancelled,
-                ))
+                )))
             }
-            None => tui_permission_bridge.clone(),
+            None => None,
         };
 
     // SessionRuntime owns every per-session subsystem (FileReadState,
@@ -193,7 +193,7 @@ pub async fn run_tui(
             process_runtime: process_runtime.clone(),
             model_runtimes: None,
             fast_model_spec,
-            permission_bridge: Some(session_permission_bridge),
+            permission_bridge: session_permission_bridge,
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
             // Interactive TUI: file-history checkpointing defaults ON.
             is_non_interactive: false,
@@ -221,7 +221,7 @@ pub async fn run_tui(
                 "resume: starting session through AppServer lifecycle",
             );
             local_app_server_bridge
-                .resume_interactive_session(
+                .resume_session(
                     coco_types::SessionResumeParams {
                         target: coco_types::SessionTarget {
                             session_id: plan.session_id.clone(),
@@ -234,7 +234,7 @@ pub async fn run_tui(
                 .map_err(|err| anyhow::anyhow!("startup resume via AppServer failed: {err}"))?
         }
         None => local_app_server_bridge
-            .start_interactive_session(
+            .start_session(
                 coco_types::SessionStartParams {
                     session_id: Some(coco_types::SessionId::generate()),
                     cwd: Some(initial_runtime_cwd.to_string_lossy().into_owned()),
@@ -575,6 +575,12 @@ pub async fn run_tui(
         .map(std::path::PathBuf::from);
     let app_server_shutdown_timeout =
         Duration::from_secs(runtime_config.server.shutdown_timeout_secs as u64);
+    let tui_server_request_dispatcher = spawn_tui_server_request_dispatcher(
+        local_app_server_bridge.client().clone(),
+        Arc::clone(local_app_server_bridge.app_server()),
+        Arc::clone(&tui_permission_bridge_concrete),
+        pending_approvals.clone(),
+    );
     let driver_handle = tokio::spawn(run_agent_driver(
         command_rx,
         notification_tx,
@@ -647,10 +653,137 @@ pub async fn run_tui(
             event_hub: coco_agent_host::shutdown::ShutdownDrainOutcome::Clean,
         },
     };
+    tui_server_request_dispatcher.abort();
 
     tui_result.map_err(|e| anyhow::anyhow!("TUI error: {e}"))?;
     shutdown.into_result("local")?;
     Ok(())
+}
+
+fn spawn_tui_server_request_dispatcher<H>(
+    mut client: coco_agent_host::local_client::LocalServerClient<H>,
+    app_server: Arc<coco_app_server::AppServer<H>>,
+    permission_bridge: Arc<coco_agent_host::tui_permission_bridge::TuiPermissionBridge>,
+    pending_approvals: coco_agent_host::tui_permission_bridge::PendingApprovals,
+) -> tokio::task::JoinHandle<()>
+where
+    H: Clone + Send + Sync + 'static,
+{
+    tokio::spawn(async move {
+        let connection = client.connection_key();
+        let mut tasks = tokio::task::JoinSet::new();
+        let mut active = std::collections::HashMap::new();
+        loop {
+            tokio::select! {
+                delivery = client.next_server_request() => {
+                    let Some(delivery) = delivery else { break };
+                    match delivery.request {
+                        coco_types::ServerRequest::AskForApproval(params) => {
+                            let outer_request_id = delivery.request_id.clone();
+                            let inner_request_id = params.request_id.clone();
+                            let request = coco_tool_runtime::ToolPermissionRequest {
+                                id: params.request_id,
+                                tool_use_id: params.tool_use_id,
+                                agent_id: params.agent_id.unwrap_or_else(|| "main".to_string()),
+                                tool_name: params.tool_name,
+                                description: params.description.unwrap_or_default(),
+                                input: params.input,
+                                cwd: params.cwd,
+                                suggestions: params
+                                    .permission_suggestions
+                                    .into_iter()
+                                    .filter_map(|value| serde_json::from_value(value).ok())
+                                    .collect(),
+                                choices: params.choices,
+                                detail: params.detail,
+                                worker_badge: params.worker_badge,
+                            };
+                            let bridge = Arc::clone(&permission_bridge);
+                            let server = Arc::clone(&app_server);
+                            let session_id = delivery.session_id;
+                            let task_request_id = outer_request_id.clone();
+                            let abort = tasks.spawn(async move {
+                                let resolution = coco_tool_runtime::ToolPermissionBridge::request_permission(
+                                    bridge.as_ref(),
+                                    request,
+                                )
+                                .await
+                                .unwrap_or_else(|error| coco_tool_runtime::ToolPermissionResolution {
+                                    decision: coco_tool_runtime::ToolPermissionDecision::Rejected,
+                                    feedback: Some(error),
+                                    ..Default::default()
+                                });
+                                let reply = coco_app_server::ServerRequestReply::Approval(
+                                    coco_types::ApprovalResolveParams {
+                                        target: coco_types::SessionTarget {
+                                            session_id: session_id.clone(),
+                                        },
+                                        request_id: task_request_id.as_display(),
+                                        decision: if matches!(
+                                            resolution.decision,
+                                            coco_tool_runtime::ToolPermissionDecision::Approved
+                                        ) {
+                                            coco_types::ApprovalDecision::Allow
+                                        } else {
+                                            coco_types::ApprovalDecision::Deny
+                                        },
+                                        permission_updates: resolution.applied_updates,
+                                        feedback: resolution.feedback,
+                                        updated_input: resolution.updated_input,
+                                        resolution_detail: resolution.detail,
+                                        content_blocks: resolution.content_blocks,
+                                    },
+                                );
+                                if let Err(error) = server.resolve_server_request_for_connection(
+                                    connection,
+                                    &session_id,
+                                    &task_request_id,
+                                    reply,
+                                ) {
+                                    tracing::debug!(?error, request_id = %task_request_id.as_display(), "TUI approval lost or was cancelled");
+                                }
+                                task_request_id
+                            });
+                            active.insert(outer_request_id, (inner_request_id, abort));
+                        }
+                        coco_types::ServerRequest::CancelRequest(params) => {
+                            let request_id = coco_types::RequestId::String(params.request_id);
+                            if let Some((inner_request_id, abort)) = active.remove(&request_id) {
+                                abort.abort();
+                                let _ = coco_agent_host::tui_permission_bridge::take_pending(
+                                    &pending_approvals,
+                                    &inner_request_id,
+                                )
+                                .await;
+                            }
+                        }
+                        request => {
+                            let reply = coco_app_server::ServerRequestReply::Error(
+                                coco_app_server::ServerRequestErrorReply {
+                                    request_id: delivery.request_id.as_display(),
+                                    code: coco_types::error_codes::METHOD_NOT_FOUND,
+                                    message: format!("TUI cannot handle server request {:?}", request.method()),
+                                    data: None,
+                                },
+                            );
+                            let _ = app_server.resolve_server_request_for_connection(
+                                connection,
+                                &delivery.session_id,
+                                &delivery.request_id,
+                                reply,
+                            );
+                        }
+                    }
+                }
+                joined = tasks.join_next(), if !tasks.is_empty() => {
+                    if let Some(Ok(request_id)) = joined {
+                        active.remove(&request_id);
+                    }
+                }
+            }
+        }
+        tasks.abort_all();
+    })
 }
 
 fn spawn_display_settings_reload_to(

@@ -1,15 +1,14 @@
 use coco_types::{
     CoreEvent, ServerNotification, ServerRequest, ServerRequestUserInputParams, SessionState,
-    TuiOnlyEvent,
 };
 
 use super::*;
 
-fn test_session_id(value: &str) -> SessionId {
-    SessionId::try_new(value).expect("valid test session id")
+fn session(value: &str) -> SessionId {
+    SessionId::try_new(value).expect("valid session id")
 }
 
-fn durable_envelope(session_id: SessionId, seq: i64) -> SessionEnvelope {
+fn envelope(session_id: SessionId, seq: i64) -> SessionEnvelope {
     SessionEnvelope::durable(
         session_id,
         None,
@@ -21,30 +20,9 @@ fn durable_envelope(session_id: SessionId, seq: i64) -> SessionEnvelope {
     )
 }
 
-fn ephemeral_envelope(session_id: SessionId) -> SessionEnvelope {
-    SessionEnvelope::ephemeral(
-        session_id,
-        None,
-        None,
-        CoreEvent::Tui(TuiOnlyEvent::QuestionAsked {
-            request_id: "question-1".to_string(),
-            input: serde_json::json!({ "question": "continue?" }),
-        }),
-    )
-}
-
-fn request_id_strings(request_ids: Vec<RequestId>) -> Vec<String> {
-    let mut request_ids = request_ids
-        .into_iter()
-        .map(|request_id| request_id.as_display())
-        .collect::<Vec<_>>();
-    request_ids.sort();
-    request_ids
-}
-
-fn test_server_request() -> ServerRequest {
+fn server_request() -> ServerRequest {
     ServerRequest::RequestUserInput(ServerRequestUserInputParams {
-        request_id: "payload-request-id".to_string(),
+        request_id: "payload-id".to_string(),
         prompt: "continue?".to_string(),
         description: None,
         choices: Vec::new(),
@@ -52,1149 +30,747 @@ fn test_server_request() -> ServerRequest {
     })
 }
 
+struct ConnectionReceivers {
+    events: tokio::sync::mpsc::Receiver<SessionDelivery>,
+    requests: tokio::sync::mpsc::Receiver<ServerRequestDelivery>,
+    _lifecycle: tokio::sync::mpsc::Receiver<SessionLifecycleEffect>,
+}
+
+fn connect(
+    routing: &mut RoutingState,
+    connection: ConnectionKey,
+    capacity: usize,
+) -> ConnectionReceivers {
+    let (event_tx, events) = tokio::sync::mpsc::channel(capacity);
+    let (request_tx, requests) = tokio::sync::mpsc::channel(capacity);
+    let (lifecycle_tx, lifecycle) = tokio::sync::mpsc::channel(capacity);
+    routing.connect_with_request_and_lifecycle_senders(
+        connection,
+        event_tx,
+        request_tx,
+        lifecycle_tx,
+    );
+    ConnectionReceivers {
+        events,
+        requests,
+        _lifecycle: lifecycle,
+    }
+}
+
 #[test]
-fn subscribe_replays_ring_then_receives_live_events() {
+fn subscribe_replays_then_receives_live_events_with_read_only_access() {
     let mut routing = RoutingState::new(8);
-    let session_id = test_session_id("sess-1");
-    routing.route_envelope(durable_envelope(session_id.clone(), 1));
-    routing.route_envelope(durable_envelope(session_id.clone(), 2));
-    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let surface_id = SurfaceId::from("surface-1");
-    routing.connect(connection, tx);
+    let session_id = session("session-replay");
+    routing.route_envelope(envelope(session_id.clone(), 1));
+    routing.route_envelope(envelope(session_id.clone(), 2));
+    let connection = ConnectionKey::generate();
+    let mut receivers = connect(&mut routing, connection, 8);
 
-    let replay = routing
-        .subscribe(connection, surface_id.clone(), session_id.clone(), Some(1))
-        .expect("subscribe");
-
-    let SubscribeReplay::Replayed(events) = replay else {
+    let Ok(SubscribeReplay::Replayed(replayed)) = routing.subscribe(
+        connection,
+        session_id.clone(),
+        Some(1),
+        AttachSessionOptions::read_only(),
+    ) else {
         panic!("expected replay");
     };
+
+    assert_eq!(replayed.len(), 1);
+    assert_eq!(replayed[0].session_seq, Some(2));
     assert_eq!(
-        events
-            .iter()
-            .map(|event| event.session_seq.expect("seq"))
-            .collect::<Vec<_>>(),
-        vec![2]
+        routing
+            .grant(connection, &session_id)
+            .map(|grant| grant.access),
+        Some(SessionAccess::ReadOnly)
     );
-    assert_eq!(routing.surface_session(&surface_id), Some(&session_id));
+    assert!(matches!(
+        routing.require_full(connection, &session_id),
+        Err(SessionAccessError::ReadOnly { .. })
+    ));
 
-    let outcome = routing.route_envelope(durable_envelope(session_id, 3));
-    assert_eq!(outcome.delivered, 1);
-    let delivered = rx.try_recv().expect("live delivery");
-    assert_eq!(delivered.surface_id, surface_id);
-    assert_eq!(delivered.envelope.session_seq, Some(3));
+    assert_eq!(routing.route_envelope(envelope(session_id, 3)).delivered, 1);
+    assert_eq!(
+        receivers
+            .events
+            .try_recv()
+            .expect("live event")
+            .envelope
+            .session_seq,
+        Some(3)
+    );
 }
 
 #[test]
-fn subscribe_requires_snapshot_when_cursor_falls_out_of_ring() {
-    let mut routing = RoutingState::new(2);
-    let session_id = test_session_id("sess-1");
-    routing.route_envelope(durable_envelope(session_id.clone(), 1));
-    routing.route_envelope(durable_envelope(session_id.clone(), 2));
-    routing.route_envelope(durable_envelope(session_id.clone(), 3));
-    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let surface_id = SurfaceId::from("surface-1");
-    routing.connect(connection, tx);
+fn snapshot_required_does_not_create_a_ghost_attachment() {
+    let mut routing = RoutingState::new(1);
+    let session_id = session("session-snapshot");
+    routing.route_envelope(envelope(session_id.clone(), 2));
+    let connection = ConnectionKey::generate();
+    let _receivers = connect(&mut routing, connection, 8);
 
-    let replay = routing
-        .subscribe(connection, surface_id.clone(), session_id.clone(), Some(0))
-        .expect("subscribe");
-
-    assert!(matches!(replay, SubscribeReplay::SnapshotRequired));
-    assert_eq!(routing.surface_session(&surface_id), None);
-    let outcome = routing.route_envelope(durable_envelope(session_id, 4));
-    assert_eq!(outcome.delivered, 0);
-    assert!(rx.try_recv().is_err());
-}
-
-#[test]
-fn missing_cursor_requires_snapshot_and_does_not_attach() {
-    let mut routing = RoutingState::new(8);
-    let (tx, _rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let surface_id = SurfaceId::from("surface-1");
-    let session_id = test_session_id("sess-1");
-    routing.connect(connection, tx);
-
-    let replay = routing
-        .subscribe(connection, surface_id.clone(), session_id, None)
-        .expect("subscribe");
-
-    assert!(matches!(replay, SubscribeReplay::SnapshotRequired));
-    assert_eq!(routing.surface_session(&surface_id), None);
-}
-
-#[test]
-fn ephemeral_events_deliver_live_without_entering_replay_ring() {
-    let mut routing = RoutingState::new(8);
-    let session_id = test_session_id("sess-1");
-    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let surface_id = SurfaceId::from("surface-1");
-    routing.connect(connection, tx);
-    routing
-        .attach_surface(connection, surface_id.clone(), session_id.clone())
-        .expect("attach");
-
-    let outcome = routing.route_envelope(ephemeral_envelope(session_id.clone()));
-
-    assert_eq!(outcome.delivered, 1);
-    let delivered = rx.try_recv().expect("ephemeral delivery");
-    assert_eq!(delivered.surface_id, surface_id);
-    assert_eq!(delivered.envelope.session_seq, None);
-
-    let replay = routing
-        .subscribe(
+    assert!(matches!(
+        routing.subscribe(
             connection,
-            SurfaceId::from("surface-2"),
-            session_id,
-            Some(0),
-        )
-        .expect("subscribe");
-    let SubscribeReplay::Replayed(events) = replay else {
-        panic!("expected empty replay");
-    };
-    assert!(events.is_empty());
-}
-
-#[test]
-fn disconnect_removes_surfaces_from_all_indexes() {
-    let mut routing = RoutingState::new(8);
-    let session_id = test_session_id("sess-1");
-    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let surface_1 = SurfaceId::from("surface-1");
-    let surface_2 = SurfaceId::from("surface-2");
-    routing.connect(connection, tx);
-    routing
-        .attach_surface(connection, surface_1.clone(), session_id.clone())
-        .expect("attach surface 1");
-    routing
-        .attach_surface(connection, surface_2.clone(), session_id.clone())
-        .expect("attach surface 2");
-
-    let outcome = routing.disconnect(connection);
-
-    assert_eq!(outcome.detached_surfaces.len(), 2);
-    assert!(outcome.cancelled_requests.is_empty());
-    assert_eq!(routing.surface_session(&surface_1), None);
-    assert_eq!(routing.surface_session(&surface_2), None);
-    assert_eq!(routing.connection_surface_count(connection), 0);
-    let outcome = routing.route_envelope(durable_envelope(session_id, 1));
-    assert_eq!(outcome.delivered, 0);
-    assert!(rx.try_recv().is_err());
-}
-
-#[test]
-fn slow_consumer_disconnects_connection() {
-    let mut routing = RoutingState::new(8);
-    let session_id = test_session_id("sess-1");
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-    let connection = ConnectionKey::for_test(1);
-    let surface_id = SurfaceId::from("surface-1");
-    routing.connect(connection, tx);
-    routing
-        .attach_surface(connection, surface_id.clone(), session_id.clone())
-        .expect("attach");
-
-    let first = routing.route_envelope(durable_envelope(session_id.clone(), 1));
-    let second = routing.route_envelope(durable_envelope(session_id.clone(), 2));
-
-    assert_eq!(first.delivered, 1);
-    assert_eq!(second.delivered, 0);
-    assert_eq!(second.disconnected, vec![connection]);
-    assert_eq!(routing.surface_session(&surface_id), None);
-    assert_eq!(routing.connection_surface_count(connection), 0);
-
-    let queued = rx.try_recv().expect("first delivery remains queued");
-    assert_eq!(queued.envelope.session_seq, Some(1));
-    let third = routing.route_envelope(durable_envelope(session_id, 3));
-    assert_eq!(third.delivered, 0);
-}
-
-#[test]
-fn second_interactive_surface_is_rejected_with_owner_metadata() {
-    let mut routing = RoutingState::new(8);
-    let session_id = test_session_id("sess-1");
-    let (tx, _rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let owner_surface = SurfaceId::from("surface-owner");
-    let second_surface = SurfaceId::from("surface-second");
-    routing.connect(connection, tx);
-    let options = AttachSurfaceOptions {
-        role: SurfaceRole::Interactive,
-        ..AttachSurfaceOptions::default()
-    };
-    routing
-        .attach_surface_with_options(
-            connection,
-            owner_surface.clone(),
             session_id.clone(),
-            options.clone(),
-        )
-        .expect("attach interactive owner");
-
-    let err = routing
-        .attach_surface_with_options(connection, second_surface, session_id.clone(), options)
-        .expect_err("second interactive should be rejected");
-
-    match err {
-        AttachError::InteractiveOwnerConflict {
-            session_id: err_session_id,
-            owner_surface: err_owner_surface,
-            owner_idle,
-            ..
-        } => {
-            assert_eq!(err_session_id, session_id);
-            assert_eq!(err_owner_surface, owner_surface);
-            assert!(!owner_idle);
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
-    assert_eq!(routing.interactive_owner(&session_id), Some(&owner_surface));
+            None,
+            AttachSessionOptions::read_only(),
+        ),
+        Ok(SubscribeReplay::SnapshotRequired)
+    ));
+    assert!(routing.attachment(connection, &session_id).is_none());
 }
 
 #[test]
-fn passive_surfaces_can_share_session_with_interactive_owner() {
-    let mut routing = RoutingState::new(8);
-    let session_id = test_session_id("sess-1");
-    let (tx, _rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let interactive = SurfaceId::from("surface-interactive");
-    let passive = SurfaceId::from("surface-passive");
-    routing.connect(connection, tx);
-    routing
-        .attach_surface_with_options(
-            connection,
-            interactive.clone(),
-            session_id.clone(),
-            AttachSurfaceOptions {
-                role: SurfaceRole::Interactive,
-                ..AttachSurfaceOptions::default()
-            },
-        )
-        .expect("attach interactive");
-    routing
-        .attach_surface(connection, passive.clone(), session_id.clone())
-        .expect("attach passive");
-
-    assert_eq!(routing.interactive_owner(&session_id), Some(&interactive));
-    assert_eq!(routing.surface_session(&passive), Some(&session_id));
-}
-
-#[test]
-fn connection_surface_limit_is_enforced() {
-    let mut routing = RoutingState::new_with_limits(
+fn connection_limits_bound_resources_without_single_writer_semantics() {
+    let mut routing = RoutingState::new_with_connection_limits(
         8,
-        SurfaceLimits {
-            max_surfaces_per_connection: 1,
-            max_passive_surfaces_per_session: 16,
+        ConnectionLimits {
+            max_attached_sessions_per_connection: 1,
+            max_connections_per_session: 1,
         },
     );
-    let session_id = test_session_id("sess-1");
-    let (tx, _rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    routing.connect(connection, tx);
+    let first_connection = ConnectionKey::generate();
+    let second_connection = ConnectionKey::generate();
+    let _first_receivers = connect(&mut routing, first_connection, 8);
+    let _second_receivers = connect(&mut routing, second_connection, 8);
+    let first_session = session("session-limit-first");
+    let second_session = session("session-limit-second");
+
     routing
-        .attach_surface(connection, SurfaceId::from("surface-1"), session_id.clone())
+        .attach_session(
+            first_connection,
+            first_session.clone(),
+            AttachSessionOptions::full(),
+        )
+        .expect("first attachment");
+    routing
+        .attach_session(
+            first_connection,
+            first_session.clone(),
+            AttachSessionOptions::full(),
+        )
+        .expect("idempotent attachment does not consume capacity");
+    assert!(matches!(
+        routing.attach_session(
+            first_connection,
+            second_session,
+            AttachSessionOptions::full(),
+        ),
+        Err(AttachError::ConnectionAttachmentLimit { .. })
+    ));
+    assert!(matches!(
+        routing.attach_session(
+            second_connection,
+            first_session.clone(),
+            AttachSessionOptions::read_only(),
+        ),
+        Err(AttachError::SessionConnectionLimit { .. })
+    ));
+
+    routing.detach_session_for_connection(first_connection, &first_session);
+    routing
+        .attach_session(
+            second_connection,
+            first_session,
+            AttachSessionOptions::full(),
+        )
+        .expect("released capacity can be reused");
+}
+
+#[test]
+fn two_full_connections_receive_the_same_session_event() {
+    let mut routing = RoutingState::new(8);
+    let session_id = session("session-shared");
+    let first = ConnectionKey::generate();
+    let second = ConnectionKey::generate();
+    let mut first_rx = connect(&mut routing, first, 8);
+    let mut second_rx = connect(&mut routing, second, 8);
+    routing
+        .attach_session(first, session_id.clone(), AttachSessionOptions::full())
         .expect("attach first");
-
-    let err = routing
-        .attach_surface(connection, SurfaceId::from("surface-2"), session_id)
-        .expect_err("second surface should exceed connection limit");
-
-    assert!(matches!(err, AttachError::SurfaceLimit { .. }));
-    assert_eq!(err.status_code(), StatusCode::ResourcesExhausted);
-}
-
-#[test]
-fn passive_surface_limit_is_enforced_per_session() {
-    let mut routing = RoutingState::new_with_limits(
-        8,
-        SurfaceLimits {
-            max_surfaces_per_connection: 8,
-            max_passive_surfaces_per_session: 1,
-        },
-    );
-    let session_id = test_session_id("sess-1");
-    let (tx, _rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    routing.connect(connection, tx);
     routing
-        .attach_surface(connection, SurfaceId::from("surface-1"), session_id.clone())
-        .expect("attach first passive");
+        .attach_session(second, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach second");
 
-    let err = routing
-        .attach_surface(connection, SurfaceId::from("surface-2"), session_id)
-        .expect_err("second passive should exceed session passive limit");
+    let outcome = routing.route_envelope(envelope(session_id.clone(), 1));
 
-    assert!(matches!(err, AttachError::SurfaceLimit { .. }));
-}
-
-#[test]
-fn notification_preferences_filter_delivery_per_surface() {
-    let mut routing = RoutingState::new(8);
-    let session_id = test_session_id("sess-1");
-    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let surface_id = SurfaceId::from("surface-1");
-    routing.connect(connection, tx);
-    routing
-        .attach_surface_with_options(
-            connection,
-            surface_id,
-            session_id.clone(),
-            AttachSurfaceOptions {
-                notification_prefs: NotificationPrefs {
-                    protocol: true,
-                    stream: true,
-                    tui: false,
-                },
-                ..AttachSurfaceOptions::default()
-            },
-        )
-        .expect("attach");
-
-    let tui_outcome = routing.route_envelope(ephemeral_envelope(session_id.clone()));
-    let protocol_outcome = routing.route_envelope(durable_envelope(session_id, 1));
-
-    assert_eq!(tui_outcome.delivered, 0);
-    assert_eq!(protocol_outcome.delivered, 1);
-    let delivered = rx.try_recv().expect("protocol delivery");
-    assert_eq!(delivered.envelope.session_seq, Some(1));
-    assert!(rx.try_recv().is_err());
-}
-
-#[test]
-fn disconnect_clears_interactive_owner() {
-    let mut routing = RoutingState::new(8);
-    let session_id = test_session_id("sess-1");
-    let (tx, _rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let surface_id = SurfaceId::from("surface-1");
-    routing.connect(connection, tx);
-    routing
-        .attach_surface_with_options(
-            connection,
-            surface_id.clone(),
-            session_id.clone(),
-            AttachSurfaceOptions {
-                role: SurfaceRole::Interactive,
-                ..AttachSurfaceOptions::default()
-            },
-        )
-        .expect("attach interactive");
-
-    routing.disconnect(connection);
-
-    assert_eq!(routing.interactive_owner(&session_id), None);
+    assert_eq!(outcome.delivered, 2);
     assert_eq!(
-        routing.surface_attachment(&surface_id).map(|a| a.state),
-        None
+        first_rx
+            .events
+            .try_recv()
+            .expect("first")
+            .envelope
+            .session_id,
+        session_id
+    );
+    assert_eq!(
+        second_rx
+            .events
+            .try_recv()
+            .expect("second")
+            .envelope
+            .session_seq,
+        Some(1)
+    );
+    assert_eq!(
+        routing.connection_counts_for_session(&session("session-shared")),
+        SessionConnectionCounts {
+            full: 2,
+            read_only: 0,
+        }
     );
 }
 
 #[test]
-fn server_request_targets_interactive_surface_with_declared_capability() {
+fn read_only_subscribe_does_not_downgrade_existing_full_grant() {
     let mut routing = RoutingState::new(8);
-    let session_id = test_session_id("sess-1");
-    let (tx, _rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let interactive = SurfaceId::from("surface-interactive");
-    let passive = SurfaceId::from("surface-passive");
-    routing.connect(connection, tx);
+    let session_id = session("session-grant");
+    let connection = ConnectionKey::generate();
+    let _receivers = connect(&mut routing, connection, 8);
     routing
-        .attach_surface(connection, passive.clone(), session_id.clone())
-        .expect("attach passive");
-    routing
-        .attach_surface_with_options(
-            connection,
-            interactive.clone(),
-            session_id.clone(),
-            AttachSurfaceOptions {
-                role: SurfaceRole::Interactive,
-                capabilities: SurfaceCapabilities {
-                    keychain: true,
-                    ..SurfaceCapabilities::default()
-                },
-                ..AttachSurfaceOptions::default()
-            },
-        )
-        .expect("attach interactive");
+        .attach_session(connection, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach full");
 
-    let pending = routing
-        .open_server_request(session_id.clone(), SurfaceCapability::Keychain, None)
-        .expect("open request");
+    let _ = routing.subscribe(
+        connection,
+        session_id.clone(),
+        Some(0),
+        AttachSessionOptions::read_only(),
+    );
 
-    assert_eq!(pending.session_id, session_id);
-    assert_eq!(pending.surface_id, interactive);
-    assert_eq!(pending.capability, SurfaceCapability::Keychain);
-    assert!(
+    assert_eq!(
         routing
-            .pending_server_requests_for_surface(&passive)
-            .is_empty()
-    );
-    assert_eq!(
-        routing.pending_server_requests_for_surface(&pending.surface_id),
-        vec![pending]
+            .grant(connection, &session_id)
+            .map(|grant| grant.access),
+        Some(SessionAccess::Full)
     );
 }
 
 #[test]
-fn route_server_request_delivers_on_request_channel_and_records_pending() {
+fn server_request_is_broadcast_to_full_connections_only_and_first_reply_wins() {
     let mut routing = RoutingState::new(8);
-    let session_id = test_session_id("sess-1");
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(8);
-    let (request_tx, mut request_rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let surface_id = SurfaceId::from("surface-1");
-    routing.connect_with_request_sender(connection, event_tx, request_tx);
+    let session_id = session("session-request");
+    let first = ConnectionKey::generate();
+    let second = ConnectionKey::generate();
+    let reader = ConnectionKey::generate();
+    let mut first_rx = connect(&mut routing, first, 8);
+    let mut second_rx = connect(&mut routing, second, 8);
+    let mut reader_rx = connect(&mut routing, reader, 8);
     routing
-        .attach_surface_with_options(
-            connection,
-            surface_id.clone(),
+        .attach_session(first, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach first");
+    routing
+        .attach_session(second, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach second");
+    routing
+        .attach_session(
+            reader,
             session_id.clone(),
-            AttachSurfaceOptions {
-                role: SurfaceRole::Interactive,
-                capabilities: SurfaceCapabilities {
-                    notifications: true,
-                    ..SurfaceCapabilities::default()
-                },
-                ..AttachSurfaceOptions::default()
-            },
+            AttachSessionOptions::read_only(),
         )
-        .expect("attach interactive");
+        .expect("attach reader");
 
-    let outcome = routing
-        .route_server_request(
-            session_id.clone(),
-            SurfaceCapability::Notifications,
-            Some(TurnId::from("turn-1")),
-            test_server_request(),
-        )
+    let routed = routing
+        .route_server_request(session_id.clone(), None, server_request())
         .expect("route request");
 
-    assert_eq!(outcome.pending.session_id, session_id);
-    assert_eq!(outcome.pending.surface_id, surface_id);
+    assert_eq!(routed.delivered, 2);
     assert_eq!(
-        routing.pending_server_requests_for_surface(&outcome.pending.surface_id),
-        vec![outcome.pending.clone()]
+        first_rx
+            .requests
+            .try_recv()
+            .expect("first request")
+            .request_id,
+        routed.pending.request_id
     );
-    let delivery = request_rx.try_recv().expect("request delivery");
-    assert_eq!(delivery.surface_id, outcome.pending.surface_id);
-    assert_eq!(delivery.request_id, outcome.pending.request_id);
-    assert!(matches!(
-        delivery.request,
-        ServerRequest::RequestUserInput(_)
-    ));
-    assert!(event_rx.try_recv().is_err());
-}
-
-#[test]
-fn route_server_request_replay_returns_retained_payload_for_surface() {
-    let mut routing = RoutingState::new(8);
-    let session_id = test_session_id("sess-1");
-    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(8);
-    let (request_tx, _request_rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let surface_id = SurfaceId::from("surface-1");
-    routing.connect_with_request_sender(connection, event_tx, request_tx);
-    routing
-        .attach_surface_with_options(
-            connection,
-            surface_id.clone(),
-            session_id.clone(),
-            AttachSurfaceOptions {
-                role: SurfaceRole::Interactive,
-                capabilities: SurfaceCapabilities {
-                    notifications: true,
-                    ..SurfaceCapabilities::default()
-                },
-                ..AttachSurfaceOptions::default()
-            },
-        )
-        .expect("attach interactive");
-
-    let outcome = routing
-        .route_server_request(
-            session_id,
-            SurfaceCapability::Notifications,
-            Some(TurnId::from("turn-1")),
-            test_server_request(),
-        )
-        .expect("route request");
-
-    let replays = routing.pending_server_request_replays_for_surface(&surface_id);
-    assert_eq!(replays.len(), 1);
-    assert_eq!(replays[0].pending, outcome.pending);
-    let ServerRequest::RequestUserInput(params) = &replays[0].request else {
-        panic!("expected user input replay");
-    };
-    assert_eq!(params.request_id, "payload-request-id");
-    assert_eq!(params.prompt, "continue?");
-}
-
-#[test]
-fn completed_routed_server_request_removes_replay_payload() {
-    let mut routing = RoutingState::new(8);
-    let session_id = test_session_id("sess-1");
-    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(8);
-    let (request_tx, _request_rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let surface_id = SurfaceId::from("surface-1");
-    routing.connect_with_request_sender(connection, event_tx, request_tx);
-    routing
-        .attach_surface_with_options(
-            connection,
-            surface_id.clone(),
-            session_id.clone(),
-            AttachSurfaceOptions {
-                role: SurfaceRole::Interactive,
-                capabilities: SurfaceCapabilities {
-                    notifications: true,
-                    ..SurfaceCapabilities::default()
-                },
-                ..AttachSurfaceOptions::default()
-            },
-        )
-        .expect("attach interactive");
-    let outcome = routing
-        .route_server_request(
-            session_id.clone(),
-            SurfaceCapability::Notifications,
-            None,
-            test_server_request(),
-        )
-        .expect("route request");
-
-    routing
-        .complete_server_request(
-            &outcome.pending.request_id,
-            &coco_types::InteractiveTarget {
-                session_id,
-                surface_id: outcome.pending.surface_id.clone(),
-            },
-        )
-        .expect("complete request");
-
+    assert!(second_rx.requests.try_recv().is_ok());
+    assert!(reader_rx.requests.try_recv().is_err());
     assert!(
-        routing
-            .pending_server_request_replays_for_surface(&surface_id)
-            .is_empty()
-    );
-}
-
-#[test]
-fn route_server_request_requires_request_channel_without_opening_pending() {
-    let mut routing = RoutingState::new(8);
-    let session_id = test_session_id("sess-1");
-    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let surface_id = SurfaceId::from("surface-1");
-    routing.connect(connection, event_tx);
-    routing
-        .attach_surface_with_options(
-            connection,
-            surface_id.clone(),
-            session_id.clone(),
-            AttachSurfaceOptions {
-                role: SurfaceRole::Interactive,
-                capabilities: SurfaceCapabilities {
-                    keychain: true,
-                    ..SurfaceCapabilities::default()
-                },
-                ..AttachSurfaceOptions::default()
-            },
-        )
-        .expect("attach interactive");
-
-    let err = routing
-        .route_server_request(
-            session_id,
-            SurfaceCapability::Keychain,
-            None,
-            test_server_request(),
-        )
-        .expect_err("missing request sender");
-
-    assert_eq!(
-        err,
-        ServerRequestRouteError::NoRequestChannel {
-            surface_id: surface_id.clone(),
-        }
-    );
-    assert!(
-        routing
-            .pending_server_requests_for_surface(&surface_id)
-            .is_empty()
-    );
-}
-
-#[test]
-fn route_server_request_disconnects_full_request_channel_and_cancels_pending() {
-    let mut routing = RoutingState::new(8);
-    let session_id = test_session_id("sess-1");
-    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(8);
-    let (request_tx, mut request_rx) = tokio::sync::mpsc::channel(1);
-    let connection = ConnectionKey::for_test(1);
-    let surface_id = SurfaceId::from("surface-1");
-    routing.connect_with_request_sender(connection, event_tx, request_tx);
-    routing
-        .attach_surface_with_options(
-            connection,
-            surface_id.clone(),
-            session_id.clone(),
-            AttachSurfaceOptions {
-                role: SurfaceRole::Interactive,
-                capabilities: SurfaceCapabilities {
-                    notifications: true,
-                    ..SurfaceCapabilities::default()
-                },
-                ..AttachSurfaceOptions::default()
-            },
-        )
-        .expect("attach interactive");
-
-    let first = routing
-        .route_server_request(
-            session_id.clone(),
-            SurfaceCapability::Notifications,
-            None,
-            test_server_request(),
-        )
-        .expect("first route");
-    let second = routing
-        .route_server_request(
-            session_id.clone(),
-            SurfaceCapability::Notifications,
-            None,
-            test_server_request(),
-        )
-        .expect_err("request channel full");
-
-    let ServerRequestRouteError::QueueUnavailable { request_id, .. } = second else {
-        panic!("expected queue unavailable");
-    };
-    assert_ne!(request_id, first.pending.request_id);
-    assert_eq!(routing.surface_session(&surface_id), None);
-    assert!(
-        routing
-            .pending_server_requests_for_surface(&surface_id)
-            .is_empty()
-    );
-    assert!(matches!(
-        routing.complete_server_request(
-            &first.pending.request_id,
-            &coco_types::InteractiveTarget {
-                session_id,
-                surface_id: first.pending.surface_id.clone(),
-            },
-        ),
-        Err(CompleteServerRequestError::NotFound { .. })
-    ));
-    let queued = request_rx.try_recv().expect("first request remains queued");
-    assert_eq!(queued.request_id, first.pending.request_id);
-}
-
-#[test]
-fn server_request_rejects_missing_interactive_capability() {
-    let mut routing = RoutingState::new(8);
-    let session_id = test_session_id("sess-1");
-    let (tx, _rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let interactive = SurfaceId::from("surface-interactive");
-    routing.connect(connection, tx);
-    routing
-        .attach_surface_with_options(
-            connection,
-            interactive.clone(),
-            session_id.clone(),
-            AttachSurfaceOptions {
-                role: SurfaceRole::Interactive,
-                capabilities: SurfaceCapabilities {
-                    keychain: true,
-                    ..SurfaceCapabilities::default()
-                },
-                ..AttachSurfaceOptions::default()
-            },
-        )
-        .expect("attach interactive");
-
-    let err = routing
-        .open_server_request(session_id.clone(), SurfaceCapability::FilePicker, None)
-        .expect_err("file picker was not declared");
-
-    assert_eq!(
-        err,
-        OpenServerRequestError::CapabilityNotDeclared {
-            session_id,
-            surface_id: interactive,
-            capability: SurfaceCapability::FilePicker,
-        }
-    );
-}
-
-#[test]
-fn completing_server_request_validates_session_and_clears_indexes() {
-    let mut routing = RoutingState::new(8);
-    let session_id = test_session_id("sess-1");
-    let wrong_session_id = test_session_id("sess-wrong");
-    let (tx, _rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let surface_id = SurfaceId::from("surface-1");
-    routing.connect(connection, tx);
-    routing
-        .attach_surface_with_options(
-            connection,
-            surface_id.clone(),
-            session_id.clone(),
-            AttachSurfaceOptions {
-                role: SurfaceRole::Interactive,
-                capabilities: SurfaceCapabilities {
-                    notifications: true,
-                    ..SurfaceCapabilities::default()
-                },
-                ..AttachSurfaceOptions::default()
-            },
-        )
-        .expect("attach interactive");
-    let pending = routing
-        .open_server_request(
-            session_id.clone(),
-            SurfaceCapability::Notifications,
-            Some(TurnId::from("turn-1")),
-        )
-        .expect("open request");
-
-    let err = routing
-        .complete_server_request(
-            &pending.request_id,
-            &coco_types::InteractiveTarget {
-                session_id: wrong_session_id.clone(),
-                surface_id: pending.surface_id.clone(),
-            },
-        )
-        .expect_err("wrong session should be rejected");
-    assert_eq!(
-        err,
-        CompleteServerRequestError::WrongSession {
-            request_id: pending.request_id.clone(),
-            expected_session_id: session_id.clone(),
-            actual_session_id: wrong_session_id,
-        }
-    );
-
-    let wrong_surface_id = SurfaceId::from("surface-rebound");
-    let err = routing
-        .complete_server_request(
-            &pending.request_id,
-            &coco_types::InteractiveTarget {
-                session_id: session_id.clone(),
-                surface_id: wrong_surface_id.clone(),
-            },
-        )
-        .expect_err("wrong surface should be rejected");
-    assert_eq!(
-        err,
-        CompleteServerRequestError::WrongSurface {
-            request_id: pending.request_id.clone(),
-            expected_surface_id: surface_id.clone(),
-            actual_surface_id: wrong_surface_id,
-        }
-    );
-
-    let completed = routing
-        .complete_server_request(
-            &pending.request_id,
-            &coco_types::InteractiveTarget {
-                session_id: session_id.clone(),
-                surface_id: pending.surface_id.clone(),
-            },
-        )
-        .expect("complete request");
-    assert_eq!(completed, pending);
-    assert!(
-        routing
-            .pending_server_requests_for_surface(&surface_id)
-            .is_empty()
-    );
-    assert!(matches!(
-        routing.complete_server_request(
-            &completed.request_id,
-            &coco_types::InteractiveTarget {
-                session_id,
-                surface_id: completed.surface_id.clone(),
-            },
-        ),
-        Err(CompleteServerRequestError::NotFound { .. })
-    ));
-}
-
-#[test]
-fn disconnect_cancels_pending_requests_for_connection_surfaces() {
-    let mut routing = RoutingState::new(8);
-    let session_id = test_session_id("sess-1");
-    let (tx, _rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let surface_id = SurfaceId::from("surface-1");
-    routing.connect(connection, tx);
-    routing
-        .attach_surface_with_options(
-            connection,
-            surface_id.clone(),
-            session_id.clone(),
-            AttachSurfaceOptions {
-                role: SurfaceRole::Interactive,
-                capabilities: SurfaceCapabilities {
-                    keychain: true,
-                    notifications: true,
-                    ..SurfaceCapabilities::default()
-                },
-                ..AttachSurfaceOptions::default()
-            },
-        )
-        .expect("attach interactive");
-    let keychain = routing
-        .open_server_request(session_id.clone(), SurfaceCapability::Keychain, None)
-        .expect("open keychain");
-    let notifications = routing
-        .open_server_request(session_id.clone(), SurfaceCapability::Notifications, None)
-        .expect("open notifications");
-
-    let outcome = routing.disconnect(connection);
-
-    assert_eq!(outcome.detached_surfaces, vec![surface_id.clone()]);
-    assert_eq!(
-        request_id_strings(outcome.cancelled_requests),
-        request_id_strings(vec![keychain.request_id.clone(), notifications.request_id])
-    );
-    assert!(
-        routing
-            .pending_server_requests_for_surface(&surface_id)
-            .is_empty()
-    );
-    assert!(matches!(
-        routing.complete_server_request(
-            &keychain.request_id,
-            &coco_types::InteractiveTarget {
-                session_id,
-                surface_id: keychain.surface_id.clone(),
-            },
-        ),
-        Err(CompleteServerRequestError::NotFound { .. })
-    ));
-}
-
-#[test]
-fn turn_transition_cancels_only_that_turns_pending_requests() {
-    let mut routing = RoutingState::new(8);
-    let session_id = test_session_id("sess-1");
-    let turn_1 = TurnId::from("turn-1");
-    let turn_2 = TurnId::from("turn-2");
-    let (tx, _rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let surface_id = SurfaceId::from("surface-1");
-    routing.connect(connection, tx);
-    routing
-        .attach_surface_with_options(
-            connection,
-            surface_id.clone(),
-            session_id.clone(),
-            AttachSurfaceOptions {
-                role: SurfaceRole::Interactive,
-                capabilities: SurfaceCapabilities {
-                    notifications: true,
-                    ..SurfaceCapabilities::default()
-                },
-                ..AttachSurfaceOptions::default()
-            },
-        )
-        .expect("attach interactive");
-    let first = routing
-        .open_server_request(
-            session_id.clone(),
-            SurfaceCapability::Notifications,
-            Some(turn_1.clone()),
-        )
-        .expect("open first");
-    let second = routing
-        .open_server_request(
-            session_id.clone(),
-            SurfaceCapability::Notifications,
-            Some(turn_2),
-        )
-        .expect("open second");
-
-    let cancelled = routing.cancel_turn_server_requests(&turn_1);
-
-    assert_eq!(cancelled, vec![first.request_id.clone()]);
-    assert_eq!(
-        routing.pending_server_requests_for_surface(&surface_id),
-        vec![second.clone()]
-    );
-    assert!(matches!(
-        routing.complete_server_request(
-            &first.request_id,
-            &coco_types::InteractiveTarget {
-                session_id: session_id.clone(),
-                surface_id: first.surface_id.clone(),
-            },
-        ),
-        Err(CompleteServerRequestError::NotFound { .. })
-    ));
-    assert_eq!(
         routing
             .complete_server_request(
-                &second.request_id,
-                &coco_types::InteractiveTarget {
-                    session_id,
-                    surface_id: second.surface_id.clone(),
-                },
+                first,
+                &session_id,
+                &routed.pending.request_id,
+                Some(ServerRequestReplyKind::UserInput),
             )
-            .expect("second still pending"),
-        second
+            .is_ok()
+    );
+    assert!(matches!(
+        routing.complete_server_request(
+            second,
+            &session_id,
+            &routed.pending.request_id,
+            Some(ServerRequestReplyKind::UserInput),
+        ),
+        Err(CompleteServerRequestError::NotFound { .. })
+    ));
+    let cancellation = second_rx.requests.try_recv().expect("loser cancellation");
+    assert!(matches!(
+        cancellation.request,
+        ServerRequest::CancelRequest(ref params)
+            if params.request_id == routed.pending.request_id.as_display()
+    ));
+}
+
+#[test]
+fn one_full_connection_can_withdraw_without_cancelling_its_peers_request() {
+    let mut routing = RoutingState::new(8);
+    let session_id = session("session-request-withdraw");
+    let first = ConnectionKey::generate();
+    let second = ConnectionKey::generate();
+    let mut first_rx = connect(&mut routing, first, 8);
+    let mut second_rx = connect(&mut routing, second, 8);
+    routing
+        .attach_session(first, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach first");
+    routing
+        .attach_session(second, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach second");
+    let routed = routing
+        .route_server_request(session_id.clone(), None, server_request())
+        .expect("route request");
+    assert!(first_rx.requests.try_recv().is_ok());
+    assert!(second_rx.requests.try_recv().is_ok());
+
+    assert_eq!(
+        routing
+            .cancel_server_request_for_connection(&routed.pending.request_id, first)
+            .expect("withdraw first"),
+        CancelServerRequestOutcome::Withdrawn
+    );
+    assert!(matches!(
+        routing.complete_server_request(
+            first,
+            &session_id,
+            &routed.pending.request_id,
+            Some(ServerRequestReplyKind::UserInput),
+        ),
+        Err(CompleteServerRequestError::NotRecipient { .. })
+    ));
+    assert!(
+        routing
+            .complete_server_request(
+                second,
+                &session_id,
+                &routed.pending.request_id,
+                Some(ServerRequestReplyKind::UserInput),
+            )
+            .is_ok()
     );
 }
 
 #[test]
-fn replace_repoints_calling_surface_and_closes_peer_surfaces() {
+fn connection_owned_request_is_not_broadcast_or_resolvable_by_a_peer() {
     let mut routing = RoutingState::new(8);
-    let old_session_id = test_session_id("sess-old");
-    let new_session_id = test_session_id("sess-new");
-    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let caller = SurfaceId::from("surface-caller");
-    let peer = SurfaceId::from("surface-peer");
-    routing.connect(connection, tx);
+    let session_id = session("session-owned-request");
+    let owner = ConnectionKey::generate();
+    let peer = ConnectionKey::generate();
+    let mut owner_rx = connect(&mut routing, owner, 8);
+    let mut peer_rx = connect(&mut routing, peer, 8);
     routing
-        .attach_surface_with_options(
-            connection,
-            caller.clone(),
-            old_session_id.clone(),
-            AttachSurfaceOptions {
-                role: SurfaceRole::Interactive,
-                last_delivered_seq: 42,
-                ..AttachSurfaceOptions::default()
-            },
+        .attach_session(owner, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach owner");
+    routing
+        .attach_session(peer, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach peer");
+
+    let routed = routing
+        .route_server_request_to(
+            ServerRequestAudience::Connection(owner),
+            session_id.clone(),
+            None,
+            server_request(),
         )
+        .expect("route owned request");
+
+    assert_eq!(routed.delivered, 1);
+    assert!(owner_rx.requests.try_recv().is_ok());
+    assert!(peer_rx.requests.try_recv().is_err());
+    assert!(matches!(
+        routing.complete_server_request(
+            peer,
+            &session_id,
+            &routed.pending.request_id,
+            Some(ServerRequestReplyKind::UserInput),
+        ),
+        Err(CompleteServerRequestError::NotRecipient { .. })
+    ));
+    assert!(matches!(
+        routing.cancel_server_request_for_connection(&routed.pending.request_id, peer),
+        Err(CompleteServerRequestError::NotRecipient { .. })
+    ));
+    assert!(
+        routing
+            .complete_server_request(
+                owner,
+                &session_id,
+                &routed.pending.request_id,
+                Some(ServerRequestReplyKind::UserInput),
+            )
+            .is_ok()
+    );
+}
+
+#[test]
+fn detaching_a_session_removes_targeted_requests_and_callback_ownership() {
+    let mut routing = RoutingState::new(8);
+    let session_id = session("session-detach-cleanup");
+    let owner = ConnectionKey::generate();
+    let _owner_rx = connect(&mut routing, owner, 8);
+    routing
+        .attach_session(owner, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach owner");
+    let callback = ConnectionCallback::Hook("callback-1".to_string());
+    routing
+        .register_connection_callback(owner, session_id.clone(), callback.clone())
+        .expect("register callback owner");
+    let pending = routing
+        .route_server_request_to(
+            ServerRequestAudience::Connection(owner),
+            session_id.clone(),
+            None,
+            server_request(),
+        )
+        .expect("route owned request")
+        .pending;
+
+    let outcome = routing.detach_session_for_connection(owner, &session_id);
+
+    assert!(outcome.detached);
+    assert_eq!(outcome.cancelled_requests, vec![pending.request_id]);
+    assert!(
+        routing
+            .connection_callback_owner(&session_id, &callback)
+            .is_none()
+    );
+    assert!(
+        routing
+            .pending_server_request_replays_for_session(&session_id)
+            .is_empty()
+    );
+}
+
+#[test]
+fn callback_registration_requires_a_live_full_attachment() {
+    let mut routing = RoutingState::new(8);
+    let session_id = session("session-callback-access");
+    let connection = ConnectionKey::generate();
+    let _receivers = connect(&mut routing, connection, 8);
+    let callback = ConnectionCallback::Hook("callback-1".to_string());
+
+    routing
+        .attach_session(
+            connection,
+            session_id.clone(),
+            AttachSessionOptions::read_only(),
+        )
+        .expect("attach read-only");
+    assert!(matches!(
+        routing.register_connection_callback(connection, session_id.clone(), callback.clone(),),
+        Err(SessionAccessError::ReadOnly { .. })
+    ));
+
+    routing
+        .attach_session(connection, session_id.clone(), AttachSessionOptions::full())
+        .expect("upgrade to full");
+    routing.close_session_attachments(&session_id);
+    assert_eq!(
+        routing.session_access(connection, &session_id),
+        Some(SessionAccess::Full),
+        "close intentionally preserves the grant"
+    );
+    assert!(matches!(
+        routing.register_connection_callback(connection, session_id, callback),
+        Err(SessionAccessError::NotAttached { .. })
+    ));
+}
+
+#[test]
+fn wrong_reply_kind_does_not_consume_pending_request() {
+    let mut routing = RoutingState::new(8);
+    let session_id = session("session-reply-kind");
+    let connection = ConnectionKey::generate();
+    let _rx = connect(&mut routing, connection, 8);
+    routing
+        .attach_session(connection, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach full");
+    let routed = routing
+        .route_server_request(session_id.clone(), None, server_request())
+        .expect("route request");
+
+    assert!(matches!(
+        routing.complete_server_request(
+            connection,
+            &session_id,
+            &routed.pending.request_id,
+            Some(ServerRequestReplyKind::Approval),
+        ),
+        Err(CompleteServerRequestError::WrongReplyKind { .. })
+    ));
+    assert!(
+        routing
+            .complete_server_request(
+                connection,
+                &session_id,
+                &routed.pending.request_id,
+                Some(ServerRequestReplyKind::UserInput),
+            )
+            .is_ok()
+    );
+}
+
+#[test]
+fn idempotent_full_attach_does_not_replay_pending_request_twice() {
+    let mut routing = RoutingState::new(8);
+    let session_id = session("session-idempotent-attach");
+    let connection = ConnectionKey::generate();
+    let mut rx = connect(&mut routing, connection, 8);
+    routing
+        .attach_session(connection, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach full");
+    routing
+        .route_server_request(session_id.clone(), None, server_request())
+        .expect("route request");
+    assert!(rx.requests.try_recv().is_ok());
+
+    routing
+        .attach_session(connection, session_id, AttachSessionOptions::full())
+        .expect("reattach full");
+
+    assert!(rx.requests.try_recv().is_err());
+}
+
+#[test]
+fn disconnecting_one_full_connection_does_not_cancel_shared_pending_request() {
+    let mut routing = RoutingState::new(8);
+    let session_id = session("session-request-disconnect");
+    let first = ConnectionKey::generate();
+    let second = ConnectionKey::generate();
+    let _first_rx = connect(&mut routing, first, 8);
+    let _second_rx = connect(&mut routing, second, 8);
+    routing
+        .attach_session(first, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach first");
+    routing
+        .attach_session(second, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach second");
+    let routed = routing
+        .route_server_request(session_id.clone(), None, server_request())
+        .expect("route request");
+
+    routing.disconnect(first);
+
+    assert!(
+        routing
+            .complete_server_request(
+                second,
+                &session_id,
+                &routed.pending.request_id,
+                Some(ServerRequestReplyKind::UserInput),
+            )
+            .is_ok()
+    );
+}
+
+#[test]
+fn reconnecting_with_full_access_replays_pending_server_requests() {
+    let mut routing = RoutingState::new(8);
+    let session_id = session("session-request-reconnect");
+    let original = ConnectionKey::generate();
+    let mut original_rx = connect(&mut routing, original, 8);
+    routing
+        .attach_session(original, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach original");
+    let routed = routing
+        .route_server_request(session_id.clone(), None, server_request())
+        .expect("route request");
+    assert_eq!(
+        original_rx
+            .requests
+            .try_recv()
+            .expect("original delivery")
+            .request_id,
+        routed.pending.request_id
+    );
+    routing.disconnect(original);
+
+    let reconnected = ConnectionKey::generate();
+    let mut reconnected_rx = connect(&mut routing, reconnected, 8);
+    routing
+        .attach_session(
+            reconnected,
+            session_id.clone(),
+            AttachSessionOptions::full(),
+        )
+        .expect("attach replacement responder");
+
+    assert_eq!(
+        reconnected_rx
+            .requests
+            .try_recv()
+            .expect("pending request replay")
+            .request_id,
+        routed.pending.request_id
+    );
+    assert!(
+        routing
+            .complete_server_request(
+                reconnected,
+                &session_id,
+                &routed.pending.request_id,
+                Some(ServerRequestReplyKind::UserInput),
+            )
+            .is_ok()
+    );
+}
+
+#[test]
+fn a_slow_connection_is_disconnected_without_affecting_its_peer() {
+    let mut routing = RoutingState::new(8);
+    let session_id = session("session-slow");
+    let slow = ConnectionKey::generate();
+    let healthy = ConnectionKey::generate();
+    let _slow_rx = connect(&mut routing, slow, 1);
+    let mut healthy_rx = connect(&mut routing, healthy, 8);
+    routing
+        .attach_session(slow, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach slow");
+    routing
+        .attach_session(healthy, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach healthy");
+
+    assert_eq!(
+        routing
+            .route_envelope(envelope(session_id.clone(), 1))
+            .delivered,
+        2
+    );
+    let second = routing.route_envelope(envelope(session_id.clone(), 2));
+
+    assert_eq!(second.delivered, 1);
+    assert_eq!(second.disconnected, vec![slow]);
+    assert!(routing.attachment(slow, &session_id).is_none());
+    assert!(routing.require_full(healthy, &session_id).is_ok());
+    assert!(healthy_rx.events.try_recv().is_ok());
+    assert!(healthy_rx.events.try_recv().is_ok());
+}
+
+#[test]
+fn replacing_a_session_repoints_only_the_calling_connection() {
+    let mut routing = RoutingState::new(8);
+    let old = session("session-old");
+    let new = session("session-new");
+    let caller = ConnectionKey::generate();
+    let peer = ConnectionKey::generate();
+    let _caller_rx = connect(&mut routing, caller, 8);
+    let _peer_rx = connect(&mut routing, peer, 8);
+    routing
+        .attach_session(caller, old.clone(), AttachSessionOptions::full())
         .expect("attach caller");
     routing
-        .attach_surface(connection, peer.clone(), old_session_id.clone())
+        .attach_session(peer, old.clone(), AttachSessionOptions::full())
         .expect("attach peer");
 
     let outcome = routing
-        .replace_calling_surface(&caller, new_session_id.clone())
+        .replace_calling_attachment(caller, &old, new.clone())
         .expect("replace");
 
-    assert_eq!(outcome.old_session_id, old_session_id);
-    assert_eq!(outcome.new_session_id, new_session_id);
-    assert_eq!(outcome.calling_surface, caller);
-    assert_eq!(outcome.detached_surfaces, vec![peer.clone()]);
-    assert!(outcome.cancelled_requests.is_empty());
-    assert_eq!(routing.surface_session(&caller), Some(&new_session_id));
-    assert_eq!(routing.surface_session(&peer), None);
-    assert_eq!(
-        routing.surface_attachment(&peer).map(|a| a.state),
-        Some(SurfaceState::SessionClosed)
-    );
-    assert_eq!(routing.interactive_owner(&old_session_id), None);
-    assert_eq!(routing.interactive_owner(&new_session_id), Some(&caller));
-    assert_eq!(
-        routing
-            .surface_attachment(&caller)
-            .map(|a| a.last_delivered_seq),
-        Some(0)
-    );
-
-    let old_outcome = routing.route_envelope(durable_envelope(old_session_id, 1));
-    let new_outcome = routing.route_envelope(durable_envelope(new_session_id, 1));
-    assert_eq!(old_outcome.delivered, 0);
-    assert_eq!(new_outcome.delivered, 1);
-    let delivered = rx.try_recv().expect("new-session delivery");
-    assert_eq!(delivered.surface_id, caller);
-    assert_eq!(delivered.envelope.session_id, test_session_id("sess-new"));
-    assert!(rx.try_recv().is_err());
+    assert_eq!(outcome.calling_connection, caller);
+    assert!(outcome.detached_connections.contains(&caller));
+    assert!(outcome.detached_connections.contains(&peer));
+    assert!(routing.require_full(caller, &new).is_ok());
+    assert!(routing.attachment(peer, &old).is_none());
 }
 
 #[test]
-fn replace_cancels_old_session_pending_requests() {
+fn failed_replace_replay_keeps_old_session_peers_attached() {
     let mut routing = RoutingState::new(8);
-    let old_session_id = test_session_id("sess-old");
-    let new_session_id = test_session_id("sess-new");
-    let (tx, _rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let caller = SurfaceId::from("surface-caller");
-    routing.connect(connection, tx);
+    let old = session("session-replace-replay-old");
+    let new = session("session-replace-replay-new");
+    let caller = ConnectionKey::generate();
+    let peer = ConnectionKey::generate();
+    let destination_owner = ConnectionKey::generate();
+    let _caller_receivers = connect(&mut routing, caller, 1);
+    let _peer_receivers = connect(&mut routing, peer, 2);
+    let _destination_receivers = connect(&mut routing, destination_owner, 2);
     routing
-        .attach_surface_with_options(
-            connection,
-            caller.clone(),
-            old_session_id.clone(),
-            AttachSurfaceOptions {
-                role: SurfaceRole::Interactive,
-                capabilities: SurfaceCapabilities {
-                    keychain: true,
-                    ..SurfaceCapabilities::default()
-                },
-                ..AttachSurfaceOptions::default()
-            },
-        )
+        .attach_session(caller, old.clone(), AttachSessionOptions::full())
         .expect("attach caller");
-    let pending = routing
-        .open_server_request(old_session_id.clone(), SurfaceCapability::Keychain, None)
-        .expect("open request");
+    routing
+        .attach_session(peer, old.clone(), AttachSessionOptions::full())
+        .expect("attach peer");
+    routing
+        .attach_session(destination_owner, new.clone(), AttachSessionOptions::full())
+        .expect("attach destination owner");
+    routing
+        .route_server_request(old.clone(), None, server_request())
+        .expect("fill caller request queue");
+    routing
+        .route_server_request(new.clone(), None, server_request())
+        .expect("create destination pending request");
 
-    let outcome = routing
-        .replace_calling_surface(&caller, new_session_id.clone())
-        .expect("replace");
-
-    assert_eq!(outcome.cancelled_requests, vec![pending.request_id.clone()]);
-    assert_eq!(routing.surface_session(&caller), Some(&new_session_id));
-    assert!(
-        routing
-            .pending_server_requests_for_surface(&caller)
-            .is_empty()
-    );
     assert!(matches!(
-        routing.complete_server_request(
-            &pending.request_id,
-            &coco_types::InteractiveTarget {
-                session_id: old_session_id,
-                surface_id: pending.surface_id.clone(),
-            },
-        ),
-        Err(CompleteServerRequestError::NotFound { .. })
+        routing.replace_calling_attachment(caller, &old, new.clone()),
+        Err(ReplaceAttachmentError::Attach(
+            AttachError::ReplayQueueUnavailable { .. }
+        ))
     ));
+    assert!(routing.attachment(peer, &old).is_some());
+    assert!(routing.attachment(destination_owner, &new).is_some());
+    assert!(routing.attachment(caller, &old).is_none());
+    assert!(routing.attachment(caller, &new).is_none());
 }
 
 #[test]
-fn close_session_surfaces_closes_surfaces_and_removes_fanout() {
+fn closing_a_session_cancels_pending_requests_and_detaches_every_connection() {
     let mut routing = RoutingState::new(8);
-    let session_id = test_session_id("sess-1");
-    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let interactive = SurfaceId::from("surface-interactive");
-    let passive = SurfaceId::from("surface-passive");
-    routing.connect(connection, tx);
+    let session_id = session("session-close");
+    let first = ConnectionKey::generate();
+    let second = ConnectionKey::generate();
+    let _first_rx = connect(&mut routing, first, 8);
+    let _second_rx = connect(&mut routing, second, 8);
     routing
-        .attach_surface_with_options(
-            connection,
-            interactive.clone(),
-            session_id.clone(),
-            AttachSurfaceOptions {
-                role: SurfaceRole::Interactive,
-                ..AttachSurfaceOptions::default()
-            },
-        )
-        .expect("attach interactive");
-    routing
-        .attach_surface(connection, passive.clone(), session_id.clone())
-        .expect("attach passive");
-
-    let outcome = routing.close_session_surfaces(&session_id);
-
-    assert_eq!(outcome.closed_surfaces.len(), 2);
-    assert!(outcome.cancelled_requests.is_empty());
-    assert_eq!(routing.surface_session(&interactive), None);
-    assert_eq!(routing.surface_session(&passive), None);
-    assert_eq!(
-        routing.surface_attachment(&interactive).map(|a| a.state),
-        Some(SurfaceState::SessionClosed)
-    );
-    assert_eq!(
-        routing.surface_attachment(&passive).map(|a| a.state),
-        Some(SurfaceState::SessionClosed)
-    );
-    assert_eq!(routing.interactive_owner(&session_id), None);
-    assert_eq!(routing.attached_connection_surface_count(connection), 0);
-    assert_eq!(routing.connection_surface_count(connection), 2);
-
-    let route = routing.route_envelope(durable_envelope(session_id, 1));
-    assert_eq!(route.delivered, 0);
-    assert!(rx.try_recv().is_err());
-}
-
-#[test]
-fn close_session_surfaces_cancels_pending_requests() {
-    let mut routing = RoutingState::new(8);
-    let session_id = test_session_id("sess-1");
-    let (tx, _rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let surface_id = SurfaceId::from("surface-1");
-    routing.connect(connection, tx);
-    routing
-        .attach_surface_with_options(
-            connection,
-            surface_id.clone(),
-            session_id.clone(),
-            AttachSurfaceOptions {
-                role: SurfaceRole::Interactive,
-                capabilities: SurfaceCapabilities {
-                    notifications: true,
-                    ..SurfaceCapabilities::default()
-                },
-                ..AttachSurfaceOptions::default()
-            },
-        )
-        .expect("attach interactive");
-    let pending = routing
-        .open_server_request(session_id.clone(), SurfaceCapability::Notifications, None)
-        .expect("open request");
-
-    let outcome = routing.close_session_surfaces(&session_id);
-
-    assert_eq!(outcome.cancelled_requests, vec![pending.request_id.clone()]);
-    assert!(
-        routing
-            .pending_server_requests_for_surface(&surface_id)
-            .is_empty()
-    );
-    assert!(matches!(
-        routing.complete_server_request(
-            &pending.request_id,
-            &coco_types::InteractiveTarget {
-                session_id: session_id.clone(),
-                surface_id: pending.surface_id.clone(),
-            },
-        ),
-        Err(CompleteServerRequestError::NotFound { .. })
-    ));
-}
-
-#[test]
-fn closed_surfaces_do_not_count_against_connection_limit() {
-    let mut routing = RoutingState::new_with_limits(
-        8,
-        SurfaceLimits {
-            max_surfaces_per_connection: 1,
-            max_passive_surfaces_per_session: 16,
-        },
-    );
-    let first_session_id = test_session_id("sess-1");
-    let (tx, _rx) = tokio::sync::mpsc::channel(8);
-    let connection = ConnectionKey::for_test(1);
-    let first = SurfaceId::from("surface-1");
-    let second = SurfaceId::from("surface-2");
-    routing.connect(connection, tx);
-    routing
-        .attach_surface(connection, first.clone(), first_session_id.clone())
+        .attach_session(first, session_id.clone(), AttachSessionOptions::full())
         .expect("attach first");
-    routing.close_session_surfaces(&first_session_id);
-
     routing
-        .attach_surface(connection, second.clone(), test_session_id("sess-2"))
-        .expect("closed first surface should not consume live limit");
+        .attach_session(
+            second,
+            session_id.clone(),
+            AttachSessionOptions::read_only(),
+        )
+        .expect("attach second");
+    routing.route_envelope(envelope(session_id.clone(), 1));
+    assert!(routing.rings.contains_key(&session_id));
+    let pending = routing
+        .route_server_request(session_id.clone(), None, server_request())
+        .expect("request")
+        .pending;
 
-    assert_eq!(routing.connection_surface_count(connection), 2);
-    assert_eq!(routing.attached_connection_surface_count(connection), 1);
+    let outcome = routing.close_session_attachments(&session_id);
+
+    assert_eq!(outcome.detached_connections.len(), 2);
+    assert_eq!(outcome.cancelled_requests, vec![pending.request_id]);
     assert_eq!(
-        routing.surface_attachment(&first).map(|a| a.state),
-        Some(SurfaceState::SessionClosed)
+        routing.connection_counts_for_session(&session_id),
+        SessionConnectionCounts::default()
     );
     assert_eq!(
-        routing.surface_session(&second),
-        Some(&test_session_id("sess-2"))
+        routing.session_access(first, &session_id),
+        Some(SessionAccess::Full),
+        "close preserves the full grant for durable operations"
     );
+    assert_eq!(
+        routing.session_access(second, &session_id),
+        Some(SessionAccess::ReadOnly),
+        "close preserves the read-only sharing grant"
+    );
+    assert!(routing.attachment(first, &session_id).is_none());
+    assert!(routing.attachment(second, &session_id).is_none());
+    assert!(!routing.rings.contains_key(&session_id));
+
+    routing.disconnect(first);
+    routing.disconnect(second);
+    assert!(routing.grant(first, &session_id).is_none());
+    assert!(routing.grant(second, &session_id).is_none());
 }

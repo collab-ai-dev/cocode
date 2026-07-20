@@ -33,7 +33,7 @@ pub enum SessionVisibility {
     /// Present in `session/list` / `session/read` / `session/turns/list`.
     Public,
     /// Hidden from public catalogs and data APIs; operable only through its
-    /// validated local interactive handle.
+    /// validated local Full-access handle.
     Internal,
 }
 

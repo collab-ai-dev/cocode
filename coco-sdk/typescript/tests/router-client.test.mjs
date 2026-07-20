@@ -45,10 +45,7 @@ class MockTransport {
 const response = (id, result = {}) => ({ jsonrpc: "2.0", id, result });
 const notification = (method, params = {}) => ({ jsonrpc: "2.0", method, params });
 const serverRequest = (id, method, params = {}) => ({ jsonrpc: "2.0", id, method, params });
-const sessionStartResult = (session_id = "session-1", surface_id = "surface-1") => ({
-  session_id,
-  surface_id,
-});
+const sessionStartResult = (session_id = "session-1") => ({ session_id });
 
 test("router replies with JSON-RPC error for unhandled server requests", async () => {
   const transport = new MockTransport([
@@ -65,6 +62,193 @@ test("router replies with JSON-RPC error for unhandled server requests", async (
   assert.match(sent.error.message, /unsupported server request/);
 
   await router.close();
+});
+
+test("router aborts an active server-request handler on cancellation", async () => {
+  const transport = new MockTransport(
+    [
+      serverRequest("srv-cancel", ServerRequestMethod.INPUT_REQUEST_USER_INPUT, {
+        request_id: "input-cancel",
+      }),
+      notification(ServerRequestMethod.CONTROL_CANCEL_REQUEST, {
+        request_id: "srv-cancel",
+      }),
+    ],
+    { keepOpen: true },
+  );
+  let aborted = false;
+  const router = new MessageRouter(transport, async (_message, signal) => {
+    await new Promise((resolve) => {
+      signal.addEventListener("abort", () => {
+        aborted = true;
+        resolve();
+      }, { once: true });
+    });
+    return true;
+  });
+
+  router.start();
+  await eventually(() => aborted);
+  assert.deepEqual(transport.sentLines, []);
+
+  await router.close();
+});
+
+test("router swallows a handler rejection caused by cancellation", async () => {
+  // A handler that honors the AbortSignal by rejecting (the losing side of
+  // an approval broadcast) must not surface through nextEvent() and must
+  // not write an error reply for the cancelled request.
+  const transport = new MockTransport(
+    [
+      serverRequest("srv-abort", ServerRequestMethod.APPROVAL_ASK_FOR_APPROVAL, {
+        request_id: "r-abort",
+        tool_name: "Bash",
+        input: {},
+      }),
+      notification(ServerRequestMethod.CONTROL_CANCEL_REQUEST, {
+        request_id: "srv-abort",
+      }),
+      notification(NotificationMethod.TURN_ENDED, {
+        turn_id: "t1",
+        usage: {},
+        outcome: { kind: "completed", data: { stop_reason: "end_turn" } },
+      }),
+    ],
+    { keepOpen: true },
+  );
+  let rejected = false;
+  const router = new MessageRouter(transport, async (_message, signal) => {
+    await new Promise((_resolve, reject) => {
+      signal.addEventListener(
+        "abort",
+        () => {
+          rejected = true;
+          reject(new Error("Operation aborted"));
+        },
+        { once: true },
+      );
+    });
+    return true;
+  });
+
+  router.start();
+  // If the rejection leaked, nextEvent() would throw before yielding.
+  const event = await router.nextEvent();
+  assert.equal(event.method, NotificationMethod.TURN_ENDED);
+  assert.ok(rejected);
+  assert.deepEqual(transport.sentLines, []);
+
+  await router.close();
+});
+
+test("cancelRequest purges the pending correlation entry immediately", async () => {
+  // A handler that never settles (and ignores its signal) must not leak
+  // its correlation entry until close — the entry is dropped when the
+  // cancellation arrives.
+  const transport = new MockTransport(
+    [
+      serverRequest("srv-leak", ServerRequestMethod.INPUT_REQUEST_USER_INPUT, {
+        request_id: "r-leak",
+      }),
+      notification(ServerRequestMethod.CONTROL_CANCEL_REQUEST, {
+        request_id: "srv-leak",
+      }),
+    ],
+    { keepOpen: true },
+  );
+  let sawRequest = false;
+  const router = new MessageRouter(transport, async () => {
+    sawRequest = true;
+    await new Promise(() => {});
+    return true;
+  });
+
+  router.start();
+  await eventually(() => sawRequest);
+  await eventually(() => router.serverRequestControllers.size === 0);
+  assert.equal(router.serverRequestControllers.size, 0);
+  assert.deepEqual(transport.sentLines, []);
+
+  await router.close();
+});
+
+test("client withdraws via error reply when no canUseTool is configured", async () => {
+  // Approvals are broadcast; a deny would consume the broadcast and cancel
+  // a human peer's prompt. The handler-less client must reply with a
+  // JSON-RPC error instead, which only withdraws this client.
+  const transport = new MockTransport([
+    response(1),
+    response(2, sessionStartResult()),
+    response(3),
+    serverRequest("appr1", ServerRequestMethod.APPROVAL_ASK_FOR_APPROVAL, {
+      request_id: "r1",
+      tool_name: "Bash",
+      tool_use_id: "tu1",
+      input: {},
+    }),
+    notification(NotificationMethod.TURN_ENDED, {
+      turn_id: "t1",
+      usage: {},
+      outcome: { kind: "completed", data: { stop_reason: "end_turn" } },
+    }),
+  ]);
+  const client = new CocoClient({ prompt: "hello", transport });
+
+  await client.start();
+  for await (const _event of client.events()) {
+    // drain to terminal event
+  }
+
+  const replies = transport.sentLines.map((line) => JSON.parse(line));
+  const approvalReply = replies.find((line) => line.id === "appr1");
+  assert.equal(approvalReply.result, undefined);
+  assert.equal(approvalReply.error.code, -32601);
+  assert.match(approvalReply.error.message, /no approval handler configured/);
+
+  await client.close();
+});
+
+test("client passes the cancellation signal to canUseTool", async () => {
+  const seen = [];
+  const transport = new MockTransport([
+    response(1),
+    response(2, sessionStartResult()),
+    response(3),
+    serverRequest("appr2", ServerRequestMethod.APPROVAL_ASK_FOR_APPROVAL, {
+      request_id: "r2",
+      tool_name: "Read",
+      input: { path: "/tmp/x" },
+    }),
+    notification(NotificationMethod.TURN_ENDED, {
+      turn_id: "t1",
+      usage: {},
+      outcome: { kind: "completed", data: { stop_reason: "end_turn" } },
+    }),
+  ]);
+  const client = new CocoClient({
+    prompt: "hello",
+    transport,
+    canUseTool: async (toolName, input, signal) => {
+      seen.push({ toolName, input, signal });
+      return "allow";
+    },
+  });
+
+  await client.start();
+  for await (const _event of client.events()) {
+    // drain to terminal event
+  }
+
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].toolName, "Read");
+  assert.deepEqual(seen[0].input, { path: "/tmp/x" });
+  assert.ok(seen[0].signal instanceof AbortSignal);
+
+  const replies = transport.sentLines.map((line) => JSON.parse(line));
+  const approvalReply = replies.find((line) => line.id === "appr2");
+  assert.deepEqual(approvalReply.result, { request_id: "r2", decision: "allow" });
+
+  await client.close();
 });
 
 test("client handles hook callbacks without leaking them as notifications", async () => {
@@ -182,7 +366,7 @@ test("send interrupts an in-flight turn when its signal aborts", async () => {
 test("client sends target-aware close for active session and clears target", async () => {
   const transport = new MockTransport([
     response(1),
-    response(2, sessionStartResult("session-close", "surface-close")),
+    response(2, sessionStartResult("session-close")),
     response(3),
     response(4),
   ]);
@@ -194,18 +378,12 @@ test("client sends target-aware close for active session and clears target", asy
   const requests = transport.sentLines.map((line) => JSON.parse(line));
   const closeRequest = requests.find((line) => line.method === ClientRequestMethod.SESSION_CLOSE);
   assert.deepEqual(closeRequest.params, {
-    target: {
-      kind: "interactive",
-      target: {
-        session_id: "session-close",
-        surface_id: "surface-close",
-      },
-    },
+    target: { session_id: "session-close" },
   });
 
   await assert.rejects(
     () => client.send("after close").next(),
-    /no active interactive session target/,
+    /no active session target/,
   );
   await client.close();
 });

@@ -4,7 +4,7 @@ use coco_app_server_transport::{
     JsonRpcFrame, JsonRpcNotification as TransportJsonRpcNotification,
 };
 use coco_types::{
-    AgentId, AgentStreamEvent, ServerNotification, SessionId, StreamAccumulator, SurfaceId, TurnId,
+    AgentId, AgentStreamEvent, ServerNotification, SessionId, StreamAccumulator, TurnId,
 };
 #[cfg(test)]
 use coco_types::{CoreEvent, JSONRPC_VERSION, JsonRpcNotification as LegacyJsonRpcNotification};
@@ -49,7 +49,6 @@ impl SdkEventRenderer {
                 .unwrap_or(serde_json::Value::Null),
         )?;
         let metadata = RoutedEventMetadata {
-            surface_id: routed.surface_id,
             session_id: routed.envelope.session_id.clone(),
             agent_id: routed.envelope.agent_id,
             turn_id: routed.envelope.turn_id,
@@ -139,7 +138,6 @@ impl SdkEventRenderer {
 
 #[derive(Deserialize)]
 struct RoutedSdkEvent {
-    surface_id: SurfaceId,
     envelope: RoutedSdkEnvelope,
 }
 
@@ -162,7 +160,6 @@ struct RoutedCoreEvent {
 }
 
 struct RoutedEventMetadata {
-    surface_id: SurfaceId,
     session_id: SessionId,
     agent_id: Option<AgentId>,
     turn_id: Option<TurnId>,
@@ -189,10 +186,6 @@ fn notification_frame(
             params
         }
     };
-    params.insert(
-        "surface_id".to_string(),
-        serde_json::to_value(&metadata.surface_id)?,
-    );
     params.insert(
         "session_id".to_string(),
         serde_json::to_value(&metadata.session_id)?,

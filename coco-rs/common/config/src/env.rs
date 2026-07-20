@@ -72,14 +72,16 @@ pub enum EnvKey {
     CocoSkillLearnCuratorDisable,
     /// Maximum live AppServer session slots for multi-session SDK mode.
     CocoServerMaxSessions,
-    /// Maximum AppServer surfaces that one connection may attach.
-    CocoServerMaxSurfacesPerConnection,
-    /// Maximum passive AppServer surfaces attached to one session.
-    CocoServerMaxPassiveSurfacesPerSession,
+    /// Maximum live session attachments owned by one transport connection.
+    CocoServerMaxAttachedSessionsPerConnection,
+    /// Maximum transport connections attached to one live session.
+    CocoServerMaxConnectionsPerSession,
     /// Per-session AppServer event retention ring size.
     CocoServerEventRetentionPerSession,
     /// Per-connection AppServer outbound queue capacity in frames.
     CocoServerOutboundQueueFrames,
+    /// Timeout for approval, user-input, elicitation, and callback requests.
+    CocoServerRequestTimeoutSecs,
     /// Active-turn drain timeout during AppServer close cascade, in seconds.
     /// Non-positive values are ignored by config resolution.
     CocoServerTurnDrainTimeoutSecs,
@@ -425,12 +427,13 @@ impl EnvKey {
             Self::CocoSkillLearnReviewThrottle => "COCO_SKILL_LEARN_REVIEW_THROTTLE",
             Self::CocoSkillLearnCuratorDisable => "COCO_SKILL_LEARN_CURATOR_DISABLE",
             Self::CocoServerMaxSessions => "COCO_SERVER_MAX_SESSIONS",
-            Self::CocoServerMaxSurfacesPerConnection => "COCO_SERVER_MAX_SURFACES_PER_CONNECTION",
-            Self::CocoServerMaxPassiveSurfacesPerSession => {
-                "COCO_SERVER_MAX_PASSIVE_SURFACES_PER_SESSION"
+            Self::CocoServerMaxAttachedSessionsPerConnection => {
+                "COCO_SERVER_MAX_ATTACHED_SESSIONS_PER_CONNECTION"
             }
+            Self::CocoServerMaxConnectionsPerSession => "COCO_SERVER_MAX_CONNECTIONS_PER_SESSION",
             Self::CocoServerEventRetentionPerSession => "COCO_SERVER_EVENT_RETENTION_PER_SESSION",
             Self::CocoServerOutboundQueueFrames => "COCO_SERVER_OUTBOUND_QUEUE_FRAMES",
+            Self::CocoServerRequestTimeoutSecs => "COCO_SERVER_REQUEST_TIMEOUT_SECS",
             Self::CocoServerTurnDrainTimeoutSecs => "COCO_SERVER_TURN_DRAIN_TIMEOUT_SECS",
             Self::CocoServerShutdownTimeoutSecs => "COCO_SERVER_SHUTDOWN_TIMEOUT_SECS",
             Self::CocoServerProjectServicesIdleTtlSecs => {
