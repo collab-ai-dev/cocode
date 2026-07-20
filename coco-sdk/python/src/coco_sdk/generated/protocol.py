@@ -25,7 +25,6 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 
 SessionId = str
-SurfaceId = str
 TurnId = str
 
 
@@ -250,6 +249,16 @@ class ErrorCode(str, Enum):
     system_reminder = "system_reminder"
     hook_blocked = "hook_blocked"
     unknown = "unknown"
+
+
+class ExitPlanChoice(str, Enum):
+    yes_auto_clear_context = "yes-auto-clear-context"
+    yes_bypass_permissions = "yes-bypass-permissions"
+    yes_accept_edits = "yes-accept-edits"
+    yes_accept_edits_keep_context = "yes-accept-edits-keep-context"
+    yes_resume_auto_mode = "yes-resume-auto-mode"
+    yes_default_keep_context = "yes-default-keep-context"
+    no = "no"
 
 
 class ExitPlanModeOutcome(str, Enum):
@@ -722,7 +731,7 @@ AttachmentExtras = Union[
 
 ConfigReadTarget = Union["str", "dict[str, SessionTarget]"]
 
-ConfigWriteTarget = Union["str", "dict[str, InteractiveTarget]"]
+ConfigWriteTarget = Union["str", "dict[str, SessionTarget]"]
 
 # Top-level JSON-RPC 2.0 message.
 JsonRpcMessage = Union[
@@ -742,6 +751,9 @@ Message = Union[
 
 # Tool-specific payload for permission UIs.
 PermissionRequestDetail = dict[str, Any]
+
+# Tool-specific trusted metadata attached to a permission approval.
+PermissionResolutionDetail = dict[str, Any]
 
 # Request identifier. Can be a string or integer per JSON-RPC 2.0.
 RequestId = int | str
@@ -1078,7 +1090,7 @@ class ClientRequestTurnStart(BaseModel):
 class ClientRequestTurnInterrupt(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["turn/interrupt"] = Field(default="turn/interrupt", alias="method")
-    params: InteractiveTarget
+    params: SessionTarget
 
 
 class ClientRequestTaskList(BaseModel):
@@ -1170,7 +1182,7 @@ class ClientRequestControlResetSessionPermissionRules(BaseModel):
     method: Literal["control/resetSessionPermissionRules"] = Field(
         default="control/resetSessionPermissionRules", alias="method"
     )
-    params: InteractiveTarget
+    params: SessionTarget
 
 
 class ClientRequestControlStopTask(BaseModel):
@@ -1202,7 +1214,7 @@ class ClientRequestControlBackgroundAllTasks(BaseModel):
     method: Literal["control/backgroundAllTasks"] = Field(
         default="control/backgroundAllTasks", alias="method"
     )
-    params: InteractiveTarget
+    params: SessionTarget
 
 
 class ClientRequestControlKeepAlive(BaseModel):
@@ -1275,13 +1287,13 @@ class ClientRequestMcpToggle(BaseModel):
 class ClientRequestPluginReload(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["plugin/reload"] = Field(default="plugin/reload", alias="method")
-    params: InteractiveTarget
+    params: SessionTarget
 
 
 class ClientRequestHookReload(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["hook/reload"] = Field(default="hook/reload", alias="method")
-    params: InteractiveTarget
+    params: SessionTarget
 
 
 class ClientRequestConfigApplyFlags(BaseModel):
@@ -2502,24 +2514,6 @@ ServerRequest = Annotated[
         ServerRequestMcpRequestElicitation,
     ],
     Field(discriminator="method"),
-]
-
-
-class SessionCloseTargetInteractive(BaseModel):
-    model_config = {"populate_by_name": True}
-    kind: Literal["interactive"] = Field(default="interactive", alias="kind")
-    target: InteractiveTarget
-
-
-class SessionCloseTargetOrphaned(BaseModel):
-    model_config = {"populate_by_name": True}
-    kind: Literal["orphaned"] = Field(default="orphaned", alias="kind")
-    target: SessionTarget
-
-
-SessionCloseTarget = Annotated[
-    Union[SessionCloseTargetInteractive, SessionCloseTargetOrphaned],
-    Field(discriminator="kind"),
 ]
 
 
@@ -4301,12 +4295,15 @@ class AskForApprovalParams(BaseModel):
     tool_use_id: str
     agent_id: str | None = None
     blocked_path: str | None = None
+    choices: list[PermissionAskChoice] | None = None
     cwd: str | None = None
     decision_reason: str | None = None
     description: str | None = None
+    detail: PermissionRequestDetail | None = None
     display_name: str | None = None
     permission_suggestions: list[Any] | None = None
     title: str | None = None
+    worker_badge: WorkerBadge | None = None
 
 
 class HookCallbackParams(BaseModel):
@@ -4425,21 +4422,22 @@ class HookCallbackOutput(BaseModel):
 
 class AgentInterruptCurrentWorkParams(BaseModel):
     agent_id: str
-    target: InteractiveTarget
+    target: SessionTarget
 
 
 class ApplyPermissionUpdateParams(BaseModel):
-    target: InteractiveTarget
+    target: SessionTarget
     update: PermissionUpdate
 
 
 class ApprovalResolveParams(BaseModel):
     decision: ApprovalDecision
     request_id: str
-    target: InteractiveTarget
+    target: SessionTarget
     content_blocks: list[Any] | None = None
     feedback: str | None = None
-    permission_update: PermissionUpdate | None = None
+    permission_updates: list[PermissionUpdate] | None = None
+    resolution_detail: PermissionResolutionDetail | None = None
     updated_input: dict[str, Any] | None = None
 
 
@@ -4450,7 +4448,7 @@ class CancelRequestParams(BaseModel):
 
 class ConfigApplyFlagsParams(BaseModel):
     settings: dict[str, Any]
-    target: InteractiveTarget
+    target: SessionTarget
 
 
 class ConfigReadParams(BaseModel):
@@ -4467,7 +4465,7 @@ class ElicitationResolveParams(BaseModel):
     approved: bool
     mcp_server_name: str
     request_id: str
-    target: InteractiveTarget
+    target: SessionTarget
     values: dict[str, Any] = {}
 
 
@@ -4499,35 +4497,30 @@ class InitializeParams(BaseModel):
     prompt_suggestions: bool | None = None
 
 
-class InteractiveTarget(BaseModel):
-    session_id: SessionId
-    surface_id: SurfaceId
-
-
 class McpReconnectParams(BaseModel):
     server_name: str
-    target: InteractiveTarget
+    target: SessionTarget
 
 
 class McpSetServersParams(BaseModel):
     servers: dict[str, Any]
-    target: InteractiveTarget
+    target: SessionTarget
 
 
 class McpToggleParams(BaseModel):
     enabled: bool
     server_name: str
-    target: InteractiveTarget
+    target: SessionTarget
 
 
 class RewindFilesParams(BaseModel):
-    target: InteractiveTarget
+    target: SessionTarget
     user_message_id: str
     dry_run: bool = False
 
 
 class SessionCloseParams(BaseModel):
-    target: SessionCloseTarget
+    target: SessionTarget
 
 
 class SessionDeleteParams(BaseModel):
@@ -4547,7 +4540,7 @@ class SessionRenameParams(BaseModel):
 
 class SessionReplaceParams(BaseModel):
     destination: SessionReplacement
-    source: InteractiveTarget
+    source: SessionTarget
 
 
 class SessionResumeParams(BaseModel):
@@ -4592,12 +4585,12 @@ class SessionTurnsListParams(BaseModel):
 
 
 class SetAgentColorParams(BaseModel):
-    target: InteractiveTarget
+    target: SessionTarget
     color: AgentColorName | None = None
 
 
 class SetModelParams(BaseModel):
-    target: InteractiveTarget
+    target: SessionTarget
     model: str | None = None
 
 
@@ -4605,22 +4598,22 @@ class SetModelRoleParams(BaseModel):
     model_id: str
     provider: str
     role: ModelRole
-    target: InteractiveTarget
+    target: SessionTarget
     effort: ReasoningEffort | None = None
 
 
 class SetPermissionModeParams(BaseModel):
     mode: PermissionMode
-    target: InteractiveTarget
+    target: SessionTarget
 
 
 class SetThinkingParams(BaseModel):
-    target: InteractiveTarget
+    target: SessionTarget
     thinking_level: ThinkingLevel | None = None
 
 
 class StopTaskParams(BaseModel):
-    target: InteractiveTarget
+    target: SessionTarget
     task_id: str
 
 
@@ -4632,8 +4625,7 @@ class TaskDetailParams(BaseModel):
 class TurnStartParams(BaseModel):
     composer: SubmittedComposer
     prompt: str
-    target: InteractiveTarget
-    history_override: list[Any] | None = None
+    target: SessionTarget
     images: list[QueuedCommandEditImage] | None = None
     model_selection: ProviderModelSelection | None = None
     permission_mode: PermissionMode | None = None
@@ -4643,13 +4635,13 @@ class TurnStartParams(BaseModel):
 
 class UpdateEnvParams(BaseModel):
     env: dict[str, str]
-    target: InteractiveTarget
+    target: SessionTarget
 
 
 class UserInputResolveParams(BaseModel):
     answer: str
     request_id: str
-    target: InteractiveTarget
+    target: SessionTarget
 
 
 # ---------------------------------------------------------------------------
@@ -4962,7 +4954,7 @@ class TurnInterruptRequest(BaseModel):
     method: Literal["turn/interrupt"] = Field(default="turn/interrupt")
     params: TurnInterruptRequestParams
 
-    class TurnInterruptRequestParams(InteractiveTarget):
+    class TurnInterruptRequestParams(SessionTarget):
         pass
 
 
@@ -5116,7 +5108,7 @@ class ResetSessionPermissionRulesRequest(BaseModel):
     )
     params: ResetSessionPermissionRulesRequestParams
 
-    class ResetSessionPermissionRulesRequestParams(InteractiveTarget):
+    class ResetSessionPermissionRulesRequestParams(SessionTarget):
         pass
 
 
@@ -5168,7 +5160,7 @@ class BackgroundAllTasksRequest(BaseModel):
     )
     params: BackgroundAllTasksRequestParams
 
-    class BackgroundAllTasksRequestParams(InteractiveTarget):
+    class BackgroundAllTasksRequestParams(SessionTarget):
         pass
 
 
@@ -5306,7 +5298,7 @@ class PluginReloadRequest(BaseModel):
     method: Literal["plugin/reload"] = Field(default="plugin/reload")
     params: PluginReloadRequestParams
 
-    class PluginReloadRequestParams(InteractiveTarget):
+    class PluginReloadRequestParams(SessionTarget):
         pass
 
 
@@ -5318,7 +5310,7 @@ class HookReloadRequest(BaseModel):
     method: Literal["hook/reload"] = Field(default="hook/reload")
     params: HookReloadRequestParams
 
-    class HookReloadRequestParams(InteractiveTarget):
+    class HookReloadRequestParams(SessionTarget):
         pass
 
 
@@ -6388,7 +6380,6 @@ class SessionReadResult(BaseModel):
 
 class SessionResumeResult(BaseModel):
     session: SessionSummary
-    surface_id: SurfaceId
 
 
 class SessionSearchHit(BaseModel):
@@ -6410,7 +6401,6 @@ class SessionStartInput(BaseModel):
 
 class SessionStartResult(BaseModel):
     session_id: SessionId
-    surface_id: SurfaceId
 
 
 class SessionUsageSourceEntry(BaseModel):

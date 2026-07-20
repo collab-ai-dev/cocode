@@ -29,8 +29,9 @@ fn test_parse_settings_accepts_server_unix_socket_path() {
                 "websocket_bind": "127.0.0.1:7777",
                 "named_pipe_name": "\\\\.\\pipe\\coco-sdk",
                 "max_sessions": 12,
-                "max_surfaces_per_connection": 4,
-                "max_passive_surfaces_per_session": 10,
+                "max_attached_sessions_per_connection": 3,
+                "max_connections_per_session": 5,
+                "server_request_timeout_secs": 900,
                 "turn_drain_timeout_secs": 15
             }
         }"#,
@@ -50,8 +51,12 @@ fn test_parse_settings_accepts_server_unix_socket_path() {
         Some(r"\\.\pipe\coco-sdk")
     );
     assert_eq!(settings.server.max_sessions, Some(12));
-    assert_eq!(settings.server.max_surfaces_per_connection, Some(4));
-    assert_eq!(settings.server.max_passive_surfaces_per_session, Some(10));
+    assert_eq!(
+        settings.server.max_attached_sessions_per_connection,
+        Some(3)
+    );
+    assert_eq!(settings.server.max_connections_per_session, Some(5));
+    assert_eq!(settings.server.server_request_timeout_secs, Some(900));
     assert_eq!(settings.server.turn_drain_timeout_secs, Some(15));
 }
 

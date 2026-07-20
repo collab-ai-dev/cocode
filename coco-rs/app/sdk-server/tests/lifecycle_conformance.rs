@@ -16,9 +16,9 @@ use coco_agent_host::{
 use coco_app_server_transport::{JsonRpcFrame, JsonRpcId, JsonRpcNotification, JsonRpcRequest};
 use coco_sdk_server::{InMemoryTransport, SdkServer, SdkTransport};
 use coco_types::{
-    ClientRequestMethod, InitializeParams, InteractiveTarget, SessionCloseParams,
-    SessionCloseTarget, SessionReadParams, SessionReadResult, SessionResumeParams,
-    SessionResumeResult, SessionStartParams, SessionStartResult, SessionTarget,
+    ClientRequestMethod, InitializeParams, SessionCloseParams, SessionReadParams,
+    SessionReadResult, SessionResumeParams, SessionResumeResult, SessionStartParams,
+    SessionStartResult, SessionTarget,
 };
 
 struct Fixture {
@@ -183,11 +183,10 @@ async fn sdk_stdio_shares_start_read_close_lifecycle_contract() {
         .await,
         "sdk stdio session/start",
     );
-    let surface_id = started.surface_id.clone();
     let live = fixture.server.list_live_sessions();
     assert_eq!(live.len(), 1);
     assert_eq!(live[0].session_id, started.session_id);
-    assert_eq!(live[0].surface_counts.attached, 1);
+    assert_eq!(live[0].connection_counts.full, 1);
 
     let read: SessionReadResult = json_rpc_success(
         request(
@@ -217,11 +216,8 @@ async fn sdk_stdio_shares_start_read_close_lifecycle_contract() {
             &mut notifications,
             ClientRequestMethod::SessionClose,
             SessionCloseParams {
-                target: SessionCloseTarget::Interactive {
-                    target: InteractiveTarget {
-                        session_id: started.session_id.clone(),
-                        surface_id,
-                    },
+                target: SessionTarget {
+                    session_id: started.session_id.clone(),
                 },
             },
             "sdk stdio session/close",
@@ -259,7 +255,6 @@ async fn sdk_stdio_shares_start_read_close_lifecycle_contract() {
         "sdk stdio session/resume",
     );
     assert_eq!(resumed.session.session_id, started.session_id);
-    let resumed_surface_id = resumed.surface_id.clone();
     let resumed_read: SessionReadResult = json_rpc_success(
         request(
             &fixture.client,
@@ -291,11 +286,8 @@ async fn sdk_stdio_shares_start_read_close_lifecycle_contract() {
             &mut notifications,
             ClientRequestMethod::SessionClose,
             SessionCloseParams {
-                target: SessionCloseTarget::Interactive {
-                    target: InteractiveTarget {
-                        session_id: started.session_id.clone(),
-                        surface_id: resumed_surface_id,
-                    },
+                target: SessionTarget {
+                    session_id: started.session_id.clone(),
                 },
             },
             "sdk stdio resumed session/close",

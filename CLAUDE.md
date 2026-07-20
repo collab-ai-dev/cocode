@@ -300,7 +300,7 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 | `sdk-server` | SDK JSON-RPC/NDJSON adapter: stdio/sidecar transport, outbound writer, callback correlation, and AppServer bridge wiring |
 | `runtime` | Transport-independent process/project resources, workspace paths, and session bootstrap contracts |
 | `server` | Multi-session lifecycle/routing registry plus local and JSON-RPC adapters |
-| `server-client` | Remote AppServer JSON-RPC client, per-surface demux, and transport owners; independent of the server implementation |
+| `server-client` | Remote AppServer JSON-RPC client, per-session demux, and transport owners; independent of the server implementation |
 | `server-transport` | JSON-RPC framing and concrete stream/listener transports |
 | `tui` | Terminal UI shell (TEA + rust-i18n): owns `AppState` and the AppState→Line projection; drives `coco-tui-ui` for painting |
 | `tui-ui` (top-level crate) | Pure, domain-free presentational layer: scrollback paint engine, widgets, theme; no `AppState`, no i18n (seam-guarded) |

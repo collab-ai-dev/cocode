@@ -22,6 +22,7 @@ use super::handler_error_mapping::{
 };
 use super::request_targeting::resolve_request_runtime;
 use super::runtime_replacement_gate::require_runtime_replacement;
+use super::session_connections::subscribe_local_app_server_session;
 use super::session_data::{LocalSessionDataRequest, LocalSessionDataView};
 use super::session_local_operations::apply_local_session_operation;
 use super::session_operation_input::LocalSessionOperation;
@@ -32,7 +33,6 @@ use super::session_request_mapping::{
 };
 use super::session_resume_operation::resume_app_server_session_with_runtime_replacement;
 use super::session_start_operation::start_app_server_session_with_runtime_replacement;
-use super::session_surfaces::subscribe_local_app_server_session;
 use super::{AppServerHostState, HandlerContext};
 
 /// Runtime-backed request handler for AppServer adapters.
@@ -53,13 +53,7 @@ enum RequestOrigin {
 }
 
 fn targeted_session_id(request: &ClientRequest) -> Option<&coco_types::SessionId> {
-    if let ClientRequest::SessionClose(params) = request {
-        return Some(params.target.session_id());
-    }
-    request
-        .interactive_target()
-        .map(|target| &target.session_id)
-        .or_else(|| request.session_target().map(|target| &target.session_id))
+    request.session_target().map(|target| &target.session_id)
 }
 
 impl AppServerHostHandler {
@@ -201,11 +195,40 @@ impl AppServerHostHandler {
         if let (Some(app_server), Some(session_data_request)) =
             (local_app_server.clone(), session_data_request)
         {
+            if let Some(target) = request.session_target()
+                && let Err(error) = app_server.validate_session_grant(
+                    connection,
+                    target,
+                    coco_types::SessionAccess::ReadOnly,
+                )
+            {
+                return Box::pin(async move {
+                    Err(super::session_errors::app_server_lifecycle_error(
+                        "read session data",
+                        error,
+                    ))
+                });
+            }
             let state = Arc::clone(&self.state);
             return Box::pin(async move {
                 LocalSessionDataView { app_server, state }
                     .handle(&session_data_request)
                     .await
+            });
+        }
+        if let (Some(app_server), ClientRequest::SessionDelete(params)) =
+            (local_app_server.as_ref(), &request)
+            && let Err(error) = app_server.validate_session_grant(
+                connection,
+                &params.target,
+                coco_types::SessionAccess::Full,
+            )
+        {
+            return Box::pin(async move {
+                Err(super::session_errors::app_server_lifecycle_error(
+                    "validate delete grant",
+                    error,
+                ))
             });
         }
         if let (Some(app_server), ClientRequest::SessionStart(params)) =
@@ -285,6 +308,7 @@ impl AppServerHostHandler {
             state: Arc::clone(&self.state),
             connection_profile,
             app_server: local_app_server,
+            connection: Some(connection),
             target_session_id,
             session,
         };

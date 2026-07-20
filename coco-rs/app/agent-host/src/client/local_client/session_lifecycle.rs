@@ -1,6 +1,6 @@
 use super::*;
 
-impl<H: Clone> LocalServerClient<H> {
+impl<H: Clone + Send + Sync + 'static> LocalServerClient<H> {
     pub async fn initialize<Handler>(
         &self,
         handler: &Handler,
@@ -44,7 +44,6 @@ impl<H: Clone> LocalServerClient<H> {
         let started = self.session_start(handler, params).await?;
         Ok(LocalSessionClient {
             session_id: started.session_id,
-            surface_id: started.surface_id,
         })
     }
 
@@ -71,7 +70,6 @@ impl<H: Clone> LocalServerClient<H> {
         let resumed = self.session_resume(handler, params).await?;
         Ok(LocalSessionClient {
             session_id: resumed.session.session_id,
-            surface_id: resumed.surface_id,
         })
     }
 
@@ -132,15 +130,10 @@ impl<H: Clone> LocalServerClient<H> {
         Handler: LocalClientRequestHandler,
     {
         let params = SessionCloseParams {
-            target: SessionCloseTarget::Interactive {
-                target: session.interactive_target(),
-            },
+            target: session.session_target(),
         };
         match self.session_close(handler, params).await {
-            Ok(()) => {
-                self.purge_surface_buffers(&session.surface_id);
-                Ok(())
-            }
+            Ok(()) => Ok(()),
             Err(error) => Err((session, error)),
         }
     }
@@ -158,7 +151,7 @@ impl<H: Clone> LocalServerClient<H> {
             .session_replace(
                 handler,
                 coco_types::SessionReplaceParams {
-                    source: session.interactive_target(),
+                    source: session.session_target(),
                     destination: coco_types::SessionReplacement::Fresh(params),
                 },
             )
@@ -166,7 +159,6 @@ impl<H: Clone> LocalServerClient<H> {
         {
             Ok(replaced) => Ok(LocalSessionClient {
                 session_id: replaced.session_id,
-                surface_id: replaced.surface_id,
             }),
             Err(error) => Err((session, error)),
         }
@@ -185,7 +177,7 @@ impl<H: Clone> LocalServerClient<H> {
             .session_replace(
                 handler,
                 coco_types::SessionReplaceParams {
-                    source: session.interactive_target(),
+                    source: session.session_target(),
                     destination: coco_types::SessionReplacement::Resume(params.target),
                 },
             )
@@ -193,7 +185,6 @@ impl<H: Clone> LocalServerClient<H> {
         {
             Ok(replaced) => Ok(LocalSessionClient {
                 session_id: replaced.session_id,
-                surface_id: replaced.surface_id,
             }),
             Err(error) => Err((session, error)),
         }
@@ -211,7 +202,7 @@ impl<H: Clone> LocalServerClient<H> {
             .session_replace(
                 handler,
                 coco_types::SessionReplaceParams {
-                    source: session.interactive_target(),
+                    source: session.session_target(),
                     destination: coco_types::SessionReplacement::Clear,
                 },
             )
@@ -219,7 +210,6 @@ impl<H: Clone> LocalServerClient<H> {
         {
             Ok(replaced) => Ok(LocalSessionClient {
                 session_id: replaced.session_id,
-                surface_id: replaced.surface_id,
             }),
             Err(error) => Err((session, error)),
         }

@@ -27,7 +27,7 @@ SDK client must reply via the corresponding `ClientRequest` variant.",
     variants = {
         /// Ask the SDK client to approve or deny a tool use.
         /// Expected response: `ClientRequest::ApprovalResolve`.
-        "approval/askForApproval" => AskForApproval(AskForApprovalParams),
+        "approval/askForApproval" => AskForApproval(Box<AskForApprovalParams>),
         /// Ask the user a question via the SDK client (e.g. multiple choice).
         /// Expected response: `ClientRequest::UserInputResolve`.
         "input/requestUserInput" => RequestUserInput(RequestUserInputParams),
@@ -80,6 +80,12 @@ pub struct AskForApprovalParams {
     /// Suggested permission updates the SDK can present to the user.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permission_suggestions: Vec<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choices: Option<Vec<crate::PermissionAskChoice>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<crate::PermissionRequestDetail>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_badge: Option<crate::WorkerBadge>,
 }
 
 /// Ask the SDK to request user input (free-form or choice-list).
@@ -650,12 +656,11 @@ pub struct SessionTurnsListResult {
     pub has_more: bool,
 }
 
-/// Response to passive `ClientRequest::SessionSubscribe`.
+/// Response to read-only `ClientRequest::SessionSubscribe`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSubscribeResult {
     pub session_id: crate::SessionId,
-    pub surface_id: crate::SurfaceId,
     #[serde(default)]
     pub replayed: Vec<SessionSubscribeEnvelope>,
 }
@@ -686,9 +691,6 @@ pub struct SessionSubscribeEnvelope {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionResumeResult {
     pub session: SessionSummary,
-    /// The interactive surface attached by a successful resume. Required: a
-    /// successful lifecycle call always attaches an interactive surface.
-    pub surface_id: crate::SurfaceId,
 }
 
 /// Response to `ClientRequest::SessionStart`.
@@ -699,18 +701,13 @@ pub struct SessionResumeResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStartResult {
     pub session_id: crate::SessionId,
-    /// The interactive surface attached by a successful start. Required: a
-    /// successful lifecycle call always attaches an interactive surface.
-    pub surface_id: crate::SurfaceId,
 }
 
-/// Response to explicit `session/replace`. The source surface keeps its
-/// identity and is atomically repointed to the destination session.
+/// Response to explicit `session/replace`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionReplaceResult {
     pub session_id: crate::SessionId,
-    pub surface_id: crate::SurfaceId,
 }
 
 /// Response to `ClientRequest::TurnStart`.

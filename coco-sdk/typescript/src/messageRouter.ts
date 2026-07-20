@@ -4,7 +4,7 @@ import type { JsonObject, Transport } from "./transport.js";
 
 const JSONRPC_VERSION = "2.0";
 
-export type ServerRequestHandler = (message: JsonObject) => Promise<boolean>;
+export type ServerRequestHandler = (message: JsonObject, signal: AbortSignal) => Promise<boolean>;
 
 type Pending = {
   resolve(value: JsonObject): void;
@@ -16,6 +16,7 @@ export class MessageRouter {
   private readonly ignoredResponses = new Set<number | string>();
   private readonly earlyResponses = new Map<number | string, JsonObject | Error>();
   private readonly events = new AsyncQueue<JsonObject>();
+  private readonly serverRequestControllers = new Map<number | string, AbortController>();
   private closed = false;
   private reader?: Promise<void>;
 
@@ -29,34 +30,44 @@ export class MessageRouter {
   }
 
   async close(): Promise<void> {
-    this.closed = true;
     this.failAll(new TransportClosedError("transport closed"));
     await this.transport.close();
+    await this.reader;
   }
 
   async request(request: ClientRequest): Promise<JsonObject> {
     const id = this.transport.nextRequestId();
-    if (this.closed && !this.earlyResponses.has(id)) {
-      throw new TransportClosedError("transport closed");
-    }
-    const result = new Promise<JsonObject>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-    });
-    await this.sendTypedRequest(id, request);
     const early = this.earlyResponses.get(id);
     if (early) {
       this.earlyResponses.delete(id);
-      this.pending.delete(id);
+      await this.sendTypedRequest(id, request);
       if (early instanceof Error) throw early;
       return early;
     }
-    return result;
+    if (this.closed) {
+      throw new TransportClosedError("transport closed");
+    }
+    const response = new Promise<JsonObject>((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+    });
+    try {
+      const [, result] = await Promise.all([this.sendTypedRequest(id, request), response]);
+      return result;
+    } catch (error) {
+      this.pending.delete(id);
+      throw error;
+    }
   }
 
   async notify(request: ClientRequest): Promise<void> {
     const id = this.transport.nextRequestId();
     this.ignoredResponses.add(id);
-    await this.sendTypedRequest(id, request);
+    try {
+      await this.sendTypedRequest(id, request);
+    } catch (error) {
+      this.ignoredResponses.delete(id);
+      throw error;
+    }
   }
 
   async respond(id: number | string, result: unknown): Promise<void> {
@@ -100,7 +111,19 @@ export class MessageRouter {
         } else if ("id" in message && "method" in message) {
           void this.routeServerRequest(message);
         } else if ("method" in message) {
-          this.events.push(message);
+          if (message.method === "control/cancelRequest") {
+            const params = (message.params ?? {}) as JsonObject;
+            const requestId = params.request_id as number | string | undefined;
+            if (requestId !== undefined) {
+              // Purge the correlation entry immediately — a handler that
+              // never settles must not leak it until close.
+              const controller = this.serverRequestControllers.get(requestId);
+              this.serverRequestControllers.delete(requestId);
+              controller?.abort();
+            }
+          } else {
+            this.events.push(message);
+          }
         } else {
           throw new ProcessError(`invalid JSON-RPC message from coco: ${JSON.stringify(message)}`);
         }
@@ -147,35 +170,45 @@ export class MessageRouter {
 
   private async routeServerRequest(message: JsonObject): Promise<void> {
     const id = message.id as number | string | undefined;
+    if (id === undefined) return;
+    const controller = new AbortController();
+    this.serverRequestControllers.set(id, controller);
     try {
-      const handled = this.serverRequestHandler ? await this.serverRequestHandler(message) : false;
-      if (!handled && id !== undefined) {
+      const handled = this.serverRequestHandler
+        ? await this.serverRequestHandler(message, controller.signal)
+        : false;
+      if (controller.signal.aborted) return;
+      if (!handled) {
         await this.respondError(id, `unsupported server request: ${String(message.method ?? "")}`, -32601);
       }
     } catch (error) {
+      // A handler that honors the AbortSignal by rejecting (e.g.
+      // `signal.throwIfAborted()`) is benign on the losing side of a
+      // broadcast — swallow it: no error reply, no event-loop error.
+      if (controller.signal.aborted) return;
       try {
-        if (id !== undefined) {
-          await this.respondError(
-            id,
-            error instanceof Error ? error.message : String(error),
-            -32603,
-          );
-          return;
-        }
+        await this.respondError(
+          id,
+          error instanceof Error ? error.message : String(error),
+          -32603,
+        );
       } catch (replyError) {
         this.events.pushError(replyError instanceof Error ? replyError : new Error(String(replyError)));
-        return;
       }
-      this.events.pushError(error instanceof Error ? error : new Error(String(error)));
+    } finally {
+      this.serverRequestControllers.delete(id);
     }
   }
 
   private failAll(error: Error): void {
+    if (this.closed) return;
     this.closed = true;
     for (const pending of this.pending.values()) {
       pending.reject(error);
     }
     this.pending.clear();
+    for (const controller of this.serverRequestControllers.values()) controller.abort();
+    this.serverRequestControllers.clear();
     this.events.pushError(error);
   }
 }

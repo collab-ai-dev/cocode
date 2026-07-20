@@ -17,17 +17,16 @@ use coco_agent_host::{
     },
 };
 use coco_app_server::{
-    AppServer, AttachSurfaceOptions, JsonRpcConnectionHandlerFactory, LocalClientAdapter,
-    LocalClientSubscribeOutcome, SurfaceCapability,
+    AppServer, AttachSessionOptions, JsonRpcConnectionHandlerFactory, LocalClientAdapter,
+    LocalClientSubscribeOutcome,
 };
 use coco_app_server_client::ClientError;
 use coco_app_server_transport::{JsonRpcFrame, JsonRpcId, JsonRpcNotification, JsonRpcRequest};
 use coco_types::{
     ClientRequestMethod, ConfigWriteParams, ConfigWriteTarget, CoreEvent, HookCallbackMatcher,
-    HookEventType, InitializeParams, InteractiveTarget, ServerNotification, SessionCloseParams,
-    SessionCloseTarget, SessionDeleteParams, SessionEnvelope, SessionReadParams, SessionReadResult,
-    SessionResumeParams, SessionResumeResult, SessionStartParams, SessionStartResult, SessionState,
-    SessionTarget,
+    HookEventType, InitializeParams, ServerNotification, SessionCloseParams, SessionDeleteParams,
+    SessionEnvelope, SessionReadParams, SessionReadResult, SessionResumeParams,
+    SessionResumeResult, SessionStartParams, SessionStartResult, SessionState, SessionTarget,
 };
 use tokio::sync::mpsc;
 
@@ -652,12 +651,12 @@ impl coco_app_runtime::BootstrapSource for IsolatedTestBootstrapSource {
 }
 
 fn spawn_client_mcp_responder(
-    mut requests: mpsc::Receiver<coco_types::ServerRequestDelivery>,
+    mut client: LocalServerClient<AppSessionHandle>,
     server: Arc<AppServer<AppSessionHandle>>,
     expected_server: &'static str,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        while let Some(delivery) = requests.recv().await {
+        while let Some(delivery) = client.next_server_request().await {
             let coco_types::ServerRequest::McpRouteMessage(params) = delivery.request else {
                 continue;
             };
@@ -689,9 +688,9 @@ fn spawn_client_mcp_responder(
             };
             server
                 .resolve_server_request(
-                    &InteractiveTarget {
+                    client.connection_key(),
+                    &SessionTarget {
                         session_id: delivery.session_id,
-                        surface_id: delivery.surface_id,
                     },
                     coco_app_server::ServerRequestReply::McpRouteMessage {
                         request_id: delivery.request_id.as_display(),
@@ -1072,9 +1071,8 @@ async fn shortcut_turns_emit_terminal_session_result_and_accounting() {
         .session_start(&fixture.handler, SessionStartParams::default())
         .await
         .expect("start shortcut session");
-    let target = InteractiveTarget {
+    let target = SessionTarget {
         session_id: started.session_id.clone(),
-        surface_id: started.surface_id.clone(),
     };
 
     let cost_prompt = coco_commands::handlers::cost::handler(String::new())
@@ -1086,7 +1084,6 @@ async fn shortcut_turns_emit_terminal_session_result_and_accounting() {
             coco_types::TurnStartParams {
                 target: target.clone(),
                 prompt: cost_prompt,
-                history_override: Vec::new(),
                 images: Vec::new(),
                 composer: Default::default(),
                 slash_metadata: None,
@@ -1119,7 +1116,6 @@ async fn shortcut_turns_emit_terminal_session_result_and_accounting() {
             coco_types::TurnStartParams {
                 target: target.clone(),
                 prompt: compact_prompt,
-                history_override: Vec::new(),
                 images: Vec::new(),
                 composer: Default::default(),
                 slash_metadata: None,
@@ -1144,12 +1140,7 @@ async fn shortcut_turns_emit_terminal_session_result_and_accounting() {
     );
 
     client
-        .session_close(
-            &fixture.handler,
-            SessionCloseParams {
-                target: SessionCloseTarget::Interactive { target },
-            },
-        )
+        .session_close(&fixture.handler, SessionCloseParams { target })
         .await
         .expect("close shortcut session");
     let final_result = fixture
@@ -1169,7 +1160,7 @@ async fn shortcut_turns_emit_terminal_session_result_and_accounting() {
 }
 
 #[tokio::test]
-async fn one_connection_holds_two_independent_interactive_authorities() {
+async fn one_connection_holds_two_independent_full_session_grants() {
     let fixture = fixture().await;
     let client = LocalServerClient::connect_local(&fixture.adapter);
     let first = client
@@ -1182,12 +1173,11 @@ async fn one_connection_holds_two_independent_interactive_authorities() {
         .expect("start B");
 
     assert_ne!(first.session_id, second.session_id);
-    assert_ne!(first.surface_id, second.surface_id);
     let live = fixture.server.list_live_sessions();
     assert_eq!(live.len(), 2);
     assert!(
         live.iter()
-            .all(|summary| summary.surface_counts.attached == 1)
+            .all(|summary| summary.connection_counts.total() == 1)
     );
 }
 
@@ -1275,14 +1265,15 @@ async fn session_start_rejects_existing_live_id_without_mutation() {
     );
 
     // The original session is untouched: exactly one live session with its
-    // single interactive surface; the duplicate start left no new slot and
-    // attached no second surface.
+    // single Full attachment; the duplicate start left no new slot and
+    // attached no second connection.
     let live = fixture.server.list_live_sessions();
     assert_eq!(live.len(), 1, "duplicate start must not create a slot");
     assert_eq!(live[0].session_id, chosen);
     assert_eq!(
-        live[0].surface_counts.attached, 1,
-        "duplicate start must not attach a second surface"
+        live[0].connection_counts.total(),
+        1,
+        "duplicate start must not attach a second connection"
     );
 }
 
@@ -1363,12 +1354,11 @@ async fn lifecycle_conformance_start_read_close(surface: LifecycleConformanceSur
     let started = client
         .session_start(&fixture, SessionStartParams::default())
         .await;
-    let surface_id = started.surface_id.clone();
 
     let live = fixture.server.list_live_sessions();
     assert_eq!(live.len(), 1, "{} live session count", surface.label());
     assert_eq!(live[0].session_id, started.session_id);
-    assert_eq!(live[0].surface_counts.attached, 1);
+    assert_eq!(live[0].connection_counts.total(), 1);
 
     let read = client
         .session_read(
@@ -1388,11 +1378,8 @@ async fn lifecycle_conformance_start_read_close(surface: LifecycleConformanceSur
         .session_close(
             &fixture,
             SessionCloseParams {
-                target: SessionCloseTarget::Interactive {
-                    target: InteractiveTarget {
-                        session_id: started.session_id.clone(),
-                        surface_id,
-                    },
+                target: SessionTarget {
+                    session_id: started.session_id.clone(),
                 },
             },
         )
@@ -1423,18 +1410,14 @@ async fn lifecycle_conformance_resume(surface: LifecycleConformanceSurface) {
     let started = client
         .session_start(&fixture, SessionStartParams::default())
         .await;
-    let surface_id = started.surface_id.clone();
     append_durable_transcript_seed(&fixture, &started.session_id, &seed_text);
 
     client
         .session_close(
             &fixture,
             SessionCloseParams {
-                target: SessionCloseTarget::Interactive {
-                    target: InteractiveTarget {
-                        session_id: started.session_id.clone(),
-                        surface_id,
-                    },
+                target: SessionTarget {
+                    session_id: started.session_id.clone(),
                 },
             },
         )
@@ -1457,7 +1440,6 @@ async fn lifecycle_conformance_resume(surface: LifecycleConformanceSurface) {
         )
         .await;
     assert_eq!(resumed.session.session_id, started.session_id);
-    let resumed_surface_id = resumed.surface_id.clone();
     let live = fixture.server.list_live_sessions();
     assert_eq!(
         live.len(),
@@ -1466,7 +1448,7 @@ async fn lifecycle_conformance_resume(surface: LifecycleConformanceSurface) {
         surface.label()
     );
     assert_eq!(live[0].session_id, started.session_id);
-    assert_eq!(live[0].surface_counts.attached, 1);
+    assert_eq!(live[0].connection_counts.total(), 1);
 
     let read = client
         .session_read(
@@ -1493,11 +1475,8 @@ async fn lifecycle_conformance_resume(surface: LifecycleConformanceSurface) {
         .session_close(
             &fixture,
             SessionCloseParams {
-                target: SessionCloseTarget::Interactive {
-                    target: InteractiveTarget {
-                        session_id: started.session_id.clone(),
-                        surface_id: resumed_surface_id,
-                    },
+                target: SessionTarget {
+                    session_id: started.session_id.clone(),
                 },
             },
         )
@@ -1544,13 +1523,11 @@ async fn one_connection_runtime_isolation_scenario() {
         )
         .await
         .expect("start B");
-    let target_a = InteractiveTarget {
+    let target_a = SessionTarget {
         session_id: first.session_id.clone(),
-        surface_id: first.surface_id.clone(),
     };
-    let target_b = InteractiveTarget {
+    let target_b = SessionTarget {
         session_id: second.session_id.clone(),
-        surface_id: second.surface_id.clone(),
     };
 
     for (target, prompt) in [
@@ -1563,7 +1540,6 @@ async fn one_connection_runtime_isolation_scenario() {
                 coco_types::TurnStartParams {
                     target,
                     prompt: prompt.to_string(),
-                    history_override: Vec::new(),
                     images: Vec::new(),
                     composer: Default::default(),
                     slash_metadata: None,
@@ -1624,13 +1600,11 @@ async fn one_connection_runtime_isolation_scenario() {
         .get(&second.session_id)
         .expect("B runtime")
         .into_session();
-    let target_a = InteractiveTarget {
+    let target_a = SessionTarget {
         session_id: first.session_id.clone(),
-        surface_id: first.surface_id.clone(),
     };
-    let target_b = InteractiveTarget {
+    let target_b = SessionTarget {
         session_id: second.session_id.clone(),
-        surface_id: second.surface_id.clone(),
     };
     client
         .set_model(
@@ -1876,18 +1850,12 @@ async fn one_connection_runtime_isolation_scenario() {
 #[tokio::test]
 async fn two_initialized_connections_keep_profiles_runtimes_and_writers_isolated() {
     let fixture = fixture().await;
-    let mut client_a = LocalServerClient::connect_local(&fixture.adapter);
-    let mut client_b = LocalServerClient::connect_local(&fixture.adapter);
-    let responder_a = spawn_client_mcp_responder(
-        client_a.take_server_requests(),
-        Arc::clone(&fixture.server),
-        "mcp-a",
-    );
-    let responder_b = spawn_client_mcp_responder(
-        client_b.take_server_requests(),
-        Arc::clone(&fixture.server),
-        "mcp-b",
-    );
+    let client_a = LocalServerClient::connect_local(&fixture.adapter);
+    let client_b = LocalServerClient::connect_local(&fixture.adapter);
+    let responder_a =
+        spawn_client_mcp_responder(client_a.clone(), Arc::clone(&fixture.server), "mcp-a");
+    let responder_b =
+        spawn_client_mcp_responder(client_b.clone(), Arc::clone(&fixture.server), "mcp-b");
     let handler_a = fixture
         .handler
         .open(coco_app_server::ConnectionKey::generate());
@@ -1939,12 +1907,10 @@ async fn two_initialized_connections_keep_profiles_runtimes_and_writers_isolated
         .expect("start B");
     let make_turn =
         |started: &coco_types::SessionStartResult, prompt: &str| coco_types::TurnStartParams {
-            target: InteractiveTarget {
+            target: SessionTarget {
                 session_id: started.session_id.clone(),
-                surface_id: started.surface_id.clone(),
             },
             prompt: prompt.to_string(),
-            history_override: Vec::new(),
             images: Vec::new(),
             composer: Default::default(),
             slash_metadata: None,
@@ -1973,18 +1939,6 @@ async fn two_initialized_connections_keep_profiles_runtimes_and_writers_isolated
         .get(&second.session_id)
         .expect("B runtime")
         .into_session();
-    assert!(
-        runtime_a
-            .callback_requirements()
-            .hook_callback_ids
-            .is_empty()
-    );
-    assert!(
-        runtime_b
-            .callback_requirements()
-            .hook_callback_ids
-            .is_empty()
-    );
     assert_eq!(runtime_a.original_cwd(), &cwd_a);
     assert_eq!(runtime_b.original_cwd(), &cwd_b);
     assert_eq!(
@@ -2043,17 +1997,18 @@ async fn two_initialized_connections_keep_profiles_runtimes_and_writers_isolated
             .expect("initialized turn completes");
     }
     drop(observations);
-    client_a.disconnect();
-    client_b.disconnect();
+    client_a.close();
+    client_b.close();
     let closer = LocalServerClient::connect_local(&fixture.adapter);
     for session_id in [first.session_id, second.session_id] {
+        closer
+            .attach_full_session(session_id.clone())
+            .expect("attach closer");
         closer
             .session_close(
                 &fixture.handler,
                 SessionCloseParams {
-                    target: SessionCloseTarget::Orphaned {
-                        target: coco_types::SessionTarget { session_id },
-                    },
+                    target: coco_types::SessionTarget { session_id },
                 },
             )
             .await
@@ -2064,11 +2019,7 @@ async fn two_initialized_connections_keep_profiles_runtimes_and_writers_isolated
 }
 
 #[tokio::test]
-async fn cross_connection_surface_authority_is_rejected_without_mutation() {
-    cross_connection_surface_authority_scenario().await;
-}
-
-async fn cross_connection_surface_authority_scenario() {
+async fn connection_must_attach_before_mutating_a_session() {
     let fixture = fixture().await;
     let owner = LocalServerClient::connect_local(&fixture.adapter);
     let attacker = LocalServerClient::connect_local(&fixture.adapter);
@@ -2076,67 +2027,87 @@ async fn cross_connection_surface_authority_scenario() {
         .session_start(&fixture.handler, SessionStartParams::default())
         .await
         .expect("start owner session");
-    let target = InteractiveTarget {
+    let target = SessionTarget {
         session_id: started.session_id.clone(),
-        surface_id: started.surface_id.clone(),
     };
 
     let error = attacker
         .turn_interrupt(&fixture.handler, target)
         .await
-        .expect_err("foreign connection cannot use surface");
+        .expect_err("an unattached connection cannot mutate the session");
     let ClientError::Server { data, .. } = error else {
         panic!("expected typed server error");
     };
     assert_eq!(
         data.and_then(|value| value.get("kind").cloned()),
-        Some(serde_json::json!("surface_wrong_connection"))
+        Some(serde_json::json!("session_not_attached"))
     );
     assert_eq!(fixture.server.list_live_sessions().len(), 1);
 }
 
 #[tokio::test]
-async fn mismatched_session_surface_pair_is_rejected_with_stable_kind() {
-    mismatched_session_surface_scenario().await;
-}
-
-async fn mismatched_session_surface_scenario() {
-    let fixture = fixture().await;
+async fn two_full_connections_can_control_the_same_session() {
+    let gate = Arc::new(TurnGate {
+        started: tokio::sync::Barrier::new(2),
+        release: tokio::sync::Semaphore::new(0),
+        ignore_cancel: false,
+        result_emission: TurnResultEmission::None,
+        drop_signal: None,
+    });
+    let fixture = fixture_with_turn_gate(Some(Arc::clone(&gate))).await;
     let owner = LocalServerClient::connect_local(&fixture.adapter);
-    let first = owner
+    let peer = LocalServerClient::connect_local(&fixture.adapter);
+    let started = owner
         .session_start(&fixture.handler, SessionStartParams::default())
         .await
-        .expect("start A");
-    let second = owner
-        .session_start(&fixture.handler, SessionStartParams::default())
-        .await
-        .expect("start B");
+        .expect("start session");
+    let peer_session = peer
+        .attach_full_session(started.session_id.clone())
+        .expect("attach peer");
 
-    let error = owner
-        .turn_interrupt(
+    owner
+        .turn_start(
             &fixture.handler,
-            InteractiveTarget {
-                session_id: second.session_id,
-                surface_id: first.surface_id.clone(),
+            coco_types::TurnStartParams {
+                target: SessionTarget {
+                    session_id: started.session_id.clone(),
+                },
+                prompt: "interrupt from peer".to_string(),
+                images: Vec::new(),
+                composer: Default::default(),
+                slash_metadata: None,
+                model_selection: None,
+                permission_mode: None,
+                thinking_level: None,
+                goal_continuation: false,
             },
         )
         .await
-        .expect_err("surface and session must be correlated");
-    let ClientError::Server { data, .. } = error else {
-        panic!("expected typed server error");
-    };
+        .expect("start turn");
+    gate.started.wait().await;
+    peer.turn_interrupt(&fixture.handler, peer_session.session_target())
+        .await
+        .expect("a second full connection may control the session");
     assert_eq!(
-        data.and_then(|value| value.get("kind").cloned()),
-        Some(serde_json::json!("surface_wrong_session"))
+        fixture.server.list_live_sessions()[0]
+            .connection_counts
+            .full,
+        2
+    );
+    assert!(
+        fixture
+            .turn_observations
+            .lock()
+            .await
+            .recv()
+            .await
+            .expect("turn observation")
+            .cancelled
     );
 }
 
 #[tokio::test]
-async fn passive_surface_cannot_issue_interactive_mutation() {
-    passive_surface_mutation_scenario().await;
-}
-
-async fn passive_surface_mutation_scenario() {
+async fn read_only_connection_cannot_mutate_a_session() {
     let fixture = fixture().await;
     let owner = LocalServerClient::connect_local(&fixture.adapter);
     let started = owner
@@ -2144,26 +2115,55 @@ async fn passive_surface_mutation_scenario() {
         .await
         .expect("start session");
     let observer = LocalServerClient::connect_local(&fixture.adapter);
-    let passive = observer
-        .attach_passive_session(started.session_id.clone())
-        .expect("attach passive surface");
+    let read_only = observer
+        .subscribe_session(started.session_id.clone(), Some(0))
+        .expect("subscribe read-only");
 
     let error = observer
         .turn_interrupt(
             &fixture.handler,
-            InteractiveTarget {
-                session_id: passive.session_id().clone(),
-                surface_id: passive.surface_id().clone(),
+            SessionTarget {
+                session_id: read_only.session_id().clone(),
             },
         )
         .await
-        .expect_err("passive surface has no mutation authority");
+        .expect_err("read-only access has no mutation authority");
     let ClientError::Server { data, .. } = error else {
         panic!("expected typed server error");
     };
     assert_eq!(
         data.and_then(|value| value.get("kind").cloned()),
-        Some(serde_json::json!("surface_not_interactive"))
+        Some(serde_json::json!("session_grant_read_only"))
+    );
+
+    owner
+        .session_close(
+            &fixture.handler,
+            SessionCloseParams {
+                target: SessionTarget {
+                    session_id: started.session_id.clone(),
+                },
+            },
+        )
+        .await
+        .expect("full owner closes session");
+    let error = observer
+        .session_delete(
+            &fixture.handler,
+            SessionDeleteParams {
+                target: SessionTarget {
+                    session_id: started.session_id,
+                },
+            },
+        )
+        .await
+        .expect_err("read-only grant cannot delete a closed session");
+    let ClientError::Server { data, .. } = error else {
+        panic!("expected typed server error");
+    };
+    assert_eq!(
+        data.and_then(|value| value.get("kind").cloned()),
+        Some(serde_json::json!("session_grant_read_only"))
     );
 }
 
@@ -2201,9 +2201,8 @@ async fn targeted_config_write_scenario() {
         .expect("start B");
 
     for (started, value) in [(first, true), (second, false)] {
-        let target = InteractiveTarget {
+        let target = SessionTarget {
             session_id: started.session_id,
-            surface_id: started.surface_id.clone(),
         };
         owner
             .config_write(
@@ -2258,7 +2257,7 @@ async fn targeted_config_write_scenario() {
 }
 
 #[tokio::test]
-async fn disconnected_session_is_closed_through_explicit_orphan_authority() {
+async fn disconnect_does_not_cancel_an_active_turn() {
     disconnected_orphan_lifecycle_scenario().await;
 }
 
@@ -2280,12 +2279,10 @@ async fn disconnected_orphan_lifecycle_scenario() {
         .turn_start(
             &fixture.handler,
             coco_types::TurnStartParams {
-                target: InteractiveTarget {
+                target: SessionTarget {
                     session_id: started.session_id.clone(),
-                    surface_id: started.surface_id.clone(),
                 },
                 prompt: "continue while orphaned".to_string(),
-                history_override: Vec::new(),
                 images: Vec::new(),
                 composer: Default::default(),
                 slash_metadata: None,
@@ -2298,29 +2295,7 @@ async fn disconnected_orphan_lifecycle_scenario() {
         .await
         .expect("start orphan turn");
     gate.started.wait().await;
-    let mut pending_callback = fixture
-        .server
-        .route_server_request_with_reply(
-            started.session_id.clone(),
-            SurfaceCapability::Interactive,
-            None,
-            coco_types::ServerRequest::RequestUserInput(coco_types::ServerRequestUserInputParams {
-                request_id: "orphan-turn-callback".to_string(),
-                prompt: "continue?".to_string(),
-                description: None,
-                choices: Vec::new(),
-                default: None,
-            }),
-        )
-        .expect("route callback before disconnect");
-    owner.disconnect();
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_secs(1), &mut pending_callback)
-            .await
-            .expect("callback fail-closed timeout")
-            .is_err(),
-        "orphan callback must fail closed"
-    );
+    owner.close();
     gate.release.add_permits(1);
     let observation = tokio::time::timeout(
         std::time::Duration::from_secs(5),
@@ -2336,18 +2311,19 @@ async fn disconnected_orphan_lifecycle_scenario() {
 
     let closer = LocalServerClient::connect_local(&fixture.adapter);
     closer
+        .attach_full_session(started.session_id.clone())
+        .expect("attach closer");
+    closer
         .session_close(
             &fixture.handler,
             SessionCloseParams {
-                target: SessionCloseTarget::Orphaned {
-                    target: coco_types::SessionTarget {
-                        session_id: started.session_id.clone(),
-                    },
+                target: coco_types::SessionTarget {
+                    session_id: started.session_id.clone(),
                 },
             },
         )
         .await
-        .expect("close orphan");
+        .expect("a new full connection closes the session");
     assert!(fixture.server.registry().get(&started.session_id).is_none());
 }
 
@@ -2371,9 +2347,8 @@ async fn close_timeout_aborts_active_turn_and_returns_structured_error() {
         .session_start(&fixture.handler, SessionStartParams::default())
         .await
         .expect("start timeout session");
-    let target = InteractiveTarget {
+    let target = SessionTarget {
         session_id: started.session_id.clone(),
-        surface_id: started.surface_id.clone(),
     };
     client
         .turn_start(
@@ -2381,7 +2356,6 @@ async fn close_timeout_aborts_active_turn_and_returns_structured_error() {
             coco_types::TurnStartParams {
                 target: target.clone(),
                 prompt: "hang until close timeout".to_string(),
-                history_override: Vec::new(),
                 images: Vec::new(),
                 composer: Default::default(),
                 slash_metadata: None,
@@ -2396,12 +2370,7 @@ async fn close_timeout_aborts_active_turn_and_returns_structured_error() {
     gate.started.wait().await;
 
     let error = client
-        .session_close(
-            &fixture.handler,
-            SessionCloseParams {
-                target: SessionCloseTarget::Interactive { target },
-            },
-        )
+        .session_close(&fixture.handler, SessionCloseParams { target })
         .await
         .expect_err("close must surface drain timeout");
     let ClientError::Server { data, .. } = error else {
@@ -2439,9 +2408,8 @@ async fn successful_close_has_no_late_session_events_after_completion() {
         .session_start(&fixture.handler, SessionStartParams::default())
         .await
         .expect("start close session");
-    let target = InteractiveTarget {
+    let target = SessionTarget {
         session_id: started.session_id.clone(),
-        surface_id: started.surface_id.clone(),
     };
 
     client
@@ -2450,7 +2418,6 @@ async fn successful_close_has_no_late_session_events_after_completion() {
             coco_types::TurnStartParams {
                 target: target.clone(),
                 prompt: "close should drain this turn".to_string(),
-                history_override: Vec::new(),
                 images: Vec::new(),
                 composer: Default::default(),
                 slash_metadata: None,
@@ -2465,12 +2432,7 @@ async fn successful_close_has_no_late_session_events_after_completion() {
     gate.started.wait().await;
 
     client
-        .session_close(
-            &fixture.handler,
-            SessionCloseParams {
-                target: SessionCloseTarget::Interactive { target },
-            },
-        )
+        .session_close(&fixture.handler, SessionCloseParams { target })
         .await
         .expect("close session");
 
@@ -2536,9 +2498,8 @@ async fn close_waits_for_inflight_turn_result_before_final_session_result() {
         .session_start(&fixture.handler, SessionStartParams::default())
         .await
         .expect("start accounting session");
-    let target = InteractiveTarget {
+    let target = SessionTarget {
         session_id: started.session_id.clone(),
-        surface_id: started.surface_id.clone(),
     };
 
     client
@@ -2547,7 +2508,6 @@ async fn close_waits_for_inflight_turn_result_before_final_session_result() {
             coco_types::TurnStartParams {
                 target: target.clone(),
                 prompt: "close should include in-flight accounting".to_string(),
-                history_override: Vec::new(),
                 images: Vec::new(),
                 composer: Default::default(),
                 slash_metadata: None,
@@ -2562,12 +2522,7 @@ async fn close_waits_for_inflight_turn_result_before_final_session_result() {
     gate.started.wait().await;
 
     client
-        .session_close(
-            &fixture.handler,
-            SessionCloseParams {
-                target: SessionCloseTarget::Interactive { target },
-            },
-        )
+        .session_close(&fixture.handler, SessionCloseParams { target })
         .await
         .expect("close session");
 
@@ -2604,9 +2559,8 @@ async fn embedded_turn_result_is_accounted_without_standalone_session_result() {
         .session_start(&fixture.handler, SessionStartParams::default())
         .await
         .expect("start embedded-result session");
-    let target = InteractiveTarget {
+    let target = SessionTarget {
         session_id: started.session_id.clone(),
-        surface_id: started.surface_id.clone(),
     };
 
     let turn = client
@@ -2615,7 +2569,6 @@ async fn embedded_turn_result_is_accounted_without_standalone_session_result() {
             coco_types::TurnStartParams {
                 target: target.clone(),
                 prompt: "embedded result only".to_string(),
-                history_override: Vec::new(),
                 images: Vec::new(),
                 composer: Default::default(),
                 slash_metadata: None,
@@ -2649,12 +2602,7 @@ async fn embedded_turn_result_is_accounted_without_standalone_session_result() {
     );
 
     client
-        .session_close(
-            &fixture.handler,
-            SessionCloseParams {
-                target: SessionCloseTarget::Interactive { target },
-            },
-        )
+        .session_close(&fixture.handler, SessionCloseParams { target })
         .await
         .expect("close embedded-result session");
     let final_result = fixture
@@ -2690,9 +2638,8 @@ async fn embedded_and_standalone_turn_result_is_accounted_once() {
         .session_start(&fixture.handler, SessionStartParams::default())
         .await
         .expect("start duplicate-result session");
-    let target = InteractiveTarget {
+    let target = SessionTarget {
         session_id: started.session_id.clone(),
-        surface_id: started.surface_id.clone(),
     };
 
     let turn = client
@@ -2701,7 +2648,6 @@ async fn embedded_and_standalone_turn_result_is_accounted_once() {
             coco_types::TurnStartParams {
                 target: target.clone(),
                 prompt: "embedded and standalone result".to_string(),
-                history_override: Vec::new(),
                 images: Vec::new(),
                 composer: Default::default(),
                 slash_metadata: None,
@@ -2725,12 +2671,7 @@ async fn embedded_and_standalone_turn_result_is_accounted_once() {
     assert_eq!(ended.turn_session_result_total_turns, Some(1));
 
     client
-        .session_close(
-            &fixture.handler,
-            SessionCloseParams {
-                target: SessionCloseTarget::Interactive { target },
-            },
-        )
+        .session_close(&fixture.handler, SessionCloseParams { target })
         .await
         .expect("close duplicate-result session");
     let final_result = fixture
@@ -2821,11 +2762,8 @@ async fn delete_rejects_live_session_and_close_preserves_transcript_until_delete
         .session_close(
             &fixture.handler,
             SessionCloseParams {
-                target: SessionCloseTarget::Interactive {
-                    target: InteractiveTarget {
-                        session_id: started.session_id.clone(),
-                        surface_id: started.surface_id.clone(),
-                    },
+                target: SessionTarget {
+                    session_id: started.session_id.clone(),
                 },
             },
         )
@@ -2860,17 +2798,25 @@ async fn delete_rejects_live_session_and_close_preserves_transcript_until_delete
         )
         .await
         .expect("delete closed session");
-    client
+    let read_after_delete_error = client
         .session_read(
             &fixture.handler,
             SessionReadParams {
-                target: delete_target,
+                target: delete_target.clone(),
                 cursor: None,
                 limit: None,
             },
         )
         .await
         .expect_err("delete removes transcript");
+    let ClientError::Server { data, .. } = read_after_delete_error else {
+        panic!("expected typed server error");
+    };
+    assert_eq!(
+        data.and_then(|value| value.get("kind").cloned()),
+        Some(serde_json::json!("session_grant_missing")),
+        "delete revokes every grant for the removed identity"
+    );
     assert!(
         !transcript_path.exists(),
         "session/delete must remove the transcript file"
@@ -2878,7 +2824,7 @@ async fn delete_rejects_live_session_and_close_preserves_transcript_until_delete
 }
 
 #[tokio::test]
-async fn orphan_close_rejects_owned_session_before_turn_or_runtime_side_effects() {
+async fn second_full_connection_can_close_a_session_with_an_active_turn() {
     let gate = Arc::new(TurnGate {
         started: tokio::sync::Barrier::new(2),
         release: tokio::sync::Semaphore::new(0),
@@ -2892,9 +2838,8 @@ async fn orphan_close_rejects_owned_session_before_turn_or_runtime_side_effects(
         .session_start(&fixture.handler, SessionStartParams::default())
         .await
         .expect("start owned session");
-    let target = InteractiveTarget {
+    let target = SessionTarget {
         session_id: started.session_id.clone(),
-        surface_id: started.surface_id.clone(),
     };
     owner
         .turn_start(
@@ -2902,7 +2847,6 @@ async fn orphan_close_rejects_owned_session_before_turn_or_runtime_side_effects(
             coco_types::TurnStartParams {
                 target,
                 prompt: "must survive rejected orphan close".to_string(),
-                history_override: Vec::new(),
                 images: Vec::new(),
                 composer: Default::default(),
                 slash_metadata: None,
@@ -2919,29 +2863,21 @@ async fn orphan_close_rejects_owned_session_before_turn_or_runtime_side_effects(
         .expect("turn reaches barrier");
 
     let closer = LocalServerClient::connect_local(&fixture.adapter);
-    let error = closer
+    closer
+        .attach_full_session(started.session_id.clone())
+        .expect("attach closer");
+    closer
         .session_close(
             &fixture.handler,
             SessionCloseParams {
-                target: SessionCloseTarget::Orphaned {
-                    target: coco_types::SessionTarget {
-                        session_id: started.session_id.clone(),
-                    },
+                target: coco_types::SessionTarget {
+                    session_id: started.session_id.clone(),
                 },
             },
         )
         .await
-        .expect_err("owned session is not orphan authority");
-    let ClientError::Server { data, .. } = error else {
-        panic!("expected typed server error");
-    };
-    assert_eq!(
-        data.and_then(|value| value.get("kind").cloned()),
-        Some(serde_json::json!("interactive_owner_conflict"))
-    );
-    assert!(fixture.server.registry().get(&started.session_id).is_some());
-
-    gate.release.add_permits(1);
+        .expect("second full connection closes the session");
+    assert!(fixture.server.registry().get(&started.session_id).is_none());
     let observation = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         fixture.turn_observations.lock().await.recv(),
@@ -2949,22 +2885,24 @@ async fn orphan_close_rejects_owned_session_before_turn_or_runtime_side_effects(
     .await
     .expect("turn observation timeout")
     .expect("turn observation");
-    assert!(!observation.cancelled);
+    assert!(observation.cancelled);
 }
 
 #[tokio::test]
-async fn orphaning_cancels_pending_callback_and_rebind_cannot_resolve_it() {
+async fn pending_callback_survives_disconnect_and_a_new_full_connection_can_resolve_it() {
     let fixture = fixture().await;
     let mut owner = LocalServerClient::connect_local(&fixture.adapter);
     let started = owner
         .session_start(&fixture.handler, SessionStartParams::default())
         .await
         .expect("start callback session");
-    let mut pending_reply = fixture
+    let owner_session = owner
+        .attach_full_session(started.session_id.clone())
+        .expect("attach owner");
+    let pending_reply = fixture
         .server
         .route_server_request_with_reply(
             started.session_id.clone(),
-            SurfaceCapability::Interactive,
             None,
             coco_types::ServerRequest::RequestUserInput(coco_types::ServerRequestUserInputParams {
                 request_id: "payload-request-id".to_string(),
@@ -2976,65 +2914,51 @@ async fn orphaning_cancels_pending_callback_and_rebind_cannot_resolve_it() {
         )
         .expect("route callback");
     let delivery = owner
-        .server_requests_mut()
-        .recv()
+        .next_session_request(&owner_session)
         .await
         .expect("callback delivery");
 
-    owner.disconnect();
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_secs(1), &mut pending_reply)
-            .await
-            .expect("orphan callback cancellation timeout")
-            .is_err(),
-        "disconnect must fail the pending callback closed"
-    );
-
+    owner.close();
     let rebound = LocalServerClient::connect_local(&fixture.adapter);
-    let rebound_surface = rebound
-        .attach_interactive_session(started.session_id.clone(), AttachSurfaceOptions::default())
-        .expect("reattach orphaned session");
-    let error = rebound
+    let rebound_session = rebound
+        .attach_full_session(started.session_id.clone())
+        .expect("attach rebound connection");
+    rebound
         .user_input_resolve(
             &fixture.handler,
             coco_types::UserInputResolveParams {
-                target: rebound_surface.interactive_target(),
+                target: rebound_session.session_target(),
                 request_id: delivery.request_id.as_display(),
                 answer: "yes".to_string(),
             },
         )
         .await
-        .expect_err("rebound surface cannot resolve cancelled callback");
-    let ClientError::Server { data, .. } = error else {
-        panic!("expected typed server error");
-    };
-    assert_eq!(
-        data.and_then(|value| value.get("kind").cloned()),
-        Some(serde_json::json!("server_request_not_found"))
-    );
+        .expect("new full connection resolves pending callback");
+    assert!(matches!(
+        pending_reply.await.expect("pending callback result"),
+        coco_app_server::ServerRequestReply::UserInput(_)
+    ));
 }
 
 #[tokio::test]
-async fn callback_reply_cannot_cross_session_on_the_same_connection() {
-    callback_authority_matrix_scenario().await;
-}
-
-async fn callback_authority_matrix_scenario() {
+async fn server_request_is_broadcast_and_first_full_response_wins() {
     let fixture = fixture().await;
     let mut owner = LocalServerClient::connect_local(&fixture.adapter);
-    let first = owner
+    let mut peer = LocalServerClient::connect_local(&fixture.adapter);
+    let started = owner
         .session_start(&fixture.handler, SessionStartParams::default())
         .await
-        .expect("start callback owner A");
-    let second = owner
-        .session_start(&fixture.handler, SessionStartParams::default())
-        .await
-        .expect("start sibling B");
-    let mut pending_reply = fixture
+        .expect("start callback session");
+    let owner_session = owner
+        .attach_full_session(started.session_id.clone())
+        .expect("attach owner");
+    let peer_session = peer
+        .attach_full_session(started.session_id.clone())
+        .expect("attach peer");
+    let pending_reply = fixture
         .server
         .route_server_request_with_reply(
-            first.session_id.clone(),
-            SurfaceCapability::Interactive,
+            started.session_id.clone(),
             None,
             coco_types::ServerRequest::RequestUserInput(coco_types::ServerRequestUserInputParams {
                 request_id: "payload-request-id".to_string(),
@@ -3044,47 +2968,39 @@ async fn callback_authority_matrix_scenario() {
                 default: None,
             }),
         )
-        .expect("route callback to A");
-    let delivery = owner
-        .server_requests_mut()
-        .recv()
+        .expect("broadcast callback");
+    let owner_delivery = owner
+        .next_session_request(&owner_session)
         .await
-        .expect("callback delivery");
-    let target_a = InteractiveTarget {
-        session_id: first.session_id.clone(),
-        surface_id: first.surface_id.clone(),
-    };
-    let attacker = LocalServerClient::connect_local(&fixture.adapter);
-    let error = attacker
-        .user_input_resolve(
-            &fixture.handler,
-            coco_types::UserInputResolveParams {
-                target: target_a.clone(),
-                request_id: delivery.request_id.as_display(),
-                answer: "wrong connection".to_string(),
-            },
-        )
+        .expect("owner callback delivery");
+    let peer_delivery = peer
+        .next_session_request(&peer_session)
         .await
-        .expect_err("foreign connection cannot resolve A callback");
-    let ClientError::Server { data, .. } = error else {
-        panic!("expected typed server error");
-    };
-    assert_eq!(
-        data.and_then(|value| value.get("kind").cloned()),
-        Some(serde_json::json!("surface_wrong_connection"))
-    );
+        .expect("peer callback delivery");
+    assert_eq!(owner_delivery.request_id, peer_delivery.request_id);
+
+    peer.user_input_resolve(
+        &fixture.handler,
+        coco_types::UserInputResolveParams {
+            target: peer_session.session_target(),
+            request_id: peer_delivery.request_id.as_display(),
+            answer: "peer won".to_string(),
+        },
+    )
+    .await
+    .expect("peer resolves callback first");
 
     let error = owner
         .user_input_resolve(
             &fixture.handler,
             coco_types::UserInputResolveParams {
-                target: target_a.clone(),
-                request_id: "wrong-request-id".to_string(),
-                answer: "wrong request".to_string(),
+                target: owner_session.session_target(),
+                request_id: owner_delivery.request_id.as_display(),
+                answer: "owner was late".to_string(),
             },
         )
         .await
-        .expect_err("wrong request id cannot resolve A callback");
+        .expect_err("the second response loses");
     let ClientError::Server { data, .. } = error else {
         panic!("expected typed server error");
     };
@@ -3092,67 +3008,6 @@ async fn callback_authority_matrix_scenario() {
         data.and_then(|value| value.get("kind").cloned()),
         Some(serde_json::json!("server_request_not_found"))
     );
-
-    let error = owner
-        .user_input_resolve(
-            &fixture.handler,
-            coco_types::UserInputResolveParams {
-                target: InteractiveTarget {
-                    session_id: first.session_id.clone(),
-                    surface_id: coco_types::SurfaceId::from("forged-surface"),
-                },
-                request_id: delivery.request_id.as_display(),
-                answer: "wrong surface".to_string(),
-            },
-        )
-        .await
-        .expect_err("foreign surface cannot resolve A callback");
-    let ClientError::Server { data, .. } = error else {
-        panic!("expected typed server error");
-    };
-    assert_eq!(
-        data.and_then(|value| value.get("kind").cloned()),
-        Some(serde_json::json!("surface_not_attached"))
-    );
-
-    let error = owner
-        .user_input_resolve(
-            &fixture.handler,
-            coco_types::UserInputResolveParams {
-                target: InteractiveTarget {
-                    session_id: second.session_id,
-                    surface_id: second.surface_id.clone(),
-                },
-                request_id: delivery.request_id.as_display(),
-                answer: "wrong session".to_string(),
-            },
-        )
-        .await
-        .expect_err("B cannot resolve A callback");
-    let ClientError::Server { data, .. } = error else {
-        panic!("expected typed server error");
-    };
-    assert_eq!(
-        data.and_then(|value| value.get("kind").cloned()),
-        Some(serde_json::json!("server_request_wrong_session"))
-    );
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(50), &mut pending_reply)
-            .await
-            .is_err(),
-        "rejected sibling reply must keep A callback pending"
-    );
-    owner
-        .user_input_resolve(
-            &fixture.handler,
-            coco_types::UserInputResolveParams {
-                target: target_a,
-                request_id: delivery.request_id.as_display(),
-                answer: "correct".to_string(),
-            },
-        )
-        .await
-        .expect("owning target resolves callback");
     let resolved = pending_reply.await.expect("pending callback result");
     assert!(matches!(
         resolved,
@@ -3161,11 +3016,89 @@ async fn callback_authority_matrix_scenario() {
 }
 
 #[tokio::test]
-async fn orphan_resume_enforces_callback_requirements_before_rebinding() {
-    orphan_resume_callback_requirements_scenario().await;
+async fn session_start_client_hook_is_routed_after_full_attachment() {
+    let fixture = fixture().await;
+    let client = LocalServerClient::connect_local(&fixture.adapter);
+    let handler = fixture
+        .handler
+        .open(coco_app_server::ConnectionKey::generate());
+    client
+        .initialize(
+            handler.as_ref(),
+            InitializeParams {
+                hooks: Some(std::collections::HashMap::from([(
+                    HookEventType::SessionStart,
+                    vec![HookCallbackMatcher {
+                        matcher: None,
+                        hook_callback_ids: vec!["session-start-callback".to_string()],
+                        timeout: None,
+                    }],
+                )])),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("initialize session-start callback");
+
+    let start_client = client.clone();
+    let start_handler = Arc::clone(&handler);
+    let mut start = tokio::spawn(async move {
+        start_client
+            .session_start(start_handler.as_ref(), SessionStartParams::default())
+            .await
+    });
+    let mut requests = client.clone();
+    let delivery = tokio::select! {
+        delivery = requests.next_server_request() => {
+            delivery.expect("connection closed before session/start hook callback")
+        }
+        result = &mut start => {
+            panic!("session/start completed before its hook callback was routed: {result:?}");
+        }
+        () = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+            panic!("session/start hook callback was not routed");
+        }
+    };
+    let coco_types::ServerRequest::HookCallback(params) = &delivery.request else {
+        panic!("expected hook/callback, got {:?}", delivery.request);
+    };
+    assert_eq!(params.callback_id, "session-start-callback");
+    assert_eq!(params.event_type, HookEventType::SessionStart);
+    assert_eq!(
+        fixture.server.connection_callback_owner(
+            &delivery.session_id,
+            &coco_app_server::ConnectionCallback::Hook(params.callback_id.clone()),
+        ),
+        Some(client.connection_key())
+    );
+
+    fixture
+        .server
+        .resolve_server_request_for_connection(
+            client.connection_key(),
+            &delivery.session_id,
+            &delivery.request_id,
+            coco_app_server::ServerRequestReply::HookCallback {
+                request_id: delivery.request_id.as_display(),
+                result: serde_json::to_value(coco_types::HookCallbackResult::default())
+                    .expect("encode empty hook result"),
+            },
+        )
+        .expect("resolve session/start hook callback");
+    let started = tokio::time::timeout(std::time::Duration::from_secs(1), start)
+        .await
+        .expect("session/start did not finish after hook reply")
+        .expect("session/start task panicked")
+        .expect("session/start failed");
+    assert_eq!(started.session_id, delivery.session_id);
 }
 
-async fn orphan_resume_callback_requirements_scenario() {
+#[tokio::test]
+async fn full_connection_without_callbacks_can_resume_live_session_without_stealing_callback() {
+    concurrent_full_resume_keeps_callback_owner_scenario().await;
+}
+
+async fn concurrent_full_resume_keeps_callback_owner_scenario() {
     let fixture = fixture().await;
     let make_profile = |callback: Option<&str>| InitializeParams {
         hooks: callback.map(|callback| {
@@ -3227,50 +3160,24 @@ async fn orphan_resume_callback_requirements_scenario() {
             },
         )
         .expect("seed resumable transcript");
-    owner.disconnect();
-
-    let incompatible = LocalServerClient::connect_local(&fixture.adapter);
-    let incompatible_handler = fixture
-        .handler
-        .open(coco_app_server::ConnectionKey::generate());
-    incompatible
-        .initialize(incompatible_handler.as_ref(), make_profile(None))
-        .await
-        .expect("initialize incompatible connection");
-    let error = incompatible
-        .session_resume(
-            incompatible_handler.as_ref(),
-            coco_types::SessionResumeParams {
-                target: coco_types::SessionTarget {
-                    session_id: started.session_id.clone(),
-                },
-                plan_mode_instructions: None,
-            },
-        )
-        .await
-        .expect_err("missing callback capability must reject orphan resume");
-    let ClientError::Server { data, .. } = error else {
-        panic!("expected typed server error");
-    };
     assert_eq!(
-        data.and_then(|value| value.get("kind").cloned()),
-        Some(serde_json::json!("connection_profile_mismatch"))
+        fixture.server.connection_callback_owner(
+            &started.session_id,
+            &coco_app_server::ConnectionCallback::Hook("required-callback".to_string()),
+        ),
+        Some(owner.connection_key())
     );
 
-    let compatible = LocalServerClient::connect_local(&fixture.adapter);
-    let compatible_handler = fixture
+    let peer = LocalServerClient::connect_local(&fixture.adapter);
+    let peer_handler = fixture
         .handler
         .open(coco_app_server::ConnectionKey::generate());
-    compatible
-        .initialize(
-            compatible_handler.as_ref(),
-            make_profile(Some("required-callback")),
-        )
+    peer.initialize(peer_handler.as_ref(), make_profile(None))
         .await
-        .expect("initialize compatible connection");
-    let resumed = compatible
+        .expect("initialize callback-free peer");
+    let resumed = peer
         .session_resume(
-            compatible_handler.as_ref(),
+            peer_handler.as_ref(),
             coco_types::SessionResumeParams {
                 target: coco_types::SessionTarget {
                     session_id: started.session_id.clone(),
@@ -3279,8 +3186,22 @@ async fn orphan_resume_callback_requirements_scenario() {
             },
         )
         .await
-        .expect("compatible profile rebinds orphan");
+        .expect("callback-free peer receives an independent full grant");
     assert_eq!(resumed.session.session_id, started.session_id);
+    assert_eq!(
+        fixture.server.list_live_sessions()[0]
+            .connection_counts
+            .full,
+        2
+    );
+    assert_eq!(
+        fixture.server.connection_callback_owner(
+            &started.session_id,
+            &coco_app_server::ConnectionCallback::Hook("required-callback".to_string()),
+        ),
+        Some(owner.connection_key()),
+        "adding a full peer must not transfer connection-owned callbacks"
+    );
 }
 
 #[tokio::test]
@@ -3314,9 +3235,12 @@ async fn event_replay_identity_scenario() {
             }),
         ));
         let observer = fixture.adapter.connect();
-        let LocalClientSubscribeOutcome::Attached(subscription) = observer
-            .subscribe_surface(session_id.clone(), Some(0), AttachSurfaceOptions::default())
-            .expect("subscribe with replay")
+        let Ok(LocalClientSubscribeOutcome::Attached(subscription)) =
+            observer.handle().subscribe_session(
+                session_id.clone(),
+                Some(0),
+                AttachSessionOptions::read_only(),
+            )
         else {
             panic!("expected retained replay");
         };
@@ -3370,11 +3294,8 @@ async fn reload_supervisors_coexist_and_close_reaps_only_the_target_runtime() {
         .session_close(
             &fixture.handler,
             SessionCloseParams {
-                target: SessionCloseTarget::Interactive {
-                    target: InteractiveTarget {
-                        session_id: first.session_id,
-                        surface_id: first.surface_id.clone(),
-                    },
+                target: SessionTarget {
+                    session_id: first.session_id,
                 },
             },
         )
@@ -3391,9 +3312,8 @@ async fn reload_supervisors_coexist_and_close_reaps_only_the_target_runtime() {
         .session_replace(
             &fixture.handler,
             coco_types::SessionReplaceParams {
-                source: InteractiveTarget {
+                source: SessionTarget {
                     session_id: second.session_id.clone(),
-                    surface_id: second.surface_id.clone(),
                 },
                 destination: coco_types::SessionReplacement::Fresh(SessionStartParams::default()),
             },
@@ -3416,15 +3336,25 @@ async fn reload_supervisors_coexist_and_close_reaps_only_the_target_runtime() {
 #[tokio::test]
 async fn slow_consumer_disconnects_whole_connection_and_both_sessions_replay_cleanly() {
     let fixture = fixture().await;
-    let stalled = LocalServerClient::connect_local(&fixture.adapter);
-    let first = stalled
+    let starter = LocalServerClient::connect_local(&fixture.adapter);
+    let first = starter
         .session_start(&fixture.handler, SessionStartParams::default())
         .await
         .expect("start A");
-    let second = stalled
+    let second = starter
         .session_start(&fixture.handler, SessionStartParams::default())
         .await
         .expect("start B");
+    starter.close();
+    let stalled = fixture.adapter.connect();
+    stalled
+        .handle()
+        .attach_session(first.session_id.clone(), AttachSessionOptions::full())
+        .expect("attach first stalled session");
+    stalled
+        .handle()
+        .attach_session(second.session_id.clone(), AttachSessionOptions::full())
+        .expect("attach second stalled session");
     for seq in 1..=9 {
         for session_id in [&first.session_id, &second.session_id] {
             fixture.server.route_envelope(SessionEnvelope::durable(
@@ -3443,15 +3373,18 @@ async fn slow_consumer_disconnects_whole_connection_and_both_sessions_replay_cle
             .server
             .list_live_sessions()
             .iter()
-            .all(|summary| summary.surface_counts.attached == 0),
+            .all(|summary| summary.connection_counts.total() == 0),
         "overflow must disconnect the connection and orphan both sessions"
     );
 
     for session_id in [first.session_id, second.session_id] {
         let observer = fixture.adapter.connect();
-        let LocalClientSubscribeOutcome::Attached(subscription) = observer
-            .subscribe_surface(session_id.clone(), Some(0), AttachSurfaceOptions::default())
-            .expect("reconnect with replay")
+        let Ok(LocalClientSubscribeOutcome::Attached(subscription)) =
+            observer.handle().subscribe_session(
+                session_id.clone(),
+                Some(0),
+                AttachSessionOptions::read_only(),
+            )
         else {
             panic!("retention should cover the complete disconnected interval");
         };
@@ -3495,12 +3428,10 @@ async fn concurrent_shutdown_scenario() {
             .turn_start(
                 &fixture.handler,
                 coco_types::TurnStartParams {
-                    target: InteractiveTarget {
+                    target: SessionTarget {
                         session_id: started.session_id.clone(),
-                        surface_id: started.surface_id.clone(),
                     },
                     prompt: "shutdown-concurrency".to_string(),
-                    history_override: Vec::new(),
                     images: Vec::new(),
                     composer: Default::default(),
                     slash_metadata: None,

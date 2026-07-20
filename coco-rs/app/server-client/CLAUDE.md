@@ -1,7 +1,7 @@
 # coco-app-server-client
 
 Remote typed client for AppServer. `lib.rs` owns the JSON-RPC/session core and
-public error mapping, `remote_demux.rs` owns surface/lifecycle
+public error mapping, `remote_demux.rs` owns session/lifecycle
 demultiplexing, and `remote_transport.rs` owns NDJSON/WebSocket connection
 tasks and dialing. In-process client composition lives in
 `coco-agent-host::local_client`.
@@ -12,31 +12,29 @@ tasks and dialing. In-process client composition lives in
   and general-purpose async/serde libraries — never the server
   implementation. Cross-crate server/client integration tests live in
   agent-host, which intentionally depends on both sides.
-- Surface event, lifecycle, and server-request delivery DTOs are owned by
+- Session event, lifecycle, and server-request delivery DTOs are owned by
   `coco-types`; client and server share them with no compatibility wrapper.
-  Lifecycle delivery is `SurfaceLifecycleEffect` directly, one `surface_id`.
+  Lifecycle delivery is `SessionLifecycleEffect` and all routing keys use the
+  session id.
 - `RemoteJsonRpcClient` owns client-side JSON-RPC request-id generation,
   pending-response correlation, and replies to server-initiated requests.
   Its typed helpers (session lifecycle/read, turn, task, approval/user-input/
   elicitation resolve, initialize, config/runtime-control, MCP, plugin/hook
   reload, context usage) are thin wrappers over canonical `ClientRequest`
   variants decoding existing `coco-types` result DTOs.
-- **Per-request targeting is implemented:** `RemoteSessionClient` helpers set
-  `params.target = self.interactive_target()` on turn and runtime-control
-  requests, so one connection can control multiple interactive sessions.
+- `RemoteSessionClient` helpers set `params.target = self.session_target()` on
+  turn and runtime-control requests, so one connection can control multiple
+  Full-access sessions.
 - `RemoteSessionClient` (query/interrupt/replace/close) and
-  `RemotePassiveSessionClient` (snapshots + events only) are immutable
-  handles reading through `RemoteEventDemux`. Start/resume helpers mint
-  handles directly from the required `surface_id` on the result DTO — a
-  successful lifecycle call always attaches an interactive surface, so there
-  is no optional-surface fallback.
+  `RemoteReadOnlySessionClient` (snapshots + events only) are immutable handles
+  reading through `RemoteEventDemux`. Start/resume establish Full access and
+  mint handles from the returned session id.
 - Replace/close **consume self** and return the original handle on failure so
-  callers cannot silently orphan a live session; neither handle is `Clone`,
-  making this type-enforced. Remote replace success calls
-  `RemoteEventDemux::purge_surface` on the replaced surface.
-- `subscribe_session` is the passive remote attach path: it returns a
-  `RemotePassiveSessionClient` only after AppServer actually attaches the
-  surface, preserving replayed envelopes on the handle. Snapshot-required
+  callers cannot silently lose track of a live session. Remote replace success
+  calls `RemoteEventDemux::purge_session` for the replaced session.
+- `subscribe_session` is the ReadOnly attach path: it returns a
+  `RemoteReadOnlySessionClient` only after AppServer records the grant,
+  preserving replayed envelopes on the handle. Snapshot-required
   replies map to `ClientError::SnapshotRequired` — **no fake handle is ever
   minted**; the caller reads a snapshot and subscribes again.
 - `RemoteConnectOptions` names outbound/event channel capacities plus an
@@ -55,8 +53,8 @@ tasks and dialing. In-process client composition lives in
   (insert/remove/drain) is non-await — so `Drop` can resolve pending futures
   without an async context.
 - `RemoteJsonRpcIncoming` decodes known `session/event` / `session/lifecycle`
-  notifications into typed surface deliveries, preserves unknown
-  notifications raw, and surfaces inbound server-initiated requests as
+  notifications into typed session deliveries, preserves unknown
+  notifications raw, and exposes inbound server-initiated requests as
   `RemoteJsonRpcEvent::ServerRequest` (these must not invalidate the
   connection — approval/user-input/MCP callbacks use this direction).
   **Error taxonomy:** notification payload decode failures (unknown
@@ -76,8 +74,8 @@ tasks and dialing. In-process client composition lives in
   (`InvalidRequest`, `InvalidParams`, `MethodNotFound`,
   `InternalServerError`); dialing failures are `ClientError::Connect` with
   transport error text preserved. Stable domain payloads with `data.kind`
-  map to narrower variants (`snapshot_required` -> `SnapshotRequired`,
-  `surface_limit` -> `SurfaceLimit`); unknown domain kinds stay
+  map to narrower variants (`snapshot_required` -> `SnapshotRequired`);
+  unknown domain kinds stay
   `ClientError::Domain { code, kind, message, data }`; unknown codes without
   a kind stay `ClientError::Server { code, message, data }`.
 - Transport owner loops: `RemoteNdjsonConnection::run` (caller-owned NDJSON
@@ -87,22 +85,22 @@ tasks and dialing. In-process client composition lives in
   `connect_named_pipe` (Windows), and `connect_websocket` all return the
   same `(client, owner, events)` shape as `connect_ndjson`; the caller owns
   spawning and supervising the owner.
-- `RemoteEventDemux` wraps the mixed event receiver: sync/async per-surface
+- `RemoteEventDemux` wraps the mixed event receiver: sync/async per-session
   event/lifecycle demux plus buffered server-request and raw-notification
-  access. `purge_surface` drops a surface's buffered events/lifecycle after
-  close/replace or a consumed `SessionEnded`. `RemoteSurfaceStream` is a
-  borrowed per-surface facade (no concurrent mutable reads across streams);
-  `RemoteOwnedSurfaceStream` owns the demux for single-surface callers while
-  still exposing it for server requests and other buffered surfaces.
+  access. `purge_session` drops a session's buffered events/lifecycle after
+  close/replace or a consumed `SessionEnded`.
+- `control/cancelRequest` removes the matching buffered server request before
+  any future consumer can answer it. The notification remains available so an
+  active SDK dispatcher can abort an already-running handler.
 
-## Per-surface buffer bound
+## Per-session buffer bound
 
-`RemoteEventDemux` caps each surface's buffered events/lifecycle at
-`MAX_BUFFERED_SURFACE_QUEUE`. Unlike the connection-scoped
+`RemoteEventDemux` caps each session's buffered events/lifecycle at
+`MAX_BUFFERED_SESSION_QUEUE`. Unlike the connection-scoped
 `server_requests` / `notifications` queues (bounded, drop-oldest + warn), it
 does **NOT** drop-oldest — an event stream is ordered and lifecycle drops
-desync surface state — so overflow means the caller is not draining a
-subscribed surface, and the demux disconnects (`disconnected = true`); the
+desync session state — so overflow means the caller is not draining a
+subscribed session, and the demux disconnects (`disconnected = true`); the
 caller reconnects and re-snapshots. `RemoteJsonRpcIncoming::handle_frame`
 applies the same policy at the connection events channel: `try_send`, and on
 a full channel `ClientError::SlowConsumer` routes through the

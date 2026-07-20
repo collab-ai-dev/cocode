@@ -1,15 +1,13 @@
 """Canonical turn builders for SDK-originated plain-text prompts."""
 
 from coco_sdk.generated.protocol import (
-    InteractiveTarget,
+    SessionTarget,
     SubmittedComposer,
     TurnStartRequest,
 )
 
 
-def build_plain_text_turn_start(
-    target: InteractiveTarget, prompt: str
-) -> TurnStartRequest:
+def build_plain_text_turn_start(target: SessionTarget, prompt: str) -> TurnStartRequest:
     """Build a turn with explicit empty atomic-composer metadata."""
     return TurnStartRequest(
         params=TurnStartRequest.TurnStartRequestParams(

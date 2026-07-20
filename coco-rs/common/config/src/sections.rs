@@ -53,10 +53,11 @@ const DEFAULT_RETRY_JITTER: f64 = 0.25;
 /// enough that the model doesn't stall forever on a stuck fetch.
 const DEFAULT_WEB_FETCH_TIMEOUT_SECS: i64 = 60;
 const DEFAULT_SERVER_MAX_SESSIONS: i64 = 32;
-const DEFAULT_SERVER_MAX_SURFACES_PER_CONNECTION: i64 = 8;
-const DEFAULT_SERVER_MAX_PASSIVE_SURFACES_PER_SESSION: i64 = 16;
+const DEFAULT_SERVER_MAX_ATTACHED_SESSIONS_PER_CONNECTION: i64 = 8;
+const DEFAULT_SERVER_MAX_CONNECTIONS_PER_SESSION: i64 = 16;
 const DEFAULT_SERVER_EVENT_RETENTION_PER_SESSION: i64 = 1024;
 const DEFAULT_SERVER_OUTBOUND_QUEUE_FRAMES: i64 = 1024;
+const DEFAULT_SERVER_REQUEST_TIMEOUT_SECS: i64 = 900;
 const DEFAULT_SERVER_TURN_DRAIN_TIMEOUT_SECS: i64 = 10;
 const DEFAULT_SERVER_SHUTDOWN_TIMEOUT_SECS: i64 = 30;
 const DEFAULT_SERVER_PROJECT_SERVICES_IDLE_TTL_SECS: i64 = 3600;
@@ -111,13 +112,15 @@ pub struct PartialServerSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_sessions: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_surfaces_per_connection: Option<i64>,
+    pub max_attached_sessions_per_connection: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_passive_surfaces_per_session: Option<i64>,
+    pub max_connections_per_session: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_retention_per_session: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outbound_queue_frames: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_request_timeout_secs: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_drain_timeout_secs: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -134,16 +137,17 @@ pub struct ServerConfig {
     pub websocket_bind: Option<String>,
     pub named_pipe_name: Option<String>,
     pub max_sessions: i64,
-    pub max_surfaces_per_connection: i64,
-    pub max_passive_surfaces_per_session: i64,
+    pub max_attached_sessions_per_connection: i64,
+    pub max_connections_per_session: i64,
     pub event_retention_per_session: i64,
     pub outbound_queue_frames: i64,
+    pub server_request_timeout_secs: i64,
     pub turn_drain_timeout_secs: i64,
     pub shutdown_timeout_secs: i64,
     /// Evict a cached `ProjectServices` entry with zero attached sessions after
     /// this many seconds (multi-session project-scope design).
     pub project_services_idle_ttl_secs: i64,
-    /// Optional auto-archive of a session with zero surfaces AND no active or
+    /// Optional auto-archive of a session with zero connections AND no active or
     /// queued turn after this many seconds. `None` = off (the default);
     /// unattended background work is legitimate.
     pub idle_session_timeout_secs: Option<i64>,
@@ -156,10 +160,12 @@ impl Default for ServerConfig {
             websocket_bind: None,
             named_pipe_name: None,
             max_sessions: DEFAULT_SERVER_MAX_SESSIONS,
-            max_surfaces_per_connection: DEFAULT_SERVER_MAX_SURFACES_PER_CONNECTION,
-            max_passive_surfaces_per_session: DEFAULT_SERVER_MAX_PASSIVE_SURFACES_PER_SESSION,
+            max_attached_sessions_per_connection:
+                DEFAULT_SERVER_MAX_ATTACHED_SESSIONS_PER_CONNECTION,
+            max_connections_per_session: DEFAULT_SERVER_MAX_CONNECTIONS_PER_SESSION,
             event_retention_per_session: DEFAULT_SERVER_EVENT_RETENTION_PER_SESSION,
             outbound_queue_frames: DEFAULT_SERVER_OUTBOUND_QUEUE_FRAMES,
+            server_request_timeout_secs: DEFAULT_SERVER_REQUEST_TIMEOUT_SECS,
             turn_drain_timeout_secs: DEFAULT_SERVER_TURN_DRAIN_TIMEOUT_SECS,
             shutdown_timeout_secs: DEFAULT_SERVER_SHUTDOWN_TIMEOUT_SECS,
             project_services_idle_ttl_secs: DEFAULT_SERVER_PROJECT_SERVICES_IDLE_TTL_SECS,
@@ -188,16 +194,16 @@ impl ServerConfig {
                 .or(settings.server.max_sessions)
                 .filter(|count| *count > 0)
                 .unwrap_or(DEFAULT_SERVER_MAX_SESSIONS),
-            max_surfaces_per_connection: env
-                .get_i64(EnvKey::CocoServerMaxSurfacesPerConnection)
-                .or(settings.server.max_surfaces_per_connection)
+            max_attached_sessions_per_connection: env
+                .get_i64(EnvKey::CocoServerMaxAttachedSessionsPerConnection)
+                .or(settings.server.max_attached_sessions_per_connection)
                 .filter(|count| *count > 0)
-                .unwrap_or(DEFAULT_SERVER_MAX_SURFACES_PER_CONNECTION),
-            max_passive_surfaces_per_session: env
-                .get_i64(EnvKey::CocoServerMaxPassiveSurfacesPerSession)
-                .or(settings.server.max_passive_surfaces_per_session)
+                .unwrap_or(DEFAULT_SERVER_MAX_ATTACHED_SESSIONS_PER_CONNECTION),
+            max_connections_per_session: env
+                .get_i64(EnvKey::CocoServerMaxConnectionsPerSession)
+                .or(settings.server.max_connections_per_session)
                 .filter(|count| *count > 0)
-                .unwrap_or(DEFAULT_SERVER_MAX_PASSIVE_SURFACES_PER_SESSION),
+                .unwrap_or(DEFAULT_SERVER_MAX_CONNECTIONS_PER_SESSION),
             event_retention_per_session: env
                 .get_i64(EnvKey::CocoServerEventRetentionPerSession)
                 .or(settings.server.event_retention_per_session)
@@ -208,6 +214,11 @@ impl ServerConfig {
                 .or(settings.server.outbound_queue_frames)
                 .filter(|count| *count > 0)
                 .unwrap_or(DEFAULT_SERVER_OUTBOUND_QUEUE_FRAMES),
+            server_request_timeout_secs: env
+                .get_i64(EnvKey::CocoServerRequestTimeoutSecs)
+                .or(settings.server.server_request_timeout_secs)
+                .filter(|secs| *secs > 0)
+                .unwrap_or(DEFAULT_SERVER_REQUEST_TIMEOUT_SECS),
             turn_drain_timeout_secs: env
                 .get_i64(EnvKey::CocoServerTurnDrainTimeoutSecs)
                 .or(settings.server.turn_drain_timeout_secs)

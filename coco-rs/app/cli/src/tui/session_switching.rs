@@ -261,7 +261,7 @@ pub(super) async fn apply_resume_plan_through_app_server(
     runtime_reload_subscriptions: &Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
 ) -> anyhow::Result<()> {
     let binding = local_app_server_bridge
-        .replace_interactive_session_with_resume(
+        .replace_session_with_resume(
             coco_types::SessionResumeParams {
                 target: coco_types::SessionTarget {
                     session_id: plan.session_id.clone(),

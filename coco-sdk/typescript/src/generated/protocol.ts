@@ -167,7 +167,7 @@ export interface AgentInfo {
  */
 export interface AgentInterruptCurrentWorkParams {
   agent_id: string;
-  target: InteractiveTarget;
+  target: SessionTarget;
 }
 
 /**
@@ -342,7 +342,7 @@ export type ApplyPatchToolType = "freeform";
  * Params for `control/applyPermissionUpdate`.
  */
 export interface ApplyPermissionUpdateParams {
-  target: InteractiveTarget;
+  target: SessionTarget;
   update: PermissionUpdate;
 }
 
@@ -358,18 +358,21 @@ export interface ApprovalResolveParams {
   content_blocks?: Array<unknown> | null;
   decision: ApprovalDecision;
   feedback?: string | null;
-  permission_update?: PermissionUpdate | null;
+  permission_updates?: Array<PermissionUpdate>;
   request_id: string;
-  target: InteractiveTarget;
+  resolution_detail?: PermissionResolutionDetail | null;
+  target: SessionTarget;
   updated_input?: unknown;
 }
 
 export interface AskForApprovalParams {
   agent_id?: string | null;
   blocked_path?: string | null;
+  choices?: Array<PermissionAskChoice> | null;
   cwd?: string | null;
   decision_reason?: string | null;
   description?: string | null;
+  detail?: PermissionRequestDetail | null;
   display_name?: string | null;
   input: unknown;
   permission_suggestions?: Array<unknown>;
@@ -377,6 +380,7 @@ export interface AskForApprovalParams {
   title?: string | null;
   tool_name: string;
   tool_use_id: string;
+  worker_badge?: WorkerBadge | null;
 }
 
 /**
@@ -609,7 +613,7 @@ export interface CompletedOutcome {
  */
 export interface ConfigApplyFlagsParams {
   settings: { [key: string]: unknown; };
-  target: InteractiveTarget;
+  target: SessionTarget;
 }
 
 /**
@@ -658,9 +662,9 @@ export interface ConfigWriteParams {
 }
 
 export type ConfigWriteTarget = "user" | {
-  project: InteractiveTarget;
+  project: SessionTarget;
 } | {
-  local: InteractiveTarget;
+  local: SessionTarget;
 };
 
 export interface ContentDeltaParams {
@@ -862,7 +866,7 @@ export interface ElicitationResolveParams {
   approved: boolean;
   mcp_server_name: string;
   request_id: string;
-  target: InteractiveTarget;
+  target: SessionTarget;
   values?: { [key: string]: unknown; };
 }
 
@@ -910,6 +914,20 @@ export interface ErrorPayload {
   code: ErrorCode;
   message: string;
 }
+
+/**
+ * The user's response to an `ExitPlanMode` approval prompt.
+ * The wire `value` strings are the single source of truth for the choice
+ * echoed back through `PermissionDecision::Ask.choices` →
+ * `PermissionResolutionDetail::ExitPlanMode.choice`. Owning the mapping here keeps
+ * the producer (the TUI permission bridge, which builds the choice list) and
+ * the consumer (`ExitPlanModeTool::execute`, which branches on the picked
+ * value) from drifting apart.
+ * Response value for the exit-plan-mode permission request. Values mirror
+ * upstream 2.1.193's `buildExitPlanModeOptions`/`Tar` branches so TUI
+ * choice logs and SDK surfaces stay source-compatible.
+ */
+export type ExitPlanChoice = "yes-auto-clear-context" | "yes-bypass-permissions" | "yes-accept-edits" | "yes-accept-edits-keep-context" | "yes-resume-auto-mode" | "yes-default-keep-context" | "no";
 
 export interface ExitPlanModeAllowedPrompt {
   prompt: string;
@@ -1531,14 +1549,6 @@ export interface InstructionsLoadedInput {
 }
 
 /**
- * Selects one live interactive surface and its immutable session identity.
- */
-export interface InteractiveTarget {
-  session_id: SessionId;
-  surface_id: SurfaceId;
-}
-
-/**
  * Payload for [`TurnOutcome::Interrupted`]. `abort_reason`
  * distinguishes user Ctrl+C, submit interrupt, permission abort, and
  * system pre-empt. Never carries a model `stop_reason`.
@@ -1773,7 +1783,7 @@ export type McpConnectionStatus = "connected" | "pending" | "failed" | "needs-au
  */
 export interface McpReconnectParams {
   server_name: string;
-  target: InteractiveTarget;
+  target: SessionTarget;
 }
 
 /**
@@ -1820,7 +1830,7 @@ export interface McpServerStatus {
  */
 export interface McpSetServersParams {
   servers: { [key: string]: unknown; };
-  target: InteractiveTarget;
+  target: SessionTarget;
 }
 
 /**
@@ -1865,7 +1875,7 @@ export interface McpStatusResult {
 export interface McpToggleParams {
   enabled: boolean;
   server_name: string;
-  target: InteractiveTarget;
+  target: SessionTarget;
 }
 
 /**
@@ -2209,6 +2219,15 @@ export interface PermissionRequestInput {
   transcript_path?: string;
   hook_event_name: "PermissionRequest";
 }
+
+/**
+ * Tool-specific trusted metadata attached to a permission approval.
+ */
+export type PermissionResolutionDetail = {
+  choice: ExitPlanChoice;
+  edited_plan?: string | null;
+  kind: "exit_plan_mode";
+};
 
 /**
  * A single permission rule.
@@ -2739,7 +2758,7 @@ export interface RewindDiffStatsPayload {
  */
 export interface RewindFilesParams {
   dry_run?: boolean;
-  target: InteractiveTarget;
+  target: SessionTarget;
   user_message_id: string;
 }
 
@@ -2787,16 +2806,8 @@ export interface ServerCancelRequestParams {
  * Params for `session/close`.
  */
 export interface SessionCloseParams {
-  target: SessionCloseTarget;
-}
-
-export type SessionCloseTarget = {
-  kind: "interactive";
-  target: InteractiveTarget;
-} | {
-  kind: "orphaned";
   target: SessionTarget;
-};
+}
 
 /**
  * Params for `session/delete`.
@@ -2903,7 +2914,7 @@ export interface SessionRenameParams {
 
 export interface SessionReplaceParams {
   destination: SessionReplacement;
-  source: InteractiveTarget;
+  source: SessionTarget;
 }
 
 /**
@@ -2953,7 +2964,14 @@ export interface SessionResumeParams {
  */
 export interface SessionResumeResult {
   session: SessionSummary;
-  surface_id: SurfaceId;
+}
+
+/**
+ * One content-search match streamed into the TUI session picker.
+ */
+export interface SessionSearchHit {
+  session_id: SessionId;
+  snippet: string;
 }
 
 /**
@@ -3000,7 +3018,6 @@ export interface SessionStartParams {
  */
 export interface SessionStartResult {
   session_id: SessionId;
-  surface_id: SurfaceId;
 }
 
 /**
@@ -3037,7 +3054,7 @@ export interface SessionStartedParams {
 export type SessionState = "idle" | "running" | "requires_action";
 
 /**
- * Params for passive `session/subscribe`.
+ * Params for read-only `session/subscribe`.
  */
 export interface SessionSubscribeParams {
   after_seq?: number | null;
@@ -3050,6 +3067,8 @@ export interface SessionSubscribeParams {
 export interface SessionSummary {
   created_at: string;
   cwd: string;
+  first_prompt?: string;
+  last_message_preview?: string | null;
   message_count?: number;
   model: string;
   session_id: SessionId;
@@ -3059,7 +3078,7 @@ export interface SessionSummary {
 }
 
 /**
- * Selects persisted or live state without proving interactive ownership.
+ * Selects persisted or live session state.
  */
 export interface SessionTarget {
   session_id: SessionId;
@@ -3149,7 +3168,7 @@ export interface SessionUsageTotals {
  */
 export interface SetAgentColorParams {
   color?: AgentColorName | null;
-  target: InteractiveTarget;
+  target: SessionTarget;
 }
 
 /**
@@ -3157,7 +3176,7 @@ export interface SetAgentColorParams {
  */
 export interface SetModelParams {
   model?: string | null;
-  target: InteractiveTarget;
+  target: SessionTarget;
 }
 
 /**
@@ -3168,7 +3187,7 @@ export interface SetModelRoleParams {
   model_id: string;
   provider: string;
   role: ModelRole;
-  target: InteractiveTarget;
+  target: SessionTarget;
 }
 
 /**
@@ -3179,7 +3198,7 @@ export interface SetModelRoleParams {
  */
 export interface SetPermissionModeParams {
   mode: PermissionMode;
-  target: InteractiveTarget;
+  target: SessionTarget;
 }
 
 /**
@@ -3187,7 +3206,7 @@ export interface SetPermissionModeParams {
  * Uses `ThinkingLevel` which includes effort level and per-provider options.
  */
 export interface SetThinkingParams {
-  target: InteractiveTarget;
+  target: SessionTarget;
   thinking_level?: ThinkingLevel | null;
 }
 
@@ -3411,9 +3430,19 @@ export interface SlashCommandInfo {
   description?: string | null;
   kind?: CommandTypeTag;
   name: string;
+  session_scope?: SlashCommandSessionScope;
   source?: CommandSource | null;
   usage_score?: number;
 }
+
+/**
+ * Interactive session kinds in which a slash command may run.
+ *
+ * Commands default to the primary session. Sidechat support is opt-in so a
+ * newly registered builtin, plugin command, or skill cannot accidentally
+ * mutate the hidden parent or escape the sidechat's restricted surface.
+ */
+export type SlashCommandSessionScope = "primary_only" | "primary_and_side_chat";
 
 /**
  * Categorization of a `SlashCommandStatus` payload. Each variant maps to
@@ -3493,7 +3522,7 @@ export interface StopInput {
  * Params for `control/stopTask`.
  */
 export interface StopTaskParams {
-  target: InteractiveTarget;
+  target: SessionTarget;
   task_id: string;
 }
 
@@ -3570,15 +3599,6 @@ export interface SummarizeCompletedParams {
   from_turn: number;
   summary_tokens: number;
 }
-
-/**
- * Branded surface attachment identifier.
- *
- * A surface is a client-visible attachment to a live session. It is
- * generated by the server, used for routing/capability checks, and is
- * never persisted as transcript identity.
- */
-export type SurfaceId = string;
 
 export interface SystemAgentsKilledMessage {
   count: number;
@@ -4383,6 +4403,12 @@ export type TuiOnlyEvent = {
   sessions: Array<SessionSummary>;
   type: "open_session_browser";
 } | {
+  complete: boolean;
+  hits: Array<SessionSearchHit>;
+  query: string;
+  request_id: number;
+  type: "session_search_results";
+} | {
   rows: Array<RewindRowMetadata>;
   type: "rewind_row_metadata_ready";
 } | {
@@ -4445,19 +4471,23 @@ export type TuiOnlyEvent = {
 } | {
   args: string;
   name: string;
+  session_id: SessionId;
   text: string;
   type: "slash_command_result";
 } | {
   body: string;
+  session_id: SessionId;
   title: string;
   type: "open_goal_status";
 } | {
   result: ContextUsageResult;
+  session_id: SessionId;
   type: "open_context_usage";
 } | {
   args: string;
   kind: SlashCommandStatusKind;
   name: string;
+  session_id: SessionId;
   type: "slash_command_status";
 } | {
   type: "open_rewind_picker";
@@ -4627,13 +4657,12 @@ export type TurnOutcome = {
  */
 export interface TurnStartParams {
   composer: SubmittedComposer;
-  history_override?: Array<unknown>;
   images?: Array<QueuedCommandEditImage>;
   model_selection?: ProviderModelSelection | null;
   permission_mode?: PermissionMode | null;
   prompt: string;
   slash_metadata?: string | null;
-  target: InteractiveTarget;
+  target: SessionTarget;
   thinking_level?: ThinkingLevel | null;
 }
 
@@ -4666,7 +4695,7 @@ export type UnifiedFinishReason = "end_turn" | "stop_sequence" | "tool_use" | "m
  */
 export interface UpdateEnvParams {
   env: { [key: string]: string; };
-  target: InteractiveTarget;
+  target: SessionTarget;
 }
 
 /**
@@ -4690,7 +4719,7 @@ export type UserContentPart = TextPart | FilePart;
 export interface UserInputResolveParams {
   answer: string;
   request_id: string;
-  target: InteractiveTarget;
+  target: SessionTarget;
 }
 
 export interface UserMessage {
@@ -4936,7 +4965,7 @@ export type TurnStartRequest = {
 
 export type TurnInterruptRequest = {
   method: "turn/interrupt";
-  params: InteractiveTarget;
+  params: SessionTarget;
 };
 
 export type TaskListRequest = {
@@ -5002,7 +5031,7 @@ export type ControlApplyPermissionUpdateRequest = {
 
 export type ControlResetSessionPermissionRulesRequest = {
   method: "control/resetSessionPermissionRules";
-  params: InteractiveTarget;
+  params: SessionTarget;
 };
 
 export type ControlStopTaskRequest = {
@@ -5022,7 +5051,7 @@ export type ControlUpdateEnvRequest = {
 
 export type ControlBackgroundAllTasksRequest = {
   method: "control/backgroundAllTasks";
-  params: InteractiveTarget;
+  params: SessionTarget;
 };
 
 export type ControlKeepAliveRequest = {
@@ -5098,7 +5127,7 @@ export type McpToggleRequest = {
  */
 export type PluginReloadRequest = {
   method: "plugin/reload";
-  params: InteractiveTarget;
+  params: SessionTarget;
 };
 
 /**
@@ -5106,7 +5135,7 @@ export type PluginReloadRequest = {
  */
 export type HookReloadRequest = {
   method: "hook/reload";
-  params: InteractiveTarget;
+  params: SessionTarget;
 };
 
 /**

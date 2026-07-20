@@ -40,7 +40,7 @@ pub struct AppServerBridgeControlHandler {
     state: Arc<AppServerHostState>,
     session: std::sync::RwLock<
         Option<(
-            coco_types::InteractiveTarget,
+            coco_types::SessionTarget,
             crate::session_runtime::SessionHandle,
         )>,
     >,
@@ -56,7 +56,7 @@ impl AppServerBridgeControlHandler {
 
     pub fn bind_session(
         &self,
-        target: coco_types::InteractiveTarget,
+        target: coco_types::SessionTarget,
         session: crate::session_runtime::SessionHandle,
     ) {
         *self
@@ -68,7 +68,7 @@ impl AppServerBridgeControlHandler {
     fn selected_session(
         &self,
     ) -> Option<(
-        coco_types::InteractiveTarget,
+        coco_types::SessionTarget,
         crate::session_runtime::SessionHandle,
     )> {
         self.session
@@ -140,6 +140,7 @@ impl AppServerBridgeControlHandler {
             state: self.state.clone(),
             connection_profile: Arc::new(connection_profile),
             app_server: None,
+            connection: None,
             target_session_id,
             session,
         };
@@ -161,13 +162,13 @@ impl AppServerBridgeControlHandler {
 #[async_trait::async_trait]
 impl ControlRequestHandler for AppServerBridgeControlHandler {
     async fn handle(&self, request: ControlRequest) -> Result<serde_json::Value, ControlError> {
-        let interactive_target = || {
+        let session_target = || {
             self.selected_session()
                 .map(|(target, _)| target)
                 .ok_or_else(|| {
                     ControlError::new(
                         coco_types::error_codes::INVALID_REQUEST,
-                        "bridge control requires an explicitly bound interactive session",
+                        "bridge control requires an explicitly bound Full session",
                     )
                 })
         };
@@ -183,26 +184,26 @@ impl ControlRequestHandler for AppServerBridgeControlHandler {
                 .await
             }
             ControlRequest::Interrupt => {
-                self.dispatch_control_request(ClientRequest::TurnInterrupt(interactive_target()?))
+                self.dispatch_control_request(ClientRequest::TurnInterrupt(session_target()?))
                     .await
             }
             ControlRequest::SetModel { model } => {
                 self.dispatch_control_request(ClientRequest::SetModel(coco_types::SetModelParams {
-                    target: interactive_target()?,
+                    target: session_target()?,
                     model,
                 }))
                 .await
             }
             ControlRequest::SetPermissionMode { mode } => self.set_permission_mode(mode).await,
             ControlRequest::McpStatus => {
-                let target = interactive_target()?;
+                let target = session_target()?;
                 self.dispatch_control_request(ClientRequest::McpStatus(coco_types::SessionTarget {
                     session_id: target.session_id,
                 }))
                 .await
             }
             ControlRequest::GetContextUsage => {
-                let target = interactive_target()?;
+                let target = session_target()?;
                 self.dispatch_control_request(ClientRequest::ContextUsage(
                     coco_types::SessionTarget {
                         session_id: target.session_id,
@@ -216,7 +217,7 @@ impl ControlRequestHandler for AppServerBridgeControlHandler {
             } => {
                 self.dispatch_control_request(ClientRequest::RewindFiles(
                     coco_types::RewindFilesParams {
-                        target: interactive_target()?,
+                        target: session_target()?,
                         user_message_id,
                         dry_run,
                     },

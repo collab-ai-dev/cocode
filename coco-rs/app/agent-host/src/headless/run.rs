@@ -321,7 +321,7 @@ pub async fn run_chat_with_options(
     );
     let startup_binding = if let Some(target) = opts.resume_target.clone() {
         local_app_server_bridge
-            .resume_interactive_session(
+            .resume_session(
                 coco_types::SessionResumeParams {
                     target,
                     plan_mode_instructions: None,
@@ -332,7 +332,7 @@ pub async fn run_chat_with_options(
             .map_err(|err| anyhow::anyhow!("headless session/resume failed: {err}"))?
     } else {
         local_app_server_bridge
-            .start_interactive_session(
+            .start_session(
                 coco_types::SessionStartParams {
                     session_id: Some(session_id.clone()),
                     cwd: Some(cwd.to_string_lossy().into_owned()),
@@ -364,10 +364,10 @@ pub async fn run_chat_with_options(
         .install_structured_output_tool_if_requested(cli.json_schema.as_deref())
         .await?;
 
-    let interactive_target = local_app_server_bridge
-        .interactive_session()
-        .map(crate::local_client::LocalSessionClient::interactive_target)
-        .ok_or_else(|| anyhow::anyhow!("interactive surface was not installed"))?;
+    let session_target = local_app_server_bridge
+        .full_session()
+        .map(crate::local_client::LocalSessionClient::session_target)
+        .ok_or_else(|| anyhow::anyhow!("full session handle was not installed"))?;
     local_app_server_bridge
         .client()
         .keep_alive(local_app_server_bridge.handler())
@@ -567,7 +567,7 @@ pub async fn run_chat_with_options(
         let cancel = cancel.clone();
         let client = local_app_server_bridge.connect_local_client();
         let handler = local_app_server_bridge.handler().clone();
-        let target = interactive_target.clone();
+        let target = session_target.clone();
         tokio::spawn(async move {
             tokio::select! {
                 () = cancel.cancelled() => {}
@@ -581,9 +581,8 @@ pub async fn run_chat_with_options(
         .start_turn_and_wait_for_end(
             session_id.clone(),
             coco_types::TurnStartParams {
-                target: interactive_target,
+                target: session_target,
                 prompt: effective_prompt,
-                history_override: Vec::new(),
                 images: Vec::new(),
                 composer: Default::default(),
                 slash_metadata: None,

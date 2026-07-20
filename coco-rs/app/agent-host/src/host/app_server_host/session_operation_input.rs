@@ -6,12 +6,12 @@ use crate::session_start::SessionStartInput;
 pub(crate) enum LocalSessionOperation {
     Close {
         connection: ConnectionKey,
-        target: coco_types::SessionCloseTarget,
+        target: coco_types::SessionTarget,
     },
 }
 
 pub(crate) struct SessionReplaceInput {
-    pub(crate) source: coco_types::InteractiveTarget,
+    pub(crate) source: coco_types::SessionTarget,
     pub(crate) destination: SessionReplaceDestination,
 }
 

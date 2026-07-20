@@ -33,7 +33,7 @@ pub(crate) async fn handle_mcp_status(ctx: &HandlerContext) -> HandlerResult {
 /// `SendElicitation` factory for AppServer-routed MCP connects.
 ///
 /// The base closure bridges MCP server-initiated elicitations to the
-/// connected interactive surface via AppServer server requests
+/// connected Full clients via AppServer server requests
 /// (`ServerRequest::RequestElicitation` →
 /// `ClientRequest::ElicitationResolve` synchronous reply). When a
 /// session runtime with a hook registry is wired, we wrap the closure
@@ -50,12 +50,13 @@ async fn build_send_elicitation(
     let Some(app_server) = ctx.app_server.clone() else {
         return unavailable_elicitation_bridge();
     };
-    build_send_elicitation_for_session(session, app_server, server_name.to_string()).await
+    build_send_elicitation_for_session(session, app_server, None, server_name.to_string()).await
 }
 
 pub(crate) async fn build_send_elicitation_for_session(
     session: crate::session_runtime::SessionHandle,
     app_server: Arc<coco_app_server::AppServer<crate::app_session::AppSessionHandle>>,
+    owner: Option<coco_app_server::ConnectionKey>,
     server_name: String,
 ) -> coco_mcp::SendElicitation {
     use std::{future::Future, pin::Pin};
@@ -79,8 +80,9 @@ pub(crate) async fn build_send_elicitation_for_session(
             let session_id = base_session_id.clone();
             let server_name = server_name_for_base.clone();
             Box::pin(async move {
-                bridge_elicitation_to_remote_surface(
+                bridge_elicitation_to_full_clients(
                     &app_server,
+                    owner,
                     session_id,
                     &server_name,
                     elicitation,
@@ -102,14 +104,15 @@ fn unavailable_elicitation_bridge() -> coco_mcp::SendElicitation {
     })
 }
 
-/// Bridge a single MCP-server-initiated elicitation to the remote surface.
+/// Bridge one MCP-server-initiated elicitation to the session's Full clients.
 ///
 /// Allocates a fresh `request_id`, serializes the rmcp `Elicitation`
 /// payload, sends a `ServerRequest::RequestElicitation` via the
-/// AppServer route, awaits the surface response, and maps the result back
+/// AppServer route, awaits the first client response, and maps the result back
 /// to the rmcp [`coco_mcp::ElicitationResponse`] shape.
-async fn bridge_elicitation_to_remote_surface(
+async fn bridge_elicitation_to_full_clients(
     app_server: &Arc<coco_app_server::AppServer<crate::app_session::AppSessionHandle>>,
+    owner: Option<coco_app_server::ConnectionKey>,
     session_id: coco_types::SessionId,
     server_name: &str,
     elicitation: impl serde::Serialize,
@@ -127,24 +130,22 @@ async fn bridge_elicitation_to_remote_surface(
         .registry()
         .get(&session_id)
         .and_then(|handle| handle.into_session().active_turn_id());
-    let reply = app_server
-        .route_server_request_with_reply(
-            session_id,
-            coco_app_server::SurfaceCapability::Interactive,
-            turn_id,
-            coco_types::ServerRequest::RequestElicitation(params),
-        )
-        .map_err(|error| {
-            coco_mcp::RmcpClientError::generic(format!("route elicitation: {error:?}"))
-        })?
-        .await
-        .map_err(|_| coco_mcp::RmcpClientError::generic("elicitation reply channel closed"))?;
+    let request = coco_types::ServerRequest::RequestElicitation(params);
+    let reply = match owner {
+        Some(connection) => app_server.route_server_request_with_reply_to_connection(
+            connection, session_id, turn_id, request,
+        ),
+        None => app_server.route_server_request_with_reply(session_id, turn_id, request),
+    }
+    .map_err(|error| coco_mcp::RmcpClientError::generic(format!("route elicitation: {error:?}")))?
+    .await
+    .map_err(|_| coco_mcp::RmcpClientError::generic("elicitation reply channel closed"))?;
 
     let resolved = match reply {
         coco_app_server::ServerRequestReply::Elicitation(resolved) => resolved,
         coco_app_server::ServerRequestReply::Error(e) => {
             return Err(coco_mcp::RmcpClientError::generic(format!(
-                "remote surface returned error for mcp/requestElicitation: {} ({})",
+                "remote client returned error for mcp/requestElicitation: {} ({})",
                 e.message, e.code
             )));
         }

@@ -37,7 +37,7 @@ class MessageRouter:
         self._ignored_responses: set[int | str] = set()
         self._early_responses: dict[int | str, dict[str, Any] | BaseException] = {}
         self._events: asyncio.Queue[dict[str, Any] | BaseException] = asyncio.Queue()
-        self._handler_tasks: set[asyncio.Task[None]] = set()
+        self._handler_tasks: dict[int | str, asyncio.Task[None]] = {}
         self._reader_task: asyncio.Task[None] | None = None
         self._closed = False
 
@@ -54,15 +54,21 @@ class MessageRouter:
             except asyncio.CancelledError:
                 pass
             self._reader_task = None
-        for task in list(self._handler_tasks):
+        for task in list(self._handler_tasks.values()):
             task.cancel()
         if self._handler_tasks:
-            await asyncio.gather(*self._handler_tasks, return_exceptions=True)
+            await asyncio.gather(*self._handler_tasks.values(), return_exceptions=True)
         self._fail_all(TransportClosedError("transport closed"))
 
     async def request(self, typed_request: Any) -> dict[str, Any]:
         request_id = self._transport.next_request_id()
-        if self._closed and request_id not in self._early_responses:
+        early = self._early_responses.pop(request_id, None)
+        if early is not None:
+            await self._send_typed_request(request_id, typed_request)
+            if isinstance(early, BaseException):
+                raise early
+            return early
+        if self._closed:
             raise TransportClosedError("transport closed")
         loop = asyncio.get_running_loop()
         waiter: asyncio.Future[dict[str, Any]] = loop.create_future()
@@ -71,14 +77,8 @@ class MessageRouter:
             await self._send_typed_request(request_id, typed_request)
         except BaseException:
             self._pending.pop(request_id, None)
+            waiter.cancel()
             raise
-        early = self._early_responses.pop(request_id, None)
-        if early is not None and not waiter.done():
-            self._pending.pop(request_id, None)
-            if isinstance(early, BaseException):
-                waiter.set_exception(early)
-            else:
-                waiter.set_result(early)
         return await waiter
 
     async def notify(self, typed_request: Any) -> None:
@@ -158,8 +158,18 @@ class MessageRouter:
                     self._route_error(data)
                 elif "id" in data and "method" in data:
                     self._route_server_request(data)
+                    # Preserve causal order for already-buffered frames while
+                    # keeping slow approval callbacks concurrent/cancellable.
+                    await asyncio.sleep(0)
                 elif "method" in data:
-                    await self._events.put(data)
+                    if data.get("method") == "control/cancelRequest":
+                        params = data.get("params") or {}
+                        request_id = params.get("request_id")
+                        task = self._handler_tasks.pop(request_id, None)
+                        if task is not None:
+                            task.cancel()
+                    else:
+                        await self._events.put(data)
                 else:
                     raise ProcessError(f"invalid JSON-RPC message from coco: {data!r}")
         except asyncio.CancelledError:
@@ -205,16 +215,36 @@ class MessageRouter:
         )
 
     def _route_server_request(self, data: dict[str, Any]) -> None:
+        request_id = data.get("id")
+        if request_id is None:
+            return
+
         async def run_handler() -> None:
-            handled = False
-            if self._server_request_handler is not None:
-                handled = await self._server_request_handler(data)
-            if not handled:
-                await self._events.put(data)
+            try:
+                handled = False
+                if self._server_request_handler is not None:
+                    handled = await self._server_request_handler(data)
+                if not handled:
+                    await self.respond_error(
+                        request_id,
+                        code=-32601,
+                        message=f"unsupported server request: {data.get('method', '')}",
+                    )
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:
+                try:
+                    await self.respond_error(request_id, message=str(exc))
+                except BaseException:
+                    logger.exception(
+                        "failed to report server-request handler error for %r",
+                        request_id,
+                    )
+            finally:
+                self._handler_tasks.pop(request_id, None)
 
         task = asyncio.create_task(run_handler())
-        self._handler_tasks.add(task)
-        task.add_done_callback(self._handler_tasks.discard)
+        self._handler_tasks[request_id] = task
 
     def _fail_all(self, exc: BaseException) -> None:
         self._closed = True
@@ -222,4 +252,7 @@ class MessageRouter:
             if not waiter.done():
                 waiter.set_exception(exc)
         self._pending.clear()
+        for task in self._handler_tasks.values():
+            task.cancel()
+        self._handler_tasks.clear()
         self._events.put_nowait(exc)

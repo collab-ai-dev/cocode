@@ -1,26 +1,26 @@
 pub struct RemoteEventDemux {
     events: mpsc::Receiver<RemoteJsonRpcEvent>,
-    event_buffers: HashMap<SurfaceId, VecDeque<SessionEnvelope>>,
-    lifecycle_buffers: HashMap<SurfaceId, VecDeque<SurfaceLifecycleEffect>>,
+    event_buffers: HashMap<SessionId, VecDeque<SessionEnvelope>>,
+    lifecycle_buffers: HashMap<SessionId, VecDeque<SessionLifecycleEffect>>,
     server_requests: VecDeque<JsonRpcRequest>,
     notifications: VecDeque<JsonRpcNotification>,
     disconnected: bool,
 }
 
-pub struct RemoteSurfaceStream<'a> {
+pub struct RemoteSessionStream<'a> {
     demux: &'a mut RemoteEventDemux,
-    surface_id: SurfaceId,
+    session_id: SessionId,
 }
 
-pub struct RemoteOwnedSurfaceStream {
+pub struct RemoteOwnedSessionStream {
     demux: RemoteEventDemux,
-    surface_id: SurfaceId,
+    session_id: SessionId,
 }
 
 #[derive(Debug, Clone)]
 pub enum RemoteJsonRpcEvent {
-    SurfaceDelivery(Box<SurfaceDelivery>),
-    SurfaceLifecycle(SurfaceLifecycleEffect),
+    SessionDelivery(Box<SessionDelivery>),
+    SessionLifecycle(SessionLifecycleEffect),
     Notification(JsonRpcNotification),
     ServerRequest(JsonRpcRequest),
     Disconnected,
@@ -37,56 +37,62 @@ impl RemoteEventDemux {
         }
     }
 
-    pub fn try_next_surface_event(&mut self, surface_id: &SurfaceId) -> Option<SessionEnvelope> {
-        if let Some(envelope) = self.pop_buffered_event(surface_id) {
+    pub fn try_next_session_event(&mut self, session_id: &SessionId) -> Option<SessionEnvelope> {
+        if let Some(envelope) = self.pop_buffered_event(session_id) {
             return Some(envelope);
         }
 
         loop {
             match self.next_remote_event()? {
-                RemoteJsonRpcEvent::SurfaceDelivery(delivery) => {
-                    if &delivery.surface_id == surface_id {
+                RemoteJsonRpcEvent::SessionDelivery(delivery) => {
+                    if &delivery.envelope.session_id == session_id {
                         return Some(delivery.envelope);
                     }
-                    self.push_surface_event(delivery.surface_id.clone(), delivery.envelope);
+                    self.push_session_event(
+                        delivery.envelope.session_id.clone(),
+                        delivery.envelope,
+                    );
                 }
-                event => self.buffer_non_surface_event(event),
+                event => self.buffer_non_session_event(event),
             }
         }
     }
 
-    pub async fn next_surface_event(&mut self, surface_id: &SurfaceId) -> Option<SessionEnvelope> {
-        if let Some(envelope) = self.pop_buffered_event(surface_id) {
+    pub async fn next_session_event(&mut self, session_id: &SessionId) -> Option<SessionEnvelope> {
+        if let Some(envelope) = self.pop_buffered_event(session_id) {
             return Some(envelope);
         }
 
         loop {
             match self.recv_remote_event().await? {
-                RemoteJsonRpcEvent::SurfaceDelivery(delivery) => {
-                    if &delivery.surface_id == surface_id {
+                RemoteJsonRpcEvent::SessionDelivery(delivery) => {
+                    if &delivery.envelope.session_id == session_id {
                         return Some(delivery.envelope);
                     }
-                    self.push_surface_event(delivery.surface_id.clone(), delivery.envelope);
+                    self.push_session_event(
+                        delivery.envelope.session_id.clone(),
+                        delivery.envelope,
+                    );
                 }
-                event => self.buffer_non_surface_event(event),
+                event => self.buffer_non_session_event(event),
             }
         }
     }
 
-    pub fn try_next_lifecycle(&mut self, surface_id: &SurfaceId) -> Option<SurfaceLifecycleEffect> {
-        if let Some(delivery) = self.pop_buffered_lifecycle(surface_id) {
+    pub fn try_next_lifecycle(&mut self, session_id: &SessionId) -> Option<SessionLifecycleEffect> {
+        if let Some(delivery) = self.pop_buffered_lifecycle(session_id) {
             self.purge_on_session_ended(&delivery);
             return Some(delivery);
         }
 
         loop {
             match self.next_remote_event()? {
-                RemoteJsonRpcEvent::SurfaceLifecycle(delivery) => {
-                    if &delivery.surface_id == surface_id {
+                RemoteJsonRpcEvent::SessionLifecycle(delivery) => {
+                    if lifecycle_session_id(&delivery) == session_id {
                         self.purge_on_session_ended(&delivery);
                         return Some(delivery);
                     }
-                    self.push_surface_lifecycle(delivery.surface_id.clone(), delivery);
+                    self.push_session_lifecycle(lifecycle_session_id(&delivery).clone(), delivery);
                 }
                 event => self.buffer_non_lifecycle_event(event),
             }
@@ -95,52 +101,49 @@ impl RemoteEventDemux {
 
     pub async fn next_lifecycle(
         &mut self,
-        surface_id: &SurfaceId,
-    ) -> Option<SurfaceLifecycleEffect> {
-        if let Some(delivery) = self.pop_buffered_lifecycle(surface_id) {
+        session_id: &SessionId,
+    ) -> Option<SessionLifecycleEffect> {
+        if let Some(delivery) = self.pop_buffered_lifecycle(session_id) {
             self.purge_on_session_ended(&delivery);
             return Some(delivery);
         }
 
         loop {
             match self.recv_remote_event().await? {
-                RemoteJsonRpcEvent::SurfaceLifecycle(delivery) => {
-                    if &delivery.surface_id == surface_id {
+                RemoteJsonRpcEvent::SessionLifecycle(delivery) => {
+                    if lifecycle_session_id(&delivery) == session_id {
                         self.purge_on_session_ended(&delivery);
                         return Some(delivery);
                     }
-                    self.push_surface_lifecycle(delivery.surface_id.clone(), delivery);
+                    self.push_session_lifecycle(lifecycle_session_id(&delivery).clone(), delivery);
                 }
                 event => self.buffer_non_lifecycle_event(event),
             }
         }
     }
 
-    /// When a caller consumes a `SessionEnded` for its surface, drop that
-    /// surface's now-moot buffered deliveries.
-    fn purge_on_session_ended(&mut self, delivery: &SurfaceLifecycleEffect) {
-        if matches!(
-            delivery.kind,
-            SurfaceLifecycleEffectKind::SessionEnded { .. }
-        ) {
-            self.purge_surface(&delivery.surface_id);
+    /// When a caller consumes a `SessionEnded`, drop that
+    /// session's now-moot buffered deliveries.
+    fn purge_on_session_ended(&mut self, delivery: &SessionLifecycleEffect) {
+        if let SessionLifecycleEffectKind::SessionEnded { session_id } = &delivery.kind {
+            self.purge_session(session_id);
         }
     }
 
     pub fn try_next_session_activation(
         &mut self,
         session_id: &SessionId,
-    ) -> Option<SurfaceLifecycleEffect> {
+    ) -> Option<SessionLifecycleEffect> {
         if let Some(delivery) = self.take_buffered_activation(session_id) {
             return Some(delivery);
         }
         loop {
             match self.next_remote_event()? {
-                RemoteJsonRpcEvent::SurfaceLifecycle(delivery) => {
+                RemoteJsonRpcEvent::SessionLifecycle(delivery) => {
                     if lifecycle_activates_session(&delivery, session_id) {
                         return Some(delivery);
                     }
-                    self.push_surface_lifecycle(delivery.surface_id.clone(), delivery);
+                    self.push_session_lifecycle(lifecycle_session_id(&delivery).clone(), delivery);
                 }
                 event => self.buffer_non_lifecycle_event(event),
             }
@@ -150,17 +153,17 @@ impl RemoteEventDemux {
     pub async fn next_session_activation(
         &mut self,
         session_id: &SessionId,
-    ) -> Option<SurfaceLifecycleEffect> {
+    ) -> Option<SessionLifecycleEffect> {
         if let Some(delivery) = self.take_buffered_activation(session_id) {
             return Some(delivery);
         }
         loop {
             match self.recv_remote_event().await? {
-                RemoteJsonRpcEvent::SurfaceLifecycle(delivery) => {
+                RemoteJsonRpcEvent::SessionLifecycle(delivery) => {
                     if lifecycle_activates_session(&delivery, session_id) {
                         return Some(delivery);
                     }
-                    self.push_surface_lifecycle(delivery.surface_id.clone(), delivery);
+                    self.push_session_lifecycle(lifecycle_session_id(&delivery).clone(), delivery);
                 }
                 event => self.buffer_non_lifecycle_event(event),
             }
@@ -170,24 +173,24 @@ impl RemoteEventDemux {
     /// Scan every buffered lifecycle queue for a delivery that activates
     /// `session_id`, removing it in place. Other demux accessors buffer
     /// activations they don't match; without this scan the waiter would block on
-    /// `recv` forever while its activation sits in a sibling surface's queue.
+    /// `recv` forever while its activation sits in a sibling session's queue.
     fn take_buffered_activation(
         &mut self,
         session_id: &SessionId,
-    ) -> Option<SurfaceLifecycleEffect> {
-        let (surface_id, pos) = self
-            .lifecycle_buffers
-            .iter()
-            .find_map(|(surface_id, queue)| {
-                let pos = queue
-                    .iter()
-                    .position(|delivery| lifecycle_activates_session(delivery, session_id))?;
-                Some((surface_id.clone(), pos))
-            })?;
-        let queue = self.lifecycle_buffers.get_mut(&surface_id)?;
+    ) -> Option<SessionLifecycleEffect> {
+        let (buffer_session_id, pos) =
+            self.lifecycle_buffers
+                .iter()
+                .find_map(|(buffer_session_id, queue)| {
+                    let pos = queue
+                        .iter()
+                        .position(|delivery| lifecycle_activates_session(delivery, session_id))?;
+                    Some((buffer_session_id.clone(), pos))
+                })?;
+        let queue = self.lifecycle_buffers.get_mut(&buffer_session_id)?;
         let delivery = queue.remove(pos);
         if queue.is_empty() {
-            self.lifecycle_buffers.remove(&surface_id);
+            self.lifecycle_buffers.remove(&buffer_session_id);
         }
         delivery
     }
@@ -225,7 +228,10 @@ impl RemoteEventDemux {
 
         loop {
             match self.next_remote_event()? {
-                RemoteJsonRpcEvent::Notification(notification) => return Some(notification),
+                RemoteJsonRpcEvent::Notification(notification) => {
+                    self.purge_cancelled_server_request(&notification);
+                    return Some(notification);
+                }
                 event => self.buffer_non_notification_event(event),
             }
         }
@@ -238,7 +244,10 @@ impl RemoteEventDemux {
 
         loop {
             match self.recv_remote_event().await? {
-                RemoteJsonRpcEvent::Notification(notification) => return Some(notification),
+                RemoteJsonRpcEvent::Notification(notification) => {
+                    self.purge_cancelled_server_request(&notification);
+                    return Some(notification);
+                }
                 event => self.buffer_non_notification_event(event),
             }
         }
@@ -248,13 +257,13 @@ impl RemoteEventDemux {
         self.disconnected
     }
 
-    /// Drop every buffered per-surface queue for `surface_id` (events +
-    /// lifecycle). Call after the surface is closed/detached/replaced so stale
+    /// Drop every buffered per-session queue for `session_id` (events +
+    /// lifecycle). Call after the session is closed/detached/replaced so stale
     /// deliveries do not linger. The connection-scoped `server_requests` /
-    /// `notifications` queues are not surface-keyed and are bounded separately.
-    pub fn purge_surface(&mut self, surface_id: &SurfaceId) {
-        self.event_buffers.remove(surface_id);
-        self.lifecycle_buffers.remove(surface_id);
+    /// `notifications` queues are not session-keyed and are bounded separately.
+    pub fn purge_session(&mut self, session_id: &SessionId) {
+        self.event_buffers.remove(session_id);
+        self.lifecycle_buffers.remove(session_id);
     }
 
     /// Buffer a server request, dropping the oldest with a warning if the
@@ -270,17 +279,17 @@ impl RemoteEventDemux {
         self.server_requests.push_back(request);
     }
 
-    /// Buffer an event for a sibling surface. If that surface's queue is at its
-    /// cap the caller is not draining a surface it subscribed to (a slow
+    /// Buffer an event for a sibling session. If that session's queue is at its
+    /// cap the caller is not draining a session it subscribed to (a slow
     /// consumer), so the demux disconnects rather than silently dropping an
     /// ordered event or growing unbounded.
-    fn push_surface_event(&mut self, surface_id: SurfaceId, envelope: SessionEnvelope) {
-        let queue = self.event_buffers.entry(surface_id.clone()).or_default();
-        if queue.len() >= MAX_BUFFERED_SURFACE_QUEUE {
+    fn push_session_event(&mut self, session_id: SessionId, envelope: SessionEnvelope) {
+        let queue = self.event_buffers.entry(session_id.clone()).or_default();
+        if queue.len() >= MAX_BUFFERED_SESSION_QUEUE {
             tracing::warn!(
-                %surface_id,
-                cap = MAX_BUFFERED_SURFACE_QUEUE,
-                "remote demux per-surface event buffer full; disconnecting slow consumer"
+                %session_id,
+                cap = MAX_BUFFERED_SESSION_QUEUE,
+                "remote demux per-session event buffer full; disconnecting slow consumer"
             );
             self.disconnected = true;
             return;
@@ -288,19 +297,19 @@ impl RemoteEventDemux {
         queue.push_back(envelope);
     }
 
-    /// Buffer a lifecycle effect for a sibling surface. Same slow-consumer
-    /// disconnect policy as [`push_surface_event`]; lifecycle is never dropped
-    /// (a dropped `SessionEnded`/`SessionStarted` would desync surface state).
-    fn push_surface_lifecycle(&mut self, surface_id: SurfaceId, effect: SurfaceLifecycleEffect) {
+    /// Buffer a lifecycle effect for a sibling session. Same slow-consumer
+    /// disconnect policy as [`push_session_event`]; lifecycle is never dropped
+    /// (a dropped `SessionEnded`/`SessionStarted` would desync session state).
+    fn push_session_lifecycle(&mut self, session_id: SessionId, effect: SessionLifecycleEffect) {
         let queue = self
             .lifecycle_buffers
-            .entry(surface_id.clone())
+            .entry(session_id.clone())
             .or_default();
-        if queue.len() >= MAX_BUFFERED_SURFACE_QUEUE {
+        if queue.len() >= MAX_BUFFERED_SESSION_QUEUE {
             tracing::warn!(
-                %surface_id,
-                cap = MAX_BUFFERED_SURFACE_QUEUE,
-                "remote demux per-surface lifecycle buffer full; disconnecting slow consumer"
+                %session_id,
+                cap = MAX_BUFFERED_SESSION_QUEUE,
+                "remote demux per-session lifecycle buffer full; disconnecting slow consumer"
             );
             self.disconnected = true;
             return;
@@ -311,6 +320,7 @@ impl RemoteEventDemux {
     /// Buffer a raw notification, dropping the oldest with a warning if the
     /// connection-scoped queue is at its cap.
     fn push_notification(&mut self, notification: JsonRpcNotification) {
+        self.purge_cancelled_server_request(&notification);
         if self.notifications.len() >= MAX_BUFFERED_CONNECTION_QUEUE {
             self.notifications.pop_front();
             tracing::warn!(
@@ -321,17 +331,36 @@ impl RemoteEventDemux {
         self.notifications.push_back(notification);
     }
 
-    pub fn surface_stream(&mut self, surface_id: SurfaceId) -> RemoteSurfaceStream<'_> {
-        RemoteSurfaceStream {
+    fn purge_cancelled_server_request(&mut self, notification: &JsonRpcNotification) {
+        if notification.method != "control/cancelRequest" {
+            return;
+        }
+        let Some(request_id) = notification
+            .params
+            .as_ref()
+            .and_then(|params| params.get("request_id"))
+            .and_then(serde_json::Value::as_str)
+        else {
+            return;
+        };
+        self.server_requests.retain(|request| match &request.id {
+            coco_app_server_transport::JsonRpcId::String(id) => id != request_id,
+            coco_app_server_transport::JsonRpcId::Number(id) => id.to_string() != request_id,
+            coco_app_server_transport::JsonRpcId::Null => true,
+        });
+    }
+
+    pub fn session_stream(&mut self, session_id: SessionId) -> RemoteSessionStream<'_> {
+        RemoteSessionStream {
             demux: self,
-            surface_id,
+            session_id,
         }
     }
 
-    pub fn into_surface_stream(self, surface_id: SurfaceId) -> RemoteOwnedSurfaceStream {
-        RemoteOwnedSurfaceStream {
+    pub fn into_session_stream(self, session_id: SessionId) -> RemoteOwnedSessionStream {
+        RemoteOwnedSessionStream {
             demux: self,
-            surface_id,
+            session_id,
         }
     }
 
@@ -364,28 +393,28 @@ impl RemoteEventDemux {
         }
     }
 
-    fn pop_buffered_event(&mut self, surface_id: &SurfaceId) -> Option<SessionEnvelope> {
-        let queue = self.event_buffers.get_mut(surface_id)?;
+    fn pop_buffered_event(&mut self, session_id: &SessionId) -> Option<SessionEnvelope> {
+        let queue = self.event_buffers.get_mut(session_id)?;
         let envelope = queue.pop_front();
         if queue.is_empty() {
-            self.event_buffers.remove(surface_id);
+            self.event_buffers.remove(session_id);
         }
         envelope
     }
 
-    fn pop_buffered_lifecycle(&mut self, surface_id: &SurfaceId) -> Option<SurfaceLifecycleEffect> {
-        let queue = self.lifecycle_buffers.get_mut(surface_id)?;
+    fn pop_buffered_lifecycle(&mut self, session_id: &SessionId) -> Option<SessionLifecycleEffect> {
+        let queue = self.lifecycle_buffers.get_mut(session_id)?;
         let delivery = queue.pop_front();
         if queue.is_empty() {
-            self.lifecycle_buffers.remove(surface_id);
+            self.lifecycle_buffers.remove(session_id);
         }
         delivery
     }
 
-    fn buffer_non_surface_event(&mut self, event: RemoteJsonRpcEvent) {
+    fn buffer_non_session_event(&mut self, event: RemoteJsonRpcEvent) {
         match event {
-            RemoteJsonRpcEvent::SurfaceLifecycle(delivery) => {
-                self.push_surface_lifecycle(delivery.surface_id.clone(), delivery);
+            RemoteJsonRpcEvent::SessionLifecycle(delivery) => {
+                self.push_session_lifecycle(lifecycle_session_id(&delivery).clone(), delivery);
             }
             other => self.buffer_common_event(other),
         }
@@ -393,8 +422,8 @@ impl RemoteEventDemux {
 
     fn buffer_non_lifecycle_event(&mut self, event: RemoteJsonRpcEvent) {
         match event {
-            RemoteJsonRpcEvent::SurfaceDelivery(delivery) => {
-                self.push_surface_event(delivery.surface_id.clone(), delivery.envelope);
+            RemoteJsonRpcEvent::SessionDelivery(delivery) => {
+                self.push_session_event(delivery.envelope.session_id.clone(), delivery.envelope);
             }
             other => self.buffer_common_event(other),
         }
@@ -402,11 +431,11 @@ impl RemoteEventDemux {
 
     fn buffer_non_server_request_event(&mut self, event: RemoteJsonRpcEvent) {
         match event {
-            RemoteJsonRpcEvent::SurfaceDelivery(delivery) => {
-                self.push_surface_event(delivery.surface_id.clone(), delivery.envelope);
+            RemoteJsonRpcEvent::SessionDelivery(delivery) => {
+                self.push_session_event(delivery.envelope.session_id.clone(), delivery.envelope);
             }
-            RemoteJsonRpcEvent::SurfaceLifecycle(delivery) => {
-                self.push_surface_lifecycle(delivery.surface_id.clone(), delivery);
+            RemoteJsonRpcEvent::SessionLifecycle(delivery) => {
+                self.push_session_lifecycle(lifecycle_session_id(&delivery).clone(), delivery);
             }
             other => self.buffer_common_event(other),
         }
@@ -414,11 +443,11 @@ impl RemoteEventDemux {
 
     fn buffer_non_notification_event(&mut self, event: RemoteJsonRpcEvent) {
         match event {
-            RemoteJsonRpcEvent::SurfaceDelivery(delivery) => {
-                self.push_surface_event(delivery.surface_id.clone(), delivery.envelope);
+            RemoteJsonRpcEvent::SessionDelivery(delivery) => {
+                self.push_session_event(delivery.envelope.session_id.clone(), delivery.envelope);
             }
-            RemoteJsonRpcEvent::SurfaceLifecycle(delivery) => {
-                self.push_surface_lifecycle(delivery.surface_id.clone(), delivery);
+            RemoteJsonRpcEvent::SessionLifecycle(delivery) => {
+                self.push_session_lifecycle(lifecycle_session_id(&delivery).clone(), delivery);
             }
             RemoteJsonRpcEvent::ServerRequest(request) => {
                 self.push_server_request(request);
@@ -441,40 +470,40 @@ impl RemoteEventDemux {
             RemoteJsonRpcEvent::Disconnected => {
                 self.disconnected = true;
             }
-            RemoteJsonRpcEvent::SurfaceDelivery(_) | RemoteJsonRpcEvent::SurfaceLifecycle(_) => {}
+            RemoteJsonRpcEvent::SessionDelivery(_) | RemoteJsonRpcEvent::SessionLifecycle(_) => {}
         }
     }
 }
 
-impl RemoteSurfaceStream<'_> {
-    pub fn surface_id(&self) -> &SurfaceId {
-        &self.surface_id
+impl RemoteSessionStream<'_> {
+    pub fn session_id(&self) -> &SessionId {
+        &self.session_id
     }
 
     pub fn try_next_event(&mut self) -> Option<SessionEnvelope> {
-        self.demux.try_next_surface_event(&self.surface_id)
+        self.demux.try_next_session_event(&self.session_id)
     }
 
     pub async fn next_event(&mut self) -> Option<SessionEnvelope> {
-        self.demux.next_surface_event(&self.surface_id).await
+        self.demux.next_session_event(&self.session_id).await
     }
 
-    pub fn try_next_lifecycle(&mut self) -> Option<SurfaceLifecycleEffect> {
-        self.demux.try_next_lifecycle(&self.surface_id)
+    pub fn try_next_lifecycle(&mut self) -> Option<SessionLifecycleEffect> {
+        self.demux.try_next_lifecycle(&self.session_id)
     }
 
-    pub async fn next_lifecycle(&mut self) -> Option<SurfaceLifecycleEffect> {
-        self.demux.next_lifecycle(&self.surface_id).await
+    pub async fn next_lifecycle(&mut self) -> Option<SessionLifecycleEffect> {
+        self.demux.next_lifecycle(&self.session_id).await
     }
 }
 
-impl RemoteOwnedSurfaceStream {
-    pub fn new(demux: RemoteEventDemux, surface_id: SurfaceId) -> Self {
-        Self { demux, surface_id }
+impl RemoteOwnedSessionStream {
+    pub fn new(demux: RemoteEventDemux, session_id: SessionId) -> Self {
+        Self { demux, session_id }
     }
 
-    pub fn surface_id(&self) -> &SurfaceId {
-        &self.surface_id
+    pub fn session_id(&self) -> &SessionId {
+        &self.session_id
     }
 
     pub fn demux_mut(&mut self) -> &mut RemoteEventDemux {
@@ -486,19 +515,19 @@ impl RemoteOwnedSurfaceStream {
     }
 
     pub fn try_next_event(&mut self) -> Option<SessionEnvelope> {
-        self.demux.try_next_surface_event(&self.surface_id)
+        self.demux.try_next_session_event(&self.session_id)
     }
 
     pub async fn next_event(&mut self) -> Option<SessionEnvelope> {
-        self.demux.next_surface_event(&self.surface_id).await
+        self.demux.next_session_event(&self.session_id).await
     }
 
-    pub fn try_next_lifecycle(&mut self) -> Option<SurfaceLifecycleEffect> {
-        self.demux.try_next_lifecycle(&self.surface_id)
+    pub fn try_next_lifecycle(&mut self) -> Option<SessionLifecycleEffect> {
+        self.demux.try_next_lifecycle(&self.session_id)
     }
 
-    pub async fn next_lifecycle(&mut self) -> Option<SurfaceLifecycleEffect> {
-        self.demux.next_lifecycle(&self.surface_id).await
+    pub async fn next_lifecycle(&mut self) -> Option<SessionLifecycleEffect> {
+        self.demux.next_lifecycle(&self.session_id).await
     }
 }
 pub(super) fn remote_event_from_notification(
@@ -506,8 +535,8 @@ pub(super) fn remote_event_from_notification(
 ) -> Option<RemoteJsonRpcEvent> {
     match notification.method.as_str() {
         coco_types::SESSION_EVENT_METHOD => {
-            match decode_surface_delivery_notification(notification.params) {
-                Ok(delivery) => Some(RemoteJsonRpcEvent::SurfaceDelivery(Box::new(delivery))),
+            match decode_session_delivery_notification(notification.params) {
+                Ok(delivery) => Some(RemoteJsonRpcEvent::SessionDelivery(Box::new(delivery))),
                 Err(error) => {
                     tracing::warn!(%error, "dropping undecodable session/event notification");
                     None
@@ -516,7 +545,7 @@ pub(super) fn remote_event_from_notification(
         }
         coco_types::SESSION_LIFECYCLE_METHOD => {
             match decode_lifecycle_notification(notification.params) {
-                Ok(delivery) => Some(RemoteJsonRpcEvent::SurfaceLifecycle(delivery)),
+                Ok(delivery) => Some(RemoteJsonRpcEvent::SessionLifecycle(delivery)),
                 Err(error) => {
                     tracing::warn!(%error, "dropping undecodable session/lifecycle notification");
                     None
@@ -527,11 +556,10 @@ pub(super) fn remote_event_from_notification(
     }
 }
 
-fn decode_surface_delivery_notification(
+fn decode_session_delivery_notification(
     params: Option<serde_json::Value>,
-) -> Result<SurfaceDelivery, ClientError> {
+) -> Result<SessionDelivery, ClientError> {
     let mut params = object_params(params, "session/event")?;
-    let surface_id = take_field(&mut params, "surface_id", "session/event")?;
     let mut envelope = take_object_field(&mut params, "envelope", "session/event")?;
     let session_id = take_field(&mut envelope, "session_id", "session/event envelope")?;
     let agent_id = take_optional_field(&mut envelope, "agent_id", "session/event envelope")?;
@@ -542,8 +570,7 @@ fn decode_surface_delivery_notification(
         "event",
         "session/event envelope",
     )?)?;
-    Ok(SurfaceDelivery {
-        surface_id,
+    Ok(SessionDelivery {
         envelope: SessionEnvelope {
             session_id,
             agent_id,
@@ -556,20 +583,19 @@ fn decode_surface_delivery_notification(
 
 fn decode_lifecycle_notification(
     params: Option<serde_json::Value>,
-) -> Result<SurfaceLifecycleEffect, ClientError> {
+) -> Result<SessionLifecycleEffect, ClientError> {
     let mut params = object_params(params, "session/lifecycle")?;
-    let surface_id: SurfaceId = take_field(&mut params, "surface_id", "session/lifecycle")?;
     let mut effect = take_object_field(&mut params, "effect", "session/lifecycle")?;
     let effect_type: String = take_field(&mut effect, "type", "session/lifecycle effect")?;
     let kind = match effect_type.as_str() {
-        "session_started" => SurfaceLifecycleEffectKind::SessionStarted {
+        "session_started" => SessionLifecycleEffectKind::SessionStarted {
             session_id: take_field(&mut effect, "session_id", "session/lifecycle effect")?,
         },
-        "session_replaced" => SurfaceLifecycleEffectKind::SessionReplaced {
+        "session_replaced" => SessionLifecycleEffectKind::SessionReplaced {
             old_session_id: take_field(&mut effect, "old_session_id", "session/lifecycle effect")?,
             new_session_id: take_field(&mut effect, "new_session_id", "session/lifecycle effect")?,
         },
-        "session_ended" => SurfaceLifecycleEffectKind::SessionEnded {
+        "session_ended" => SessionLifecycleEffectKind::SessionEnded {
             session_id: take_field(&mut effect, "session_id", "session/lifecycle effect")?,
         },
         other => {
@@ -578,18 +604,26 @@ fn decode_lifecycle_notification(
             )));
         }
     };
-    Ok(SurfaceLifecycleEffect { surface_id, kind })
+    Ok(SessionLifecycleEffect { kind })
 }
 
-fn lifecycle_activates_session(delivery: &SurfaceLifecycleEffect, session_id: &SessionId) -> bool {
+fn lifecycle_session_id(delivery: &SessionLifecycleEffect) -> &SessionId {
     match &delivery.kind {
-        SurfaceLifecycleEffectKind::SessionStarted {
+        SessionLifecycleEffectKind::SessionStarted { session_id }
+        | SessionLifecycleEffectKind::SessionEnded { session_id } => session_id,
+        SessionLifecycleEffectKind::SessionReplaced { old_session_id, .. } => old_session_id,
+    }
+}
+
+fn lifecycle_activates_session(delivery: &SessionLifecycleEffect, session_id: &SessionId) -> bool {
+    match &delivery.kind {
+        SessionLifecycleEffectKind::SessionStarted {
             session_id: started,
         } => started == session_id,
-        SurfaceLifecycleEffectKind::SessionReplaced { new_session_id, .. } => {
+        SessionLifecycleEffectKind::SessionReplaced { new_session_id, .. } => {
             new_session_id == session_id
         }
-        SurfaceLifecycleEffectKind::SessionEnded { .. } => false,
+        SessionLifecycleEffectKind::SessionEnded { .. } => false,
     }
 }
 pub(super) fn decode_session_subscribe_envelope(
@@ -713,15 +747,14 @@ use coco_types::AgentId;
 use coco_types::AgentStreamEvent;
 use coco_types::CoreEvent;
 use coco_types::ServerNotification;
+use coco_types::SessionDelivery;
 use coco_types::SessionEnvelope;
 use coco_types::SessionId;
+use coco_types::SessionLifecycleEffect;
+use coco_types::SessionLifecycleEffectKind;
 use coco_types::SessionSubscribeEnvelope;
-use coco_types::SurfaceDelivery;
-use coco_types::SurfaceId;
-use coco_types::SurfaceLifecycleEffect;
-use coco_types::SurfaceLifecycleEffectKind;
 use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;
 
 use super::ClientError;
-use super::{MAX_BUFFERED_CONNECTION_QUEUE, MAX_BUFFERED_SURFACE_QUEUE};
+use super::{MAX_BUFFERED_CONNECTION_QUEUE, MAX_BUFFERED_SESSION_QUEUE};

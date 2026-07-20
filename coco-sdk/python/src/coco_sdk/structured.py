@@ -1,7 +1,7 @@
 """Typed structured output helper.
 
 Provides ``TypedClient`` — a generic wrapper that takes a Pydantic model,
-passes its JSON schema through the ``initialize.json_schema`` field,
+passes its JSON schema through the ``session/start`` ``json_schema`` field,
 and deserializes the ``structured_output`` from the turn result metadata back
 into the model::
 

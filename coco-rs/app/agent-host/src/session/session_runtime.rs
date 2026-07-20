@@ -203,6 +203,7 @@ pub struct SessionTurnEngine {
     pub engine: coco_query::QueryEngine,
     pub model_id: String,
     pub turn_cwd: PathBuf,
+    pub(crate) has_session_permission_bridge: bool,
 }
 
 pub struct SessionFileRewindRequest {
@@ -280,9 +281,8 @@ pub struct SessionRuntimeBuildOpts<'a> {
     pub tools: Arc<ToolRegistry>,
     pub session_manager: Arc<SessionManager>,
     pub fast_model_spec: Option<ModelSpec>,
-    /// AppServer turn execution installs an `AppServerPermissionBridge`; TUI
-    /// passes `None` at runtime construction and uses interactive approval
-    /// prompts through its local bridge instead.
+    /// Optional in-process permission bridge. When absent, AppServer turn
+    /// execution installs its client-facing permission bridge.
     pub permission_bridge: Option<ToolPermissionBridgeRef>,
     /// Slash-command registry — populated once at startup via
     /// `coco_commands::build_command_registry`. Both typed `/foo`
@@ -327,10 +327,6 @@ pub struct SessionRuntimeBuildOpts<'a> {
     /// skills, suggestions, tasks, or title). Gated in `build` /
     /// `install_session_late_binds` like `is_non_interactive`.
     pub execution_profile: SessionExecutionProfile,
-    /// Callback requirements this session is constructed with. Empty for local
-    /// (TUI/headless) surfaces; the connection profile's set for AppServer/SDK
-    /// sessions. Owned by the handle from construction — never installed late.
-    pub callback_requirements: coco_types::SessionCallbackRequirements,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

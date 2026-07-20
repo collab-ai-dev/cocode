@@ -6,44 +6,15 @@ fn session_target() -> SessionTarget {
     }
 }
 
-fn interactive_target() -> InteractiveTarget {
-    InteractiveTarget {
-        session_id: session_target().session_id,
-        surface_id: crate::SurfaceId::new("surface-a"),
-    }
-}
-
 #[test]
 fn canonical_targets_round_trip() {
     let session = session_target();
-    let interactive = interactive_target();
     assert_eq!(
         serde_json::from_value::<SessionTarget>(serde_json::to_value(&session).unwrap())
             .unwrap()
             .session_id,
         session.session_id
     );
-    let decoded =
-        serde_json::from_value::<InteractiveTarget>(serde_json::to_value(&interactive).unwrap())
-            .unwrap();
-    assert_eq!(decoded.session_id, interactive.session_id);
-    assert_eq!(decoded.surface_id, interactive.surface_id);
-}
-
-#[test]
-fn close_target_round_trips_both_authority_cases() {
-    for target in [
-        SessionCloseTarget::Interactive {
-            target: interactive_target(),
-        },
-        SessionCloseTarget::Orphaned {
-            target: session_target(),
-        },
-    ] {
-        let value = serde_json::to_value(&target).unwrap();
-        let decoded: SessionCloseTarget = serde_json::from_value(value).unwrap();
-        assert_eq!(decoded.session_id(), target.session_id());
-    }
 }
 
 #[test]
@@ -59,8 +30,8 @@ fn config_targets_round_trip_without_string_scopes() {
     }
     let writes = [
         ConfigWriteTarget::User,
-        ConfigWriteTarget::Project(interactive_target()),
-        ConfigWriteTarget::Local(interactive_target()),
+        ConfigWriteTarget::Project(session_target()),
+        ConfigWriteTarget::Local(session_target()),
     ];
     for target in writes {
         let decoded: ConfigWriteTarget =
@@ -84,12 +55,12 @@ fn missing_targets_fail_deserialization() {
 }
 
 #[test]
-fn interactive_and_session_requests_serialize_authority() {
-    let interactive = ClientRequest::TurnInterrupt(interactive_target());
+fn full_and_read_requests_serialize_session_target() {
+    let full = ClientRequest::TurnInterrupt(session_target());
     let session = ClientRequest::McpStatus(session_target());
     assert_eq!(
-        serde_json::to_value(interactive).unwrap()["params"]["surface_id"],
-        "surface-a"
+        serde_json::to_value(full).unwrap()["params"]["session_id"],
+        "session-a"
     );
     assert_eq!(
         serde_json::to_value(session).unwrap()["params"]["session_id"],
@@ -125,7 +96,7 @@ fn request_scope_classifies_representative_methods() {
     );
     assert_eq!(
         request_scope(ClientRequestMethod::TurnStart),
-        RequestScope::Interactive
+        RequestScope::SessionFull
     );
     assert_eq!(
         request_scope(ClientRequestMethod::ConfigRead),
@@ -134,7 +105,7 @@ fn request_scope_classifies_representative_methods() {
 }
 
 #[test]
-fn connection_profile_normalizes_and_freezes_callback_requirements() {
+fn connection_profile_normalizes_and_freezes_initialize_data() {
     let mut params = InitializeParams {
         client_mcp_servers: Some(vec![" beta ".into(), "alpha".into(), "alpha".into()]),
         ..Default::default()
@@ -152,24 +123,22 @@ fn connection_profile_normalizes_and_freezes_callback_requirements() {
         profile.initialize().client_mcp_servers.as_ref().unwrap(),
         &["alpha".to_string(), "beta".to_string()]
     );
-    let requirements = profile.callback_requirements();
-    assert!(requirements.hook_callback_ids.contains("callback-a"));
-    assert!(requirements.is_satisfied_by(&profile));
-    assert!(
-        !requirements
-            .is_satisfied_by(&ConnectionProfile::try_from(InitializeParams::default()).unwrap())
+    assert_eq!(
+        profile.initialize().hooks.as_ref().unwrap()[&crate::HookEventType::PreToolUse][0]
+            .hook_callback_ids,
+        ["callback-a"]
     );
 }
 
 #[test]
 fn replace_serializes_source_and_typed_destination() {
     let request = ClientRequest::SessionReplace(Box::new(SessionReplaceParams {
-        source: interactive_target(),
+        source: session_target(),
         destination: SessionReplacement::Resume(session_target()),
     }));
     let value = serde_json::to_value(request).unwrap();
     assert_eq!(value["method"], "session/replace");
-    assert_eq!(value["params"]["source"]["surface_id"], "surface-a");
+    assert_eq!(value["params"]["source"]["session_id"], "session-a");
     assert_eq!(
         value["params"]["destination"]["resume"]["session_id"],
         "session-a"

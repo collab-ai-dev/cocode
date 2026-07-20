@@ -3,7 +3,7 @@ use std::{path::PathBuf, sync::Arc};
 use anyhow::Result;
 use coco_app_runtime::ProcessRuntime;
 use coco_messages::Message;
-use coco_types::{AgentDefinition, SessionCallbackRequirements, SessionId};
+use coco_types::{AgentDefinition, SessionId};
 
 use crate::session_runtime::{SessionHandle, SessionRuntimeFactory, SessionStartRuntimeConfig};
 
@@ -17,7 +17,6 @@ pub(crate) struct AppSessionRuntimeBinding {
 
 #[derive(Clone)]
 pub(crate) struct AppSessionRuntimeProfile {
-    pub(crate) callback_requirements: SessionCallbackRequirements,
     pub(crate) plan_mode_custom_instructions: Option<String>,
     pub(crate) supplied_agents: Vec<AgentDefinition>,
     pub(crate) requires_structured_output: bool,
@@ -45,7 +44,6 @@ pub(crate) async fn build_app_session_runtime_for_start(
         .build_with_session_id_and_cwd(
             prepared.session_id.clone(),
             session_build_cwd_from_str(&binding.cwd, &prepared.cwd),
-            profile.callback_requirements.clone(),
         )
         .await?;
     apply_app_session_runtime_profile(profile, &session).await;
@@ -60,11 +58,7 @@ pub(crate) async fn build_app_session_runtime_for_resume(
 ) -> Result<SessionHandle> {
     let session = binding
         .runtime_factory
-        .build_with_session_id_and_cwd(
-            session_id,
-            session_build_cwd(&binding.cwd, &cwd),
-            profile.callback_requirements.clone(),
-        )
+        .build_with_session_id_and_cwd(session_id, session_build_cwd(&binding.cwd, &cwd))
         .await?;
     apply_app_session_runtime_profile(profile, &session).await;
     Ok(session)

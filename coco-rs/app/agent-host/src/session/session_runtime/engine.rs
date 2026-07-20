@@ -279,6 +279,7 @@ impl SessionRuntime {
     ) -> super::SessionTurnEngine {
         let prepared = self.prepare_turn_engine_config(request).await;
         let session_id = self.current_typed_session_id().await;
+        let has_session_permission_bridge = self.turn_resources.permission_bridge().is_some();
         let engine = self
             .build_engine_from_config(prepared.config, session_id, cancel, None)
             .await
@@ -287,6 +288,7 @@ impl SessionRuntime {
             engine,
             model_id: prepared.model_id,
             turn_cwd: prepared.turn_cwd,
+            has_session_permission_bridge,
         }
     }
 

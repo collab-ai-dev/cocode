@@ -426,10 +426,6 @@ impl SessionHandle {
     pub async fn flush_session_usage_snapshot(&self) {
         self.runtime.flush_session_usage_snapshot().await;
     }
-
-    pub fn callback_requirements(&self) -> coco_types::SessionCallbackRequirements {
-        self.callback_requirements.clone()
-    }
 }
 
 fn session_message_preview(message: &Arc<coco_messages::Message>) -> Option<String> {

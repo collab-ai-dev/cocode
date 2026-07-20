@@ -1,7 +1,7 @@
 import {
   ClientRequestMethod,
   NotificationMethod,
-  type InteractiveTarget,
+  type SessionTarget,
   type PermissionMode,
   type SessionStartResult,
   type ServerNotification,
@@ -55,8 +55,11 @@ export async function* query(prompt: string, options: QueryOptions = {}): AsyncG
         max_budget_usd: options.maxBudgetUsd ?? null,
       },
     })) as unknown as SessionStartResult;
-    const target = interactiveTarget(startResult);
-    await router.request({ method: ClientRequestMethod.TURN_START, params: { target, prompt } });
+    const target = sessionTarget(startResult);
+    await router.request({
+      method: ClientRequestMethod.TURN_START,
+      params: { target, prompt, composer: { next_attachment_label: 0 } },
+    });
 
     while (true) {
       const event = (await router.nextEvent(options.signal)) as unknown as ServerNotification;
@@ -70,11 +73,8 @@ export async function* query(prompt: string, options: QueryOptions = {}): AsyncG
   }
 }
 
-function interactiveTarget(startResult: SessionStartResult): InteractiveTarget {
-  if (!startResult.surface_id) {
-    throw new Error("session/start did not attach an interactive surface");
-  }
-  return { session_id: startResult.session_id, surface_id: startResult.surface_id };
+function sessionTarget(startResult: SessionStartResult): SessionTarget {
+  return { session_id: startResult.session_id };
 }
 
 function throwIfAborted(signal?: AbortSignal): void {

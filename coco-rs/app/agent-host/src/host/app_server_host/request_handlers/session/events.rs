@@ -171,7 +171,7 @@ pub(in crate::host::app_server_host::request_handlers) async fn forward_turn_eve
     // The turn has ended. Cancel any server->client requests still pending for
     // it (e.g. an approval abandoned when the turn was interrupted) so their
     // pending entries + retained payloads are reclaimed now rather than leaking
-    // until the surface detaches or the session closes.
+    // until the turn or session closes.
     if let Some(app_server) = &app_server {
         app_server.cancel_turn_server_requests(&turn_id);
     }
@@ -187,7 +187,7 @@ async fn forward_terminal_event(
     // Belt against a duplicate terminal reaching the wire/ring. The active-turn
     // slot is cleared exactly once, on the first terminal; a second terminal is
     // dropped-with-warn rather than forwarded (it would otherwise be delivered
-    // to passive/replay/Hub consumers as a contradictory outcome).
+    // to read-only/replay/Hub consumers as a contradictory outcome).
     if *turn_slot_cleared {
         tracing::warn!(
             session_id = %owner_session_id,

@@ -1,6 +1,6 @@
 use super::*;
 
-impl<H: Clone> LocalServerClient<H> {
+impl<H: Clone + Send + Sync + 'static> LocalServerClient<H> {
     pub async fn approval_resolve<Handler>(
         &self,
         handler: &Handler,
@@ -134,7 +134,7 @@ impl<H: Clone> LocalServerClient<H> {
     {
         self.send_typed_client_request(
             handler,
-            ClientRequest::ResetSessionPermissionRules(session.interactive_target()),
+            ClientRequest::ResetSessionPermissionRules(session.session_target()),
         )
         .await
     }

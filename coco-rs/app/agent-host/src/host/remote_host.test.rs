@@ -427,10 +427,6 @@ async fn max_sessions_one_allows_first_real_session_without_placeholder() {
             "first real session/start must succeed with COCO_SERVER_MAX_SESSIONS=1, got {other:?}"
         ),
     };
-    // session/start always attaches the caller surface; `surface_id` is required
-    // on the result, so a successful start proves the attachment.
-    let _ = &result.surface_id;
-
     let live_sessions = host.app_server.list_live_sessions();
     assert_eq!(live_sessions.len(), 1);
     assert_eq!(live_sessions[0].session_id, result.session_id);

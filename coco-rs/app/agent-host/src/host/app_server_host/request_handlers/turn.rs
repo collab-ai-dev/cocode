@@ -331,22 +331,40 @@ pub(crate) async fn handle_user_input_resolve(
 /// (or similar) that it no longer wants to resolve, e.g. if the user
 /// closed the approval UI before answering.
 ///
-/// We drop the pending oneshot sender so the agent-side receiver gets
-/// an `Err (RecvError)` and the tool executor can treat it as "denied".
+/// For a broadcast, this withdraws only the calling connection so another
+/// Full client can still answer. The pending oneshot is dropped only when the
+/// last recipient withdraws; targeted requests therefore still cancel
+/// immediately.
 /// If the `request_id` isn't in any pending map, we still return ok so
 /// the client doesn't treat a race (server already resolved + cleaned
 /// up) as a protocol error.
 pub(crate) async fn handle_cancel_request(
     params: coco_types::CancelRequestParams,
-    _ctx: &HandlerContext,
+    ctx: &HandlerContext,
 ) -> HandlerResult {
-    HandlerResult::Err {
-        code: coco_types::error_codes::INVALID_REQUEST,
-        message: format!(
-            "control/cancelRequest {} requires AppServer connection routing",
-            params.request_id
-        ),
-        data: None,
+    let (Some(app_server), Some(connection)) = (&ctx.app_server, ctx.connection) else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "control/cancelRequest requires an AppServer connection".to_string(),
+            data: None,
+        };
+    };
+    let request_id = coco_types::RequestId::String(params.request_id);
+    match app_server.cancel_server_request_for_connection(connection, &request_id) {
+        Ok(_) | Err(coco_app_server::AppServerError::ServerRequestNotFound { .. }) => {
+            HandlerResult::ok_empty()
+        }
+        Err(error) => {
+            let error = crate::app_server_host::session_errors::app_server_lifecycle_error(
+                "cancel pending server request",
+                error,
+            );
+            HandlerResult::Err {
+                code: error.code,
+                message: error.message,
+                data: error.data,
+            }
+        }
     }
 }
 
@@ -373,19 +391,26 @@ fn resolve_app_server_request(
     let Some(_session_id) = &ctx.target_session_id else {
         return Err(HandlerResult::Err {
             code: coco_types::error_codes::INVALID_REQUEST,
-            message: format!("{kind} resolve requires an interactive target"),
+            message: format!("{kind} resolve requires a session target"),
             data: None,
         });
     };
-    let Some(target) = reply.interactive_target().cloned() else {
+    let Some(target) = reply.session_target().cloned() else {
         return Err(HandlerResult::Err {
             code: coco_types::error_codes::INVALID_REQUEST,
-            message: format!("{kind} resolve requires an interactive reply target"),
+            message: format!("{kind} resolve requires a session reply target"),
+            data: None,
+        });
+    };
+    let Some(connection) = ctx.connection else {
+        return Err(HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: format!("{kind} resolve requires a connection"),
             data: None,
         });
     };
     app_server
-        .resolve_server_request(&target, reply)
+        .resolve_server_request(connection, &target, reply)
         .map(|_| ())
         .map_err(|error| {
             let error = crate::app_server_host::session_errors::app_server_lifecycle_error(

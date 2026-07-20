@@ -1,7 +1,7 @@
 //! `SandboxApprovalBridge` impl that routes through AppServer.
 //!
 //! Sandbox network approvals are surfaced as a synthetic tool named
-//! `SandboxNetworkAccess` so remote interactive surfaces see one uniform
+//! `SandboxNetworkAccess` so Full remote clients see one uniform
 //! permission protocol for both regular tools and sandbox-level operations. This
 //! crate's [`coco_sandbox::SandboxApprovalBridge`] is the producer-side
 //! seam (D7); this module is the AppServer bridge that connects it to the
@@ -26,22 +26,22 @@ use coco_types::{ApprovalDecision, ServerAskForApprovalParams};
 use tracing::warn;
 use uuid::Uuid;
 
-/// Synthetic tool name surfaced to remote surfaces so sandbox approvals
+/// Synthetic tool name sent to remote clients so sandbox approvals
 /// reuse the regular tool-permission UI / handlers without a separate
 /// message type.
 pub const SANDBOX_NETWORK_ACCESS_TOOL_NAME: &str = "SandboxNetworkAccess";
 
 /// Synthetic tool name for filesystem-level sandbox approvals
 /// (path read / write). coco-rs has a stricter filesystem sandbox
-/// and surfaces denied paths through the same channel so remote surfaces
+/// and sends denied paths through the same channel so remote clients
 /// can prompt with one consistent dialog.
 pub const SANDBOX_PATH_ACCESS_TOOL_NAME: &str = "SandboxPathAccess";
 
 /// AppServer-backed sandbox approval bridge.
 ///
-/// The bridge is bound to the same session capability whose sandbox
-/// produced the request. AppServer selects that session's interactive
-/// surface and owns reply correlation.
+/// The bridge is bound to the session whose sandbox produced the request.
+/// AppServer broadcasts to that session's Full clients and owns first-response
+/// correlation.
 pub struct AppServerSandboxApprovalBridge {
     app_server: Arc<coco_app_server::AppServer<crate::app_session::AppSessionHandle>>,
     session: crate::session_runtime::SessionHandle,
@@ -65,7 +65,7 @@ impl SandboxApprovalBridge for AppServerSandboxApprovalBridge {
         // `SandboxOperation` is `#[non_exhaustive]`; future kinds
         // (subprocess spawn, etc.) need an explicit wire mapping. We
         // route unknown kinds through the path-access tool with a
-        // generic input shape so the remote surface at least sees the
+        // generic input shape so the remote client at least sees the
         // approval prompt — the alternative would be silent acceptance
         // or hard panic, both worse for the security model.
         let tool_name = match request.operation {
@@ -108,8 +108,11 @@ impl SandboxApprovalBridge for AppServerSandboxApprovalBridge {
             agent_id: None,
             cwd: None,
             permission_suggestions: Vec::new(),
+            choices: None,
+            detail: None,
+            worker_badge: None,
         };
-        // Fire the Notification hook before blocking on the remote surface so
+        // Fire the Notification hook before blocking on the remote client so
         // the same hook fires regardless of whether the prompt comes from
         // a regular tool or a sandbox-level deny. Best-effort — runtime
         // not yet installed (e.g. tests) leaves the hook unfired.
@@ -124,9 +127,8 @@ impl SandboxApprovalBridge for AppServerSandboxApprovalBridge {
 
         let reply = match self.app_server.route_server_request_with_reply(
             self.session.session_id().clone(),
-            coco_app_server::SurfaceCapability::Interactive,
             self.session.active_turn_id(),
-            coco_types::ServerRequest::AskForApproval(params),
+            coco_types::ServerRequest::AskForApproval(Box::new(params)),
         ) {
             Ok(receiver) => match receiver.await {
                 Ok(reply) => reply,

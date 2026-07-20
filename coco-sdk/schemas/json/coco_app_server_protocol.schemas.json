@@ -38,7 +38,7 @@
           "type": "string"
         },
         "target": {
-          "$ref": "#/$defs/InteractiveTarget"
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
@@ -580,7 +580,7 @@
       "description": "Params for `control/applyPermissionUpdate`.",
       "properties": {
         "target": {
-          "$ref": "#/$defs/InteractiveTarget"
+          "$ref": "#/$defs/SessionTarget"
         },
         "update": {
           "$ref": "#/$defs/PermissionUpdate"
@@ -622,22 +622,29 @@
             "null"
           ]
         },
-        "permission_update": {
+        "permission_updates": {
+          "description": "Permission updates authorized by the user and persisted to rules.",
+          "items": {
+            "$ref": "#/$defs/PermissionUpdate"
+          },
+          "type": "array"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "resolution_detail": {
           "anyOf": [
             {
-              "$ref": "#/$defs/PermissionUpdate"
+              "$ref": "#/$defs/PermissionResolutionDetail"
             },
             {
               "type": "null"
             }
           ],
-          "description": "Optional permission update to persist to rules."
-        },
-        "request_id": {
-          "type": "string"
+          "description": "Trusted tool-specific approval metadata selected by the client."
         },
         "target": {
-          "$ref": "#/$defs/InteractiveTarget"
+          "$ref": "#/$defs/SessionTarget"
         },
         "updated_input": {
           "description": "Optional rewritten tool input the SDK client supplies at\napproval time. When `Some`, the engine substitutes this for the\nmodel-emitted input before invoking the tool. Used by\n`AskUserQuestion` to ship user-selected `answers` (and optional\n`annotations`) back into the tool's data envelope.\n\nIn-process equivalent is `coco_tool_runtime::ToolPermissionResolution.updated_input`\n(TUI mode). Consumed by the SDK approval bridge in `coco-agent-host`."
@@ -664,6 +671,15 @@
             "null"
           ]
         },
+        "choices": {
+          "items": {
+            "$ref": "#/$defs/PermissionAskChoice"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "cwd": {
           "description": "Tool execution cwd. Relative paths in `input` resolve against this so\nan SDK client can derive correctly-scoped grants (mirrors the TUI path).",
           "type": [
@@ -681,6 +697,16 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionRequestDetail"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "display_name": {
@@ -710,6 +736,16 @@
         },
         "tool_use_id": {
           "type": "string"
+        },
+        "worker_badge": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkerBadge"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -1774,7 +1810,7 @@
               "type": "string"
             },
             "params": {
-              "$ref": "#/$defs/InteractiveTarget"
+              "$ref": "#/$defs/SessionTarget"
             }
           },
           "required": [
@@ -1967,7 +2003,7 @@
               "type": "string"
             },
             "params": {
-              "$ref": "#/$defs/InteractiveTarget"
+              "$ref": "#/$defs/SessionTarget"
             }
           },
           "required": [
@@ -2031,7 +2067,7 @@
               "type": "string"
             },
             "params": {
-              "$ref": "#/$defs/InteractiveTarget"
+              "$ref": "#/$defs/SessionTarget"
             }
           },
           "required": [
@@ -2210,7 +2246,7 @@
               "type": "string"
             },
             "params": {
-              "$ref": "#/$defs/InteractiveTarget"
+              "$ref": "#/$defs/SessionTarget"
             }
           },
           "required": [
@@ -2227,7 +2263,7 @@
               "type": "string"
             },
             "params": {
-              "$ref": "#/$defs/InteractiveTarget"
+              "$ref": "#/$defs/SessionTarget"
             }
           },
           "required": [
@@ -2620,7 +2656,7 @@
           "type": "object"
         },
         "target": {
-          "$ref": "#/$defs/InteractiveTarget"
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
@@ -2711,7 +2747,7 @@
           "additionalProperties": false,
           "properties": {
             "project": {
-              "$ref": "#/$defs/InteractiveTarget"
+              "$ref": "#/$defs/SessionTarget"
             }
           },
           "required": [
@@ -2723,7 +2759,7 @@
           "additionalProperties": false,
           "properties": {
             "local": {
-              "$ref": "#/$defs/InteractiveTarget"
+              "$ref": "#/$defs/SessionTarget"
             }
           },
           "required": [
@@ -3216,7 +3252,7 @@
           "type": "string"
         },
         "target": {
-          "$ref": "#/$defs/InteractiveTarget"
+          "$ref": "#/$defs/SessionTarget"
         },
         "values": {
           "additionalProperties": true,
@@ -3300,6 +3336,46 @@
         "code"
       ],
       "type": "object"
+    },
+    "ExitPlanChoice": {
+      "description": "The user's response to an `ExitPlanMode` approval prompt.\nThe wire `value` strings are the single source of truth for the choice\nechoed back through `PermissionDecision::Ask.choices` \u2192\n`PermissionResolutionDetail::ExitPlanMode.choice`. Owning the mapping here keeps\nthe producer (the TUI permission bridge, which builds the choice list) and\nthe consumer (`ExitPlanModeTool::execute`, which branches on the picked\nvalue) from drifting apart.\nResponse value for the exit-plan-mode permission request. Values mirror\nupstream 2.1.193's `buildExitPlanModeOptions`/`Tar` branches so TUI\nchoice logs and SDK surfaces stay source-compatible.",
+      "oneOf": [
+        {
+          "const": "yes-auto-clear-context",
+          "description": "Clear context, then implement in Auto mode.",
+          "type": "string"
+        },
+        {
+          "const": "yes-bypass-permissions",
+          "description": "Clear context, then implement with permissions bypassed.",
+          "type": "string"
+        },
+        {
+          "const": "yes-accept-edits",
+          "description": "Clear context, then implement auto-accepting edits.",
+          "type": "string"
+        },
+        {
+          "const": "yes-accept-edits-keep-context",
+          "description": "Keep context; auto-accept edits (or bypass when the gate allows).",
+          "type": "string"
+        },
+        {
+          "const": "yes-resume-auto-mode",
+          "description": "Keep context; resume Auto mode.",
+          "type": "string"
+        },
+        {
+          "const": "yes-default-keep-context",
+          "description": "Keep context; manually approve edits.",
+          "type": "string"
+        },
+        {
+          "const": "no",
+          "description": "Reject the plan and stay in plan mode. Never reaches `execute` (the\nTUI maps it to a denial) \u2014 carried so the bridge and the \"is this a\nrejection?\" check share one wire constant.",
+          "type": "string"
+        }
+      ]
     },
     "ExitPlanModeAllowedPrompt": {
       "properties": {
@@ -5032,22 +5108,6 @@
       },
       "type": "object"
     },
-    "InteractiveTarget": {
-      "description": "Selects one live interactive surface and its immutable session identity.",
-      "properties": {
-        "session_id": {
-          "$ref": "#/$defs/SessionId"
-        },
-        "surface_id": {
-          "$ref": "#/$defs/SurfaceId"
-        }
-      },
-      "required": [
-        "session_id",
-        "surface_id"
-      ],
-      "type": "object"
-    },
     "InterruptedOutcome": {
       "description": "Payload for [`TurnOutcome::Interrupted`]. `abort_reason`\ndistinguishes user Ctrl+C, submit interrupt, permission abort, and\nsystem pre-empt. Never carries a model `stop_reason`.",
       "properties": {
@@ -5739,7 +5799,7 @@
           "type": "string"
         },
         "target": {
-          "$ref": "#/$defs/InteractiveTarget"
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
@@ -5843,7 +5903,7 @@
           "type": "object"
         },
         "target": {
-          "$ref": "#/$defs/InteractiveTarget"
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
@@ -5961,7 +6021,7 @@
           "type": "string"
         },
         "target": {
-          "$ref": "#/$defs/InteractiveTarget"
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
@@ -7000,6 +7060,33 @@
           "required": [
             "kind",
             "outcome"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PermissionResolutionDetail": {
+      "description": "Tool-specific trusted metadata attached to a permission approval.",
+      "oneOf": [
+        {
+          "properties": {
+            "choice": {
+              "$ref": "#/$defs/ExitPlanChoice"
+            },
+            "edited_plan": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "exit_plan_mode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "choice"
           ],
           "type": "object"
         }
@@ -8226,7 +8313,7 @@
           "type": "boolean"
         },
         "target": {
-          "$ref": "#/$defs/InteractiveTarget"
+          "$ref": "#/$defs/SessionTarget"
         },
         "user_message_id": {
           "type": "string"
@@ -9945,49 +10032,13 @@
       "description": "Params for `session/close`.",
       "properties": {
         "target": {
-          "$ref": "#/$defs/SessionCloseTarget"
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
         "target"
       ],
       "type": "object"
-    },
-    "SessionCloseTarget": {
-      "oneOf": [
-        {
-          "properties": {
-            "kind": {
-              "const": "interactive",
-              "type": "string"
-            },
-            "target": {
-              "$ref": "#/$defs/InteractiveTarget"
-            }
-          },
-          "required": [
-            "kind",
-            "target"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "const": "orphaned",
-              "type": "string"
-            },
-            "target": {
-              "$ref": "#/$defs/SessionTarget"
-            }
-          },
-          "required": [
-            "kind",
-            "target"
-          ],
-          "type": "object"
-        }
-      ]
     },
     "SessionDeleteParams": {
       "description": "Params for `session/delete`.",
@@ -10248,7 +10299,7 @@
           "$ref": "#/$defs/SessionReplacement"
         },
         "source": {
-          "$ref": "#/$defs/InteractiveTarget"
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
@@ -10409,15 +10460,10 @@
       "properties": {
         "session": {
           "$ref": "#/$defs/SessionSummary"
-        },
-        "surface_id": {
-          "$ref": "#/$defs/SurfaceId",
-          "description": "The interactive surface attached by a successful resume. Required: a\nsuccessful lifecycle call always attaches an interactive surface."
         }
       },
       "required": [
-        "session",
-        "surface_id"
+        "session"
       ],
       "title": "SessionResumeResult",
       "type": "object"
@@ -10508,15 +10554,10 @@
       "properties": {
         "session_id": {
           "$ref": "#/$defs/SessionId"
-        },
-        "surface_id": {
-          "$ref": "#/$defs/SurfaceId",
-          "description": "The interactive surface attached by a successful start. Required: a\nsuccessful lifecycle call always attaches an interactive surface."
         }
       },
       "required": [
-        "session_id",
-        "surface_id"
+        "session_id"
       ],
       "title": "SessionStartResult",
       "type": "object"
@@ -10658,7 +10699,7 @@
       ]
     },
     "SessionSubscribeParams": {
-      "description": "Params for passive `session/subscribe`.",
+      "description": "Params for read-only `session/subscribe`.",
       "properties": {
         "after_seq": {
           "description": "Last durable envelope sequence the client already has.",
@@ -10734,7 +10775,7 @@
       "type": "object"
     },
     "SessionTarget": {
-      "description": "Selects persisted or live state without proving interactive ownership.",
+      "description": "Selects persisted or live session state.",
       "properties": {
         "session_id": {
           "$ref": "#/$defs/SessionId"
@@ -11042,7 +11083,7 @@
           ]
         },
         "target": {
-          "$ref": "#/$defs/InteractiveTarget"
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
@@ -11061,7 +11102,7 @@
           ]
         },
         "target": {
-          "$ref": "#/$defs/InteractiveTarget"
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
@@ -11092,7 +11133,7 @@
           "$ref": "#/$defs/ModelRole"
         },
         "target": {
-          "$ref": "#/$defs/InteractiveTarget"
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
@@ -11110,7 +11151,7 @@
           "$ref": "#/$defs/PermissionMode"
         },
         "target": {
-          "$ref": "#/$defs/InteractiveTarget"
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
@@ -11123,7 +11164,7 @@
       "description": "Params for `control/setThinking`.\nUses `ThinkingLevel` which includes effort level and per-provider options.",
       "properties": {
         "target": {
-          "$ref": "#/$defs/InteractiveTarget"
+          "$ref": "#/$defs/SessionTarget"
         },
         "thinking_level": {
           "anyOf": [
@@ -12018,7 +12059,7 @@
       "description": "Params for `control/stopTask`.",
       "properties": {
         "target": {
-          "$ref": "#/$defs/InteractiveTarget"
+          "$ref": "#/$defs/SessionTarget"
         },
         "task_id": {
           "type": "string"
@@ -12161,10 +12202,6 @@
         "summary_tokens"
       ],
       "type": "object"
-    },
-    "SurfaceId": {
-      "description": "Branded surface attachment identifier.\n\nA surface is a client-visible attachment to a live session. It is\ngenerated by the server, used for routing/capability checks, and is\nnever persisted as transcript identity.",
-      "type": "string"
     },
     "SystemAgentsKilledMessage": {
       "properties": {
@@ -16084,11 +16121,6 @@
           "$ref": "#/$defs/SubmittedComposer",
           "description": "Lossless atomic composer description relative to `prompt`."
         },
-        "history_override": {
-          "description": "Optional full-history override for local compatibility turns that have\nalready assembled transcript messages outside a plain prompt. Each item\nis a serialized `coco_messages::Message`; kept as JSON here to avoid a\nreverse dependency from `coco-types` to `coco-messages`.",
-          "items": true,
-          "type": "array"
-        },
         "images": {
           "description": "Optional clipboard/paste images to include on the user message.",
           "items": {
@@ -16129,7 +16161,7 @@
           ]
         },
         "target": {
-          "$ref": "#/$defs/InteractiveTarget"
+          "$ref": "#/$defs/SessionTarget"
         },
         "thinking_level": {
           "anyOf": [
@@ -16230,7 +16262,7 @@
           "type": "object"
         },
         "target": {
-          "$ref": "#/$defs/InteractiveTarget"
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [
@@ -16311,7 +16343,7 @@
           "type": "string"
         },
         "target": {
-          "$ref": "#/$defs/InteractiveTarget"
+          "$ref": "#/$defs/SessionTarget"
         }
       },
       "required": [

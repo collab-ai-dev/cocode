@@ -48,12 +48,16 @@ fn test_env_key_as_str() {
         "COCO_SERVER_MAX_SESSIONS"
     );
     assert_eq!(
-        EnvKey::CocoServerMaxSurfacesPerConnection.as_str(),
-        "COCO_SERVER_MAX_SURFACES_PER_CONNECTION"
+        EnvKey::CocoServerMaxAttachedSessionsPerConnection.as_str(),
+        "COCO_SERVER_MAX_ATTACHED_SESSIONS_PER_CONNECTION"
     );
     assert_eq!(
-        EnvKey::CocoServerMaxPassiveSurfacesPerSession.as_str(),
-        "COCO_SERVER_MAX_PASSIVE_SURFACES_PER_SESSION"
+        EnvKey::CocoServerMaxConnectionsPerSession.as_str(),
+        "COCO_SERVER_MAX_CONNECTIONS_PER_SESSION"
+    );
+    assert_eq!(
+        EnvKey::CocoServerRequestTimeoutSecs.as_str(),
+        "COCO_SERVER_REQUEST_TIMEOUT_SECS"
     );
     assert_eq!(
         EnvKey::CocoServerTurnDrainTimeoutSecs.as_str(),

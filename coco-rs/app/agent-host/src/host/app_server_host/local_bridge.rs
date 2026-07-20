@@ -6,7 +6,7 @@
 use std::{sync::Arc, time::Duration};
 
 use crate::local_client::{LocalServerClient, LocalSessionClient};
-use coco_app_server::{AppServer, LocalClientAdapter, SurfaceLimits};
+use coco_app_server::{AppServer, ConnectionLimits, LocalClientAdapter};
 use coco_app_server_client::ClientError;
 use coco_types::SessionId;
 use tokio::{sync::mpsc, task::JoinHandle};
@@ -15,17 +15,15 @@ use tracing::warn;
 use crate::app_session::AppSessionHandle;
 use crate::event_hub::ProcessEventHubEgress;
 
-mod local_interactive_session;
+mod session;
 
 use super::AppServerHostState;
 pub(crate) use super::config::APP_SERVER_TURN_DRAIN_TIMEOUT;
 use super::config::{
     APP_SERVER_LOCAL_CHANNEL_CAPACITY, APP_SERVER_LOCAL_RETENTION_PER_SESSION,
-    server_config_duration_secs, server_config_surface_limits, server_config_usize,
+    server_config_duration_secs, server_config_usize,
 };
 pub use super::handler::AppServerHostHandler;
-#[cfg(test)]
-use super::outbound::route_app_server_session_event;
 use super::outbound::{install_session_seq_durability, spawn_app_server_local_outbound_forwarder};
 use super::session_close::shutdown_local_app_server_sessions;
 use super::session_registry::register_local_app_server_session;
@@ -40,7 +38,7 @@ pub struct AppServerLocalTurnCompletion {
 #[derive(Clone)]
 pub struct AppServerLocalSessionBinding {
     pub session: crate::session_runtime::SessionHandle,
-    pub surface: LocalSessionClient,
+    pub client: LocalSessionClient,
 }
 
 pub struct AppServerLocalBridge {
@@ -51,13 +49,12 @@ pub struct AppServerLocalBridge {
     hub_connector: Arc<std::sync::RwLock<Option<ProcessEventHubEgress>>>,
     event_pump: Option<JoinHandle<()>>,
     event_pump_session_id: Option<SessionId>,
-    interactive_surface: Option<LocalSessionClient>,
+    full_session: Option<LocalSessionClient>,
     // At most one ephemeral sidechat child coexists with the primary session
     // (I-2), so a single extra pair of slots suffices — no map needed. The
     // primary fields above are never disturbed by child lifecycle.
-    child_interactive_surface: Option<LocalSessionClient>,
+    child_full_session: Option<LocalSessionClient>,
     child_event_pump: Option<JoinHandle<()>>,
-    channel_capacity: usize,
 }
 
 impl AppServerLocalBridge {
@@ -79,10 +76,23 @@ impl AppServerLocalBridge {
                 server_config.event_retention_per_session,
                 APP_SERVER_LOCAL_RETENTION_PER_SESSION,
             ),
-            server_config_surface_limits(server_config),
             server_config_duration_secs(
                 server_config.turn_drain_timeout_secs,
                 APP_SERVER_TURN_DRAIN_TIMEOUT,
+            ),
+            ConnectionLimits {
+                max_attached_sessions_per_connection: server_config_usize(
+                    server_config.max_attached_sessions_per_connection,
+                    ConnectionLimits::default().max_attached_sessions_per_connection,
+                ),
+                max_connections_per_session: server_config_usize(
+                    server_config.max_connections_per_session,
+                    ConnectionLimits::default().max_connections_per_session,
+                ),
+            },
+            server_config_duration_secs(
+                server_config.server_request_timeout_secs,
+                Duration::from_secs(15 * 60),
             ),
         )
     }
@@ -99,8 +109,9 @@ impl AppServerLocalBridge {
             state,
             channel_capacity,
             channel_capacity,
-            SurfaceLimits::default(),
             APP_SERVER_TURN_DRAIN_TIMEOUT,
+            ConnectionLimits::default(),
+            Duration::from_secs(15 * 60),
         )
     }
 
@@ -108,8 +119,9 @@ impl AppServerLocalBridge {
         state: Arc<AppServerHostState>,
         channel_capacity: usize,
         event_retention_per_session: usize,
-        surface_limits: SurfaceLimits,
         turn_drain_timeout: Duration,
+        connection_limits: ConnectionLimits,
+        server_request_timeout: Duration,
     ) -> Self {
         assert!(
             channel_capacity > 0,
@@ -119,15 +131,18 @@ impl AppServerLocalBridge {
             event_retention_per_session > 0,
             "local AppServer bridge event retention must be non-zero"
         );
-        let app_server = Arc::new(AppServer::<AppSessionHandle>::new_with_surface_limits(
-            // Capacity guard: the primary session plus at most one ephemeral
-            // sidechat child (I-2). Correctness is enforced by the registry's
-            // parent→child index, not this number.
-            /*max_sessions*/
-            2,
-            event_retention_per_session,
-            surface_limits,
-        ));
+        let app_server = Arc::new(
+            AppServer::<AppSessionHandle>::with_connection_limits_and_server_request_timeout(
+                // Capacity guard: the primary session plus at most one ephemeral
+                // sidechat child (I-2). Correctness is enforced by the registry's
+                // parent→child index, not this number.
+                /*max_sessions*/
+                2,
+                event_retention_per_session,
+                connection_limits,
+                server_request_timeout,
+            ),
+        );
         install_session_seq_durability(&state, event_retention_per_session as i64);
         let adapter =
             LocalClientAdapter::with_channel_capacity(Arc::clone(&app_server), channel_capacity);
@@ -154,10 +169,9 @@ impl AppServerLocalBridge {
             hub_connector,
             event_pump: None,
             event_pump_session_id: None,
-            interactive_surface: None,
-            child_interactive_surface: None,
+            full_session: None,
+            child_full_session: None,
             child_event_pump: None,
-            channel_capacity,
         }
     }
 
@@ -176,16 +190,8 @@ impl AppServerLocalBridge {
         }
     }
 
-    pub fn client_mut(&mut self) -> &mut LocalServerClient<AppSessionHandle> {
-        &mut self.client
-    }
-
     pub fn connect_local_client(&self) -> LocalServerClient<AppSessionHandle> {
-        let adapter = LocalClientAdapter::with_channel_capacity(
-            Arc::clone(&self.app_server),
-            self.channel_capacity,
-        );
-        LocalServerClient::connect_local(&adapter)
+        self.client.clone()
     }
 
     pub fn handler(&self) -> &AppServerHostHandler {
@@ -250,6 +256,9 @@ impl Drop for AppServerLocalBridge {
     fn drop(&mut self) {
         self.outbound_forwarder.abort();
         if let Some(handle) = &self.event_pump {
+            handle.abort();
+        }
+        if let Some(handle) = &self.child_event_pump {
             handle.abort();
         }
     }

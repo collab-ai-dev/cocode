@@ -169,7 +169,7 @@ pub async fn persist_session_resume_mode(session: &SessionHandle) {
 }
 
 /// Final interactive-session checkpoint after local AppServer shutdown.
-pub async fn flush_interactive_session_exit_checkpoint(session: &SessionHandle) {
+pub async fn flush_full_session_exit_checkpoint(session: &SessionHandle) {
     session.re_append_session_metadata().await;
     session.persist_session_mode().await;
     session.flush_session_usage_snapshot().await;

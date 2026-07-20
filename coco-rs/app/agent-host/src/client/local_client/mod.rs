@@ -1,27 +1,29 @@
-use std::collections::{HashMap, VecDeque};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{Arc, Mutex},
+};
 
 use coco_app_server::{
-    AttachSurfaceOptions, DetachSurfaceOutcome, DisconnectOutcome, LocalClientAdapter,
-    LocalClientConnection, LocalClientDispatchError, LocalClientRequestHandler,
-    LocalClientSubscribeOutcome, SessionSurfaceCounts, SurfaceRole,
+    AttachSessionOptions, DetachSessionOutcome, DisconnectOutcome, LocalClientAdapter,
+    LocalClientDispatchError, LocalClientHandle, LocalClientRequestHandler,
+    LocalClientSubscribeOutcome, SessionConnectionCounts,
 };
 use coco_types::{
     AgentInterruptCurrentWorkParams, ApplyPermissionUpdateParams, ApprovalResolveParams,
     BackgroundAllTasksResult, CancelRequestParams, ClientRequest, ConfigApplyFlagsParams,
     ConfigReadParams, ConfigReadResult, ConfigWriteParams, ContextUsageResult,
     ElicitationResolveParams, HookReloadResult, InitializeParams, InitializeResult,
-    InteractiveTarget, McpReconnectParams, McpSetServersParams, McpSetServersResult,
-    McpStatusResult, McpToggleParams, PluginReloadResult, ResetSessionPermissionRulesResult,
-    RewindFilesParams, RewindFilesResult, ServerRequestDelivery, SessionCloseParams,
-    SessionCloseTarget, SessionCostResult, SessionDeleteParams, SessionEnvelope, SessionId,
+    McpReconnectParams, McpSetServersParams, McpSetServersResult, McpStatusResult, McpToggleParams,
+    PluginReloadResult, ResetSessionPermissionRulesResult, RewindFilesParams, RewindFilesResult,
+    SessionCloseParams, SessionCostResult, SessionDeleteParams, SessionEnvelope, SessionId,
     SessionListResult, SessionReadParams, SessionReadResult, SessionRenameParams,
     SessionRenameResult, SessionResumeParams, SessionResumeResult, SessionStartParams,
     SessionStartResult, SessionStatusResult, SessionSubscribeParams, SessionSubscribeResult,
     SessionTarget, SessionToggleTagParams, SessionToggleTagResult, SessionTurnsListParams,
     SessionTurnsListResult, SetAgentColorParams, SetModelParams, SetModelRoleParams,
     SetModelRoleResult, SetPermissionModeParams, SetThinkingParams, StopTaskParams,
-    SurfaceDelivery, SurfaceId, SurfaceLifecycleEffect, TaskDetailParams, TaskDetailResult,
-    TaskListResult, TurnStartParams, TurnStartResult, UpdateEnvParams, UserInputResolveParams,
+    TaskDetailParams, TaskDetailResult, TaskListResult, TurnStartParams, TurnStartResult,
+    UpdateEnvParams, UserInputResolveParams,
 };
 
 use coco_app_server_client::ClientError;
@@ -30,7 +32,7 @@ mod controls;
 mod data;
 mod session_lifecycle;
 mod session_ops;
-mod surfaces;
+mod sessions;
 mod tasks;
 mod turn;
 
@@ -42,29 +44,135 @@ fn dispatch_error(error: LocalClientDispatchError) -> ClientError {
     }
 }
 
-pub(crate) fn client_error_from_attach(error: coco_app_server::AttachError) -> ClientError {
-    ClientError::InvalidArgument(error.to_string())
-}
-
 pub struct LocalServerClient<H> {
-    connection: LocalClientConnection<H>,
-    event_buffers: HashMap<SurfaceId, VecDeque<SessionEnvelope>>,
-    request_buffers: HashMap<SurfaceId, VecDeque<ServerRequestDelivery>>,
-    lifecycle_buffers: HashMap<SurfaceId, VecDeque<SurfaceLifecycleEffect>>,
+    handle: LocalClientHandle<H>,
+    inbound_owner: Arc<LocalInboundOwner>,
+    events: tokio::sync::broadcast::Receiver<SessionEnvelope>,
 }
 
-impl<H: Clone> LocalServerClient<H> {
-    pub fn connect_local(adapter: &LocalClientAdapter<H>) -> Self {
+struct LocalInboundOwner {
+    state: Arc<Mutex<LocalInboundState>>,
+    notify: Arc<tokio::sync::Notify>,
+    events: tokio::sync::broadcast::Sender<SessionEnvelope>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+struct LocalInboundState {
+    capacity: usize,
+    requests: HashMap<SessionId, VecDeque<coco_types::ServerRequestDelivery>>,
+    request_count: usize,
+    lifecycle: VecDeque<coco_types::SessionLifecycleEffect>,
+    closed: bool,
+}
+
+impl LocalInboundState {
+    fn new(capacity: usize) -> Self {
         Self {
-            connection: adapter.connect(),
-            event_buffers: HashMap::new(),
-            request_buffers: HashMap::new(),
-            lifecycle_buffers: HashMap::new(),
+            capacity,
+            requests: HashMap::new(),
+            request_count: 0,
+            lifecycle: VecDeque::new(),
+            closed: false,
         }
     }
 
-    pub fn disconnect(self) -> coco_app_server::DisconnectOutcome {
-        self.connection.disconnect()
+    fn push(&mut self, inbound: coco_app_server::LocalClientInbound) -> Result<(), ()> {
+        match inbound {
+            coco_app_server::LocalClientInbound::Event(_) => {
+                unreachable!("session events use the per-view broadcast channel")
+            }
+            coco_app_server::LocalClientInbound::ServerRequest(delivery) => {
+                if self.request_count == self.capacity {
+                    return Err(());
+                }
+                let delivery = *delivery;
+                self.requests
+                    .entry(delivery.session_id.clone())
+                    .or_default()
+                    .push_back(delivery);
+                self.request_count += 1;
+            }
+            coco_app_server::LocalClientInbound::Lifecycle(effect) => {
+                if self.lifecycle.len() == self.capacity {
+                    return Err(());
+                }
+                self.lifecycle.push_back(effect);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for LocalInboundOwner {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+impl<H> Clone for LocalServerClient<H> {
+    fn clone(&self) -> Self {
+        Self {
+            handle: self.handle.clone(),
+            inbound_owner: Arc::clone(&self.inbound_owner),
+            events: self.inbound_owner.events.subscribe(),
+        }
+    }
+}
+
+impl<H: Clone + Send + Sync + 'static> LocalServerClient<H> {
+    pub fn connect_local(adapter: &LocalClientAdapter<H>) -> Self {
+        let mut connection = adapter.connect();
+        let handle = connection.handle();
+        let state = Arc::new(Mutex::new(LocalInboundState::new(
+            adapter.channel_capacity().saturating_mul(4).max(64),
+        )));
+        let owner_state = Arc::clone(&state);
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let owner_notify = Arc::clone(&notify);
+        let event_capacity = adapter.channel_capacity().saturating_mul(4).max(64);
+        let (events, event_receiver) = tokio::sync::broadcast::channel(event_capacity);
+        let owner_events = events.clone();
+        let task = tokio::spawn(async move {
+            while let Some(inbound) = connection.recv().await {
+                let inbound = match inbound {
+                    coco_app_server::LocalClientInbound::Event(delivery) => {
+                        let _ = owner_events.send(delivery.envelope);
+                        continue;
+                    }
+                    other => other,
+                };
+                let mut state = owner_state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if state.push(inbound).is_err() {
+                    state.closed = true;
+                    drop(state);
+                    owner_notify.notify_waiters();
+                    return;
+                }
+                drop(state);
+                owner_notify.notify_waiters();
+            }
+            owner_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .closed = true;
+            owner_notify.notify_waiters();
+        });
+        Self {
+            handle,
+            inbound_owner: Arc::new(LocalInboundOwner {
+                state,
+                notify,
+                events,
+                task,
+            }),
+            events: event_receiver,
+        }
+    }
+
+    pub fn connection_key(&self) -> coco_app_server::ConnectionKey {
+        self.handle.connection_key()
     }
 
     pub async fn send_client_request<Handler>(
@@ -75,7 +183,7 @@ impl<H: Clone> LocalServerClient<H> {
     where
         Handler: LocalClientRequestHandler,
     {
-        self.connection
+        self.handle
             .dispatch_client_request(handler, request)
             .await
             .map_err(dispatch_error)
@@ -96,23 +204,14 @@ impl<H: Clone> LocalServerClient<H> {
         })
     }
 
-    /// Drop this surface's buffered events/requests/lifecycle after it is
-    /// detached or its session closed.
-    fn purge_surface_buffers(&mut self, surface_id: &SurfaceId) {
-        self.event_buffers.remove(surface_id);
-        self.request_buffers.remove(surface_id);
-        self.lifecycle_buffers.remove(surface_id);
-    }
-
-    pub fn close(self) -> Result<DisconnectOutcome, ClientError> {
-        Ok(self.connection.disconnect())
+    pub fn close(&self) -> DisconnectOutcome {
+        self.handle.disconnect()
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalSessionClient {
     session_id: SessionId,
-    surface_id: SurfaceId,
 }
 
 impl LocalSessionClient {
@@ -122,40 +221,24 @@ impl LocalSessionClient {
         }
     }
 
-    pub fn interactive_target(&self) -> InteractiveTarget {
-        InteractiveTarget {
-            session_id: self.session_id.clone(),
-            surface_id: self.surface_id.clone(),
-        }
-    }
-
     pub fn session_id(&self) -> &SessionId {
         &self.session_id
     }
 
-    pub fn surface_id(&self) -> &SurfaceId {
-        &self.surface_id
-    }
-
-    /// Mint the successor handle after a server-committed replace re-points this
-    /// surface to `new_session_id`. Consumes `self`: the
-    /// identity rule is that a handle is never re-pointed in place.
-    pub fn into_replaced(self, new_session_id: SessionId) -> LocalSessionClient {
-        LocalSessionClient {
+    pub fn into_replaced(self, new_session_id: SessionId) -> Self {
+        Self {
             session_id: new_session_id,
-            surface_id: self.surface_id,
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct LocalPassiveSessionClient {
+pub struct LocalReadOnlySessionClient {
     session_id: SessionId,
-    surface_id: SurfaceId,
     replayed: Vec<SessionEnvelope>,
 }
 
-impl LocalPassiveSessionClient {
+impl LocalReadOnlySessionClient {
     fn session_target(&self) -> SessionTarget {
         SessionTarget {
             session_id: self.session_id.clone(),
@@ -166,10 +249,6 @@ impl LocalPassiveSessionClient {
         &self.session_id
     }
 
-    pub fn surface_id(&self) -> &SurfaceId {
-        &self.surface_id
-    }
-
     pub fn replayed(&self) -> &[SessionEnvelope] {
         &self.replayed
     }
@@ -178,7 +257,7 @@ impl LocalPassiveSessionClient {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalLiveSessionSummary {
     pub session_id: SessionId,
-    pub surface_counts: SessionSurfaceCounts,
+    pub connection_counts: SessionConnectionCounts,
 }
 
 #[cfg(test)]

@@ -3,13 +3,12 @@ pub(super) async fn background_all_tasks_through_app_server(
     session: &crate::session_runtime::SessionHandle,
     local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> Result<Vec<String>, coco_app_server_client::ClientError> {
-    local_app_server_bridge
-        .activate_existing_interactive_session(session.session_id().clone(), None)?;
+    local_app_server_bridge.activate_existing_full_session(session.session_id().clone(), None)?;
     local_app_server_bridge
         .client()
         .background_all_tasks(
             local_app_server_bridge.handler(),
-            interactive_session(local_app_server_bridge),
+            full_session(local_app_server_bridge),
         )
         .await
         .map(|result| result.task_ids)
@@ -116,36 +115,18 @@ pub(super) async fn spawn_history_turn_through_app_server(
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
 ) {
     let session_id = session.session_id().clone();
-    let history_override = match messages
-        .iter()
-        .map(|message| serde_json::to_value(message.as_ref()))
-        .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(history_override) => history_override,
-        Err(error) => {
-            tracing::warn!(%error, "history turn AppServer serialization failed");
-            return;
-        }
-    };
-
     if let Err(error) = local_app_server_bridge
-        .activate_existing_interactive_session(session_id.clone(), Some(event_tx.clone()))
+        .activate_existing_full_session(session_id.clone(), Some(event_tx.clone()))
     {
         tracing::warn!(%error, "history turn could not activate local AppServer session");
         return;
     }
+    session.replace_history_with_arc_messages(messages).await;
     let mut monitor_client = local_app_server_bridge.connect_local_client();
-    let passive_surface = match monitor_client.attach_passive_session(session_id.clone()) {
-        Ok(surface) => surface,
-        Err(error) => {
-            tracing::warn!(%error, "history turn could not attach AppServer completion monitor");
-            return;
-        }
-    };
+    let observed_session = monitor_client.observe_session(session_id.clone());
     let params = coco_types::TurnStartParams {
-        target: interactive_target(local_app_server_bridge),
+        target: session_target(local_app_server_bridge),
         prompt: String::new(),
-        history_override,
         images: Vec::new(),
         composer: Default::default(),
         slash_metadata: None,
@@ -170,13 +151,13 @@ pub(super) async fn spawn_history_turn_through_app_server(
     let protocol_turn_id = started.turn_id.clone();
     let interrupt_client = local_app_server_bridge.connect_local_client();
     let handler = local_app_server_bridge.handler().clone();
-    let interrupt_target = interactive_target(local_app_server_bridge);
+    let interrupt_target = session_target(local_app_server_bridge);
     let task = tokio::spawn(async move {
         let _done = TurnDoneGuard {
             turn_id,
             tx: turn_done_tx_t,
         };
-        while let Some(envelope) = monitor_client.next_passive_event(&passive_surface).await {
+        while let Some(envelope) = monitor_client.next_session_event(&observed_session).await {
             if let CoreEvent::Protocol(ServerNotification::TurnEnded(ended)) = envelope.event
                 && ended.turn_id == protocol_turn_id
             {
@@ -221,24 +202,16 @@ pub(super) async fn spawn_slash_run_engine_turn(
         model_runtime_source,
     } = prompt;
     if let Err(error) = local_app_server_bridge
-        .activate_existing_interactive_session(session_id.clone(), Some(event_tx.clone()))
+        .activate_existing_full_session(session_id.clone(), Some(event_tx.clone()))
     {
         tracing::warn!(%error, "slash RunEngine could not activate local AppServer session");
         return;
     }
     let mut monitor_client = local_app_server_bridge.connect_local_client();
-    // live-only tail attach with no replay cursor (see SubmitInput site).
-    let passive_surface = match monitor_client.attach_passive_session(session_id.clone()) {
-        Ok(surface) => surface,
-        Err(error) => {
-            tracing::warn!(%error, "slash RunEngine could not attach AppServer completion monitor");
-            return;
-        }
-    };
+    let observed_session = monitor_client.observe_session(session_id.clone());
     let params = coco_types::TurnStartParams {
-        target: interactive_target(local_app_server_bridge),
+        target: session_target(local_app_server_bridge),
         prompt: content,
-        history_override: Vec::new(),
         images: Vec::new(),
         composer: Default::default(),
         slash_metadata: metadata,
@@ -272,7 +245,7 @@ pub(super) async fn spawn_slash_run_engine_turn(
         };
         let mut auto_title_client = Some(auto_title_client);
         let mut auto_title_handler = Some(auto_title_handler);
-        while let Some(envelope) = monitor_client.next_passive_event(&passive_surface).await {
+        while let Some(envelope) = monitor_client.next_session_event(&observed_session).await {
             if let CoreEvent::Protocol(ServerNotification::TurnEnded(ended)) = envelope.event
                 && ended.turn_id == protocol_turn_id
             {
@@ -300,7 +273,7 @@ pub(super) async fn spawn_slash_run_engine_turn(
         cancel: ActiveTurnCancel {
             client: interrupt_client,
             handler,
-            target: interactive_target(local_app_server_bridge),
+            target: session_target(local_app_server_bridge),
         },
     });
 }

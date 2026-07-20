@@ -1,6 +1,6 @@
 use super::*;
 
-impl<H: Clone> LocalServerClient<H> {
+impl<H: Clone + Send + Sync + 'static> LocalServerClient<H> {
     pub async fn session_rename<Handler>(
         &self,
         handler: &Handler,
@@ -131,7 +131,7 @@ impl<H: Clone> LocalServerClient<H> {
     {
         self.send_typed_client_request(
             handler,
-            ClientRequest::PluginReload(session.interactive_target()),
+            ClientRequest::PluginReload(session.session_target()),
         )
         .await
     }
@@ -144,10 +144,7 @@ impl<H: Clone> LocalServerClient<H> {
     where
         Handler: LocalClientRequestHandler,
     {
-        self.send_typed_client_request(
-            handler,
-            ClientRequest::HookReload(session.interactive_target()),
-        )
-        .await
+        self.send_typed_client_request(handler, ClientRequest::HookReload(session.session_target()))
+            .await
     }
 }

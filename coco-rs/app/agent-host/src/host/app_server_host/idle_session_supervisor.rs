@@ -15,7 +15,7 @@ use super::session_close::close_local_app_server_session;
 
 /// Spawn the optional event-driven idle-session auto-close supervisor.
 ///
-/// A session is eligible only when it has no attached surface, no active turn,
+/// A session is eligible only when it has no attached connection, no active turn,
 /// and no queued cross-turn command. AppServer lifecycle/event activity, host
 /// session activity, and command-queue changes wake the supervisor immediately;
 /// otherwise it sleeps until the earliest exact idle deadline.
@@ -51,7 +51,7 @@ pub fn spawn_idle_session_sweep(
                 };
 
                 let queued = queue_status.as_ref().is_some_and(|status| !status.is_empty);
-                if summary.surface_counts.attached != 0
+                if summary.connection_counts.total() != 0
                     || runtime
                         .as_ref()
                         .is_some_and(crate::session_runtime::SessionHandle::has_active_turn)
@@ -95,7 +95,7 @@ pub fn spawn_idle_session_sweep(
                 tracing::info!(
                     session_id = %session_id,
                     idle_timeout_secs = idle_timeout.as_secs(),
-                    "auto-closing idle session with no surfaces, active turn, or queued command"
+                    "auto-closing idle session with no connections, active turn, or queued command"
                 );
                 if let Err(error) = close_local_app_server_session(
                     Arc::clone(&app_server),
@@ -133,7 +133,7 @@ async fn idle_session_is_due(
         .registry()
         .get(session_id)
         .map(|handle| handle.runtime().clone());
-    if summary.surface_counts.attached != 0
+    if summary.connection_counts.total() != 0
         || runtime
             .as_ref()
             .is_some_and(crate::session_runtime::SessionHandle::has_active_turn)

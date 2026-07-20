@@ -18,7 +18,7 @@ pub(super) struct ActiveTurnCancel {
         coco_agent_host::app_session::AppSessionHandle,
     >,
     pub(super) handler: coco_agent_host::app_server_host::AppServerHostHandler,
-    pub(super) target: coco_types::InteractiveTarget,
+    pub(super) target: coco_types::SessionTarget,
 }
 
 /// Always-fires completion signaller for spawned turn tasks.
@@ -193,15 +193,13 @@ pub(super) async fn run_manual_compact(
             }
         };
     if local_app_server_bridge.is_child_session(session.session_id()) {
-        let Some(surface) = interactive_session_for(local_app_server_bridge, session.session_id())
-        else {
+        let Some(surface) = full_session_for(local_app_server_bridge, session.session_id()) else {
             warn!(session_id = %session.session_id(), "TUI sidechat /compact surface is stale");
             return;
         };
         let params = coco_types::TurnStartParams {
-            target: surface.interactive_target(),
+            target: surface.session_target(),
             prompt,
-            history_override: Vec::new(),
             images: Vec::new(),
             composer: Default::default(),
             slash_metadata: None,
@@ -243,24 +241,17 @@ pub(super) async fn run_local_app_server_shortcut_turn(
 ) {
     let session_id = session.session_id().clone();
     if let Err(error) = local_app_server_bridge
-        .activate_existing_interactive_session(session_id.clone(), Some(event_tx.clone()))
+        .activate_existing_full_session(session_id.clone(), Some(event_tx.clone()))
     {
         tracing::warn!(%error, "{log_label} could not activate local AppServer session");
         return;
     }
     let mut monitor_client = local_app_server_bridge.connect_local_client();
     // live-only tail attach with no replay cursor (see SubmitInput site).
-    let passive_surface = match monitor_client.attach_passive_session(session_id.clone()) {
-        Ok(surface) => surface,
-        Err(error) => {
-            tracing::warn!(%error, "{log_label} could not attach AppServer completion monitor");
-            return;
-        }
-    };
+    let observed_session = monitor_client.observe_session(session_id.clone());
     let params = coco_types::TurnStartParams {
-        target: interactive_target(local_app_server_bridge),
+        target: session_target(local_app_server_bridge),
         prompt,
-        history_override: Vec::new(),
         images: Vec::new(),
         composer: Default::default(),
         slash_metadata: None,
@@ -287,7 +278,7 @@ pub(super) async fn run_local_app_server_shortcut_turn(
             turn_id,
             tx: turn_done_tx_t,
         };
-        while let Some(envelope) = monitor_client.next_passive_event(&passive_surface).await {
+        while let Some(envelope) = monitor_client.next_session_event(&observed_session).await {
             if let CoreEvent::Protocol(ServerNotification::TurnEnded(ended)) = envelope.event
                 && ended.turn_id == protocol_turn_id
             {
@@ -303,7 +294,7 @@ pub(super) async fn run_local_app_server_shortcut_turn(
         cancel: ActiveTurnCancel {
             client: interrupt_client,
             handler,
-            target: interactive_target(local_app_server_bridge),
+            target: session_target(local_app_server_bridge),
         },
     });
 }
@@ -351,17 +342,17 @@ pub(super) async fn run_clear_conversation(
     drain_active_turn(active_turn, ActiveTurnDrain::Wait).await;
     let old_session_id = runtime.session_id().clone();
     if let Err(error) =
-        local_app_server_bridge.activate_existing_interactive_session(old_session_id.clone(), None)
+        local_app_server_bridge.activate_existing_full_session(old_session_id.clone(), None)
     {
         warn!(
             %error,
             session_id = %old_session_id,
-            "/clear could not confirm local AppServer interactive surface"
+            "/clear could not confirm local AppServer Full grant"
         );
         return;
     }
     let binding = match local_app_server_bridge
-        .replace_interactive_session_with_clear(Some(event_tx.clone()))
+        .replace_session_with_clear(Some(event_tx.clone()))
         .await
     {
         Ok(binding) => binding,
@@ -476,10 +467,7 @@ pub(super) async fn run_side_chat(
     };
     let parent_id = session.session_id().clone();
 
-    if local_app_server_bridge
-        .child_interactive_session()
-        .is_some()
-    {
+    if local_app_server_bridge.child_full_session().is_some() {
         emit_slash_text(
             event_tx,
             &parent_id,
@@ -519,9 +507,8 @@ pub(super) async fn run_side_chat(
         return;
     };
     let params = coco_types::TurnStartParams {
-        target: binding.surface.interactive_target(),
+        target: binding.client.session_target(),
         prompt: question.clone(),
-        history_override: Vec::new(),
         images: images.to_vec(),
         composer: Default::default(),
         slash_metadata: None,
@@ -636,9 +623,7 @@ pub(super) async fn run_reload_plugins(
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) {
-    let Some(interactive_session) =
-        interactive_session_for(local_app_server_bridge, session.session_id())
-    else {
+    let Some(full_session) = full_session_for(local_app_server_bridge, session.session_id()) else {
         emit_slash_text(
             event_tx,
             session.session_id(),
@@ -651,7 +636,7 @@ pub(super) async fn run_reload_plugins(
     };
     let result = match local_app_server_bridge
         .client()
-        .plugin_reload(local_app_server_bridge.handler(), interactive_session)
+        .plugin_reload(local_app_server_bridge.handler(), full_session)
         .await
     {
         Ok(result) => result,
@@ -688,9 +673,7 @@ pub(super) async fn run_reload_hooks(
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) {
-    let Some(interactive_session) =
-        interactive_session_for(local_app_server_bridge, session.session_id())
-    else {
+    let Some(full_session) = full_session_for(local_app_server_bridge, session.session_id()) else {
         emit_slash_text(
             event_tx,
             session.session_id(),
@@ -703,7 +686,7 @@ pub(super) async fn run_reload_hooks(
     };
     let body = match local_app_server_bridge
         .client()
-        .hook_reload(local_app_server_bridge.handler(), interactive_session)
+        .hook_reload(local_app_server_bridge.handler(), full_session)
         .await
     {
         Ok(result) => format!(

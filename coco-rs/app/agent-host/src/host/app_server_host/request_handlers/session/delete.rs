@@ -33,6 +33,9 @@ pub(crate) async fn handle_session_delete(
     let target_id = session_id.as_str().to_string();
     match tokio::task::spawn_blocking(move || manager.delete(&target_id)).await {
         Ok(Ok(())) => {
+            if let Some(app_server) = &ctx.app_server {
+                app_server.revoke_session_grants(&session_id);
+            }
             info!(session_id = %session_id, "AppServerHost: session/delete");
             HandlerResult::ok_empty()
         }

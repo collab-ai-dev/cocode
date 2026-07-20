@@ -1,10 +1,10 @@
 # coco-agent-host
 
-Agent-session host shared by CLI surfaces. It owns session-runtime construction,
+Agent-session host shared by CLI and SDK clients. It owns session-runtime construction,
 the in-process AppServer client facade, protocol-neutral AppServer request
 handling for remote and local adapters, headless operations, and runtime
 integrations. It does not own the `coco` process entrypoint or the TUI command
-loop (those are `coco-cli` surface composition), nor the SDK JSON-RPC/NDJSON
+loop (those are `coco-cli` client composition), nor the SDK JSON-RPC/NDJSON
 connection adapter (`coco-sdk-server`).
 
 Tier-1 application-composition crate under the workspace error policy:
@@ -16,7 +16,7 @@ typed errors and adapters translate failures to protocol results.
 | Type | Purpose |
 |------|---------|
 | `AgentHostOptions` | Clap-independent application inputs mapped once by `coco-cli`. |
-| `local_client::LocalServerClient` | In-process typed client over `LocalClientAdapter`; owns local interactive/passive surface handles and receiver demultiplexing. |
+| `local_client::LocalServerClient` | In-process typed client over `LocalClientAdapter`; one instance owns one AppServer connection, while clones and session observers use in-memory channels. |
 | `app_server_host::AppServerHostHandler` | Runtime-backed AppServer request handler shared by remote JSON-RPC and local in-process adapters. |
 | `app_server_host::AppServerLocalBridge` | Preferred local entrypoint: owns the local `AppServer`, `LocalServerClient`, shared handler, and outbound forwarder so TUI/headless don't duplicate adapter wiring. |
 | `app_server_host::AppServerHostState` | Shared host projection state: turn runner, startup/bootstrap data, session-manager projection, activity, runtime replacement, durable sequence allocation. |
@@ -26,15 +26,15 @@ typed errors and adapters translate failures to protocol results.
 | `remote_host::RemoteAppServerBridgeHost` | Narrow remote transport-facing capability handle for opening JSON-RPC/AppServer bindings without exposing raw host state. |
 | `session_runtime::SessionRuntimeFactory` | Owned construction seam for building `SessionHandle`s from cloneable startup inputs and a target session id. |
 | `session_runtime::SessionExecutionProfile` (`Primary` / `SideChatReadOnly`) + `HookExecutionPolicy` | Construction-time capability decision table read by the runtime installers (predicate methods: `persists_history`, `registers_pid`, `runs_goals`, …). `SideChatReadOnly` disables durable/background ownership and restricts hooks to tool-lifecycle only. |
-| `session_controls::*` | Protocol-neutral runtime controls (tasks, status/cost, context usage); adapters map results to their surfaces. |
+| `session_controls::*` | Protocol-neutral runtime controls (tasks, status/cost, context usage); adapters map results to their clients. |
 | `headless` (`headless/run`, `headless/support`) | Print-mode orchestration plus goal/slash, transcript, tool-filter, and additional-directory helpers. |
 | `local_host::build_local_host` | Shared local AppServer host assembly for TUI + headless; local counterpart to `remote_host::HostBuilder`. |
 | `coco_app_runtime::ProjectServices` | Project-rooted plugin/command/skill/hook/MCP/LSP discovery shared per project root (lives in `app/runtime`; see Runtime Paths). |
 
 ## Multi-Session Ownership
 
-AppServer validates every interactive `(connection, surface, session)` target
-and hands the handler one opaque `SessionHandle`. Runtime selection is never
+AppServer validates every `(connection, session)` target and its ReadOnly/Full
+grant, then hands the handler one opaque `SessionHandle`. Runtime selection is never
 repeated in a runner or handler. The runtime owns history, engine/app state,
 MCP, reload supervisors, file history, active-turn cancellation, turn ids, and
 aggregate turn accounting. `AppServerHostState` owns only process services and
@@ -44,10 +44,14 @@ runtime-owned capabilities — reach them only through the validated
 `SessionHandle`.
 
 Accepted connections own immutable initialize profiles, bounded outbound
-writers, and callback correlation. Callback replies are accepted only when
-connection, surface, session, and request id all match pending AppServer
-ownership. Do not add sole-session inference, optional live-runtime handles, or
-process-keyed session capability maps. See
+writers, and connection-owned hook/MCP callback registration. Human replies
+are accepted only when connection, session, and request id match pending
+AppServer state. Any Full connection may reply and the first valid response
+wins. Live resume never requires a peer to reproduce another connection's
+callback profile. Runtime callback definitions may be prepared before publish,
+but connection ownership, client hook invocation, and client-MCP setup begin
+only after live Full attachment. Do not add sole-session inference, writer leases, optional
+live-runtime handles, or process-keyed capability maps. See
 `docs/internal/multi-session-app-server/README.md` and `protocol-scope.md`.
 
 Handler rules:
@@ -59,9 +63,10 @@ Handler rules:
 - Every routed event carries an explicit session id; no active-session
   fallback. Local handler-emitted `CoreEvent`s return through
   `AppServer::route_envelope` via the bridge's outbound forwarder.
-- TUI: `start_passive_event_pump` attaches a passive surface for ordinary
-  event delivery; the interactive surface is reserved for server-request
-  ownership.
+- TUI: the bridge creates one local AppServer connection. Its command handles,
+  event pump, turn waiters, and sidechat observers are bounded broadcast
+  cursors over that connection; they neither attach transport-level observer
+  connections nor compete for one destructive event queue.
 - SDK transport/correlation/outbound writing stay in `coco-sdk-server`; slot
   lifecycle/replace/close-owner semantics are owned by `coco-app-server`.
 
@@ -125,7 +130,7 @@ metadata attachment text, explicit model selection, and thinking overrides.
 
 ## Close Cascade & Shutdown
 
-AppServer close performs the bridge-owned cascade before archiving surfaces:
+AppServer close performs the bridge-owned cascade before removing attachments:
 cancel the state-owned active turn, boundedly drain the turn runner and
 forwarder, clear the slot, then ask the matching
 `SessionHandle::close_runtime` to fire SessionEnd hooks, tombstone the turn
@@ -136,7 +141,7 @@ slot/owner semantics live in `coco-app-server`. The local bridge's
 (TUI on exit, headless before hub flush, SDK after sidecar shutdown). Drain
 waits observe OS interrupts (`drain_with_timeout_or_signal`); drain/flush
 failures become a nonzero process result. The optional idle-session supervisor
-is event-driven: attached surfaces, active turns, and non-empty cross-turn
+is event-driven: attached connections, active turns, and non-empty cross-turn
 queues are never idle.
 
 ## Server Config (`RuntimeConfig.server`)
@@ -146,9 +151,7 @@ queues are never idle.
 | `unix_socket_path` | `UNIX_SOCKET_PATH` | off | SDK NDJSON Unix-socket sidecar; bind failure = startup failure |
 | `websocket_bind` | `WEBSOCKET_BIND` | off | SDK WebSocket sidecar |
 | `named_pipe_name` | `NAMED_PIPE` | off | Windows NDJSON named-pipe sidecar |
-| `max_sessions` | `MAX_SESSIONS` | 32 | SDK process session-slot limit (local TUI/headless bridge stays capped at 1) |
-| `max_surfaces_per_connection` | `MAX_SURFACES_PER_CONNECTION` | 8 | AppServer routing limit |
-| `max_passive_surfaces_per_session` | `MAX_PASSIVE_SURFACES_PER_SESSION` | 16 | AppServer routing limit |
+| `max_sessions` | `MAX_SESSIONS` | 32 | SDK process session-slot limit (local TUI/headless bridge allows primary + sidechat) |
 | `event_retention_per_session` | `EVENT_RETENTION_PER_SESSION` | 1024 | Event retention ring size |
 | `outbound_queue_frames` | `OUTBOUND_QUEUE_FRAMES` | 1024 | Outbound queue size |
 | `turn_drain_timeout_secs` | `TURN_DRAIN_TIMEOUT_SECS` | 10 | Close-cascade active-turn drain bound |
@@ -160,7 +163,7 @@ queues are never idle.
 
 TUI slash commands and runtime controls route through `LocalServerClient`
 methods (the local AppServer seam shared with SDK handlers); the TUI keeps only
-parsing, confirmation/toast rendering, and surface event policy. Representative
+parsing, confirmation/toast rendering, and session event policy. Representative
 mappings:
 
 | Command / control | `LocalServerClient` method |
@@ -187,7 +190,7 @@ before a normal runner task is spawned. Raw remote `/btw` input is rejected.
 ## Session Module Ownership (`src/session/`)
 
 Host modules own the operation; remote/local adapters keep parsing, rendering,
-and surface event policy.
+and session event policy.
 
 | Module | Owns |
 |--------|------|

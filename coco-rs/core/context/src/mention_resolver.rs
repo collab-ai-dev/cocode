@@ -4,10 +4,13 @@
 //! `readFileState` for dedup (returns `AlreadyReadFileAttachment` if
 //! unchanged).
 
-use std::path::Path;
+use std::{path::Path, sync::Arc, time::Duration};
+
+use tokio::sync::RwLock;
 
 use crate::attachment::AlreadyReadFileAttachment;
 use crate::attachment::Attachment;
+use crate::attachment::AttachmentBudget;
 use crate::attachment::DirectoryAttachment;
 use crate::attachment::FileReadOptions;
 use crate::attachment::generate_file_attachment;
@@ -41,12 +44,12 @@ impl Default for MentionResolveOptions<'_> {
 /// After reading a new file, updates `file_read_state` with its content and mtime.
 pub async fn resolve_mentions(
     mentions: &[Mention],
-    file_read_state: &mut FileReadState,
+    file_read_state: &Arc<RwLock<FileReadState>>,
     options: &MentionResolveOptions<'_>,
 ) -> Vec<Attachment> {
     let mut attachments = Vec::new();
 
-    for mention in mentions {
+    for mention in mentions.iter().take(MAX_MENTIONS_PER_TURN) {
         match &mention.mention_type {
             MentionType::FilePath => {
                 if let Some(att) = resolve_file_mention(mention, file_read_state, options).await {
@@ -73,13 +76,19 @@ pub async fn resolve_mentions(
         }
     }
 
-    attachments
+    AttachmentBudget::new(MAX_MENTION_TOKENS_PER_TURN).filter_within_budget(attachments)
 }
+
+const MAX_MENTIONS_PER_TURN: usize = 32;
+const MAX_MENTION_TOKENS_PER_TURN: i64 = 16_000;
+const MAX_TEXT_FILE_BYTES: u64 = 256 * 1024;
+const MAX_BINARY_FILE_BYTES: u64 = 4 * 1024 * 1024;
+const MENTION_READ_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Resolve a single file mention to an attachment.
 async fn resolve_file_mention(
     mention: &Mention,
-    file_read_state: &mut FileReadState,
+    file_read_state: &Arc<RwLock<FileReadState>>,
     options: &MentionResolveOptions<'_>,
 ) -> Option<Attachment> {
     let raw_path = Path::new(&mention.text);
@@ -95,14 +104,34 @@ async fn resolve_file_mention(
         .to_string_lossy()
         .into_owned();
 
-    // Check if path exists
-    if !abs_path.exists() {
+    let metadata = tokio::fs::metadata(&abs_path).await.ok()?;
+    if !metadata.is_file() && !metadata.is_dir() {
         return None;
     }
 
     // Directory handling
-    if abs_path.is_dir() {
-        return resolve_directory(&abs_path, &display_path, options.max_dir_entries);
+    if metadata.is_dir() {
+        let path = abs_path.clone();
+        let max_entries = options.max_dir_entries;
+        return tokio::time::timeout(
+            MENTION_READ_TIMEOUT,
+            tokio::task::spawn_blocking(move || {
+                resolve_directory(&path, &display_path, max_entries)
+            }),
+        )
+        .await
+        .ok()?
+        .ok()
+        .flatten();
+    }
+
+    let max_bytes = if is_binary_mention(&abs_path) {
+        MAX_BINARY_FILE_BYTES
+    } else {
+        MAX_TEXT_FILE_BYTES
+    };
+    if metadata.len() > max_bytes {
+        return None;
     }
 
     // FileReadState is keyed by CANONICAL path — matching the Read primer
@@ -117,7 +146,8 @@ async fn resolve_file_mention(
 
     // Dedup check: if file is in FileReadState and mtime hasn't changed,
     // return AlreadyReadFileAttachment.
-    if let Some(entry) = file_read_state.peek(&key_path)
+    let cached = file_read_state.read().await.peek(&key_path).cloned();
+    if let Some(entry) = cached
         && let Ok(disk_mtime) = file_mtime_ms(&key_path).await
         && entry.mtime_ms == disk_mtime
     {
@@ -137,7 +167,19 @@ async fn resolve_file_mention(
         ..Default::default()
     };
 
-    let attachment = generate_file_attachment(&abs_path, options.cwd, &read_options)?;
+    let path = abs_path.clone();
+    let cwd = options.cwd.to_path_buf();
+    let blocking_options = read_options.clone();
+    let attachment = tokio::time::timeout(
+        MENTION_READ_TIMEOUT,
+        tokio::task::spawn_blocking(move || {
+            generate_file_attachment(&path, &cwd, &blocking_options)
+        }),
+    )
+    .await
+    .ok()?
+    .ok()
+    .flatten()?;
 
     // Update FileReadState with new content and mtime, keyed by canonical path.
     update_file_read_state(file_read_state, &key_path, &attachment, &read_options).await;
@@ -147,7 +189,7 @@ async fn resolve_file_mention(
 
 /// Update FileReadState after resolving a mention.
 async fn update_file_read_state(
-    state: &mut FileReadState,
+    state: &Arc<RwLock<FileReadState>>,
     abs_path: &Path,
     attachment: &Attachment,
     options: &FileReadOptions,
@@ -172,8 +214,18 @@ async fn update_file_read_state(
         } else {
             FileReadEntry::full_real(content, mtime)
         };
-        state.set(abs_path.to_path_buf(), entry);
+        state.write().await.set(abs_path.to_path_buf(), entry);
     }
+}
+
+fn is_binary_mention(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(std::ffi::OsStr::to_str)
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "pdf")
+    )
 }
 
 /// Resolve a directory mention: list entries up to `max_entries`.

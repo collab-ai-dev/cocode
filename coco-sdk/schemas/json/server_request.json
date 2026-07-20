@@ -107,6 +107,20 @@
     }
   ],
   "$defs": {
+    "AgentColorName": {
+      "description": "`AgentColorName`. Validated set; unknown values are dropped at parse\ntime with a warning so the runtime never sees an invalid color.",
+      "type": "string",
+      "enum": [
+        "red",
+        "blue",
+        "green",
+        "yellow",
+        "purple",
+        "orange",
+        "pink",
+        "cyan"
+      ]
+    },
     "AskForApprovalParams": {
       "type": "object",
       "properties": {
@@ -121,6 +135,15 @@
             "string",
             "null"
           ]
+        },
+        "choices": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/PermissionAskChoice"
+          }
         },
         "cwd": {
           "description": "Tool execution cwd. Relative paths in `input` resolve against this so\nan SDK client can derive correctly-scoped grants (mirrors the TUI path).",
@@ -139,6 +162,16 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionRequestDetail"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "display_name": {
@@ -168,6 +201,16 @@
         },
         "tool_use_id": {
           "type": "string"
+        },
+        "worker_badge": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkerBadge"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -175,6 +218,36 @@
         "tool_name",
         "input",
         "tool_use_id"
+      ]
+    },
+    "ExitPlanModeAllowedPrompt": {
+      "type": "object",
+      "properties": {
+        "prompt": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool",
+        "prompt"
+      ]
+    },
+    "ExitPlanModeOutcome": {
+      "description": "First-class outcome of an `ExitPlanMode` tool call.",
+      "oneOf": [
+        {
+          "description": "A concrete implementation plan was produced and approved for execution.",
+          "type": "string",
+          "const": "implementation_plan"
+        },
+        {
+          "description": "Plan mode ended for a request that does not have implementation work.",
+          "type": "string",
+          "const": "no_implementation_plan"
+        }
       ]
     },
     "HookCallbackParams": {
@@ -253,6 +326,70 @@
         "message"
       ]
     },
+    "PermissionAskChoice": {
+      "description": "One option in a multi-choice permission dialog.\nUsed by `ToolCheckResult::Ask.choices` and surfaced on the wire via\n`PermissionDecision::Ask.choices`. The TUI renders one row per\nchoice; the picked `value` is echoed back so the tool's `execute()`\ncan branch on the user's selection.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Optional one-line explanation rendered under the label.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "description": "Short row label shown to the user.",
+          "type": "string"
+        },
+        "value": {
+          "description": "Stable identifier echoed back in the approval response. Use\nkebab-case (`\"yes-default-keep-context\"`, `\"yes-accept-edits\"`,\n`\"no\"`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "label"
+      ]
+    },
+    "PermissionRequestDetail": {
+      "description": "Tool-specific payload for permission UIs.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "allowed_prompts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ExitPlanModeAllowedPrompt"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "exit_plan_mode"
+            },
+            "outcome": {
+              "$ref": "#/$defs/ExitPlanModeOutcome"
+            },
+            "plan": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "plan_file_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "outcome"
+          ]
+        }
+      ]
+    },
     "RequestElicitationParams": {
       "description": "Forward an MCP server's elicitation request to the SDK client.\nThe MCP protocol lets servers ask the user for structured input\n(form fields with a JSON schema). When the bound MCP transport\nfires its `elicitation/create` callback, the SDK server bridges\nit to the connected SDK client via this `ServerRequest`. The\nclient renders a form and returns an [`ElicitationResolveParams`]\npayload as the synchronous JSON-RPC response.",
       "type": "object",
@@ -326,6 +463,22 @@
       },
       "required": [
         "request_id"
+      ]
+    },
+    "WorkerBadge": {
+      "description": "Identity badge for a teammate whose tool needs the leader's approval.\nSurfaced in the leader's permission prompt so a human reviewing a\ncross-process worker's request can see WHO is asking. The `color` is\nthe worker's assigned per-teammate palette color (a coco-rs\nimprovement over TS's hardcoded `cyan`); text-surface renderers show\nthe name and carry the color for styled / SDK consumers.",
+      "type": "object",
+      "properties": {
+        "color": {
+          "$ref": "#/$defs/AgentColorName"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "color"
       ]
     },
     "CompactTrigger": {

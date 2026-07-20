@@ -33,7 +33,7 @@ pub(super) async fn dispatch_context(
             "context",
             "failed",
             SlashCommandStatusKind::Failed {
-                error: "interactive session surface is no longer available".to_string(),
+                error: "full session attachment is no longer available".to_string(),
             },
         )
         .await;
@@ -222,7 +222,7 @@ pub(super) async fn handle_rewind(
         && runtime.file_history_enabled()
     {
         if let Err(error) = local_app_server_bridge
-            .activate_existing_interactive_session(session.session_id().clone(), None)
+            .activate_existing_full_session(session.session_id().clone(), None)
         {
             tracing::warn!(%error, "rewind could not activate local AppServer session");
             return;
@@ -232,7 +232,7 @@ pub(super) async fn handle_rewind(
             .rewind_files(
                 local_app_server_bridge.handler(),
                 coco_types::RewindFilesParams {
-                    target: interactive_target(local_app_server_bridge),
+                    target: session_target(local_app_server_bridge),
                     user_message_id: message_id.to_string(),
                     dry_run: false,
                 },

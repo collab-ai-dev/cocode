@@ -121,7 +121,7 @@ pub(super) async fn run_tasks_command(
     match parts.next() {
         Some("list") => {
             if let Err(error) = local_app_server_bridge
-                .activate_existing_interactive_session(session.session_id().clone(), None)
+                .activate_existing_full_session(session.session_id().clone(), None)
             {
                 emit_slash_text(
                     event_tx,
@@ -137,7 +137,7 @@ pub(super) async fn run_tasks_command(
                 .client()
                 .task_list(
                     local_app_server_bridge.handler(),
-                    interactive_session(local_app_server_bridge),
+                    full_session(local_app_server_bridge),
                 )
                 .await
             {
@@ -170,7 +170,7 @@ pub(super) async fn run_tasks_command(
                 return;
             };
             if let Err(error) = local_app_server_bridge
-                .activate_existing_interactive_session(session.session_id().clone(), None)
+                .activate_existing_full_session(session.session_id().clone(), None)
             {
                 emit_slash_text(
                     event_tx,
@@ -222,7 +222,7 @@ pub(super) async fn run_tasks_command(
                 return;
             };
             if let Err(error) = local_app_server_bridge
-                .activate_existing_interactive_session(session.session_id().clone(), None)
+                .activate_existing_full_session(session.session_id().clone(), None)
             {
                 emit_slash_text(
                     event_tx,
@@ -239,7 +239,7 @@ pub(super) async fn run_tasks_command(
                 .stop_task(
                     local_app_server_bridge.handler(),
                     coco_types::StopTaskParams {
-                        target: interactive_target(local_app_server_bridge),
+                        target: session_target(local_app_server_bridge),
                         task_id: task_id.to_string(),
                     },
                 )
@@ -293,7 +293,7 @@ pub(super) async fn toggle_fast_mode_through_app_server(
         }
     };
     if let Err(error) = local_app_server_bridge
-        .activate_existing_interactive_session(session.session_id().clone(), Some(event_tx.clone()))
+        .activate_existing_full_session(session.session_id().clone(), Some(event_tx.clone()))
     {
         warn!(%error, "TUI ToggleFastMode could not activate local AppServer session");
         return;
@@ -306,7 +306,7 @@ pub(super) async fn toggle_fast_mode_through_app_server(
         .config_apply_flags(
             local_app_server_bridge.handler(),
             coco_types::ConfigApplyFlagsParams {
-                target: interactive_target(local_app_server_bridge),
+                target: session_target(local_app_server_bridge),
                 settings,
             },
         )
@@ -330,7 +330,7 @@ pub(super) async fn set_thinking_level_through_app_server(
         }
     };
     if let Err(error) = local_app_server_bridge
-        .activate_existing_interactive_session(session.session_id().clone(), Some(event_tx.clone()))
+        .activate_existing_full_session(session.session_id().clone(), Some(event_tx.clone()))
     {
         warn!(%error, "TUI SetThinkingLevel could not activate local AppServer session");
         return;
@@ -341,7 +341,7 @@ pub(super) async fn set_thinking_level_through_app_server(
         .set_thinking(
             local_app_server_bridge.handler(),
             coco_types::SetThinkingParams {
-                target: interactive_target(local_app_server_bridge),
+                target: session_target(local_app_server_bridge),
                 thinking_level: Some(coco_types::ThinkingLevel {
                     effort,
                     budget_tokens: None,
@@ -428,7 +428,4 @@ use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use super::{
-    MAX_FILE_HISTORY_DIFF_CHARS, emit_slash_text, interactive_session, interactive_target,
-    session_target,
-};
+use super::{MAX_FILE_HISTORY_DIFF_CHARS, emit_slash_text, full_session, session_target};

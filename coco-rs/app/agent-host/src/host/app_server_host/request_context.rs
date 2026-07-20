@@ -19,6 +19,8 @@ pub struct HandlerContext {
 
     pub app_server: Option<Arc<coco_app_server::AppServer<crate::app_session::AppSessionHandle>>>,
 
+    pub connection: Option<coco_app_server::ConnectionKey>,
+
     /// Explicit protocol target, including persisted-session requests that do
     /// not require a live runtime.
     pub target_session_id: Option<coco_types::SessionId>,

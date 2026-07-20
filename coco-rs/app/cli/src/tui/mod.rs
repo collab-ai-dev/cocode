@@ -63,45 +63,39 @@ use turn_postprocessing::*;
 
 pub(super) type SharedSessionHandle = Arc<RwLock<crate::session_runtime::SessionHandle>>;
 
-fn interactive_session(
+fn full_session(
     bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> &coco_agent_host::local_client::LocalSessionClient {
-    let Some(session) = bridge.interactive_session() else {
-        panic!("TUI command requires an attached interactive AppServer surface");
+    let Some(session) = bridge.full_session() else {
+        panic!("TUI command requires a full-access AppServer session");
     };
     session
-}
-
-fn interactive_target(
-    bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
-) -> coco_types::InteractiveTarget {
-    interactive_session(bridge).interactive_target()
 }
 
 fn session_target(
     bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> coco_types::SessionTarget {
-    interactive_session(bridge).session_target()
+    full_session(bridge).session_target()
 }
 
-fn interactive_session_for<'a>(
+fn full_session_for<'a>(
     bridge: &'a coco_agent_host::app_server_host::AppServerLocalBridge,
     session_id: &coco_types::SessionId,
 ) -> Option<&'a coco_agent_host::local_client::LocalSessionClient> {
-    bridge.interactive_session_by_id(session_id)
+    bridge.full_session_by_id(session_id)
 }
 
 fn session_target_for(
     bridge: &coco_agent_host::app_server_host::AppServerLocalBridge,
     session_id: &coco_types::SessionId,
 ) -> Option<coco_types::SessionTarget> {
-    interactive_session_for(bridge, session_id)
+    full_session_for(bridge, session_id)
         .map(coco_agent_host::local_client::LocalSessionClient::session_target)
 }
 
-/// Adapt engine events emitted outside an AppServer surface (for example the
+/// Adapt engine events emitted outside AppServer routing (for example the
 /// localized slash-result writeback) into the same exact-session envelope used
-/// by surface pumps.
+/// by the session event pump.
 fn session_scoped_event_sender(
     event_tx: &mpsc::Sender<coco_types::CoreEvent>,
     session_id: coco_types::SessionId,

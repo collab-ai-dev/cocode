@@ -9,16 +9,14 @@
 //! request variant for them. See `event-system-design.md` §5.
 
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{BTreeSet, HashMap},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     AgentColorName, GoalCreateParams, GoalEditParams, GoalSetStatusParams, HookEventType,
-    ModelRole, PermissionMode, PermissionUpdate, ProviderModelSelection, QueuedCommandEditImage,
-    ReasoningEffort, SessionId, SessionUsageSnapshot, SubmittedComposer, SurfaceId, TaskStateBase,
-    ThinkingLevel, wire_tagged::wire_tagged_enum,
+    ModelRole, PermissionMode, PermissionResolutionDetail, PermissionUpdate,
+    ProviderModelSelection, QueuedCommandEditImage, ReasoningEffort, SessionId,
+    SessionUsageSnapshot, SubmittedComposer, TaskStateBase, ThinkingLevel,
+    wire_tagged::wire_tagged_enum,
 };
 
 wire_tagged_enum! {
@@ -62,7 +60,7 @@ gap additions.",
 
         // === Turn control (2) ===
         "turn/start" => TurnStart(TurnStartParams),
-        "turn/interrupt" => TurnInterrupt(InteractiveTarget),
+        "turn/interrupt" => TurnInterrupt(SessionTarget),
 
         // === Running task observability (2) ===
         "task/list" => TaskList(SessionTarget),
@@ -84,11 +82,11 @@ gap additions.",
         "control/setThinking" => SetThinking(SetThinkingParams),
         "control/setAgentColor" => SetAgentColor(SetAgentColorParams),
         "control/applyPermissionUpdate" => ApplyPermissionUpdate(ApplyPermissionUpdateParams),
-        "control/resetSessionPermissionRules" => ResetSessionPermissionRules(InteractiveTarget),
+        "control/resetSessionPermissionRules" => ResetSessionPermissionRules(SessionTarget),
         "control/stopTask" => StopTask(StopTaskParams),
         "control/rewindFiles" => RewindFiles(RewindFilesParams),
         "control/updateEnv" => UpdateEnv(UpdateEnvParams),
-        "control/backgroundAllTasks" => BackgroundAllTasks(InteractiveTarget),
+        "control/backgroundAllTasks" => BackgroundAllTasks(SessionTarget),
         "control/keepAlive" => KeepAlive,
         "control/cancelRequest" => CancelRequest(CancelRequestParams),
         /// Interrupt one in-process teammate's active turn without
@@ -111,44 +109,19 @@ gap additions.",
         /// Enable/disable a specific MCP server.
         "mcp/toggle" => McpToggle(McpToggleParams),
         /// Reload all plugins from disk.
-        "plugin/reload" => PluginReload(InteractiveTarget),
+        "plugin/reload" => PluginReload(SessionTarget),
         /// Reload hooks from current settings.
-        "hook/reload" => HookReload(InteractiveTarget),
+        "hook/reload" => HookReload(SessionTarget),
         /// Apply feature flag settings at runtime.
         "config/applyFlags" => ConfigApplyFlags(ConfigApplyFlagsParams),
     }
 }
 
-/// Selects persisted or live state without proving interactive ownership.
+/// Selects persisted or live session state.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionTarget {
     pub session_id: SessionId,
-}
-
-/// Selects one live interactive surface and its immutable session identity.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InteractiveTarget {
-    pub session_id: SessionId,
-    pub surface_id: SurfaceId,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum SessionCloseTarget {
-    Interactive { target: InteractiveTarget },
-    Orphaned { target: SessionTarget },
-}
-
-impl SessionCloseTarget {
-    pub fn session_id(&self) -> &SessionId {
-        match self {
-            Self::Interactive { target } => &target.session_id,
-            Self::Orphaned { target } => &target.session_id,
-        }
-    }
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -159,7 +132,7 @@ pub enum RequestScope {
     Lifecycle,
     Process,
     SessionRead,
-    Interactive,
+    SessionFull,
     Configuration,
 }
 
@@ -178,20 +151,20 @@ pub const fn request_scope(method: ClientRequestMethod) -> RequestScope {
         ClientRequestMethod::SessionList => RequestScope::Process,
         ClientRequestMethod::SessionRead
         | ClientRequestMethod::SessionTurnsList
-        | ClientRequestMethod::SessionRename
-        | ClientRequestMethod::SessionToggleTag
         | ClientRequestMethod::SessionCost
         | ClientRequestMethod::SessionStatus
-        | ClientRequestMethod::SessionGoalCreate
         | ClientRequestMethod::SessionGoalGet
-        | ClientRequestMethod::SessionGoalEdit
-        | ClientRequestMethod::SessionGoalSetStatus
-        | ClientRequestMethod::SessionGoalClear
         | ClientRequestMethod::TaskList
         | ClientRequestMethod::TaskDetail
         | ClientRequestMethod::McpStatus
         | ClientRequestMethod::ContextUsage => RequestScope::SessionRead,
-        ClientRequestMethod::TurnStart
+        ClientRequestMethod::SessionRename
+        | ClientRequestMethod::SessionToggleTag
+        | ClientRequestMethod::SessionGoalCreate
+        | ClientRequestMethod::SessionGoalEdit
+        | ClientRequestMethod::SessionGoalSetStatus
+        | ClientRequestMethod::SessionGoalClear
+        | ClientRequestMethod::TurnStart
         | ClientRequestMethod::TurnInterrupt
         | ClientRequestMethod::ApprovalResolve
         | ClientRequestMethod::UserInputResolve
@@ -213,7 +186,7 @@ pub const fn request_scope(method: ClientRequestMethod) -> RequestScope {
         | ClientRequestMethod::McpToggle
         | ClientRequestMethod::PluginReload
         | ClientRequestMethod::HookReload
-        | ClientRequestMethod::ConfigApplyFlags => RequestScope::Interactive,
+        | ClientRequestMethod::ConfigApplyFlags => RequestScope::SessionFull,
         ClientRequestMethod::ConfigRead | ClientRequestMethod::ConfigWrite => {
             RequestScope::Configuration
         }
@@ -221,11 +194,30 @@ pub const fn request_scope(method: ClientRequestMethod) -> RequestScope {
 }
 
 impl ClientRequest {
-    /// Interactive authority carried by this request, if its scope requires
-    /// one. Lifecycle replacement and close validate their typed targets in
-    /// their dedicated lifecycle paths.
-    pub fn interactive_target(&self) -> Option<&InteractiveTarget> {
+    pub fn session_target(&self) -> Option<&SessionTarget> {
         match self {
+            Self::SessionResume(params) => Some(&params.target),
+            Self::SessionRead(params) => Some(&params.target),
+            Self::SessionTurnsList(params) => Some(&params.target),
+            Self::SessionSubscribe(params) => Some(&params.target),
+            Self::SessionClose(params) => Some(&params.target),
+            Self::SessionDelete(params) => Some(&params.target),
+            Self::SessionRename(params) => Some(&params.target),
+            Self::SessionToggleTag(params) => Some(&params.target),
+            Self::SessionCost(target)
+            | Self::SessionStatus(target)
+            | Self::SessionGoalGet(target)
+            | Self::SessionGoalClear(target)
+            | Self::TaskList(target)
+            | Self::McpStatus(target)
+            | Self::ContextUsage(target) => Some(target),
+            Self::SessionGoalCreate(params) => Some(&params.target),
+            Self::SessionGoalEdit(params) => Some(&params.target),
+            Self::SessionGoalSetStatus(params) => Some(&params.target),
+            Self::TaskDetail(params) => Some(&params.target),
+            Self::ConfigRead(ConfigReadParams {
+                target: ConfigReadTarget::Session(target),
+            }) => Some(target),
             Self::TurnStart(params) => Some(&params.target),
             Self::TurnInterrupt(target)
             | Self::ResetSessionPermissionRules(target)
@@ -255,94 +247,17 @@ impl ClientRequest {
             }) => Some(target),
             Self::Initialize(_)
             | Self::SessionStart(_)
-            | Self::SessionResume(_)
             | Self::SessionReplace(_)
             | Self::SessionList
-            | Self::SessionRead(_)
-            | Self::SessionTurnsList(_)
-            | Self::SessionSubscribe(_)
-            | Self::SessionClose(_)
-            | Self::SessionDelete(_)
-            | Self::SessionRename(_)
-            | Self::SessionToggleTag(_)
-            | Self::SessionCost(_)
-            | Self::SessionStatus(_)
-            | Self::SessionGoalCreate(_)
-            | Self::SessionGoalGet(_)
-            | Self::SessionGoalEdit(_)
-            | Self::SessionGoalSetStatus(_)
-            | Self::SessionGoalClear(_)
-            | Self::TaskList(_)
-            | Self::TaskDetail(_)
             | Self::KeepAlive
             | Self::CancelRequest(_)
-            | Self::ConfigRead(_)
-            | Self::ConfigWrite(ConfigWriteParams {
-                target: ConfigWriteTarget::User,
-                ..
-            })
-            | Self::McpStatus(_)
-            | Self::ContextUsage(_) => None,
-        }
-    }
-
-    pub fn session_target(&self) -> Option<&SessionTarget> {
-        match self {
-            Self::SessionResume(params) => Some(&params.target),
-            Self::SessionRead(params) => Some(&params.target),
-            Self::SessionTurnsList(params) => Some(&params.target),
-            Self::SessionSubscribe(params) => Some(&params.target),
-            Self::SessionDelete(params) => Some(&params.target),
-            Self::SessionRename(params) => Some(&params.target),
-            Self::SessionToggleTag(params) => Some(&params.target),
-            Self::SessionCost(target)
-            | Self::SessionStatus(target)
-            | Self::SessionGoalGet(target)
-            | Self::SessionGoalClear(target)
-            | Self::TaskList(target)
-            | Self::McpStatus(target)
-            | Self::ContextUsage(target) => Some(target),
-            Self::SessionGoalCreate(params) => Some(&params.target),
-            Self::SessionGoalEdit(params) => Some(&params.target),
-            Self::SessionGoalSetStatus(params) => Some(&params.target),
-            Self::TaskDetail(params) => Some(&params.target),
-            Self::ConfigRead(ConfigReadParams {
-                target: ConfigReadTarget::Session(target),
-            }) => Some(target),
-            Self::Initialize(_)
-            | Self::SessionStart(_)
-            | Self::SessionReplace(_)
-            | Self::SessionList
-            | Self::SessionClose(_)
-            | Self::TurnStart(_)
-            | Self::TurnInterrupt(_)
-            | Self::ApprovalResolve(_)
-            | Self::UserInputResolve(_)
-            | Self::ElicitationResolve(_)
-            | Self::SetModel(_)
-            | Self::SetModelRole(_)
-            | Self::SetPermissionMode(_)
-            | Self::SetThinking(_)
-            | Self::SetAgentColor(_)
-            | Self::ApplyPermissionUpdate(_)
-            | Self::ResetSessionPermissionRules(_)
-            | Self::StopTask(_)
-            | Self::RewindFiles(_)
-            | Self::UpdateEnv(_)
-            | Self::BackgroundAllTasks(_)
-            | Self::KeepAlive
-            | Self::CancelRequest(_)
-            | Self::AgentInterruptCurrentWork(_)
             | Self::ConfigRead(ConfigReadParams {
                 target: ConfigReadTarget::Process,
             })
-            | Self::ConfigWrite(_)
-            | Self::McpSetServers(_)
-            | Self::McpReconnect(_)
-            | Self::McpToggle(_)
-            | Self::PluginReload(_)
-            | Self::HookReload(_)
-            | Self::ConfigApplyFlags(_) => None,
+            | Self::ConfigWrite(ConfigWriteParams {
+                target: ConfigWriteTarget::User,
+                ..
+            }) => None,
         }
     }
 }
@@ -393,18 +308,6 @@ impl ConnectionProfile {
 
     pub fn client_mcp_server_names(&self) -> Option<&[String]> {
         self.initialize.client_mcp_servers.as_deref()
-    }
-
-    pub fn callback_requirements(&self) -> SessionCallbackRequirements {
-        let hook_callback_ids = self
-            .initialize
-            .hooks
-            .iter()
-            .flat_map(HashMap::values)
-            .flatten()
-            .flat_map(|matcher| matcher.hook_callback_ids.iter().cloned())
-            .collect();
-        SessionCallbackRequirements { hook_callback_ids }
     }
 }
 
@@ -466,19 +369,6 @@ impl std::fmt::Display for ConnectionProfileError {
 }
 
 impl std::error::Error for ConnectionProfileError {}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SessionCallbackRequirements {
-    pub hook_callback_ids: BTreeSet<String>,
-}
-
-impl SessionCallbackRequirements {
-    pub fn is_satisfied_by(&self, profile: &ConnectionProfile) -> bool {
-        let available = profile.callback_requirements();
-        self.hook_callback_ids
-            .is_subset(&available.hook_callback_ids)
-    }
-}
 
 /// Hook callback matcher with optional tool-name filter and callback IDs.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -634,7 +524,7 @@ pub enum SessionReplacement {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionReplaceParams {
-    pub source: InteractiveTarget,
+    pub source: SessionTarget,
     pub destination: SessionReplacement,
 }
 
@@ -662,7 +552,7 @@ pub struct SessionTurnsListParams {
     pub limit: Option<i32>,
 }
 
-/// Params for passive `session/subscribe`.
+/// Params for read-only `session/subscribe`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSubscribeParams {
@@ -676,7 +566,7 @@ pub struct SessionSubscribeParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionCloseParams {
-    pub target: SessionCloseTarget,
+    pub target: SessionTarget,
 }
 
 /// Params for `session/delete`.
@@ -771,14 +661,8 @@ pub struct BackgroundAllTasksResult {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnStartParams {
-    pub target: InteractiveTarget,
+    pub target: SessionTarget,
     pub prompt: String,
-    /// Optional full-history override for local compatibility turns that have
-    /// already assembled transcript messages outside a plain prompt. Each item
-    /// is a serialized `coco_messages::Message`; kept as JSON here to avoid a
-    /// reverse dependency from `coco-types` to `coco-messages`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub history_override: Vec<serde_json::Value>,
     /// Optional clipboard/paste images to include on the user message.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<QueuedCommandEditImage>,
@@ -811,12 +695,12 @@ pub struct TurnStartParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApprovalResolveParams {
-    pub target: InteractiveTarget,
+    pub target: SessionTarget,
     pub request_id: String,
     pub decision: ApprovalDecision,
-    /// Optional permission update to persist to rules.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub permission_update: Option<PermissionUpdate>,
+    /// Permission updates authorized by the user and persisted to rules.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permission_updates: Vec<PermissionUpdate>,
     /// Optional feedback to inject back to the model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feedback: Option<String>,
@@ -830,6 +714,9 @@ pub struct ApprovalResolveParams {
     /// (TUI mode). Consumed by the SDK approval bridge in `coco-agent-host`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_input: Option<serde_json::Value>,
+    /// Trusted tool-specific approval metadata selected by the client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution_detail: Option<PermissionResolutionDetail>,
     /// Optional content blocks (typically image attachments) the SDK client
     /// wants attached to the next user message. Paste-image-during-
     /// AskUserQuestion or attachments alongside `MCPTool` answers ride this
@@ -853,7 +740,7 @@ pub enum ApprovalDecision {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserInputResolveParams {
-    pub target: InteractiveTarget,
+    pub target: SessionTarget,
     pub request_id: String,
     /// The user's answer to the `AskUserQuestion` prompt.
     pub answer: String,
@@ -869,7 +756,7 @@ pub struct UserInputResolveParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElicitationResolveParams {
-    pub target: InteractiveTarget,
+    pub target: SessionTarget,
     /// Correlation id matching the `ServerRequest` the agent sent.
     pub request_id: String,
     /// Which MCP server the elicitation originated from. Echoed back
@@ -889,7 +776,7 @@ pub struct ElicitationResolveParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetModelParams {
-    pub target: InteractiveTarget,
+    pub target: SessionTarget,
     /// None means revert to the default model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -899,7 +786,7 @@ pub struct SetModelParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetModelRoleParams {
-    pub target: InteractiveTarget,
+    pub target: SessionTarget,
     pub role: ModelRole,
     pub provider: String,
     pub model_id: String,
@@ -914,7 +801,7 @@ pub struct SetModelRoleParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetPermissionModeParams {
-    pub target: InteractiveTarget,
+    pub target: SessionTarget,
     pub mode: PermissionMode,
 }
 
@@ -923,7 +810,7 @@ pub struct SetPermissionModeParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetThinkingParams {
-    pub target: InteractiveTarget,
+    pub target: SessionTarget,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_level: Option<ThinkingLevel>,
 }
@@ -932,7 +819,7 @@ pub struct SetThinkingParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetAgentColorParams {
-    pub target: InteractiveTarget,
+    pub target: SessionTarget,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<AgentColorName>,
 }
@@ -941,7 +828,7 @@ pub struct SetAgentColorParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyPermissionUpdateParams {
-    pub target: InteractiveTarget,
+    pub target: SessionTarget,
     pub update: PermissionUpdate,
 }
 
@@ -957,7 +844,7 @@ pub struct ResetSessionPermissionRulesResult {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StopTaskParams {
-    pub target: InteractiveTarget,
+    pub target: SessionTarget,
     pub task_id: String,
 }
 
@@ -965,7 +852,7 @@ pub struct StopTaskParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RewindFilesParams {
-    pub target: InteractiveTarget,
+    pub target: SessionTarget,
     pub user_message_id: String,
     #[serde(default)]
     pub dry_run: bool,
@@ -975,7 +862,7 @@ pub struct RewindFilesParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateEnvParams {
-    pub target: InteractiveTarget,
+    pub target: SessionTarget,
     pub env: HashMap<String, String>,
 }
 
@@ -995,7 +882,7 @@ pub struct CancelRequestParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentInterruptCurrentWorkParams {
-    pub target: InteractiveTarget,
+    pub target: SessionTarget,
     pub agent_id: String,
 }
 
@@ -1018,8 +905,8 @@ pub struct ConfigReadParams {
 #[serde(rename_all = "snake_case")]
 pub enum ConfigWriteTarget {
     User,
-    Project(InteractiveTarget),
-    Local(InteractiveTarget),
+    Project(SessionTarget),
+    Local(SessionTarget),
 }
 
 /// Params for `config/value/write`.
@@ -1037,7 +924,7 @@ pub struct ConfigWriteParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpSetServersParams {
-    pub target: InteractiveTarget,
+    pub target: SessionTarget,
     /// Server configs keyed by name.
     pub servers: HashMap<String, serde_json::Value>,
 }
@@ -1046,7 +933,7 @@ pub struct McpSetServersParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpReconnectParams {
-    pub target: InteractiveTarget,
+    pub target: SessionTarget,
     pub server_name: String,
 }
 
@@ -1054,7 +941,7 @@ pub struct McpReconnectParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpToggleParams {
-    pub target: InteractiveTarget,
+    pub target: SessionTarget,
     pub server_name: String,
     pub enabled: bool,
 }
@@ -1063,7 +950,7 @@ pub struct McpToggleParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigApplyFlagsParams {
-    pub target: InteractiveTarget,
+    pub target: SessionTarget,
     pub settings: HashMap<String, serde_json::Value>,
 }
 

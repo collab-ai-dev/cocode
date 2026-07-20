@@ -116,12 +116,8 @@ run_pipeline() {
     local out_protocol="$1"
     local out_init_dir="$2"
     mkdir -p "$(dirname "$out_protocol")" "$out_init_dir/coco_sdk"
-    # The append/regen scripts read from the protocol path's parent
-    # parent directory (`<root>/python`) to scan src/ + tests/, so they
-    # always work against the canonical source tree. In --check mode we
-    # only redirect the *outputs*; reads still come from the live tree.
+    # Generate protocol models, then regenerate the public import surface.
     python3 "$SCRIPTS_DIR/postprocess_python.py" "$SCHEMA_DIR" "$out_protocol"
-    python3 "$SCRIPTS_DIR/append_stubs.py" "$REPO_ROOT/coco-sdk/python" "$out_protocol"
     "$RUFF_BIN" format "$out_protocol" >/dev/null
     # regen_init.py writes `__init__.py` next to the protocol's parent
     # directory (i.e. `<protocol_dir>/../__init__.py`). For --check we
