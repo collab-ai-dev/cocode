@@ -49,7 +49,6 @@ pub async fn register_and_connect(
             crate::app_server_host::request_handlers::mcp::build_send_elicitation_for_session(
                 session.clone(),
                 Arc::clone(&app_server),
-                Some(connection),
                 name.clone(),
             )
             .await;

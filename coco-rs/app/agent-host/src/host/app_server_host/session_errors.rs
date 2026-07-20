@@ -1,5 +1,6 @@
 use coco_app_server::JsonRpcDispatchError;
 
+#[derive(Debug)]
 pub(crate) enum LifecycleError {
     InvalidRequest {
         message: String,
@@ -237,6 +238,14 @@ pub(crate) fn registry_lifecycle_error_parts(
             LifecycleErrorKind::Internal,
             data.clone()
                 .unwrap_or_else(|| serde_json::json!({ "kind": "session_close_failed" })),
+        ),
+        RegistryError::CloseAborted { session_id, .. } => (
+            LifecycleErrorKind::InvalidRequest,
+            serde_json::json!({ "kind": "session_close_aborted", "session_id": session_id }),
+        ),
+        RegistryError::DeleteInProgress { session_id, .. } => (
+            LifecycleErrorKind::InvalidRequest,
+            serde_json::json!({ "kind": "session_delete_in_progress", "session_id": session_id }),
         ),
     };
     lifecycle_error(kind, message, Some(data))

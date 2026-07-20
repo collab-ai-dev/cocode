@@ -78,8 +78,19 @@ live beside their modules (`routing.test.rs`, `app_server.test.rs`,
 
 ## Routing / Lock Order
 
-- Lock order is **registry -> routing -> waiters**; the routing lock is
-  always dropped before the `server_request_waiters` mutex is taken.
+- Lock order is **registry -> routing -> waiters** — always acquire in that
+  direction; no path may take a lock earlier in the order while holding a
+  later one. Most wrappers drop the routing lock before touching the
+  `server_request_waiters` mutex, but `route_server_request_with_reply*`
+  deliberately holds the routing write lock across the waiter insert and the
+  publish: that continuous hold is what makes waiter-before-publish atomic
+  and keeps the prepared pending entry alive for publication.
+- Internal slow-consumer disconnects (inside route/publish/notify) record the
+  removed connection-targeted request ids in `RoutingState`'s orphaned-waiter
+  buffer; every `AppServer` wrapper that takes the routing write lock drains
+  it after unlock via `cancel_server_request_waiters`. Never leave that
+  buffer undrained — a stranded reply waiter blocks its hook/MCP bridge until
+  the request timeout.
 - Keep the two live-routing indexes and attachment map in sync:
   `SessionId -> ConnectionKey set`, `ConnectionKey -> SessionId set`, and
   `(ConnectionKey, SessionId) -> SessionAttachment`.
@@ -108,9 +119,11 @@ live beside their modules (`routing.test.rs`, `app_server.test.rs`,
   live-checked variants.
 - Outbound queues are bounded by their transport owner; `RoutingState` uses
   `try_send`, and a full/closed queue disconnects the whole `ConnectionKey`.
-  `RouteOutcome`-family results fold that connection's `cancelled_requests`
-  into the outcome; AppServer route wrappers call
-  `cancel_server_request_waiters` after the routing lock is released.
+  Such an internal disconnect records the connection's cancelled
+  connection-targeted request ids in the orphaned-waiter buffer, and every
+  AppServer routing-write wrapper drains it into
+  `cancel_server_request_waiters` after the lock is released (see Routing /
+  Lock Order above).
 
 ## Server-Initiated Requests
 
@@ -120,6 +133,14 @@ live beside their modules (`routing.test.rs`, `app_server.test.rs`,
 - `resolve_server_request` validates `(connection, session, request_id)` and
   atomically removes the pending entry. Therefore concurrent valid responders
   use first-response-wins semantics; later replies receive NotFound.
+- An **error reply is not a valid answer**: on a broadcast it withdraws only
+  the sender (last-recipient error cancels the request); it completes only a
+  connection-targeted request, whose sole responder failed
+  (`ErrorReplyDisposition` / `ServerRequestResolution`).
+- Callback owners are a per-`(session, callback)` **registration stack**,
+  most recent first. Routing targets the front entry; disconnect/detach prune
+  the connection from every stack so ownership falls back to a prior
+  still-attached registrant instead of orphaning the callback.
 - Keep pending indexes in sync by request, session, and turn. Turn transition,
   replace, and session close cancel the precise affected ids; disconnecting one
   Full connection does not invalidate requests still answerable by peers.

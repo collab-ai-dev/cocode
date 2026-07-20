@@ -7,13 +7,15 @@
 > plans). README marketing numbers are flagged where they back an
 > architectural claim.
 
-This module is where the two harnesses diverge most sharply, and where the
-divergence is mostly a **maturity gap, not an architecture refusal**. jcode
-ships a hardened single-process / multi-client peer server today; coco-rs
-has the same single-process-shared-singletons *design* written down in a
-1053-line plan, plus three narrower production pieces (a read-only
-observability hub, a single-session SDK server, and a cloud-session client),
-but **no multi-client server crate exists on disk yet**.
+This module is where the two harnesses diverged most sharply; the core gap
+has since closed. jcode ships a hardened single-process / multi-client peer
+server; coco-rs now ships one too — the multi-session AppServer
+(`coco-app-server` + `coco-app-server-transport` + `coco-app-server-client`)
+hosts N sessions per process with per-connection grants, multi-Full-client
+control, and bounded fanout (see
+`docs/internal/multi-session-app-server/`). What coco-rs still lacks is
+jcode's detached-daemon story: spawn/ready handshake, in-place hot-reload,
+and daemon-level idle/owner lifecycle.
 
 ---
 
@@ -185,9 +187,10 @@ process.
 
 ## coco-rs approach
 
-coco-rs does **not** have a single-server / multi-client peer architecture
-today. The space is covered by three production pieces at different maturity
-levels, plus one design doc for the true equivalent.
+coco-rs covers the space with the shipped multi-session AppServer plus two
+narrower pieces: a read-only observability hub and a cloud-session client
+design. Unlike jcode there is no detached daemon — the AppServer is embedded
+in the TUI/SDK process.
 
 ### (1) `hub/` — read-only event-aggregation / observability (implemented, simplified mode)
 
@@ -276,25 +279,26 @@ single-runtime-owner remediation in
 
 ## Head-to-head comparison
 
-| Dimension | jcode (shipped) | coco-rs (today / planned) |
+| Dimension | jcode (shipped) | coco-rs (shipped) |
 |---|---|---|
-| Persistent multi-client server | **Yes**, one process owns N sessions (`socket.rs`, `client_lifecycle.rs`) | SDK server is single-session (`handlers/mod.rs:236`); multi-client is a doc only |
-| Transports | Unix socket + Windows named pipe; **no TCP/WS server** (`transport/unix.rs`) | Plan mandates 3 from day one: stdio NDJSON, WS-over-UDS, WS-over-TCP + `InProcessClientHandle` (`plan:390,403`) |
-| Daemon startup | `pipe()` ready-fd + `flock` lock + stderr race reconcile (`socket.rs:163-251,104-128,306-359`) | No daemon (`main.rs:155-158`); plan has no readiness/lock spec |
+| Persistent multi-client server | **Yes**, one process owns N sessions (`socket.rs`, `client_lifecycle.rs`) | **Yes** — multi-session AppServer: `LiveSessionRegistry` + `RoutingState`; multiple Full connections control one session |
+| Transports | Unix socket + Windows named pipe; **no TCP/WS server** (`transport/unix.rs`) | stdio NDJSON + Unix socket + Windows named pipe (`app/server-transport`) + WebSocket sidecar (`app/sdk-server`); local TUI is one in-process connection |
+| Daemon startup | `pipe()` ready-fd + `flock` lock + stderr race reconcile (`socket.rs:163-251,104-128,306-359`) | No detached daemon; the AppServer is embedded in the TUI/SDK process |
 | Hot-reload | In-place `exec()` same socket/PID, `ReloadProgress` streamed (`reload.rs:160-163`, `wire.rs:950`) | None; tied to self-dev which coco-rs does not pursue |
-| Idle / owner-pid lifecycle | Idle-timeout + `kill(pid,0)` liveness + on-disk metadata (`lifecycle.rs:138-204,20-132`) | No shared daemon to manage; plan silent on idle/owner-liveness |
-| Event fanout | Targeted per-session `event_txs` (`state.rs:320-350`) + global UI bus (`bus.rs:415-422`); **unbounded** senders | Planned per-Thread subscriber registry (`plan:564`); **bounded** channels (`plan:657-660`) |
-| Reconnect / takeover | Full state machine: supersede stale owner, transfer in-flight, reject split-brain (`client_session.rs:1070-1162`) | Plan: duplicate-resume → `Conflict` only (`plan:682,992`); no takeover/transfer specified |
-| Recent-event replay on reconnect | Bounded `MAX_EVENT_HISTORY=5000` ring (`state.rs:289`) | No in-memory ring; only disk JSONL via thread archive |
-| Identity model | Bare `session_id: String` threaded everywhere; no thread/session split | Two-level `ThreadId`/`SessionId` UUID-v7 (`plan:41-104`) — type-safer |
-| Protocol shape | One enum, ~70 Req / ~61 Evt; provider-control + swarm fused at wire (`wire.rs`) | Plan keeps provider concerns in `vercel-ai-*`; swarm isolated; per-crate protocol |
-| Layering | Flat `src/server/`; `Server` god-struct + 29-arg `handle_client` (own audit flags it) | Plan: `app/server` (L4) → `app/thread` (L3) → `app/session` (L2) from the start |
+| Idle / owner-pid lifecycle | Idle-timeout + `kill(pid,0)` liveness + on-disk metadata (`lifecycle.rs:138-204,20-132`) | No shared daemon to manage; per-session idle auto-close supervisor ships instead (atomic close-when-unattached) |
+| Event fanout | Targeted per-session `event_txs` (`state.rs:320-350`) + global UI bus (`bus.rs:415-422`); **unbounded** senders | Per-session attachment fanout over **bounded** per-connection queues; a slow consumer is disconnected as a unit |
+| Reconnect / takeover | Full state machine: supersede stale owner, transfer in-flight, reject split-brain (`client_session.rs:1070-1162`) | No takeover needed — no unique writer; many Full connections attach concurrently and pending broadcast requests replay on attach |
+| Recent-event replay on reconnect | Bounded `MAX_EVENT_HISTORY=5000` ring (`state.rs:289`) | Bounded per-session retention ring + ordered gap-free subscribe replay |
+| Identity model | Bare `session_id: String` threaded everywhere; no thread/session split | `SessionId` is the only root conversation id; connection identity is a process-private `ConnectionKey`, never serialized |
+| Protocol shape | One enum, ~70 Req / ~61 Evt; provider-control + swarm fused at wire (`wire.rs`) | Provider concerns stay in `vercel-ai-*`; swarm isolated; typed wire-tagged `ClientRequest`/`ServerRequest` enums |
+| Layering | Flat `src/server/`; `Server` god-struct + 29-arg `handle_client` (own audit flags it) | `app/server-transport` → `app/server` / `app/server-client` → `app/agent-host` → `app/sdk-server` → `app/cli`; the server crate never constructs runtimes |
 
 ### Where jcode is genuinely ahead, and the mechanism
 
-1. **It actually ships the persistent multi-client server.** The single
-   biggest gap. But it is the explicit subject of an in-flight coco-rs plan, so
-   it is a **roadmap gap, not an architecture refusal**.
+1. **The detached daemon packaging.** The former "single biggest gap" — no
+   multi-client server — is closed: the multi-session AppServer ships. What
+   remains jcode-distinct is running the server as a spawnable long-lived
+   daemon a separate client process attaches to.
 2. **In-place `exec()` hot-reload preserving the socket** (`reload.rs:160-163`).
    coco-rs has nothing comparable; this is tightly coupled to jcode's self-dev
    story and to *having a long-lived server to reload into* — coco-rs pursues
@@ -329,16 +333,19 @@ single-runtime-owner remediation in
 ### Perf convergence
 
 jcode's "~10 MB per added session" (`README.md:222`, measured) is a direct
-consequence of *one shared Rust process*. coco-rs's *current* model (one process
-per TUI, single-session SDK server) cannot reach that for N concurrent sessions
-— but coco-rs's *target* (the plan's §6 sharing table: process-wide
-`AuthManager`/`ToolRegistry`/`CommandRegistry`/`McpManager`-config, per-thread
-engine/MCP/exec) is architecturally the **same** single-process-shared-singletons
-design. If executed, the plan converges on jcode's memory profile.
+consequence of *one shared Rust process*. coco-rs's shipped multi-session
+AppServer is architecturally the same single-process design — an added
+session is a registry slot + runtime + routing entries, not a new OS process —
+so the memory profile converges on jcode's.
 
 ---
 
 ## Where coco-rs already matches or wins
+
+> Items below were written against the pre-ship plan; the AppServer has since
+> shipped with bounded per-connection queues, per-session fanout, and
+> stdio/UDS/named-pipe/WebSocket transports. Plan-line refs are retained as
+> historical evidence; the shipped state is in the table above.
 
 1. **Transport breadth is designed-in, not retrofitted.** The plan mandates
    **three** transports from day one (stdio NDJSON, WS-over-UDS, WS-over-TCP)
@@ -392,9 +399,11 @@ design. If executed, the plan converges on jcode's memory profile.
 All six analyst suggestions survived adversarial review; **none was refuted**
 (two confirmed outright, four are nuanced with the correction folded in). Three
 strong verifier findings are appended as supplementary recommendations. Every
-item respects coco-rs's documented non-goals. **All are gated on the
-concurrent-app-server plan actually shipping** (PRs 9/11) — there is no shared
-daemon to harden today.
+item respects coco-rs's documented non-goals. The multi-session AppServer has
+since shipped (plan-line refs below are retained as historical evidence);
+**the daemon items (M04-S1/S4) remain gated on a detached `coco serve` daemon
+actually shipping** — the AppServer runs embedded today, so there is no shared
+daemon to harden.
 
 ### M04-S3 — Reconnect-ownership / session-takeover state machine *(confirmed)*
 
@@ -403,11 +412,12 @@ daemon to harden today.
   using `client_instance_id` + `client_has_local_history` +
   `allow_session_takeover` (`wire.rs:79-126`; decision at
   `client_session.rs:1070-1162`, transfer at `:1124-1125`, reject at
-  `:1138-1162`). coco-rs's plan provides only split-brain **rejection** —
-  `thread/resume` is `Global Exclusive` and the only concurrent-resume test
-  asserts the second caller gets a `Conflict` (`plan:682,992`); the SDK server
-  today is single-session (`handlers/mod.rs:236`). There are no
-  takeover/transfer semantics anywhere.
+  `:1138-1162`). The shipped AppServer dissolves most of this: multiple Full
+  connections attach to one live session concurrently with no unique writer,
+  so there is no owner to supersede. What remains jcode-distinct is
+  *transferring in-flight processing* to a designated owner — semantics
+  coco-rs does not have (and, with first-valid-response broadcast, mostly
+  does not need).
 - **Concrete change.** In `app/server` (PR 9): on `session/resume` or a second
   subscribe to an already-attached `ThreadId`, drive a small `AttachDecision`
   enum (`RejectConflict` / `TakeOver` / `PassiveObserve`). For `TakeOver`, signal

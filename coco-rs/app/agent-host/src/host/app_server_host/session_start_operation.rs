@@ -66,12 +66,12 @@ pub(crate) async fn start_app_server_session_with_runtime_replacement(
     input: SessionStartInput,
     connection_profile: Arc<coco_types::ConnectionProfile>,
     replacement: RuntimeReplacementContext,
+    turn_drain_timeout: std::time::Duration,
 ) -> Result<SessionStartResult, SessionOperationError> {
     let prepared = prepare_app_server_session_start(input, &state, &connection_profile).await?;
     let started_session_id = prepared.session_id.clone();
 
     let factory = {
-        let state = Arc::clone(&state);
         let replacement = replacement.clone();
         let prepared = prepared.clone();
         let connection_profile = Arc::clone(&connection_profile);
@@ -79,7 +79,6 @@ pub(crate) async fn start_app_server_session_with_runtime_replacement(
         async move {
             let runtime = build_connection_runtime_for_start(
                 replacement,
-                state,
                 connection_profile,
                 prepared,
                 app_server,
@@ -92,9 +91,14 @@ pub(crate) async fn start_app_server_session_with_runtime_replacement(
         }
     };
 
-    let handle =
-        load_local_app_server_session_new_only(&app_server, started_session_id.clone(), factory)
-            .await?;
+    let handle = load_local_app_server_session_new_only(
+        &app_server,
+        Arc::clone(&state),
+        started_session_id.clone(),
+        factory,
+        turn_drain_timeout,
+    )
+    .await?;
     let runtime = handle.into_session();
 
     install_app_server_session_runtime_state(
@@ -105,14 +109,26 @@ pub(crate) async fn start_app_server_session_with_runtime_replacement(
     .await;
     touch_started_session_activity(&state, &prepared);
 
-    attach_local_app_server_session(&app_server, connection, started_session_id.clone())?;
-    register_connection_callback_owners(&connection_profile, &runtime, &app_server, connection)
-        .map_err(|error| {
-            SessionOperationError::internal(
-                format!("register session/start callback owners: {error}"),
-                Some(serde_json::json!({ "kind": "callback_owner_registration_failed" })),
-            )
-        })?;
+    // Failure past this point must roll the published session back: leaving
+    // it live and (half-)attached would leak a running runtime and make a
+    // retry with the same id fail against the new-only loader.
+    if let Err(error) =
+        attach_local_app_server_session(&app_server, connection, started_session_id.clone())
+    {
+        rollback_started_session(&app_server, &state, &started_session_id, turn_drain_timeout)
+            .await;
+        return Err(error.into());
+    }
+    if let Err(error) =
+        register_connection_callback_owners(&connection_profile, &runtime, &app_server, connection)
+    {
+        rollback_started_session(&app_server, &state, &started_session_id, turn_drain_timeout)
+            .await;
+        return Err(SessionOperationError::internal(
+            format!("register session/start callback owners: {error}"),
+            Some(serde_json::json!({ "kind": "callback_owner_registration_failed" })),
+        ));
+    }
     runtime
         .fire_session_start_hooks(coco_hooks::orchestration::SessionStartSource::Startup)
         .await;
@@ -126,4 +142,29 @@ pub(crate) async fn start_app_server_session_with_runtime_replacement(
     Ok(SessionStartResult {
         session_id: started_session_id,
     })
+}
+
+/// Best-effort close of a session that published but failed start finalize
+/// (attach or callback-owner registration). Runs the full close cascade so
+/// the runtime's SessionEnd hooks fire and its tasks join.
+async fn rollback_started_session(
+    app_server: &Arc<AppServer<AppSessionHandle>>,
+    state: &Arc<AppServerHostState>,
+    session_id: &coco_types::SessionId,
+    turn_drain_timeout: std::time::Duration,
+) {
+    if let Err(error) = super::session_close::close_local_app_server_session_parts(
+        Arc::clone(app_server),
+        Arc::clone(state),
+        session_id.clone(),
+        turn_drain_timeout,
+    )
+    .await
+    {
+        tracing::warn!(
+            session_id = %session_id,
+            ?error,
+            "failed to roll back half-started session"
+        );
+    }
 }

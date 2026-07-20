@@ -88,7 +88,17 @@ Start and resume construction finish before a runtime is promoted and attached.
 Construction may install runtime-local callback definitions, but it must not
 publish connection ownership, invoke client callbacks, or connect client-hosted
 MCP until promotion and Full attachment succeed. Failed factories therefore
-leave no ghost callback owner.
+leave no ghost callback owner. Constructed runtimes are never dropped: a
+failed load commit hands the handle back to the load owner for teardown, and a
+start whose attach or callback-owner registration fails after publish rolls
+the published session back through the full close cascade.
+Idle auto-close commits the `Live -> Closing` transition only while zero
+connections are attached, checked under the registry write lock; attaches hold
+the registry read lock across their routing mutation, so the check-then-close
+race is structurally closed. An attached session aborts the close and the idle
+supervisor skips. Durable deletion marks the identity as deleting; every slot
+reservation (load, resume, replace, child) refuses a deleting id, so a
+concurrent resume cannot publish a live runtime over rows mid-deletion.
 Replacement commits destination promotion, source Closing transition, and
 routing changes in one no-await section. Close drains owned work, commits the
 terminal state, routes lifecycle effects after locks are released, removes the
@@ -117,10 +127,14 @@ Human interactions that any user-facing Full client can answer are broadcast:
 approval, user input, and ordinary elicitation. First valid response wins.
 
 Hooks and client-hosted MCP servers execute in a client process, so their
-registration records `(session, callback) -> connection`. Routing looks up the
-owner for every invocation; it does not capture a stale connection in a global
-session closure. Disconnect clears that connection's registrations. Explicit
-re-registration may transfer ownership.
+registration records a stack of connections per `(session, callback)`, most
+recent registrant first. Routing looks up the front of the stack for every
+invocation — including client-MCP elicitation, which resolves its owner per
+call and falls back to the Full broadcast when no owner exists; it does not
+capture a stale connection in a global session closure. Disconnect and detach
+prune the connection from every stack, so ownership falls back to a prior
+still-attached registrant. Explicit re-registration moves a connection to the
+front of the stack.
 
 ## Pending request broker
 
@@ -136,12 +150,23 @@ Completion validates:
 - response variant matches the request;
 - no previous response won.
 
+An error reply is never a valid answer: on a broadcast it withdraws only the
+sender, and the last recipient's error cancels the request and waiter. Error
+replies complete only connection-targeted requests — the sole responder
+failed and the waiter receives the error.
+
 Completion removes every index atomically and sends cancellation notifications
 to losers. Timeout, turn end, close, and replacement use the same global cleanup
 path. A client-originated cancel withdraws only that recipient from a broadcast;
 the request and waiter remain live for peers, and are removed only when the last
-recipient withdraws. Client routers abort local handlers and remove correlation
-on server-originated `control/cancelRequest`.
+recipient withdraws. Disconnect is deliberately weaker: it only prunes the
+recipient, so a broadcast whose recipients all disconnect stays pending for
+attach-time replay (oldest first by mint order) until the request timeout —
+intentional crash-reconnect rescue. A slow-consumer disconnect that fires
+inside another routing mutation records the orphaned request ids; every
+AppServer wrapper drains them into waiter cancellation after unlock, so no
+reply waiter is stranded. Client routers abort local handlers and remove
+correlation on server-originated `control/cancelRequest`.
 
 ## Event routing
 

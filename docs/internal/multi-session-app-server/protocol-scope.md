@@ -85,7 +85,10 @@ registry slot, and preserves durable storage and grants.
 
 `session/delete` requires a Full grant for the exact target, rejects every
 Loading/Live/Closing slot, removes durable state only, and revokes every grant
-for that identity. Close and delete are never combined.
+for that identity. Close and delete are never combined. While durable deletion
+runs the identity is marked deleting, and every slot reservation
+(load/resume/replace/child) refuses it, so a concurrent resume cannot publish
+a live runtime over rows mid-deletion.
 
 ## Events and replay
 
@@ -105,19 +108,38 @@ all currently attached Full connections. ReadOnly connections never receive
 them. AppServer registers the waiter before publication, validates reply type,
 and atomically accepts the first valid response. Losing clients receive
 `control/cancelRequest` and must purge their local correlation.
+`input/requestUserInput` is reserved: its wire shape and broadcast semantics
+are defined, but no server path currently emits it — AskUserQuestion rides the
+approval request.
 
 Pending requests are indexed by request, session, and optional turn. Turn end,
 replacement, close, and timeout cancel the whole request, notify recipients,
 and resolve the server waiter. A client `control/cancelRequest` withdraws only
 that connection from a broadcast; peers retain their opportunity to answer.
-The waiter is cancelled when the last recipient withdraws.
+The request is cancelled when the last recipient withdraws. An error reply is
+not a valid answer: on a broadcast it likewise withdraws only the sender, and
+the last recipient's error cancels the request. Error replies complete only
+connection-targeted requests — the sole responder failed and the waiter
+receives the error.
+
+Disconnect is deliberately weaker than withdrawal: it only prunes the
+recipient. A broadcast whose recipients all disconnect stays pending so a
+newly attached Full connection receives it via attach-time replay, oldest
+first by mint order, bounded by the server request timeout (default 900 s).
+This is intentional crash-reconnect rescue; only an explicit cancel or error
+reply from the last recipient cancels the request early.
 
 Hook callbacks and client-hosted MCP routing differ because their handler lives
 inside a particular client process. Those requests are targeted to the
-connection that registered the callback or MCP server. Adding another Full
-connection neither blocks attachment nor silently transfers ownership. A new
-connection that explicitly registers the same callback/server becomes the new
-owner under normal last-registration-wins coordination.
+connection that registered the callback or MCP server. Owners form a
+registration stack per `(session, callback)`, most recent registrant first;
+routing — including client-MCP elicitation — resolves the current owner per
+call, and with no owner falls back to the Full broadcast. Disconnect and
+detach prune the connection from every stack, so ownership falls back to a
+prior still-attached registrant instead of orphaning the callback. Adding
+another Full connection neither blocks attachment nor silently transfers
+ownership. A new connection that explicitly registers the same callback/server
+becomes the new owner under normal last-registration-wins coordination.
 Registration becomes routable only after the session is live and the owning
 connection has a Full attachment. Unpublished construction cannot create an
 AppServer callback owner or initiate client-hosted MCP traffic.
@@ -137,5 +159,8 @@ pending state.
 
 The protocol contains no serialized transport key, UI identity, active-owner
 token, history override, or compatibility wrapper. `TurnStartParams` carries
-typed prompt/composer/image data only; history replacement is an in-process
-session operation performed before turn admission.
+typed prompt/composer/image data plus slash-command metadata and turn-scoped
+model / permission-mode / thinking overrides (`goal_continuation` is
+`#[serde(skip)]` host-internal and never crosses the wire); history
+replacement is an in-process session operation performed before turn
+admission.

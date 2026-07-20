@@ -89,7 +89,6 @@ pub(crate) async fn resume_app_server_session_with_runtime_replacement(
     }
 
     let make_factory = || {
-        let state = Arc::clone(&state);
         let replacement = replacement.clone();
         let session_id = resumed_session_id.clone();
         let cwd = resumed_cwd.clone();
@@ -100,7 +99,6 @@ pub(crate) async fn resume_app_server_session_with_runtime_replacement(
         async move {
             let runtime = build_connection_runtime_for_resume(
                 replacement,
-                state,
                 connection_profile,
                 session_id.clone(),
                 cwd,
@@ -119,6 +117,7 @@ pub(crate) async fn resume_app_server_session_with_runtime_replacement(
 
     let handle = load_local_app_server_session_with_retrying_factory_parts(
         &app_server,
+        Arc::clone(&state),
         resumed_session_id.clone(),
         make_factory,
         turn_drain_timeout,

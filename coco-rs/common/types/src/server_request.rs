@@ -56,7 +56,11 @@ SDK client must reply via the corresponding `ClientRequest` variant.",
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AskForApprovalParams {
-    /// Unique correlation id (SDK must echo in `ApprovalResolve`).
+    /// Bridge-internal id echoed verbatim inside the reply payload. It does
+    /// NOT resolve the pending request: `approval/resolve` (and JSON-RPC
+    /// response correlation) use the ENVELOPE request id — the id this
+    /// request was delivered under (`ServerRequestDelivery.request_id` /
+    /// the JSON-RPC request id).
     pub request_id: String,
     pub tool_name: String,
     pub input: serde_json::Value,
@@ -92,6 +96,8 @@ pub struct AskForApprovalParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestUserInputParams {
+    /// Bridge-internal id echoed verbatim inside the reply payload; resolves
+    /// correlate via the ENVELOPE request id (see `AskForApprovalParams`).
     pub request_id: String,
     pub prompt: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -149,7 +155,8 @@ pub struct ServerCancelRequestParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestElicitationParams {
-    /// Correlation id (SDK must echo in the response payload).
+    /// Bridge-internal id echoed verbatim inside the reply payload; resolves
+    /// correlate via the ENVELOPE request id (see `AskForApprovalParams`).
     pub request_id: String,
     /// Which MCP server originated the elicitation. SDK clients
     /// surface this in the UI so users know who is asking.

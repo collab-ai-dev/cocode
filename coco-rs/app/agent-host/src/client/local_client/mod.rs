@@ -6,7 +6,7 @@ use std::{
 use coco_app_server::{
     AttachSessionOptions, DetachSessionOutcome, DisconnectOutcome, LocalClientAdapter,
     LocalClientDispatchError, LocalClientHandle, LocalClientRequestHandler,
-    LocalClientSubscribeOutcome, SessionConnectionCounts,
+    LocalClientSubscribeOutcome,
 };
 use coco_types::{
     AgentInterruptCurrentWorkParams, ApplyPermissionUpdateParams, ApprovalResolveParams,
@@ -62,6 +62,7 @@ struct LocalInboundState {
     requests: HashMap<SessionId, VecDeque<coco_types::ServerRequestDelivery>>,
     request_count: usize,
     lifecycle: VecDeque<coco_types::SessionLifecycleEffect>,
+    dropped_lifecycle: u64,
     closed: bool,
 }
 
@@ -72,6 +73,7 @@ impl LocalInboundState {
             requests: HashMap::new(),
             request_count: 0,
             lifecycle: VecDeque::new(),
+            dropped_lifecycle: 0,
             closed: false,
         }
     }
@@ -93,8 +95,18 @@ impl LocalInboundState {
                 self.request_count += 1;
             }
             coco_app_server::LocalClientInbound::Lifecycle(effect) => {
+                // Lifecycle effects are observational; a plain (non-sidechat)
+                // TUI session has no continuous lifecycle consumer, so a full
+                // queue drops the oldest effect instead of killing the
+                // connection — overflow here must never silence the client.
                 if self.lifecycle.len() == self.capacity {
-                    return Err(());
+                    self.lifecycle.pop_front();
+                    self.dropped_lifecycle = self.dropped_lifecycle.saturating_add(1);
+                    tracing::warn!(
+                        dropped_total = self.dropped_lifecycle,
+                        capacity = self.capacity,
+                        "local client lifecycle queue full; dropping oldest effect"
+                    );
                 }
                 self.lifecycle.push_back(effect);
             }
@@ -146,7 +158,14 @@ impl<H: Clone + Send + Sync + 'static> LocalServerClient<H> {
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 if state.push(inbound).is_err() {
                     state.closed = true;
+                    let pending_requests = state.request_count;
                     drop(state);
+                    // Never die silently: this ends every observer on the
+                    // TUI's only physical connection.
+                    tracing::error!(
+                        pending_requests,
+                        "local client server-request queue overflowed; closing the in-process client"
+                    );
                     owner_notify.notify_waiters();
                     return;
                 }
@@ -224,14 +243,9 @@ impl LocalSessionClient {
     pub fn session_id(&self) -> &SessionId {
         &self.session_id
     }
-
-    pub fn into_replaced(self, new_session_id: SessionId) -> Self {
-        Self {
-            session_id: new_session_id,
-        }
-    }
 }
 
+/// Read-only session view produced by [`LocalServerClient::subscribe_session`].
 #[derive(Debug, Clone)]
 pub struct LocalReadOnlySessionClient {
     session_id: SessionId,
@@ -239,12 +253,6 @@ pub struct LocalReadOnlySessionClient {
 }
 
 impl LocalReadOnlySessionClient {
-    fn session_target(&self) -> SessionTarget {
-        SessionTarget {
-            session_id: self.session_id.clone(),
-        }
-    }
-
     pub fn session_id(&self) -> &SessionId {
         &self.session_id
     }
@@ -252,12 +260,6 @@ impl LocalReadOnlySessionClient {
     pub fn replayed(&self) -> &[SessionEnvelope] {
         &self.replayed
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalLiveSessionSummary {
-    pub session_id: SessionId,
-    pub connection_counts: SessionConnectionCounts,
 }
 
 #[cfg(test)]

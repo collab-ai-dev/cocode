@@ -227,7 +227,9 @@ impl AppServerLocalBridge {
         };
         if let Err(error) = register_local_app_server_session(
             &self.app_server,
+            Arc::clone(&self.handler.state),
             AppSessionHandle::from_runtime(session.clone()),
+            self.handler.turn_drain_timeout,
         )
         .await
         {

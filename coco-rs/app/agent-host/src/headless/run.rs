@@ -577,6 +577,39 @@ pub async fn run_chat_with_options(
         })
     };
 
+    // Print mode has no interactive dispatcher: withdraw every broadcast
+    // server request (sandbox approvals, elicitations) immediately so the
+    // requesting bridge fails fast as rejected instead of stalling for the
+    // full server-request timeout. Tool-permission prompts are already
+    // suppressed by `avoid_permission_prompts`.
+    let request_drain = {
+        let mut client = local_app_server_bridge.connect_local_client();
+        let handler = local_app_server_bridge.handler().clone();
+        tokio::spawn(async move {
+            while let Some(delivery) = client.next_server_request().await {
+                if matches!(
+                    delivery.request,
+                    coco_types::ServerRequest::CancelRequest(_)
+                ) {
+                    continue;
+                }
+                tracing::debug!(
+                    request_id = %delivery.request_id.as_display(),
+                    "headless run withdrawing unanswerable server request"
+                );
+                let _ = client
+                    .cancel_request(
+                        &handler,
+                        coco_types::CancelRequestParams {
+                            request_id: delivery.request_id.as_display(),
+                            reason: Some("headless run cannot answer interactively".to_string()),
+                        },
+                    )
+                    .await;
+            }
+        })
+    };
+
     let completion = local_app_server_bridge
         .start_turn_and_wait_for_end(
             session_id.clone(),
@@ -595,6 +628,7 @@ pub async fn run_chat_with_options(
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     cancel_monitor.abort();
+    request_drain.abort();
 
     let session_result = completion.session_result;
 
