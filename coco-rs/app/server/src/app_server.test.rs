@@ -27,9 +27,15 @@ fn server_request() -> ServerRequest {
     })
 }
 
+fn drop_teardown(
+    _handle: TestHandle,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), RegistryError>> + Send>> {
+    Box::pin(async { Ok(()) })
+}
+
 async fn load(server: &Arc<AppServer<TestHandle>>, session_id: SessionId, handle: TestHandle) {
     let AppLoadStart::Started { mut completion } = server
-        .spawn_load(session_id, async move { Ok(handle) })
+        .spawn_load(session_id, async move { Ok(handle) }, drop_teardown)
         .expect("start load")
     else {
         panic!("new session must start loading");
@@ -59,11 +65,15 @@ async fn spawn_load_has_one_owner_even_when_the_original_waiter_is_dropped() {
     let (release_tx, release_rx) = tokio::sync::oneshot::channel();
     let runs = Arc::clone(&factory_runs);
     let AppLoadStart::Started { completion } = server
-        .spawn_load(session_id.clone(), async move {
-            runs.fetch_add(1, Ordering::SeqCst);
-            release_rx.await.expect("release");
-            Ok(TestHandle("loaded"))
-        })
+        .spawn_load(
+            session_id.clone(),
+            async move {
+                runs.fetch_add(1, Ordering::SeqCst);
+                release_rx.await.expect("release");
+                Ok(TestHandle("loaded"))
+            },
+            drop_teardown,
+        )
         .expect("start load")
     else {
         panic!("expected owner");
@@ -72,10 +82,14 @@ async fn spawn_load_has_one_owner_even_when_the_original_waiter_is_dropped() {
 
     let duplicate_runs = Arc::clone(&factory_runs);
     let AppLoadStart::Loading(mut waiter) = server
-        .spawn_load(session_id, async move {
-            duplicate_runs.fetch_add(10, Ordering::SeqCst);
-            Ok(TestHandle("duplicate"))
-        })
+        .spawn_load(
+            session_id,
+            async move {
+                duplicate_runs.fetch_add(10, Ordering::SeqCst);
+                Ok(TestHandle("duplicate"))
+            },
+            drop_teardown,
+        )
         .expect("observe load")
     else {
         panic!("expected loading observer");
@@ -418,4 +432,144 @@ async fn attach_live_session_rejects_an_unknown_session() {
         ),
         Err(AttachError::SessionNotFound { .. })
     ));
+}
+
+fn test_envelope(session_id: SessionId, seq: i64) -> SessionEnvelope {
+    SessionEnvelope::durable(
+        session_id,
+        None,
+        None,
+        seq,
+        coco_types::CoreEvent::Protocol(coco_types::ServerNotification::SessionStateChanged {
+            state: coco_types::SessionState::Running,
+        }),
+    )
+}
+
+#[tokio::test]
+async fn slow_consumer_disconnect_resolves_targeted_reply_waiters() {
+    let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
+    let session_id = session("session-orphan-waiter");
+    load(&server, session_id.clone(), TestHandle("session")).await;
+    let connection = ConnectionKey::generate();
+    // Event queue of capacity 1 that is never drained: the second routed
+    // envelope overflows and disconnects the connection internally.
+    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(1);
+    let (request_tx, mut request_rx) = tokio::sync::mpsc::channel(8);
+    let (lifecycle_tx, _lifecycle_rx) = tokio::sync::mpsc::channel(8);
+    server.connect_with_request_and_lifecycle_senders(
+        connection,
+        event_tx,
+        request_tx,
+        lifecycle_tx,
+    );
+    server
+        .attach_live_session(connection, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach");
+    let waiter = server
+        .route_server_request_with_reply_to_connection(
+            connection,
+            session_id.clone(),
+            None,
+            server_request(),
+        )
+        .expect("route targeted request");
+    let _delivery = request_rx.recv().await.expect("request delivered");
+
+    server.route_envelope(test_envelope(session_id.clone(), 1));
+    let outcome = server.route_envelope(test_envelope(session_id.clone(), 2));
+    assert_eq!(outcome.disconnected, vec![connection]);
+
+    // The reply waiter must fail fast (sender dropped) instead of stranding
+    // the hook/MCP bridge until the request timeout.
+    assert!(waiter.await.is_err());
+}
+
+#[tokio::test]
+async fn error_reply_withdraws_the_sender_and_keeps_the_waiter_for_peers() {
+    let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
+    let session_id = session("session-error-reply");
+    load(&server, session_id.clone(), TestHandle("session")).await;
+    let first = ConnectionKey::generate();
+    let second = ConnectionKey::generate();
+    let mut first_rx = connect(&server, first);
+    let mut second_rx = connect(&server, second);
+    server
+        .attach_live_session(first, session_id.clone(), AttachSessionOptions::full())
+        .expect("first");
+    server
+        .attach_live_session(second, session_id.clone(), AttachSessionOptions::full())
+        .expect("second");
+    let reply_waiter = server
+        .route_server_request_with_reply(session_id.clone(), None, server_request())
+        .expect("route");
+    let first_delivery = first_rx.requests.recv().await.expect("first delivery");
+    let _second_delivery = second_rx.requests.recv().await.expect("second delivery");
+
+    let resolution = server
+        .resolve_server_request_for_connection(
+            first,
+            &session_id,
+            &first_delivery.request_id,
+            ServerRequestReply::Error(ServerRequestErrorReply {
+                request_id: first_delivery.request_id.as_display(),
+                code: -32601,
+                message: "no approval handler configured".to_string(),
+                data: None,
+            }),
+        )
+        .expect("error reply accepted");
+    assert!(matches!(
+        resolution,
+        ServerRequestResolution::Withdrawn { .. }
+    ));
+
+    // The peer still owns the prompt and its valid reply reaches the waiter.
+    let target = SessionTarget {
+        session_id: session_id.clone(),
+    };
+    server
+        .resolve_server_request(
+            second,
+            &target,
+            ServerRequestReply::UserInput(UserInputResolveParams {
+                target: target.clone(),
+                request_id: first_delivery.request_id.as_display(),
+                answer: "peer".to_string(),
+            }),
+        )
+        .expect("peer reply");
+    let winner = reply_waiter.await.expect("waiter resolved");
+    assert!(matches!(
+        winner,
+        ServerRequestReply::UserInput(UserInputResolveParams { answer, .. }) if answer == "peer"
+    ));
+}
+
+#[tokio::test]
+async fn spawn_close_when_unattached_aborts_while_a_connection_is_attached() {
+    let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
+    let session_id = session("session-idle-close");
+    load(&server, session_id.clone(), TestHandle("session")).await;
+    let connection = ConnectionKey::generate();
+    let _rx = connect(&server, connection);
+    server
+        .attach_live_session(connection, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach");
+
+    let aborted =
+        server.spawn_close_when_unattached(session_id.clone(), |_handle| async { Ok(()) });
+    assert!(matches!(
+        aborted,
+        Err(AppServerError::Registry { ref source, .. })
+            if matches!(source, RegistryError::CloseAborted { .. })
+    ));
+    assert!(server.registry().get(&session_id).is_some(), "still live");
+
+    server.detach_session_for_connection(connection, &session_id);
+    let start = server
+        .spawn_close_when_unattached(session_id.clone(), |_handle| async { Ok(()) })
+        .expect("close once unattached");
+    start.completion().wait().await.expect("close completes");
+    assert!(server.registry().get(&session_id).is_none());
 }

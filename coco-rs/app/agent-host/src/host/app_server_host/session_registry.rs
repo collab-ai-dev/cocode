@@ -1,4 +1,4 @@
-use std::{future::Future, sync::Arc};
+use std::{future::Future, sync::Arc, time::Duration};
 
 use coco_app_server::{AppLoadStart, AppServer, JsonRpcDispatchError};
 use coco_types::SessionId;
@@ -6,6 +6,7 @@ use coco_types::SessionId;
 use super::AppServerHostState;
 use crate::app_session::AppSessionHandle;
 
+use super::session_close::runtime_load_teardown;
 use super::session_errors::local_lifecycle_error;
 
 pub(crate) fn restore_session_seq_from_watermark(
@@ -22,14 +23,18 @@ pub(crate) fn restore_session_seq_from_watermark(
 
 pub(crate) async fn register_local_app_server_session(
     app_server: &Arc<AppServer<AppSessionHandle>>,
+    state: Arc<AppServerHostState>,
     handle: AppSessionHandle,
+    turn_drain_timeout: Duration,
 ) -> Result<(), JsonRpcDispatchError> {
     let session_id = handle.session_id().clone();
     let handle_for_load = handle.clone();
     match app_server
-        .spawn_load(session_id, async {
-            Ok::<AppSessionHandle, coco_app_server::RegistryError>(handle_for_load)
-        })
+        .spawn_load(
+            session_id,
+            async { Ok::<AppSessionHandle, coco_app_server::RegistryError>(handle_for_load) },
+            runtime_load_teardown(state, turn_drain_timeout),
+        )
         .map_err(|error| local_lifecycle_error("register session", error))?
     {
         AppLoadStart::Started { mut completion } | AppLoadStart::Loading(mut completion) => {
@@ -58,15 +63,22 @@ pub(crate) async fn register_local_app_server_session(
 /// unowned, fully-built runtime into existence.
 pub(crate) async fn load_local_app_server_child_session<F>(
     app_server: &Arc<AppServer<AppSessionHandle>>,
+    state: Arc<AppServerHostState>,
     parent: SessionId,
     child_id: SessionId,
     factory: F,
+    turn_drain_timeout: Duration,
 ) -> Result<AppSessionHandle, JsonRpcDispatchError>
 where
     F: Future<Output = Result<AppSessionHandle, coco_app_server::RegistryError>> + Send + 'static,
 {
     match app_server
-        .spawn_child_load(parent, child_id, factory)
+        .spawn_child_load(
+            parent,
+            child_id,
+            factory,
+            runtime_load_teardown(state, turn_drain_timeout),
+        )
         .map_err(|error| local_lifecycle_error("load sidechat child", error))?
     {
         AppLoadStart::Started { mut completion } | AppLoadStart::Loading(mut completion) => {

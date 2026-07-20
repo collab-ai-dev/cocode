@@ -152,6 +152,9 @@ queues are never idle.
 | `websocket_bind` | `WEBSOCKET_BIND` | off | SDK WebSocket sidecar |
 | `named_pipe_name` | `NAMED_PIPE` | off | Windows NDJSON named-pipe sidecar |
 | `max_sessions` | `MAX_SESSIONS` | 32 | SDK process session-slot limit (local TUI/headless bridge allows primary + sidechat) |
+| `max_attached_sessions_per_connection` | `MAX_ATTACHED_SESSIONS_PER_CONNECTION` | 8 | Live-attachment cap per connection |
+| `max_connections_per_session` | `MAX_CONNECTIONS_PER_SESSION` | 16 | Attached-connection cap per session (resource policy only; never elects an owner) |
+| `server_request_timeout_secs` | `REQUEST_TIMEOUT_SECS` | 900 | Pending server→client request expiry (approvals, user input, elicitation, hook/MCP callbacks) |
 | `event_retention_per_session` | `EVENT_RETENTION_PER_SESSION` | 1024 | Event retention ring size |
 | `outbound_queue_frames` | `OUTBOUND_QUEUE_FRAMES` | 1024 | Outbound queue size |
 | `turn_drain_timeout_secs` | `TURN_DRAIN_TIMEOUT_SECS` | 10 | Close-cascade active-turn drain bound |

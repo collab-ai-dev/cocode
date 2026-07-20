@@ -25,6 +25,10 @@ pub(crate) struct RegistryInner<H> {
     /// Parents whose close/replace transaction has begun. Child admission is
     /// closed until the parent is removed or a failed replace rolls back.
     pub(crate) blocked_parents: HashSet<SessionId>,
+    /// Sessions whose durable state is being deleted. Slot reservation
+    /// (load/resume/replace/child) is refused for these ids so a concurrent
+    /// resume cannot publish a live runtime over rows mid-deletion.
+    pub(crate) deleting: HashSet<SessionId>,
 }
 
 impl<H> RegistryInner<H> {
@@ -34,6 +38,7 @@ impl<H> RegistryInner<H> {
             policies: HashMap::new(),
             children: HashMap::new(),
             blocked_parents: HashSet::new(),
+            deleting: HashSet::new(),
         }
     }
 
@@ -119,8 +124,9 @@ impl<H: Clone> LiveSessionRegistry<H> {
     }
 
     /// The child sidechat currently associated with `parent`, if one is
-    /// loading, live, or closing.
-    pub fn child_of(&self, parent: &SessionId) -> Option<SessionId> {
+    /// loading, live, or closing. Test seam only.
+    #[cfg(test)]
+    pub(crate) fn child_of(&self, parent: &SessionId) -> Option<SessionId> {
         self.sessions
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -202,10 +208,11 @@ impl<H: Clone> LiveSessionRegistry<H> {
             .collect()
     }
 
-    /// Live session ids that are publicly visible — the projection behind
-    /// `session/list`. Excludes `Internal` slots (sidechat children) so they
-    /// never appear in a public catalog.
-    pub fn list_public_live(&self) -> Vec<SessionId> {
+    /// Live session ids that are publicly visible, excluding `Internal`
+    /// slots (sidechat children). Test seam: the production `session/list`
+    /// projection is `AppServer::list_live_sessions`.
+    #[cfg(test)]
+    pub(crate) fn list_public_live(&self) -> Vec<SessionId> {
         let inner = self
             .sessions
             .read()
@@ -260,6 +267,9 @@ impl<H: Clone> LiveSessionRegistry<H> {
             }
             None => {}
         }
+        if inner.deleting.contains(&session_id) {
+            return DeleteInProgressSnafu { session_id }.fail();
+        }
         if inner.slots.len() >= self.max_sessions {
             return ResourceExhaustedSnafu.fail();
         }
@@ -309,6 +319,9 @@ impl<H: Clone> LiveSessionRegistry<H> {
         // The child id must be unused.
         if inner.slots.contains_key(&child) {
             return NewSlotOccupiedSnafu { session_id: child }.fail();
+        }
+        if inner.deleting.contains(&child) {
+            return DeleteInProgressSnafu { session_id: child }.fail();
         }
         if inner.slots.len() >= self.max_sessions {
             return ResourceExhaustedSnafu.fail();
@@ -398,7 +411,13 @@ impl<H: Clone> LiveSessionRegistry<H> {
         Ok(())
     }
 
-    pub fn begin_close(&self, session_id: &SessionId) -> Result<CloseStart<H>, RegistryError> {
+    /// Test seam: production closes go through `begin_close_cascade`, which
+    /// also transitions an owned sidechat child atomically.
+    #[cfg(test)]
+    pub(crate) fn begin_close(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<CloseStart<H>, RegistryError> {
         let mut inner = self
             .sessions
             .write()
@@ -412,12 +431,31 @@ impl<H: Clone> LiveSessionRegistry<H> {
         &self,
         session_id: &SessionId,
     ) -> Result<CloseCascadeStart<H>, RegistryError> {
+        self.begin_close_cascade_if(session_id, || true)
+    }
+
+    /// [`Self::begin_close_cascade`] gated on `still_closable`, which runs
+    /// under the registry write lock. Because live attaches hold the registry
+    /// read lock across their routing mutation, a precondition that inspects
+    /// attachments here cannot race a concurrent attach — this is the
+    /// idle-supervisor's check-then-close made atomic.
+    pub fn begin_close_cascade_if(
+        &self,
+        session_id: &SessionId,
+        still_closable: impl FnOnce() -> bool,
+    ) -> Result<CloseCascadeStart<H>, RegistryError> {
         let mut inner = self
             .sessions
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !inner.slots.contains_key(session_id) {
             return NotFoundSnafu {
+                session_id: session_id.clone(),
+            }
+            .fail();
+        }
+        if !still_closable() {
+            return CloseAbortedSnafu {
                 session_id: session_id.clone(),
             }
             .fail();
@@ -433,6 +471,41 @@ impl<H: Clone> LiveSessionRegistry<H> {
         let parent = begin_close_locked(&mut inner, session_id)?;
         inner.blocked_parents.insert(session_id.clone());
         Ok(CloseCascadeStart { child, parent })
+    }
+
+    /// Mark a session's durable state as mid-deletion. Fails while any slot
+    /// exists for the id (live/loading/closing) or a deletion is already in
+    /// flight; until [`Self::finish_delete`], every reservation path
+    /// (load/resume/replace/child) refuses the id.
+    pub fn begin_delete(&self, session_id: &SessionId) -> Result<(), RegistryError> {
+        let mut inner = self
+            .sessions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if inner.slots.contains_key(session_id) {
+            return SlotConflictSnafu {
+                session_id: session_id.clone(),
+                expected: "no slot",
+            }
+            .fail();
+        }
+        if !inner.deleting.insert(session_id.clone()) {
+            return DeleteInProgressSnafu {
+                session_id: session_id.clone(),
+            }
+            .fail();
+        }
+        Ok(())
+    }
+
+    /// Lift the deletion mark set by [`Self::begin_delete`]. Must run on
+    /// every exit path of a delete operation, success or failure.
+    pub fn finish_delete(&self, session_id: &SessionId) {
+        self.sessions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .deleting
+            .remove(session_id);
     }
 
     pub fn unblock_child_admission(&self, session_id: &SessionId) {
@@ -491,6 +564,12 @@ impl<H: Clone> LiveSessionRegistry<H> {
         };
         if inner.slots.contains_key(&new_session_id) {
             return NewSlotOccupiedSnafu {
+                session_id: new_session_id,
+            }
+            .fail();
+        }
+        if inner.deleting.contains(&new_session_id) {
+            return DeleteInProgressSnafu {
                 session_id: new_session_id,
             }
             .fail();
@@ -585,9 +664,11 @@ impl<H: Clone> LiveSessionRegistry<H> {
         new_session_id: &SessionId,
         error: RegistryError,
     ) -> Result<(), RegistryError> {
-        self.complete_load_failure(new_session_id, error)?;
+        // Unblock unconditionally: skipping it on a load-failure error would
+        // leave the old session unable to admit sidechat children until close.
+        let result = self.complete_load_failure(new_session_id, error);
         self.unblock_child_admission(old_session_id);
-        Ok(())
+        result
     }
 
     pub fn complete_close(&self, session_id: &SessionId) -> Result<(), RegistryError> {
@@ -887,6 +968,18 @@ pub enum RegistryError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("session {session_id} close aborted: still in use"))]
+    CloseAborted {
+        session_id: SessionId,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("session {session_id} durable state is being deleted"))]
+    DeleteInProgress {
+        session_id: SessionId,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 impl RegistryError {
@@ -929,6 +1022,8 @@ impl ErrorExt for RegistryError {
             Self::LoadFailed { .. } => StatusCode::Internal,
             Self::CloseFailed { .. } => StatusCode::Internal,
             Self::SignalDropped { .. } => StatusCode::Internal,
+            Self::CloseAborted { .. } => StatusCode::Cancelled,
+            Self::DeleteInProgress { .. } => StatusCode::InvalidArguments,
         }
     }
 

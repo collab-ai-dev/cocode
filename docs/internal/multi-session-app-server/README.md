@@ -70,4 +70,7 @@ Changes to this architecture must keep regressions for:
 - first-response-wins plus loser cancellation;
 - waiter-before-publish ordering and bounded timeout cleanup;
 - ordered replay, session isolation, and slow-consumer disconnect;
-- Python and TypeScript server-request cancellation/correlation.
+- Python and TypeScript server-request cancellation/correlation;
+- error-reply withdrawal semantics (broadcast withdraw vs targeted completion);
+- idle-close abort when a connection is attached;
+- delete-guard refusal of slot reservations during durable deletion.

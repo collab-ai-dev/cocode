@@ -431,7 +431,12 @@ impl<H: Clone> AppServer<H> {
         reply: ServerRequestReply,
     ) -> Result<ServerRequestResolution, AppServerError> {
         let request_id = RequestId::String(reply.request_id().to_string());
-        self.resolve_server_request_for_connection(connection, &target.session_id, &request_id, reply)
+        self.resolve_server_request_for_connection(
+            connection,
+            &target.session_id,
+            &request_id,
+            reply,
+        )
     }
 
     pub fn resolve_server_request_for_connection(
@@ -822,8 +827,7 @@ impl<H: Clone> AppServer<H> {
             .routing
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let pending = match routing.prepare_server_request(audience, session_id, turn_id, request)
-        {
+        let pending = match routing.prepare_server_request(audience, session_id, turn_id, request) {
             Ok(pending) => pending,
             Err(error) => {
                 let orphaned = routing.take_orphaned_waiter_cancellations();
@@ -1050,14 +1054,20 @@ where
     /// one-child-per-parent invariant atomically via `begin_child_load` (the
     /// child slot is stamped `Child/Internal/LocalOnly`). Otherwise identical to
     /// [`Self::spawn_load`].
-    pub fn spawn_child_load<F>(
+    pub fn spawn_child_load<F, Close, CloseFut>(
         self: &Arc<Self>,
         parent: SessionId,
         child: SessionId,
         factory: F,
+        // See `spawn_load`: runs when the child construction finishes but the
+        // commit fails (parent closed/blocked mid-construction without a
+        // recorded close-after-load).
+        teardown: Close,
     ) -> Result<AppLoadStart<H>, AppServerError>
     where
         F: Future<Output = Result<H, RegistryError>> + Send + 'static,
+        Close: FnOnce(H) -> CloseFut + Send + 'static,
+        CloseFut: Future<Output = Result<(), RegistryError>> + Send + 'static,
     {
         match self
             .registry
@@ -1079,15 +1089,19 @@ where
                         OwnerGuardAction::FailLoad(child.clone()),
                     );
                     match factory.await {
-                        Ok(handle) => {
-                            if server
-                                .registry
-                                .complete_load_success(&child, handle)
-                                .is_ok()
-                            {
-                                server.activity.touch(child.clone());
+                        Ok(handle) => match server.registry.complete_load_success(&child, handle) {
+                            Ok(()) => server.activity.touch(child.clone()),
+                            Err(failure) => {
+                                tracing::warn!(
+                                    error = %failure.error,
+                                    session_id = %child,
+                                    "child load commit failed; tearing down the constructed runtime"
+                                );
+                                let _ = teardown(failure.handle).await;
+                                let _ =
+                                    server.registry.complete_load_failure(&child, failure.error);
                             }
-                        }
+                        },
                         Err(error) => {
                             let _ = server.registry.complete_load_failure(&child, error);
                         }
@@ -1117,6 +1131,40 @@ where
         let cascade = self
             .registry
             .begin_close_cascade(&session_id)
+            .context(RegistrySnafu)?;
+        let child_completion = cascade.child.map(|(child_id, child_start)| {
+            self.spawn_close_from_start(child_id, child_start, close.clone(), None)
+                .completion()
+        });
+        Ok(self.spawn_close_from_start(session_id, cascade.parent, close, child_completion))
+    }
+
+    /// [`Self::spawn_close`] that commits the `Live -> Closing` transition
+    /// only while no connection is attached to the session. The check runs
+    /// under the registry write lock, and live attaches hold the registry
+    /// read lock across their routing mutation, so an attach can never land
+    /// between the check and the transition — the idle supervisor's
+    /// check-then-close race is structurally closed. Aborts with
+    /// `RegistryError::CloseAborted`.
+    pub fn spawn_close_when_unattached<C, Fut>(
+        self: &Arc<Self>,
+        session_id: SessionId,
+        close: C,
+    ) -> Result<AppCloseStart, AppServerError>
+    where
+        C: Fn(H) -> Fut + Clone + Send + Sync + 'static,
+        Fut: Future<Output = Result<(), RegistryError>> + Send + 'static,
+    {
+        let cascade = self
+            .registry
+            .begin_close_cascade_if(&session_id, || {
+                self.routing
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .connection_counts_for_session(&session_id)
+                    .total()
+                    == 0
+            })
             .context(RegistrySnafu)?;
         let child_completion = cascade.child.map(|(child_id, child_start)| {
             self.spawn_close_from_start(child_id, child_start, close.clone(), None)

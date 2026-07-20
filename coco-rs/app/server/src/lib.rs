@@ -1188,7 +1188,8 @@ impl RoutingState {
         // disconnect during route/publish/notify), where the caller discards
         // the outcome. Record the cancelled ids so the owning `AppServer`
         // wrapper can still resolve their reply waiters.
-        self.orphaned_waiter_requests.extend(targeted.iter().cloned());
+        self.orphaned_waiter_requests
+            .extend(targeted.iter().cloned());
         DisconnectOutcome {
             detached_sessions: sessions.into_iter().collect(),
             cancelled_requests: targeted,
@@ -1219,12 +1220,13 @@ impl RoutingState {
                 }
             }
         }
-        self.callback_owners.retain(|(owned_session_id, _), owners| {
-            if owned_session_id == session_id {
-                owners.retain(|owner| *owner != connection);
-            }
-            !owners.is_empty()
-        });
+        self.callback_owners
+            .retain(|(owned_session_id, _), owners| {
+                if owned_session_id == session_id {
+                    owners.retain(|owner| *owner != connection);
+                }
+                !owners.is_empty()
+            });
         let cancelled_requests: Vec<_> = self
             .pending_server_requests
             .iter()
@@ -1314,6 +1316,7 @@ impl RoutingState {
             .unwrap_or_default()
     }
 
+    #[cfg(test)]
     pub(crate) fn connection_session_count(&self, connection: ConnectionKey) -> usize {
         self.connection_to_sessions
             .get(&connection)

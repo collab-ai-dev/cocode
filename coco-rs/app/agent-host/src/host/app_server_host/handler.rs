@@ -236,6 +236,7 @@ impl AppServerHostHandler {
         {
             let input = session_start_input_from_params(params);
             let state = Arc::clone(&self.state);
+            let turn_drain_timeout = self.turn_drain_timeout;
             return Box::pin(async move {
                 let replacement =
                     require_runtime_replacement(&state, "session/start", true).await?;
@@ -246,6 +247,7 @@ impl AppServerHostHandler {
                     input,
                     connection_profile,
                     replacement,
+                    turn_drain_timeout,
                 )
                 .await
                 .map_err(session_operation_error)

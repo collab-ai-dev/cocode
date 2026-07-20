@@ -179,13 +179,13 @@ pub enum EventReplayPolicy {
     Ephemeral,
 }
 
-/// Wire method of a surface-event envelope notification (`session/event`).
+/// Wire method of a session-event envelope notification (`session/event`).
 pub const SESSION_EVENT_METHOD: &str = "session/event";
-/// Wire method of a surface-lifecycle notification (`session/lifecycle`).
+/// Wire method of a session-lifecycle notification (`session/lifecycle`).
 pub const SESSION_LIFECYCLE_METHOD: &str = "session/lifecycle";
 
 /// The three-layer discriminator of a [`CoreEvent`] as it appears on the wire
-/// inside a surface-event envelope. Single source of truth for the
+/// inside a session-event envelope. Single source of truth for the
 /// `"protocol"`/`"stream"`/`"tui"` strings shared by the AppServer encoder and
 /// the client/SDK decoders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

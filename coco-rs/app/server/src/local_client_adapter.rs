@@ -98,6 +98,9 @@ impl<H: Clone> LocalClientAdapter<H> {
             events,
             server_requests,
             lifecycle,
+            events_done: false,
+            server_requests_done: false,
+            lifecycle_done: false,
             disconnected: false,
         }
     }
@@ -112,6 +115,11 @@ pub struct LocalClientConnection<H: Clone> {
     events: tokio::sync::mpsc::Receiver<SessionDelivery>,
     server_requests: tokio::sync::mpsc::Receiver<ServerRequestDelivery>,
     lifecycle: tokio::sync::mpsc::Receiver<SessionLifecycleEffect>,
+    /// Per-channel exhaustion (closed AND drained). `recv` keeps draining a
+    /// closed channel's buffered deliveries instead of discarding them.
+    events_done: bool,
+    server_requests_done: bool,
+    lifecycle_done: bool,
     disconnected: bool,
 }
 
@@ -166,28 +174,27 @@ impl<H: Clone> LocalClientConnection<H> {
 
     pub async fn recv(&mut self) -> Option<LocalClientInbound> {
         loop {
-            if self.events.is_closed()
-                && self.server_requests.is_closed()
-                && self.lifecycle.is_closed()
-            {
+            if self.events_done && self.server_requests_done && self.lifecycle_done {
                 return None;
             }
+            // `mpsc::Receiver::recv` keeps yielding buffered deliveries after
+            // the senders drop and returns `None` only once drained, so a
+            // server-side disconnect never discards already-routed messages.
             tokio::select! {
-                event = self.events.recv(), if !self.events.is_closed() => {
-                    if let Some(event) = event {
-                        return Some(LocalClientInbound::Event(Box::new(event)));
-                    }
-                }
-                request = self.server_requests.recv(), if !self.server_requests.is_closed() => {
-                    if let Some(request) = request {
+                event = self.events.recv(), if !self.events_done => match event {
+                    Some(event) => return Some(LocalClientInbound::Event(Box::new(event))),
+                    None => self.events_done = true,
+                },
+                request = self.server_requests.recv(), if !self.server_requests_done => match request {
+                    Some(request) => {
                         return Some(LocalClientInbound::ServerRequest(Box::new(request)));
                     }
-                }
-                lifecycle = self.lifecycle.recv(), if !self.lifecycle.is_closed() => {
-                    if let Some(lifecycle) = lifecycle {
-                        return Some(LocalClientInbound::Lifecycle(lifecycle));
-                    }
-                }
+                    None => self.server_requests_done = true,
+                },
+                lifecycle = self.lifecycle.recv(), if !self.lifecycle_done => match lifecycle {
+                    Some(lifecycle) => return Some(LocalClientInbound::Lifecycle(lifecycle)),
+                    None => self.lifecycle_done = true,
+                },
             }
         }
     }

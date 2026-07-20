@@ -42,7 +42,6 @@ pub(crate) async fn configure_connection_mcp_bridge(
 
 pub(crate) async fn build_connection_runtime_for_start(
     replacement: RuntimeReplacementContext,
-    _state: Arc<AppServerHostState>,
     connection_profile: Arc<coco_types::ConnectionProfile>,
     prepared: crate::session_start::PreparedStartSession,
     app_server: Arc<AppServer<AppSessionHandle>>,
@@ -78,7 +77,6 @@ pub(crate) async fn build_connection_runtime_for_start(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn build_connection_runtime_for_resume(
     replacement: RuntimeReplacementContext,
-    _state: Arc<AppServerHostState>,
     connection_profile: Arc<coco_types::ConnectionProfile>,
     session_id: SessionId,
     cwd: std::path::PathBuf,
@@ -123,7 +121,6 @@ fn effective_mcp_tool_exposure_on_resume(
 
 pub(crate) async fn build_connection_runtime_for_clear(
     replacement: RuntimeReplacementContext,
-    _state: Arc<AppServerHostState>,
     connection_profile: Arc<coco_types::ConnectionProfile>,
     session_id: SessionId,
     snapshot: crate::session_runtime::ClearReplacementSnapshot,
@@ -240,7 +237,6 @@ pub async fn install_app_server_session_runtime_state(
 ) {
     let session_manager = session.session_manager_handle();
     install_app_server_sandbox_reload_subscription(&session, app_server).await;
-    let _ = session;
     state.install_session_manager(session_manager).await;
 }
 

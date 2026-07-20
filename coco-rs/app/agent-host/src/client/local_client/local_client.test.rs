@@ -273,3 +273,55 @@ fn full_attach_requires_a_live_session() {
             .is_none()
     );
 }
+
+#[test]
+fn lifecycle_overflow_drops_oldest_without_closing_the_client() {
+    let mut state = LocalInboundState::new(2);
+    for _ in 0..3 {
+        state
+            .push(coco_app_server::LocalClientInbound::Lifecycle(
+                coco_types::SessionLifecycleEffect {
+                    kind: coco_types::SessionLifecycleEffectKind::SessionEnded {
+                        session_id: session("session-lifecycle-overflow"),
+                    },
+                },
+            ))
+            .expect("lifecycle overflow must never fail the ingress");
+    }
+    assert_eq!(state.lifecycle.len(), 2, "oldest effect dropped");
+    assert_eq!(state.dropped_lifecycle, 1);
+    assert!(!state.closed);
+}
+
+#[test]
+fn server_request_overflow_still_fails_the_ingress() {
+    let mut state = LocalInboundState::new(1);
+    let delivery = || {
+        Box::new(coco_types::ServerRequestDelivery {
+            session_id: session("session-request-overflow"),
+            request_id: coco_types::RequestId::String("server-request-test".to_string()),
+            request: coco_types::ServerRequest::RequestUserInput(
+                coco_types::ServerRequestUserInputParams {
+                    request_id: "payload".to_string(),
+                    prompt: "continue?".to_string(),
+                    description: None,
+                    choices: Vec::new(),
+                    default: None,
+                },
+            ),
+        })
+    };
+    state
+        .push(coco_app_server::LocalClientInbound::ServerRequest(
+            delivery(),
+        ))
+        .expect("first request fits");
+    assert!(
+        state
+            .push(coco_app_server::LocalClientInbound::ServerRequest(
+                delivery()
+            ))
+            .is_err(),
+        "request overflow fails closed (and the ingress logs before dying)"
+    );
+}

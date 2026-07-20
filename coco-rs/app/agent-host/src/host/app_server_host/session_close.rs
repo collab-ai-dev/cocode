@@ -16,6 +16,27 @@ use super::session_errors::{
     registry_lifecycle_error_parts,
 };
 
+/// Standard teardown for a runtime whose load commit failed: run the same
+/// state-cleanup + close cascade a normal close would, so the constructed
+/// runtime is never silently dropped (SessionEnd hooks must fire and its
+/// session tasks must join).
+pub(crate) fn runtime_load_teardown(
+    state: Arc<AppServerHostState>,
+    turn_drain_timeout: Duration,
+) -> impl FnOnce(
+    AppSessionHandle,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<(), RegistryError>> + Send>,
+> + Send
++ 'static {
+    move |handle| {
+        Box::pin(async move {
+            close_app_server_session_state(&state, handle.session_id()).await;
+            close_local_session_handle(handle, turn_drain_timeout).await
+        })
+    }
+}
+
 pub(crate) async fn close_local_app_server_session(
     app_server: Arc<AppServer<AppSessionHandle>>,
     state: Arc<AppServerHostState>,
@@ -55,6 +76,52 @@ pub(crate) async fn close_local_app_server_session_parts(
         .wait()
         .await
         .map_err(|error| registry_lifecycle_error_parts("close session", error))
+}
+
+/// Idle-supervisor close: commits `Live -> Closing` only while the session
+/// has zero attached connections (checked atomically against concurrent
+/// attaches inside the registry lock). Returns `Ok(false)` when the session
+/// was gone or no longer idle — the supervisor just skips it.
+pub(crate) async fn close_local_app_server_session_if_unattached(
+    app_server: Arc<AppServer<AppSessionHandle>>,
+    state: Arc<AppServerHostState>,
+    session_id: SessionId,
+    turn_drain_timeout: Duration,
+) -> Result<bool, LifecycleError> {
+    if !app_server.has_session_slot(&session_id) {
+        return Ok(false);
+    }
+    let close_state = Arc::clone(&state);
+    let start = match app_server.spawn_close_when_unattached(session_id, move |handle| {
+        let close_state = Arc::clone(&close_state);
+        async move {
+            close_app_server_session_state(&close_state, handle.session_id()).await;
+            close_local_session_handle(handle, turn_drain_timeout).await
+        }
+    }) {
+        Ok(start) => start,
+        Err(coco_app_server::AppServerError::Registry { ref source, .. })
+            if matches!(source, RegistryError::CloseAborted { .. }) =>
+        {
+            return Ok(false);
+        }
+        Err(error) => {
+            return Err(app_server_lifecycle_error_parts(
+                "close idle session",
+                error,
+            ));
+        }
+    };
+    let mut completion = match start {
+        AppCloseStart::Started { completion }
+        | AppCloseStart::Loading(completion)
+        | AppCloseStart::Closing(completion) => completion,
+    };
+    completion
+        .wait()
+        .await
+        .map(|()| true)
+        .map_err(|error| registry_lifecycle_error_parts("close idle session", error))
 }
 
 pub async fn shutdown_local_app_server_sessions(

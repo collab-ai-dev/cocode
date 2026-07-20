@@ -722,7 +722,7 @@
           "type": "array"
         },
         "request_id": {
-          "description": "Unique correlation id (SDK must echo in `ApprovalResolve`).",
+          "description": "Bridge-internal id echoed verbatim inside the reply payload. It does\nNOT resolve the pending request: `approval/resolve` (and JSON-RPC\nresponse correlation) use the ENVELOPE request id \u2014 the id this\nrequest was delivered under (`ServerRequestDelivery.request_id` /\nthe JSON-RPC request id).",
           "type": "string"
         },
         "title": {
@@ -8199,7 +8199,7 @@
           "type": "string"
         },
         "request_id": {
-          "description": "Correlation id (SDK must echo in the response payload).",
+          "description": "Bridge-internal id echoed verbatim inside the reply payload; resolves\ncorrelate via the ENVELOPE request id (see `AskForApprovalParams`).",
           "type": "string"
         }
       },
@@ -8249,6 +8249,7 @@
           "type": "string"
         },
         "request_id": {
+          "description": "Bridge-internal id echoed verbatim inside the reply payload; resolves\ncorrelate via the ENVELOPE request id (see `AskForApprovalParams`).",
           "type": "string"
         }
       },

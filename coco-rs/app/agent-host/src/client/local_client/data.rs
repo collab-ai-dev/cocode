@@ -35,46 +35,4 @@ impl<H: Clone + Send + Sync + 'static> LocalServerClient<H> {
         self.send_typed_client_request(handler, ClientRequest::SessionTurnsList(params))
             .await
     }
-
-    pub async fn read_read_only_session<Handler>(
-        &self,
-        handler: &Handler,
-        session: &LocalReadOnlySessionClient,
-        cursor: Option<String>,
-        limit: Option<i32>,
-    ) -> Result<SessionReadResult, ClientError>
-    where
-        Handler: LocalClientRequestHandler,
-    {
-        self.session_read(
-            handler,
-            SessionReadParams {
-                target: session.session_target(),
-                cursor,
-                limit,
-            },
-        )
-        .await
-    }
-
-    pub async fn list_read_only_session_turns<Handler>(
-        &self,
-        handler: &Handler,
-        session: &LocalReadOnlySessionClient,
-        cursor: Option<String>,
-        limit: Option<i32>,
-    ) -> Result<SessionTurnsListResult, ClientError>
-    where
-        Handler: LocalClientRequestHandler,
-    {
-        self.session_turns_list(
-            handler,
-            SessionTurnsListParams {
-                target: session.session_target(),
-                cursor,
-                limit,
-            },
-        )
-        .await
-    }
 }

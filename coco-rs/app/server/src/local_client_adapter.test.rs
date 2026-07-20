@@ -146,6 +146,9 @@ async fn unified_receive_path_drains_server_requests() {
         .attach_session(session_id.clone(), AttachSessionOptions::full())
         .expect("attach request session");
     let routed = server
+        .routing()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .route_server_request(session_id, None, server_request())
         .expect("route");
 

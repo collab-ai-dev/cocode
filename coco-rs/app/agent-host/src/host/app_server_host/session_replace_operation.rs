@@ -46,14 +46,12 @@ pub(crate) async fn replace_app_server_session_with_runtime(
                 prepare_app_server_session_start(*start_input, &state, &connection_profile).await?;
             let destination_id = prepared.session_id.clone();
             let factory = {
-                let state = Arc::clone(&state);
                 let replacement = replacement.clone();
                 let profile = Arc::clone(&connection_profile);
                 let app_server = Arc::clone(&app_server);
                 async move {
                     let runtime = build_connection_runtime_for_start(
                         replacement,
-                        state,
                         Arc::clone(&profile),
                         prepared,
                         Arc::clone(&app_server),
@@ -121,7 +119,6 @@ pub(crate) async fn replace_app_server_session_with_runtime(
                 let prior_messages = loaded.conversation.messages.clone();
                 let persisted_mcp_tool_exposure = loaded.conversation.mcp_tool_exposure;
                 let factory = {
-                    let state = Arc::clone(&state);
                     let replacement = replacement.clone();
                     let profile = Arc::clone(&connection_profile);
                     let session_id = destination_id.clone();
@@ -131,7 +128,6 @@ pub(crate) async fn replace_app_server_session_with_runtime(
                     async move {
                         let runtime = build_connection_runtime_for_resume(
                             replacement,
-                            state,
                             Arc::clone(&profile),
                             session_id.clone(),
                             cwd,
@@ -194,7 +190,6 @@ pub(crate) async fn replace_app_server_session_with_runtime(
             let snapshot = source_runtime.clear_replacement_snapshot().await;
             let destination_id = coco_types::SessionId::generate();
             let factory = {
-                let state = Arc::clone(&state);
                 let replacement = replacement.clone();
                 let profile = Arc::clone(&connection_profile);
                 let session_id = destination_id.clone();
@@ -202,7 +197,6 @@ pub(crate) async fn replace_app_server_session_with_runtime(
                 async move {
                     let runtime = build_connection_runtime_for_clear(
                         replacement,
-                        state,
                         profile,
                         session_id,
                         snapshot,

@@ -226,13 +226,13 @@ pub(super) async fn run_agent_driver(
                 // entirely when no child is open, so the primary path is
                 // unchanged.)
                 if local_app_server_bridge.is_child_session(&session_id) {
-                    let Some(surface) = local_app_server_bridge.full_session_by_id(&session_id)
+                    let Some(client) = local_app_server_bridge.full_session_by_id(&session_id)
                     else {
-                        warn!(%session_id, "dropping input for a stale sidechat surface");
+                        warn!(%session_id, "dropping input for a stale sidechat session");
                         continue;
                     };
                     let params = coco_types::TurnStartParams {
-                        target: surface.session_target(),
+                        target: client.session_target(),
                         prompt: effective_content,
                         images: image_data_to_turn_start(&images),
                         composer: effective_composer.clone(),
@@ -838,7 +838,7 @@ pub(super) async fn run_agent_driver(
                     tracing::warn!(%error, "Ctrl+C sidechat close failed");
                     if let Some(child_id) = local_app_server_bridge
                         .child_full_session()
-                        .map(|surface| surface.session_id().clone())
+                        .map(|client| client.session_id().clone())
                     {
                         emit_slash_text(
                             &event_tx,

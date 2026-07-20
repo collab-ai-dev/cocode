@@ -212,9 +212,11 @@ impl AppServerLocalBridge {
         };
         let handle = load_local_app_server_child_session(
             &self.app_server,
+            Arc::clone(&self.handler.state),
             parent_id.clone(),
             child_id.clone(),
             factory,
+            self.handler.turn_drain_timeout,
         )
         .await
         .map_err(|error| {
@@ -436,25 +438,6 @@ impl AppServerLocalBridge {
             self.start_event_pump(session_id, event_tx);
         }
         Ok(AppServerLocalSessionBinding { session, client })
-    }
-
-    pub async fn drain_full_session_events_to(&mut self, event_tx: &mpsc::Sender<CoreEvent>) {
-        let Some(client) = self.full_session.clone() else {
-            return;
-        };
-        for pass in 0..2 {
-            while let Some(envelope) = self.client.try_next_session_event(&client) {
-                let Some(event) = scope_session_event(envelope.session_id, envelope.event) else {
-                    continue;
-                };
-                if event_tx.send(event).await.is_err() {
-                    return;
-                }
-            }
-            if pass == 0 {
-                tokio::task::yield_now().await;
-            }
-        }
     }
 
     pub async fn start_turn_and_wait_for_end(

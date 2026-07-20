@@ -105,6 +105,11 @@ pub(super) enum PendingEditorRequest {
     },
 }
 
+/// Upper bound for `ActiveTurnDrain::Wait`: long enough for any legitimate
+/// post-interrupt drain, short enough that a monitor stuck on a lag-dropped
+/// `TurnEnded` cannot freeze the driver loop indefinitely.
+const WAIT_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Cancel the in-flight turn (if any) and drain its task.
 /// Used by every arm whose semantics conflict with a concurrent
 /// turn (Clear / Compact / Rewind / Shutdown / next SubmitInput).
@@ -128,7 +133,27 @@ pub(super) async fn drain_active_turn(
         }
         match mode {
             ActiveTurnDrain::Wait => {
-                let _ = s.task.await;
+                // Bounded: the monitor's TurnEnded can be lost to broadcast
+                // lag, and an unbounded wait here freezes the whole driver
+                // loop (next SubmitInput / /clear / /compact). On timeout the
+                // stale monitor is aborted; if the turn is somehow still
+                // running the server rejects the next start with
+                // TurnAlreadyRunning, which surfaces as a visible error
+                // instead of a frozen UI.
+                let mut task = s.task;
+                tokio::select! {
+                    result = &mut task => {
+                        let _ = result;
+                    }
+                    _ = tokio::time::sleep(WAIT_DRAIN_TIMEOUT) => {
+                        warn!(
+                            timeout_ms = WAIT_DRAIN_TIMEOUT.as_millis(),
+                            "active turn monitor did not observe TurnEnded; aborting stale monitor"
+                        );
+                        task.abort();
+                        let _ = task.await;
+                    }
+                }
             }
             ActiveTurnDrain::AbortAfter(timeout) => {
                 let mut task = s.task;
@@ -193,12 +218,12 @@ pub(super) async fn run_manual_compact(
             }
         };
     if local_app_server_bridge.is_child_session(session.session_id()) {
-        let Some(surface) = full_session_for(local_app_server_bridge, session.session_id()) else {
-            warn!(session_id = %session.session_id(), "TUI sidechat /compact surface is stale");
+        let Some(client) = full_session_for(local_app_server_bridge, session.session_id()) else {
+            warn!(session_id = %session.session_id(), "TUI sidechat /compact session is stale");
             return;
         };
         let params = coco_types::TurnStartParams {
-            target: surface.session_target(),
+            target: client.session_target(),
             prompt,
             images: Vec::new(),
             composer: Default::default(),

@@ -14,6 +14,9 @@ impl<H: Clone + Send + Sync + 'static> LocalServerClient<H> {
         })
     }
 
+    /// Read-only live subscription (the share scenario): replays the durable
+    /// tail after `after_seq` and attaches with a `ReadOnly` grant. Never
+    /// downgrades an existing Full grant.
     pub fn subscribe_session(
         &self,
         session_id: SessionId,
@@ -48,17 +51,6 @@ impl<H: Clone + Send + Sync + 'static> LocalServerClient<H> {
             )))
         }
     }
-
-    pub fn list_live_sessions(&self) -> Vec<LocalLiveSessionSummary> {
-        self.handle
-            .list_live_sessions()
-            .into_iter()
-            .map(|summary| LocalLiveSessionSummary {
-                session_id: summary.session_id,
-                connection_counts: summary.connection_counts,
-            })
-            .collect()
-    }
 }
 
 impl<H: Clone + Send + Sync + 'static> LocalServerClient<H> {
@@ -88,7 +80,19 @@ impl<H: Clone + Send + Sync + 'static> LocalServerClient<H> {
             tokio::select! {
                 event = self.events.recv() => match event {
                     Ok(event) if &event.session_id == session.session_id() => return Some(event),
-                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        // The oldest buffered events were dropped for this
+                        // cursor. A waiter blocked on a specific event (e.g. a
+                        // turn's TurnEnded) may now never see it — surface the
+                        // gap instead of hiding it; bounded waits upstream
+                        // (drain timeout) recover the UI.
+                        tracing::warn!(
+                            skipped,
+                            session_id = %session.session_id(),
+                            "session event observer lagged; events were dropped"
+                        );
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
                 },
                 () = &mut notified => {}
@@ -104,6 +108,10 @@ impl<H: Clone + Send + Sync + 'static> LocalServerClient<H> {
         session: &LocalSessionClient,
     ) -> Option<coco_types::ServerRequestDelivery> {
         loop {
+            // Created before the queue check: `notify_waiters` wakes every
+            // `Notified` created before the call (tokio snapshots the
+            // generation counter at creation), so a push landing between the
+            // check and the await cannot be lost.
             let notified = self.inbound_owner.notify.notified();
             {
                 let mut state = self
@@ -127,6 +135,7 @@ impl<H: Clone + Send + Sync + 'static> LocalServerClient<H> {
     /// every full-access session carried by the connection.
     pub async fn next_server_request(&mut self) -> Option<coco_types::ServerRequestDelivery> {
         loop {
+            // Creation-before-check ordering; see `next_session_request`.
             let notified = self.inbound_owner.notify.notified();
             {
                 let mut state = self
@@ -145,18 +154,6 @@ impl<H: Clone + Send + Sync + 'static> LocalServerClient<H> {
         }
     }
 
-    pub fn try_next_session_request(
-        &mut self,
-        session: &LocalSessionClient,
-    ) -> Option<coco_types::ServerRequestDelivery> {
-        let mut state = self
-            .inbound_owner
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        pop_session_request(&mut state, session.session_id())
-    }
-
     pub fn try_next_session_event(
         &mut self,
         session: &LocalSessionClient,
@@ -164,7 +161,14 @@ impl<H: Clone + Send + Sync + 'static> LocalServerClient<H> {
         loop {
             match self.events.try_recv() {
                 Ok(event) if &event.session_id == session.session_id() => return Some(event),
-                Ok(_) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {}
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(skipped)) => {
+                    tracing::warn!(
+                        skipped,
+                        session_id = %session.session_id(),
+                        "session event observer lagged; events were dropped"
+                    );
+                }
                 Err(tokio::sync::broadcast::error::TryRecvError::Empty)
                 | Err(tokio::sync::broadcast::error::TryRecvError::Closed) => return None,
             }
@@ -175,6 +179,7 @@ impl<H: Clone + Send + Sync + 'static> LocalServerClient<H> {
         &mut self,
     ) -> Option<coco_types::SessionLifecycleEffect> {
         loop {
+            // Creation-before-check ordering; see `next_session_request`.
             let notified = self.inbound_owner.notify.notified();
             {
                 let mut state = self

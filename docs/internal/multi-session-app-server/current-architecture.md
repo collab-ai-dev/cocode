@@ -41,6 +41,19 @@ so dropping a request caller cannot strand lifecycle state.
 deadline, commits terminal routing/lifecycle effects, and preserves durable
 storage. `session/delete` requires the target's retained Full grant, rejects a
 live/loading/closing slot, deletes storage, and revokes grants.
+`begin_delete`/`finish_delete` mark the id as deleting for the duration of
+durable deletion; every slot reservation (load/resume/replace/child) refuses
+it with `DeleteInProgress`, so a concurrent resume cannot publish a live
+runtime over rows mid-deletion.
+
+Idle auto-close uses `spawn_close_when_unattached`: the `Live -> Closing`
+commit happens only while zero connections are attached, checked under the
+registry write lock (attaches hold the registry read lock across their routing
+mutation), and otherwise aborts with `RegistryError::CloseAborted`, which the
+idle supervisor skips. Constructed runtimes are never dropped: a failed load
+commit hands the handle back via `CompleteLoadFailure` so the load owner runs
+teardown, and session/start rolls the published session back through the full
+close cascade when attach or callback-owner registration fails after publish.
 
 ## Events and local demultiplexing
 
@@ -62,15 +75,36 @@ connections. Reply validation includes connection, grant, recipient, session,
 request id, and reply variant. The first valid reply wins; every loser receives
 `control/cancelRequest`.
 
+An error reply is not a valid answer: `resolve_error_reply` withdraws the
+sender from a broadcast (the last recipient's error cancels the request) and
+completes only connection-targeted requests, where the waiter receives the
+error. Disconnect merely prunes the recipient — a broadcast whose recipients
+all disconnect stays pending and is replayed oldest-first (by mint order) to a
+newly attached Full connection, bounded by the server request timeout. An
+internal slow-consumer disconnect records orphaned request ids in routing, and
+every AppServer wrapper drains them into waiter cancellation after unlock.
+
 Timeout, turn end, close, and replacement all remove the same pending indexes,
 notify recipients, and close the waiter. Client cancellation removes only that
 recipient from a broadcast; the waiter remains for peers until a reply, a
 system cancellation, or the last recipient's withdrawal. JSON-RPC, Python, and
-TypeScript routers purge local correlation on server cancellation.
+TypeScript routers purge local correlation on `control/cancelRequest`, and the
+TypeScript router swallows abort-driven handler rejections. With no
+`can_use_tool`/`canUseTool` handler, the Python and TypeScript SDKs answer an
+approval with a JSON-RPC error (withdrawal), not a deny — a sole client still
+sees the tool denied (last-recipient error cancels the request) while
+multi-client peers keep their prompt. Headless print mode spawns a drain task
+that withdraws every broadcast server request immediately, so sandbox
+approvals fail fast as rejected instead of stalling for the timeout.
 
-Hook callbacks and client-hosted MCP messages are connection-owned. The route
-looks up the current owner at invocation time. Adding a Full Web/TUI peer does
-not transfer ownership; explicit registration of the same id/name does.
+Hook callbacks and client-hosted MCP messages are connection-owned. Owners
+form a registration stack per `(session, callback)`, most recent registrant
+first; disconnect and detach prune the connection from every stack so
+ownership falls back to a prior still-attached registrant. The route — and
+client-MCP elicitation (`bridge_elicitation_to_full_clients`) — looks up the
+current owner at invocation time, broadcasting to Full clients when no owner
+exists. Adding a Full Web/TUI peer does not transfer ownership; explicit
+registration of the same id/name does.
 Runtime callback definitions are installed during unpublished construction,
 but AppServer ownership, SessionStart hook execution, and client-MCP connection
 begin only after the runtime is live and the Full connection is attached.

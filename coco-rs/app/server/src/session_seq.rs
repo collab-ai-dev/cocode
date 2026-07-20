@@ -34,6 +34,12 @@ const DEFAULT_SKIP_AHEAD_WINDOW: i64 = 1024 + WATERMARK_PERSIST_INTERVAL;
 /// Shared per-process allocator for durable `session_seq` values.
 pub struct SessionSeqAllocator {
     inner: Mutex<AllocatorState>,
+    /// Highest watermark handed to the persist hook per session. Hook calls
+    /// happen outside the allocator lock, so two due allocations can race to
+    /// it in either order; this gate drops the older one so the on-disk
+    /// watermark never regresses (the skip-ahead safety proof assumes
+    /// monotone persists).
+    persist_gate: Mutex<HashMap<SessionId, i64>>,
 }
 
 struct AllocatorState {
@@ -65,6 +71,7 @@ impl SessionSeqAllocator {
                 persist_hook: None,
                 skip_ahead_window: DEFAULT_SKIP_AHEAD_WINDOW,
             }),
+            persist_gate: Mutex::new(HashMap::new()),
         }
     }
 
@@ -109,7 +116,18 @@ impl SessionSeqAllocator {
             (seq, due.then(|| inner.persist_hook.clone()).flatten())
         };
         if let Some(hook) = persist {
-            hook(session_id, seq);
+            // Serialize hook invocation and skip stale watermarks: without
+            // this, hooks for seqs 32 and 64 could run in reverse order and
+            // leave 32 on disk.
+            let mut gate = self
+                .persist_gate
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let last = gate.entry(session_id.clone()).or_insert(0);
+            if seq > *last {
+                *last = seq;
+                hook(session_id, seq);
+            }
         }
         seq
     }

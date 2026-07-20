@@ -615,3 +615,104 @@ fn child_load_failure_clears_index() {
     assert!(registry.policy(&child).is_none());
     assert_eq!(registry.slot_count(), 1);
 }
+
+#[test]
+fn begin_delete_blocks_slot_reservation_until_finished() {
+    let registry = LiveSessionRegistry::<TestHandle>::new(4);
+    let session_id = test_session_id("sess-deleting");
+
+    registry.begin_delete(&session_id).expect("begin delete");
+    assert!(matches!(
+        registry.begin_delete(&session_id),
+        Err(RegistryError::DeleteInProgress { .. })
+    ));
+    assert!(matches!(
+        registry.begin_load(session_id.clone()),
+        Err(RegistryError::DeleteInProgress { .. })
+    ));
+
+    registry.finish_delete(&session_id);
+    assert!(matches!(
+        registry.begin_load(session_id).expect("reserve"),
+        LoadStart::Reserved
+    ));
+}
+
+#[test]
+fn begin_delete_rejects_an_existing_slot() {
+    let registry = LiveSessionRegistry::new(4);
+    let session_id = test_session_id("sess-delete-live");
+    assert!(matches!(
+        registry
+            .begin_load(session_id.clone())
+            .expect("reserve load"),
+        LoadStart::Reserved
+    ));
+    registry
+        .complete_load_success(&session_id, TestHandle("live"))
+        .expect("complete load");
+
+    assert!(matches!(
+        registry.begin_delete(&session_id),
+        Err(RegistryError::SlotConflict { .. })
+    ));
+}
+
+#[test]
+fn complete_load_success_returns_the_handle_when_the_slot_is_gone() {
+    let registry = LiveSessionRegistry::new(4);
+    let session_id = test_session_id("sess-load-conflict");
+    assert!(matches!(
+        registry
+            .begin_load(session_id.clone())
+            .expect("reserve load"),
+        LoadStart::Reserved
+    ));
+    registry
+        .complete_load_failure(&session_id, RegistryError::load_failed("aborted"))
+        .expect("fail load");
+
+    // The commit lost its slot: the constructed handle must come back to the
+    // owner for teardown instead of being dropped.
+    let failure = registry
+        .complete_load_success(&session_id, TestHandle("constructed"))
+        .expect_err("slot is gone");
+    assert_eq!(failure.handle, TestHandle("constructed"));
+    assert!(matches!(failure.error, RegistryError::SlotConflict { .. }));
+}
+
+#[test]
+fn complete_replace_failure_unblocks_child_admission_even_on_slot_conflict() {
+    let registry = LiveSessionRegistry::new(4);
+    let parent = test_session_id("sess-replace-parent");
+    assert!(matches!(
+        registry.begin_load(parent.clone()).expect("reserve load"),
+        LoadStart::Reserved
+    ));
+    registry
+        .complete_load_success(&parent, TestHandle("parent"))
+        .expect("parent live");
+    let replacement = test_session_id("sess-replace-new");
+    let ReplaceStart::Reserved { .. } = registry
+        .begin_replace(&parent, replacement.clone())
+        .expect("begin replace");
+
+    // Simulate the replacement slot vanishing before the failure completes:
+    // the unblock must still run or the parent can never admit a sidechat.
+    registry
+        .complete_load_failure(&replacement, RegistryError::load_failed("factory failed"))
+        .expect("fail replacement");
+    let _ = registry.complete_replace_failure(
+        &parent,
+        &replacement,
+        RegistryError::load_failed("factory failed"),
+    );
+
+    let child = test_session_id("sess-replace-child");
+    assert!(matches!(
+        registry
+            .begin_child_load(&parent, child)
+            .expect("child admission unblocked"),
+        LoadStart::Reserved
+    ));
+}

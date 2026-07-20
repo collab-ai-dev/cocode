@@ -5,6 +5,8 @@ use coco_types::SessionId;
 
 use crate::app_session::AppSessionHandle;
 
+use super::AppServerHostState;
+use super::session_close::runtime_load_teardown;
 use super::session_errors::{LifecycleError, local_lifecycle_error_parts};
 
 /// New-only load owner for `session/start`.
@@ -17,14 +19,20 @@ use super::session_errors::{LifecycleError, local_lifecycle_error_parts};
 /// session and the registry untouched.
 pub(crate) async fn load_local_app_server_session_new_only<F>(
     app_server: &Arc<AppServer<AppSessionHandle>>,
+    state: Arc<AppServerHostState>,
     session_id: SessionId,
     factory: F,
+    turn_drain_timeout: Duration,
 ) -> Result<AppSessionHandle, LifecycleError>
 where
     F: Future<Output = Result<AppSessionHandle, coco_app_server::RegistryError>> + Send + 'static,
 {
     let mut completion = match app_server
-        .spawn_load(session_id.clone(), factory)
+        .spawn_load(
+            session_id.clone(),
+            factory,
+            runtime_load_teardown(state, turn_drain_timeout),
+        )
         .map_err(|error| local_lifecycle_error_parts("start session", error))?
     {
         AppLoadStart::Started { completion } => completion,
@@ -53,6 +61,7 @@ fn start_slot_conflict(session_id: &SessionId, state: &str) -> LifecycleError {
 
 pub(crate) async fn load_local_app_server_session_with_retrying_factory_parts<Make, F>(
     app_server: &Arc<AppServer<AppSessionHandle>>,
+    state: Arc<AppServerHostState>,
     session_id: SessionId,
     make_factory: Make,
     close_wait_timeout: Duration,
@@ -63,7 +72,11 @@ where
 {
     loop {
         match app_server
-            .spawn_load(session_id.clone(), make_factory())
+            .spawn_load(
+                session_id.clone(),
+                make_factory(),
+                runtime_load_teardown(Arc::clone(&state), close_wait_timeout),
+            )
             .map_err(|error| local_lifecycle_error_parts("load session", error))?
         {
             AppLoadStart::Started { mut completion } | AppLoadStart::Loading(mut completion) => {

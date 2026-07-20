@@ -11,7 +11,7 @@ use tokio::task::JoinHandle;
 use super::AppServerHostState;
 use crate::app_session::AppSessionHandle;
 
-use super::session_close::close_local_app_server_session;
+use super::session_close::close_local_app_server_session_if_unattached;
 
 /// Spawn the optional event-driven idle-session auto-close supervisor.
 ///
@@ -97,7 +97,11 @@ pub fn spawn_idle_session_sweep(
                     idle_timeout_secs = idle_timeout.as_secs(),
                     "auto-closing idle session with no connections, active turn, or queued command"
                 );
-                if let Err(error) = close_local_app_server_session(
+                // The unattached precondition commits atomically with the
+                // Live -> Closing transition, so an attach or turn/start
+                // landing after the recheck above aborts the close instead
+                // of being killed underneath.
+                match close_local_app_server_session_if_unattached(
                     Arc::clone(&app_server),
                     Arc::clone(&state),
                     session_id.clone(),
@@ -105,11 +109,20 @@ pub fn spawn_idle_session_sweep(
                 )
                 .await
                 {
-                    tracing::warn!(
-                        session_id = %session_id,
-                        ?error,
-                        "idle-session auto-close failed"
-                    );
+                    Ok(true) => {}
+                    Ok(false) => {
+                        tracing::debug!(
+                            session_id = %session_id,
+                            "idle-session auto-close skipped: session attached or gone"
+                        );
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            session_id = %session_id,
+                            ?error,
+                            "idle-session auto-close failed"
+                        );
+                    }
                 }
             }
         }

@@ -774,3 +774,346 @@ fn closing_a_session_cancels_pending_requests_and_detaches_every_connection() {
     assert!(routing.grant(first, &session_id).is_none());
     assert!(routing.grant(second, &session_id).is_none());
 }
+
+#[test]
+fn error_reply_on_broadcast_withdraws_only_the_sender() {
+    let mut routing = RoutingState::new(8);
+    let session_id = session("session-error-withdraw");
+    let first = ConnectionKey::generate();
+    let second = ConnectionKey::generate();
+    let mut first_rx = connect(&mut routing, first, 8);
+    let mut second_rx = connect(&mut routing, second, 8);
+    routing
+        .attach_session(first, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach first");
+    routing
+        .attach_session(second, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach second");
+    let routed = routing
+        .route_server_request(session_id.clone(), None, server_request())
+        .expect("route request");
+    assert!(first_rx.requests.try_recv().is_ok());
+    assert!(second_rx.requests.try_recv().is_ok());
+
+    assert_eq!(
+        routing
+            .resolve_error_reply(first, &session_id, &routed.pending.request_id)
+            .expect("error reply withdraws"),
+        ErrorReplyDisposition::Withdrawn
+    );
+    // The peer keeps the pending request and can still answer it.
+    assert!(
+        routing
+            .complete_server_request(
+                second,
+                &session_id,
+                &routed.pending.request_id,
+                Some(ServerRequestReplyKind::UserInput),
+            )
+            .is_ok()
+    );
+}
+
+#[test]
+fn error_reply_from_last_broadcast_recipient_cancels_the_request() {
+    let mut routing = RoutingState::new(8);
+    let session_id = session("session-error-last");
+    let only = ConnectionKey::generate();
+    let mut only_rx = connect(&mut routing, only, 8);
+    routing
+        .attach_session(only, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach");
+    let routed = routing
+        .route_server_request(session_id.clone(), None, server_request())
+        .expect("route request");
+    assert!(only_rx.requests.try_recv().is_ok());
+
+    let disposition = routing
+        .resolve_error_reply(only, &session_id, &routed.pending.request_id)
+        .expect("error reply cancels");
+    assert!(matches!(
+        disposition,
+        ErrorReplyDisposition::CancelledLast(pending)
+            if pending.request_id == routed.pending.request_id
+    ));
+    assert!(matches!(
+        routing.complete_server_request(
+            only,
+            &session_id,
+            &routed.pending.request_id,
+            Some(ServerRequestReplyKind::UserInput),
+        ),
+        Err(CompleteServerRequestError::NotFound { .. })
+    ));
+}
+
+#[test]
+fn error_reply_completes_a_connection_targeted_request() {
+    let mut routing = RoutingState::new(8);
+    let session_id = session("session-error-targeted");
+    let owner = ConnectionKey::generate();
+    let peer = ConnectionKey::generate();
+    let mut owner_rx = connect(&mut routing, owner, 8);
+    let _peer_rx = connect(&mut routing, peer, 8);
+    routing
+        .attach_session(owner, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach owner");
+    routing
+        .attach_session(peer, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach peer");
+    let routed = routing
+        .route_server_request_to(
+            ServerRequestAudience::Connection(owner),
+            session_id.clone(),
+            None,
+            server_request(),
+        )
+        .expect("route targeted request");
+    assert!(owner_rx.requests.try_recv().is_ok());
+
+    let disposition = routing
+        .resolve_error_reply(owner, &session_id, &routed.pending.request_id)
+        .expect("error reply completes targeted");
+    assert!(matches!(
+        disposition,
+        ErrorReplyDisposition::CompletedTargeted(pending)
+            if pending.request_id == routed.pending.request_id
+    ));
+    assert!(matches!(
+        routing.complete_server_request(
+            owner,
+            &session_id,
+            &routed.pending.request_id,
+            Some(ServerRequestReplyKind::UserInput),
+        ),
+        Err(CompleteServerRequestError::NotFound { .. })
+    ));
+}
+
+#[test]
+fn cancellation_notifications_are_not_routable_as_requests() {
+    let mut routing = RoutingState::new(8);
+    let session_id = session("session-cancel-not-routable");
+    let connection = ConnectionKey::generate();
+    let _rx = connect(&mut routing, connection, 8);
+    routing
+        .attach_session(connection, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach");
+
+    let result = routing.route_server_request(
+        session_id.clone(),
+        None,
+        ServerRequest::CancelRequest(ServerCancelRequestParams {
+            request_id: "bogus".to_string(),
+            reason: None,
+        }),
+    );
+    assert!(matches!(
+        result,
+        Err(ServerRequestRouteError::CancellationNotRoutable { session_id: ref rejected })
+            if *rejected == session_id
+    ));
+}
+
+#[test]
+fn internal_disconnect_records_orphaned_waiter_cancellations() {
+    let mut routing = RoutingState::new(8);
+    let session_id = session("session-orphaned-waiters");
+    let connection = ConnectionKey::generate();
+    // Event queue of 1: the second routed envelope overflows and disconnects
+    // the connection from inside `route_envelope`.
+    let _rx = connect(&mut routing, connection, 1);
+    routing
+        .attach_session(connection, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach");
+    let routed = routing
+        .route_server_request_to(
+            ServerRequestAudience::Connection(connection),
+            session_id.clone(),
+            None,
+            server_request(),
+        )
+        .expect("route targeted request");
+
+    routing.route_envelope(envelope(session_id.clone(), 1));
+    let outcome = routing.route_envelope(envelope(session_id, 2));
+    assert_eq!(outcome.disconnected, vec![connection]);
+
+    let orphaned = routing.take_orphaned_waiter_cancellations();
+    assert!(
+        orphaned.contains(&routed.pending.request_id),
+        "the internal disconnect must surface the cancelled request id for waiter cleanup"
+    );
+    assert!(routing.take_orphaned_waiter_cancellations().is_empty());
+}
+
+#[test]
+fn callback_owner_falls_back_to_prior_registrant_on_disconnect() {
+    let mut routing = RoutingState::new(8);
+    let session_id = session("session-owner-stack");
+    let first = ConnectionKey::generate();
+    let second = ConnectionKey::generate();
+    let _first_rx = connect(&mut routing, first, 8);
+    let _second_rx = connect(&mut routing, second, 8);
+    routing
+        .attach_session(first, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach first");
+    routing
+        .attach_session(second, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach second");
+    let callback = ConnectionCallback::Hook("hook-1".to_string());
+    routing
+        .register_connection_callback(first, session_id.clone(), callback.clone())
+        .expect("register first");
+    routing
+        .register_connection_callback(second, session_id.clone(), callback.clone())
+        .expect("register second");
+    assert_eq!(
+        routing.connection_callback_owner(&session_id, &callback),
+        Some(second),
+        "most recent registrant owns the callback"
+    );
+
+    routing.disconnect(second);
+    assert_eq!(
+        routing.connection_callback_owner(&session_id, &callback),
+        Some(first),
+        "ownership falls back to the prior still-attached registrant"
+    );
+
+    routing.disconnect(first);
+    assert_eq!(
+        routing.connection_callback_owner(&session_id, &callback),
+        None
+    );
+}
+
+#[test]
+fn attach_replays_pending_broadcasts_in_mint_order() {
+    let mut routing = RoutingState::new(8);
+    let session_id = session("session-replay-order");
+    let first = ConnectionKey::generate();
+    let mut first_rx = connect(&mut routing, first, 8);
+    routing
+        .attach_session(first, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach first");
+    let mut routed_order = Vec::new();
+    for _ in 0..3 {
+        routed_order.push(
+            routing
+                .route_server_request(session_id.clone(), None, server_request())
+                .expect("route request")
+                .pending
+                .request_id,
+        );
+    }
+    while first_rx.requests.try_recv().is_ok() {}
+
+    let second = ConnectionKey::generate();
+    let mut second_rx = connect(&mut routing, second, 8);
+    routing
+        .attach_session(second, session_id, AttachSessionOptions::full())
+        .expect("attach second");
+
+    let replayed: Vec<_> = std::iter::from_fn(|| second_rx.requests.try_recv().ok())
+        .map(|delivery| delivery.request_id)
+        .collect();
+    assert_eq!(
+        replayed, routed_order,
+        "pending broadcasts replay oldest-first to a newly attached Full connection"
+    );
+}
+
+#[test]
+fn turn_transition_cancels_only_that_turns_pending_requests() {
+    let mut routing = RoutingState::new(8);
+    let session_id = session("session-turn-cancel");
+    let connection = ConnectionKey::generate();
+    let mut rx = connect(&mut routing, connection, 8);
+    routing
+        .attach_session(connection, session_id.clone(), AttachSessionOptions::full())
+        .expect("attach");
+    let first_turn = TurnId::from("turn-1");
+    let second_turn = TurnId::from("turn-2");
+    let first_routed = routing
+        .route_server_request(
+            session_id.clone(),
+            Some(first_turn.clone()),
+            server_request(),
+        )
+        .expect("route first");
+    let second_routed = routing
+        .route_server_request(session_id.clone(), Some(second_turn), server_request())
+        .expect("route second");
+    while rx.requests.try_recv().is_ok() {}
+
+    let cancelled = routing.cancel_turn_server_requests(&first_turn);
+    assert_eq!(cancelled, vec![first_routed.pending.request_id.clone()]);
+    // The other turn's request survives and remains completable.
+    assert!(
+        routing
+            .complete_server_request(
+                connection,
+                &session_id,
+                &second_routed.pending.request_id,
+                Some(ServerRequestReplyKind::UserInput),
+            )
+            .is_ok()
+    );
+    // The cancelled turn's request is gone.
+    assert!(matches!(
+        routing.complete_server_request(
+            connection,
+            &session_id,
+            &first_routed.pending.request_id,
+            Some(ServerRequestReplyKind::UserInput),
+        ),
+        Err(CompleteServerRequestError::NotFound { .. })
+    ));
+}
+
+#[test]
+fn reply_for_the_wrong_session_is_rejected_and_the_request_stays_pending() {
+    let mut routing = RoutingState::new(8);
+    let session_a = session("session-reply-a");
+    let session_b = session("session-reply-b");
+    let connection = ConnectionKey::generate();
+    let mut rx = connect(&mut routing, connection, 8);
+    routing
+        .attach_session(connection, session_a.clone(), AttachSessionOptions::full())
+        .expect("attach a");
+    routing
+        .attach_session(connection, session_b.clone(), AttachSessionOptions::full())
+        .expect("attach b");
+    let routed = routing
+        .route_server_request(session_a.clone(), None, server_request())
+        .expect("route request");
+    while rx.requests.try_recv().is_ok() {}
+
+    // A Full grant on another session must not let a reply cross sessions.
+    assert!(matches!(
+        routing.complete_server_request(
+            connection,
+            &session_b,
+            &routed.pending.request_id,
+            Some(ServerRequestReplyKind::UserInput),
+        ),
+        Err(CompleteServerRequestError::WrongSession { .. })
+    ));
+    // Same for error replies.
+    assert!(matches!(
+        routing.resolve_error_reply(connection, &session_b, &routed.pending.request_id),
+        Err(CompleteServerRequestError::WrongSession { .. })
+    ));
+    // The rejected replies left the request pending and resolvable.
+    assert!(
+        routing
+            .complete_server_request(
+                connection,
+                &session_a,
+                &routed.pending.request_id,
+                Some(ServerRequestReplyKind::UserInput),
+            )
+            .is_ok()
+    );
+}
