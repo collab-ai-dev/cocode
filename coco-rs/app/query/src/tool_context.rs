@@ -179,6 +179,9 @@ pub(crate) struct ToolContextFactory {
     /// Per-engine-run repeated-tool-call guard state, installed onto
     /// every built context. `None` when the guard is off.
     pub(crate) loop_guardrail: Option<coco_tool_runtime::LoopGuardrailHandle>,
+    /// Active model's resolved context window, threaded to the registry's
+    /// deferral-worthwhile gate.
+    pub(crate) context_window_tokens: Option<i64>,
 }
 
 /// Per-call overrides applied on top of [`ToolContextFactory`] inputs.
@@ -689,6 +692,7 @@ impl ToolContextFactory {
             session_id_for_history: Some(self.session_id.to_string()),
             tool_output_store: self.tool_output_store.clone(),
             loop_guardrail: self.loop_guardrail.clone(),
+            context_window_tokens: self.context_window_tokens,
             transcript_path: self.transcript_path.clone(),
             approval_feedback: None,
             permission_resolution_detail: None,

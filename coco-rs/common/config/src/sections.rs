@@ -443,6 +443,11 @@ pub struct PartialToolSettings {
     pub bash: Option<PartialBashSettings>,
     pub search: Option<PartialSearchSettings>,
     pub loop_guardrail: Option<PartialLoopGuardrailSettings>,
+    /// ToolSearch deferral-worthwhile threshold, percent of the context
+    /// window. Deferral is skipped when the deferrable schemas would cost
+    /// less than this fraction inline. `0` disables the gate (always
+    /// defer). Default 10.
+    pub tool_search_threshold_pct: Option<i64>,
 }
 
 /// settings.json `tool.loop_guardrail` — warning-first repeated-tool-call
@@ -581,6 +586,14 @@ pub struct ToolConfig {
     /// Warning-first repeated-tool-call guardrails.
     #[serde(default)]
     pub loop_guardrail: LoopGuardrailConfig,
+    /// See `PartialToolSettings::tool_search_threshold_pct`; clamped
+    /// 0..=100, default 10.
+    #[serde(default = "default_tool_search_threshold_pct")]
+    pub tool_search_threshold_pct: i64,
+}
+
+fn default_tool_search_threshold_pct() -> i64 {
+    10
 }
 
 impl Default for ToolConfig {
@@ -595,6 +608,7 @@ impl Default for ToolConfig {
             bash: BashConfig::default(),
             search: SearchFormatConfig::default(),
             loop_guardrail: LoopGuardrailConfig::default(),
+            tool_search_threshold_pct: default_tool_search_threshold_pct(),
         }
     }
 }
@@ -630,6 +644,9 @@ impl ToolConfig {
         }
         if let Some(guardrail) = &tool.loop_guardrail {
             config.loop_guardrail.apply_settings(guardrail);
+        }
+        if let Some(v) = tool.tool_search_threshold_pct {
+            config.tool_search_threshold_pct = v.clamp(0, 100);
         }
 
         if let Some(v) = env.get_i32(EnvKey::CocoMaxToolUseConcurrency) {

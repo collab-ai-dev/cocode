@@ -397,6 +397,23 @@ impl ToolMaterialization {
     }
 }
 
+/// Whether deferring `deferrable_schema_bytes` worth of tool schemas is
+/// worth the ToolSearch round-trip. Mirrors hermes `should_activate`:
+/// tokens ≈ bytes/4; with a known window the cutoff is
+/// `threshold_pct%` of it, otherwise a fixed 20K-token cutoff (never
+/// silently assume a 200K window).
+fn deferral_worthwhile(
+    deferrable_schema_bytes: i64,
+    context_window_tokens: Option<i64>,
+    threshold_pct: i64,
+) -> bool {
+    let deferrable_tokens = deferrable_schema_bytes / 4;
+    match context_window_tokens.filter(|w| *w > 0) {
+        None => deferrable_tokens >= 20_000,
+        Some(window) => deferrable_tokens >= window.saturating_mul(threshold_pct) / 100,
+    }
+}
+
 fn build_materialization(
     tools: Vec<MaterializedTool>,
     aliases: HashMap<String, String>,
@@ -663,6 +680,33 @@ impl ToolRegistry {
                 placement,
                 discoverable,
             ));
+        }
+        // Deferral-worthwhile gate (hermes #34493): when the deferrable
+        // schemas are small relative to the context window, deferral costs
+        // more than it saves — the search → describe → call round-trip
+        // outweighs inlining a few small schemas. Flip the whole deferred
+        // set to Loaded for this assembly; `discoverable` stays true so a
+        // redundant ToolSearch remains an idempotent no-op.
+        let threshold_pct = ctx.tool_config.tool_search_threshold_pct.clamp(0, 100);
+        if threshold_pct > 0 {
+            let deferrable_bytes: i64 = tools
+                .iter()
+                .filter(|t| matches!(t.placement, ToolPlacement::Deferred))
+                .map(|t| {
+                    serde_json::to_string(t.tool.runtime_validation_schema().as_value())
+                        .map(|s| s.len() as i64)
+                        .unwrap_or(0)
+                })
+                .sum();
+            if deferrable_bytes > 0
+                && !deferral_worthwhile(deferrable_bytes, ctx.context_window_tokens, threshold_pct)
+            {
+                for tool in &mut tools {
+                    if matches!(tool.placement, ToolPlacement::Deferred) {
+                        tool.placement = ToolPlacement::Loaded;
+                    }
+                }
+            }
         }
         // Transport closure: carriers are derived after ordinary target
         // filtering. Agent/model allowlists may narrow targets but cannot make

@@ -863,6 +863,7 @@ impl QueryEngine {
             config_home: self.config_home.clone(),
             tool_output_store: self.tool_output_store_for_prompt(),
             loop_guardrail: self.loop_guardrail.clone(),
+            context_window_tokens: Some(self.resolved_context_window()),
             transcript_path: self
                 .transcript_store
                 .as_ref()

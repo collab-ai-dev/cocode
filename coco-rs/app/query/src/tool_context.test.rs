@@ -78,6 +78,7 @@ fn factory_with_live_rules(
         parent_runtime_snapshot: None,
         live_command_rules,
         loop_guardrail: None,
+        context_window_tokens: None,
     }
 }
 
