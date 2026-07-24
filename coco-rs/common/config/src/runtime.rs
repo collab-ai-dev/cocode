@@ -1145,6 +1145,7 @@ fn resolve_configured_moa_endpoint(
         reference_max_tokens: preset.reference_max_tokens,
         reference_temperature: preset.reference_temperature,
         aggregator_temperature: preset.aggregator_temperature,
+        reference_timeout_secs: preset.reference_timeout_secs,
     })
 }
 

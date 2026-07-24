@@ -509,6 +509,10 @@ pub struct RmcpClient {
     /// Prevents concurrent session recovery attempts.
     session_recovery_lock: Mutex<()>,
     progress_epoch: Arc<AtomicU64>,
+    /// Fired by the client handler on `notifications/tools/list_changed`.
+    /// Installed once (before `initialize`) by the connection manager;
+    /// the callback must not do I/O inline.
+    tool_list_changed: Arc<std::sync::OnceLock<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl RmcpClient {
@@ -538,6 +542,7 @@ impl RmcpClient {
             initialize_context: Mutex::new(None),
             session_recovery_lock: Mutex::new(()),
             progress_epoch: Arc::new(AtomicU64::new(0)),
+            tool_list_changed: Arc::new(std::sync::OnceLock::new()),
         })
     }
 
@@ -570,7 +575,31 @@ impl RmcpClient {
             initialize_context: Mutex::new(None),
             session_recovery_lock: Mutex::new(()),
             progress_epoch: Arc::new(AtomicU64::new(0)),
+            tool_list_changed: Arc::new(std::sync::OnceLock::new()),
         })
+    }
+
+    /// Install the `tools/list_changed` notifier. Must be called before
+    /// [`Self::initialize`] (the handler is built there); a second call is
+    /// a no-op. The callback runs on the transport task — it must only
+    /// schedule work, never do I/O inline.
+    pub fn set_tool_list_changed_notifier(&self, notify: Arc<dyn Fn() + Send + Sync>) {
+        let _ = self.tool_list_changed.set(notify);
+    }
+
+    /// MCP `ping` — used by keepalive loops to keep short-TTL
+    /// streamable-HTTP sessions alive. Routed through
+    /// `run_service_operation`, so an expired session self-heals.
+    pub async fn ping(&self, timeout: Option<Duration>) -> Result<()> {
+        self.run_service_operation("ping", timeout, |service| async move {
+            service
+                .send_request(ClientRequest::CustomRequest(CustomRequest::new(
+                    "ping", /*params*/ None,
+                )))
+                .await
+        })
+        .await?;
+        Ok(())
     }
 
     /// Perform the initialization handshake with the MCP server.
@@ -586,6 +615,7 @@ impl RmcpClient {
             rmcp_params,
             send_elicitation,
             Arc::clone(&self.progress_epoch),
+            self.tool_list_changed.get().cloned(),
         );
 
         // Save initialization context so session recovery can re-handshake.

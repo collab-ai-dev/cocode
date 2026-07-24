@@ -147,3 +147,39 @@ fn test_micro_compact_ignores_non_compactable_custom_tools() {
     assert_eq!(result.messages_cleared, 0);
     assert!(format!("{:?}", messages[1]).contains("custom output"));
 }
+
+#[test]
+fn test_measure_micro_compact_reclaim_matches_actual_prune() {
+    let big = "x".repeat(8_000);
+    let mut messages = vec![
+        make_assistant_tool_call("t1", ToolName::Read.as_str()),
+        make_tool_result("t1", ToolId::Builtin(ToolName::Read), &big),
+        make_assistant_tool_call("t2", ToolName::Bash.as_str()),
+        make_tool_result("t2", ToolId::Builtin(ToolName::Bash), &big),
+        make_assistant_tool_call("t3", ToolName::Read.as_str()),
+        make_tool_result("t3", ToolId::Builtin(ToolName::Read), "recent"),
+    ];
+
+    let measured = measure_micro_compact_reclaim(&messages, 1);
+    assert!(measured > 0, "old large results must be measurable");
+
+    let result = micro_compact(&mut messages, 1);
+    assert_eq!(result.messages_cleared, 2);
+    // The measurement approximates the replacement with a text-level
+    // estimate; allow a small structural-overhead delta per message.
+    let delta = (measured - result.tokens_saved_estimate).abs();
+    assert!(
+        delta <= 32,
+        "measured {measured} vs actual {} (delta {delta})",
+        result.tokens_saved_estimate
+    );
+}
+
+#[test]
+fn test_measure_micro_compact_reclaim_zero_when_all_recent() {
+    let messages = vec![
+        make_assistant_tool_call("t1", ToolName::Read.as_str()),
+        make_tool_result("t1", ToolId::Builtin(ToolName::Read), "content"),
+    ];
+    assert_eq!(measure_micro_compact_reclaim(&messages, 5), 0);
+}

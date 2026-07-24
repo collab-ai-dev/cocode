@@ -47,6 +47,11 @@ pub struct MoaPresetSettings {
     pub reference_temperature: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aggregator_temperature: Option<f32>,
+    /// Per-reference wall-clock timeout, seconds. A slow advisor must not
+    /// stall the whole fan-out; `None` uses the built-in default (120 s),
+    /// `0` disables the bound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_timeout_secs: Option<i64>,
 }
 
 impl Default for MoaPresetSettings {
@@ -59,6 +64,7 @@ impl Default for MoaPresetSettings {
             reference_max_tokens: None,
             reference_temperature: None,
             aggregator_temperature: None,
+            reference_timeout_secs: None,
         }
     }
 }
@@ -72,6 +78,8 @@ pub struct MoaEndpointSpec {
     pub reference_max_tokens: Option<i64>,
     pub reference_temperature: Option<f32>,
     pub aggregator_temperature: Option<f32>,
+    /// See `MoaPresetSettings::reference_timeout_secs`.
+    pub reference_timeout_secs: Option<i64>,
 }
 
 impl MoaEndpointSpec {

@@ -198,6 +198,11 @@ fn convert_user_content_parts(parts: &[UserContentPart]) -> Vec<GoogleGenerative
     result
 }
 
+/// Sentinel `thoughtSignature` for functionCall parts replayed from a
+/// non-Google provider. Gemini accepts it in place of a real signature;
+/// shared convention with hermes and opencode-gemini-auth.
+pub const CROSS_PROVIDER_THOUGHT_SIGNATURE_SENTINEL: &str = "skip_thought_signature_validator";
+
 /// Extract thoughtSignature from a part's provider metadata.
 fn extract_thought_signature(
     provider_metadata: &Option<vercel_ai_provider::ProviderMetadata>,
@@ -308,12 +313,22 @@ fn convert_assistant_content_parts(
                     &tool_call_part.provider_metadata,
                     provider_options_name,
                 );
+                // Cross-provider replay fallback: a tool call that
+                // originated on another provider (Anthropic/OpenAI/xAI
+                // failover) carries no Google thoughtSignature, and Gemini 3
+                // thinking models reject such functionCall parts with 400
+                // INVALID_ARGUMENT ("Function call is missing a
+                // thought_signature"). Emit the sentinel the Gemini
+                // ecosystem uses for exactly this case (hermes
+                // gemini_native/cloudcode adapters, opencode-gemini-auth).
                 result.push(GoogleGenerativeAIContentPart::FunctionCall {
                     function_call: FunctionCallPart {
                         name: tool_call_part.tool_name.clone(),
                         args: tool_call_part.input.clone(),
                     },
-                    thought_signature: ts,
+                    thought_signature: Some(
+                        ts.unwrap_or_else(|| CROSS_PROVIDER_THOUGHT_SIGNATURE_SENTINEL.to_string()),
+                    ),
                 });
             }
             AssistantContentPart::ToolResult(_) => {

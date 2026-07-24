@@ -108,6 +108,7 @@ fn configure_preset(
             reference_max_tokens,
             reference_temperature,
             aggregator_temperature,
+            reference_timeout_secs: None,
         },
     );
     if make_default {

@@ -398,9 +398,20 @@ pub fn spawn(session: SessionHandle) {
         session.session_plan_file_path(),
     ));
     let materializer = Arc::new(GoalContextMaterializer::new(plan_source));
+    // Deterministic contract checks execute for real (N10-stage-1): the
+    // session-backed executor runs Command/FileContent/Artifact predicates
+    // fail-closed. Free-form candidates without deterministic coverage
+    // keep the structural-gate-only behavior via the AlwaysVerified
+    // fallback; a model-backed semantic verifier is stage 2.
+    let check_verifier = Arc::new(coco_goal_runtime::DeterministicCheckVerifier::new(
+        Arc::new(crate::session::goal_check_exec::SessionCheckExecutor::new(
+            session.original_cwd().clone(),
+        )),
+        Arc::new(coco_goal_runtime::AlwaysVerified),
+    ));
     let coordinator = Arc::new(GoalCompletionCoordinator::new(
         session.goal_evidence(),
-        Arc::new(coco_goal_runtime::AlwaysVerified),
+        check_verifier,
     ));
     let port: Arc<dyn SessionTurnPort> = Arc::new(SessionGoalTurnPort::new(session.clone()));
     let shutdown = session.shutdown_child_token();

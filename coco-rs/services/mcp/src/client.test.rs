@@ -259,6 +259,7 @@ fn tool_idle_timeout_is_remote_only_and_clamped_to_overall_timeout() {
         policy: Default::default(),
         tool_exposure: Default::default(),
         server_tool_exposure: Default::default(),
+        keepalive_interval_secs: None,
     };
     let manager = McpConnectionManager::new_with_runtime_config(std::env::temp_dir(), &runtime);
 
@@ -293,6 +294,7 @@ fn tool_idle_timeout_zero_disables_remote_idle_watchdog() {
         policy: Default::default(),
         tool_exposure: Default::default(),
         server_tool_exposure: Default::default(),
+        keepalive_interval_secs: None,
     };
     let manager = McpConnectionManager::new_with_runtime_config(std::env::temp_dir(), &runtime);
     let http = crate::types::McpServerConfig::Http(crate::types::McpHttpConfig {

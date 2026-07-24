@@ -552,3 +552,56 @@ fn handles_mixed_reasoning_reasoning_file_text_and_tool_call() {
         _ => panic!("Expected function call part"),
     }
 }
+
+#[test]
+fn tool_call_without_signature_gets_cross_provider_sentinel() {
+    // A tool call replayed from a non-Google provider (Anthropic/OpenAI
+    // failover) carries no thoughtSignature; Gemini 3 thinking models 400
+    // on such functionCall parts unless the sentinel is emitted.
+    let parts = vec![AssistantContentPart::ToolCall(ToolCallPart::new(
+        "call_1",
+        "get_weather",
+        serde_json::json!({"location": "NYC"}),
+    ))];
+    let messages = vec![LanguageModelV4Message::assistant(parts)];
+    let result =
+        convert_to_google_generative_ai_messages(&messages, &ConvertOptions::default()).unwrap();
+    match &result.contents[0].parts[0] {
+        GoogleGenerativeAIContentPart::FunctionCall {
+            thought_signature, ..
+        } => {
+            assert_eq!(
+                thought_signature.as_deref(),
+                Some(CROSS_PROVIDER_THOUGHT_SIGNATURE_SENTINEL)
+            );
+        }
+        _ => panic!("Expected function call part"),
+    }
+}
+
+#[test]
+fn tool_call_with_real_signature_keeps_it() {
+    let meta = vercel_ai_provider::ProviderMetadata::from_map(
+        [(
+            "google".to_string(),
+            serde_json::json!({"thoughtSignature": "sig-real"}),
+        )]
+        .into_iter()
+        .collect(),
+    );
+    let mut part = ToolCallPart::new("call_1", "get_weather", serde_json::json!({}));
+    part.provider_metadata = Some(meta);
+    let messages = vec![LanguageModelV4Message::assistant(vec![
+        AssistantContentPart::ToolCall(part),
+    ])];
+    let result =
+        convert_to_google_generative_ai_messages(&messages, &ConvertOptions::default()).unwrap();
+    match &result.contents[0].parts[0] {
+        GoogleGenerativeAIContentPart::FunctionCall {
+            thought_signature, ..
+        } => {
+            assert_eq!(thought_signature.as_deref(), Some("sig-real"));
+        }
+        _ => panic!("Expected function call part"),
+    }
+}

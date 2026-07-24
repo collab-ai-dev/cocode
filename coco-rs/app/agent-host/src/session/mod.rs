@@ -2,6 +2,7 @@
 
 pub(crate) mod at_mention_turn;
 pub mod conversation_export;
+pub mod goal_check_exec;
 pub mod goal_command;
 pub mod goal_driver;
 pub mod goal_plan;

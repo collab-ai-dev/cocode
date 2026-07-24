@@ -27,10 +27,12 @@ pub const COMPACTABLE_TOOLS: &[ToolName] = &[
 
 /// Walk messages in encounter order and collect tool_use IDs whose tool name
 /// is compactable.
-pub fn collect_compactable_tool_ids(messages: &[Message]) -> Vec<String> {
+pub fn collect_compactable_tool_ids<M: std::borrow::Borrow<Message>>(
+    messages: &[M],
+) -> Vec<String> {
     let mut ids = Vec::new();
     for msg in messages {
-        let Message::Assistant(asst) = msg else {
+        let Message::Assistant(asst) = msg.borrow() else {
             continue;
         };
         let LlmMessage::Assistant { content, .. } = &asst.message else {
@@ -108,6 +110,41 @@ pub fn micro_compact(messages: &mut [Message], keep_recent: usize) -> Microcompa
         tokens_saved_estimate: tokens_freed,
         was_time_triggered: false,
     }
+}
+
+/// Read-only measurement of the tokens [`micro_compact`] would reclaim at
+/// the given `keep_recent`.
+///
+/// Drives the proactive-prune reclaim gate (hermes `fa4800414`): rewriting
+/// already-sent history invalidates the provider prompt-cache prefix, so
+/// the caller commits a prune only when it reclaims a meaningful batch —
+/// keeping cache breaks episodic/amortized like a compaction boundary.
+pub fn measure_micro_compact_reclaim<M: std::borrow::Borrow<Message>>(
+    messages: &[M],
+    keep_recent: usize,
+) -> i64 {
+    let keep_recent = keep_recent.max(1);
+    let compactable_ids = collect_compactable_tool_ids(messages);
+    let total = compactable_ids.len();
+    let clear_set: std::collections::HashSet<&str> = compactable_ids
+        .iter()
+        .take(total.saturating_sub(keep_recent))
+        .map(String::as_str)
+        .collect();
+
+    let mut reclaim: i64 = 0;
+    for msg in messages {
+        let Message::ToolResult(tr) = msg.borrow() else {
+            continue;
+        };
+        if !clear_set.contains(tr.tool_use_id.as_str()) {
+            continue;
+        }
+        if let Some(freed) = crate::types::measure_tool_result_clearable(tr) {
+            reclaim += freed;
+        }
+    }
+    reclaim
 }
 
 /// Check whether a tool name string is in the compactable set.

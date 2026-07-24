@@ -121,6 +121,42 @@ pub fn clearing_decision(content: &str) -> ClearDecision {
     }
 }
 
+/// Read-only estimate of the tokens
+/// [`clear_tool_result_preserving_pointers`] would free for this message;
+/// `None` when it would skip. The freed figure approximates the
+/// replacement with a text-level estimate (a few tokens of imprecision —
+/// irrelevant against the thousands-of-tokens reclaim gate it feeds).
+pub(crate) fn measure_tool_result_clearable(tr: &coco_messages::ToolResultMessage) -> Option<i64> {
+    let coco_messages::LlmMessage::Tool { content, .. } = &tr.message else {
+        return None;
+    };
+    let mut footers: Vec<&str> = Vec::new();
+    for part in content {
+        let coco_messages::ToolContent::ToolResult(p) = part else {
+            continue;
+        };
+        let coco_llm_types::ToolResultContent::Text { value, .. } = &p.output else {
+            continue;
+        };
+        match clearing_decision(value) {
+            ClearDecision::Skip => return None,
+            ClearDecision::Replace(_) => {
+                if let Some(footer) = coco_types::persisted_output::pointer_footer(value) {
+                    footers.push(footer);
+                }
+            }
+        }
+    }
+    let replacement = if footers.is_empty() {
+        CLEARED_TOOL_RESULT_MESSAGE.to_string()
+    } else {
+        format!("{CLEARED_TOOL_RESULT_MESSAGE}\n\n{}", footers.join("\n\n"))
+    };
+    let est_before = coco_messages::estimate_tool_result_message_tokens(tr);
+    let est_after = coco_messages::estimate_text_tokens(&replacement);
+    Some((est_before - est_after).max(0))
+}
+
 /// Clear a tool-result message in place per [`clearing_decision`], preserving
 /// any recovery footers. Returns the estimated tokens freed, or `None` when
 /// the message was skipped (already cleared / minimal reference).
