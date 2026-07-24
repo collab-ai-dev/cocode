@@ -547,6 +547,10 @@ pub struct ToolUseContext {
     /// Per-engine-run repeated-tool-call guardrail state. `None` when
     /// `tool.loop_guardrail.level = "off"` (or in bare test contexts).
     pub loop_guardrail: Option<crate::LoopGuardrailHandle>,
+    /// Active model's resolved context window (tokens), when known.
+    /// Consumed by the registry's deferral-worthwhile gate; `None`
+    /// falls back to the fixed 20K-token cutoff.
+    pub context_window_tokens: Option<i64>,
     /// Path to the session transcript, used for post-clear implementation
     /// hints after plan approval.
     pub transcript_path: Option<PathBuf>,
@@ -751,6 +755,7 @@ impl ToolUseContext {
             session_id_for_history: self.session_id_for_history.clone(),
             tool_output_store: self.tool_output_store.clone(),
             loop_guardrail: self.loop_guardrail.clone(),
+            context_window_tokens: self.context_window_tokens,
             transcript_path: self.transcript_path.clone(),
             approval_feedback: self.approval_feedback.clone(),
             permission_resolution_detail: self.permission_resolution_detail.clone(),
@@ -1061,6 +1066,7 @@ impl ToolUseContext {
             session_id_for_history: None,
             tool_output_store: None,
             loop_guardrail: None,
+            context_window_tokens: None,
             transcript_path: None,
             approval_feedback: None,
             permission_resolution_detail: None,

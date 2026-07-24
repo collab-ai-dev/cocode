@@ -1,7 +1,7 @@
 //! Tests for ToolRegistry, focusing on the B3.3 MCP naming convention
 //! enforcement (`mcp__<server>__<tool>`) and deregister cleanup.
 
-use super::{MaterializedToolLookup, ToolLookup, ToolRegistry};
+use super::{MaterializedToolLookup, ToolLookup, ToolRegistry, deferral_worthwhile};
 use crate::traits::DescriptionOptions;
 use crate::traits::DynTool;
 use crate::traits::McpToolInfo;
@@ -1089,4 +1089,16 @@ fn test_deregister_by_server_removes_namespaced_tools() {
     assert!(reg.get_by_name("mcp__myserver__ls").is_none());
     assert!(reg.get_by_name("mcp__other__read").is_some());
     assert!(reg.get_by_name("Read").is_some());
+}
+
+#[test]
+fn deferral_worthwhile_gates_on_window_fraction_and_fixed_cutoff() {
+    // Known window: 10% of 200K = 20K tokens = 80K bytes.
+    assert!(!deferral_worthwhile(79_999, Some(200_000), 10));
+    assert!(deferral_worthwhile(80_000, Some(200_000), 10));
+    // Unknown window: fixed 20K-token (80K-byte) cutoff.
+    assert!(!deferral_worthwhile(79_999, None, 10));
+    assert!(deferral_worthwhile(80_000, None, 10));
+    // Non-positive window falls back to the fixed cutoff too.
+    assert!(deferral_worthwhile(80_000, Some(0), 10));
 }
