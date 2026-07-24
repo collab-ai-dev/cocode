@@ -218,6 +218,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             disable_all_hooks: false,
             allow_managed_hooks_only: false,
             enable_token_budget_continuation: false,
+            empty_response_nudge: coco_config::EmptyResponsePolicy::default(),
             compact: coco_config::CompactConfig::default(),
             wire_dump: config.wire_dump.clone(),
             system_reminder: coco_config::SystemReminderConfig::default(),

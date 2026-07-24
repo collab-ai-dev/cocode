@@ -218,3 +218,178 @@ async fn test_full_compact_default_summarizes_recent_tool_result_without_keeping
         "recent tool result should not be preserved as an original post-compact message"
     );
 }
+
+fn make_assistant_with_media() -> Arc<Message> {
+    Arc::new(Message::Assistant(AssistantMessage {
+        message: LlmMessage::assistant(vec![
+            AssistantContentPart::Text(coco_llm_types::TextPart::new(
+                "here is the generated chart".to_string(),
+            )),
+            AssistantContentPart::File(coco_llm_types::FilePart::from_bytes(
+                vec![0u8; 64],
+                "image/png",
+            )),
+            AssistantContentPart::ReasoningFile(coco_llm_types::ReasoningFilePart::new(
+                coco_llm_types::LanguageModelV4FileData::bytes(vec![0u8; 64]),
+                "application/pdf",
+            )),
+        ]),
+        uuid: Uuid::new_v4(),
+        model: "test".to_string(),
+        stop_reason: Some(StopReason::EndTurn),
+        usage: None,
+        cost_usd: None,
+        request_id: None,
+        api_error: None,
+    }))
+}
+
+#[test]
+fn test_strip_images_covers_assistant_media_parts() {
+    let owned: Vec<Message> = vec![
+        make_user_text("show me a chart").as_ref().clone(),
+        make_assistant_with_media().as_ref().clone(),
+    ];
+    let stripped = strip_images_from_messages(&owned);
+
+    let Message::Assistant(a) = &stripped[1] else {
+        panic!("assistant message expected");
+    };
+    let LlmMessage::Assistant { content, .. } = &a.message else {
+        panic!("assistant llm message expected");
+    };
+    let texts: Vec<&str> = content
+        .iter()
+        .filter_map(|p| match p {
+            AssistantContentPart::Text(t) => Some(t.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        texts,
+        vec!["here is the generated chart", "[image]", "[document]"],
+        "File → [image], ReasoningFile → [document]; text untouched"
+    );
+    assert!(
+        !content.iter().any(|p| matches!(
+            p,
+            AssistantContentPart::File(_) | AssistantContentPart::ReasoningFile(_)
+        )),
+        "no media parts survive"
+    );
+}
+
+#[test]
+fn test_strip_images_assistant_without_media_untouched() {
+    // Fast path: a media-free assistant message must not be rewritten.
+    assert!(strip_one_message_for_media_if_needed(&make_assistant_text("plain answer")).is_none());
+}
+
+#[test]
+fn test_bound_summary_input_noop_when_fits() {
+    let messages = vec![
+        make_user_text("short request"),
+        make_assistant_text("short answer"),
+    ];
+    let bounded = bound_summary_input_to_window(
+        messages.clone(),
+        "summarize",
+        /*max_summary_tokens*/ 1_000,
+        /*context_window*/ 200_000,
+    );
+    assert_eq!(bounded.len(), messages.len());
+}
+
+#[test]
+fn test_bound_summary_input_drops_head_rounds_when_over_window() {
+    // 10 rounds of ~8 KB each (~2k estimated tokens per round). Window
+    // 30k → budget = 27k − prompt − 20k output reserve ≈ 7k tokens, so
+    // most head rounds must be dropped before the first summarizer call.
+    let big = "x".repeat(4_000);
+    let mut messages = Vec::new();
+    for i in 0..10 {
+        messages.push(make_user_text(&format!("round {i} {big}")));
+        messages.push(make_assistant_text(&format!("answer {i} {big}")));
+    }
+    let bounded = bound_summary_input_to_window(
+        messages.clone(),
+        "summarize",
+        MAX_OUTPUT_TOKENS_FOR_SUMMARY,
+        /*context_window*/ 30_000,
+    );
+    assert!(
+        bounded.len() < messages.len(),
+        "head rounds must be dropped proactively"
+    );
+    // The most recent round always survives.
+    assert!(messages_contain_text(&bounded, "answer 9"));
+    // And the estimate now fits the derived budget.
+    let budget = (30_000f64 * SUMMARY_INPUT_WINDOW_FILL_RATIO) as i64
+        - coco_messages::estimate_text_tokens("summarize")
+        - MAX_OUTPUT_TOKENS_FOR_SUMMARY;
+    assert!(coco_messages::estimate_tokens_for_messages(&bounded) <= budget);
+}
+
+#[test]
+fn test_bound_summary_input_degenerate_budget_is_noop() {
+    // Window smaller than the output reservation → budget ≤ 0: leave the
+    // input alone and let the reactive PTL retry own recovery.
+    let messages = vec![
+        make_user_text("request"),
+        make_assistant_text("answer"),
+        make_user_text("more"),
+        make_assistant_text("more answer"),
+    ];
+    let bounded = bound_summary_input_to_window(
+        messages.clone(),
+        "summarize",
+        MAX_OUTPUT_TOKENS_FOR_SUMMARY,
+        /*context_window*/ 1_000,
+    );
+    assert_eq!(bounded.len(), messages.len());
+}
+
+#[tokio::test]
+async fn test_full_compact_bounds_summarizer_input_before_first_call() {
+    let big = "x".repeat(4_000);
+    let mut messages = Vec::new();
+    for i in 0..10 {
+        messages.push(make_user_text(&format!("round {i} {big}")));
+        messages.push(make_assistant_text(&format!("answer {i} {big}")));
+    }
+
+    let attempt_sizes: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
+    let config = CompactRunOptions {
+        context_window: 30_000,
+        ..Default::default()
+    };
+    compact_conversation(
+        &messages,
+        &config,
+        {
+            let attempt_sizes = Arc::clone(&attempt_sizes);
+            move |attempt| {
+                let attempt_sizes = Arc::clone(&attempt_sizes);
+                async move {
+                    attempt_sizes
+                        .lock()
+                        .expect("capture lock")
+                        .push(attempt.messages.len());
+                    Ok(CompactSummaryResponse {
+                        summary: "<summary>ok</summary>".to_string(),
+                    })
+                }
+            }
+        },
+        None,
+    )
+    .await
+    .expect("compact succeeds");
+
+    let sizes = attempt_sizes.lock().expect("capture lock");
+    assert_eq!(sizes.len(), 1, "no reactive PTL retries were needed");
+    assert!(
+        sizes[0] < messages.len(),
+        "the first summarizer call already received a bounded slice"
+    );
+}

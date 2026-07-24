@@ -228,3 +228,24 @@ fn tool_result_budget_invalid_per_message_bytes_ignored() {
     let cfg = CompactConfig::resolve(&settings, &empty_env());
     assert_eq!(cfg.tool_result_budget.per_message_bytes, None);
 }
+
+#[test]
+fn keep_recent_rounds_defaults_zero_cc_parity() {
+    // TS full compact keeps zero verbatim messages (`messagesToSummarize
+    // = messages`); the knob exists for deliberate hermes-style
+    // divergence only.
+    assert_eq!(CompactConfig::default().keep_recent_rounds, 0);
+}
+
+#[test]
+fn keep_recent_rounds_resolves_from_settings() {
+    let mut settings = Settings::default();
+    settings.compact.keep_recent_rounds = Some(3);
+    let cfg = CompactConfig::resolve(&settings, &empty_env());
+    assert_eq!(cfg.keep_recent_rounds, 3);
+
+    // Negative values are rejected (default preserved).
+    settings.compact.keep_recent_rounds = Some(-1);
+    let cfg = CompactConfig::resolve(&settings, &empty_env());
+    assert_eq!(cfg.keep_recent_rounds, 0);
+}

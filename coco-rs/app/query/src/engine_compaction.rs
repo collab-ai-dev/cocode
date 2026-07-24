@@ -43,6 +43,12 @@ use crate::engine::QueryEngine;
 
 const COMPACT_QUERY_SOURCE: &str = "compact";
 
+/// Current local date (`%Y-%m-%d`) for the summarizer's temporal-anchoring
+/// rule. `coco-compact` reads no clock, so the date is threaded from here.
+pub(crate) fn current_compact_date() -> Option<String> {
+    Some(chrono::Local::now().format("%Y-%m-%d").to_string())
+}
+
 /// Manual `/compact` invocation context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManualCompactRequest {
@@ -235,12 +241,16 @@ impl QueryEngine {
         let summarize_fn = |attempt: coco_compact::CompactSummaryAttempt| async move {
             self.run_compact_summary_attempt(attempt, event_tx).await
         };
+        let current_date = current_compact_date();
         let result = coco_compact::partial_compact_conversation(
             history.as_slice(),
             pivot_index,
             direction,
-            user_feedback.as_deref(),
-            effective_instructions.as_deref(),
+            coco_compact::PartialCompactOptions {
+                user_feedback: user_feedback.as_deref(),
+                custom_instructions: effective_instructions.as_deref(),
+                current_date: current_date.as_deref(),
+            },
             summarize_fn,
             None,
         )

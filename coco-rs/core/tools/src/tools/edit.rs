@@ -408,7 +408,7 @@ impl Tool for EditTool {
         let new_content = if replace_all {
             if count == 0 {
                 return Err(ToolError::InvalidInput {
-                    message: format!("old_string not found in {file_path}"),
+                    message: not_found_message_with_hint(file_path, old_string, &content),
                     error_code: Some("1".into()),
                 });
             }
@@ -440,7 +440,7 @@ impl Tool for EditTool {
                 crate::tools::edit_utils::apply_edit_to_file(&content, &actual, new_string, false)
             } else {
                 return Err(ToolError::InvalidInput {
-                    message: format!("old_string not found in {file_path}"),
+                    message: not_found_message_with_hint(file_path, old_string, &content),
                     error_code: Some("1".into()),
                 });
             }
@@ -515,6 +515,18 @@ impl Tool for EditTool {
 /// Strategy:
 /// 1. Normalize both strings (collapse whitespace) and search
 /// 2. Try trimming leading/trailing whitespace from each line
+/// Zero-match error text, extended with a "did you mean" section hint when
+/// something in the file scores above the similarity floor. Fires only on
+/// the total-miss path — the ambiguous multi-match error keeps its own
+/// guidance.
+fn not_found_message_with_hint(file_path: &str, old_string: &str, content: &str) -> String {
+    let base = format!("old_string not found in {file_path}");
+    match crate::tools::edit_utils::closest_match_hint(old_string, content) {
+        Some(hint) => format!("{base}\n\nDid you mean one of these sections?\n{hint}"),
+        None => base,
+    }
+}
+
 fn find_fuzzy_match(content: &str, old_string: &str) -> Option<String> {
     // Strategy 1: Normalize whitespace
     let normalized_old = normalize_whitespace(old_string);

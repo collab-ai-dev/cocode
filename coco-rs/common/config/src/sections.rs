@@ -442,6 +442,109 @@ pub struct PartialToolSettings {
     pub file_read_ignore_patterns: Option<Vec<String>>,
     pub bash: Option<PartialBashSettings>,
     pub search: Option<PartialSearchSettings>,
+    pub loop_guardrail: Option<PartialLoopGuardrailSettings>,
+}
+
+/// settings.json `tool.loop_guardrail` — warning-first repeated-tool-call
+/// guardrails (hermes v0.13 absorption).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PartialLoopGuardrailSettings {
+    pub level: Option<LoopGuardrailLevel>,
+    pub warn_after: Option<PartialGuardrailThresholds>,
+    pub hard_stop_after: Option<PartialGuardrailThresholds>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PartialGuardrailThresholds {
+    pub exact_failure: Option<i64>,
+    pub same_tool_failure: Option<i64>,
+    pub no_progress: Option<i64>,
+}
+
+/// Enforcement posture for the tool-loop guardrail. Warn-only by default
+/// (hermes parity: warnings on, hard stop opt-in).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoopGuardrailLevel {
+    /// Guard disabled entirely.
+    Off,
+    /// Append warnings to repeated failing / no-progress results; never
+    /// block execution.
+    #[default]
+    WarnOnly,
+    /// Warnings plus pre-execution blocking at the hard-stop thresholds.
+    Enforce,
+}
+
+/// Per-shape counts at which the guardrail acts. A call is warned when
+/// its counter reaches `warn_after.*` and (at `enforce`) blocked when it
+/// reaches `hard_stop_after.*`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuardrailThresholds {
+    /// Identical `(tool, args)` failures.
+    pub exact_failure: i64,
+    /// Failures of one tool across distinct args.
+    pub same_tool_failure: i64,
+    /// Identical results from an idempotent (read-only) call.
+    pub no_progress: i64,
+}
+
+/// Resolved `tool.loop_guardrail` config.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoopGuardrailConfig {
+    pub level: LoopGuardrailLevel,
+    pub warn_after: GuardrailThresholds,
+    pub hard_stop_after: GuardrailThresholds,
+}
+
+impl Default for LoopGuardrailConfig {
+    fn default() -> Self {
+        // hermes ToolCallGuardrailConfig defaults.
+        Self {
+            level: LoopGuardrailLevel::default(),
+            warn_after: GuardrailThresholds {
+                exact_failure: 2,
+                same_tool_failure: 3,
+                no_progress: 2,
+            },
+            hard_stop_after: GuardrailThresholds {
+                exact_failure: 5,
+                same_tool_failure: 8,
+                no_progress: 5,
+            },
+        }
+    }
+}
+
+impl LoopGuardrailConfig {
+    fn apply_settings(&mut self, partial: &PartialLoopGuardrailSettings) {
+        if let Some(level) = partial.level {
+            self.level = level;
+        }
+        if let Some(warn) = &partial.warn_after {
+            apply_threshold_settings(&mut self.warn_after, warn);
+        }
+        if let Some(stop) = &partial.hard_stop_after {
+            apply_threshold_settings(&mut self.hard_stop_after, stop);
+        }
+    }
+}
+
+fn apply_threshold_settings(
+    target: &mut GuardrailThresholds,
+    partial: &PartialGuardrailThresholds,
+) {
+    if let Some(v) = partial.exact_failure {
+        target.exact_failure = v;
+    }
+    if let Some(v) = partial.same_tool_failure {
+        target.same_tool_failure = v;
+    }
+    if let Some(v) = partial.no_progress {
+        target.no_progress = v;
+    }
 }
 
 /// settings.json `tool.search` section — Grep/Glob output-formatting knobs
@@ -475,6 +578,9 @@ pub struct ToolConfig {
     pub bash: BashConfig,
     /// Grep/Glob output-formatting knobs (§2.3/§2.4).
     pub search: SearchFormatConfig,
+    /// Warning-first repeated-tool-call guardrails.
+    #[serde(default)]
+    pub loop_guardrail: LoopGuardrailConfig,
 }
 
 impl Default for ToolConfig {
@@ -488,6 +594,7 @@ impl Default for ToolConfig {
             file_read_ignore_patterns: Vec::new(),
             bash: BashConfig::default(),
             search: SearchFormatConfig::default(),
+            loop_guardrail: LoopGuardrailConfig::default(),
         }
     }
 }
@@ -520,6 +627,9 @@ impl ToolConfig {
         }
         if let Some(search) = &tool.search {
             config.search.apply_settings(search);
+        }
+        if let Some(guardrail) = &tool.loop_guardrail {
+            config.loop_guardrail.apply_settings(guardrail);
         }
 
         if let Some(v) = env.get_i32(EnvKey::CocoMaxToolUseConcurrency) {
@@ -813,6 +923,21 @@ pub struct PartialLoopSettings {
     pub default_prompt_enabled: Option<bool>,
     pub dynamic_enabled: Option<bool>,
     pub persistent_preamble_enabled: Option<bool>,
+    pub empty_response_nudge: Option<EmptyResponsePolicy>,
+}
+
+/// Recovery policy for a clean-but-empty model response (no text, no
+/// tool calls, normal stop reason). Weak models routinely emit empty or
+/// thinking-only responses mid-task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmptyResponsePolicy {
+    /// End the turn silently (legacy behavior).
+    Off,
+    /// Inject a retry nudge as a meta message and continue the loop,
+    /// capped per user cycle.
+    #[default]
+    Nudge,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -826,6 +951,9 @@ pub struct LoopConfig {
     pub default_prompt_enabled: bool,
     pub dynamic_enabled: bool,
     pub persistent_preamble_enabled: bool,
+    /// See [`EmptyResponsePolicy`]; default [`EmptyResponsePolicy::Nudge`].
+    #[serde(default)]
+    pub empty_response_nudge: EmptyResponsePolicy,
 }
 
 impl Default for LoopConfig {
@@ -841,6 +969,7 @@ impl Default for LoopConfig {
             default_prompt_enabled: false,
             dynamic_enabled: false,
             persistent_preamble_enabled: false,
+            empty_response_nudge: EmptyResponsePolicy::default(),
         }
     }
 }
@@ -874,6 +1003,9 @@ impl LoopConfig {
         }
         if let Some(v) = loop_settings.persistent_preamble_enabled {
             config.persistent_preamble_enabled = v;
+        }
+        if let Some(v) = loop_settings.empty_response_nudge {
+            config.empty_response_nudge = v;
         }
         if env.is_truthy(EnvKey::CocoLoopPersistent) {
             config.persistent_preamble_enabled = true;

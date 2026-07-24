@@ -348,6 +348,11 @@ impl QueryEngine {
             trigger,
             custom_prompt: effective_instructions,
             recompaction_info,
+            current_date: current_compact_date(),
+            // Session-level keep-tail knob (`compact.keep_recent_rounds`).
+            // Default 0 = CC parity; internal callers with an explicit
+            // per-call value (teammate engine) construct their own options.
+            keep_recent_rounds: self.config.compact.keep_recent_rounds.max(0) as usize,
             ..Default::default()
         };
 

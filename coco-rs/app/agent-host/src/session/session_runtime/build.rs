@@ -525,6 +525,7 @@ impl SessionRuntime {
                 }),
             system_prompt: Some(system_prompt_with_memory),
             streaming_tool_execution: runtime_config.loop_config.enable_streaming_tools,
+            empty_response_nudge: runtime_config.loop_config.empty_response_nudge,
             log_assistant_responses: runtime_config.settings.merged.log.assistant_responses,
             project_dir: runtime_config
                 .paths

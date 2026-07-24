@@ -34,8 +34,7 @@ async fn partial_newest_summarizes_tail_keeps_prefix() {
         &arc_vec(&messages),
         4,
         PartialCompactDirection::Newest,
-        None,
-        None,
+        Default::default(),
         summarize,
         None,
     )
@@ -89,8 +88,10 @@ async fn partial_oldest_summarizes_prefix_keeps_tail() {
         &arc_vec(&messages),
         2,
         PartialCompactDirection::Oldest,
-        Some("focus on tests"),
-        None,
+        coco_compact::PartialCompactOptions {
+            user_feedback: Some("focus on tests"),
+            ..Default::default()
+        },
         mock::mock_summarize_ok(SUMMARY),
         None,
     )
@@ -126,8 +127,7 @@ async fn partial_empty_summarize_errors() {
         &arc_vec(&messages),
         messages.len(),
         PartialCompactDirection::Newest,
-        None,
-        None,
+        Default::default(),
         mock::mock_summarize_ok(SUMMARY),
         None,
     )
@@ -287,8 +287,7 @@ async fn partial_newest_ptl_retry_truncates_full_context_not_tail_only() {
         &arc_vec(&messages),
         8,
         PartialCompactDirection::Newest,
-        None,
-        None,
+        Default::default(),
         summarize,
         None,
     )

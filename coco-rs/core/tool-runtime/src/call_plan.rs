@@ -403,6 +403,9 @@ pub enum ToolCallErrorKind {
     JoinFailed,
     /// Streaming fallback discarded the call before it completed.
     StreamingDiscarded,
+    /// Loop-guardrail hard stop: the repeated call was not executed;
+    /// the model received one synthetic guardrail result.
+    GuardrailBlocked,
 }
 
 impl ToolCallErrorKind {
@@ -422,7 +425,8 @@ impl ToolCallErrorKind {
             | Self::PermissionDenied
             | Self::PermissionBridgeFailed
             | Self::PreExecutionCancelled
-            | Self::StreamingDiscarded => false,
+            | Self::StreamingDiscarded
+            | Self::GuardrailBlocked => false,
         }
     }
 

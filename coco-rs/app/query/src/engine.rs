@@ -226,6 +226,10 @@ pub struct QueryEngine {
     /// [`Self::with_permission_rule_handle`] to install a `NoOp` for
     /// isolation.
     pub(crate) permission_rule_handle: coco_tool_runtime::PermissionRuleHandleRef,
+    /// Per-engine-run repeated-tool-call guardrail state; threaded onto
+    /// every `ToolUseContext` via the factory. `None` when
+    /// `tool.loop_guardrail.level = "off"`.
+    pub(crate) loop_guardrail: Option<coco_tool_runtime::LoopGuardrailHandle>,
     /// Snapshot of the agent-definition catalog (T7). Surfaced on
     /// every `ToolUseContext` so AgentTool can resolve
     /// `subagent_type → AgentDefinition` and thread the definition

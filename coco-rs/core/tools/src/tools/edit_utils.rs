@@ -23,6 +23,70 @@ pub fn normalize_quotes(s: &str) -> String {
         .replace([LEFT_DOUBLE_CURLY, RIGHT_DOUBLE_CURLY], "\"")
 }
 
+// ── Closest-match hint ──
+
+/// Similarity floor below which a line is not worth suggesting.
+const HINT_SIMILARITY_FLOOR: f64 = 0.3;
+/// Number of candidate sections shown in the hint.
+const HINT_MAX_CANDIDATES: usize = 3;
+/// Context lines rendered on each side of a candidate line.
+const HINT_CONTEXT_LINES: usize = 2;
+/// Byte cap on the rendered hint (UTF-8-safe truncation).
+const HINT_MAX_BYTES: usize = 1_536;
+
+/// Best-effort "did you mean" hint for a failed exact match.
+///
+/// Anchors on the first non-blank line of `old_string`, scores every
+/// content line with normalized Levenshtein similarity, keeps the top
+/// [`HINT_MAX_CANDIDATES`] above [`HINT_SIMILARITY_FLOOR`], and renders
+/// each as a line-numbered snippet with [`HINT_CONTEXT_LINES`] context
+/// lines (snippets joined by `---`). Returns `None` when nothing scores
+/// above the floor — the caller keeps its bare error in that case.
+pub fn closest_match_hint(old_string: &str, content: &str) -> Option<String> {
+    let anchor = old_string.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.is_empty() {
+        return None;
+    }
+
+    let mut scored: Vec<(usize, f64)> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(i, line)| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            let score = strsim::normalized_levenshtein(anchor, trimmed);
+            (score > HINT_SIMILARITY_FLOOR).then_some((i, score))
+        })
+        .collect();
+    if scored.is_empty() {
+        return None;
+    }
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    scored.truncate(HINT_MAX_CANDIDATES);
+    // Present candidates in file order once selected.
+    scored.sort_by_key(|(i, _)| *i);
+
+    let snippets: Vec<String> = scored
+        .iter()
+        .map(|&(idx, _)| {
+            let start = idx.saturating_sub(HINT_CONTEXT_LINES);
+            let end = (idx + HINT_CONTEXT_LINES + 1).min(lines.len());
+            lines[start..end]
+                .iter()
+                .enumerate()
+                .map(|(j, line)| format!("{:>4}| {line}", start + j + 1))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .collect();
+
+    let hint = snippets.join("\n---\n");
+    Some(coco_utils_string::take_bytes_at_char_boundary(&hint, HINT_MAX_BYTES).to_string())
+}
+
 /// Find the actual string in file content that matches the search string,
 /// accounting for quote normalization.
 ///

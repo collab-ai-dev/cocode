@@ -991,6 +991,11 @@ async fn compress_and_cap_stdout(
     let filtered = super::bash_rtk::apply_post_exec_filter(ctx, cmd, exit_code, raw_stdout).await;
     let builtin_fired = filtered.is_some();
     let effective = filtered.as_deref().unwrap_or(raw_stdout);
+    // ANSI strip on the always-path: the rtk filter strips when it fires,
+    // but the unfiltered fall-through must stay escape-free too — models
+    // copy escape sequences into file writes. Strip BEFORE the byte cap so
+    // escapes don't consume the budget and the cap can't cut mid-sequence.
+    let effective = coco_utils_string::strip_ansi(effective);
     (
         decode_capped(effective.as_bytes(), max_bytes),
         builtin_fired,
@@ -1199,7 +1204,10 @@ async fn execute_via_task_runtime(
                 max_bytes,
             )
             .await;
-            let stderr = decode_capped(outputs.stderr.as_bytes(), max_bytes);
+            let stderr = decode_capped(
+                coco_utils_string::strip_ansi(&outputs.stderr).as_bytes(),
+                max_bytes,
+            );
             // Strip + record Claude Code hints so the model never sees the tag.
             let stdout = maybe_strip_and_record_hints(stdout, cmd.original());
             let mut result_obj = serde_json::json!({
@@ -1441,7 +1449,10 @@ async fn execute_foreground(
     // Stripping runs unconditionally (subagent output must stay clean too);
     // recording is best-effort and never affects the tool result.
     let stdout = maybe_strip_and_record_hints(stdout, cmd.original());
-    let stderr = decode_capped(cmd_result.stderr.as_bytes(), max_bytes);
+    let stderr = decode_capped(
+        coco_utils_string::strip_ansi(&cmd_result.stderr).as_bytes(),
+        max_bytes,
+    );
     let exit_code = cmd_result.exit_code;
 
     // R5-T14 + R6-T17 + R7-T12: structured output envelope:

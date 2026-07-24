@@ -30,6 +30,9 @@ fn parse_raw_arguments_like_adapter(raw: &str) -> serde_json::Value {
 
 pub enum MockResponse {
     Text(String),
+    /// Reasoning-only response: thinking content with no visible text and
+    /// no tool calls (weak reasoning models stalling mid-task).
+    ReasoningOnly(String),
     ToolCall {
         tool_name: String,
         input: serde_json::Value,
@@ -131,6 +134,10 @@ impl MockResponse {
         Self::Text(s.to_string())
     }
 
+    pub fn reasoning_only(s: &str) -> Self {
+        Self::ReasoningOnly(s.to_string())
+    }
+
     pub fn tool_call(name: &str, input: serde_json::Value) -> Self {
         Self::ToolCall {
             tool_name: name.to_string(),
@@ -149,6 +156,15 @@ impl MockResponse {
                     text,
                     provider_metadata: None,
                 })],
+                StopReason::EndTurn,
+            ),
+            Self::ReasoningOnly(text) => (
+                vec![AssistantContentPart::Reasoning(
+                    coco_llm_types::ReasoningPart {
+                        text,
+                        provider_metadata: None,
+                    },
+                )],
                 StopReason::EndTurn,
             ),
             Self::ToolCall { tool_name, input } => (

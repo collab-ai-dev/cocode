@@ -90,7 +90,11 @@ pub async fn watchdog(
                     agent_id: agent_id.clone(),
                     output_file: output_file.clone(),
                     description: description.clone(),
-                    kind: NotificationKind::Stall { output_tail: tail },
+                    kind: NotificationKind::Stall {
+                        // Model-facing tail must stay ANSI-free — interactive
+                        // prompts are exactly where escapes concentrate.
+                        output_tail: coco_utils_string::strip_ansi(&tail).into_owned(),
+                    },
                 };
                 sink.push(n).await;
                 // One-shot per stall episode.

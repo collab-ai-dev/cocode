@@ -299,6 +299,22 @@ impl QueryEngine {
                         prepared.permission_resolution_detail.clone();
                     call_ctx.approval_feedback = prepared.approval_feedback.clone();
                     let approval_content_message = prepared.approval_content_message.clone();
+                    // Loop-guardrail hard stop — mirrors the batch runner's
+                    // pre-execution check so the two paths cannot drift.
+                    if let Some(guard) = call_ctx.loop_guardrail.as_ref()
+                        && let Some(block) = guard
+                            .check_block_before_call(&prepared.tool_id, effective_input.as_value())
+                    {
+                        return crate::tool_outcome_builder::build_early_outcome(
+                            prepared.tool_use_id.clone(),
+                            prepared.tool_id.clone(),
+                            prepared.provider_tool_name.as_str(),
+                            prepared.model_index,
+                            coco_tool_runtime::ToolCallErrorKind::GuardrailBlocked,
+                            &block.render_synthetic_result(),
+                            None,
+                        );
+                    }
                     let execute_result = tokio::select! {
                         r = prepared.tool.execute(effective_input.as_value().clone(), &call_ctx) => r,
                         () = call_ctx.abort.cancelled() => Err(coco_tool_runtime::ToolError::Cancelled),
@@ -317,6 +333,7 @@ impl QueryEngine {
                             orchestration_ctx,
                             hook_tx: hook_tx.as_ref(),
                             tool_output_store: ctx.tool_output_store.clone(),
+                            loop_guardrail: call_ctx.loop_guardrail.clone(),
                             approval_content_message,
                         },
                     )

@@ -544,6 +544,9 @@ pub struct ToolUseContext {
     pub session_id_for_history: Option<String>,
     /// Session-scoped store used by tool-result persistence helpers.
     pub tool_output_store: Option<crate::ToolOutputStore>,
+    /// Per-engine-run repeated-tool-call guardrail state. `None` when
+    /// `tool.loop_guardrail.level = "off"` (or in bare test contexts).
+    pub loop_guardrail: Option<crate::LoopGuardrailHandle>,
     /// Path to the session transcript, used for post-clear implementation
     /// hints after plan approval.
     pub transcript_path: Option<PathBuf>,
@@ -747,6 +750,7 @@ impl ToolUseContext {
             config_home: self.config_home.clone(),
             session_id_for_history: self.session_id_for_history.clone(),
             tool_output_store: self.tool_output_store.clone(),
+            loop_guardrail: self.loop_guardrail.clone(),
             transcript_path: self.transcript_path.clone(),
             approval_feedback: self.approval_feedback.clone(),
             permission_resolution_detail: self.permission_resolution_detail.clone(),
@@ -1056,6 +1060,7 @@ impl ToolUseContext {
             config_home: None,
             session_id_for_history: None,
             tool_output_store: None,
+            loop_guardrail: None,
             transcript_path: None,
             approval_feedback: None,
             permission_resolution_detail: None,
