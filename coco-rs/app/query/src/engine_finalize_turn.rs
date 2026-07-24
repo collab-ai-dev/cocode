@@ -609,9 +609,66 @@ impl QueryEngine {
         // baseline + chars/4 estimate of the tail. When the marker is
         // unset (resume / post-compact / first turn) it falls back to
         // a full walk — same accuracy as the previous chars/4-only path.
-        let estimated_tokens = history.tokens_with_last_usage();
+        let mut estimated_tokens = history.tokens_with_last_usage();
         let tool_calls_last_turn =
             coco_messages::count_tool_calls_in_last_assistant_turn(history.as_slice());
+
+        // Step 0.7 (opt-in): proactive tool-result prune for large-window
+        // models. The percent-of-window auto-compact threshold barely ever
+        // fires on a 1M-token window, so old tool results ride in history
+        // and are re-billed every turn. When estimated tokens exceed
+        // `micro.proactive_prune_tokens`, run the no-LLM prune — but commit
+        // only when the measured reclaim clears
+        // `proactive_prune_min_reclaim_tokens`: rewriting sent history
+        // invalidates the provider prompt-cache prefix, so the hysteresis
+        // keeps cache breaks episodic/amortized like a compaction boundary.
+        // Offload pointers survive (pointer-bearing results keep their
+        // recovery footer), so recovery is preserved.
+        if let Some(prune_threshold) = self.config.compact.micro.proactive_prune_tokens
+            && self.config.compact.micro.enabled
+            && estimated_tokens >= prune_threshold
+        {
+            let min_reclaim = self.config.compact.micro.proactive_prune_min_reclaim_tokens;
+            let reclaim =
+                coco_compact::measure_micro_compact_reclaim(history.as_slice(), micro_keep);
+            if reclaim >= min_reclaim {
+                let pre_prune_tokens = estimated_tokens;
+                let result = history
+                    .with_owned_messages(|msgs| coco_compact::micro_compact(msgs, micro_keep));
+                let cleared = result.messages_cleared;
+                estimated_tokens = history.tokens_with_last_usage();
+                info!(
+                    cleared,
+                    reclaim,
+                    pre_prune_tokens,
+                    post_prune_tokens = estimated_tokens,
+                    "proactive tool-result prune committed"
+                );
+                let _ = emit_protocol(
+                    event_tx,
+                    ServerNotification::ContextCompacted(coco_types::ContextCompactedParams {
+                        removed_messages: cleared,
+                        summary_tokens: 0,
+                        trigger: coco_types::CompactTrigger::Auto,
+                        pre_tokens: Some(pre_prune_tokens),
+                        post_tokens: Some(estimated_tokens),
+                    }),
+                )
+                .await;
+                // The next response's cache_read drop is from us, not a
+                // real break.
+                let qs = self.query_source_label();
+                self.notify_model_cache_deletion(qs).await;
+            } else {
+                tracing::debug!(
+                    target: "coco_query::compact_decision",
+                    estimated_tokens,
+                    reclaim,
+                    min_reclaim,
+                    "proactive prune deferred: reclaim below the cache-break floor"
+                );
+            }
+        }
 
         // Bare mode skips the entire post-turn fan-out (promptSuggestion +
         // extractMemories + sessionMemory + autoDream). Used by `--bare`
@@ -815,6 +872,28 @@ impl QueryEngine {
                             threshold = coco_compact::types::MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES,
                             "auto compaction skipped after repeated failures"
                         );
+                        // Surface the skip like the rapid-refill breaker
+                        // does — a silently-open breaker leaves the user
+                        // watching the context climb with no explanation.
+                        // Once per open episode (the decision repeats every
+                        // over-threshold turn).
+                        let show_notice = {
+                            let mut state = self.auto_compact_state.lock().await;
+                            state.take_failure_breaker_notice()
+                        };
+                        if show_notice {
+                            let msg = coco_messages::create_assistant_error_message(
+                                &format!(
+                                    "Auto-compaction is paused: the last \
+                                     {consecutive_failures} attempts failed in a row. \
+                                     Run /compact to retry manually, or /clear to start fresh."
+                                ),
+                                None,
+                                Some("invalid_request"),
+                            );
+                            crate::history_sync::history_push_and_emit(history, msg, event_tx)
+                                .await;
+                        }
                     }
                     coco_compact::AutoCompactAttemptDecision::RapidRefillBreakerTripped {
                         consecutive_rapid_refills,

@@ -70,6 +70,7 @@ fn guidance_appends_to_api_prompt_clone_only() {
         reference_max_tokens: None,
         reference_temperature: None,
         aggregator_temperature: None,
+        reference_timeout_secs: None,
     };
     let next = attach_reference_guidance(
         &params,
@@ -102,6 +103,7 @@ fn user_turn_cache_key_is_turn_scoped_and_ignores_synthetic_context() {
         reference_max_tokens: None,
         reference_temperature: None,
         aggregator_temperature: None,
+        reference_timeout_secs: None,
     };
     let base_prompt = vec![
         LlmMessage::system(REFERENCE_SYSTEM_PROMPT),
@@ -145,6 +147,7 @@ fn per_iteration_cache_key_is_disabled() {
         reference_max_tokens: None,
         reference_temperature: None,
         aggregator_temperature: None,
+        reference_timeout_secs: None,
     };
     let prompt = vec![LlmMessage::user_text("prompt")];
     let turn_id = coco_types::TurnId::from("turn-1");
@@ -164,6 +167,7 @@ async fn moa_events_surface_reference_lifecycle_and_thinking_block() {
         reference_max_tokens: None,
         reference_temperature: None,
         aggregator_temperature: None,
+        reference_timeout_secs: None,
     };
     let output = ReferenceOutput {
         index: 0,

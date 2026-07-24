@@ -134,6 +134,10 @@ pub struct AutoCompactState {
     compacted: bool,
     turns_since_compact: i32,
     consecutive_rapid_refills: i32,
+    /// Once-latch for the user-facing failure-breaker notice: the open
+    /// breaker repeats every over-threshold turn, but the transcript
+    /// message should appear once per open episode.
+    failure_breaker_notified: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -199,6 +203,16 @@ impl AutoCompactState {
         }
     }
 
+    /// One-shot claim of the user-facing failure-breaker notice. Returns
+    /// `true` exactly once per open episode; success/reset re-arms it.
+    pub fn take_failure_breaker_notice(&mut self) -> bool {
+        if self.failure_breaker_notified {
+            return false;
+        }
+        self.failure_breaker_notified = true;
+        true
+    }
+
     /// Record a successful auto/session-memory compact.
     pub fn record_success(&mut self, timestamp_ms: i64, consecutive_rapid_refills: i32) {
         self.failure_count = 0;
@@ -206,6 +220,7 @@ impl AutoCompactState {
         self.compacted = true;
         self.turns_since_compact = 0;
         self.consecutive_rapid_refills = consecutive_rapid_refills.max(0);
+        self.failure_breaker_notified = false;
     }
 
     /// Record a failed auto-compact attempt.

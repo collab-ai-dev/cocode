@@ -537,6 +537,11 @@ impl QueryEngine {
             .init_loop_state(turn_messages, &event_tx, history)
             .await;
 
+        // Preflight-compaction one-shot: when the pre-send blocking gate
+        // trips, one compaction attempt runs before the terminal Block. A
+        // second trip in the same cycle is genuinely unrecoverable.
+        let mut preflight_compact_attempted = false;
+
         loop {
             if self.cancel.is_cancelled() {
                 // Single writer for the user-cancel marker (dedup +
@@ -732,6 +737,34 @@ impl QueryEngine {
                     estimated_tokens,
                     context_window,
                 } => {
+                    // Preflight compact (hermes `929c95259`): the assembled
+                    // request exceeds the window, but the turn is not lost
+                    // yet — compact and rebuild instead of dying. Falls
+                    // through to the terminal Block when compaction was
+                    // already tried this cycle or didn't apply.
+                    if !preflight_compact_attempted {
+                        preflight_compact_attempted = true;
+                        tracing::warn!(
+                            estimated_tokens,
+                            context_window,
+                            "pre-send blocking limit hit — attempting preflight compaction"
+                        );
+                        let outcome = self
+                            .try_full_compact(
+                                history,
+                                &event_tx,
+                                coco_types::CompactTrigger::Auto,
+                                /*custom_instructions*/ None,
+                            )
+                            .await;
+                        if matches!(outcome, coco_compact::CompactOutcome::Applied) {
+                            // Rebuild the request from the compacted
+                            // history; this retry is runtime policy, not a
+                            // model turn.
+                            turn_state.count_next_iteration_as_turn = false;
+                            continue;
+                        }
+                    }
                     let terminal_result = self
                         .handle_blocking_limit_terminal(
                             &consts,

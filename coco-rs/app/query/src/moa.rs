@@ -40,6 +40,9 @@ static USER_TURN_REFERENCE_CACHE: Lazy<Mutex<LruCache<String, Vec<ReferenceOutpu
     Lazy::new(|| Mutex::new(LruCache::new(USER_TURN_REFERENCE_CACHE_CAPACITY)));
 
 const MAX_REFERENCE_QUERY_ATTEMPTS: usize = 3;
+/// Default per-reference wall-clock bound. One slow advisor must not stall
+/// the whole fan-out; the aggregator runs with whatever came back.
+const DEFAULT_REFERENCE_TIMEOUT_SECS: u64 = 120;
 const TOOL_RESULT_TEXT_BUDGET: usize = 4_000;
 const REFERENCE_GUIDANCE_TEXT_BUDGET: usize = 24_000;
 const REFERENCE_SYSTEM_PROMPT: &str = "\
@@ -48,7 +51,11 @@ acting agent and you do not execute tools, browse, run commands, or access \
 files directly. A separate aggregator model will act on the task.\n\n\
 Analyze the conversation state and provide concise, concrete guidance for the \
 aggregator: next steps, tool-use strategy, risks, disagreements, and anything \
-the acting agent may be missing. Do not apologize for lacking access.";
+the acting agent may be missing. Do not apologize for lacking access.\n\n\
+NEVER claim to have executed a tool, run a command, edited a file, or \
+fetched a page yourself — you cannot. Phrase suggestions as recommendations \
+for the acting agent (\"run X and check Y\"), never as completed actions \
+(\"I ran X\").";
 const ADVISORY_INSTRUCTION: &str = "\
 The conversation above is the current state of the task. Give your best \
 judgement about what should happen next and what risks or mistakes you see.";
@@ -73,6 +80,7 @@ pub(crate) async fn maybe_attach_moa_guidance(
         event_tx,
         turn_id,
         role,
+        Some(&engine.cancel),
     )
     .await;
     attach_reference_guidance(params, &endpoint, &references)
@@ -105,6 +113,7 @@ pub(crate) async fn maybe_attach_moa_guidance_for_query_once(
         event_tx,
         turn_id,
         role,
+        /*cancel*/ None,
     )
     .await;
     attach_reference_guidance(params, &endpoint, &references)
@@ -150,6 +159,7 @@ pub async fn prepare_moa_query_once_params_with_usage_accounting(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_references(
     usage_recorder: MoaReferenceUsageRecorder<'_>,
     model_runtimes: &Arc<ModelRuntimeRegistry>,
@@ -158,6 +168,7 @@ async fn run_references(
     event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
     turn_id: &TurnId,
     role: ModelRole,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
 ) -> Vec<ReferenceOutput> {
     let count = endpoint.reference_models.len();
     let prompt = reference_prompt(&params.prompt);
@@ -196,14 +207,41 @@ async fn run_references(
             reference_params.query_source = Some(format!(
                 "moa_reference:{preset}:{idx}:{provider}/{model_id}"
             ));
+            let timeout_secs = endpoint
+                .reference_timeout_secs
+                .map(|v| v.max(0) as u64)
+                .unwrap_or(DEFAULT_REFERENCE_TIMEOUT_SECS);
             async move {
                 let started = std::time::Instant::now();
                 let selection = ProviderModelSelection {
                     provider: provider.clone(),
                     model_id: model_id.clone(),
                 };
-                let outcome =
-                    query_reference_with_retry(&model_runtimes, selection, &reference_params).await;
+                // Per-reference wall-clock bound (0 = unbounded): a stalled
+                // advisor becomes a `[failed: …]` marker instead of holding
+                // the aggregator hostage.
+                let query =
+                    query_reference_with_retry(&model_runtimes, selection, &reference_params);
+                let outcome = if timeout_secs == 0 {
+                    query.await
+                } else {
+                    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), query)
+                        .await
+                    {
+                        Ok(outcome) => outcome,
+                        Err(_) => {
+                            return ReferenceOutput {
+                                index: idx,
+                                count,
+                                provider,
+                                model_id,
+                                text: String::new(),
+                                failed: Some(format!("reference timed out after {timeout_secs}s")),
+                                usage: None,
+                            };
+                        }
+                    }
+                };
                 match outcome {
                     ModelRuntimeQueryOutcome::Success { result, .. } => ReferenceOutput {
                         index: idx,
@@ -235,7 +273,24 @@ async fn run_references(
                 }
             }
         });
-    let mut outputs = join_all(tasks).await;
+    // User interrupt aborts the fan-out wait: return empty so the caller
+    // attaches no guidance — the surrounding turn is being cancelled and
+    // must not block on slow advisors. Nothing is cached on this path.
+    let mut outputs = match cancel {
+        Some(token) => {
+            tokio::select! {
+                outputs = join_all(tasks) => outputs,
+                () = token.cancelled() => {
+                    tracing::info!(
+                        preset = %endpoint.preset_name,
+                        "MoA reference fan-out aborted by interrupt"
+                    );
+                    return Vec::new();
+                }
+            }
+        }
+        None => join_all(tasks).await,
+    };
     outputs.sort_by_key(|output| output.index);
     for output in &outputs {
         emit_reference_completed(event_tx, turn_id, role, endpoint, output).await;

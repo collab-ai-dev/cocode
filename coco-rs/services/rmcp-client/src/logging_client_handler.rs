@@ -27,6 +27,10 @@ pub(crate) struct LoggingClientHandler {
     client_info: ClientInfo,
     send_elicitation: Arc<SendElicitation>,
     progress_epoch: Arc<AtomicU64>,
+    /// Fired on `notifications/tools/list_changed`. Must never do I/O
+    /// inline (it runs on the transport task) — the installed callback
+    /// only spawns/schedules.
+    tool_list_changed: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl LoggingClientHandler {
@@ -34,11 +38,13 @@ impl LoggingClientHandler {
         client_info: ClientInfo,
         send_elicitation: SendElicitation,
         progress_epoch: Arc<AtomicU64>,
+        tool_list_changed: Option<Arc<dyn Fn() + Send + Sync>>,
     ) -> Self {
         Self {
             client_info,
             send_elicitation: Arc::new(send_elicitation),
             progress_epoch,
+            tool_list_changed,
         }
     }
 }
@@ -95,6 +101,9 @@ impl ClientHandler for LoggingClientHandler {
 
     async fn on_tool_list_changed(&self, _context: NotificationContext<RoleClient>) {
         info!("MCP server tool list changed");
+        if let Some(notify) = &self.tool_list_changed {
+            notify();
+        }
     }
 
     async fn on_prompt_list_changed(&self, _context: NotificationContext<RoleClient>) {

@@ -1291,9 +1291,18 @@ async fn execute_command_hook(
         }
         stdout_prefix = first_line;
         use tokio::io::AsyncReadExt;
-        reader.read_to_string(&mut stdout_rest).await.map_err(|e| {
+        // Bounded read: a misbehaving hook must not blow the context (or
+        // process memory) in one shot. Over-cap output is truncated with a
+        // visible marker; UTF-8 boundary cuts degrade to lossy.
+        let mut raw = Vec::new();
+        let mut limited = reader.take(HOOK_OUTPUT_CAP_BYTES as u64 + 1);
+        limited.read_to_end(&mut raw).await.map_err(|e| {
             crate::HooksError::exec_failed(format!("failed to read hook stdout: {e}"))
         })?;
+        // Drain (and discard) anything past the cap so the child never
+        // blocks on a full pipe and can exit normally.
+        let _ = tokio::io::copy(&mut limited.into_inner(), &mut tokio::io::sink()).await;
+        stdout_rest = bound_hook_output(raw);
     }
 
     let status = tokio::time::timeout(timeout, child.wait())
@@ -1331,17 +1340,45 @@ fn first_line_is_async(line: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Byte cap on captured hook stdout/stderr. Hook-injected context rides
+/// into the model prompt, so an unbounded read lets one misbehaving hook
+/// blow the context (hermes #20468 spills to disk; coco truncates with a
+/// visible marker — the offload seam is not reachable from this crate).
+const HOOK_OUTPUT_CAP_BYTES: usize = 65_536;
+
+/// Convert a (possibly over-cap) raw read into bounded output text. The
+/// reader was limited to cap+1 bytes, so one extra byte signals
+/// truncation without ever buffering the full stream.
+fn bound_hook_output(mut raw: Vec<u8>) -> String {
+    let truncated = raw.len() > HOOK_OUTPUT_CAP_BYTES;
+    if truncated {
+        raw.truncate(HOOK_OUTPUT_CAP_BYTES);
+    }
+    let mut text = String::from_utf8_lossy(&raw).into_owned();
+    if truncated {
+        tracing::warn!(
+            cap_bytes = HOOK_OUTPUT_CAP_BYTES,
+            "hook output exceeded the byte cap and was truncated"
+        );
+        text.push_str("\n[hook output truncated: exceeded the 64 KB cap]");
+    }
+    text
+}
+
 async fn read_to_string_opt<R>(reader: Option<R>) -> String
 where
     R: tokio::io::AsyncRead + Unpin,
 {
-    let Some(mut reader) = reader else {
+    let Some(reader) = reader else {
         return String::new();
     };
-    let mut out = String::new();
+    let mut raw = Vec::new();
     use tokio::io::AsyncReadExt;
-    let _ = reader.read_to_string(&mut out).await;
-    out
+    let mut limited = reader.take(HOOK_OUTPUT_CAP_BYTES as u64 + 1);
+    let _ = limited.read_to_end(&mut raw).await;
+    // Drain past-cap output so the child never blocks on a full pipe.
+    let _ = tokio::io::copy(&mut limited.into_inner(), &mut tokio::io::sink()).await;
+    bound_hook_output(raw)
 }
 
 fn spawn_registry_command(

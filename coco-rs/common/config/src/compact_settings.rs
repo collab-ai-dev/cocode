@@ -70,6 +70,10 @@ pub struct PartialMicroCompactSettings {
     /// Opt-in: per-turn cleanup of `[file unchanged]` placeholders.
     /// No TS equivalent; default `false`.
     pub clear_file_unchanged_stubs_enabled: Option<bool>,
+    /// Proactive prune trigger tokens (large-window models). `None` = off.
+    pub proactive_prune_tokens: Option<i64>,
+    /// Min estimated tokens a proactive prune must reclaim to commit.
+    pub proactive_prune_min_reclaim_tokens: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -228,6 +232,17 @@ pub struct MicroCompactConfig {
     /// Opt-in: per-turn `[file unchanged]` stub rewrite. No TS equivalent.
     /// Default off.
     pub clear_file_unchanged_stubs_enabled: bool,
+    /// Opt-in proactive prune trigger for large-window models: when the
+    /// estimated history tokens exceed this, run the no-LLM tool-result
+    /// prune even though the percent-of-window auto-compact threshold is far
+    /// away (a 1M-window model re-bills old tool output every turn).
+    /// `None` = off.
+    pub proactive_prune_tokens: Option<i64>,
+    /// Reclaim hysteresis: a proactive prune only commits when it frees
+    /// at least this many estimated tokens — rewriting sent history
+    /// breaks the provider prompt-cache prefix, so small reclaims are
+    /// deferred until the batch is worth the break.
+    pub proactive_prune_min_reclaim_tokens: i64,
 }
 
 impl Default for MicroCompactConfig {
@@ -238,6 +253,8 @@ impl Default for MicroCompactConfig {
             time_based: TimeBasedMcConfig::default(),
             count_based_enabled: false,
             clear_file_unchanged_stubs_enabled: false,
+            proactive_prune_tokens: None,
+            proactive_prune_min_reclaim_tokens: 4096,
         }
     }
 }
@@ -504,6 +521,16 @@ impl CompactConfig {
         }
         if let Some(v) = part.micro.count_based_enabled {
             config.micro.count_based_enabled = v;
+        }
+        if let Some(v) = part.micro.proactive_prune_tokens.filter(|v| *v > 0) {
+            config.micro.proactive_prune_tokens = Some(v);
+        }
+        if let Some(v) = part
+            .micro
+            .proactive_prune_min_reclaim_tokens
+            .filter(|v| *v >= 0)
+        {
+            config.micro.proactive_prune_min_reclaim_tokens = v;
         }
         if let Some(v) = part.micro.clear_file_unchanged_stubs_enabled {
             config.micro.clear_file_unchanged_stubs_enabled = v;

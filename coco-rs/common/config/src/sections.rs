@@ -1680,6 +1680,10 @@ pub struct PartialMcpRuntimeSettings {
     pub tool_exposure: Option<coco_types::McpToolExposure>,
     /// Per-server overrides keyed by MCP server name.
     pub server_tool_exposure: HashMap<String, coco_types::McpToolExposure>,
+    /// Keepalive ping cadence for HTTP/SSE MCP servers, seconds.
+    /// Streamable-HTTP session TTLs can be as low as ~15 s; a periodic
+    /// ping keeps them alive. `0` disables; values below 5 clamp to 5.
+    pub keepalive_interval_secs: Option<i32>,
 }
 
 /// Settings-derived MCP server activation policy, resolved once at the
@@ -1710,6 +1714,10 @@ pub struct McpRuntimeConfig {
     pub tool_exposure: coco_types::McpToolExposure,
     /// Per-server exposure overrides keyed by MCP server name.
     pub server_tool_exposure: HashMap<String, coco_types::McpToolExposure>,
+    /// Keepalive ping cadence for HTTP/SSE MCP servers, seconds.
+    /// See `PartialMcpRuntimeSettings::keepalive_interval_secs`; `None`
+    /// uses the built-in default (180 s).
+    pub keepalive_interval_secs: Option<i32>,
 }
 
 impl McpRuntimeConfig {
@@ -1736,6 +1744,9 @@ impl McpRuntimeConfig {
         }
         if let Some(v) = env.get_i32(EnvKey::CocoMcpToolIdleTimeoutMs) {
             config.tool_idle_timeout_ms = Some(v);
+        }
+        if let Some(v) = settings.merged.mcp_runtime.keepalive_interval_secs {
+            config.keepalive_interval_secs = Some(v);
         }
         if let Some(v) = settings.merged.mcp_runtime.tool_exposure {
             config.tool_exposure = v;

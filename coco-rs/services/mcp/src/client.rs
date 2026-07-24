@@ -39,6 +39,7 @@ use coco_rmcp_client::perform_oauth_login_return_url;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::time::timeout;
+use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
@@ -54,6 +55,15 @@ use crate::types::ScopedMcpServerConfig;
 
 /// Default MCP tool call timeout (ms) — ~27.8 hours.
 const DEFAULT_TOOL_TIMEOUT_MS: u64 = 100_000_000;
+
+/// Default keepalive ping cadence for HTTP/SSE servers. Streamable-HTTP
+/// session TTLs can be as low as ~15 s; a periodic ping keeps them alive
+/// so the first tool call after idle doesn't pay a failed round-trip.
+const DEFAULT_KEEPALIVE_INTERVAL_SECS: u64 = 180;
+/// Clamp floor for a configured keepalive interval.
+const MIN_KEEPALIVE_INTERVAL_SECS: u64 = 5;
+/// Per-ping timeout inside the keepalive loop.
+const KEEPALIVE_PING_TIMEOUT: Duration = Duration::from_secs(30);
 /// Default remote MCP tool-call idle timeout (ms) — 5 minutes of silence.
 const DEFAULT_TOOL_IDLE_TIMEOUT_MS: u64 = 300_000;
 
@@ -122,6 +132,11 @@ pub struct McpConnectionManager {
     /// 15-min on-disk cache of servers that recently required auth, used to
     /// skip doomed connect-401 probes within the window.
     auth_cache: crate::auth_cache::McpNeedsAuthCache,
+    /// Keepalive ping cadence for HTTP/SSE servers, seconds. `0` disables.
+    keepalive_interval_secs: u64,
+    /// Per-server keepalive tasks; aborted on disconnect/replace. Shared
+    /// across cloned managers so any clone can tear a task down.
+    keepalive_tasks: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
 }
 
 impl McpConnectionManager {
@@ -139,6 +154,8 @@ impl McpConnectionManager {
             config_home,
             reconnect_notifier: Arc::new(std::sync::OnceLock::new()),
             auth_cache,
+            keepalive_interval_secs: DEFAULT_KEEPALIVE_INTERVAL_SECS,
+            keepalive_tasks: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -172,6 +189,13 @@ impl McpConnectionManager {
                 0
             } else {
                 tool_idle_timeout_ms.max(1_000) as u64
+            };
+        }
+        if let Some(keepalive) = config.keepalive_interval_secs {
+            manager.keepalive_interval_secs = if keepalive <= 0 {
+                0
+            } else {
+                (keepalive as u64).max(MIN_KEEPALIVE_INTERVAL_SECS)
             };
         }
         manager
@@ -268,6 +292,14 @@ impl McpConnectionManager {
                 // Success evicts any stale needs-auth marker so a later
                 // bootstrap doesn't skip this now-authenticated server.
                 self.auth_cache.clear(server_name).await;
+                // Keepalive applies to HTTP/SSE only — stdio process
+                // liveness is already observable, and pings there are noise.
+                if matches!(
+                    config.config,
+                    McpServerConfig::Sse(_) | McpServerConfig::Http(_)
+                ) {
+                    self.spawn_keepalive(server_name).await;
+                }
                 Ok(())
             }
             Err(e) => {
@@ -295,6 +327,60 @@ impl McpConnectionManager {
                 }
                 Err(e)
             }
+        }
+    }
+
+    /// Spawn (or replace) the keepalive ping loop for a connected HTTP/SSE
+    /// server. The ping keeps short-TTL streamable-HTTP sessions alive and
+    /// rides `RmcpClient::ping`'s session recovery, so an expired session
+    /// re-handshakes on the spot. A server that rejects `ping` as
+    /// method-not-found stops the loop quietly (no error spam).
+    async fn spawn_keepalive(&self, server_name: &str) {
+        if self.keepalive_interval_secs == 0 {
+            return;
+        }
+        let Ok(client) = self.rmcp_client(server_name).await else {
+            return;
+        };
+        let interval = Duration::from_secs(self.keepalive_interval_secs);
+        let name = server_name.to_string();
+        let handle = tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            ticker.tick().await; // first tick fires immediately — skip it
+            loop {
+                ticker.tick().await;
+                match client.ping(Some(KEEPALIVE_PING_TIMEOUT)).await {
+                    Ok(()) => {}
+                    Err(error) => {
+                        let text = error.to_string();
+                        if text.contains("-32601")
+                            || text.to_ascii_lowercase().contains("method not found")
+                        {
+                            debug!(
+                                server = %name,
+                                "MCP server does not support ping; keepalive stopped"
+                            );
+                            return;
+                        }
+                        // Recovery already ran inside `ping` (404 path);
+                        // a persistent failure stays reactive — the next
+                        // real call goes through the same recovery.
+                        warn!(server = %name, %error, "MCP keepalive ping failed");
+                    }
+                }
+            }
+        });
+        let mut tasks = self.keepalive_tasks.lock().await;
+        if let Some(previous) = tasks.insert(server_name.to_string(), handle) {
+            previous.abort();
+        }
+    }
+
+    /// Abort and forget the keepalive task for a server, if any.
+    async fn abort_keepalive(&self, server_name: &str) {
+        if let Some(handle) = self.keepalive_tasks.lock().await.remove(server_name) {
+            handle.abort();
         }
     }
 
@@ -465,6 +551,38 @@ impl McpConnectionManager {
             }
         };
 
+        // tools/list_changed → refresh the stored tool list off the
+        // transport task, then nudge the app-layer listener to re-reconcile
+        // the ToolRegistry (same seam as post-OAuth reconnect). Installed
+        // before `initialize` because the client handler is built there.
+        {
+            let connections = Arc::clone(&self.connections);
+            let rmcp_clients = Arc::clone(&self.rmcp_clients);
+            let notifier = Arc::clone(&self.reconnect_notifier);
+            let name = server_name.to_string();
+            client.set_tool_list_changed_notifier(Arc::new(move || {
+                let connections = Arc::clone(&connections);
+                let rmcp_clients = Arc::clone(&rmcp_clients);
+                let notifier = Arc::clone(&notifier);
+                let name = name.clone();
+                // Never do I/O inline on the transport task.
+                tokio::spawn(async move {
+                    match refresh_connected_server_tools(&connections, &rmcp_clients, &name).await {
+                        Ok(()) => {
+                            if let Some(tx) = notifier.get() {
+                                let _ = tx.send(name);
+                            }
+                        }
+                        Err(error) => warn!(
+                            server = %name,
+                            %error,
+                            "MCP tools/list_changed refresh failed"
+                        ),
+                    }
+                });
+            }));
+        }
+
         // Initialize MCP handshake
         let init_params = coco_mcp_types::InitializeRequestParams {
             capabilities: coco_mcp_types::ClientCapabilities {
@@ -493,15 +611,7 @@ impl McpConnectionManager {
         // Discover tools
         let tools_result = list_tools_with_retry(&client, server_name).await;
         let tools: Vec<McpToolDefinition> = match tools_result {
-            Ok(result) => result
-                .tools
-                .into_iter()
-                .map(|t| McpToolDefinition {
-                    name: t.name,
-                    description: t.description,
-                    input_schema: serde_json::to_value(t.input_schema).unwrap_or_default(),
-                })
-                .collect(),
+            Ok(result) => map_tool_definitions(result),
             Err(e) => {
                 warn!(server = %server_name, "failed to list tools: {e}");
                 Vec::new()
@@ -1267,6 +1377,7 @@ impl McpConnectionManager {
 
     /// Disconnect a specific server.
     pub async fn disconnect(&self, server_name: &str) {
+        self.abort_keepalive(server_name).await;
         let mut conns = self.connections.write().await;
         conns.remove(server_name);
         let mut clients = self.rmcp_clients.write().await;
@@ -1287,6 +1398,12 @@ impl McpConnectionManager {
 
     /// Disconnect all servers.
     pub async fn disconnect_all(&self) {
+        {
+            let mut tasks = self.keepalive_tasks.lock().await;
+            for (_, handle) in tasks.drain() {
+                handle.abort();
+            }
+        }
         let mut conns = self.connections.write().await;
         let count = conns.len();
         conns.clear();
@@ -1393,6 +1510,55 @@ async fn list_tools_with_retry(
         client.list_tools(None, Some(DEFAULT_INIT_TIMEOUT))
     })
     .await
+}
+
+/// Project a `tools/list` result into the stored definition shape. Shared
+/// by connect-time discovery and the `tools/list_changed` refresh.
+fn map_tool_definitions(result: ListToolsResult) -> Vec<McpToolDefinition> {
+    result
+        .tools
+        .into_iter()
+        .map(|t| McpToolDefinition {
+            name: t.name,
+            description: t.description,
+            input_schema: serde_json::to_value(t.input_schema).unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// Re-list tools on a connected server and update the stored connection
+/// state **in place** — never nuke-and-repave: in-flight tool-call IDs
+/// must stay valid; the ToolRegistry re-reconcile happens at the app layer
+/// via the reconnect-notifier listener, at its own pace.
+async fn refresh_connected_server_tools(
+    connections: &RwLock<HashMap<String, McpConnectionState>>,
+    rmcp_clients: &RwLock<HashMap<String, Arc<RmcpClient>>>,
+    server_name: &str,
+) -> Result<(), McpClientError> {
+    let client = rmcp_clients
+        .read()
+        .await
+        .get(server_name)
+        .cloned()
+        .ok_or_else(|| McpClientError::ServerNotFound {
+            name: server_name.to_string(),
+        })?;
+    let result = list_tools_with_retry(&client, server_name)
+        .await
+        .map_err(|e| McpClientError::ToolCallFailed {
+            message: format!("tools/list after list_changed failed: {e}"),
+        })?;
+    let tools = map_tool_definitions(result);
+    let mut guard = connections.write().await;
+    if let Some(McpConnectionState::Connected(server)) = guard.get_mut(server_name) {
+        info!(
+            server = %server_name,
+            tools = tools.len(),
+            "MCP tool list refreshed after tools/list_changed"
+        );
+        server.tools = tools;
+    }
+    Ok(())
 }
 
 /// List a connected server's resources, mapping into [`McpResource`].

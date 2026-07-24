@@ -74,6 +74,7 @@ pub use compact::strip_reinjected_attachments;
 pub use compact::truncate_head_for_ptl_retry;
 pub use micro::COMPACTABLE_TOOLS;
 pub use micro::collect_compactable_tool_ids;
+pub use micro::measure_micro_compact_reclaim;
 pub use micro::micro_compact;
 pub use micro::time_based_microcompact;
 pub use micro_advanced::MicroCompactBudgetConfig;

@@ -14,6 +14,7 @@
 //! supervisor on top of this boundary.
 
 mod admission;
+mod check_exec;
 mod coordinator;
 mod error;
 mod evidence;
@@ -29,6 +30,7 @@ mod verifier;
 mod test_support;
 
 pub use admission::{AdmissionPermit, AutonomousAdmission};
+pub use check_exec::{CheckExecutor, CommandObservation, DeterministicCheckVerifier};
 pub use coordinator::{CoordinatorOutcome, GoalCompletionCoordinator, GoalTurnResult};
 pub use error::{GoalRuntimeError, Result};
 pub use evidence::{EvidenceStore, InMemoryEvidenceStore};
