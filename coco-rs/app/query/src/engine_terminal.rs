@@ -31,6 +31,26 @@ pub(crate) enum NoToolCallsTerminal {
     },
 }
 
+/// Max nudge retries for clean-but-empty responses per user cycle.
+pub(crate) const MAX_EMPTY_RESPONSE_NUDGES: i32 = 3;
+
+/// Nudge wording when this cycle just executed tools (hermes #9400 case).
+const EMPTY_RESPONSE_NUDGE_AFTER_TOOLS: &str = "You just executed tool calls but returned an empty response. Please process the tool results above and continue with the task.";
+
+/// Generic nudge wording for an empty first response.
+const EMPTY_RESPONSE_NUDGE_GENERIC: &str =
+    "You returned an empty response. Please respond to the request above.";
+
+/// Whether any of the last few history messages is a tool result — picks
+/// the post-tool nudge wording over the generic one.
+fn recent_history_has_tool_result(history: &MessageHistory) -> bool {
+    history
+        .iter()
+        .rev()
+        .take(5)
+        .any(|m| matches!(m.as_ref(), Message::ToolResult(_)))
+}
+
 #[allow(clippy::too_many_arguments)]
 impl QueryEngine {
     pub(crate) async fn handle_blocking_limit_terminal(
@@ -256,6 +276,51 @@ impl QueryEngine {
             turn_state.stop_hook_active = false;
             turn_state.max_tokens_recovery_count = 0;
             return NoToolCallsTerminal::ContinueLoop;
+        }
+
+        // Empty-response nudge: a *clean* stop with neither text nor tool
+        // calls (thinking-only responses count — reasoning is dropped at
+        // the stream-consume seam and never reaches visible output) means
+        // the model stalled mid-task. Nudge and retry instead of silently
+        // ending the turn. Abnormal stops (MaxTokens / ContentFilter /
+        // ContextWindowExceeded) never reach this branch's gate — they
+        // carry their own recovery in `engine_recovery` and fall through
+        // to the normal terminal path here.
+        if response_text.trim().is_empty()
+            && self.config.empty_response_nudge == coco_config::EmptyResponsePolicy::Nudge
+            && matches!(
+                parsed_stop_reason,
+                None | Some(coco_messages::StopReason::EndTurn)
+                    | Some(coco_messages::StopReason::StopSequence)
+            )
+        {
+            if turn_state.empty_response_retries < MAX_EMPTY_RESPONSE_NUDGES {
+                turn_state.empty_response_retries += 1;
+                let nudge = if recent_history_has_tool_result(history) {
+                    EMPTY_RESPONSE_NUDGE_AFTER_TOOLS
+                } else {
+                    EMPTY_RESPONSE_NUDGE_GENERIC
+                };
+                warn!(
+                    turn = turn_state.turn,
+                    retry = turn_state.empty_response_retries,
+                    "empty model response on a clean stop — nudging and retrying"
+                );
+                crate::history_sync::history_push_and_emit(
+                    history,
+                    coco_messages::create_meta_message(nudge),
+                    event_tx,
+                )
+                .await;
+                turn_state.transition = Some(crate::ContinueReason::NextTurn);
+                turn_state.stop_hook_active = false;
+                turn_state.max_tokens_recovery_count = 0;
+                return NoToolCallsTerminal::ContinueLoop;
+            }
+            warn!(
+                turn = turn_state.turn,
+                "empty model response persisted after {MAX_EMPTY_RESPONSE_NUDGES} nudges — ending turn"
+            );
         }
 
         self.flush_successful_turn_state(&mut *history).await;

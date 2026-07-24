@@ -377,6 +377,17 @@ fn collapse_text_parts(
 // Cache control helpers
 // ---------------------------------------------------------------------------
 
+/// Preserve a cache breakpoint from a skipped (empty-text) part by moving
+/// it onto the previously converted block — the breakpoint covers the same
+/// prefix. No-op when there is no breakpoint or no previous block.
+fn reattach_cache_control_to_last(cache_control: Option<Value>, result: &mut [Value]) {
+    if let Some(cc) = cache_control
+        && let Some(last) = result.last_mut()
+    {
+        last["cache_control"] = cc;
+    }
+}
+
 /// Get cache control for a user content part, falling back to message-level
 /// cache control on the last part.
 fn get_part_cache_control(
@@ -504,6 +515,16 @@ fn convert_user_part(
 ) {
     match part {
         UserContentPart::Text(text_part) => {
+            // The Messages API rejects empty / whitespace-only text blocks
+            // (HTTP 400 "text content blocks must contain non-whitespace
+            // text") — and a blank block replayed from history wedges the
+            // session behind the same 400 every turn. Skip the part; if it
+            // carried a cache breakpoint, move it to the previous block
+            // (covers the same prefix).
+            if text_part.text.trim().is_empty() {
+                reattach_cache_control_to_last(cache_control, result);
+                return;
+            }
             let mut block = json!({
                 "type": "text",
                 "text": text_part.text,
@@ -690,6 +711,14 @@ fn convert_assistant_part(
                 } else {
                     text_part.text.clone()
                 };
+                // Empty / whitespace-only text blocks 400 on the Messages
+                // API — common after compaction or thinking-only turns
+                // replayed from history. Skip; keep any cache breakpoint
+                // by moving it to the previous block.
+                if text.trim().is_empty() {
+                    reattach_cache_control_to_last(cache_control, result);
+                    return;
+                }
                 let mut block = json!({
                     "type": "text",
                     "text": text,

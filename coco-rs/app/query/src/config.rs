@@ -266,6 +266,10 @@ pub struct QueryEngineConfig {
     /// (no tool calls, `end_turn` stop) but consumed tokens are below 90% of
     /// `max_tokens` budget, inject a nudge meta message and continue.
     pub enable_token_budget_continuation: bool,
+    /// Recovery policy for clean-but-empty model responses (no text, no
+    /// tool calls; thinking-only counts as empty). Resolved from
+    /// `loop.empty_response_nudge`; default nudge-and-retry.
+    pub empty_response_nudge: coco_config::EmptyResponsePolicy,
     /// Resolved compaction configuration (auto / micro / api-native /
     /// session-memory / experimental). Single source of truth — engine
     /// reads only this, never env directly. Env vars are folded in by
@@ -458,6 +462,7 @@ impl Default for QueryEngineConfig {
             disable_all_hooks: false,
             allow_managed_hooks_only: false,
             enable_token_budget_continuation: false,
+            empty_response_nudge: coco_config::EmptyResponsePolicy::default(),
             compact: coco_config::CompactConfig::default(),
             wire_dump: None,
             system_reminder: coco_config::SystemReminderConfig::default(),

@@ -227,6 +227,7 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
 
         let opts = coco_compact::CompactRunOptions {
             keep_recent_rounds: KEEP_RECENT_ROUNDS_FOR_FULL,
+            current_date: Some(chrono::Local::now().format("%Y-%m-%d").to_string()),
             ..Default::default()
         };
 

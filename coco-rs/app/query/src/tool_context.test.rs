@@ -77,6 +77,7 @@ fn factory_with_live_rules(
         agent_catalog: None,
         parent_runtime_snapshot: None,
         live_command_rules,
+        loop_guardrail: None,
     }
 }
 

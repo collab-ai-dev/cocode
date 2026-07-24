@@ -18,7 +18,7 @@ fn test_format_compact_summary_no_tags() {
 
 #[test]
 fn test_get_compact_prompt_includes_preamble() {
-    let prompt = get_compact_prompt(None);
+    let prompt = get_compact_prompt(CompactPromptOptions::default());
     assert!(prompt.starts_with(COMPACT_DIRECTIVE_OPEN));
     assert!(prompt.contains("CRITICAL: Respond with TEXT ONLY"));
     assert!(prompt.contains("Do NOT call any tools"));
@@ -29,9 +29,15 @@ fn test_get_compact_prompt_includes_preamble() {
 fn test_compact_prompts_wrapped_in_directive_tags() {
     use coco_messages::PartialCompactDirection;
     let prompts = [
-        get_compact_prompt(None),
-        get_partial_compact_prompt(None, PartialCompactDirection::Newest),
-        get_partial_compact_prompt(None, PartialCompactDirection::Oldest),
+        get_compact_prompt(CompactPromptOptions::default()),
+        get_partial_compact_prompt(
+            CompactPromptOptions::default(),
+            PartialCompactDirection::Newest,
+        ),
+        get_partial_compact_prompt(
+            CompactPromptOptions::default(),
+            PartialCompactDirection::Oldest,
+        ),
     ];
     for prompt in &prompts {
         assert!(prompt.starts_with(COMPACT_DIRECTIVE_OPEN));
@@ -46,7 +52,10 @@ fn test_compact_prompts_wrapped_in_directive_tags() {
 
 #[test]
 fn test_custom_instructions_land_inside_directive() {
-    let prompt = get_compact_prompt(Some("Focus on Rust code changes"));
+    let prompt = get_compact_prompt(CompactPromptOptions {
+        custom_instructions: Some("Focus on Rust code changes"),
+        current_date: None,
+    });
     let instructions_at = prompt
         .find("Focus on Rust code changes")
         .expect("instructions present");
@@ -61,9 +70,15 @@ fn test_custom_instructions_land_inside_directive() {
 fn test_section6_excludes_directive_in_all_templates() {
     use coco_messages::PartialCompactDirection;
     let prompts = [
-        get_compact_prompt(None),
-        get_partial_compact_prompt(None, PartialCompactDirection::Newest),
-        get_partial_compact_prompt(None, PartialCompactDirection::Oldest),
+        get_compact_prompt(CompactPromptOptions::default()),
+        get_partial_compact_prompt(
+            CompactPromptOptions::default(),
+            PartialCompactDirection::Newest,
+        ),
+        get_partial_compact_prompt(
+            CompactPromptOptions::default(),
+            PartialCompactDirection::Oldest,
+        ),
     ];
     for prompt in &prompts {
         assert!(prompt.contains(SECTION6_EXCLUSION));
@@ -129,7 +144,7 @@ fn test_format_compact_summary_pure_echo_falls_back_nonempty() {
     // consumes everything, so the fallback must re-format the raw text
     // with only bare tags dropped (pre-fix behavior floor) rather than
     // returning an empty summary.
-    let raw = get_compact_prompt(None);
+    let raw = get_compact_prompt(CompactPromptOptions::default());
     let result = format_compact_summary(&raw);
     assert!(!result.trim().is_empty());
     assert!(!result.contains(COMPACT_DIRECTIVE_OPEN));
@@ -164,7 +179,10 @@ fn test_format_compact_summary_deletes_echo_span_with_directive_body() {
 
 #[test]
 fn test_get_compact_prompt_with_custom() {
-    let prompt = get_compact_prompt(Some("Focus on Rust code changes"));
+    let prompt = get_compact_prompt(CompactPromptOptions {
+        custom_instructions: Some("Focus on Rust code changes"),
+        current_date: None,
+    });
     assert!(prompt.contains("Focus on Rust code changes"));
 }
 
@@ -197,8 +215,14 @@ fn test_user_summary_recent_preserved() {
 #[test]
 fn test_partial_compact_prompt_directions_differ() {
     use coco_messages::PartialCompactDirection;
-    let from_prompt = get_partial_compact_prompt(None, PartialCompactDirection::Newest);
-    let up_to_prompt = get_partial_compact_prompt(None, PartialCompactDirection::Oldest);
+    let from_prompt = get_partial_compact_prompt(
+        CompactPromptOptions::default(),
+        PartialCompactDirection::Newest,
+    );
+    let up_to_prompt = get_partial_compact_prompt(
+        CompactPromptOptions::default(),
+        PartialCompactDirection::Oldest,
+    );
     assert!(from_prompt.contains("Current Work"));
     assert!(up_to_prompt.contains("Work Completed"));
     assert!(up_to_prompt.contains("Context for Continuing Work"));
@@ -206,8 +230,86 @@ fn test_partial_compact_prompt_directions_differ() {
 }
 
 #[test]
+fn test_language_rule_present_in_all_templates() {
+    use coco_messages::PartialCompactDirection;
+    let prompts = [
+        get_compact_prompt(CompactPromptOptions::default()),
+        get_partial_compact_prompt(
+            CompactPromptOptions::default(),
+            PartialCompactDirection::Newest,
+        ),
+        get_partial_compact_prompt(
+            CompactPromptOptions::default(),
+            PartialCompactDirection::Oldest,
+        ),
+    ];
+    for prompt in &prompts {
+        assert!(prompt.contains(LANGUAGE_RULE));
+    }
+}
+
+#[test]
+fn test_temporal_anchoring_present_only_with_date() {
+    use coco_messages::PartialCompactDirection;
+    let dated = CompactPromptOptions {
+        custom_instructions: None,
+        current_date: Some("2026-07-24"),
+    };
+    let prompts = [
+        get_compact_prompt(dated),
+        get_partial_compact_prompt(dated, PartialCompactDirection::Newest),
+        get_partial_compact_prompt(dated, PartialCompactDirection::Oldest),
+    ];
+    for prompt in &prompts {
+        assert!(prompt.contains("TEMPORAL ANCHORING: The current date is 2026-07-24."));
+        assert!(prompt.contains("Sent the proposal email to John on 2026-07-24."));
+    }
+    let undated = [
+        get_compact_prompt(CompactPromptOptions::default()),
+        get_partial_compact_prompt(
+            CompactPromptOptions::default(),
+            PartialCompactDirection::Newest,
+        ),
+        get_partial_compact_prompt(
+            CompactPromptOptions::default(),
+            PartialCompactDirection::Oldest,
+        ),
+    ];
+    for prompt in &undated {
+        // Absent entirely — no dangling header, no empty date placeholder.
+        assert!(!prompt.contains("TEMPORAL ANCHORING"));
+    }
+}
+
+#[test]
+fn test_temporal_anchoring_blank_date_omitted() {
+    let blank = CompactPromptOptions {
+        custom_instructions: None,
+        current_date: Some("  "),
+    };
+    assert!(!get_compact_prompt(blank).contains("TEMPORAL ANCHORING"));
+}
+
+#[test]
+fn test_rules_precede_custom_instructions_inside_directive() {
+    let prompt = get_compact_prompt(CompactPromptOptions {
+        custom_instructions: Some("Focus on Rust code changes"),
+        current_date: Some("2026-07-24"),
+    });
+    let lang_at = prompt.find(LANGUAGE_RULE).expect("language rule");
+    let temporal_at = prompt.find("TEMPORAL ANCHORING").expect("temporal rule");
+    let custom_at = prompt
+        .find("Additional Instructions:")
+        .expect("custom instructions");
+    let close_at = prompt.find(COMPACT_DIRECTIVE_CLOSE).expect("close tag");
+    assert!(lang_at < temporal_at, "fixed rules precede the date rule");
+    assert!(temporal_at < custom_at, "custom instructions stay last");
+    assert!(custom_at < close_at, "everything inside the envelope");
+}
+
+#[test]
 fn test_compact_prompt_includes_example_block() {
-    let prompt = get_compact_prompt(None);
+    let prompt = get_compact_prompt(CompactPromptOptions::default());
     assert!(prompt.contains("<example>"));
     assert!(prompt.contains("</example>"));
     assert!(prompt.contains("Compact Instructions"));

@@ -284,6 +284,26 @@ impl<'a> ToolCallRunner<'a> {
                             );
                         }
 
+                        // Loop-guardrail hard stop (enforce level only): a call
+                        // that already hit its hard-stop threshold is not
+                        // executed again; the model gets one synthetic result.
+                        if let Some(guard) = call_ctx.loop_guardrail.as_ref()
+                            && let Some(block) = guard.check_block_before_call(
+                                &prepared.tool_id,
+                                effective_input.as_value(),
+                            )
+                        {
+                            return crate::tool_outcome_builder::build_early_outcome(
+                                prepared.tool_use_id.clone(),
+                                prepared.tool_id.clone(),
+                                provider_tool_name.as_str(),
+                                prepared.model_index,
+                                coco_tool_runtime::ToolCallErrorKind::GuardrailBlocked,
+                                &block.render_synthetic_result(),
+                                None,
+                            );
+                        }
+
                         // Execute the tool under cancellation.
                         let execute_result = tokio::select! {
                             r = prepared.tool.execute(effective_input.as_value().clone(), &call_ctx) => r,
@@ -303,6 +323,7 @@ impl<'a> ToolCallRunner<'a> {
                             orchestration_ctx,
                             hook_tx,
                             tool_output_store: shared_ctx.tool_output_store.clone(),
+                            loop_guardrail: call_ctx.loop_guardrail.clone(),
                             approval_content_message,
                         })
                         .await

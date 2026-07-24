@@ -58,6 +58,10 @@ pub(crate) struct RunOneTail<'a> {
     /// checks `tool.max_result_size_bound()` against the rendered
     /// output and persists when over threshold.
     pub tool_output_store: Option<coco_tool_runtime::ToolOutputStore>,
+    /// Per-engine-run repeated-tool-call guard. When present, every
+    /// completed call is recorded and warn-threshold hits append a
+    /// guidance suffix to the tool result (append-only ⇒ cache-safe).
+    pub loop_guardrail: Option<coco_tool_runtime::LoopGuardrailHandle>,
     /// Optional user message built from permission approval content blocks.
     /// Appended on the success path so the next model turn receives images
     /// or other content supplied alongside the approval.
@@ -238,6 +242,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
         orchestration_ctx,
         hook_tx,
         tool_output_store,
+        loop_guardrail,
         approval_content_message,
     } = args;
     let is_mcp = tool.is_mcp();
@@ -308,6 +313,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
             // OpenAI-Compatible degrade non-Text parts to a visible
             // marker.
             let text_only_output = plain_text_parts(&parts);
+            let mut guard_result_text: Option<String> = None;
             let mut tool_result_msg = match text_only_output {
                 Some(rendered_text) => {
                     let rendered_output_raw = if rendered_text.trim().is_empty() {
@@ -328,6 +334,9 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                         tool.inline_window_budget(),
                     )
                     .await;
+                    if loop_guardrail.is_some() {
+                        guard_result_text = Some(rendered_output.clone());
+                    }
 
                     create_tool_result_message(
                         &tool_use_id,
@@ -360,6 +369,23 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                 && let Message::ToolResult(tr) = &mut tool_result_msg
             {
                 tr.display_data = Some(display_data);
+            }
+
+            // Loop-guardrail bookkeeping: record the completed call; a
+            // warn-threshold hit appends guidance to this (newest) result —
+            // append-only, so the prompt-cache prefix is untouched.
+            // Idempotency proxy for no-progress tracking: read-only
+            // (concurrency-safe) tools only.
+            if let Some(guard) = &loop_guardrail
+                && let Some(warning) = guard.record_after_call(
+                    &tool_id,
+                    &effective_input,
+                    /*failed*/ tool_result_is_error,
+                    /*idempotent*/ tool.is_concurrency_safe(&effective_input),
+                    guard_result_text.as_deref(),
+                )
+            {
+                append_guardrail_suffix(&mut tool_result_msg, &warning.render_suffix());
             }
 
             // Collect post-hook additional_contexts into message
@@ -459,6 +485,20 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                 // Some failed tools can still provide bounded UI context.
                 tr.display_data = Some(display_data);
             }
+
+            // Loop-guardrail bookkeeping on the failure path — repeated
+            // identical failures are exactly what the guard exists for.
+            if let Some(guard) = &loop_guardrail
+                && let Some(warning) = guard.record_after_call(
+                    &tool_id,
+                    &effective_input,
+                    /*failed*/ true,
+                    /*idempotent*/ false,
+                    /*result_text*/ None,
+                )
+            {
+                append_guardrail_suffix(&mut tool_result_msg, &warning.render_suffix());
+            }
             let post_hook_msgs = render_hook_context_messages(
                 &semantic_tool_name,
                 &post.additional_contexts,
@@ -497,6 +537,38 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                 prevent_continuation: None,
                 structured_output: None,
                 effects: ToolSideEffects::none(),
+            }
+        }
+    }
+}
+
+/// Append the guardrail warning suffix to a tool-result message. Text and
+/// error-text bodies get the suffix inline; multi-part bodies get an extra
+/// text part. JSON bodies are left untouched (never mangle a structured
+/// payload — the next round's counters still escalate).
+fn append_guardrail_suffix(msg: &mut Message, suffix: &str) {
+    let Message::ToolResult(tr) = msg else {
+        return;
+    };
+    let coco_messages::LlmMessage::Tool { content, .. } = &mut tr.message else {
+        return;
+    };
+    for part in content.iter_mut() {
+        if let coco_messages::ToolContent::ToolResult(rp) = part {
+            match &mut rp.output {
+                coco_llm_types::ToolResultContent::Text { value, .. }
+                | coco_llm_types::ToolResultContent::ErrorText { value, .. } => {
+                    value.push_str(suffix);
+                }
+                coco_llm_types::ToolResultContent::Content { value, .. } => {
+                    value.push(coco_llm_types::ToolResultContentPart::Text {
+                        text: suffix.to_string(),
+                        provider_options: None,
+                    });
+                }
+                coco_llm_types::ToolResultContent::Json { .. }
+                | coco_llm_types::ToolResultContent::ErrorJson { .. }
+                | coco_llm_types::ToolResultContent::ExecutionDenied { .. } => {}
             }
         }
     }

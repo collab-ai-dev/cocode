@@ -73,6 +73,9 @@ impl QueryEngine {
         // carries (config.initial_command_rules). Empty for the main session.
         let live_command_rules: Arc<RwLock<Vec<coco_types::PermissionRule>>> =
             Arc::new(RwLock::new(config.initial_command_rules.clone()));
+        // Per-engine-run (= per-user-cycle) repeated-tool-call guard state.
+        let loop_guardrail =
+            coco_tool_runtime::LoopGuardrailHandle::from_config(&config.tool_config.loop_guardrail);
         let permission_rule_handle: coco_tool_runtime::PermissionRuleHandleRef = Arc::new(
             crate::engine_live_rules::EngineLiveRulesHandle::new(live_command_rules.clone()),
         );
@@ -110,6 +113,7 @@ impl QueryEngine {
             skill_handle: None,
             live_command_rules,
             permission_rule_handle,
+            loop_guardrail,
             agent_catalog: None,
             last_cache_safe_params: tokio::sync::RwLock::new(None),
             fork_dispatcher: None,

@@ -100,6 +100,10 @@ pub(crate) struct LoopTurnState {
     /// far in this session. Capped at
     /// [`crate::config::MAX_OUTPUT_TOKENS_RECOVERY_LIMIT`].
     pub(crate) max_tokens_recovery_count: i32,
+    /// How many empty-response nudge retries have fired in this user
+    /// cycle. Capped at
+    /// [`crate::engine_terminal::MAX_EMPTY_RESPONSE_NUDGES`].
+    pub(crate) empty_response_retries: i32,
     /// UUID of the last user message already handed to UserPrompt-tier
     /// reminders. Prevents duplicate `at_mentioned_files` /
     /// `agent_mentions` / `ultrathink_effort` emissions when the same
@@ -141,6 +145,7 @@ impl LoopTurnState {
             transition: None,
             stop_hook_active: false,
             max_tokens_recovery_count: 0,
+            empty_response_retries: 0,
             reminder_last_user_input_uuid: None,
             budget: BudgetTracker::new(total_token_budget, max_turns, max_continuations),
             count_next_iteration_as_turn: true,

@@ -228,6 +228,7 @@ impl SessionRuntime {
                 .system_prompt
                 .or_else(|| current_engine_config.system_prompt.clone()),
             streaming_tool_execution: runtime_config.loop_config.enable_streaming_tools,
+            empty_response_nudge: runtime_config.loop_config.empty_response_nudge,
             tool_config: runtime_config.tool.clone(),
             sandbox_config: runtime_config.sandbox.clone(),
             sandbox_state: self.sandbox_state(),

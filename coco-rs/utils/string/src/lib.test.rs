@@ -138,3 +138,78 @@ fn test_format_thousands() {
     assert_eq!(format_thousands(-1_234_567), "-1,234,567");
     assert_eq!(format_thousands(i64::MIN), "-9,223,372,036,854,775,808");
 }
+
+// ── strip_ansi ──────────────────────────────────────────────────────
+
+#[test]
+fn strip_ansi_clean_input_borrows() {
+    let input = "plain text, no escapes — 中文也可以";
+    let out = strip_ansi(input);
+    assert!(matches!(out, std::borrow::Cow::Borrowed(_)));
+    assert_eq!(out, input);
+}
+
+#[test]
+fn strip_ansi_removes_sgr_colors() {
+    let input = "\u{1b}[31merror\u{1b}[0m: something \u{1b}[1;32mbold green\u{1b}[m done";
+    assert_eq!(strip_ansi(input), "error: something bold green done");
+}
+
+#[test]
+fn strip_ansi_removes_csi_private_mode_and_colon_params() {
+    // Cursor-hide (private-mode `?`) and colon-parameter underline styles.
+    let input = "\u{1b}[?25lhidden\u{1b}[?25h \u{1b}[4:3munder\u{1b}[4:0m";
+    assert_eq!(strip_ansi(input), "hidden under");
+}
+
+#[test]
+fn strip_ansi_removes_osc_bel_and_st_terminated() {
+    let input = "\u{1b}]0;window title\u{07}before \u{1b}]8;;https://x.test\u{1b}\\link\u{1b}]8;;\u{1b}\\ after";
+    assert_eq!(strip_ansi(input), "before link after");
+}
+
+#[test]
+fn strip_ansi_removes_dcs_and_apc() {
+    let input = "a\u{1b}Pq#0;2;0;0;0#0~~\u{1b}\\b\u{1b}_apc payload\u{1b}\\c";
+    assert_eq!(strip_ansi(input), "abc");
+}
+
+#[test]
+fn strip_ansi_removes_8bit_c1_controls() {
+    // U+009B is the 8-bit CSI; stray C1 controls are dropped too.
+    let input = "x\u{9b}31my\u{85}z";
+    assert_eq!(strip_ansi(input), "xyz");
+}
+
+#[test]
+fn strip_ansi_cursor_movement_and_erase() {
+    let input = "progress: \u{1b}[2K\u{1b}[1G100%\u{1b}[0K";
+    assert_eq!(strip_ansi(input), "progress: 100%");
+}
+
+#[test]
+fn strip_ansi_keeps_text_after_malformed_sequence() {
+    // ESC [ followed by a newline: the newline is real content, not part
+    // of the (malformed) sequence.
+    let input = "a\u{1b}[\nb";
+    assert_eq!(strip_ansi(input), "a\nb");
+}
+
+#[test]
+fn strip_ansi_trailing_escape_dropped() {
+    assert_eq!(strip_ansi("done\u{1b}"), "done");
+    assert_eq!(strip_ansi("done\u{1b}["), "done");
+}
+
+#[test]
+fn strip_ansi_simple_escapes() {
+    // ESC 7 / ESC 8 (save/restore cursor), ESC ( B (charset select, nF).
+    let input = "\u{1b}7text\u{1b}8 more\u{1b}(Bend";
+    assert_eq!(strip_ansi(input), "text more end");
+}
+
+#[test]
+fn strip_ansi_multibyte_neighbors_survive() {
+    let input = "构建\u{1b}[32m成功\u{1b}[0m🎉";
+    assert_eq!(strip_ansi(input), "构建成功🎉");
+}

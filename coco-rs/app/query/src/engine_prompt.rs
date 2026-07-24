@@ -862,6 +862,7 @@ impl QueryEngine {
             file_history: self.file_history.clone(),
             config_home: self.config_home.clone(),
             tool_output_store: self.tool_output_store_for_prompt(),
+            loop_guardrail: self.loop_guardrail.clone(),
             transcript_path: self
                 .transcript_store
                 .as_ref()

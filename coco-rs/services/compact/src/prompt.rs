@@ -59,6 +59,34 @@ const NO_TOOLS_TRAILER: &str = "\n\nREMINDER: Do NOT call any tools. Respond wit
 an <analysis> block followed by a <summary> block. \
 Tool calls will be rejected and you will fail the task.";
 
+/// Always-on language rule: a CJK (or any non-English) conversation must
+/// compact into a same-language summary or continuation quality degrades.
+const LANGUAGE_RULE: &str = "Write the summary in the same language the user was using in the conversation — do not translate or switch to English.";
+
+/// Temporal-anchoring rule, emitted only when the caller supplied a
+/// current date — the summarizer is never handed an empty date
+/// placeholder. Rewrites completed actions into dated past-tense facts so
+/// a resumed session does not re-issue them as open instructions.
+fn temporal_anchoring_rule(date: &str) -> String {
+    format!(
+        "TEMPORAL ANCHORING: The current date is {date}. When an action has already been carried out, phrase it as a completed, dated, past-tense fact rather than an open instruction. For example, rewrite \"email John about the proposal\" as \"Sent the proposal email to John on {date}.\" Never leave a finished action worded as if it still needs doing, and never invent a date for work that has not happened yet."
+    )
+}
+
+/// Caller-supplied inputs for the compaction prompt builders.
+///
+/// This crate reads no clock (crate invariant), so the current date is
+/// threaded in by the caller.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CompactPromptOptions<'a> {
+    /// Custom summarization instructions (merged PreCompact-hook output +
+    /// `/compact <instructions>`).
+    pub custom_instructions: Option<&'a str>,
+    /// Current date formatted `%Y-%m-%d`. `None` ⇒ the temporal-anchoring
+    /// rule is omitted entirely (never an empty date placeholder).
+    pub current_date: Option<&'a str>,
+}
+
 const DETAILED_ANALYSIS_INSTRUCTION_BASE: &str = "Before providing your final summary, wrap your analysis in <analysis> tags to organize your thoughts and ensure you've covered all necessary points. In your analysis process:
 
 1. Chronologically analyze each message and section of the conversation — everything above this directive; the directive itself is not part of the conversation. For each section thoroughly identify:
@@ -308,15 +336,23 @@ fn render_template(template: &str, analysis_instruction: &str) -> String {
         .replace("{PLACEHOLDER_NOTE}", EXAMPLE_PLACEHOLDER_NOTE)
 }
 
-/// Wrap a rendered template (plus optional custom instructions) in the
-/// compaction-directive envelope. Custom instructions sit *inside* the
-/// sentinel tags so the boundary declaration and the echo scrub cover
-/// them too.
-fn assemble_directive(template: &str, custom_instructions: Option<&str>) -> String {
+/// Wrap a rendered template (plus the fixed language/temporal rules and
+/// optional custom instructions) in the compaction-directive envelope.
+/// The rules and custom instructions sit *inside* the sentinel tags so
+/// the boundary declaration and the echo scrub cover them too; custom
+/// instructions stay last.
+fn assemble_directive(template: &str, options: CompactPromptOptions<'_>) -> String {
     let mut prompt =
         format!("{COMPACT_DIRECTIVE_OPEN}\n{DIRECTIVE_PREAMBLE}{NO_TOOLS_PREAMBLE}{template}");
 
-    if let Some(instructions) = custom_instructions
+    prompt.push_str(&format!("\n\n{LANGUAGE_RULE}"));
+    if let Some(date) = options.current_date
+        && !date.trim().is_empty()
+    {
+        prompt.push_str(&format!("\n\n{}", temporal_anchoring_rule(date)));
+    }
+
+    if let Some(instructions) = options.custom_instructions
         && !instructions.trim().is_empty()
     {
         prompt.push_str(&format!("\n\nAdditional Instructions:\n{instructions}"));
@@ -329,9 +365,9 @@ fn assemble_directive(template: &str, custom_instructions: Option<&str>) -> Stri
 }
 
 /// Build the full compaction prompt.
-pub fn get_compact_prompt(custom_instructions: Option<&str>) -> String {
+pub fn get_compact_prompt(options: CompactPromptOptions<'_>) -> String {
     let template = render_template(BASE_COMPACT_TEMPLATE, DETAILED_ANALYSIS_INSTRUCTION_BASE);
-    assemble_directive(&template, custom_instructions)
+    assemble_directive(&template, options)
 }
 
 /// Build the partial compaction prompt.
@@ -339,7 +375,7 @@ pub fn get_compact_prompt(custom_instructions: Option<&str>) -> String {
 /// older messages intact. `Oldest` → summarize the *earlier*
 /// portion, keep newer messages intact (summary precedes them in the chain).
 pub fn get_partial_compact_prompt(
-    custom_instructions: Option<&str>,
+    options: CompactPromptOptions<'_>,
     direction: PartialCompactDirection,
 ) -> String {
     let template_str = match direction {
@@ -355,7 +391,7 @@ pub fn get_partial_compact_prompt(
         ),
     };
 
-    assemble_directive(&template_str, custom_instructions)
+    assemble_directive(&template_str, options)
 }
 
 /// Substrings that occur in the directive *body* but never in

@@ -40,6 +40,11 @@ pub struct PartialCompactSettings {
     pub session_memory: PartialSessionMemorySettings,
     pub experimental: PartialExperimentalSettings,
     pub tool_result_budget: PartialToolResultBudgetSettings,
+    /// Recent API rounds kept verbatim through a full compaction.
+    /// Default 0 = Claude Code parity (summarize everything; the
+    /// post-compact attachment bundle compensates). Non-zero is a
+    /// deliberate hermes-style divergence.
+    pub keep_recent_rounds: Option<i32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -162,6 +167,12 @@ pub struct CompactConfig {
     pub session_memory: SessionMemoryConfig,
     pub experimental: ExperimentalConfig,
     pub tool_result_budget: ToolResultBudgetConfig,
+    /// Recent API rounds kept verbatim through a full compaction.
+    /// See [`PartialCompactSettings::keep_recent_rounds`]; default 0.
+    /// Internal callers with an explicit per-call value (teammate
+    /// engine) keep winning over this session default.
+    #[serde(default)]
+    pub keep_recent_rounds: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -437,6 +448,9 @@ impl CompactConfig {
         }
         if let Some(v) = part.auto.blocking_limit_override.filter(|v| *v > 0) {
             config.auto.blocking_limit_override = Some(v);
+        }
+        if let Some(v) = part.keep_recent_rounds.filter(|v| *v >= 0) {
+            config.keep_recent_rounds = v;
         }
         config.auto.disabled_by_env = env.is_truthy(EnvKey::CocoCompactDisable);
         config.auto.auto_disabled_by_env = env.is_truthy(EnvKey::CocoCompactDisableAuto);

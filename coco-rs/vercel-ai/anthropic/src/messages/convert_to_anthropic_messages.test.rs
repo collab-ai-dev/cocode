@@ -1294,3 +1294,108 @@ fn reasoning_with_redacted_data_does_not_warn() {
     assert_eq!(content[0]["type"], "redacted_thinking");
     assert_eq!(content[0]["data"], "redacted123");
 }
+
+// ---------------------------------------------------------------------------
+// Empty text-part coercion (#N1): the Messages API 400s on empty /
+// whitespace-only text blocks; blank parts replayed from history must be
+// skipped at convert time.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn skips_empty_user_text_part_inside_mixed_content() {
+    let prompt = vec![LanguageModelV4Message::User {
+        content: vec![
+            vercel_ai_provider::UserContentPart::Text(TextPart {
+                text: "".into(),
+                provider_metadata: None,
+            }),
+            vercel_ai_provider::UserContentPart::Text(TextPart {
+                text: "real question".into(),
+                provider_metadata: None,
+            }),
+        ],
+        provider_options: None,
+    }];
+    let (_, messages, warnings) = convert_to_anthropic_messages(&prompt, true);
+    assert!(warnings.is_empty());
+    let content = messages[0]["content"].as_array().unwrap();
+    assert_eq!(content.len(), 1, "empty text part must be skipped");
+    assert_eq!(content[0]["text"], "real question");
+}
+
+#[test]
+fn skips_whitespace_only_assistant_text_part_keeps_tool_call() {
+    let prompt = vec![LanguageModelV4Message::Assistant {
+        content: vec![
+            AssistantContentPart::Text(TextPart {
+                text: "  \n\t ".into(),
+                provider_metadata: None,
+            }),
+            AssistantContentPart::ToolCall(ToolCallPart {
+                tool_call_id: "tc_1".into(),
+                tool_name: "get_weather".into(),
+                input: json!({"city": "SF"}),
+                provider_executed: None,
+                provider_metadata: None,
+                invalid: false,
+                invalid_reason: None,
+            }),
+        ],
+        provider_options: None,
+    }];
+    let (_, messages, _) = convert_to_anthropic_messages(&prompt, true);
+    let content = messages[0]["content"].as_array().unwrap();
+    assert_eq!(
+        content.len(),
+        1,
+        "whitespace-only text part must be skipped"
+    );
+    assert_eq!(content[0]["type"], "tool_use");
+}
+
+#[test]
+fn assistant_message_of_only_empty_text_elides_entirely() {
+    let prompt = vec![
+        LanguageModelV4Message::user_text("hi"),
+        LanguageModelV4Message::Assistant {
+            content: vec![AssistantContentPart::Text(TextPart {
+                text: "".into(),
+                provider_metadata: None,
+            })],
+            provider_options: None,
+        },
+    ];
+    let (_, messages, _) = convert_to_anthropic_messages(&prompt, true);
+    assert_eq!(
+        messages.len(),
+        1,
+        "assistant message with only blank text must be elided"
+    );
+    assert_eq!(messages[0]["role"], "user");
+}
+
+#[test]
+fn trailing_assistant_text_that_trims_to_empty_is_skipped() {
+    // The prefill trailing-trim previously produced an empty block from a
+    // whitespace-only final text part.
+    let prompt = vec![
+        LanguageModelV4Message::user_text("hi"),
+        LanguageModelV4Message::Assistant {
+            content: vec![
+                AssistantContentPart::Text(TextPart {
+                    text: "answer".into(),
+                    provider_metadata: None,
+                }),
+                AssistantContentPart::Text(TextPart {
+                    text: "\n\n".into(),
+                    provider_metadata: None,
+                }),
+            ],
+            provider_options: None,
+        },
+    ];
+    let (_, messages, _) = convert_to_anthropic_messages(&prompt, true);
+    let content = messages[1]["content"].as_array().unwrap();
+    assert_eq!(content.len(), 1);
+    assert_eq!(content[0]["text"], "answer");
+}

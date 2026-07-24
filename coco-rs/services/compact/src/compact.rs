@@ -80,6 +80,10 @@ pub struct CompactRunOptions {
     /// disambiguation). When `Some`, sets `CompactResult.is_recompaction`
     /// to the embedded flag so downstream consumers see the chain state.
     pub recompaction_info: Option<crate::types::RecompactionInfo>,
+    /// Current date (`%Y-%m-%d`), threaded by the caller — this crate
+    /// reads no clock. Drives the temporal-anchoring prompt rule;
+    /// `None` omits it.
+    pub current_date: Option<String>,
 }
 
 impl Default for CompactRunOptions {
@@ -92,6 +96,7 @@ impl Default for CompactRunOptions {
             suppress_follow_up: true,
             trigger: CompactTrigger::Auto,
             recompaction_info: None,
+            current_date: None,
         }
     }
 }
@@ -197,8 +202,20 @@ where
     // `working_messages` are in `old_rounds`, and the rest are in
     // `recent_rounds`. Index back to share Arcs (zero `Message::clone`).
     let prefix_len: usize = old_rounds.iter().map(Vec::len).sum();
-    let messages_to_summarize: Vec<Arc<Message>> = working_messages[..prefix_len].to_vec();
-    let summary_request = crate::prompt::get_compact_prompt(config.custom_prompt.as_deref());
+    let summary_request = crate::prompt::get_compact_prompt(crate::prompt::CompactPromptOptions {
+        custom_instructions: config.custom_prompt.as_deref(),
+        current_date: config.current_date.as_deref(),
+    });
+
+    // Proactive input bound: drop head rounds until the estimated request
+    // fits the summarizer's window, instead of burning up to
+    // MAX_PTL_RETRIES reactive round-trips on a very long history.
+    let messages_to_summarize = bound_summary_input_to_window(
+        working_messages[..prefix_len].to_vec(),
+        &summary_request,
+        config.max_summary_tokens,
+        config.context_window,
+    );
 
     // Step 5: Call LLM with retry on prompt-too-long
     let summary_text = call_with_ptl_retry(
@@ -306,6 +323,18 @@ where
     Ok(result)
 }
 
+/// Caller-supplied text inputs for [`partial_compact_conversation`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PartialCompactOptions<'a> {
+    /// User feedback merged into the summarizer instructions.
+    pub user_feedback: Option<&'a str>,
+    /// Custom summarization instructions (hooks + `/compact <args>`).
+    pub custom_instructions: Option<&'a str>,
+    /// Current date (`%Y-%m-%d`) for the temporal-anchoring rule; this
+    /// crate reads no clock, so the caller threads it in.
+    pub current_date: Option<&'a str>,
+}
+
 /// Partial compaction: summarize half of the conversation, keep the other.
 ///
 /// Direction:
@@ -331,8 +360,7 @@ pub async fn partial_compact_conversation<F, Fut>(
     all_messages: &[Arc<Message>],
     pivot_index: usize,
     direction: PartialCompactDirection,
-    user_feedback: Option<&str>,
-    custom_instructions: Option<&str>,
+    options: PartialCompactOptions<'_>,
     summarize_fn: F,
     attachment_fn: Option<PostCompactAttachmentFn>,
 ) -> Result<CompactResult, CompactError>
@@ -340,6 +368,11 @@ where
     F: Fn(CompactSummaryAttempt) -> Fut,
     Fut: std::future::Future<Output = Result<CompactSummaryResponse, String>>,
 {
+    let PartialCompactOptions {
+        user_feedback,
+        custom_instructions,
+        current_date,
+    } = options;
     tracing::info!("compaction begin (partial)");
     if pivot_index > all_messages.len() {
         tracing::warn!(
@@ -411,7 +444,13 @@ where
         _ => None,
     };
 
-    let prompt = crate::prompt::get_partial_compact_prompt(merged.as_deref(), direction);
+    let prompt = crate::prompt::get_partial_compact_prompt(
+        crate::prompt::CompactPromptOptions {
+            custom_instructions: merged.as_deref(),
+            current_date,
+        },
+        direction,
+    );
 
     // Strip media + attachments before summarizing — single canonical
     // pipeline shared with `compact_conversation` and `compact_session_memory`.
@@ -625,7 +664,8 @@ pub fn merge_hook_instructions(
 /// arrays** — Bash/MCP tool_results that carry image data (e.g. `cat
 /// image.png`) must be stripped before the compact summarizer runs or the
 /// summarization request itself trips prompt-too-long on the re-encoded
-/// base64.
+/// base64. Assistant-generated media (File / ReasoningFile parts) is
+/// flattened the same way.
 pub fn strip_images_from_messages(messages: &[Message]) -> Vec<Message> {
     messages
         .iter()
@@ -660,14 +700,7 @@ fn strip_one_message_for_media_if_needed(msg: &Message) -> Option<Message> {
             let stripped: Vec<UserContent> = content
                 .iter()
                 .map(|part| match part {
-                    UserContent::File(f) => {
-                        let placeholder = if is_image_media_type(f) {
-                            "[image]"
-                        } else {
-                            "[document]"
-                        };
-                        UserContent::text(placeholder)
-                    }
+                    UserContent::File(f) => UserContent::text(media_placeholder(&f.media_type)),
                     other => other.clone(),
                 })
                 .collect();
@@ -720,7 +753,57 @@ fn strip_one_message_for_media_if_needed(msg: &Message) -> Option<Message> {
             };
             Some(Message::ToolResult(new_tr))
         }
+        // Assistant messages can carry generated media: File parts
+        // (image-generation outputs) and ReasoningFile parts (file data
+        // inside reasoning). Flatten both to placeholders — the
+        // summarizer needs neither, and re-encoded base64 trips
+        // prompt-too-long just like user-side media.
+        Message::Assistant(a) => {
+            use coco_messages::AssistantContent;
+            let coco_messages::LlmMessage::Assistant {
+                content,
+                provider_options,
+            } = &a.message
+            else {
+                return None;
+            };
+            // Fast path: bail before touching content if there is no media.
+            if !content.iter().any(|p| {
+                matches!(
+                    p,
+                    AssistantContent::File(_) | AssistantContent::ReasoningFile(_)
+                )
+            }) {
+                return None;
+            }
+            let stripped: Vec<AssistantContent> = content
+                .iter()
+                .map(|part| match part {
+                    AssistantContent::File(f) => {
+                        AssistantContent::text(media_placeholder(&f.media_type))
+                    }
+                    AssistantContent::ReasoningFile(rf) => {
+                        AssistantContent::text(media_placeholder(&rf.media_type))
+                    }
+                    other => other.clone(),
+                })
+                .collect();
+            let mut new_a = a.clone();
+            new_a.message = coco_messages::LlmMessage::Assistant {
+                content: stripped,
+                provider_options: provider_options.clone(),
+            };
+            Some(Message::Assistant(new_a))
+        }
         _ => None,
+    }
+}
+
+fn media_placeholder(media_type: &str) -> &'static str {
+    if media_type.starts_with("image/") {
+        "[image]"
+    } else {
+        "[document]"
     }
 }
 
@@ -749,13 +832,8 @@ fn strip_images_from_tool_result_content(
         .iter()
         .map(|p| match p {
             coco_llm_types::ToolResultContentPart::FileData { media_type, .. } => {
-                let placeholder = if media_type.starts_with("image/") {
-                    "[image]"
-                } else {
-                    "[document]"
-                };
                 coco_llm_types::ToolResultContentPart::Text {
-                    text: placeholder.to_string(),
+                    text: media_placeholder(media_type).to_string(),
                     provider_options: None,
                 }
             }
@@ -826,9 +904,10 @@ pub(crate) mod compact_passes {
     use super::*;
     use coco_messages::pipeline::MessagePass;
 
-    /// Strip image / document content out of `User` and `ToolResult`
-    /// messages. Reuses the shared `strip_one_message_for_media_if_needed`
-    /// helper for the per-message rewrite.
+    /// Strip image / document content out of `User`, `ToolResult`, and
+    /// `Assistant` messages. Reuses the shared
+    /// `strip_one_message_for_media_if_needed` helper for the per-message
+    /// rewrite.
     pub struct StripImages;
     impl MessagePass for StripImages {
         fn would_mutate(&self, messages: &[&Message]) -> bool {
@@ -938,6 +1017,64 @@ pub fn truncate_head_for_ptl_retry(
     }
     out.extend(survivors.iter().cloned());
     Some(out)
+}
+
+/// Fraction of the summarizer's context window the request may fill.
+/// The token estimator is heuristic; the reserve absorbs its error so the
+/// proactive bound rarely under-shoots into a reactive PTL retry.
+const SUMMARY_INPUT_WINDOW_FILL_RATIO: f64 = 0.9;
+
+/// Proactively bound the summarizer input to the model window.
+///
+/// The reactive path recovers from prompt-too-long only *after* the API
+/// rejects — up to [`MAX_PTL_RETRIES`] wasted summarizer calls on a very
+/// long history. This pre-pass drops oldest API-round groups (same
+/// [`truncate_head_for_ptl_retry`] machinery the reactive path uses)
+/// until the estimated request — messages + directive prompt + summary
+/// output reservation — fits the window. Estimation is heuristic, so the
+/// reactive retry stays as the backstop.
+fn bound_summary_input_to_window(
+    messages: Vec<Arc<Message>>,
+    summary_request: &str,
+    max_summary_tokens: i64,
+    context_window: i64,
+) -> Vec<Arc<Message>> {
+    let budget = (context_window as f64 * SUMMARY_INPUT_WINDOW_FILL_RATIO) as i64
+        - coco_messages::estimate_text_tokens(summary_request)
+        - max_summary_tokens;
+    if budget <= 0 {
+        // Degenerate window (tests / misconfig): nothing sensible to do
+        // proactively — leave recovery to the reactive PTL retry.
+        return messages;
+    }
+    let initial_len = messages.len();
+    let mut current = messages;
+    loop {
+        let estimated = coco_messages::estimate_tokens_for_messages(&current);
+        if estimated <= budget {
+            break;
+        }
+        let Some(truncated) = truncate_head_for_ptl_retry(
+            &current,
+            Some(estimated - budget),
+            /*drop_fraction*/ 0.2,
+        ) else {
+            break; // single group left — cannot shrink further here
+        };
+        if truncated.len() >= current.len() {
+            break; // no progress (marker replaced the dropped group)
+        }
+        current = truncated;
+    }
+    if current.len() < initial_len {
+        tracing::warn!(
+            dropped_messages = initial_len - current.len(),
+            kept_messages = current.len(),
+            context_window,
+            "compact summarizer input exceeded window; proactively dropped oldest rounds"
+        );
+    }
+    current
 }
 
 fn user_message_text_equals(u: &UserMessage, needle: &str) -> bool {
@@ -1139,7 +1276,10 @@ pub fn render_summary_prompt_for_debug(
     rounds: &[Vec<&Message>],
     config: &CompactRunOptions,
 ) -> String {
-    let base_prompt = crate::prompt::get_compact_prompt(config.custom_prompt.as_deref());
+    let base_prompt = crate::prompt::get_compact_prompt(crate::prompt::CompactPromptOptions {
+        custom_instructions: config.custom_prompt.as_deref(),
+        current_date: config.current_date.as_deref(),
+    });
 
     let mut conversation = String::with_capacity(base_prompt.len() + 4096);
     conversation.push_str(&base_prompt);
@@ -1169,10 +1309,6 @@ pub fn render_summary_prompt_for_debug(
     }
 
     conversation
-}
-
-fn is_image_media_type(file: &coco_llm_types::FilePart) -> bool {
-    file.media_type.starts_with("image/")
 }
 
 /// Parse the token gap from an Anthropic prompt-too-long error message.

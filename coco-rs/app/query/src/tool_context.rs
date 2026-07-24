@@ -176,6 +176,9 @@ pub(crate) struct ToolContextFactory {
     /// rules emitted by prior turns of the same user message. The Arc
     /// drops with the engine — see [`crate::engine_live_rules`].
     pub(crate) live_command_rules: Arc<RwLock<Vec<PermissionRule>>>,
+    /// Per-engine-run repeated-tool-call guard state, installed onto
+    /// every built context. `None` when the guard is off.
+    pub(crate) loop_guardrail: Option<coco_tool_runtime::LoopGuardrailHandle>,
 }
 
 /// Per-call overrides applied on top of [`ToolContextFactory`] inputs.
@@ -685,6 +688,7 @@ impl ToolContextFactory {
             config_home: self.config_home.clone(),
             session_id_for_history: Some(self.session_id.to_string()),
             tool_output_store: self.tool_output_store.clone(),
+            loop_guardrail: self.loop_guardrail.clone(),
             transcript_path: self.transcript_path.clone(),
             approval_feedback: None,
             permission_resolution_detail: None,

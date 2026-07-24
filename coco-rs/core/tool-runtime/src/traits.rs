@@ -305,7 +305,6 @@ pub trait DynTool: Send + Sync + 'static {
         None
     }
     fn coerce_raw_string_input(&self, raw: &str) -> Option<Value>;
-    fn inputs_equivalent(&self, a: &Value, b: &Value) -> bool;
     fn backfill_observable_input(&self, input: &mut Value);
 
     // -- Permissions --
@@ -767,11 +766,6 @@ pub trait Tool: Send + Sync + 'static {
         ValidationResult::Valid
     }
 
-    /// Check if two inputs are equivalent (for idempotency detection).
-    fn inputs_equivalent(&self, _a: &Self::Input, _b: &Self::Input) -> bool {
-        false
-    }
-
     /// Backfill observable input fields for hooks/logging.
     ///
     /// Normalizes input before hooks see it (e.g., adds default field
@@ -1061,15 +1055,6 @@ impl<T: Tool> DynTool for T {
     }
     fn coerce_raw_string_input(&self, raw: &str) -> Option<Value> {
         Tool::coerce_raw_string_input(self, raw)
-    }
-    fn inputs_equivalent(&self, a: &Value, b: &Value) -> bool {
-        match (
-            serde_json::from_value::<T::Input>(a.clone()),
-            serde_json::from_value::<T::Input>(b.clone()),
-        ) {
-            (Ok(ta), Ok(tb)) => Tool::inputs_equivalent(self, &ta, &tb),
-            _ => false,
-        }
     }
     fn backfill_observable_input(&self, input: &mut Value) {
         Tool::backfill_observable_input(self, input)

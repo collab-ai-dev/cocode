@@ -188,6 +188,107 @@ pub fn format_thousands(n: i64) -> String {
     out
 }
 
+/// Strip ANSI/ECMA-48 escape sequences from model-facing text.
+///
+/// Covers CSI (incl. private-mode `?` and colon parameters), OSC (BEL- and
+/// ST-terminated), DCS/SOS/PM/APC (ST-terminated), other `ESC`-prefixed
+/// sequences (nF intermediates + final), and stray 8-bit C1 controls
+/// (U+0080–U+009F). Clean input — the overwhelmingly common case — returns
+/// `Cow::Borrowed` without allocating.
+///
+/// Escape codes in tool results waste tokens and, worse, get copied by
+/// models into file writes; strip *before* truncation so a byte cap can
+/// never land mid-sequence and leave garbage.
+pub fn strip_ansi(input: &str) -> std::borrow::Cow<'_, str> {
+    fn is_c1(c: char) -> bool {
+        ('\u{80}'..='\u{9f}').contains(&c)
+    }
+    if !input.chars().any(|c| c == '\u{1b}' || is_c1(c)) {
+        return std::borrow::Cow::Borrowed(input);
+    }
+
+    /// Consume CSI parameter bytes (0x30–0x3F), intermediates (0x20–0x2F),
+    /// and the final byte (0x40–0x7E). A malformed sequence stops without
+    /// consuming the offending char, so real text is never eaten.
+    fn skip_csi(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+        while let Some(&c) = chars.peek() {
+            if ('\u{40}'..='\u{7e}').contains(&c) {
+                chars.next(); // final byte
+                break;
+            }
+            if ('\u{20}'..='\u{3f}').contains(&c) {
+                chars.next();
+                continue;
+            }
+            break; // malformed: leave the char to normal processing
+        }
+    }
+
+    /// Consume until BEL, ST (`ESC \` or C1 0x9C), or end of input.
+    fn skip_until_st(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, allow_bel: bool) {
+        while let Some(c) = chars.next() {
+            match c {
+                '\u{07}' if allow_bel => break,
+                '\u{9c}' => break,
+                '\u{1b}' => {
+                    if chars.peek() == Some(&'\\') {
+                        chars.next();
+                    }
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\u{1b}' => match chars.peek().copied() {
+                Some('[') => {
+                    chars.next();
+                    skip_csi(&mut chars);
+                }
+                Some(']') => {
+                    chars.next();
+                    skip_until_st(&mut chars, /*allow_bel*/ true);
+                }
+                Some('P' | 'X' | '^' | '_') => {
+                    chars.next();
+                    skip_until_st(&mut chars, /*allow_bel*/ false);
+                }
+                Some(c) if ('\u{20}'..='\u{2f}').contains(&c) => {
+                    // nF sequence: intermediates then one final 0x30–0x7E.
+                    while let Some(&c) = chars.peek() {
+                        if ('\u{20}'..='\u{2f}').contains(&c) {
+                            chars.next();
+                            continue;
+                        }
+                        if ('\u{30}'..='\u{7e}').contains(&c) {
+                            chars.next(); // final byte
+                        }
+                        break;
+                    }
+                }
+                Some(c) if ('\u{30}'..='\u{7e}').contains(&c) => {
+                    // Fp/Fe/Fs single-final escape.
+                    chars.next();
+                }
+                _ => {} // bare trailing ESC: drop it
+            },
+            '\u{9b}' => skip_csi(&mut chars),
+            '\u{9d}' => skip_until_st(&mut chars, /*allow_bel*/ true),
+            '\u{90}' | '\u{98}' | '\u{9e}' | '\u{9f}' => {
+                skip_until_st(&mut chars, /*allow_bel*/ false);
+            }
+            c if is_c1(c) => {} // stray single C1 control: drop
+            c => out.push(c),
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 #[cfg(test)]
 #[path = "lib.test.rs"]
 mod tests;
