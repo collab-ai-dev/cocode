@@ -1846,6 +1846,7 @@ dependencies = [
  "coco-config",
  "coco-error",
  "coco-llm-types",
+ "coco-model-card",
  "coco-otel",
  "coco-types",
  "coco-utils-json-repair",

@@ -34,6 +34,7 @@ pub use catalog::knowledge_cutoff;
 pub use catalog::lookup;
 pub use catalog::lookup_with_provider;
 pub use catalog::pricing;
+pub use catalog::stall_timeout_floor_secs;
 pub use schema::KnowledgeCutoff;
 pub use schema::ModelCard;
 pub use schema::ModelCardError;

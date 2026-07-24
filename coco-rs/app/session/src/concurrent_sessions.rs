@@ -538,7 +538,10 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-fn env_session_kind() -> Option<ProcessSessionKind> {
+/// Session kind from `COCO_SESSION_KIND` (`bg` / `daemon` / `daemon-worker`);
+/// `None` for interactive / unset. Shared by the PID registry and the
+/// background job ledger so the two stores agree on kind.
+pub fn env_session_kind() -> Option<ProcessSessionKind> {
     coco_config::env::var(EnvKey::CocoSessionKind)
         .ok()
         .and_then(|s| ProcessSessionKind::from_env_value(&s))

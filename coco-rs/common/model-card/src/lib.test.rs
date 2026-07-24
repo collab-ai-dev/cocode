@@ -194,3 +194,15 @@ fn display_model_name_strips_provider_preserving_spelling() {
     // Empty input stays empty so the env line is omitted.
     assert_eq!(display_model_name(""), "");
 }
+
+#[test]
+fn stall_timeout_floor_matches_reasoning_families_only() {
+    // Provider prefixes and version suffixes resolve via the normalized slug.
+    assert_eq!(stall_timeout_floor_secs("deepseek/deepseek-r1"), Some(600));
+    assert_eq!(stall_timeout_floor_secs("o3-mini"), Some(300));
+    // Longest prefix wins: o3-mini (300) over o3 (600).
+    assert_eq!(stall_timeout_floor_secs("openai/o3-mini-high"), Some(300));
+    assert_eq!(stall_timeout_floor_secs("claude-opus-4-7"), Some(240));
+    // Unlisted models keep the safe disabled default.
+    assert_eq!(stall_timeout_floor_secs("gpt-4o"), None);
+}

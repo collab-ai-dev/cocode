@@ -195,6 +195,42 @@ fn curated_knowledge_cutoff(model_id: &str) -> Option<KnowledgeCutoff> {
     KnowledgeCutoff::from_raw(raw)
 }
 
+/// Curated stream stall-timeout FLOOR (seconds) for slow-reasoning model
+/// families. Callers must apply it as `max(configured, floor)` — it lifts
+/// a too-aggressive idle timeout, and it enables a hard idle backstop for
+/// listed models when nothing is configured (a hung stream on these
+/// otherwise waits for the outer request timeout). Unlisted models return
+/// `None` and keep the safe disabled default.
+///
+/// Values are operational tuning seeded from hermes-agent's
+/// `_REASONING_STALE_TIMEOUT_FLOORS` (v0.19), not vendor facts.
+pub fn stall_timeout_floor_secs(model_id: &str) -> Option<i64> {
+    let normalized = normalize_id(strip_provider(model_id.trim()));
+    // Start-of-slug anchored, longest-prefix wins.
+    const FLOORS: &[(&str, i64)] = &[
+        ("deepseek-r1", 600),
+        ("deepseek-v4", 600),
+        ("o3-mini", 300),
+        ("o4-mini", 300),
+        ("o1", 600),
+        ("o3", 600),
+        ("qwq-32b", 300),
+        ("claude-opus-4", 240),
+        ("claude-sonnet-4-5", 180),
+        ("claude-sonnet-4-6", 180),
+        ("grok-4-fast-reasoning", 300),
+    ];
+    let mut best: Option<(&str, i64)> = None;
+    for &(slug, secs) in FLOORS {
+        if normalized.starts_with(slug)
+            && best.is_none_or(|(current, _)| slug.len() > current.len())
+        {
+            best = Some((slug, secs));
+        }
+    }
+    best.map(|(_, secs)| secs)
+}
+
 /// Exact/normalized lookup against the current in-memory catalog.
 pub fn lookup(model_id: &str) -> Option<Arc<ModelCard>> {
     match current_catalog().lookup(model_id) {
