@@ -18,6 +18,7 @@ pub use concurrent_sessions::SessionStatus;
 pub use concurrent_sessions::TerminalJobOutcome;
 pub use concurrent_sessions::collect_ps_entries;
 pub use concurrent_sessions::count_concurrent_sessions;
+pub use concurrent_sessions::env_session_kind;
 pub use concurrent_sessions::is_bg_session;
 pub use concurrent_sessions::read_registration as read_session_registration;
 pub use concurrent_sessions::view_state;

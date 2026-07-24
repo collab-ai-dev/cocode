@@ -108,6 +108,18 @@ pub struct TaskManager {
     controls: Arc<RwLock<HashMap<String, TaskControl>>>,
     event_tx: Option<mpsc::Sender<CoreEvent>>,
     sdk_summaries_enabled: Option<Arc<AtomicBool>>,
+    job_ledger: Option<Arc<JobLedger>>,
+}
+
+/// Durable job-ledger binding for this manager's background tasks. When
+/// installed, spawn and terminal transitions write [`crate::JobState`]
+/// records under `<config_home>/bg-jobs/`, so `coco ps` reports real
+/// terminal outcomes and a process restart does not silently lose them.
+pub struct JobLedger {
+    pub store: crate::JobStore,
+    pub session_id: coco_types::SessionId,
+    pub cwd: std::path::PathBuf,
+    pub kind: coco_session::ProcessSessionKind,
 }
 
 pub struct TaskCreateRequest {
@@ -170,7 +182,47 @@ impl TaskManager {
             controls: Arc::new(RwLock::new(HashMap::new())),
             event_tx: None,
             sdk_summaries_enabled: None,
+            job_ledger: None,
         }
+    }
+
+    /// Install the durable job ledger. Spawn/terminal transitions then
+    /// write `bg-jobs/` records (best-effort — a write failure is logged
+    /// and never blocks the task lifecycle).
+    pub fn with_job_ledger(mut self, ledger: JobLedger) -> Self {
+        self.job_ledger = Some(Arc::new(ledger));
+        self
+    }
+
+    /// Best-effort durable job-record write, off the async path.
+    fn write_job_record(
+        &self,
+        id: &str,
+        status: TaskStatus,
+        name: Option<String>,
+        error: Option<String>,
+        created_at: i64,
+    ) {
+        let Some(ledger) = self.job_ledger.clone() else {
+            return;
+        };
+        let job = crate::JobState {
+            id: id.to_string(),
+            session_id: ledger.session_id.clone(),
+            cwd: ledger.cwd.clone(),
+            kind: ledger.kind,
+            created_at,
+            updated_at: crate::job_store::now_ms(),
+            status,
+            name,
+            intent: None,
+            error,
+        };
+        tokio::task::spawn_blocking(move || {
+            if let Err(error) = ledger.store.write(&job) {
+                tracing::warn!(job = %job.id, %error, "job-ledger write failed");
+            }
+        });
     }
 
     pub fn with_summary_emission_gate(mut self, flag: Arc<AtomicBool>) -> Self {
@@ -493,6 +545,16 @@ impl TaskManager {
             rows.insert(id.clone(), state);
             controls.insert(id.clone(), control);
         }
+        // Durable spawn record: a restart mid-task must not silently lose
+        // the job — `coco ps` reconciles a Running record with no live PID
+        // into an observable stale state.
+        self.write_job_record(
+            &id,
+            emit_state.status,
+            Some(emit_state.description.clone()),
+            /*error*/ None,
+            emit_state.start_time,
+        );
         self.emit_task_started(&emit_state).await;
         id
     }
@@ -525,6 +587,16 @@ impl TaskManager {
             rows.insert(id.clone(), state);
             controls.insert(id.clone(), control);
         }
+        // Durable spawn record: a restart mid-task must not silently lose
+        // the job — `coco ps` reconciles a Running record with no live PID
+        // into an observable stale state.
+        self.write_job_record(
+            &id,
+            emit_state.status,
+            Some(emit_state.description.clone()),
+            /*error*/ None,
+            emit_state.start_time,
+        );
         self.emit_task_started(&emit_state).await;
         id
     }
@@ -688,6 +760,15 @@ impl TaskManager {
             control.cancel.cancel();
             control.status_tx.send_replace(status);
         }
+        // Durable terminal record — survives process exit so `coco ps`
+        // reports real done/failed/stopped outcomes.
+        self.write_job_record(
+            id,
+            status,
+            Some(snapshot.description.clone()),
+            /*error*/ None,
+            snapshot.start_time,
+        );
         self.emit_task_completed(id, &snapshot).await;
         Some(snapshot)
     }

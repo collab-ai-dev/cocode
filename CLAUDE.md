@@ -215,7 +215,7 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 | `error` | Unified errors with `StatusCode` classification (snafu + virtstack) |
 | `otel` | OpenTelemetry tracing and metrics |
 | `stack-trace-macro` | `#[stack_trace_debug]` proc macro for snafu enums |
-| `model-card` | Vendor-defined model facts (knowledge cutoff, pricing, deprecation). Exact-id lookup; no substring matching |
+| `model-card` | Vendor-defined model facts (knowledge cutoff, pricing) + curated stall-timeout floors. Card lookup is exact-id, no substring matching; lifecycle/deprecation metadata not yet modeled |
 
 ### Vercel AI
 

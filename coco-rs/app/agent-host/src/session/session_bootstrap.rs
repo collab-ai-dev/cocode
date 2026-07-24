@@ -504,6 +504,19 @@ pub async fn install_session_late_binds(
     if let Some(event_sink) = event_sink.clone() {
         task_manager = task_manager.with_event_sink(event_sink);
     }
+    // Durable job ledger: spawn/terminal records under
+    // `<config_home>/bg-jobs/` so `coco ps` reports real outcomes and a
+    // restart mid-task doesn't silently lose them. Sidechats own no
+    // background runtime, so they skip the ledger with it.
+    if session.execution_profile().runs_scheduled_tasks() {
+        task_manager = task_manager.with_job_ledger(coco_tasks::JobLedger {
+            store: coco_tasks::JobStore::new(&coco_config::global_config::config_home()),
+            session_id: task_session_id.clone(),
+            cwd: session.original_cwd().clone(),
+            kind: coco_session::env_session_kind()
+                .unwrap_or(coco_session::ProcessSessionKind::Interactive),
+        });
+    }
     let task_runtime = Arc::new(
         crate::task_runtime::TaskRuntime::with_session_dir(
             Arc::new(task_manager),

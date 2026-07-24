@@ -13,13 +13,13 @@
 //! merging these records with the live PID sweep (keyed on
 //! `session_id`).
 //!
-//! ## Scope (first cut)
+//! ## Scope
 //!
-//! This is intentionally just the typed record + file IO. The daemon
-//! supervisor process, RPC roster, worker fork/retire/respawn, and the
-//! spawn/exit wiring that *writes* these records are deliberately
-//! deferred — a follow-up wires bg-agent spawn/exit to call
-//! [`JobStore::write`].
+//! Typed record + file IO, plus the spawn/terminal write wiring:
+//! [`crate::TaskManager`] writes records through an installed
+//! [`crate::JobLedger`] (`with_job_ledger`, wired at session bootstrap).
+//! The daemon supervisor process, RPC roster, and worker
+//! fork/retire/respawn remain deferred.
 //!
 //! ## Layout
 //!

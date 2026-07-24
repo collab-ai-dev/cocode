@@ -35,6 +35,7 @@ pub use notification::{
     NoOpNotificationSink, NotificationKind, NotificationSink, NotificationSinkRef,
     TaskNotification, TaskUsage, TerminalStatus, Worktree, render as render_notification,
 };
+pub use running::JobLedger;
 pub use running::KillTaskError;
 pub use running::PANEL_GRACE_MS;
 pub use running::TaskCreateRequest;

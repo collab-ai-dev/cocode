@@ -258,9 +258,23 @@ pub(crate) fn build_api_client(
         provider: spec.provider.clone(),
         model_id: spec.model_id.clone(),
     };
+    // Per-model reasoning stall floor (hermes #52845): the curated card
+    // floor lifts a too-aggressive configured idle timeout and enables the
+    // hard backstop for known slow reasoners even when unconfigured. An
+    // unlisted model keeps the safe disabled default — strictly card-gated.
+    let idle_timeout_secs = {
+        let configured = provider_cfg.client_options.stream_idle_timeout_secs;
+        let floor = coco_model_card::stall_timeout_floor_secs(&spec.model_id);
+        match (configured, floor) {
+            (Some(configured), Some(floor)) => Some(configured.max(floor)),
+            (Some(configured), None) => Some(configured),
+            (None, Some(floor)) => Some(floor),
+            (None, None) => None,
+        }
+    };
     let mut client = ApiClient::new(model, fingerprint, model_info, model_identity, retry)
         .with_cache_break_detector(detector)
-        .with_stream_idle_timeout(provider_cfg.client_options.stream_idle_timeout_secs)
+        .with_stream_idle_timeout(idle_timeout_secs)
         .with_role_effort(role_effort);
     // Reactive-401 hook for OAuth-subscription providers: bind a
     // `refresh_now(provider)` callback so an expired access token recovers
