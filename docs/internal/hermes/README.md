@@ -41,8 +41,9 @@ file:line 取证)后的吸收清单与开发计划:
 
 | 文档 | 内容 |
 |------|------|
-| [hermes-opt.md](hermes-opt.md) | 全量 release-log 扫描结论:已具备清单(防重复立项)、P0/P1/P2 吸收分级、反面教训、落地顺序 |
-| [plans/](plans/README.md) | 按 PR 切分的成套开发计划(10 篇),每篇含 Hermes 源码引用证据(仓库相对路径,锚定 commit `a7f65e3bc`)与 coco-rs 落点 |
+| [hermes-opt-0724.md](hermes-opt-0724.md) | **当前有效计划(2026-07-24)**:逐项复核 07-10 清单在 coco 的最新状态(offload/goal runtime/Grep 分组/会话搜索等已落地项关闭)、吸收 v0.19.0 "Quicksilver"(~2245 commits)+ 961 个 post-tag 提交的新增优化点(压缩加固、MoA 加固、耐久 ledger、Gemini 签名 sentinel 等),并重排 P0/P1/P2 与落地顺序 |
+| [hermes-opt.md](hermes-opt.md) | (已被 0724 版取代)全量 release-log 扫描结论 v0.2.0→v0.18.2:已具备清单、P0/P1/P2 吸收分级、反面教训、落地顺序 |
+| [plans/](plans/README.md) | 按 PR 切分的成套开发计划(10 篇),每篇含 Hermes 源码引用证据(仓库相对路径,锚定 commit `a7f65e3bc`)与 coco-rs 落点;各计划的 07-24 有效性盖章见 hermes-opt-0724.md §7 |
 
 ---
 
