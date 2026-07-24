@@ -1,6 +1,9 @@
 # Hermes-Agent Release-Log Sweep → coco-rs Absorption List
 
-Status: analysis complete (2026-07-10) — nothing implemented yet
+Status: analysis complete (2026-07-10) — **superseded by
+[hermes-opt-0724.md](hermes-opt-0724.md)** (2026-07-24), which re-verified
+every item below against current coco-rs, absorbed the v0.19.0 window, and
+re-prioritized. This file remains the evidence record for v0.2.0→v0.18.2.
 Scope: all 21 hermes-agent releases, v2026.3.12 (v0.2.0) → v2026.7.7.2 (v0.18.2)
 Related: [../tool-result-offload-v2-design.md](../tool-result-offload-v2-design.md) (P0 #7 below),
 [../cc-catchup-roadmap-v2.md](../cc-catchup-roadmap-v2.md) (model-card item merges with P1 #6),

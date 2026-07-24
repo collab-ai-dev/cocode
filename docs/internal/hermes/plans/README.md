@@ -4,6 +4,12 @@ Derived from [../hermes-opt.md](../hermes-opt.md) (the 21-release sweep and
 verified gap analysis). One plan file per work item / PR batch. All plans
 are **not started** unless the status line says otherwise.
 
+> **07-24 refresh:** per-plan validity was re-stamped in
+> [../hermes-opt-0724.md](../hermes-opt-0724.md) §7 — p1-3 is DONE (drop),
+> p1-5 is mostly done, p2-1 is superseded (goal runtime shipped), the rest
+> remain valid with noted scope tweaks. Consult that doc before starting
+> any plan here.
+
 ## Citation conventions (cross-machine portable — no absolute paths)
 
 - **Hermes evidence** cites repo-relative paths inside
