@@ -54,7 +54,18 @@ pub fn mermaid_to_lines(src: &str, styles: UiStyles<'_>, width: u16) -> Option<V
     let _restore_guard = coco_tui_ui::panic_guard::PanicRestoreGuard::new();
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let parsed = parse_mermaid(src).ok()?;
-        let opts = RenderOptions::default();
+        let mut opts = RenderOptions::default();
+        // Force deterministic text metrics. The default path measures glyph
+        // advances against the machine's *installed system fonts*
+        // (`fontdb::Database::load_system_fonts`), so every label width — and
+        // thus every downstream x-coordinate — varies by build environment,
+        // making rendered output non-reproducible across machines (a snapshot
+        // accepted on one host fails on another with labels shifted by a column
+        // or two). The `fast_text_metrics` fallback is a pure function of a
+        // calibrated per-character width table, which is both reproducible and
+        // the right fidelity for a projection onto a fixed-width cell grid.
+        // Do NOT remove: the sequence snapshot depends on it.
+        opts.layout.fast_text_metrics = true;
         let layout = compute_layout(&parsed.graph, &opts.theme, &opts.layout);
         match &layout.diagram {
             DiagramData::Graph { .. } => render_graph(&layout, styles, cols),
