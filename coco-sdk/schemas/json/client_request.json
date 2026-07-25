@@ -2007,7 +2007,7 @@
           "const": "max"
         },
         {
-          "description": "Top of the ladder. On the GPT-5.6 family this is \"maximum\nreasoning with automatic task delegation\".",
+          "description": "Top of the ladder, advertised by GPT-5.6 `sol` / `terra`.\n\n**Currently produces a byte-identical request to [`Self::Max`].**\n`ultra` is not a wire value: the vendor client advertises it in its\npicker but maps it down to `max` before building the request, so\nthe API never sees it. Its real meaning is client-side — it flips\nthe harness into proactively delegating work to subagents instead\nof waiting to be asked.\n\ncoco-rs does not implement that delegation policy yet, so today\nthis rung is selectable but behaviorally equal to `Max`. Wiring it\nup means keying an Agent-tool-biasing prompt section off this\nvariant; the wire mapping should stay `max` either way.",
           "type": "string",
           "const": "ultra"
         }

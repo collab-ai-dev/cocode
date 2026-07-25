@@ -162,8 +162,19 @@ pub enum ReasoningEffort {
     /// `ModelInfo::resolve_thinking_level`, so asking for it is never a
     /// wire error.
     Max,
-    /// Top of the ladder. On the GPT-5.6 family this is "maximum
-    /// reasoning with automatic task delegation".
+    /// Top of the ladder, advertised by GPT-5.6 `sol` / `terra`.
+    ///
+    /// **Currently produces a byte-identical request to [`Self::Max`].**
+    /// `ultra` is not a wire value: the vendor client advertises it in its
+    /// picker but maps it down to `max` before building the request, so
+    /// the API never sees it. Its real meaning is client-side — it flips
+    /// the harness into proactively delegating work to subagents instead
+    /// of waiting to be asked.
+    ///
+    /// coco-rs does not implement that delegation policy yet, so today
+    /// this rung is selectable but behaviorally equal to `Max`. Wiring it
+    /// up means keying an Agent-tool-biasing prompt section off this
+    /// variant; the wire mapping should stay `max` either way.
     Ultra,
 }
 

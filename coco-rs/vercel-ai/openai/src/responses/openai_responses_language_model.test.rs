@@ -186,15 +186,20 @@ fn get_args_reasoning_model() {
 
 #[test]
 fn get_args_maps_gpt5_6_efforts_onto_the_wire() {
-    // `max` / `ultra` are real Responses effort values on the GPT-5.6
-    // family. The whole chain — coco `ReasoningEffort` → provider-neutral
-    // `ReasoningLevel` → OpenAI `ReasoningEffort` → wire string — has to
-    // carry them verbatim; silently folding them into `xhigh` would spend
-    // the user's budget at the wrong rung.
+    // `max` is a real Responses effort value on the GPT-5.6 family and must
+    // reach the wire verbatim — folding it into `xhigh` would spend the
+    // user's budget at the wrong rung.
+    //
+    // `ultra` is NOT a wire value. Codex advertises it in its picker but
+    // maps it down to `max` in `reasoning_effort_for_request` before
+    // building the request (`codex-rs/core/src/client.rs`), so the backend
+    // never sees it; there it is purely a client-side switch that flips the
+    // multi-agent policy to proactive. Sending `"ultra"` would put a value
+    // on the wire that the API does not accept.
     for (level, expected) in [
         (vercel_ai_provider::ReasoningLevel::Xhigh, "xhigh"),
         (vercel_ai_provider::ReasoningLevel::Max, "max"),
-        (vercel_ai_provider::ReasoningLevel::Ultra, "ultra"),
+        (vercel_ai_provider::ReasoningLevel::Ultra, "max"),
     ] {
         let model = OpenAIResponsesLanguageModel::new("gpt-5.6-sol", make_config());
         let options = LanguageModelV4CallOptions {
@@ -208,6 +213,29 @@ fn get_args_maps_gpt5_6_efforts_onto_the_wire() {
             "{level:?} must reach the wire as `{expected}`"
         );
     }
+}
+
+#[test]
+fn get_args_ultra_is_byte_identical_to_max() {
+    // `ultra` is a client-side delegation switch, not a wire value, so the
+    // two rungs must produce the SAME request today. This test is the
+    // tripwire for the day coco-rs grows a proactive-delegation policy:
+    // that work should key off `ReasoningEffort::Ultra` upstream of the
+    // provider and leave this equivalence intact. If it fails, someone
+    // taught the wire layer to distinguish them — which the API will not.
+    let model = OpenAIResponsesLanguageModel::new("gpt-5.6-sol", make_config());
+    let body_for = |level| {
+        let options = LanguageModelV4CallOptions {
+            reasoning: Some(level),
+            ..reasoning_user_options()
+        };
+        model.get_args(&options).expect("get_args").0
+    };
+
+    assert_eq!(
+        body_for(vercel_ai_provider::ReasoningLevel::Ultra),
+        body_for(vercel_ai_provider::ReasoningLevel::Max),
+    );
 }
 
 fn make_config_chatgpt() -> Arc<OpenAIConfig> {
