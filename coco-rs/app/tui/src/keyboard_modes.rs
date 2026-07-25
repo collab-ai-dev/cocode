@@ -19,6 +19,8 @@ use std::fmt;
 use std::io::stdout;
 
 use coco_config::env::EnvKey;
+use coco_tui_ui::terminal_detect::Multiplexer;
+use coco_tui_ui::terminal_detect::TerminalName;
 use crossterm::Command;
 use crossterm::event::KeyboardEnhancementFlags;
 use crossterm::event::PushKeyboardEnhancementFlags;
@@ -63,16 +65,16 @@ fn running_in_wsl() -> bool {
 
 fn running_in_vscode_terminal() -> bool {
     vscode_terminal_detected(
-        std::env::var("TERM_PROGRAM").ok().as_deref(),
+        coco_tui_ui::terminal_detect::terminal_info().name,
         windows_term_program().as_deref(),
     )
 }
 
 fn vscode_terminal_detected(
-    linux_term_program: Option<&str>,
+    local_terminal: TerminalName,
     windows_term_program: Option<&str>,
 ) -> bool {
-    term_program_is_vscode(linux_term_program) || term_program_is_vscode(windows_term_program)
+    local_terminal == TerminalName::VsCode || term_program_is_vscode(windows_term_program)
 }
 
 fn term_program_is_vscode(value: Option<&str>) -> bool {
@@ -144,20 +146,9 @@ pub(crate) fn enable_keyboard_enhancement() {
     }
 }
 
-fn running_in_tmux_session() -> bool {
-    tmux_session_detected(
-        std::env::var("TMUX").ok().as_deref(),
-        std::env::var("TMUX_PANE").ok().as_deref(),
-    )
-}
-
-fn tmux_session_detected(tmux: Option<&str>, tmux_pane: Option<&str>) -> bool {
-    tmux.is_some() || tmux_pane.is_some()
-}
-
 fn tmux_should_enable_modify_other_keys() -> bool {
     tmux_should_enable_modify_other_keys_for(
-        running_in_tmux_session(),
+        coco_tui_ui::terminal_detect::terminal_info().is_inside(Multiplexer::Tmux),
         read_tmux_extended_keys_format().as_deref(),
     )
 }

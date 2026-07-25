@@ -1,3 +1,4 @@
+use crate::reflow_cap::MaxReflowRows;
 use pretty_assertions::assert_eq;
 use ratatui::style::Color;
 use std::sync::Arc;
@@ -28,6 +29,7 @@ fn finalized_history_lines_render_committed_assistant_message() {
             cwd: None,
             kb_handle: None,
             replay_cache_policy: HistoryReplayCachePolicy::default(),
+            max_reflow_rows: MaxReflowRows::default(),
             reasoning_metadata: None,
             subagent_summaries: None,
         },
@@ -141,6 +143,7 @@ fn finalized_history_lines_do_not_emit_active_busy_tail() {
             cwd: None,
             kb_handle: None,
             replay_cache_policy: HistoryReplayCachePolicy::default(),
+            max_reflow_rows: MaxReflowRows::default(),
             reasoning_metadata: None,
             subagent_summaries: None,
         },
@@ -179,6 +182,7 @@ fn finalized_history_lines_hide_compact_boundary_and_summary_by_default() {
             cwd: None,
             kb_handle: None,
             replay_cache_policy: HistoryReplayCachePolicy::default(),
+            max_reflow_rows: MaxReflowRows::default(),
             reasoning_metadata: None,
             subagent_summaries: None,
         },
@@ -208,6 +212,7 @@ fn finalized_history_lines_collapse_meta_by_default() {
             cwd: None,
             kb_handle: None,
             replay_cache_policy: HistoryReplayCachePolicy::default(),
+            max_reflow_rows: MaxReflowRows::default(),
             reasoning_metadata: None,
             subagent_summaries: None,
         },
@@ -239,6 +244,7 @@ fn finalized_history_lines_render_empty_title_info_as_markdown() {
             cwd: None,
             kb_handle: None,
             replay_cache_policy: HistoryReplayCachePolicy::default(),
+            max_reflow_rows: MaxReflowRows::default(),
             reasoning_metadata: None,
             subagent_summaries: None,
         },
@@ -277,6 +283,7 @@ fn finalized_history_lines_show_collapsed_thinking_with_toggle_hint() {
             cwd: None,
             kb_handle: Some(&kb_handle),
             replay_cache_policy: HistoryReplayCachePolicy::default(),
+            max_reflow_rows: MaxReflowRows::default(),
             reasoning_metadata: Some(&reasoning_metadata),
             subagent_summaries: None,
         },
@@ -1025,6 +1032,7 @@ fn options_with_syntax(
         cwd: None,
         kb_handle: None,
         replay_cache_policy: HistoryReplayCachePolicy::default(),
+        max_reflow_rows: MaxReflowRows::default(),
         reasoning_metadata: None,
         subagent_summaries: None,
     }

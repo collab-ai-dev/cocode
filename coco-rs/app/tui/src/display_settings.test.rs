@@ -163,3 +163,45 @@ fn from_settings_with_sources_marks_higher_priority_syntax_highlighting_as_overr
         DisplaySettingEditability::OverriddenBy(SettingSource::Local)
     );
 }
+
+#[test]
+fn animations_default_to_animated_motion() {
+    let settings = Settings::default();
+    assert_eq!(
+        DisplaySettings::from_settings(&settings).motion,
+        MotionMode::Animated
+    );
+}
+
+/// Reduced motion is opt-in and must survive the settings round trip, since
+/// this is an accessibility preference, not a cosmetic one.
+#[test]
+fn animations_disabled_selects_reduced_motion() {
+    let mut settings = Settings::default();
+    settings.tui.animations = false;
+    assert_eq!(
+        DisplaySettings::from_settings(&settings).motion,
+        MotionMode::Reduced
+    );
+    assert_eq!(
+        DisplaySettings::from_settings_with_sources(&settings_with_source(
+            settings,
+            HashMap::new()
+        ))
+        .motion,
+        MotionMode::Reduced
+    );
+}
+
+/// The reflow cap must never default to zero rows — that would replay an empty
+/// transcript on every width change.
+#[test]
+fn reflow_max_rows_defaults_to_a_usable_cap() {
+    let settings = Settings::default();
+    assert!(
+        DisplaySettings::from_settings(&settings)
+            .max_reflow_rows
+            .get()
+            > 0
+    );
+}

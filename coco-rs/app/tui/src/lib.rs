@@ -37,6 +37,7 @@ pub(crate) mod modal_pane;
 mod perf;
 pub(crate) mod permission_options;
 mod presentation;
+mod reflow_cap;
 mod resize_debounce;
 pub mod server_notification_handler;
 pub mod state;

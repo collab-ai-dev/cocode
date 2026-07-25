@@ -2,6 +2,7 @@ use super::StatusIndicator;
 use super::StatusIndicatorView;
 use super::build_line;
 use super::fmt_elapsed_compact;
+use crate::motion::MotionMode;
 use crate::style::UiStyles;
 use crate::theme::Theme;
 use crate::theme::ThemeName;
@@ -30,20 +31,29 @@ fn fmt_elapsed_compact_clamps_negative_to_zero() {
 #[test]
 fn spinner_frame_is_deterministic_in_time() {
     // First frame at t=0.
-    assert_eq!(StatusIndicator::spinner_frame(0), "⠋");
+    assert_eq!(StatusIndicator::spinner_frame(0, MotionMode::Animated), "⠋");
     // Same frame within one tick interval.
-    assert_eq!(StatusIndicator::spinner_frame(79), "⠋");
+    assert_eq!(
+        StatusIndicator::spinner_frame(79, MotionMode::Animated),
+        "⠋"
+    );
     // Advances at the 80ms boundary.
-    assert_eq!(StatusIndicator::spinner_frame(80), "⠙");
+    assert_eq!(
+        StatusIndicator::spinner_frame(80, MotionMode::Animated),
+        "⠙"
+    );
     // Spinner is bidirectional (20 frames total: forward+reverse).
     // Wraps back to the first frame after 20 * 80 = 1_600 ms.
-    assert_eq!(StatusIndicator::spinner_frame(1_600), "⠋");
+    assert_eq!(
+        StatusIndicator::spinner_frame(1_600, MotionMode::Animated),
+        "⠋"
+    );
 }
 
 #[test]
 fn spinner_frame_never_panics_on_negative() {
-    let _ = StatusIndicator::spinner_frame(-5);
-    let _ = StatusIndicator::spinner_frame(i64::MIN);
+    let _ = StatusIndicator::spinner_frame(-5, MotionMode::Animated);
+    let _ = StatusIndicator::spinner_frame(i64::MIN, MotionMode::Animated);
 }
 
 #[test]
@@ -108,6 +118,7 @@ fn snapshot_status_indicator_tokens_and_effort() {
         show_interrupt_hint: true,
         force_show_tokens: false,
         has_running_teammates: false,
+        motion: MotionMode::Animated,
     };
     insta::assert_snapshot!("status_indicator_tokens_effort", render(view, 100, 1));
 }
@@ -123,6 +134,7 @@ fn renders_typical_80_col_with_tokens() {
         show_interrupt_hint: true,
         force_show_tokens: false,
         has_running_teammates: false,
+        motion: MotionMode::Animated,
     };
     let out = render(view, 80, 1);
     // Anchor: starts with spinner glyph + verb + effort + elapsed.
@@ -149,6 +161,7 @@ fn hides_tokens_before_threshold() {
         show_interrupt_hint: true,
         force_show_tokens: false,
         has_running_teammates: false,
+        motion: MotionMode::Animated,
     };
     let out = render(view, 80, 1);
     assert!(!out.contains("↑"), "tokens shown too early: {out:?}");
@@ -166,6 +179,7 @@ fn force_show_tokens_overrides_threshold() {
         show_interrupt_hint: true,
         force_show_tokens: true,
         has_running_teammates: false,
+        motion: MotionMode::Animated,
     };
     let out = render(view, 80, 1);
     assert!(out.contains("↑… ↓300"), "verbose-token render: {out:?}");
@@ -186,6 +200,7 @@ fn running_teammates_force_tokens_before_threshold() {
         show_interrupt_hint: true,
         force_show_tokens: false,
         has_running_teammates: true,
+        motion: MotionMode::Animated,
     };
     let out = render(view, 80, 1);
     assert!(
@@ -207,6 +222,7 @@ fn narrow_terminal_drops_hint_first() {
         show_interrupt_hint: true,
         force_show_tokens: false,
         has_running_teammates: false,
+        motion: MotionMode::Animated,
     };
     let out = render(view, 55, 1);
     assert!(!out.contains("esc"), "hint should be dropped: {out:?}");
@@ -227,6 +243,7 @@ fn tighter_terminal_drops_tokens_before_elapsed() {
         show_interrupt_hint: true,
         force_show_tokens: false,
         has_running_teammates: false,
+        motion: MotionMode::Animated,
     };
     let out = render(view, 28, 1);
     assert!(!out.contains("↑"), "tokens should be dropped: {out:?}");
@@ -244,6 +261,7 @@ fn very_narrow_drops_effort_before_truncating_load_bearing_text() {
         show_interrupt_hint: true,
         force_show_tokens: false,
         has_running_teammates: false,
+        motion: MotionMode::Animated,
     };
     let out = render(view, 20, 1);
     assert!(out.contains("Pondering"), "verb dropped: {out:?}");
@@ -261,4 +279,14 @@ fn zero_area_renders_nothing() {
     let mut buf = Buffer::empty(Rect::new(0, 0, 0, 0));
     widget.render(Rect::new(0, 0, 0, 0), &mut buf);
     // Did not panic; nothing to assert on the empty buffer.
+}
+
+/// Reduced motion holds the spinner still without removing it — a blank where
+/// the indicator was would read as a stalled session.
+#[test]
+fn test_spinner_frame_is_static_under_reduced_motion() {
+    let first = StatusIndicator::spinner_frame(0, MotionMode::Reduced);
+    let later = StatusIndicator::spinner_frame(10_000, MotionMode::Reduced);
+    assert_eq!(first, later);
+    assert_eq!(first, crate::motion::STATIC_ACTIVITY_GLYPH);
 }

@@ -58,6 +58,7 @@ use sha2::Digest;
 use sha2::Sha256;
 
 use crate::keybinding_resolver::KeybindingHandle;
+use crate::reflow_cap::MaxReflowRows;
 use crate::state::session::ReasoningMetadata;
 use crate::transcript::cells::CellKind;
 use crate::transcript::cells::RenderedCell;
@@ -67,7 +68,6 @@ use coco_tui_ui::engine::history_insert::HistoryRows;
 use coco_tui_ui::engine::history_insert::render_history_rows_with_links;
 use coco_tui_ui::style::UiStyles;
 
-pub(crate) const DEFAULT_MAX_REFLOW_ROWS: usize = 9_000;
 const DEFAULT_REPLAY_CACHE_ENTRIES: usize = 32;
 const DEFAULT_REPLAY_CACHE_BYTES: usize = 2 * 1024 * 1024;
 const REPLAY_CACHE_MIN_CELLS: usize = 32;
@@ -114,6 +114,9 @@ pub(crate) struct HistoryLineRenderOptions<'a> {
     pub(crate) cwd: Option<&'a str>,
     pub(crate) kb_handle: Option<&'a KeybindingHandle>,
     pub(crate) replay_cache_policy: HistoryReplayCachePolicy,
+    /// Ceiling on rows rebuilt into native scrollback by a replay; resolved
+    /// from `tui.reflow_max_rows` against the detected terminal.
+    pub(crate) max_reflow_rows: MaxReflowRows,
     /// TUI-side side-cache for reasoning metadata keyed by assistant
     /// message UUID. `None` ⇒ thinking cells render without the
     /// `· <duration> · <tokens>` badge (live append before

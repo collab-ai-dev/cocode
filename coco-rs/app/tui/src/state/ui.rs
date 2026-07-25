@@ -26,6 +26,7 @@ use crate::theme::ThemeRuntimeState;
 use crate::theme::ThemeSetting;
 use coco_tui_ui::constants;
 use coco_tui_ui::double_press::DoublePressTracker;
+use coco_tui_ui::paste_burst::PasteBurst;
 
 const RECENT_DENIAL_LIMIT: usize = 20;
 
@@ -156,6 +157,10 @@ pub struct UiState {
     /// itself fires `TuiCommand::Cancel` on every press; this tracker
     /// only controls whether the second Esc opens the rewind picker.
     pub esc_tracker: DoublePressTracker<()>,
+    /// Recognizes a paste arriving as individual key events on terminals that
+    /// do not honour bracketed paste, so its embedded newlines insert instead
+    /// of submitting. Fed every key press; read at the Enter decision.
+    pub paste_burst: PasteBurst,
     /// Whether the terminal window currently has focus. Used to gate
     /// turn-complete notifications so they only fire when the user has
     /// switched away.
@@ -298,6 +303,7 @@ impl UiState {
             ctrl_c_tracker: DoublePressTracker::new(constants::DOUBLE_PRESS_TIMEOUT),
             ctrl_d_tracker: DoublePressTracker::new(constants::DOUBLE_PRESS_TIMEOUT),
             esc_tracker: DoublePressTracker::new(constants::DOUBLE_PRESS_TIMEOUT),
+            paste_burst: PasteBurst::new(),
             terminal_focused: true,
             surface_visibility_known_at: None,
             surface_visibility_confirmation_pending: false,

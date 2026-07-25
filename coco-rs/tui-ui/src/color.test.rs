@@ -11,6 +11,7 @@ use super::detect_from_env;
 use super::rgb_to_ansi16;
 use super::rgb_to_xterm256;
 use super::xterm256_to_rgb;
+use crate::terminal_detect::TerminalName;
 use ratatui::style::Color;
 
 /// Build a `ColorEnv` carrying only `COLORTERM`, for the canonical-signal tests.
@@ -108,29 +109,30 @@ fn test_detect_from_env_defaults_to_ansi256() {
 }
 
 #[test]
-fn test_detect_from_env_trusts_truecolor_term_programs_without_colorterm() {
-    // macOS GUI launches frequently omit COLORTERM; trust TERM_PROGRAM.
-    for program in [
-        "ghostty",
-        "iTerm.app",
-        "WezTerm",
-        "Warp",
-        "alacritty",
-        "Hyper",
+fn test_detect_from_env_trusts_truecolor_terminals_without_colorterm() {
+    // macOS GUI launches frequently omit COLORTERM; trust the identity.
+    for terminal in [
+        TerminalName::Ghostty,
+        TerminalName::Iterm2,
+        TerminalName::WezTerm,
+        TerminalName::Warp,
+        TerminalName::Alacritty,
+        TerminalName::Hyper,
+        TerminalName::Kitty,
     ] {
         assert_eq!(
             detect_from_env(ColorEnv {
-                term_program: Some(program),
+                terminal,
                 ..Default::default()
             }),
             ColorCapability::TrueColor,
-            "TERM_PROGRAM={program} should imply truecolor"
+            "{terminal:?} should imply truecolor"
         );
     }
     // Apple Terminal is 256-color only and must NOT be promoted.
     assert_eq!(
         detect_from_env(ColorEnv {
-            term_program: Some("Apple_Terminal"),
+            terminal: TerminalName::AppleTerminal,
             ..Default::default()
         }),
         ColorCapability::Ansi256
@@ -138,35 +140,25 @@ fn test_detect_from_env_trusts_truecolor_term_programs_without_colorterm() {
 }
 
 #[test]
-fn test_detect_from_env_trusts_terminal_specific_env_marker() {
-    assert_eq!(
-        detect_from_env(ColorEnv {
-            truecolor_env_marker: true,
-            ..Default::default()
-        }),
-        ColorCapability::TrueColor
-    );
-}
-
-#[test]
-fn test_detect_from_env_matches_truecolor_term_substring() {
-    for term in ["xterm-kitty", "xterm-ghostty", "alacritty", "wezterm"] {
-        assert_eq!(
-            detect_from_env(ColorEnv {
-                term: Some(term),
-                ..Default::default()
-            }),
-            ColorCapability::TrueColor,
-            "TERM={term} should imply truecolor"
-        );
-    }
-    // Plain 256color terminfo stays Ansi256.
+fn test_detect_from_env_unidentified_terminfo_stays_ansi256() {
     assert_eq!(
         detect_from_env(ColorEnv {
             term: Some("xterm-256color"),
             ..Default::default()
         }),
         ColorCapability::Ansi256
+    );
+}
+
+#[test]
+fn test_detect_from_env_dumb_terminal_disables_color() {
+    assert_eq!(
+        detect_from_env(ColorEnv {
+            terminal: TerminalName::Dumb,
+            colorterm: Some("truecolor"),
+            ..Default::default()
+        }),
+        ColorCapability::None
     );
 }
 
@@ -183,10 +175,8 @@ fn no_color_forces_none_over_truecolor() {
     assert_eq!(detect_from_env(env), ColorCapability::None);
 }
 
-#[test]
-fn dumb_term_is_none() {
-    assert_eq!(detect_from_env(term_env("dumb")), ColorCapability::None);
-}
+// `TERM=dumb` reaches this layer as `TerminalName::Dumb` (pinned in
+// `terminal_detect`), covered by `test_detect_from_env_dumb_terminal_disables_color`.
 
 #[test]
 fn classic_terminals_are_basic() {

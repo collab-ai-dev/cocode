@@ -4,6 +4,8 @@ mod builtin;
 pub(crate) mod runtime;
 mod widget;
 
+use unicode_width::UnicodeWidthStr;
+
 use crate::state::AppState;
 use crate::state::ExitKey;
 
@@ -48,11 +50,98 @@ impl StatusSpan {
     }
 }
 
+/// Drop order when the built-in bar does not fit the terminal width.
+///
+/// Narrow terminals lose whole items rather than being clipped mid-item by the
+/// paragraph renderer, which is what a half-drawn `ctx 8` or a truncated branch
+/// name used to look like. Lowest priority drops first; within one priority the
+/// rightmost item drops first, so the reading order of whatever survives never
+/// changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum StatusPriority {
+    /// Affordances and badges: cycle hints, MCP/LSP, transcript counts. The
+    /// user loses a reminder, not information.
+    Ambient,
+    /// Session vitals: spend, cache, working directory, task pill.
+    Vitals,
+    /// Never dropped: model identity, context usage, permission mode, and any
+    /// warning. Losing these silently changes what the user believes is true.
+    Essential,
+}
+
+/// One droppable unit of a built-in status line.
+///
+/// Items own their own leading separator, so filtering an item out leaves the
+/// remaining spans reading correctly with no separator fixup. That holds
+/// because the first item on every line is [`StatusPriority::Essential`] and
+/// therefore always survives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StatusItem {
+    pub(crate) spans: Vec<StatusSpan>,
+    pub(crate) priority: StatusPriority,
+}
+
+impl StatusItem {
+    pub(crate) fn new(priority: StatusPriority, spans: Vec<StatusSpan>) -> Self {
+        Self { spans, priority }
+    }
+
+    fn width(&self) -> usize {
+        self.spans
+            .iter()
+            .map(|span| UnicodeWidthStr::width(span.text.as_str()))
+            .sum()
+    }
+}
+
+impl<'a> IntoIterator for &'a StatusItem {
+    type Item = &'a StatusSpan;
+    type IntoIter = std::slice::Iter<'a, StatusSpan>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.spans.iter()
+    }
+}
+
+/// Spans of the widest prefix-preserving subset of `items` that fits `width`
+/// display columns.
+///
+/// If even the essential items overflow, they are returned anyway — there is
+/// nothing useful left to drop, and the renderer clips.
+pub(crate) fn fit_status_items(items: &[StatusItem], width: usize) -> Vec<StatusSpan> {
+    let mut kept: Vec<bool> = vec![true; items.len()];
+    for priority in [StatusPriority::Ambient, StatusPriority::Vitals] {
+        for index in (0..items.len()).rev() {
+            if kept_width(items, &kept) <= width {
+                break;
+            }
+            if items[index].priority == priority {
+                kept[index] = false;
+            }
+        }
+    }
+    items
+        .iter()
+        .zip(kept)
+        .filter(|(_, keep)| *keep)
+        .flat_map(|(item, _)| item.spans.iter().cloned())
+        .collect()
+}
+
+fn kept_width(items: &[StatusItem], kept: &[bool]) -> usize {
+    items
+        .iter()
+        .zip(kept)
+        .filter(|(_, keep)| **keep)
+        .map(|(item, _)| item.width())
+        .sum()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StatusBarView {
     ExitPrompt { key: ExitKey, text: String },
     Custom { line: String },
-    BuiltIn { lines: Vec<Vec<StatusSpan>> },
+    BuiltIn { lines: Vec<Vec<StatusItem>> },
 }
 
 pub(crate) use builtin::background_pill_label;

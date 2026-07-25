@@ -621,6 +621,7 @@ fn history_options(
         cwd: state.session.working_dir.as_deref(),
         kb_handle: Some(&state.ui.kb_handle),
         replay_cache_policy: state.ui.display_settings.native_replay_cache,
+        max_reflow_rows: state.ui.display_settings.max_reflow_rows,
         reasoning_metadata: Some(&state.session.reasoning_metadata),
         subagent_summaries: Some(&state.session.subagent_summaries),
     }

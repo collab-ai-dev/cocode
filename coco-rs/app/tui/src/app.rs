@@ -827,13 +827,17 @@ where
         // spinner ticks at its glyph period. `Idle` arms nothing, so a
         // turn blocked on a user prompt — or a genuinely idle session —
         // lets the frame scheduler sleep until the next real event.
+        // Reduced motion slows the spinner-only cadence to its own floor; the
+        // stream-reveal tick keeps its rate either way, because that one paces
+        // how fast text appears rather than how fast a glyph turns.
+        let motion = self.state.ui.display_settings.motion;
         match self.state.ui_animation() {
             UiAnimation::StreamReveal => self
                 .frame_requester
                 .schedule_frame_in(constants::SPINNER_TICK_INTERVAL),
             UiAnimation::SpinnerOnly => self
                 .frame_requester
-                .schedule_frame_in(constants::SPINNER_ONLY_TICK_INTERVAL),
+                .schedule_frame_in(motion.frame_interval(constants::SPINNER_ONLY_TICK_INTERVAL)),
             UiAnimation::Idle => {}
         }
 
@@ -1059,6 +1063,9 @@ where
                 if self.tui.retained_surface_visible() {
                     self.state.ui.record_surface_interaction(now);
                 }
+                // Must run before dispatch: `map_key` reads the burst window to
+                // decide whether this key's Enter is a newline or a submit.
+                self.state.ui.paste_burst.observe(key, now);
                 // Delegate all key mapping to keybinding_bridge
                 if let Some(cmd) = keybinding_bridge::map_key(&self.state, key) {
                     // Voice push-to-talk is intercepted here — the VoiceSession

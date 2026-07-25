@@ -1,3 +1,4 @@
+use crate::reflow_cap::MaxReflowRows;
 use pretty_assertions::assert_eq;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
@@ -221,6 +222,7 @@ fn emit_append_only_accepts_finalized_transcript_renderer() {
                     cwd: None,
                     kb_handle: None,
                     replay_cache_policy: HistoryReplayCachePolicy::default(),
+                    max_reflow_rows: MaxReflowRows::default(),
                     reasoning_metadata: None,
                     subagent_summaries: None,
                 },

@@ -383,11 +383,46 @@ impl StrictPluginOnlyCustomization {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TuiSettings {
     pub native_replay_cache: NativeReplayCacheSettings,
     pub performance: TuiPerformanceSettings,
+    pub reflow_max_rows: ReflowMaxRows,
+    /// Whether time-varying UI (the turn spinner) animates. Turn off for
+    /// reduced motion, screen readers, or clean captured terminal logs;
+    /// indicators stay visible as static glyphs.
+    pub animations: bool,
+}
+
+impl Default for TuiSettings {
+    fn default() -> Self {
+        Self {
+            native_replay_cache: NativeReplayCacheSettings::default(),
+            performance: TuiPerformanceSettings::default(),
+            reflow_max_rows: ReflowMaxRows::default(),
+            animations: true,
+        }
+    }
+}
+
+/// How many rows of transcript coco rebuilds into native scrollback on a width
+/// change or an initial replay.
+///
+/// coco is rebuilding the terminal's own scrollback, not an internal virtual
+/// transcript, so replaying more rows than the terminal retains is wasted work
+/// that only makes interactive resize feel slower.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReflowMaxRows {
+    /// Derive the cap from the detected terminal's documented scrollback
+    /// default.
+    #[default]
+    Auto,
+    /// Never cap — rebuild the whole transcript however long it is.
+    Unlimited,
+    /// A fixed row cap.
+    Rows(usize),
 }
 
 /// TUI performance logging knobs.

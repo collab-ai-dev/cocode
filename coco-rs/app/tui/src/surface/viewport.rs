@@ -392,6 +392,7 @@ fn render_live_viewport(
                 show_interrupt_hint: true,
                 force_show_tokens: false,
                 has_running_teammates,
+                motion: state.ui.display_settings.motion,
             }
         } else {
             let elapsed_ms = state
@@ -412,6 +413,7 @@ fn render_live_viewport(
                 show_interrupt_hint: true,
                 force_show_tokens: false,
                 has_running_teammates: false,
+                motion: state.ui.display_settings.motion,
             }
         };
         frame.render_widget(

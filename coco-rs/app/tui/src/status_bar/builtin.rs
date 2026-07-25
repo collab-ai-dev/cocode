@@ -9,6 +9,8 @@ use crate::state::AppState;
 use crate::state::FocusTarget;
 use crate::state::session::TaskEntryKind;
 use crate::state::transcript_view::TranscriptCounts;
+use crate::status_bar::StatusItem;
+use crate::status_bar::StatusPriority;
 use crate::status_bar::StatusSpan;
 use crate::status_bar::StatusTone;
 
@@ -20,7 +22,7 @@ use crate::status_bar::StatusTone;
 /// to a single row in the default state and grows to the full three rows in a
 /// real session. [`built_in_line_count`] mirrors the same predicates for the
 /// layout pass without building any spans.
-pub(crate) fn built_in_status_lines(state: &AppState) -> Vec<Vec<StatusSpan>> {
+pub(crate) fn built_in_status_lines(state: &AppState) -> Vec<Vec<StatusItem>> {
     let mut lines = vec![identity_line(state)];
     if show_usage_line(state) {
         lines.push(usage_line(state));
@@ -62,8 +64,8 @@ fn show_environment_line(state: &AppState) -> bool {
 
 /// Line 1 (identity + vitals): model · effort · cycle-hint | ctx | turn
 /// total spend | counts | MCP | LSP. Always rendered.
-fn identity_line(state: &AppState) -> Vec<StatusSpan> {
-    let mut spans = Vec::new();
+fn identity_line(state: &AppState) -> Vec<StatusItem> {
+    let mut items = Vec::new();
     let (provider, model_id) = state
         .session
         .model_by_role
@@ -79,20 +81,25 @@ fn identity_line(state: &AppState) -> Vec<StatusSpan> {
     };
     let has_model = !model_display.is_empty();
     if has_model {
-        spans.push(StatusSpan::bold(
+        let mut spans = vec![StatusSpan::bold(
             format!(" {model_display}"),
             StatusTone::Primary,
-        ));
+        )];
         if state.session.fast_mode {
             spans.push(StatusSpan::new(" ⚡", StatusTone::Warning));
         }
+        items.push(StatusItem::new(StatusPriority::Essential, spans));
     }
 
+    // The `join` doubles as this line's leading pad when there is no model, so
+    // the effort item carries it rather than a separate lead.
     let join = if has_model { " * " } else { " " };
-    spans.push(StatusSpan::new(join, StatusTone::Dim));
-    spans.push(StatusSpan::new(
-        state.session.thinking_effort.to_string(),
-        StatusTone::Dim,
+    items.push(StatusItem::new(
+        StatusPriority::Essential,
+        vec![
+            StatusSpan::new(join, StatusTone::Dim),
+            StatusSpan::new(state.session.thinking_effort.to_string(), StatusTone::Dim),
+        ],
     ));
     if !state.is_viewing_side_chat()
         && let Some(hint) = state
@@ -100,25 +107,36 @@ fn identity_line(state: &AppState) -> Vec<StatusSpan> {
             .kb_handle
             .display_for(&KeybindingAction::ChatCycleThinking, TuiContext::Chat)
     {
-        spans.push(StatusSpan::new(" * ", StatusTone::Dim));
-        spans.push(StatusSpan::new(format!("{hint} to cycle"), StatusTone::Dim));
+        items.push(StatusItem::new(
+            StatusPriority::Ambient,
+            vec![
+                StatusSpan::new(" * ", StatusTone::Dim),
+                StatusSpan::new(format!("{hint} to cycle"), StatusTone::Dim),
+            ],
+        ));
     }
 
     if let Some(hint) = state.ui.kb_handle.pending_display() {
-        separator(&mut spans);
-        spans.push(StatusSpan::bold(hint, StatusTone::Warning));
+        items.push(StatusItem::new(
+            StatusPriority::Essential,
+            vec![separator(), StatusSpan::bold(hint, StatusTone::Warning)],
+        ));
     }
 
     if let Some(warning) = state.ui.terminal_compatibility_warning.as_ref() {
-        separator(&mut spans);
-        spans.push(StatusSpan::bold(warning.clone(), StatusTone::Warning));
+        items.push(StatusItem::new(
+            StatusPriority::Essential,
+            vec![
+                separator(),
+                StatusSpan::bold(warning.clone(), StatusTone::Warning),
+            ],
+        ));
     }
 
-    separator(&mut spans);
-    if let Some(usage) = render_context_usage(state) {
+    let ctx_span = if let Some(usage) = render_context_usage(state) {
         let trigger = ctx_trigger_percent(state, usage.total);
         let (tone, bold) = ctx_tone(usage.percent, trigger);
-        spans.push(StatusSpan {
+        StatusSpan {
             text: format!(
                 "ctx {}/{}",
                 format_ctx_percent(usage.percent_tenths),
@@ -126,13 +144,16 @@ fn identity_line(state: &AppState) -> Vec<StatusSpan> {
             ),
             tone,
             bold,
-        });
+        }
     } else {
-        spans.push(StatusSpan::new("ctx --", StatusTone::Dim));
-    }
+        StatusSpan::new("ctx --", StatusTone::Dim)
+    };
+    items.push(StatusItem::new(
+        StatusPriority::Essential,
+        vec![separator(), ctx_span],
+    ));
 
     if let Some(usage) = total_usage_summary(state) {
-        separator(&mut spans);
         let mut text = t!(
             "status.total_usage",
             input = format_token_count(usage.input_tokens),
@@ -143,38 +164,53 @@ fn identity_line(state: &AppState) -> Vec<StatusSpan> {
             text.push(' ');
             text.push_str(&cost);
         }
-        spans.push(StatusSpan::new(text, StatusTone::Dim));
+        items.push(StatusItem::new(
+            StatusPriority::Vitals,
+            vec![separator(), StatusSpan::new(text, StatusTone::Dim)],
+        ));
     }
 
-    separator(&mut spans);
-    spans.push(StatusSpan::new(
-        transcript_count_status(state.session.transcript.cumulative_counts()),
-        StatusTone::Dim,
+    items.push(StatusItem::new(
+        StatusPriority::Ambient,
+        vec![
+            separator(),
+            StatusSpan::new(
+                transcript_count_status(state.session.transcript.cumulative_counts()),
+                StatusTone::Dim,
+            ),
+        ],
     ));
 
     let mcp_count = state.session.connected_mcp_count();
     if mcp_count > 0 {
-        separator(&mut spans);
-        spans.push(StatusSpan::new(
-            t!("status.mcp", count = mcp_count).to_string(),
-            StatusTone::Dim,
+        items.push(StatusItem::new(
+            StatusPriority::Ambient,
+            vec![
+                separator(),
+                StatusSpan::new(
+                    t!("status.mcp", count = mcp_count).to_string(),
+                    StatusTone::Dim,
+                ),
+            ],
         ));
     }
 
     if state.session.lsp_active {
-        separator(&mut spans);
-        spans.push(StatusSpan::new("LSP", StatusTone::Dim));
+        items.push(StatusItem::new(
+            StatusPriority::Ambient,
+            vec![separator(), StatusSpan::new("LSP", StatusTone::Dim)],
+        ));
     }
 
-    spans
+    items
 }
 
 /// Line 2 (spend): session `↑in/$ ↓out/$ · cache` and, once any subagent
 /// reports, the aggregate `↳ subagents …` group. Both use 2-decimal costs for
 /// a compact, scannable width. Rendered only when there is token activity
 /// ([`show_usage_line`]).
-fn usage_line(state: &AppState) -> Vec<StatusSpan> {
-    let mut spans = Vec::new();
+fn usage_line(state: &AppState) -> Vec<StatusItem> {
+    let mut items = Vec::new();
     let tokens = &state.session.token_usage;
     let usage_costs = state.session.session_usage.as_ref().map(|snapshot| {
         let input_cost = snapshot.totals.input_cost_usd
@@ -190,45 +226,54 @@ fn usage_line(state: &AppState) -> Vec<StatusSpan> {
             snapshot.unpriced_models.len(),
         )
     });
-    spans.push(StatusSpan::new(
-        match usage_costs {
-            Some((_, _, true, _)) => t!(
-                "status.session_usage_unpriced",
-                input = format_token_count(tokens.input_tokens),
-                output = format_token_count(tokens.output_tokens)
-            )
-            .to_string(),
-            Some((input_cost, output_cost, false, _)) => t!(
-                "status.session_usage",
-                input = format_token_count(tokens.input_tokens),
-                input_cost = format_cost_2dp(input_cost),
-                output = format_token_count(tokens.output_tokens),
-                output_cost = format_cost_2dp(output_cost)
-            )
-            .to_string(),
-            None => t!(
-                "status.session_usage_tokens",
-                input = format_token_count(tokens.input_tokens),
-                output = format_token_count(tokens.output_tokens)
-            )
-            .to_string(),
-        },
-        StatusTone::Dim,
+    items.push(StatusItem::new(
+        StatusPriority::Essential,
+        vec![StatusSpan::new(
+            match usage_costs {
+                Some((_, _, true, _)) => t!(
+                    "status.session_usage_unpriced",
+                    input = format_token_count(tokens.input_tokens),
+                    output = format_token_count(tokens.output_tokens)
+                )
+                .to_string(),
+                Some((input_cost, output_cost, false, _)) => t!(
+                    "status.session_usage",
+                    input = format_token_count(tokens.input_tokens),
+                    input_cost = format_cost_2dp(input_cost),
+                    output = format_token_count(tokens.output_tokens),
+                    output_cost = format_cost_2dp(output_cost)
+                )
+                .to_string(),
+                None => t!(
+                    "status.session_usage_tokens",
+                    input = format_token_count(tokens.input_tokens),
+                    output = format_token_count(tokens.output_tokens)
+                )
+                .to_string(),
+            },
+            StatusTone::Dim,
+        )],
     ));
-    spans.push(StatusSpan::new(
-        format!(
-            " · cache {}/{}",
-            format_token_count(tokens.cache_read_tokens),
-            format_cache_percent(cache_percent(tokens.cache_read_tokens, tokens.input_tokens))
-        ),
-        StatusTone::Dim,
+    items.push(StatusItem::new(
+        StatusPriority::Vitals,
+        vec![StatusSpan::new(
+            format!(
+                " · cache {}/{}",
+                format_token_count(tokens.cache_read_tokens),
+                format_cache_percent(cache_percent(tokens.cache_read_tokens, tokens.input_tokens))
+            ),
+            StatusTone::Dim,
+        )],
     ));
     if let Some((_, _, false, unpriced_count)) = usage_costs
         && unpriced_count > 0
     {
-        spans.push(StatusSpan::new(
-            format!(" · unpriced {unpriced_count}"),
-            StatusTone::Warning,
+        items.push(StatusItem::new(
+            StatusPriority::Essential,
+            vec![StatusSpan::new(
+                format!(" · unpriced {unpriced_count}"),
+                StatusTone::Warning,
+            )],
         ));
     }
 
@@ -239,25 +284,33 @@ fn usage_line(state: &AppState) -> Vec<StatusSpan> {
     // spend. Hidden until the first subagent reports.
     let sub = &state.session.subagent_usage;
     if sub.has_activity() {
-        separator(&mut spans);
-        spans.push(StatusSpan::new(
-            t!(
-                "status.subagent_usage",
-                input = format_token_count(sub.input_tokens),
-                input_cost = format_cost_2dp(sub.input_cost_usd),
-                output = format_token_count(sub.output_tokens),
-                output_cost = format_cost_2dp(sub.output_cost_usd),
-                cache = format!(
-                    "{}/{}",
-                    format_token_count(sub.cache_read_tokens),
-                    format_cache_percent(cache_percent(sub.cache_read_tokens, sub.input_tokens))
-                )
-            )
-            .to_string(),
-            StatusTone::Dim,
+        items.push(StatusItem::new(
+            StatusPriority::Vitals,
+            vec![
+                separator(),
+                StatusSpan::new(
+                    t!(
+                        "status.subagent_usage",
+                        input = format_token_count(sub.input_tokens),
+                        input_cost = format_cost_2dp(sub.input_cost_usd),
+                        output = format_token_count(sub.output_tokens),
+                        output_cost = format_cost_2dp(sub.output_cost_usd),
+                        cache = format!(
+                            "{}/{}",
+                            format_token_count(sub.cache_read_tokens),
+                            format_cache_percent(cache_percent(
+                                sub.cache_read_tokens,
+                                sub.input_tokens
+                            ))
+                        )
+                    )
+                    .to_string(),
+                    StatusTone::Dim,
+                ),
+            ],
         ));
     }
-    spans
+    items
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -398,65 +451,94 @@ fn transcript_count_status(counts: TranscriptCounts) -> String {
     }
 }
 
-fn separator(spans: &mut Vec<StatusSpan>) {
-    spans.push(StatusSpan::new(" | ", StatusTone::Border));
+fn separator() -> StatusSpan {
+    StatusSpan::new(" | ", StatusTone::Border)
 }
 
 /// Line 2: permission mode + cycle hint (`⏯ manual mode on · shift+tab to cycle`,
 /// `▸▸ auto mode on · shift+tab to cycle`) followed by the background-task pill
 /// (`· 1 agent · 2 shells`). Always rendered — every mode (incl. the baseline)
 /// shows its glyph, label, and the shift+tab affordance uniformly.
-fn permission_and_tasks_line(state: &AppState) -> Vec<StatusSpan> {
-    let mut spans = Vec::new();
+fn permission_and_tasks_line(state: &AppState) -> Vec<StatusItem> {
+    let mut items: Vec<StatusItem> = Vec::new();
+    // Leads are computed against everything built so far, not against what
+    // survives the width fit — safe because the mode item below is always
+    // present and Essential, so this line never loses its first item.
+    let lead = |items: &[StatusItem]| if items.is_empty() { " " } else { " · " };
     // Vim mode badge — the in-band tell of NORMAL vs INSERT (the cursor shape
     // is the other half, see `cursor::vim_cursor_style`). Only shown when vim
-    // editing is enabled.
+    // editing is enabled. Essential: the mode changes what every key does.
     if state.ui.input.vim.enabled {
         let (label, tone) = if state.ui.input.vim.is_normal() {
             ("NORMAL", StatusTone::Accent)
         } else {
             ("INSERT", StatusTone::Primary)
         };
-        spans.push(StatusSpan::bold(format!(" {label} "), tone));
+        items.push(StatusItem::new(
+            StatusPriority::Essential,
+            vec![StatusSpan::bold(format!(" {label} "), tone)],
+        ));
     }
     if let Some((symbol, label, tone)) = permission_mode_status(state.session.permission_mode) {
-        let lead = if spans.is_empty() { " " } else { " · " };
-        spans.push(StatusSpan::new(format!("{lead}{symbol} {label}"), tone));
+        let lead = lead(&items);
+        items.push(StatusItem::new(
+            StatusPriority::Essential,
+            vec![StatusSpan::new(format!("{lead}{symbol} {label}"), tone)],
+        ));
         if !state.is_viewing_side_chat() {
             // The child inherits a frozen mode. Only advertise a gesture when
             // the corresponding session-level control is available.
-            spans.push(StatusSpan::new(" · ", StatusTone::Dim));
-            spans.push(StatusSpan::new(
-                t!("permission_mode.status.cycle_hint").to_string(),
-                StatusTone::Dim,
+            items.push(StatusItem::new(
+                StatusPriority::Ambient,
+                vec![
+                    StatusSpan::new(" · ", StatusTone::Dim),
+                    StatusSpan::new(
+                        t!("permission_mode.status.cycle_hint").to_string(),
+                        StatusTone::Dim,
+                    ),
+                ],
             ));
         }
     }
     if let Some(goal) = state.session.goal.as_ref() {
-        let lead = if spans.is_empty() { " " } else { " · " };
-        spans.push(StatusSpan::new(lead, StatusTone::Dim));
-        spans.push(StatusSpan::bold(
-            goal_status_label(goal),
-            StatusTone::Accent,
+        let lead = lead(&items);
+        items.push(StatusItem::new(
+            StatusPriority::Vitals,
+            vec![
+                StatusSpan::new(lead, StatusTone::Dim),
+                StatusSpan::bold(goal_status_label(goal), StatusTone::Accent),
+            ],
         ));
     }
     if let Some(pill) = background_pill_label(state) {
-        let lead = if spans.is_empty() { " " } else { " · " };
-        spans.push(StatusSpan::new(lead, StatusTone::Dim));
+        let lead = lead(&items);
         // Reverse-highlight when the footer pill holds focus (down-arrow from
         // the composer parks here; Enter opens the background-tasks dialog).
-        let tone = if state.ui.focus == FocusTarget::FooterShells {
+        let focused = state.ui.focus == FocusTarget::FooterShells;
+        let tone = if focused {
             StatusTone::Accent
         } else {
             StatusTone::Dim
         };
-        spans.push(StatusSpan {
-            text: pill,
-            tone,
-            bold: state.ui.focus == FocusTarget::FooterShells,
-        });
+        items.push(StatusItem::new(
+            // Focused means the user has parked on it and Enter acts on it —
+            // dropping it would strand that focus off-screen.
+            if focused {
+                StatusPriority::Essential
+            } else {
+                StatusPriority::Vitals
+            },
+            vec![
+                StatusSpan::new(lead, StatusTone::Dim),
+                StatusSpan {
+                    text: pill,
+                    tone,
+                    bold: focused,
+                },
+            ],
+        ));
     }
-    spans
+    items
 }
 
 /// Footer pill for the current goal: `/goal <status>`, with the autonomous-turn
@@ -564,17 +646,28 @@ pub(crate) fn background_pill_label(state: &AppState) -> Option<String> {
 /// Line 3 (environment): permission mode / task pill, then the working
 /// directory + `git:(branch)`. Merges the mode and directory groups so the
 /// row reads "in this dir, in this mode".
-fn environment_line(state: &AppState) -> Vec<StatusSpan> {
-    let mut spans = permission_and_tasks_line(state);
+fn environment_line(state: &AppState) -> Vec<StatusItem> {
+    let mut items = permission_and_tasks_line(state);
     if let Some(dir_spans) = directory_spans(state) {
-        if spans.is_empty() {
-            spans.push(StatusSpan::new(" ", StatusTone::Dim));
+        let lead = if items.is_empty() {
+            StatusSpan::new(" ", StatusTone::Dim)
         } else {
-            separator(&mut spans);
-        }
+            separator()
+        };
+        let mut spans = vec![lead];
         spans.extend(dir_spans);
+        items.push(StatusItem::new(
+            // First item on the line when nothing else populated it, so it
+            // must not be droppable in that case.
+            if items.is_empty() {
+                StatusPriority::Essential
+            } else {
+                StatusPriority::Vitals
+            },
+            spans,
+        ));
     }
-    spans
+    items
 }
 
 /// Working-directory basename + `git:(branch)`, zsh-prompt style (dim parens,

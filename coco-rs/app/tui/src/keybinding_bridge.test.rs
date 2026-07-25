@@ -662,6 +662,56 @@ fn test_enter_submits() {
     assert!(matches!(cmd, Some(TuiCommand::SubmitInput)));
 }
 
+/// Open the paste-burst window by feeding it a paste-speed run of characters,
+/// all stamped at `at`.
+fn open_paste_burst(state: &mut AppState, at: std::time::Instant) {
+    for c in "paste".chars() {
+        state.ui.paste_burst.observe(press(KeyCode::Char(c)), at);
+    }
+}
+
+/// On terminals without bracketed paste a multi-line paste arrives as key
+/// events; its embedded newlines must insert rather than send one message per
+/// line.
+#[test]
+fn test_enter_inserts_newline_during_a_paste_burst() {
+    let mut state = AppState::new();
+    state.ui.input.textarea_mut().insert_str("h");
+    let now = state.clock.now();
+    open_paste_burst(&mut state, now);
+
+    let cmd = map_key(&state, press(KeyCode::Enter));
+    assert!(matches!(cmd, Some(TuiCommand::InsertNewline)));
+}
+
+#[test]
+fn test_enter_submits_again_once_the_paste_burst_window_closes() {
+    let mut state = AppState::new();
+    state.ui.input.textarea_mut().insert_str("h");
+    let stale = state
+        .clock
+        .now()
+        .checked_sub(
+            coco_tui_ui::paste_burst::BURST_IDLE_TIMEOUT + std::time::Duration::from_secs(1),
+        )
+        .expect("clock is far enough past the epoch");
+    open_paste_burst(&mut state, stale);
+
+    let cmd = map_key(&state, press(KeyCode::Enter));
+    assert!(matches!(cmd, Some(TuiCommand::SubmitInput)));
+}
+
+/// Only Enter is reinterpreted — pasted characters keep inserting normally.
+#[test]
+fn test_paste_burst_does_not_change_character_keys() {
+    let mut state = AppState::new();
+    let now = state.clock.now();
+    open_paste_burst(&mut state, now);
+
+    let cmd = map_key(&state, press(KeyCode::Char('x')));
+    assert!(matches!(cmd, Some(TuiCommand::InsertChar('x'))));
+}
+
 #[test]
 fn test_enter_steers_during_active_turn_over_suggestion() {
     // While a turn is in flight — its whole lifecycle, not just the token

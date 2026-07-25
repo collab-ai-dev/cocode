@@ -23,7 +23,6 @@ use crate::transcript::emission::HistoryEmissionOutcome;
 use crate::transcript::emission::HistoryEmissionPlan;
 use crate::transcript::emission::HistoryEmissionTracker;
 use crate::transcript::emission::finalize_after_stream_prefix;
-use crate::transcript::render::DEFAULT_MAX_REFLOW_ROWS;
 use crate::transcript::render::HistoryLineRenderOptions;
 use crate::transcript::render::HistoryReplayCache;
 use crate::transcript::render::render_finalized_history_document;
@@ -487,11 +486,12 @@ impl SurfaceHistoryDriver {
     {
         let end = committable_prefix_len(cells);
         let committable_cells = &cells[..end];
+        let max_reflow_rows = options.max_reflow_rows;
         let started = Instant::now();
         let replay = render_replay_history_lines_cached(
             committable_cells,
             options,
-            DEFAULT_MAX_REFLOW_ROWS,
+            max_reflow_rows.get(),
             &mut self.replay_cache,
         );
         let render_elapsed = started.elapsed();
@@ -509,7 +509,7 @@ impl SurfaceHistoryDriver {
             tracing::info!(
                 target: "tui::surface::replay",
                 cause = mode.cause,
-                max_rows = DEFAULT_MAX_REFLOW_ROWS,
+                max_rows = max_reflow_rows.get(),
                 omitted_messages = replay.omitted_messages,
                 rows = replay.rows.height(),
                 lines = line_count,

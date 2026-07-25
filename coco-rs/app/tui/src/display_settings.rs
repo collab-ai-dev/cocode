@@ -3,12 +3,16 @@
 use coco_config::SettingSource;
 use coco_config::SettingsWithSource;
 use coco_config::settings::NativeReplayCacheSettings;
+use coco_config::settings::ReflowMaxRows;
 use coco_config::settings::SYNTAX_HIGHLIGHTING_KEY;
 use coco_config::settings::SyntaxHighlightingLevel;
 use coco_config::settings::TuiPerformanceSettings;
 use coco_tui_ui::display::SyntaxHighlighting;
+use coco_tui_ui::motion::MotionMode;
 use std::time::Duration;
 
+use crate::reflow_cap::MaxReflowRows;
+use crate::reflow_cap::resolve_max_reflow_rows;
 use crate::transcript::render::HistoryReplayCachePolicy;
 
 /// Whether a display preference can be edited from the TUI.
@@ -41,6 +45,9 @@ pub struct DisplaySettings {
     pub copy_full_response: bool,
     pub status_line: Option<coco_config::StatusLineSettings>,
     pub native_replay_cache: HistoryReplayCachePolicy,
+    pub max_reflow_rows: MaxReflowRows,
+    /// Whether time-varying UI may animate. Defaults to `Animated`.
+    pub motion: MotionMode,
     pub performance: TuiPerformanceConfig,
 }
 
@@ -71,6 +78,8 @@ impl DisplaySettings {
             copy_full_response: settings.copy_full_response,
             status_line: settings.status_line.clone(),
             native_replay_cache: replay_cache_policy(settings.tui.native_replay_cache),
+            max_reflow_rows: max_reflow_rows(settings.tui.reflow_max_rows),
+            motion: MotionMode::from_animations_enabled(settings.tui.animations),
             performance: performance_config(settings.tui.performance),
         }
     }
@@ -85,6 +94,8 @@ impl DisplaySettings {
             copy_full_response: settings.merged.copy_full_response,
             status_line: settings.merged.status_line.clone(),
             native_replay_cache: replay_cache_policy(settings.merged.tui.native_replay_cache),
+            max_reflow_rows: max_reflow_rows(settings.merged.tui.reflow_max_rows),
+            motion: MotionMode::from_animations_enabled(settings.merged.tui.animations),
             performance: performance_config(settings.merged.tui.performance),
         }
     }
@@ -118,6 +129,10 @@ fn replay_cache_policy(settings: NativeReplayCacheSettings) -> HistoryReplayCach
         admit_min_render_elapsed: Duration::from_micros(settings.admit_min_render_us),
         admit_min_result_bytes: kib_to_bytes(settings.admit_min_result_kb),
     }
+}
+
+fn max_reflow_rows(setting: ReflowMaxRows) -> MaxReflowRows {
+    resolve_max_reflow_rows(setting, coco_tui_ui::terminal_detect::terminal_info().name)
 }
 
 fn performance_config(settings: TuiPerformanceSettings) -> TuiPerformanceConfig {
