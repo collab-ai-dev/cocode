@@ -975,7 +975,15 @@ impl ToolUseContext {
             debug: false,
             verbose: false,
             log_assistant_responses: None,
-            tool_config: coco_config::ToolConfig::default(),
+            // Disable the deferral-worthwhile size gate in test contexts so
+            // mechanics tests exercise deferral deterministically, independent
+            // of the context-window heuristic. The gate keeps dedicated
+            // coverage (`deferral_worthwhile_*` and the materialize-level gate
+            // test); production default stays 10 via `ToolConfig::default()`.
+            tool_config: coco_config::ToolConfig {
+                tool_search_threshold_pct: 0,
+                ..Default::default()
+            },
             sandbox_config: coco_config::SandboxSettings::default(),
             sandbox_state: None,
             memory_config: coco_config::MemoryConfig::default(),

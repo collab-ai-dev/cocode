@@ -204,7 +204,9 @@ fn strip_ansi_trailing_escape_dropped() {
 #[test]
 fn strip_ansi_simple_escapes() {
     // ESC 7 / ESC 8 (save/restore cursor), ESC ( B (charset select, nF).
-    let input = "\u{1b}7text\u{1b}8 more\u{1b}(Bend";
+    // The space after ESC ( B guards that text right after an nF final byte
+    // survives (the sequence is stripped without eating the next char).
+    let input = "\u{1b}7text\u{1b}8 more\u{1b}(B end";
     assert_eq!(strip_ansi(input), "text more end");
 }
 

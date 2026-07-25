@@ -201,6 +201,13 @@ async fn exposure_matrix_projects_the_expected_request_surface()
                     model_id: "mcp-exposure-model".into(),
                     mcp_tool_exposure: exposure,
                     max_turns: Some(1),
+                    // Disable the deferral-worthwhile size gate: this matrix
+                    // asserts the per-strategy deferral surface, which the gate
+                    // would collapse for the small MCP set under test.
+                    tool_config: coco_config::ToolConfig {
+                        tool_search_threshold_pct: 0,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
                 coco_types::SessionId::try_new(format!("matrix-{strategy:?}-{exposure:?}"))
@@ -266,6 +273,13 @@ async fn server_overrides_and_always_load_share_one_request_surface()
                 ("slack".into(), McpToolExposure::UseTool),
             ])),
             max_turns: Some(1),
+            // Disable the deferral-worthwhile size gate: this test asserts the
+            // deferred `gitlab` surface, which the gate would inline for the
+            // small MCP set under test.
+            tool_config: coco_config::ToolConfig {
+                tool_search_threshold_pct: 0,
+                ..Default::default()
+            },
             ..Default::default()
         },
         coco_types::SessionId::try_new("mixed-server-exposure").expect("safe session id"),

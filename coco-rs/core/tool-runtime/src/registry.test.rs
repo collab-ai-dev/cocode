@@ -1102,3 +1102,44 @@ fn deferral_worthwhile_gates_on_window_fraction_and_fixed_cutoff() {
     // Non-positive window falls back to the fixed cutoff too.
     assert!(deferral_worthwhile(80_000, Some(0), 10));
 }
+
+/// End-to-end wiring of the deferral-worthwhile gate at materialization
+/// (hermes #34493): a small deferrable set is inlined to Loaded while staying
+/// discoverable, and remains Deferred when the gate is disabled. Complements
+/// the pure-predicate test above, which does not exercise the byte-summing or
+/// the placement-flip loop in `materialize`.
+#[test]
+fn deferral_worthwhile_gate_inlines_small_deferred_set_at_materialization() {
+    use crate::{ToolPlacement, ToolSearchStrategy, ToolUseContext};
+
+    let reg = ToolRegistry::new();
+    reg.register(deferred_mcp_stub(
+        "list", "notes", /*always_load=*/ false,
+    ));
+
+    // Gate disabled (test default `tool_search_threshold_pct = 0`): the tiny
+    // schema stays deferred and discoverable.
+    let mut ctx = ToolUseContext::test_default()
+        .with_tool_search_strategy(ToolSearchStrategy::ClientSidePromotion);
+    let mat_off = reg.materialize(&ctx);
+    let mcp_off = mat_off
+        .all_materialized()
+        .iter()
+        .find(|tool| tool.tool.is_mcp())
+        .expect("MCP tool materialized");
+    assert_eq!(mcp_off.placement, ToolPlacement::Deferred);
+    assert!(mcp_off.discoverable);
+
+    // Gate enabled (threshold 10, unknown window → 20K-token fixed cutoff): the
+    // small set is inlined to Loaded but stays discoverable, so a redundant
+    // ToolSearch remains an idempotent no-op.
+    ctx.tool_config.tool_search_threshold_pct = 10;
+    let mat_on = reg.materialize(&ctx);
+    let mcp_on = mat_on
+        .all_materialized()
+        .iter()
+        .find(|tool| tool.tool.is_mcp())
+        .expect("MCP tool materialized");
+    assert_eq!(mcp_on.placement, ToolPlacement::Loaded);
+    assert!(mcp_on.discoverable);
+}
