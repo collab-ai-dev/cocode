@@ -14,7 +14,13 @@ async fn durable_task_persists_to_disk_without_runtime_fields() {
     let store = store_in(tmp.path());
 
     let task = store
-        .add_cron_task("0 9 * * *", "standup", true, /*durable*/ true, None)
+        .add_cron_task(
+            "0 9 * * *",
+            CronPayload::prompt("standup"),
+            true,
+            /*durable*/ true,
+            None,
+        )
         .await
         .unwrap();
 
@@ -42,7 +48,13 @@ async fn session_task_is_memory_only() {
     let store = store_in(tmp.path());
 
     store
-        .add_cron_task("0 9 * * *", "ping", false, /*durable*/ false, None)
+        .add_cron_task(
+            "0 9 * * *",
+            CronPayload::prompt("ping"),
+            false,
+            /*durable*/ false,
+            None,
+        )
         .await
         .unwrap();
 
@@ -64,7 +76,7 @@ async fn mark_fired_and_remove_round_trip_on_disk() {
     let tmp = tempfile::tempdir().unwrap();
     let store = store_in(tmp.path());
     let task = store
-        .add_cron_task("0 * * * *", "hourly", true, true, None)
+        .add_cron_task("0 * * * *", CronPayload::prompt("hourly"), true, true, None)
         .await
         .unwrap();
 

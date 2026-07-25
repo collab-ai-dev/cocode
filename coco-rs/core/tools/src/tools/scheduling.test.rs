@@ -81,6 +81,82 @@ fn test_cron_create_validate_input_requires_cron_and_prompt() {
 }
 
 #[test]
+fn test_cron_create_validate_input_rejects_neither_prompt_nor_script() {
+    let ctx = ToolUseContext::test_default();
+    let result = <CronCreateTool as DynTool>::validate_input(
+        &CronCreateTool,
+        &json!({"cron": "* * * * *"}),
+        &ctx,
+    );
+    match result {
+        ValidationResult::Invalid { message, .. } => assert!(
+            message.contains("exactly one of prompt or script"),
+            "got: {message}"
+        ),
+        _ => panic!("expected Invalid when neither prompt nor script is set"),
+    }
+}
+
+#[test]
+fn test_cron_create_validate_input_rejects_both_prompt_and_script() {
+    let ctx = ToolUseContext::test_default();
+    let result = <CronCreateTool as DynTool>::validate_input(
+        &CronCreateTool,
+        &json!({"cron": "* * * * *", "prompt": "do thing", "script": "true"}),
+        &ctx,
+    );
+    match result {
+        ValidationResult::Invalid { message, .. } => {
+            assert!(message.contains("mutually exclusive"), "got: {message}")
+        }
+        _ => panic!("expected Invalid when both prompt and script are set"),
+    }
+}
+
+#[test]
+fn test_cron_create_validate_input_accepts_script_only() {
+    let ctx = ToolUseContext::test_default();
+    let result = <CronCreateTool as DynTool>::validate_input(
+        &CronCreateTool,
+        &json!({"cron": "*/5 * * * *", "script": "git fetch -q", "onOutput": "wake_agent"}),
+        &ctx,
+    );
+    assert!(matches!(result, ValidationResult::Valid), "got: {result:?}");
+}
+
+/// A script job fires unattended with nobody to approve it, so destructive
+/// commands are refused at creation time rather than at 3am.
+#[test]
+fn test_cron_create_validate_input_rejects_destructive_script() {
+    let ctx = ToolUseContext::test_default();
+    let result = <CronCreateTool as DynTool>::validate_input(
+        &CronCreateTool,
+        &json!({"cron": "0 3 * * *", "script": "rm -rf /"}),
+        &ctx,
+    );
+    match result {
+        ValidationResult::Invalid { message, .. } => assert!(
+            message.contains("destructive") || message.contains("security analysis"),
+            "got: {message}"
+        ),
+        _ => panic!("expected Invalid for a destructive script"),
+    }
+}
+
+/// A blank `script` is not a script job — it must fall into the
+/// "exactly one" error rather than creating a job that runs nothing.
+#[test]
+fn test_cron_create_validate_input_rejects_blank_script() {
+    let ctx = ToolUseContext::test_default();
+    let result = <CronCreateTool as DynTool>::validate_input(
+        &CronCreateTool,
+        &json!({"cron": "* * * * *", "script": "   "}),
+        &ctx,
+    );
+    assert!(matches!(result, ValidationResult::Invalid { .. }));
+}
+
+#[test]
 fn test_cron_create_validate_input_accepts_valid() {
     let ctx = ToolUseContext::test_default();
     let result = <CronCreateTool as DynTool>::validate_input(
@@ -247,7 +323,7 @@ async fn schedule_wakeup_creates_session_only_one_shot() {
     assert!(result.data["scheduledFor"].as_i64().unwrap() >= now_ms() + 60_000);
     let tasks = store.list_all_cron_tasks().await.unwrap();
     assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].prompt, "/loop check CI");
+    assert_eq!(tasks[0].prompt(), Some("/loop check CI"));
     assert_eq!(tasks[0].recurring, None);
     assert_eq!(tasks[0].durable, Some(false));
 }

@@ -13,7 +13,53 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// A scheduled prompt. The on-disk
+/// What a script job does with its stdout. Only consulted when the script
+/// produced output — empty stdout is always a silent success.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ScriptOutputAction {
+    /// Surface stdout to the user as a transcript notice. No agent turn.
+    #[default]
+    Notify,
+    /// Enqueue an agent turn with stdout attached as context.
+    WakeAgent,
+}
+
+/// What a scheduled job runs when it fires.
+///
+/// Serialized flattened into [`CronTask`], untagged: a record carrying
+/// `script` is a script job, one carrying `prompt` is a prompt job. Records
+/// written before script jobs existed carry only `prompt` and therefore
+/// deserialize as [`CronPayload::Prompt`] with no migration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum CronPayload {
+    /// Zero-LLM: run a shell command; deliver stdout only when non-empty.
+    ///
+    /// `rename_all` must sit on the **variant**: on the enum container it
+    /// would rename variant names, not their fields, and `onOutput` would
+    /// reach disk as `on_output`.
+    #[serde(rename_all = "camelCase")]
+    Script {
+        script: String,
+        #[serde(default)]
+        on_output: ScriptOutputAction,
+    },
+    /// Enqueue the prompt as an agent turn.
+    Prompt { prompt: String },
+}
+
+impl CronPayload {
+    pub fn prompt(text: impl Into<String>) -> Self {
+        Self::Prompt {
+            prompt: text.into(),
+        }
+    }
+}
+
+/// A scheduled job. The on-disk
 /// JSON uses camelCase (`createdAt`, `lastFiredAt`); the runtime-only `durable`
 /// and `agent_id` fields are never serialized.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,8 +68,9 @@ pub struct CronTask {
     pub id: String,
     /// 5-field cron string (local time), validated on write + re-validated on read.
     pub cron: String,
-    /// Prompt enqueued when the task fires.
-    pub prompt: String,
+    /// What runs when the task fires.
+    #[serde(flatten)]
+    pub payload: CronPayload,
     /// Epoch ms when created — anchor for missed-task detection.
     pub created_at: i64,
     /// Epoch ms of the most recent fire (recurring only); lets next-fire
@@ -49,6 +96,31 @@ impl CronTask {
     /// `true` when the task reschedules after firing (missing/false = one-shot).
     pub fn is_recurring(&self) -> bool {
         self.recurring.unwrap_or(false)
+    }
+
+    /// Prompt text for prompt jobs; `None` for script jobs.
+    pub fn prompt(&self) -> Option<&str> {
+        match &self.payload {
+            CronPayload::Prompt { prompt } => Some(prompt),
+            CronPayload::Script { .. } => None,
+        }
+    }
+
+    /// Shell command for script jobs; `None` for prompt jobs.
+    pub fn script(&self) -> Option<&str> {
+        match &self.payload {
+            CronPayload::Script { script, .. } => Some(script),
+            CronPayload::Prompt { .. } => None,
+        }
+    }
+
+    /// One-line rendering of what the job does — script jobs are prefixed with
+    /// `$ ` so listings distinguish them from prompts at a glance.
+    pub fn display_summary(&self) -> String {
+        match &self.payload {
+            CronPayload::Prompt { prompt } => prompt.clone(),
+            CronPayload::Script { script, .. } => format!("$ {script}"),
+        }
     }
 }
 
@@ -77,7 +149,7 @@ pub(crate) fn short_task_id() -> String {
 /// disk stores so id/timestamp generation stays identical.
 pub(crate) fn new_cron_task(
     cron: &str,
-    prompt: &str,
+    payload: CronPayload,
     recurring: bool,
     durable: bool,
     agent_id: Option<&str>,
@@ -85,7 +157,7 @@ pub(crate) fn new_cron_task(
     CronTask {
         id: short_task_id(),
         cron: cron.to_string(),
-        prompt: prompt.to_string(),
+        payload,
         created_at: now_epoch_ms(),
         last_fired_at: None,
         recurring: recurring.then_some(true),
@@ -105,7 +177,7 @@ pub trait ScheduleStore: Send + Sync {
     async fn add_cron_task(
         &self,
         cron: &str,
-        prompt: &str,
+        payload: CronPayload,
         recurring: bool,
         durable: bool,
         agent_id: Option<&str>,
@@ -158,12 +230,12 @@ impl ScheduleStore for InMemoryScheduleStore {
     async fn add_cron_task(
         &self,
         cron: &str,
-        prompt: &str,
+        payload: CronPayload,
         recurring: bool,
         durable: bool,
         agent_id: Option<&str>,
     ) -> Result<CronTask, coco_error::BoxedError> {
-        let task = new_cron_task(cron, prompt, recurring, durable, agent_id);
+        let task = new_cron_task(cron, payload, recurring, durable, agent_id);
         self.tasks.write().await.push(task.clone());
         Ok(task)
     }
@@ -261,7 +333,7 @@ impl ScheduleStore for NoOpScheduleStore {
     async fn add_cron_task(
         &self,
         _cron: &str,
-        _prompt: &str,
+        _payload: CronPayload,
         _recurring: bool,
         _durable: bool,
         _agent_id: Option<&str>,

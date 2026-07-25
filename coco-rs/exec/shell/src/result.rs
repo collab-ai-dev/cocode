@@ -69,6 +69,11 @@ pub struct ExecOptions {
     pub sandbox_bypass: coco_sandbox::SandboxBypass,
     /// Extra environment variables.
     pub extra_env: HashMap<String, String>,
+    /// Environment variables to strip from the inherited process env before
+    /// spawning. Applied after `extra_env`, so a name in both is removed.
+    /// Used by unattended execution paths (cron script jobs) to keep provider
+    /// credentials out of the child.
+    pub remove_env: Vec<String>,
     /// CWD override.
     pub cwd_override: Option<PathBuf>,
     /// External cancel token. When fired, the executor drops the child
@@ -85,6 +90,7 @@ impl Default for ExecOptions {
             sandbox: None,
             sandbox_bypass: coco_sandbox::SandboxBypass::No,
             extra_env: HashMap::new(),
+            remove_env: Vec::new(),
             cwd_override: None,
             cancel: None,
         }

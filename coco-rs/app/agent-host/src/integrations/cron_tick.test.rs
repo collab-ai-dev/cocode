@@ -1,11 +1,12 @@
 use super::*;
 use coco_tool_runtime::CronTask;
+use coco_tool_runtime::ScriptOutputAction;
 
-fn task(id: &str, cron: &str, prompt: &str) -> CronTask {
+fn with_payload(id: &str, cron: &str, payload: CronPayload) -> CronTask {
     CronTask {
         id: id.into(),
         cron: cron.into(),
-        prompt: prompt.into(),
+        payload,
         created_at: 0,
         last_fired_at: None,
         recurring: None,
@@ -13,6 +14,10 @@ fn task(id: &str, cron: &str, prompt: &str) -> CronTask {
         durable: None,
         agent_id: None,
     }
+}
+
+fn task(id: &str, cron: &str, prompt: &str) -> CronTask {
+    with_payload(id, cron, CronPayload::prompt(prompt))
 }
 
 #[test]
@@ -43,6 +48,20 @@ fn missed_notification_fences_longer_than_inner_backticks() {
         out.contains("````"),
         "fence must exceed inner run, got: {out}"
     );
+}
+
+#[test]
+fn missed_notification_marks_script_jobs_with_a_shell_prefix() {
+    let t = with_payload(
+        "a",
+        "0 9 * * *",
+        CronPayload::Script {
+            script: "git fetch -q".into(),
+            on_output: ScriptOutputAction::Notify,
+        },
+    );
+    let out = build_missed_notification(&[&t]);
+    assert!(out.contains("$ git fetch -q"), "got: {out}");
 }
 
 #[test]

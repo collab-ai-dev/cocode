@@ -651,6 +651,7 @@ const KNOWN_SETTINGS_FIELDS: &[&str] = &[
     "api",
     "loop",
     "tool",
+    "scheduling",
     "shell",
     "sandbox",
     "memory",

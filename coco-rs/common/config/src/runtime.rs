@@ -45,6 +45,7 @@ use crate::sections::MemoryConfig;
 use crate::sections::MemoryDisabledReason;
 use crate::sections::OutputRewriteConfig;
 use crate::sections::PathConfig;
+use crate::sections::SchedulingConfig;
 use crate::sections::ServerConfig;
 use crate::sections::ShellConfig;
 use crate::sections::SkillLearnConfig;
@@ -78,6 +79,8 @@ pub struct RuntimeConfig {
     pub api: ApiConfig,
     pub loop_config: LoopConfig,
     pub tool: ToolConfig,
+    /// Zero-LLM cron script-job knobs (timeout, output cap).
+    pub scheduling: SchedulingConfig,
     pub shell: ShellConfig,
     /// Bash output-compression config (`Feature::OutputRewrite`). Consumed at
     /// session bootstrap to build the session-scoped output rewriter.
@@ -390,6 +393,7 @@ pub fn build_runtime_config_with(
     Ok(RuntimeConfig {
         api: ApiConfig::resolve(merged, &env),
         loop_config: LoopConfig::resolve(merged, &overrides, &env),
+        scheduling: SchedulingConfig::resolve(merged),
         tool: ToolConfig::resolve(merged, &env),
         shell: ShellConfig::resolve(merged, &env),
         output_rewrite: OutputRewriteConfig::resolve(merged, &env),

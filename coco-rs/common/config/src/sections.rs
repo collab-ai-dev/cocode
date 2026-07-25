@@ -943,6 +943,47 @@ pub struct PartialLoopSettings {
     pub empty_response_nudge: Option<EmptyResponsePolicy>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PartialSchedulingSettings {
+    pub script_timeout_secs: Option<i64>,
+    pub script_output_max_bytes: Option<i64>,
+}
+
+/// Knobs for zero-LLM cron script jobs (`CronCreate` with `script`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SchedulingConfig {
+    /// Hard wall-clock limit for one script job. Exceeding it kills the
+    /// child and surfaces a timeout notice.
+    pub script_timeout_secs: i64,
+    /// Cap on delivered stdout/stderr; longer output is truncated with a
+    /// marker. Keeps a runaway script from flooding the transcript.
+    pub script_output_max_bytes: i64,
+}
+
+impl Default for SchedulingConfig {
+    fn default() -> Self {
+        Self {
+            script_timeout_secs: 120,
+            script_output_max_bytes: 16_000,
+        }
+    }
+}
+
+impl SchedulingConfig {
+    pub fn resolve(settings: &Settings) -> Self {
+        let mut config = Self::default();
+        let partial = &settings.scheduling;
+        if let Some(v) = partial.script_timeout_secs.filter(|v| *v > 0) {
+            config.script_timeout_secs = v;
+        }
+        if let Some(v) = partial.script_output_max_bytes.filter(|v| *v > 0) {
+            config.script_output_max_bytes = v;
+        }
+        config
+    }
+}
+
 /// Recovery policy for a clean-but-empty model response (no text, no
 /// tool calls, normal stop reason). Weak models routinely emit empty or
 /// thinking-only responses mid-task.

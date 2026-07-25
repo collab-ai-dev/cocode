@@ -24,7 +24,7 @@ Decouple tool → subsystem circular deps; each has a `NoOp*` test double and is
 | `TaskListHandle` | Durable V2 plan-item store; DTOs (`TaskRecord` etc.) live in `coco-types`, re-exported here; `InMemoryTaskListHandle` / `NoOpTaskListHandle` |
 | `TodoListHandle` | Per-agent V1 TodoWrite checklist (`TodoRecord`); `InMemoryTodoListHandle` is the default |
 | `MailboxHandle` | Teammate inbox (`InboxMessage`/`MailboxEnvelope`) |
-| `ScheduleStore` | Cron store (`disk_backed_schedule_store` impl) |
+| `ScheduleStore` | Cron store (`disk_backed_schedule_store` impl). A `CronTask` carries a flattened untagged `CronPayload`: `Prompt` (enqueue an agent turn) or `Script { script, on_output: ScriptOutputAction }` (zero-LLM shell job). Untagged is load-bearing — pre-existing `{"prompt": …}` records deserialize as `Prompt` with no migration; read the payload through `prompt()` / `script()` / `display_summary()`, never by matching on a sentinel string |
 | `SideQuery` | One-shot side LLM queries (`side_query_to_text_callback`) |
 | `ToolPermissionBridge` | Interactive permission request/decision/resolution |
 | `GoalHandle` | Tool-facing seam onto the session goal runtime; leaf dep on `coco-goals` domain types, never on `coco-goal-runtime` |

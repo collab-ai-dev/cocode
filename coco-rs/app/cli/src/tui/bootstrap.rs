@@ -353,8 +353,10 @@ pub async fn run_tui(
     // session tasks) into the current session command queue. TUI-only:
     // headless/SDK have no queue-drain pump. Spawn after startup resume so the
     // initial missed-task scan targets the final startup runtime.
-    let _cron_tick_guard =
-        coco_agent_host::cron_tick::spawn_current_session(Arc::clone(&current_session));
+    let _cron_tick_guard = coco_agent_host::cron_tick::spawn_current_session(
+        Arc::clone(&current_session),
+        notification_tx.clone(),
+    );
 
     // TUI users opt into per-spawn periodic AgentSummary timers via
     // `COCO_AGENT_SUMMARY_ENABLE`. Default off keeps LLM cost off the

@@ -154,6 +154,7 @@ pub use sections::PathConfig;
 pub use sections::RemoteVoiceConfig;
 pub use sections::RtkConfig;
 pub use sections::RtkMode;
+pub use sections::SchedulingConfig;
 pub use sections::ServerConfig;
 pub use sections::ShellConfig;
 pub use sections::ShellToolSelection;

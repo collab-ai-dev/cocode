@@ -210,6 +210,7 @@ fn tui_event_variant(t: &coco_types::TuiOnlyEvent) -> &'static str {
         E::SessionMemoryExtractionFailed { .. } => "SessionMemoryExtractionFailed",
         E::CronJobDisabled { .. } => "CronJobDisabled",
         E::CronJobsMissed { .. } => "CronJobsMissed",
+        E::CronScriptResult { .. } => "CronScriptResult",
         E::ToolCallStreamStart { .. } => "ToolCallStreamStart",
         E::ToolCallDelta { .. } => "ToolCallDelta",
         E::ToolProgress { .. } => "ToolProgress",
