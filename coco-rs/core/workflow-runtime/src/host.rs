@@ -30,7 +30,7 @@ pub struct WorkflowAgentOpts {
     pub phase: Option<String>,
     /// Per-call model id override.
     pub model: Option<String>,
-    /// Per-call reasoning effort (`low`/`medium`/`high`/`xhigh`/`max`).
+    /// Per-call reasoning effort (`low`/`medium`/`high`/`xhigh`/`max`/`ultra`).
     pub effort: Option<String>,
     /// Subagent type (e.g. `Explore`); `None` → general-purpose.
     pub agent_type: Option<String>,

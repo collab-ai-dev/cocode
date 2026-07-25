@@ -184,6 +184,32 @@ fn get_args_reasoning_model() {
     assert!(body.get("temperature").is_none());
 }
 
+#[test]
+fn get_args_maps_gpt5_6_efforts_onto_the_wire() {
+    // `max` / `ultra` are real Responses effort values on the GPT-5.6
+    // family. The whole chain — coco `ReasoningEffort` → provider-neutral
+    // `ReasoningLevel` → OpenAI `ReasoningEffort` → wire string — has to
+    // carry them verbatim; silently folding them into `xhigh` would spend
+    // the user's budget at the wrong rung.
+    for (level, expected) in [
+        (vercel_ai_provider::ReasoningLevel::Xhigh, "xhigh"),
+        (vercel_ai_provider::ReasoningLevel::Max, "max"),
+        (vercel_ai_provider::ReasoningLevel::Ultra, "ultra"),
+    ] {
+        let model = OpenAIResponsesLanguageModel::new("gpt-5.6-sol", make_config());
+        let options = LanguageModelV4CallOptions {
+            reasoning: Some(level),
+            ..reasoning_user_options()
+        };
+
+        let (body, _) = model.get_args(&options).expect("get_args");
+        assert_eq!(
+            body["reasoning"]["effort"], expected,
+            "{level:?} must reach the wire as `{expected}`"
+        );
+    }
+}
+
 fn make_config_chatgpt() -> Arc<OpenAIConfig> {
     Arc::new(OpenAIConfig {
         provider: "openai.responses".into(),

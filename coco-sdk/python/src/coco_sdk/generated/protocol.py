@@ -531,6 +531,8 @@ class ReasoningEffort(str, Enum):
     x_high = "x_high"
     off = "off"
     auto = "auto"
+    max = "max"
+    ultra = "ultra"
 
 
 class RiskLevel(str, Enum):
@@ -3117,6 +3119,17 @@ class TuiOnlyEventCronJobsMissed(BaseModel):
     count: int
 
 
+class TuiOnlyEventCronScriptResult(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal["cron_script_result"] = Field(
+        default="cron_script_result", alias="type"
+    )
+    command: str
+    is_error: bool
+    job_id: str
+    output: str
+
+
 class TuiOnlyEventToolCallStreamStart(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal["tool_call_stream_start"] = Field(
@@ -3475,6 +3488,7 @@ TuiOnlyEvent = Annotated[
         TuiOnlyEventSessionMemoryExtractionFailed,
         TuiOnlyEventCronJobDisabled,
         TuiOnlyEventCronJobsMissed,
+        TuiOnlyEventCronScriptResult,
         TuiOnlyEventToolCallStreamStart,
         TuiOnlyEventToolCallDelta,
         TuiOnlyEventToolProgress,

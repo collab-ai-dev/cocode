@@ -55,8 +55,9 @@ fn test_deserialize_slot_effort_off_is_explicit() {
 fn test_deserialize_slot_effort_aliases() {
     for (wire, expected) in [
         ("disable", ReasoningEffort::Off),
-        ("max", ReasoningEffort::XHigh),
         ("x_high", ReasoningEffort::XHigh),
+        ("max", ReasoningEffort::Max),
+        ("ultra", ReasoningEffort::Ultra),
     ] {
         let slots: RoleSlots<ProviderModelSelection> = serde_json::from_value(json!({
             "primary": { "provider": "openai", "model_id": "gpt-5-4", "effort": wire }

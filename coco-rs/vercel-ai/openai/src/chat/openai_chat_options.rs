@@ -17,6 +17,11 @@ pub enum ReasoningEffort {
     Medium,
     High,
     Xhigh,
+    /// GPT-5.6 family.
+    Max,
+    /// GPT-5.6 `sol` / `terra` — maximum reasoning with autonomous task
+    /// delegation.
+    Ultra,
 }
 
 impl ReasoningEffort {
@@ -28,6 +33,8 @@ impl ReasoningEffort {
             Self::Medium => "medium",
             Self::High => "high",
             Self::Xhigh => "xhigh",
+            Self::Max => "max",
+            Self::Ultra => "ultra",
         }
     }
 }

@@ -139,6 +139,21 @@ Putting `effort` at the role level is rejected with a message telling you to
 move it onto a slot. In the TUI, `Ctrl+T` cycles thinking level and `F2` toggles
 it.
 
+The ladder is `off`, `auto`, `minimal`, `low`, `medium`, `high`, `xhigh`,
+`max`, `ultra`. Which rungs a model actually offers is declared per model, and
+each vendor declares only the rungs it really has — Anthropic's vocabulary is
+`low`/`medium`/`high`/`max` with no `xhigh`, OpenAI's GPT-5.6 has every rung
+from `low` up. Ask for one a model does not declare and it resolves to that
+model's nearest rung, resolving **upward** on a tie, so you never silently get
+less thinking than you asked for. `"effort": "ultra"` is therefore always safe
+to write; on a model that stops at `xhigh` it simply lands there.
+
+`ultra` is declared only by `gpt-5-6-sol` and `gpt-5-6-terra`, where it means
+maximum reasoning with autonomous task delegation. `max` is the GPT-5.6
+family's second-highest rung and Anthropic's top one. Every declared rung is
+reachable the same way — `Ctrl+T`, the `/model` picker's effort axis, or a
+slot's `effort` field.
+
 ## Mixture of Agents
 
 **MoA is a virtual provider.** It occupies the provider slot of a model

@@ -3,6 +3,10 @@
 //! GPT-5 family ships `apply_patch` as a freeform tool and excludes the
 //! generic `edit` tool. The `tool_overrides` clones reuse the same
 //! base instance per model entry.
+//!
+//! Catalog ids are dashed (`gpt-5-6-sol`); the wire slug is dotted
+//! (`gpt-5.6-sol`) and is carried by `api_model_name` — see
+//! [`openai_gpt5_models`].
 
 use coco_types::ApplyPatchToolType;
 use coco_types::Capability;
@@ -25,6 +29,10 @@ use crate::provider::model_override::PartialProviderModelOverride;
 
 const GPT_5_4: &str = include_str!("../../instructions/gpt5_4_prompt.md");
 const GPT_5_5: &str = include_str!("../../instructions/gpt5_5_prompt.md");
+/// One prompt for the whole 5.6 family — the vendor ships identical base
+/// instructions for `sol`, `terra`, and `luna`; only the reasoning ladder
+/// and defaults differ between them.
+const GPT_5_6: &str = include_str!("../../instructions/gpt5_6_prompt.md");
 const GPT_5_3_CODEX: &str = include_str!("../../instructions/gpt5_3_codex_prompt.md");
 
 pub(super) fn providers() -> Vec<(&'static str, PartialProviderConfig)> {
@@ -70,8 +78,76 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
         .with_excluded(ToolId::Builtin(ToolName::Edit))
         .with_excluded(ToolId::Builtin(ToolName::Write));
     let thinking = openai_reasoning_levels();
+    // 5.6 capabilities are identical across the family; only the ladder
+    // and the default rung differ, so the vec is built once and cloned.
+    let gpt56_capabilities = vec![
+        Capability::TextGeneration,
+        Capability::Streaming,
+        Capability::ToolCalling,
+        Capability::Vision,
+        Capability::StructuredOutput,
+        Capability::ExtendedThinking,
+        Capability::ReasoningSummaries,
+        Capability::ParallelToolCalls,
+        Capability::OpenAiNativeToolSearch,
+    ];
 
     vec![
+        (
+            // `sol` — frontier tier. Vendor default effort is `low`: the
+            // family is tuned to be strong at the cheap rungs, so starting
+            // low and escalating is the intended usage, not a downgrade.
+            "gpt-5-6-sol",
+            PartialModelInfo {
+                display_name: Some("GPT-5.6 Sol".into()),
+                base_instructions: Some(super::render_instruction_template(GPT_5_6)),
+                context_window: Some(PositiveTokens::new(272_000)),
+                max_output_tokens: Some(PositiveTokens::new(12_288)),
+                capabilities: Some(gpt56_capabilities.clone()),
+                supported_thinking_levels: Some(gpt56_reasoning_levels(UltraSupport::Yes)),
+                default_thinking_level: Some(ReasoningEffort::Low),
+                apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+                tool_overrides: Some(gpt5_overrides.clone()),
+                extra_body: Some(gpt56_extra_body()),
+                ..Default::default()
+            },
+        ),
+        (
+            // `terra` — balanced tier, same surface as `sol` with a
+            // medium default.
+            "gpt-5-6-terra",
+            PartialModelInfo {
+                display_name: Some("GPT-5.6 Terra".into()),
+                base_instructions: Some(super::render_instruction_template(GPT_5_6)),
+                context_window: Some(PositiveTokens::new(272_000)),
+                max_output_tokens: Some(PositiveTokens::new(12_288)),
+                capabilities: Some(gpt56_capabilities.clone()),
+                supported_thinking_levels: Some(gpt56_reasoning_levels(UltraSupport::Yes)),
+                default_thinking_level: Some(ReasoningEffort::Medium),
+                apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+                tool_overrides: Some(gpt5_overrides.clone()),
+                extra_body: Some(gpt56_extra_body()),
+                ..Default::default()
+            },
+        ),
+        (
+            // `luna` — fast/affordable tier. The vendor catalog stops its
+            // ladder at `max`; `ultra` is not offered here.
+            "gpt-5-6-luna",
+            PartialModelInfo {
+                display_name: Some("GPT-5.6 Luna".into()),
+                base_instructions: Some(super::render_instruction_template(GPT_5_6)),
+                context_window: Some(PositiveTokens::new(272_000)),
+                max_output_tokens: Some(PositiveTokens::new(12_288)),
+                capabilities: Some(gpt56_capabilities),
+                supported_thinking_levels: Some(gpt56_reasoning_levels(UltraSupport::No)),
+                default_thinking_level: Some(ReasoningEffort::Medium),
+                apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+                tool_overrides: Some(gpt5_overrides.clone()),
+                extra_body: Some(gpt56_extra_body()),
+                ..Default::default()
+            },
+        ),
         (
             "gpt-5-4",
             PartialModelInfo {
@@ -167,6 +243,9 @@ fn openai_gpt5_models() -> BTreeMap<String, PartialProviderModelOverride> {
         ..Default::default()
     };
     BTreeMap::from([
+        ("gpt-5-6-sol".into(), wire("gpt-5.6-sol")),
+        ("gpt-5-6-terra".into(), wire("gpt-5.6-terra")),
+        ("gpt-5-6-luna".into(), wire("gpt-5.6-luna")),
         ("gpt-5-4".into(), wire("gpt-5.4")),
         ("gpt-5-5".into(), wire("gpt-5.5")),
         // The ChatGPT/Codex backend exposes the codex model as
@@ -183,4 +262,43 @@ fn openai_reasoning_levels() -> Vec<ThinkingLevel> {
         ThinkingLevel::high(),
         ThinkingLevel::xhigh(),
     ]
+}
+
+/// Whether a 5.6 tier advertises the `ultra` rung. `sol` and `terra` do;
+/// `luna` stops at `max`.
+enum UltraSupport {
+    Yes,
+    No,
+}
+
+/// GPT-5.6 reasoning ladder. Unlike the 5.4/5.5 ladder this has no
+/// `disable()` rung — the family always reasons — and it extends past
+/// `xhigh` into `max` (and `ultra` on the tiers that offer it).
+///
+/// The ladder is what makes those two rungs safe workspace-wide: a
+/// `--effort ultra` aimed at a model that stops at `xhigh` is clamped by
+/// `ModelInfo::resolve_thinking_level` nearest-match before it can reach
+/// the wire.
+fn gpt56_reasoning_levels(ultra: UltraSupport) -> Vec<ThinkingLevel> {
+    let mut levels = vec![
+        ThinkingLevel::low(),
+        ThinkingLevel::medium(),
+        ThinkingLevel::high(),
+        ThinkingLevel::xhigh(),
+        ThinkingLevel::max(),
+    ];
+    if matches!(ultra, UltraSupport::Yes) {
+        levels.push(ThinkingLevel::ultra());
+    }
+    levels
+}
+
+/// Per-call Responses knobs the 5.6 catalog declares. `textVerbosity`
+/// rides the Layer-1 escape hatch because it is a plain per-model wire
+/// default, not a cross-provider concept worth a `ModelInfo` field.
+fn gpt56_extra_body() -> BTreeMap<String, serde_json::Value> {
+    BTreeMap::from([(
+        "textVerbosity".to_string(),
+        serde_json::Value::String("low".into()),
+    )])
 }

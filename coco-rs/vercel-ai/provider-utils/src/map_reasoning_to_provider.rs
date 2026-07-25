@@ -23,6 +23,8 @@ pub fn is_custom_reasoning(reasoning: Option<ReasoningLevel>) -> bool {
                 | ReasoningLevel::Medium
                 | ReasoningLevel::High
                 | ReasoningLevel::Xhigh
+                | ReasoningLevel::Max
+                | ReasoningLevel::Ultra
         )
     )
 }
@@ -82,6 +84,10 @@ pub fn map_reasoning_to_provider_budget(
         (ReasoningLevel::Medium, 0.3),
         (ReasoningLevel::High, 0.6),
         (ReasoningLevel::Xhigh, 0.9),
+        // `Max` / `Ultra` sit above `Xhigh` on the shared ladder; for a
+        // budget-based provider both simply mean "spend the whole cap".
+        (ReasoningLevel::Max, 1.0),
+        (ReasoningLevel::Ultra, 1.0),
     ]);
     let percentages = budget_percentages.unwrap_or(&defaults);
     let min_budget = min_reasoning_budget.unwrap_or(1024);

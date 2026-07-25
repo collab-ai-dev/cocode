@@ -150,6 +150,9 @@ fn builtin_gpt_and_gemini_models_have_base_instructions() {
     for model_id in [
         "gpt-5-4",
         "gpt-5-5",
+        "gpt-5-6-sol",
+        "gpt-5-6-terra",
+        "gpt-5-6-luna",
         "gpt-5-3-codex",
         "gemini-3.1-pro-preview",
     ] {
@@ -181,6 +184,135 @@ fn builtin_gpt_and_gemini_models_have_base_instructions() {
             )),
         "gemini prompt should carry the unified product identity"
     );
+}
+
+#[test]
+fn builtin_instruction_templates_bind_every_placeholder() {
+    // Vendor prompts are neutralized at authoring time and bound to the live
+    // tool surface by `render_instruction_template`. Two failure modes to
+    // catch: a placeholder that no longer resolves (renders literally into
+    // the system prompt), and a vendor harness literal that crept back in
+    // (tells the model to call a tool coco-rs never registers).
+    const VENDOR_LITERALS: &[&str] = &["Codex", "CODEX_HOME", "exec_command", "multi_tool_use"];
+    let builtin = builtin_models_partial();
+    for (model_id, info) in builtin {
+        let Some(instructions) = info.base_instructions.as_deref() else {
+            continue;
+        };
+        assert!(
+            !instructions.contains("{{"),
+            "{model_id} has an unresolved instruction placeholder"
+        );
+        for literal in VENDOR_LITERALS {
+            assert!(
+                !instructions.contains(literal),
+                "{model_id} leaks vendor-harness literal `{literal}`"
+            );
+        }
+    }
+    // The default prompt goes through the same renderer.
+    assert!(!default_base_instructions().contains("{{"));
+}
+
+#[test]
+fn builtin_gpt5_6_prompt_binds_the_live_tool_names() {
+    let builtin = builtin_models_partial();
+    let instructions = builtin["gpt-5-6-sol"]
+        .base_instructions
+        .as_deref()
+        .expect("gpt-5.6 base instructions");
+    for tool in [
+        coco_types::ToolName::ApplyPatch,
+        coco_types::ToolName::Bash,
+        coco_types::ToolName::Skill,
+        coco_types::ToolName::TaskCreate,
+    ] {
+        assert!(
+            instructions.contains(tool.as_str()),
+            "gpt-5.6 prompt must name the live `{}` tool",
+            tool.as_str()
+        );
+    }
+    // All three tiers share one prompt — the vendor ships identical base
+    // instructions across the family.
+    for sibling in ["gpt-5-6-terra", "gpt-5-6-luna"] {
+        assert_eq!(
+            builtin[sibling].base_instructions.as_deref(),
+            Some(instructions),
+            "{sibling} must reuse the shared 5.6 prompt"
+        );
+    }
+}
+
+#[test]
+fn builtin_gpt5_6_models_declare_tier_specific_ladders() {
+    let builtin = builtin_models_partial();
+    let efforts = |model_id: &str| {
+        builtin[model_id]
+            .supported_thinking_levels
+            .as_ref()
+            .expect("thinking levels")
+            .iter()
+            .map(|level| level.effort)
+            .collect::<Vec<_>>()
+    };
+    // `sol` / `terra` advertise `ultra`; `luna` stops at `max`. No `Off`
+    // rung anywhere in the family — 5.6 always reasons.
+    let with_ultra = vec![
+        ReasoningEffort::Low,
+        ReasoningEffort::Medium,
+        ReasoningEffort::High,
+        ReasoningEffort::XHigh,
+        ReasoningEffort::Max,
+        ReasoningEffort::Ultra,
+    ];
+    assert_eq!(efforts("gpt-5-6-sol"), with_ultra);
+    assert_eq!(efforts("gpt-5-6-terra"), with_ultra);
+    assert_eq!(
+        efforts("gpt-5-6-luna"),
+        vec![
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::XHigh,
+            ReasoningEffort::Max,
+        ]
+    );
+    assert_eq!(
+        builtin["gpt-5-6-sol"].default_thinking_level,
+        Some(ReasoningEffort::Low),
+        "sol is tuned to start low and escalate"
+    );
+    for balanced in ["gpt-5-6-terra", "gpt-5-6-luna"] {
+        assert_eq!(
+            builtin[balanced].default_thinking_level,
+            Some(ReasoningEffort::Medium)
+        );
+    }
+}
+
+#[test]
+fn builtin_gpt5_6_models_route_the_dotted_wire_slug() {
+    // Catalog ids are dashed; the backend only accepts the dotted slug.
+    let providers = builtin_provider_partials();
+    for provider_name in ["openai", super::OPENAI_CHATGPT_PROVIDER] {
+        let models = providers
+            .iter()
+            .find(|(name, _)| *name == provider_name)
+            .and_then(|(_, partial)| partial.models.as_ref())
+            .unwrap_or_else(|| panic!("{provider_name} model map"));
+        for (catalog_id, wire_slug) in [
+            ("gpt-5-6-sol", "gpt-5.6-sol"),
+            ("gpt-5-6-terra", "gpt-5.6-terra"),
+            ("gpt-5-6-luna", "gpt-5.6-luna"),
+        ] {
+            assert_eq!(
+                models[catalog_id].api_model_name.as_deref(),
+                Some(wire_slug),
+                "{provider_name}/{catalog_id} wire slug drifted"
+            );
+        }
+    }
 }
 
 #[test]
@@ -258,6 +390,10 @@ fn builtin_tool_search_capabilities_match_strategy_split() {
     assert!(!caps("gpt-5-4").contains(&Capability::ClientSideToolSearchPromotion));
     assert!(caps("gpt-5-5").contains(&Capability::OpenAiNativeToolSearch));
     assert!(!caps("gpt-5-5").contains(&Capability::ClientSideToolSearchPromotion));
+    for tier in ["gpt-5-6-sol", "gpt-5-6-terra", "gpt-5-6-luna"] {
+        assert!(caps(tier).contains(&Capability::OpenAiNativeToolSearch));
+        assert!(!caps(tier).contains(&Capability::ClientSideToolSearchPromotion));
+    }
 
     for model_id in [
         "claude-haiku-4-5",
@@ -281,14 +417,14 @@ fn builtin_claude_models_declare_explicit_thinking_budgets() {
     // without `budget_tokens`, so every Claude builtin level must declare
     // an explicit budget here. Values are aligned with
     // `vercel-ai-provider-utils::map_reasoning_to_provider_budget`
-    // defaults at 64k max_output (Low 10% / Medium 30% / High 60%; XHigh
+    // defaults at 64k max_output (Low 10% / Medium 30% / High 60%; Max
     // pinned to the model's 128k headroom).
     let builtin = builtin_models_partial();
     let expected_budgets = [
         (ReasoningEffort::Low, 6_400_i32),
         (ReasoningEffort::Medium, 19_200),
         (ReasoningEffort::High, 38_400),
-        (ReasoningEffort::XHigh, 128_000),
+        (ReasoningEffort::Max, 128_000),
     ];
     for model_id in ["claude-sonnet-4-6", "claude-opus-4-7"] {
         let info = builtin.get(model_id).expect(model_id);
@@ -354,7 +490,7 @@ fn builtin_deepseek_v4_declares_three_thinking_levels() {
             Some(&serde_json::json!({"type": "disabled"})),
             "{model_id} Disable level must declare disabled toggle"
         );
-        // Medium (UX "high") and XHigh (UX "max") carry the enabled toggle.
+        // Both explicit rungs (Medium and XHigh) carry the enabled toggle.
         assert_eq!(
             levels[1].options.get("thinking"),
             Some(&serde_json::json!({"type": "enabled"})),
@@ -435,6 +571,9 @@ fn non_anthropic_builtin_models_do_not_declare_prompt_cache() {
     for model_id in [
         "gpt-5-4",
         "gpt-5-5",
+        "gpt-5-6-sol",
+        "gpt-5-6-terra",
+        "gpt-5-6-luna",
         "gpt-5-3-codex",
         "gemini-3.1-pro-preview",
     ] {

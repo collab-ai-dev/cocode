@@ -40,7 +40,7 @@ use std::collections::BTreeMap;
 ///     default applies — protects non-adaptive Claude models (e.g.
 ///     Sonnet 4.5) from receiving a value they would reject with 400.
 ///   - `Minimal` → mapped to `Low`
-///   - `Low/Medium/High/XHigh` → both
+///   - `Low`..`Ultra` → both
 ///     `{"thinking":{"type":"enabled","budgetTokens"?}}` and
 ///     `{"output_config":{"effort":<wire>}}`
 ///
@@ -104,7 +104,9 @@ pub fn to_extra_body(
                 | ReasoningEffort::Low
                 | ReasoningEffort::Medium
                 | ReasoningEffort::High
-                | ReasoningEffort::XHigh => {
+                | ReasoningEffort::XHigh
+                | ReasoningEffort::Max
+                | ReasoningEffort::Ultra => {
                     // Legacy thinking object — kept for back-compat
                     // with pre-output_config Anthropic API; budgetTokens
                     // honored only when ModelInfo declares one.
@@ -121,13 +123,23 @@ pub fn to_extra_body(
                     // output_config.effort (new Anthropic API surface).
                     // Goes via raw shallow-merge to avoid the
                     // `effort-2025-11-24` beta header — DeepSeek
-                    // anthropic-compat doesn't accept it. Minimal has
-                    // no Anthropic equivalent, so it collapses to Low.
+                    // anthropic-compat doesn't accept it.
+                    //
+                    // Anthropic's vocabulary is low/medium/high/max, and
+                    // the Claude catalog declares exactly those rungs, so
+                    // `Low`..`Max` map 1:1 with no translation. The
+                    // remaining arms fire only for a model that declares
+                    // no ladder at all (`resolve_thinking_level` trusts
+                    // the caller there): `Minimal` has no Anthropic
+                    // equivalent and collapses to the floor, `XHigh` /
+                    // `Ultra` sit outside the vocabulary and fold to the
+                    // ceiling.
                     let wire_effort = match level.effort {
                         ReasoningEffort::Minimal | ReasoningEffort::Low => "low",
                         ReasoningEffort::Medium => "medium",
                         ReasoningEffort::High => "high",
-                        ReasoningEffort::XHigh => "max",
+                        ReasoningEffort::Max => "max",
+                        ReasoningEffort::XHigh | ReasoningEffort::Ultra => "max",
                         ReasoningEffort::Off | ReasoningEffort::Auto => unreachable!(),
                     };
                     out.insert(

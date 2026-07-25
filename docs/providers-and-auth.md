@@ -44,8 +44,9 @@ are `anthropic`, `openai`, `google`, `volcengine`, `zai`, `xai`, and
 implements the OpenAI chat API.
 
 Only some providers ship model metadata out of the box: Anthropic
-(`claude-sonnet-4-6`, `claude-opus-4-7`, `claude-haiku-4-5`), OpenAI (`gpt-5-4`,
-`gpt-5-5`, `gpt-5-3-codex`), Google (`gemini-3.1-pro-preview`), and DeepSeek
+(`claude-sonnet-4-6`, `claude-opus-4-7`, `claude-haiku-4-5`), OpenAI
+(`gpt-5-6-sol`, `gpt-5-6-terra`, `gpt-5-6-luna`, `gpt-5-4`, `gpt-5-5`,
+`gpt-5-3-codex`), Google (`gemini-3.1-pro-preview`), and DeepSeek
 (`deepseek-v4-flash`, `deepseek-v4-pro`). For the others you name the model
 yourself; a role binding only requires that the *provider* is known.
 
@@ -221,7 +222,8 @@ inline under the provider's `models` map):
 ```
 
 If a provider's catalog id differs from the slug the API expects, map it with
-`api_model_name` (this is how `gpt-5-5` reaches the wire as `gpt-5.5`).
+`api_model_name` (this is how `gpt-5-5` reaches the wire as `gpt-5.5`, and
+`gpt-5-6-sol` as `gpt-5.6-sol`).
 
 ## Checking what is configured
 

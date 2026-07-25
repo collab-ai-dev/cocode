@@ -661,6 +661,35 @@
       ]
     },
     {
+      "description": "A zero-LLM cron script job produced user-facing output. No agent turn\nran: the tick executed `command` and this is what it reported.\n`is_error` marks a non-zero exit or timeout, which surfaces even when\nthe job would otherwise have been silent.",
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "is_error": {
+          "type": "boolean"
+        },
+        "job_id": {
+          "type": "string"
+        },
+        "output": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "cron_script_result"
+        }
+      },
+      "required": [
+        "type",
+        "job_id",
+        "command",
+        "output",
+        "is_error"
+      ]
+    },
+    {
       "description": "Streaming tool input delta (typing effect).\n\nA tool call's arguments have started streaming (the model began\nemitting the input JSON). Carries the `call_id` and tool `name` so the\nTUI can create a pre-queue \"streaming\" row in the activity strip — the\n`call_id` matches the later [`AgentStreamEvent::ToolUseQueued`], which\nupgrades the same row with the finalized input once parsing completes.\n\nEmitted by the engine from `StreamEvent::ToolCallStart`. Like\n[`Self::ToolCallDelta`] it is UI-only: the SDK sees the complete input\nat `ToolUseQueued` and does not need the streaming preamble.",
       "type": "object",
       "properties": {
@@ -5086,6 +5115,16 @@
           "description": "\"Let the provider decide\". Convert layer omits reasoning fields;\nthe server-side default applies. This is the default state when\nno thinking level is configured.",
           "type": "string",
           "const": "auto"
+        },
+        {
+          "description": "Above `XHigh`. Anthropic's top `output_config.effort` rung, and\nthe GPT-5.6 family's second-highest. A model that does not declare\nit has the request resolved against its own ladder by\n`ModelInfo::resolve_thinking_level`, so asking for it is never a\nwire error.",
+          "type": "string",
+          "const": "max"
+        },
+        {
+          "description": "Top of the ladder. On the GPT-5.6 family this is \"maximum\nreasoning with automatic task delegation\".",
+          "type": "string",
+          "const": "ultra"
         }
       ]
     },

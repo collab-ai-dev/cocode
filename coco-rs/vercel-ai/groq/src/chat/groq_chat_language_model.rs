@@ -55,7 +55,8 @@ use super::groq_prepare_tools::prepare_groq_tools;
 static IMAGE_URL_RE: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"^https?://.*$").ok());
 
 /// Maps a provider-agnostic `ReasoningLevel` to Groq's `reasoning_effort`.
-/// Groq has no `minimal`/`xhigh` tiers, so they fold into `low`/`high`.
+/// Groq has no `minimal`/`xhigh`/`max`/`ultra` tiers, so they fold into
+/// `low`/`high`.
 static REASONING_EFFORT_MAP: LazyLock<HashMap<ReasoningLevel, &'static str>> =
     LazyLock::new(|| {
         HashMap::from([
@@ -64,6 +65,8 @@ static REASONING_EFFORT_MAP: LazyLock<HashMap<ReasoningLevel, &'static str>> =
             (ReasoningLevel::Medium, "medium"),
             (ReasoningLevel::High, "high"),
             (ReasoningLevel::Xhigh, "high"),
+            (ReasoningLevel::Max, "high"),
+            (ReasoningLevel::Ultra, "high"),
         ])
     });
 

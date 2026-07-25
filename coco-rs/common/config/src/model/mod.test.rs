@@ -39,15 +39,43 @@ fn test_model_info_resolve_thinking_exact() {
 }
 
 #[test]
-fn test_model_info_resolve_thinking_nearest() {
+fn test_model_info_resolve_thinking_nearest_breaks_ties_upward() {
     let info = ModelInfo {
         supported_thinking_levels: Some(vec![ThinkingLevel::low(), ThinkingLevel::high()]),
         ..Default::default()
     };
-    // Medium is not supported, should resolve to nearest (High is closer)
+    // Medium sits exactly between the two declared rungs. A tie resolves
+    // upward — the caller asked for a level this model does not have, and
+    // rounding down would silently buy them less thinking than they asked
+    // for.
     let resolved = info.resolve_thinking_level(&ThinkingLevel::medium());
-    // Medium (3) is equidistant from Low (2) and High (4), min_by_key picks first = Low
-    assert!(resolved.effort == ReasoningEffort::Low || resolved.effort == ReasoningEffort::High);
+    assert_eq!(resolved.effort, ReasoningEffort::High);
+}
+
+#[test]
+fn test_model_info_resolve_thinking_xhigh_lands_on_anthropic_max() {
+    // Anthropic's vocabulary is low/medium/high/max, so the Claude catalog
+    // declares no `XHigh`. An `xhigh` request is equidistant from `High`
+    // and `Max`; resolving upward keeps it on the vendor's top rung
+    // instead of quietly demoting it to `high`.
+    let info = ModelInfo {
+        supported_thinking_levels: Some(vec![
+            ThinkingLevel::low(),
+            ThinkingLevel::medium(),
+            ThinkingLevel::high(),
+            ThinkingLevel::max(),
+        ]),
+        ..Default::default()
+    };
+    assert_eq!(
+        info.resolve_thinking_level(&ThinkingLevel::xhigh()).effort,
+        ReasoningEffort::Max
+    );
+    // And a rung the model genuinely declares still matches exactly.
+    assert_eq!(
+        info.resolve_thinking_level(&ThinkingLevel::max()).effort,
+        ReasoningEffort::Max
+    );
 }
 
 #[test]

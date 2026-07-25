@@ -68,8 +68,41 @@ pub fn default_base_instructions() -> String {
     render_instruction_template(DEFAULT_BASE_INSTRUCTIONS_TEMPLATE)
 }
 
+/// Placeholders every builtin instruction template is rendered against.
+///
+/// Vendor prompts are written for the vendor's own harness, so they name
+/// that harness's product and tools (`Codex`, `exec_command`,
+/// `multi_tool_use.parallel`, …). Shipping those strings verbatim tells
+/// the model to call tools coco-rs does not register. Templates
+/// therefore stay **neutral** — no vendor product name, no vendor tool
+/// literal — and bind to the live surface here, so a `ToolName` rename
+/// is a compile-time edit rather than silent prompt drift.
+///
+/// Feature-dependent names are NOT resolved here: they vary per session,
+/// not per catalog. `TaskCreate` → `TodoWrite` under a disabled `TaskV2`
+/// is applied at prompt-assembly time
+/// (`coco_agent_host::build_system_prompt_for_model`), which is why the
+/// task placeholder resolves to the `TaskV2` name and is rewritten later.
+const INSTRUCTION_PLACEHOLDERS: &[(&str, &str)] = &[
+    ("{{PRODUCT_NAME}}", crate::constants::PRODUCT_NAME),
+    ("{{SHELL_TOOL}}", coco_types::ToolName::Bash.as_str()),
+    ("{{READ_TOOL}}", coco_types::ToolName::Read.as_str()),
+    ("{{EDIT_TOOL}}", coco_types::ToolName::Edit.as_str()),
+    (
+        "{{APPLY_PATCH_TOOL}}",
+        coco_types::ToolName::ApplyPatch.as_str(),
+    ),
+    ("{{TASK_TOOL}}", coco_types::ToolName::TaskCreate.as_str()),
+    ("{{SKILL_TOOL}}", coco_types::ToolName::Skill.as_str()),
+    ("{{AGENT_TOOL}}", coco_types::ToolName::Agent.as_str()),
+];
+
 pub(crate) fn render_instruction_template(template: &str) -> String {
-    template.replace("{{PRODUCT_NAME}}", crate::constants::PRODUCT_NAME)
+    let mut rendered = template.to_string();
+    for (placeholder, replacement) in INSTRUCTION_PLACEHOLDERS {
+        rendered = rendered.replace(placeholder, replacement);
+    }
+    rendered
 }
 
 /// Compiled-in builtin model registry — well-known models with known
