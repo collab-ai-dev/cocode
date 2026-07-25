@@ -314,14 +314,17 @@ coco's skill-learning review fork already routes to `ModelRole::Memory`
 (user directive); the digest-not-replay and tools[]-byte-parity ideas
 are worth auditing against the fork's current request shape.
 
-### 5.3 Browser automation — decide, don't drift
+### 5.3 Browser automation — DECIDED 2026-07-25: non-goal
 
 Hermes treats the browser as a first-class surface (CDP supervisor,
 local-Chromium auto-spawn for LAN targets, persistent-connection JS
 eval at 180× the naive cost, cloud-metadata floor + post-navigation
-SSRF recheck). coco has none of it. This is a product-scope decision,
-not an absorption item: either schedule a design effort or add it to
-the explicit non-goals list so it stops resurfacing in gap analyses.
+SSRF recheck). coco has none of it, **by decision** — the owner closed
+this on 2026-07-25 as an explicit non-goal, now recorded in the root
+`CLAUDE.md` (Design Decisions → Explicit Non-Goals) and in
+[hermes-opt-0724.md](hermes-opt-0724.md) §4 N19. Do not re-file it as
+a gap; hermes's continued investment here is evidence about hermes's
+product scope, not a coco deficiency.
 
 ## 6. Anti-Lessons — Things Hermes Proved We Should NOT Do
 
