@@ -9,6 +9,13 @@ use coco_types::ProviderApi;
 
 use super::*;
 
+fn advisor(provider: &str, model_id: &str) -> coco_config::RoleSlot<ModelSpec> {
+    coco_config::RoleSlot {
+        model: spec(provider, model_id),
+        effort: None,
+    }
+}
+
 fn spec(provider: &str, model_id: &str) -> ModelSpec {
     ModelSpec {
         provider: provider.to_string(),
@@ -65,11 +72,8 @@ fn guidance_appends_to_api_prompt_clone_only() {
     let endpoint = MoaEndpointSpec {
         preset_name: "default".to_string(),
         aggregator: spec("anthropic", "claude-sonnet-4-6"),
-        reference_models: vec![spec("openai", "gpt-5-4")],
+        reference_models: vec![advisor("openai", "gpt-5-4")],
         fanout: coco_config::MoaFanout::PerIteration,
-        reference_max_tokens: None,
-        reference_temperature: None,
-        aggregator_temperature: None,
         reference_timeout_secs: None,
     };
     let next = attach_reference_guidance(
@@ -98,11 +102,8 @@ fn user_turn_cache_key_is_turn_scoped_and_ignores_synthetic_context() {
     let endpoint = MoaEndpointSpec {
         preset_name: "default".to_string(),
         aggregator: spec("anthropic", "claude-sonnet-4-6"),
-        reference_models: vec![spec("openai", "gpt-5-4")],
+        reference_models: vec![advisor("openai", "gpt-5-4")],
         fanout: coco_config::MoaFanout::UserTurn,
-        reference_max_tokens: None,
-        reference_temperature: None,
-        aggregator_temperature: None,
         reference_timeout_secs: None,
     };
     let base_prompt = vec![
@@ -142,11 +143,8 @@ fn per_iteration_cache_key_is_disabled() {
     let endpoint = MoaEndpointSpec {
         preset_name: "default".to_string(),
         aggregator: spec("anthropic", "claude-sonnet-4-6"),
-        reference_models: vec![spec("openai", "gpt-5-4")],
+        reference_models: vec![advisor("openai", "gpt-5-4")],
         fanout: coco_config::MoaFanout::PerIteration,
-        reference_max_tokens: None,
-        reference_temperature: None,
-        aggregator_temperature: None,
         reference_timeout_secs: None,
     };
     let prompt = vec![LlmMessage::user_text("prompt")];
@@ -162,11 +160,8 @@ async fn moa_events_surface_reference_lifecycle_and_thinking_block() {
     let endpoint = MoaEndpointSpec {
         preset_name: "default".to_string(),
         aggregator: spec("anthropic", "claude-sonnet-4-6"),
-        reference_models: vec![spec("openai", "gpt-5-4")],
+        reference_models: vec![advisor("openai", "gpt-5-4")],
         fanout: coco_config::MoaFanout::PerIteration,
-        reference_max_tokens: None,
-        reference_temperature: None,
-        aggregator_temperature: None,
         reference_timeout_secs: None,
     };
     let output = ReferenceOutput {
@@ -217,4 +212,70 @@ async fn moa_events_surface_reference_lifecycle_and_thinking_block() {
     };
     assert!(delta.contains("MoA reference 1/1"));
     assert!(delta.contains("reference advice"));
+}
+
+// ── N7c: per-advisor prompt fitting ──
+//
+// A preset mixes a small cheap advisor with a large one. One shared byte
+// budget either overflows the small model (400 / silent provider truncation) or
+// wastes the large one's room, so the prompt is fitted to each advisor's own
+// declared window.
+
+/// Build an advisor-shaped prompt: system + `turns` alternating user/assistant
+/// pairs, ending on a user question.
+fn advisor_prompt(turns: usize, body: &str) -> LlmPrompt {
+    let mut out = vec![LlmMessage::system(REFERENCE_SYSTEM_PROMPT)];
+    for i in 0..turns {
+        out.push(LlmMessage::user_text(format!("u{i} {body}")));
+        out.push(LlmMessage::assistant_text(format!("a{i} {body}")));
+    }
+    out.push(LlmMessage::user_text("the actual question"));
+    out
+}
+
+#[test]
+fn fit_prompt_passes_through_when_it_already_fits() {
+    let prompt = advisor_prompt(2, "short");
+    let before = prompt.len();
+    let fitted = fit_prompt_to_advisor(prompt, Some(1_000_000), "openai", "gpt-5-4");
+    assert_eq!(fitted.len(), before);
+}
+
+/// Unknown model (registry could not resolve it) must behave exactly as before
+/// per-advisor fitting existed — never invent a bound.
+#[test]
+fn fit_prompt_passes_through_when_the_budget_is_unknown() {
+    let prompt = advisor_prompt(40, "padding padding padding padding");
+    let before = prompt.len();
+    let fitted = fit_prompt_to_advisor(prompt, None, "openai", "gpt-5-4");
+    assert_eq!(fitted.len(), before);
+}
+
+#[test]
+fn fit_prompt_drops_oldest_turns_and_keeps_system_plus_question() {
+    let prompt = advisor_prompt(40, &"padding ".repeat(40));
+    let before = prompt.len();
+    let fitted = fit_prompt_to_advisor(prompt, Some(2_000), "openai", "gpt-5-4");
+
+    assert!(fitted.len() < before, "expected turns to be dropped");
+    // The advisor instructions and the question are load-bearing: without the
+    // first it has no role, without the last it has nothing to answer.
+    assert!(matches!(fitted.first(), Some(LlmMessage::System { .. })));
+    let LlmMessage::User { content, .. } = fitted.last().expect("tail") else {
+        panic!("tail must stay a user message");
+    };
+    assert_eq!(user_text(content), "the actual question");
+    let estimated: i64 = fitted.iter().map(estimate_advisor_message_tokens).sum();
+    assert!(estimated <= 2_000, "still over budget: {estimated}");
+}
+
+/// Degenerate config: the question alone exceeds the advisor's window. Sending
+/// as-is (a visible failure) beats silently clipping the question, which would
+/// yield confidently wrong advice.
+#[test]
+fn fit_prompt_keeps_system_and_question_even_when_still_over_budget() {
+    let prompt = advisor_prompt(3, "padding");
+    let fitted = fit_prompt_to_advisor(prompt, Some(1), "openai", "gpt-5-4");
+    assert_eq!(fitted.len(), 2);
+    assert!(matches!(fitted.first(), Some(LlmMessage::System { .. })));
 }

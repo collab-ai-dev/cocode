@@ -426,15 +426,9 @@ pub enum MoaAction {
         /// Reference fanout policy.
         #[arg(long, value_enum, default_value = "per_iteration")]
         fanout: MoaFanoutArg,
-        /// Maximum tokens for each reference response.
-        #[arg(long = "reference-max-tokens", value_name = "N")]
-        reference_max_tokens: Option<i64>,
-        /// Temperature override for reference calls.
-        #[arg(long = "reference-temperature", value_name = "FLOAT")]
-        reference_temperature: Option<f32>,
-        /// Temperature override for the aggregator call.
-        #[arg(long = "aggregator-temperature", value_name = "FLOAT")]
-        aggregator_temperature: Option<f32>,
+        /// Per-reference wall-clock timeout in seconds (0 disables the bound).
+        #[arg(long = "reference-timeout-secs", value_name = "SECS")]
+        reference_timeout_secs: Option<i64>,
         /// Make this preset the default for `/moa`.
         #[arg(long = "default")]
         make_default: bool,

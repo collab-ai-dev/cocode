@@ -69,7 +69,7 @@ fn moa_default_settings(role: ModelRole) -> SettingsWithSource {
         "default".to_string(),
         crate::MoaPresetSettings {
             aggregator: Some(model_selection("anthropic", "claude-sonnet-4-6")),
-            reference_models: vec![model_selection("openai", "gpt-5-4")],
+            reference_models: vec![reference_slot("openai", "gpt-5-4")],
             ..Default::default()
         },
     );
@@ -109,6 +109,15 @@ fn settings_with_main(provider: &str, model_id: &str) -> SettingsWithSource {
     })
 }
 
+fn reference_slot(provider: &str, model_id: &str) -> crate::MoaReferenceSlot {
+    crate::MoaReferenceSlot {
+        provider: provider.to_string(),
+        model_id: model_id.to_string(),
+        enabled: true,
+        effort: None,
+    }
+}
+
 fn model_selection(provider: &str, model_id: &str) -> ProviderModelSelection {
     ProviderModelSelection {
         provider: provider.to_string(),
@@ -134,8 +143,8 @@ fn test_moa_main_role_resolves_display_and_acting_models() {
         .expect("moa endpoint");
     assert_eq!(endpoint.display_provider(), "moa");
     assert_eq!(endpoint.display_model_id(), "default");
-    assert_eq!(endpoint.reference_models[0].provider, "openai");
-    assert_eq!(endpoint.reference_models[0].model_id, "gpt-5-4");
+    assert_eq!(endpoint.reference_models[0].model.provider, "openai");
+    assert_eq!(endpoint.reference_models[0].model.model_id, "gpt-5-4");
 }
 
 #[test]
@@ -160,7 +169,7 @@ fn test_moa_preset_rejects_recursive_member() {
         .presets
         .get_mut("default")
         .expect("preset")
-        .reference_models = vec![model_selection("moa", "other")];
+        .reference_models = vec![reference_slot("moa", "other")];
 
     let err = build_isolated(
         settings,
@@ -218,7 +227,7 @@ fn test_moa_default_preset_synthesizes_from_main_review_fast() {
         endpoint
             .reference_models
             .iter()
-            .map(|spec| format!("{}/{}", spec.provider, spec.model_id))
+            .map(|slot| format!("{}/{}", slot.model.provider, slot.model.model_id))
             .collect::<Vec<_>>(),
         vec![
             "openai/gpt-5-4",
@@ -1224,4 +1233,132 @@ fn test_parse_enabled_setting_sources() {
     assert!(trimmed.contains(&SettingSource::Flag));
     assert!(trimmed.contains(&SettingSource::Policy));
     assert_eq!(trimmed.len(), 3);
+}
+
+/// `enabled: false` parks an advisor: it is dropped before validation, so it
+/// never reaches fan-out and never counts against the cap.
+#[test]
+fn test_moa_disabled_reference_slot_is_dropped_at_resolution() {
+    let mut presets = BTreeMap::new();
+    presets.insert(
+        "default".to_string(),
+        crate::MoaPresetSettings {
+            aggregator: Some(model_selection("anthropic", "claude-sonnet-4-6")),
+            reference_models: vec![
+                crate::MoaReferenceSlot {
+                    enabled: false,
+                    ..reference_slot("openai", "gpt-5-4")
+                },
+                reference_slot("google", "gemini-3.1-pro-preview"),
+            ],
+            ..Default::default()
+        },
+    );
+    let settings = settings_with(Settings {
+        models: crate::ModelSelectionSettings {
+            main: Some(role_slots_of("moa", "default")),
+            ..Default::default()
+        },
+        moa: crate::MoaSettings {
+            default_preset: Some("default".to_string()),
+            presets,
+        },
+        ..Default::default()
+    });
+
+    let runtime = build_isolated(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect("runtime config");
+    let endpoint = runtime
+        .model_roles
+        .moa_endpoint(ModelRole::Main)
+        .expect("moa endpoint");
+    assert_eq!(endpoint.reference_models.len(), 1);
+    assert_eq!(endpoint.reference_models[0].model.provider, "google");
+}
+
+/// A preset whose every advisor is parked must fail with a message that says
+/// so, not with the generic "configure at least one" — the user did configure
+/// one, they just disabled it.
+#[test]
+fn test_moa_all_references_disabled_reports_the_parked_count() {
+    let mut presets = BTreeMap::new();
+    presets.insert(
+        "default".to_string(),
+        crate::MoaPresetSettings {
+            aggregator: Some(model_selection("anthropic", "claude-sonnet-4-6")),
+            reference_models: vec![crate::MoaReferenceSlot {
+                enabled: false,
+                ..reference_slot("openai", "gpt-5-4")
+            }],
+            ..Default::default()
+        },
+    );
+    let settings = settings_with(Settings {
+        models: crate::ModelSelectionSettings {
+            main: Some(role_slots_of("moa", "default")),
+            ..Default::default()
+        },
+        moa: crate::MoaSettings {
+            default_preset: Some("default".to_string()),
+            presets,
+        },
+        ..Default::default()
+    });
+
+    let err = build_isolated(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect_err("all-disabled preset must fail");
+    let message = err.to_string();
+    assert!(message.contains("enabled: false"), "got: {message}");
+}
+
+/// Per-slot effort survives resolution onto the endpoint — it is the advisor's
+/// only thinking control, so losing it here would silently disable the feature.
+#[test]
+fn test_moa_reference_slot_effort_reaches_the_endpoint() {
+    let mut presets = BTreeMap::new();
+    presets.insert(
+        "default".to_string(),
+        crate::MoaPresetSettings {
+            aggregator: Some(model_selection("anthropic", "claude-sonnet-4-6")),
+            reference_models: vec![crate::MoaReferenceSlot {
+                effort: Some(coco_types::ReasoningEffort::High),
+                ..reference_slot("openai", "gpt-5-4")
+            }],
+            ..Default::default()
+        },
+    );
+    let settings = settings_with(Settings {
+        models: crate::ModelSelectionSettings {
+            main: Some(role_slots_of("moa", "default")),
+            ..Default::default()
+        },
+        moa: crate::MoaSettings {
+            default_preset: Some("default".to_string()),
+            presets,
+        },
+        ..Default::default()
+    });
+
+    let runtime = build_isolated(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect("runtime config");
+    let endpoint = runtime
+        .model_roles
+        .moa_endpoint(ModelRole::Main)
+        .expect("moa endpoint");
+    assert_eq!(
+        endpoint.reference_models[0].effort,
+        Some(coco_types::ReasoningEffort::High)
+    );
 }

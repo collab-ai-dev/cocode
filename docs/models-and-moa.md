@@ -184,21 +184,46 @@ Or in `~/.cocode/settings.json`:
     "presets": {
       "default": {
         "enabled": true,
-        "aggregator": "anthropic/claude-sonnet-4-6",
-        "reference_models": ["openai/gpt-5-5", "deepseek-openai/deepseek-v4-pro"],
+        "aggregator": { "provider": "anthropic", "model_id": "claude-sonnet-4-6" },
+        "reference_models": [
+          { "provider": "openai", "model_id": "gpt-5-5" },
+          { "provider": "deepseek-openai", "model_id": "deepseek-v4-pro", "effort": "low" },
+          { "provider": "google", "model_id": "gemini-3.1-pro-preview", "enabled": false }
+        ],
         "fanout": "per_iteration",
-        "reference_max_tokens": 4096,
-        "reference_temperature": 0.7,
-        "aggregator_temperature": 0.2
+        "reference_timeout_secs": 120
       }
     }
   }
 }
 ```
 
-`coco moa configure` also accepts `--reference-max-tokens`,
-`--reference-temperature`, `--aggregator-temperature`, `--enable`, and
-`--disable`.
+An advisor entry is shaped like a role slot — `provider`, `model_id`, and an
+optional `effort` — plus `enabled`:
+
+- **`effort`** pins that advisor's reasoning. Advisors deliberately do not
+  inherit the turn's thinking level (an advisor is not the acting model), so
+  this is their only thinking control. Omit it to defer to the model's own
+  `default_thinking_level`; `"off"` suppresses thinking explicitly.
+- **`enabled: false`** parks an advisor without deleting it from the array.
+  Parked slots are dropped before validation, so they never run and never count
+  against the eight-advisor cap.
+
+**There is no per-advisor `max_tokens` or `temperature`, by design.** Those are
+properties of the model, already declared per `(provider, model_id)` and
+overridable under `providers.<name>.models.<id>.overrides`. A preset-level copy
+would flatten every advisor's own configuration, so the fields do not exist.
+The aggregator likewise takes the turn's temperature and thinking verbatim —
+overriding them in the preset would silently defeat your live effort controls
+(Ctrl+T, `--effort`, the role slot).
+
+`reference_timeout_secs` bounds one advisor's whole retry loop, which is why it
+is not redundant with a provider's per-request `timeout_secs`. `0` disables the
+bound; omitting it uses 120 s.
+
+`coco moa configure` also accepts `--reference-timeout-secs`, `--enable`, and
+`--disable`. Per-slot `effort` and `enabled` are settings-file only: a repeated
+`--reference` flag has no way to say which slot a value belongs to.
 
 ### Using a preset
 
