@@ -21,3 +21,12 @@ dist/
 .claude/scheduled_tasks.lock
 .env*
 !.env.example
+
+# Crash artifacts. A panicking test can drop an ELF core dump next to the
+# crate it ran in. `coco-rs/core/` is a real source layer, so the bare `core`
+# pattern must be negated for it — keep that negation if you touch this block.
+core
+!coco-rs/core/
+core.[0-9]*
+vgcore.*
+*.stackdump
