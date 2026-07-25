@@ -1,6 +1,5 @@
 //! `coco moa <action>` — manage MoA presets in user settings.
 
-use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -26,9 +25,7 @@ pub fn handle_moa(action: &MoaAction, cwd: &Path) -> Result<()> {
             aggregator,
             references,
             fanout,
-            reference_max_tokens,
-            reference_temperature,
-            aggregator_temperature,
+            reference_timeout_secs,
             make_default,
             enable,
             disable,
@@ -37,9 +34,7 @@ pub fn handle_moa(action: &MoaAction, cwd: &Path) -> Result<()> {
             aggregator,
             references,
             *fanout,
-            *reference_max_tokens,
-            *reference_temperature,
-            *aggregator_temperature,
+            *reference_timeout_secs,
             *make_default,
             *enable,
             *disable,
@@ -54,9 +49,7 @@ fn configure_preset(
     aggregator: &str,
     references: &[String],
     fanout: MoaFanoutArg,
-    reference_max_tokens: Option<i64>,
-    reference_temperature: Option<f32>,
-    aggregator_temperature: Option<f32>,
+    reference_timeout_secs: Option<i64>,
     make_default: bool,
     enable: bool,
     disable: bool,
@@ -65,21 +58,31 @@ fn configure_preset(
     if name.is_empty() {
         bail!("MoA preset name must be non-empty");
     }
-    if reference_max_tokens.is_some_and(|tokens| tokens <= 0) {
-        bail!("--reference-max-tokens must be positive");
+    if reference_timeout_secs.is_some_and(|secs| secs < 0) {
+        bail!("--reference-timeout-secs must be zero (unbounded) or positive");
     }
     if make_default && disable && !enable {
         bail!("a disabled MoA preset cannot be saved as the default");
     }
-    validate_temperature("--reference-temperature", reference_temperature)?;
-    validate_temperature("--aggregator-temperature", aggregator_temperature)?;
 
     let aggregator = parse_real_selection("aggregator", aggregator)?;
-    let reference_models = dedupe_references(
+    // `--reference` writes identity-only slots. Per-slot `effort` / `enabled`
+    // are settings-file concerns: a repeated flag has no way to say which slot
+    // a value belongs to, and inventing `--reference-effort` positional pairing
+    // would be worse than editing the JSON.
+    let reference_models = coco_config::model::dedupe_reference_settings(
         references
             .iter()
             .enumerate()
-            .map(|(idx, reference)| parse_real_selection(&format!("reference[{idx}]"), reference))
+            .map(|(idx, reference)| {
+                let selection = parse_real_selection(&format!("reference[{idx}]"), reference)?;
+                Ok(coco_config::MoaReferenceSlot {
+                    provider: selection.provider,
+                    model_id: selection.model_id,
+                    enabled: true,
+                    effort: None,
+                })
+            })
             .collect::<Result<Vec<_>>>()?,
     );
     if reference_models.is_empty() {
@@ -105,10 +108,7 @@ fn configure_preset(
                 MoaFanoutArg::PerIteration => MoaFanout::PerIteration,
                 MoaFanoutArg::UserTurn => MoaFanout::UserTurn,
             },
-            reference_max_tokens,
-            reference_temperature,
-            aggregator_temperature,
-            reference_timeout_secs: None,
+            reference_timeout_secs,
         },
     );
     if make_default {
@@ -176,7 +176,7 @@ fn list_presets(cwd: &Path) -> Result<()> {
         let references = preset
             .reference_models
             .iter()
-            .map(format_selection)
+            .map(format_reference_slot)
             .collect::<Vec<_>>()
             .join(", ");
         println!("  {name}{marker} ({state})");
@@ -187,13 +187,18 @@ fn list_presets(cwd: &Path) -> Result<()> {
     Ok(())
 }
 
-fn validate_temperature(flag: &str, value: Option<f32>) -> Result<()> {
-    if let Some(value) = value
-        && (!value.is_finite() || value < 0.0)
-    {
-        bail!("{flag} must be a finite non-negative number");
+/// `provider/model` plus the markers that change behavior: `@effort` when the
+/// slot pins one, `(disabled)` when it is parked.
+fn format_reference_slot(slot: &coco_config::MoaReferenceSlot) -> String {
+    let mut out = format!("{}/{}", slot.provider, slot.model_id);
+    if let Some(effort) = slot.effort {
+        out.push('@');
+        out.push_str(effort.as_str());
     }
-    Ok(())
+    if !slot.enabled {
+        out.push_str(" (disabled)");
+    }
+    out
 }
 
 fn parse_real_selection(field: &str, value: &str) -> Result<ProviderModelSelection> {
@@ -203,17 +208,6 @@ fn parse_real_selection(field: &str, value: &str) -> Result<ProviderModelSelecti
         bail!("{field}: MoA presets must use real provider/model members, not moa/*");
     }
     Ok(selection)
-}
-
-fn dedupe_references(references: Vec<ProviderModelSelection>) -> Vec<ProviderModelSelection> {
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    for selection in references {
-        if seen.insert((selection.provider.clone(), selection.model_id.clone())) {
-            out.push(selection);
-        }
-    }
-    out
 }
 
 fn format_selection(selection: &ProviderModelSelection) -> String {

@@ -472,11 +472,11 @@ fn validate_moa_endpoints_against_available_models(
             &endpoint.aggregator,
             available_models,
         )?;
-        for (idx, spec) in endpoint.reference_models.iter().enumerate() {
+        for (idx, slot) in endpoint.reference_models.iter().enumerate() {
             ensure_model_allowed(
                 preset_name,
                 &format!("moa.reference_models[{idx}]"),
-                spec,
+                &slot.model,
                 available_models,
             )?;
         }
@@ -531,7 +531,9 @@ fn validate_moa_endpoints_against_registry(
     registry: &ModelRegistry,
 ) -> Result<(), ConfigError> {
     for endpoint in roles.moa_presets.values() {
-        for spec in std::iter::once(&endpoint.aggregator).chain(endpoint.reference_models.iter()) {
+        for spec in std::iter::once(&endpoint.aggregator)
+            .chain(endpoint.reference_models.iter().map(|slot| &slot.model))
+        {
             match registry.try_resolve(&spec.provider, &spec.model_id)? {
                 Some(_) => {}
                 None => {
@@ -926,7 +928,15 @@ fn synthesize_default_moa_preset(
             continue;
         }
         if seen.insert((selection.provider.clone(), selection.model_id.clone())) {
-            reference_models.push(selection.clone());
+            // Carry the source role slot's effort through: a `models.fast`
+            // pinned to low effort should not silently reason harder just
+            // because it was borrowed as an advisor.
+            reference_models.push(crate::MoaReferenceSlot {
+                provider: selection.provider.clone(),
+                model_id: selection.model_id.clone(),
+                enabled: true,
+                effort: slots.primary.effort,
+            });
         }
     }
 
@@ -1119,20 +1129,34 @@ fn resolve_configured_moa_endpoint(
     ensure_real_moa_member(preset_name, "aggregator", &aggregator)?;
     let aggregator = resolve_model_selection(aggregator, providers)?;
 
+    // Parked slots (`enabled: false`) are dropped here, before validation, so
+    // they neither reach fan-out nor count against the cap — the point of
+    // `enabled` is to park an advisor without editing the array.
     let reference_models = preset
         .reference_models
         .iter()
         .enumerate()
-        .map(|(idx, selection)| {
-            ensure_real_moa_member(preset_name, &format!("reference_models[{idx}]"), selection)?;
-            resolve_model_selection(selection.clone(), providers)
+        .filter(|(_, slot)| slot.enabled)
+        .map(|(idx, slot)| {
+            let selection = slot.selection();
+            ensure_real_moa_member(preset_name, &format!("reference_models[{idx}]"), &selection)?;
+            Ok(crate::model::RoleSlot {
+                model: resolve_model_selection(selection, providers)?,
+                effort: slot.effort,
+            })
         })
         .collect::<crate::Result<Vec<_>>>()?;
-    let reference_models = moa::dedupe_specs(reference_models);
+    let reference_models = moa::dedupe_reference_slots(reference_models);
     if reference_models.is_empty() {
-        return Err(crate::ConfigError::generic(format!(
-            "MoA preset `{preset_name}` must configure at least one reference model"
-        )));
+        let parked = preset.reference_models.len();
+        return Err(crate::ConfigError::generic(if parked > 0 {
+            format!(
+                "MoA preset `{preset_name}` has {parked} reference model(s) but all are \
+                 `enabled: false`; enable at least one"
+            )
+        } else {
+            format!("MoA preset `{preset_name}` must configure at least one reference model")
+        }));
     }
     if reference_models.len() > MAX_REFERENCE_MODELS {
         return Err(crate::ConfigError::generic(format!(
@@ -1146,9 +1170,6 @@ fn resolve_configured_moa_endpoint(
         aggregator,
         reference_models,
         fanout: preset.fanout,
-        reference_max_tokens: preset.reference_max_tokens,
-        reference_temperature: preset.reference_temperature,
-        aggregator_temperature: preset.aggregator_temperature,
         reference_timeout_secs: preset.reference_timeout_secs,
     })
 }

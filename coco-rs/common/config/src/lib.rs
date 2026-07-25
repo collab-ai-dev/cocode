@@ -77,6 +77,7 @@ pub use model::MOA_PROVIDER;
 pub use model::MoaEndpointSpec;
 pub use model::MoaFanout;
 pub use model::MoaPresetSettings;
+pub use model::MoaReferenceSlot;
 pub use model::MoaSettings;
 pub use model::ModelInfo;
 pub use model::ModelRegistry;

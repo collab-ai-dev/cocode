@@ -20,6 +20,7 @@ use coco_types::MoaReferenceParams;
 use coco_types::ModelRole;
 use coco_types::ProviderModelSelection;
 use coco_types::ServerNotification;
+use coco_types::ThinkingLevel;
 use coco_types::TurnId;
 use futures::future::join_all;
 use lru::LruCache;
@@ -183,12 +184,24 @@ async fn run_references(
         .reference_models
         .iter()
         .enumerate()
-        .map(|(idx, spec)| {
+        .map(|(idx, slot)| {
             let model_runtimes = Arc::clone(model_runtimes);
-            let prompt = prompt.clone();
             let preset = endpoint.preset_name.clone();
-            let provider = spec.provider.clone();
-            let model_id = spec.model_id.clone();
+            let provider = slot.model.provider.clone();
+            let model_id = slot.model.model_id.clone();
+            let selection = ProviderModelSelection {
+                provider: provider.clone(),
+                model_id: model_id.clone(),
+            };
+            // Per-advisor prompt window (N7c): a preset routinely mixes a
+            // small cheap advisor with a large one, and one shared byte budget
+            // either overflows the small model or wastes the large one's room.
+            let prompt = fit_prompt_to_advisor(
+                prompt.clone(),
+                advisor_input_budget(&model_runtimes, &selection),
+                &provider,
+                &model_id,
+            );
             let mut reference_params = params.clone();
             reference_params.prompt = prompt;
             reference_params.tools = None;
@@ -196,14 +209,24 @@ async fn run_references(
             reference_params.context_management = None;
             reference_params.response_format = None;
             reference_params.agentic = false;
-            reference_params.thinking_level = None;
             reference_params.fast_mode = false;
             reference_params.stop_sequences = None;
             reference_params.fallback_min_context_window = None;
             reference_params.agent_id = None;
             reference_params.time_since_last_assistant_ms = None;
-            reference_params.temperature = endpoint.reference_temperature;
-            reference_params.max_tokens = endpoint.reference_max_tokens;
+            // Temperature and max_tokens are deliberately NOT set: they are
+            // properties of the advisor model, already resolved from its own
+            // `ModelInfo`. A preset-wide value would flatten every advisor's
+            // per-model configuration.
+            //
+            // Thinking does not inherit the parent turn (an advisor is not the
+            // acting model), so the slot's own `effort` is its only control —
+            // `None` still defers to the model's `default_thinking_level`.
+            reference_params.thinking_level = slot.effort.map(|effort| ThinkingLevel {
+                effort,
+                budget_tokens: None,
+                options: std::collections::HashMap::new(),
+            });
             reference_params.query_source = Some(format!(
                 "moa_reference:{preset}:{idx}:{provider}/{model_id}"
             ));
@@ -360,7 +383,7 @@ fn emit_reference_started(
         return;
     };
     let count = endpoint.reference_models.len() as i32;
-    for (idx, spec) in endpoint.reference_models.iter().enumerate() {
+    for (idx, slot) in endpoint.reference_models.iter().enumerate() {
         let _ = tx.try_send(CoreEvent::Protocol(
             ServerNotification::MoaReferenceStarted(MoaReferenceParams {
                 turn_id: turn_id.clone(),
@@ -368,8 +391,8 @@ fn emit_reference_started(
                 preset: endpoint.preset_name.clone(),
                 index: (idx + 1) as i32,
                 count,
-                provider: spec.provider.clone(),
-                model_id: spec.model_id.clone(),
+                provider: slot.model.provider.clone(),
+                model_id: slot.model.model_id.clone(),
                 text: String::new(),
                 failed: false,
             }),
@@ -524,10 +547,20 @@ fn user_turn_cache_key(
         .collect::<Vec<_>>();
     let signature = serde_json::to_string(&signature_messages).ok()?;
     let signature_hash = cache_signature_hash(&signature);
+    // Effort participates in the label: two presets differing only in an
+    // advisor's effort produce different guidance and must not share an entry.
     let labels = endpoint
         .reference_models
         .iter()
-        .map(|spec| format!("{}/{}", spec.provider, spec.model_id))
+        .map(|slot| match slot.effort {
+            Some(effort) => format!(
+                "{}/{}@{}",
+                slot.model.provider,
+                slot.model.model_id,
+                effort.as_str()
+            ),
+            None => format!("{}/{}", slot.model.provider, slot.model.model_id),
+        })
         .collect::<Vec<_>>()
         .join(",");
     Some(format!(
@@ -608,10 +641,10 @@ fn attach_reference_guidance(
     endpoint: &MoaEndpointSpec,
     references: &[ReferenceOutput],
 ) -> QueryParams {
+    // The aggregator IS the acting model, so it keeps the parent turn's
+    // temperature and thinking verbatim — a preset-level override here would
+    // silently defeat the user's live effort/thinking controls.
     let mut next = params.clone();
-    if endpoint.aggregator_temperature.is_some() {
-        next.temperature = endpoint.aggregator_temperature;
-    }
     let mut guidance = format!(
         "[Mixture of Agents reference context]\nPreset: {}\nAggregator/acting model: {}/{}\n\nUse these independent model notes as private advisory context only. You are the acting model: answer the user directly or call tools as needed.\n",
         endpoint.preset_name, endpoint.aggregator.provider, endpoint.aggregator.model_id
@@ -743,6 +776,95 @@ fn tool_result_content_text(content: &ToolResultContent) -> String {
             .join("\n"),
     };
     truncate_head_tail(&text, TOOL_RESULT_TEXT_BUDGET)
+}
+
+/// Floor on an advisor's input budget. A model declaring a window smaller than
+/// its own output reserve would otherwise compute a negative budget and get an
+/// empty prompt; give it something rather than nothing.
+const MIN_ADVISOR_INPUT_TOKENS: i64 = 1_000;
+
+/// Input-token budget for one advisor: its own context window minus its own
+/// output reserve, both read from that model's `ModelInfo`.
+///
+/// `None` when the registry cannot resolve the model — the caller then sends
+/// the prompt untrimmed rather than inventing a bound, which keeps an unknown
+/// model behaving exactly as it did before per-advisor fitting existed.
+fn advisor_input_budget(
+    model_runtimes: &Arc<ModelRuntimeRegistry>,
+    selection: &ProviderModelSelection,
+) -> Option<i64> {
+    let info = model_runtimes
+        .primary_model_info_for_source(ModelRuntimeSource::Explicit(selection.clone()))
+        .ok()
+        .flatten()?;
+    let window = i64::from(info.context_window.get());
+    let reserve = i64::from(info.max_output_tokens.get());
+    Some((window - reserve).max(MIN_ADVISOR_INPUT_TOKENS))
+}
+
+/// Estimated tokens for one advisor-prompt message. The advisor prompt is
+/// text-only by construction (`reference_prompt` flattens every part), so the
+/// text estimator is exact enough for a windowing decision.
+fn estimate_advisor_message_tokens(message: &LlmMessage) -> i64 {
+    let text = match message {
+        LlmMessage::System { content, .. } | LlmMessage::Developer { content, .. } => {
+            user_text(content)
+        }
+        LlmMessage::User { content, .. } => user_text(content),
+        LlmMessage::Assistant { content, .. } => assistant_text(content),
+        LlmMessage::Tool { content, .. } => tool_text(content),
+    };
+    coco_messages::estimate_text_tokens(&text)
+}
+
+/// Fit the shared advisor prompt into one advisor's own context window by
+/// dropping the oldest middle turns.
+///
+/// A preset routinely mixes a small cheap advisor with a large one; a single
+/// shared budget either overflows the small model (400 / silent provider-side
+/// truncation, so its guidance comes back mangled) or wastes the large one's
+/// room. The leading system message and the trailing message are never
+/// dropped — without them the advisor has no instructions and no question.
+///
+/// If the prompt still exceeds the budget once only those two remain, it is
+/// sent as-is with a warning rather than clipped: a silently truncated question
+/// yields confidently wrong advice, which is worse than a visible failure the
+/// aggregator already renders as `[failed: …]`.
+fn fit_prompt_to_advisor(
+    mut prompt: LlmPrompt,
+    budget: Option<i64>,
+    provider: &str,
+    model_id: &str,
+) -> LlmPrompt {
+    let Some(budget) = budget else {
+        return prompt;
+    };
+    let mut total: i64 = prompt.iter().map(estimate_advisor_message_tokens).sum();
+    if total <= budget {
+        return prompt;
+    }
+    let before = total;
+    let dropped_from = prompt.len();
+    while total > budget && prompt.len() > 2 {
+        total -= estimate_advisor_message_tokens(&prompt[1]);
+        prompt.remove(1);
+    }
+    if total > budget {
+        tracing::warn!(
+            target: "coco::moa",
+            provider, model_id, budget, estimated = total,
+            "advisor prompt exceeds its context window even after dropping history; sending as-is"
+        );
+    } else {
+        tracing::debug!(
+            target: "coco::moa",
+            provider, model_id, budget,
+            estimated_before = before, estimated_after = total,
+            dropped_messages = dropped_from - prompt.len(),
+            "advisor prompt fitted to its own context window"
+        );
+    }
+    prompt
 }
 
 fn truncate_head_tail(text: &str, budget: usize) -> String {
