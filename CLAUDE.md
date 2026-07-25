@@ -215,7 +215,7 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 | `error` | Unified errors with `StatusCode` classification (snafu + virtstack) |
 | `otel` | OpenTelemetry tracing and metrics |
 | `stack-trace-macro` | `#[stack_trace_debug]` proc macro for snafu enums |
-| `model-card` | Vendor-defined model facts (knowledge cutoff, pricing) + curated stall-timeout floors. Card lookup is exact-id, no substring matching; lifecycle/deprecation metadata not yet modeled |
+| `model-card` | Vendor-defined model facts (cutoff, pricing) + curated stall-timeout floors. Exact-id lookup, no substring match; no lifecycle metadata yet |
 
 ### Vercel AI
 
@@ -478,6 +478,18 @@ Raw strings only for unconstrained input (user text, opaque external IDs, third-
 - **Compaction — three generic strategies only:** micro-compact (clear old tool results), full LLM summarization, reactive (on `prompt_too_long`). `HISTORY_SNIP` and `CONTEXT_COLLAPSE` are not implemented — cache-aware optimizations of that kind belong in the `vercel-ai-*` provider crates.
 
 - **Plan Mode — skip Ultraplan only.** Port core lifecycle, Pewter-ledger (Phase-4 variants `null`/`trim`/`cut`/`cap`), Interview phase — gate on `settings.json` (`plan_mode.phase4_variant`, `plan_mode.workflow`), not GrowthBook or `USER_TYPE=ant`. Skip every `feature('ULTRAPLAN')` path (needs CCR backend coco-rs doesn't ship).
+
+### Explicit Non-Goals
+
+Capabilities deliberately not built. These are **product decisions, not gaps** — do not re-file them as findings, and do not treat another agent's continued investment in them as evidence coco-rs is missing something. Reopening one takes a deliberate product decision, not a diff.
+
+| Non-goal | Decided | Why |
+|---|---|---|
+| Browser automation & computer-use (CDP supervisor, local-Chromium auto-spawn, persistent-connection JS eval, browser snapshots, `computer_use` verify→escalate ladder) | 2026-07-25 | Owner call: not for now. Surfaced in three consecutive hermes gap sweeps without a scope decision; recorded here so it stops resurfacing. See `docs/internal/hermes/hermes-opt-0724.md` §4 N19 |
+| Anthropic cloud-credential routes (Bedrock / Vertex / Foundry) | pre-existing | See Multi-Provider Boundaries above — coco-rs targets Anthropic FirstParty, OpenAI, Google Gemini, ByteDance, and generic OpenAI-compatible |
+| `HISTORY_SNIP` / `CONTEXT_COLLAPSE` compaction | pre-existing | Cache-aware optimizations of that kind belong in `vercel-ai-*` provider crates |
+| Ultraplan | pre-existing | Needs a CCR backend coco-rs doesn't ship |
+| Credential-injection egress proxy | pre-existing | Credentials live in provider crates, period (hermes reverted theirs before release) |
 
 ### Config & Feature Gates
 

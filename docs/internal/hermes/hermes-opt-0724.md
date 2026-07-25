@@ -66,7 +66,7 @@ Where the v0.19 window concentrated (agent-core-relevant axes only):
 | P1.7 Reasoning stall-timeout floor | **PARTIAL** | per-provider opt-in `stream_idle_timeout_secs` landed (`services/inference/src/client.rs:309`, `model_factory.rs:263`); default still `.without_idle_timeout()` + 20 s soft stall-warn (`stream.rs:614-615`). Remaining: per-model floor (model-card home) |
 | P2.1 `/goal` judged loop | **BUILT — differently; re-scoped** | first-class goal runtime shipped (`0dacc81a`): durable `GoalSnapshot`, deterministic `GoalCompletionCoordinator` (fail-closed, not fail-open), 20-turn default budget (`core/goals/src/budget.rs:15`), `/goal pause|resume`, promptless autonomous turns + per-turn reminder suffix (cache-prefix intact). **Do not build the hermes Ralph loop** — close the completion gaps instead (§4 N10) |
 | P2.2 Fork token discipline | **CLOSED by different design** ✅ | skill-learn fork achieves cache parity via Arc-shared byte-identical message prefix (`app/query/src/fork_context.rs:11-19`) instead of hermes's digest; cadence = signal gate + throttle + failure backoff (`skill-learn/src/runtime.rs:172-179`). Residual micro-audit: hermes `#64379` found reasoning-config mismatch breaks Anthropic cache parity — check the fork's thinking config when `ModelRole::Memory` resolves to the parent's model |
-| P2.3 Browser automation | **STILL UNDECIDED** | hermes keeps compounding (browser snapshots-on-truncation `#65923`, computer_use verify→escalate ladder `#67123`). The go/no-go call is still owed; every sweep re-finds it |
+| P2.3 Browser automation | **DECIDED 2026-07-25 — NON-GOAL** | user call: not implemented, for now. Recorded as an explicit non-goal in the root `CLAUDE.md` (Design Decisions) so gap analyses stop re-finding it. Revisit only on an explicit product decision, not on the next hermes sweep |
 
 ## 3. Newly Verified Present in coco — Do NOT Re-Flag
 
@@ -317,9 +317,15 @@ not build an extension point without a consumer (see anti-lesson 8 — the
 adjacent hermes "memory provider-actions" extension point was reverted for
 exactly this).
 
-**N19. Browser/computer-use go/no-go — still owed** (carried from 07-10
-§5.3 unchanged; hermes keeps compounding). Either schedule the design
-effort or add it to explicit non-goals so it stops resurfacing.
+**N19. Browser/computer-use — DECIDED 2026-07-25: explicit non-goal.**
+Carried unresolved from 07-10 §5.3 through two sweeps; the user closed it
+with "暂时不实现" (not for now). Written into the root `CLAUDE.md`
+Design-Decisions section alongside the Anthropic-cloud-credential non-goals,
+because that is the file every future sweep reads first. **Do not re-file this
+as a gap.** Hermes will keep compounding here (CDP supervisor,
+snapshots-on-truncation `#65923`, computer_use verify→escalate ladder
+`#67123`); that is evidence about hermes's product scope, not about a coco
+deficiency. Reopening requires a deliberate product decision, not a diff.
 
 ## 5. Re-Prioritized 0724 Backlog
 
@@ -351,8 +357,8 @@ Sequencing (each PR independently shippable):
    p1-6 (model retirement + fix the CLAUDE.md doc drift) →
    N11 (unknown-key warning) → P1.7 remainder (per-model floor).
 6. **P2:** N12 (SecretSource, mini design doc first) → N13 (export) →
-   N16 → N14/N15 → N17 (decision) → N19 (decision). N18 stays
-   watch-only.
+   N16 → N14/N15 → N17 (decision). N18 stays watch-only; N19 is
+   settled as a non-goal (see §4).
 
 Dropped from the backlog as done: p1-3 (Grep), p1-5 core (session search),
 old P0.7 (offload), old P2.2 (fork discipline). p2-1 is superseded by N10
