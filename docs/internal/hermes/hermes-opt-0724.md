@@ -60,7 +60,7 @@ Where the v0.19 window concentrated (agent-core-relevant axes only):
 | P1.1 MCP `list_changed` + keepalive | **STILL OPEN — now cheaper** | handler still log-only (`services/rmcp-client/src/logging_client_handler.rs:96-98`); but `refresh_server_capabilities` now exists with no production caller (`services/mcp/src/discovery.rs:222`) — the refresh half is wiring, not building. Keepalive still absent |
 | P1.2 ToolSearch deferral threshold | **STILL OPEN** | `should_defer()` still a static bool (`core/tool-runtime/src/traits.rs:626-628`, `registry.rs:646-658`); the ca341b75 `McpToolExposure::{Load,Defer,UseTool}` enum is categorical, not size-gated |
 | P1.3 Grep densification | **CLOSED — better than spec** ✅ | `format_content` → `group_content_blocks`, path printed once per file + per-file caps + overflow markers (`core/tools/src/tools/grep.rs:933,984,1074`); unconditional (no ≥5 gate needed) |
-| P1.4 Zero-LLM cron scripts | **STILL OPEN** | `CronCreateInput` unchanged (`core/tools/src/tools/scheduling.rs:80-102`); every fire enqueues an agent turn (`app/agent-host/src/integrations/cron_tick.rs:177` — note the file moved from `app/cli`) |
+| P1.4 Zero-LLM cron scripts | **CLOSED** ✅ (07-25) | `CronPayload::{Prompt,Script}` on `CronTask` (flatten+untagged ⇒ no migration); script jobs run detached from the tick with an overlap guard, credentials stripped via the new `ExecOptions.remove_env`, delivered as a `LocalCommand` transcript row or a `WakeAgent` turn. As-built deltas: [plans/p1-4-zero-llm-cron.md](plans/p1-4-zero-llm-cron.md) |
 | P1.5 Session full-text search | **MOSTLY CLOSED** ✅ | picker-level transcript content search shipped: `app/session/src/lib.rs:366` (`search_content`, linear scan in `spawn_blocking`) + TUI wiring. Residual (only if demanded): model-facing search tool; FTS/trigram index only if linear scan proves slow — deterministic-by-construction honored |
 | P1.6 Model retirement metadata | **STILL OPEN + doc drift** | `ModelCard` has no deprecation/retirement field (`common/model-card/src/schema.rs:3-18`); root `CLAUDE.md` claims "deprecation" the schema doesn't have — fix the doc when (not if) the field lands |
 | P1.7 Reasoning stall-timeout floor | **PARTIAL** | per-provider opt-in `stream_idle_timeout_secs` landed (`services/inference/src/client.rs:309`, `model_factory.rs:263`); default still `.without_idle_timeout()` + 20 s soft stall-warn (`stream.rs:614-615`). Remaining: per-model floor (model-card home) |
@@ -347,7 +347,7 @@ Sequencing (each PR independently shippable):
    N5 (pre-send preflight compact) →
    N8 (hook output cap/spill) →
    N9 (job-ledger wiring; unlocks N10-stage-3) →
-   p1-2 (ToolSearch threshold) → p1-4 (zero-LLM cron) →
+   p1-2 (ToolSearch threshold) → p1-4 (zero-LLM cron) [both done] →
    p1-6 (model retirement + fix the CLAUDE.md doc drift) →
    N11 (unknown-key warning) → P1.7 remainder (per-model floor).
 6. **P2:** N12 (SecretSource, mini design doc first) → N13 (export) →
@@ -394,7 +394,7 @@ shipped fail-closed coordinator.
 | p1-1-mcp-transport | **valid, cheaper** — `refresh_server_capabilities` now exists; the refresh half is a wiring task |
 | p1-2-toolsearch-threshold | **valid** — re-read against the new `McpToolExposure` enum before coding |
 | p1-3-grep-densify | **DONE — drop** (shipped unconditional, superset of the plan) |
-| p1-4-zero-llm-cron | **valid** — cron_tick moved to `app/agent-host/src/integrations/cron_tick.rs`; update paths |
+| p1-4-zero-llm-cron | **DONE 07-25** — as-built deltas recorded in the plan header (payload owned by `coco-tool-runtime`, not `coco-cron`; detached execution; `LocalCommand` delivery surface) |
 | p1-5-session-search | **mostly done — shrink** to the residual decision (model-facing tool? index?) |
 | p1-6-model-lifecycle | **valid** — add the root-CLAUDE.md doc-drift fix; reasoning-floor half updated by P1.7 partial |
 | p2-1-goal-loop | **superseded by §4 N10** — goal runtime exists with a sounder (fail-closed, evidence-gated) skeleton; absorb only the completion-hardening deltas |

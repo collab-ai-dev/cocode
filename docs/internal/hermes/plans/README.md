@@ -33,7 +33,7 @@ are **not started** unless the status line says otherwise.
 | [p1-1-mcp-transport.md](p1-1-mcp-transport.md) | MCP `tools/list_changed` refresh + keepalive ping | M | — |
 | [p1-2-toolsearch-threshold.md](p1-2-toolsearch-threshold.md) | ToolSearch deferral threshold gate | S | — |
 | [p1-3-grep-densify.md](p1-3-grep-densify.md) | Grep ≥5-match path-grouped densification | S | — |
-| [p1-4-zero-llm-cron.md](p1-4-zero-llm-cron.md) | Script-only (zero-LLM) scheduled jobs | M | — |
+| [p1-4-zero-llm-cron.md](p1-4-zero-llm-cron.md) | Script-only (zero-LLM) scheduled jobs | M | **DONE 07-25** — as-built deltas in the plan header |
 | [p1-5-session-search.md](p1-5-session-search.md) | Deterministic session full-text search | M | — |
 | [p1-6-model-lifecycle.md](p1-6-model-lifecycle.md) | Model retirement metadata + reasoning stall-timeout floor | M | model-card work in `../../cc-catchup-roadmap-v2.md` |
 | [p2-1-goal-loop.md](p2-1-goal-loop.md) | `/goal` judged loop + verify-on-stop (design-level) | XL | p0-2 (empty-response seam), separate design review before code |

@@ -2591,11 +2591,21 @@ pub enum TuiOnlyEvent {
     /// Memory extraction failed.
     SessionMemoryExtractionFailed { error: String },
 
-    // === Cron toasts (2) ===
+    // === Cron toasts (3) ===
     /// Cron job disabled by circuit breaker.
     CronJobDisabled { job_id: String, reason: String },
     /// Missed cron job fires.
     CronJobsMissed { count: i32 },
+    /// A zero-LLM cron script job produced user-facing output. No agent turn
+    /// ran: the tick executed `command` and this is what it reported.
+    /// `is_error` marks a non-zero exit or timeout, which surfaces even when
+    /// the job would otherwise have been silent.
+    CronScriptResult {
+        job_id: String,
+        command: String,
+        output: String,
+        is_error: bool,
+    },
 
     // === Streaming tool display (3) ===
     /// Streaming tool input delta (typing effect).

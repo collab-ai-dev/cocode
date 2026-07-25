@@ -2,9 +2,12 @@
 //! wired into the interactive session.
 //!
 //! Every second it reads the schedule store, asks the pure
-//! [`coco_cron::CronTickState`] which tasks crossed a fire boundary, and for
-//! each fire enqueues the task's prompt through the session queue with cron
-//! origin. The enqueue wakes the idle agent driver
+//! [`coco_cron::CronTickState`] which tasks crossed a fire boundary, and
+//! dispatches each fire by payload. A prompt job enqueues its prompt through
+//! the session queue with cron origin; a script job runs its shell command
+//! off-turn and only reaches the agent when it asked to
+//! (see [`crate::integrations::cron_script`]). The enqueue wakes the idle
+//! agent driver
 //! (`tui::run_agent_driver` selects on `command_queue().wait_for_change`),
 //! so the scheduled prompt runs as a turn; if a turn is already in flight it
 //! drains at the next turn boundary. Recurring tasks are rescheduled (and their
@@ -21,14 +24,18 @@
 //! tasks created in those modes still persist to disk and fire in a later
 //! interactive session.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 use coco_cron::CronTickState;
 use coco_cron::CronTiming;
 use coco_cron::RECURRING_MAX_AGE_MS;
+use coco_tool_runtime::CronPayload;
 use coco_tool_runtime::CronTask;
+use coco_types::CoreEvent;
 use coco_types::SessionId;
+use coco_types::TuiOnlyEvent;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -67,11 +74,6 @@ impl Drop for CronTickGuard {
     }
 }
 
-/// Spawn the cron tick for a fixed session handle.
-pub fn spawn(session: SessionHandle) -> CronTickGuard {
-    spawn_current_session(Arc::new(tokio::sync::RwLock::new(session)))
-}
-
 /// Spawn the TUI cron tick against a swappable current-session owner.
 ///
 /// The task lives for the TUI lifetime and resolves the current session on each
@@ -80,11 +82,17 @@ pub fn spawn(session: SessionHandle) -> CronTickGuard {
 /// a stale startup runtime.
 pub fn spawn_current_session(
     current_session: Arc<tokio::sync::RwLock<SessionHandle>>,
+    notify_tx: tokio::sync::mpsc::Sender<CoreEvent>,
 ) -> CronTickGuard {
     let cancel = CancellationToken::new();
     let task_cancel = cancel.clone();
     let task = tokio::spawn(async move {
         let mut state = CronTickState::new();
+        // Script jobs run detached so a slow command never stalls the 1s tick.
+        // This set is the overlap guard: a job still running when its next fire
+        // comes due skips that fire rather than stacking a second process.
+        let in_flight: Arc<tokio::sync::Mutex<HashSet<String>>> =
+            Arc::new(tokio::sync::Mutex::new(HashSet::new()));
         let mut active_session_id: Option<SessionId> = None;
         let mut interval = tokio::time::interval(CHECK_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -99,7 +107,7 @@ pub fn spawn_current_session(
                         process_missed_for_session(&session).await;
                         active_session_id = Some(session_id);
                     }
-                    process_tick_for_session(&session, &mut state).await;
+                    process_tick_for_session(&session, &mut state, &notify_tx, &in_flight).await;
                 }
                 _ = task_cancel.cancelled() => break,
             }
@@ -134,7 +142,12 @@ async fn process_missed_for_session(session: &SessionHandle) {
     let _ = store.remove_cron_tasks(&refs).await;
 }
 
-async fn process_tick_for_session(session: &SessionHandle, state: &mut CronTickState) {
+async fn process_tick_for_session(
+    session: &SessionHandle,
+    state: &mut CronTickState,
+    notify_tx: &tokio::sync::mpsc::Sender<CoreEvent>,
+    in_flight: &Arc<tokio::sync::Mutex<HashSet<String>>>,
+) {
     let store = session.schedule_store();
     let project_root = session.project_root().clone();
     let current_cwd = Arc::clone(session.current_cwd());
@@ -164,22 +177,101 @@ async fn process_tick_for_session(session: &SessionHandle, state: &mut CronTickS
                 "scheduled task fired"
             );
             let cwd = current_cwd.read().await.clone();
-            let prompt = {
-                let mut state = loop_sentinel_state.lock().await;
-                expand_scheduled_prompt(
-                    &task.prompt,
-                    &project_root,
-                    &cwd,
-                    &mut state,
-                    loop_persistent_preamble_enabled,
-                )
-            };
-            crate::session_queue::enqueue_cron_prompt(session, prompt).await;
+            match &task.payload {
+                CronPayload::Prompt { prompt } => {
+                    let prompt = {
+                        let mut state = loop_sentinel_state.lock().await;
+                        expand_scheduled_prompt(
+                            prompt,
+                            &project_root,
+                            &cwd,
+                            &mut state,
+                            loop_persistent_preamble_enabled,
+                        )
+                    };
+                    crate::session_queue::enqueue_cron_prompt(session, prompt).await;
+                }
+                CronPayload::Script { script, on_output } => {
+                    spawn_script_job(
+                        session, notify_tx, in_flight, &fire.id, script, *on_output, cwd,
+                    )
+                    .await;
+                }
+            }
         }
         if fire.recurring && !fire.aged {
             let _ = store.mark_cron_tasks_fired(&[&fire.id], now).await;
         } else {
             let _ = store.remove_cron_tasks(&[&fire.id]).await;
+        }
+    }
+}
+
+/// Start one script job detached, unless the previous run of the same job is
+/// still going. A `script_timeout_secs`-long command must not stall the tick
+/// loop — every other scheduled job shares it.
+async fn spawn_script_job(
+    session: &SessionHandle,
+    notify_tx: &tokio::sync::mpsc::Sender<CoreEvent>,
+    in_flight: &Arc<tokio::sync::Mutex<HashSet<String>>>,
+    job_id: &str,
+    command: &str,
+    on_output: coco_tool_runtime::ScriptOutputAction,
+    cwd: std::path::PathBuf,
+) {
+    if !in_flight.lock().await.insert(job_id.to_string()) {
+        tracing::warn!(
+            target: "coco::cron",
+            id = %job_id,
+            "script job still running from a previous fire — skipping this one"
+        );
+        return;
+    }
+    let session = session.clone();
+    let notify_tx = notify_tx.clone();
+    let in_flight = Arc::clone(in_flight);
+    let job_id = job_id.to_string();
+    let command = command.to_string();
+    tokio::spawn(async move {
+        run_script_job(&session, &notify_tx, &job_id, &command, on_output, &cwd).await;
+        in_flight.lock().await.remove(&job_id);
+    });
+}
+
+/// Execute one script job and deliver its outcome. Zero agent involvement
+/// unless the job's delivery policy asks for a turn.
+async fn run_script_job(
+    session: &SessionHandle,
+    notify_tx: &tokio::sync::mpsc::Sender<CoreEvent>,
+    job_id: &str,
+    command: &str,
+    on_output: coco_tool_runtime::ScriptOutputAction,
+    cwd: &std::path::Path,
+) {
+    let config = session.runtime_config().clone();
+    let run = crate::integrations::cron_script::run_script(command, cwd, &config).await;
+    let delivery = crate::integrations::cron_script::decide_delivery(
+        &run,
+        on_output,
+        command,
+        config.scheduling.script_output_max_bytes,
+    );
+    match delivery {
+        crate::integrations::cron_script::ScriptDelivery::Silent => {
+            tracing::debug!(target: "coco::cron", id = %job_id, "script job produced no output");
+        }
+        crate::integrations::cron_script::ScriptDelivery::Notify { text, is_error } => {
+            let _ = notify_tx
+                .send(CoreEvent::Tui(TuiOnlyEvent::CronScriptResult {
+                    job_id: job_id.to_string(),
+                    command: command.to_string(),
+                    output: text,
+                    is_error,
+                }))
+                .await;
+        }
+        crate::integrations::cron_script::ScriptDelivery::WakeAgent { prompt } => {
+            crate::session_queue::enqueue_cron_prompt(session, prompt).await;
         }
     }
 }
@@ -224,15 +316,11 @@ pub fn build_missed_notification(missed: &[&CronTask]) -> String {
     let blocks: Vec<String> = missed
         .iter()
         .map(|t| {
-            let longest = t
-                .prompt
-                .split(|c| c != '`')
-                .map(str::len)
-                .max()
-                .unwrap_or(0);
+            let body = t.display_summary();
+            let longest = body.split(|c| c != '`').map(str::len).max().unwrap_or(0);
             let fence = "`".repeat(longest.max(2) + 1);
             let meta = coco_cron::cron_to_human(&t.cron);
-            format!("[{meta}]\n{fence}\n{}\n{fence}", t.prompt)
+            format!("[{meta}]\n{fence}\n{body}\n{fence}")
         })
         .collect();
     format!("{header}\n\n{}", blocks.join("\n\n"))

@@ -5,8 +5,10 @@
 use chrono::Datelike;
 use chrono::Timelike;
 use coco_messages::ToolResult;
+use coco_tool_runtime::CronPayload;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::PromptOptions;
+use coco_tool_runtime::ScriptOutputAction;
 use coco_tool_runtime::ShellTaskKind;
 use coco_tool_runtime::ShellTaskRequest;
 use coco_tool_runtime::Tool;
@@ -84,10 +86,20 @@ pub struct CronCreateInput {
     ///
     /// REQUIRED — no `default:""`.
     pub cron: String,
-    /// The prompt to enqueue at each fire time.
-    ///
-    /// REQUIRED.
-    pub prompt: String,
+    /// The prompt to enqueue at each fire time. Exactly one of `prompt` or
+    /// `script` must be set.
+    #[serde(default)]
+    pub prompt: Option<String>,
+    /// Shell command for a zero-LLM job: the command IS the job, no model
+    /// turn is spent unless it produces output and `onOutput` is
+    /// `wake_agent`. Exactly one of `prompt` or `script` must be set.
+    #[serde(default)]
+    pub script: Option<String>,
+    /// What to do with a script's stdout when it is non-empty.
+    /// `notify` (default) shows it to the user; `wake_agent` starts an agent
+    /// turn with the output attached. Ignored for prompt jobs.
+    #[serde(default, rename = "onOutput")]
+    pub on_output: ScriptOutputAction,
     /// true (default) = fire on every cron match until deleted or
     /// auto-expired after 7 days. false = fire once at the next match,
     /// then auto-delete. Use false for "remind me at X" one-shot
@@ -128,7 +140,13 @@ impl Tool for CronCreateTool {
     type Output = CronCreateOutput;
 
     fn to_auto_classifier_input(&self, input: &CronCreateInput) -> Option<String> {
-        Some(format!("{}: {}", input.cron, input.prompt))
+        let action = input
+            .script
+            .as_deref()
+            .map(|s| format!("$ {s}"))
+            .or_else(|| input.prompt.clone())
+            .unwrap_or_default();
+        Some(format!("{}: {action}", input.cron))
     }
 
     fn id(&self) -> ToolId {
@@ -145,7 +163,7 @@ impl Tool for CronCreateTool {
     }
     fn description(&self, _input: &CronCreateInput, _options: &DescriptionOptions) -> String {
         format!(
-            "Schedule a prompt to run at a future time — either recurring on a cron schedule, or once at a specific time. Pass durable: true to persist to {}; otherwise session-only.",
+            "Schedule a prompt — or a zero-LLM shell script — to run at a future time, either recurring on a cron schedule or once at a specific time. Pass durable: true to persist to {}; otherwise session-only.",
             scheduled_tasks_path()
         )
     }
@@ -153,7 +171,7 @@ impl Tool for CronCreateTool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("schedule a recurring or one-shot prompt")
+        Some("schedule a recurring or one-shot prompt or shell script")
     }
 
     /// Full model-facing description. Engine builds the tool
@@ -186,6 +204,20 @@ Every user who asks for \"9am\" gets `0 9`, and every user who asks for \"hourly
   \"in an hour or so, remind me to...\" → pick whatever minute you land on, don't round\n\
 \n\
 Only use minute 0 or 30 when the user names that exact time and clearly means it (\"at 9:00 sharp\", \"at half past\", coordinating with a meeting). When in doubt, nudge a few minutes early or late — the user will not notice, and the fleet will.\n\
+\n\
+## Script jobs — no model turn (prefer these for monitoring)\n\
+\n\
+Pass `script` instead of `prompt` and the shell command IS the job: no turn is spent, no tokens are billed. This is what \"poll X and tell me if it changed\" should use — a prompt job burns a full turn on every tick even when nothing changed.\n\
+\n\
+  - empty stdout       → silent success, nothing surfaces\n\
+  - non-empty stdout   → per `onOutput`: \"notify\" (default) shows it to the user, \"wake_agent\" starts a turn with the output attached\n\
+  - non-zero exit      → always surfaced as an error notice\n\
+\n\
+Write the script so it prints NOTHING when there is nothing to report:\n\
+  \"tell me when the build goes red\" → script: \"gh run list -L1 --json conclusion -q '.[0].conclusion' | grep -q failure && echo 'build is red'\", onOutput: \"notify\"\n\
+  \"check for new upstream commits and summarize them\" → script: \"git fetch -q && git log -1 --oneline @{{u}} --not HEAD\", onOutput: \"wake_agent\"\n\
+\n\
+`prompt` and `script` are mutually exclusive — pass exactly one. Scripts run unattended with the session cwd and no provider credentials in the environment; destructive commands are rejected at creation time.\n\
 \n\
 ## Durability\n\
 \n\
@@ -233,8 +265,51 @@ Returns a job ID you can pass to CronDelete."
         if input.cron.is_empty() {
             return ValidationResult::invalid("cron parameter is required");
         }
-        if input.prompt.is_empty() {
-            return ValidationResult::invalid("prompt parameter is required");
+        let prompt = input
+            .prompt
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let script = input
+            .script
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        match (prompt, script) {
+            (None, None) => {
+                return ValidationResult::invalid(
+                    "exactly one of prompt or script is required (prompt = agent turn, script = zero-LLM shell job)",
+                );
+            }
+            (Some(_), Some(_)) => {
+                return ValidationResult::invalid(
+                    "prompt and script are mutually exclusive — a job either runs a prompt or a shell command",
+                );
+            }
+            _ => {}
+        }
+        // A script job runs unattended on every fire, with nobody to approve
+        // it. Reject the catastrophic (`Deny`) security checks and destructive
+        // commands at creation time. `Ask`-severity findings are left alone —
+        // pipes and redirects are normal in monitoring scripts, and there is
+        // no interactive prompt to route them to.
+        if let Some(command) = script {
+            let denied: Vec<String> = coco_shell::check_security(command)
+                .into_iter()
+                .filter(|check| check.severity == coco_shell::SecuritySeverity::Deny)
+                .map(|check| check.message)
+                .collect();
+            if !denied.is_empty() {
+                return ValidationResult::invalid(format!(
+                    "script rejected by shell security analysis: {}. Scheduled scripts run unattended — use a prompt job if this needs approval.",
+                    denied.join("; ")
+                ));
+            }
+            if let Some(warning) = coco_shell::destructive::get_destructive_warning(command) {
+                return ValidationResult::invalid(format!(
+                    "script rejected as destructive: {warning}. Scheduled scripts run unattended — use a prompt job if this needs approval."
+                ));
+            }
         }
         if !is_valid_cron_expression(&input.cron) {
             return ValidationResult::invalid(format!(
@@ -285,13 +360,30 @@ Returns a job ID you can pass to CronDelete."
             });
         }
 
+        // `validate_input` already proved exactly one of prompt/script is set
+        // and non-blank.
+        let payload = match (input.prompt.as_deref(), input.script.as_deref()) {
+            (_, Some(script)) => CronPayload::Script {
+                script: script.trim().to_string(),
+                on_output: input.on_output,
+            },
+            (Some(prompt), None) => CronPayload::prompt(prompt.trim()),
+            (None, None) => {
+                return Err(ToolError::ExecutionFailed {
+                    message: "exactly one of prompt or script is required".to_string(),
+                    display_data: None,
+                    source: None,
+                });
+            }
+        };
+
         // Persist via the store: durable writes to disk, else session-only.
-        // The scheduler tick picks it up and fires the prompt.
+        // The scheduler tick picks it up and fires the payload.
         match ctx
             .schedules
             .add_cron_task(
                 &input.cron,
-                &input.prompt,
+                payload,
                 input.recurring,
                 input.durable,
                 // Only an in-process teammate stamps its agent id. A regular
@@ -450,8 +542,12 @@ pub struct CronListJob {
     /// Wire key is `humanSchedule` for compatibility.
     #[serde(default, rename = "humanSchedule")]
     pub human_schedule: String,
-    #[serde(default)]
-    pub prompt: String,
+    /// Prompt text for prompt jobs; absent for script jobs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// Shell command for zero-LLM script jobs; absent for prompt jobs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
     /// Omitted when not set. `Option<bool>` lets us distinguish
     /// "explicitly false" from "absent" on the wire.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -527,11 +623,13 @@ impl Tool for CronListTool {
                 } else {
                     job.human_schedule.as_str()
                 };
-                buf.push_str(&format!(
-                    "\n- {id}: {schedule} → {prompt}",
-                    id = job.id,
-                    prompt = job.prompt
-                ));
+                let action = job
+                    .script
+                    .as_deref()
+                    .map(|script| format!("$ {script}"))
+                    .or_else(|| job.prompt.clone())
+                    .unwrap_or_default();
+                buf.push_str(&format!("\n- {id}: {schedule} → {action}", id = job.id));
             }
             buf
         };
@@ -556,7 +654,8 @@ impl Tool for CronListTool {
                         // Human-readable schedule via the shared cron crate;
                         // falls back to the raw cron string.
                         human_schedule: coco_cron::cron_to_human(&t.cron),
-                        prompt: t.prompt.clone(),
+                        prompt: t.prompt().map(str::to_string),
+                        script: t.script().map(str::to_string),
                         recurring: t.recurring,
                         // durable: None (file-backed) renders as durable; Some(false) = session.
                         durable: t.durable,
@@ -710,7 +809,13 @@ One short sentence on what you chose and why. Be specific.".into()
         let cron = cron_for_epoch_ms(scheduled_for);
         match ctx
             .schedules
-            .add_cron_task(&cron, &input.prompt, false, false, None)
+            .add_cron_task(
+                &cron,
+                CronPayload::prompt(&input.prompt),
+                false,
+                false,
+                None,
+            )
             .await
         {
             Ok(task) => Ok(ToolResult {

@@ -461,6 +461,33 @@ pub(super) fn handle(
             ));
             true
         }
+        TuiOnlyEvent::CronScriptResult {
+            job_id: _,
+            command,
+            output,
+            is_error,
+        } => {
+            // A zero-LLM script job reporting in. Render it exactly like a
+            // `!command` result — the same `LocalCommand` transcript row — so
+            // the full output is durable in the transcript instead of decaying
+            // with a toast. Errors additionally raise a toast because a job
+            // that started failing deserves attention now, not on scrollback.
+            if is_error {
+                state
+                    .ui
+                    .add_toast(Toast::warning(t!("toast.cron_script_failed").to_string()));
+            }
+            if let Err(e) = command_tx.try_send(crate::command::UserCommand::PushSystemMessage {
+                kind: SystemPushKind::LocalCommand { command, output },
+            }) {
+                tracing::warn!(
+                    target: "coco_tui::system_push",
+                    error = ?e,
+                    "CronScriptResult: failed to dispatch PushSystemMessage",
+                );
+            }
+            true
+        }
 
         // === Streaming tool display ===
         TuiOnlyEvent::ToolCallStreamStart { call_id, name } => {

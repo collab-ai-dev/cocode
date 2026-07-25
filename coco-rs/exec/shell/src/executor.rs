@@ -159,6 +159,9 @@ impl ShellExecutor {
         for (key, value) in merged_env {
             cmd.env(key, value);
         }
+        for key in &options.remove_env {
+            cmd.env_remove(key);
+        }
 
         apply_sandbox_wrap(&mut cmd, command, options, sandbox_tmp_path.as_deref())?;
 
@@ -333,6 +336,9 @@ impl ShellExecutor {
 
         for (key, value) in merged_env {
             cmd.env(key, value);
+        }
+        for key in &options.remove_env {
+            cmd.env_remove(key);
         }
 
         apply_sandbox_wrap(&mut cmd, command, options, sandbox_tmp_path.as_deref())?;

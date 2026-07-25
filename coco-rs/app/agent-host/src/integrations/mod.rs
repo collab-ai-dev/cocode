@@ -6,6 +6,7 @@ pub(crate) mod agent_transcript_persistence;
 pub(crate) mod bash_tool_handle;
 pub(crate) mod command_queue_sink;
 pub(crate) mod coordinator_mode_resume;
+pub(crate) mod cron_script;
 pub mod cron_tick;
 pub mod disk_task_output;
 pub(crate) mod elicitation_hooks;

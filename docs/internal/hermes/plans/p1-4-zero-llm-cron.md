@@ -1,7 +1,46 @@
 # P1-4 — Zero-LLM Scheduled Jobs (Script-Only Cron)
 
-Status: not started · Size: M · Owner crates: `coco-tools` (schema),
-`coco-cli` (tick driver), `utils/coco-cron` (job model)
+Status: **IMPLEMENTED 2026-07-25** (`feat/hermes`) · Size: M · Owner crates:
+`coco-tool-runtime` (job model), `coco-tools` (schema),
+`coco-agent-host` (tick driver + execution), `coco-config` (knobs),
+`coco-shell` (`remove_env` seam), `coco-tui` (delivery surface)
+
+## As-built deltas from this plan
+
+- **`CronPayload` lives in `coco-tool-runtime`, not `utils/coco-cron`.**
+  `coco-cron` is timing-only by design (`CronTiming` carries no payload); the
+  owning record is `coco_tool_runtime::CronTask`, so the payload went there.
+  `ScheduleStore::add_cron_task` now takes `payload: CronPayload` instead of
+  `prompt: &str`.
+- **Migration-free via `#[serde(flatten)]` + `untagged`.** A record with
+  `script` is a script job, one with `prompt` is a prompt job; pre-existing
+  `{"prompt": …}` files load as `Prompt` with no upgrade pass. A hand-written
+  script record without `onOutput` defaults to `Notify`, never `WakeAgent`.
+- **Delivery surface = the `!command` transcript row.** `Notify` emits
+  `TuiOnlyEvent::CronScriptResult`, and the TUI pushes
+  `SystemPushKind::LocalCommand { command, output }` — the same durable
+  transcript row bash-mode uses — plus a toast on failure. A toast alone would
+  have lost the output, and writing history directly from the tick driver would
+  race `commit_engine_turn_history` (which replaces the whole history).
+- **Scripts run detached, with a per-job overlap guard.** Running inline would
+  let one 120 s command stall the 1 s tick for every other job. A job still
+  running when its next fire comes due skips that fire (warn-logged) instead of
+  stacking a second process.
+- **Creation-time gating rejects `Deny`-severity security checks and
+  destructive commands only.** `Ask`-severity findings (pipes, redirects) are
+  normal in monitoring scripts and there is no interactive prompt to route them
+  to, so they are allowed.
+- **Env scrub is data-driven**, not a hardcoded list: every configured
+  provider's `ProviderConfig.env_key` plus `ANTHROPIC_API_KEY` /
+  `ANTHROPIC_AUTH_TOKEN`, stripped through the new
+  `coco_shell::ExecOptions.remove_env` (applied after `extra_env`, so a name in
+  both is removed).
+- **Two knobs, not one**: `scheduling.script_timeout_secs` (default 120) and
+  `scheduling.script_output_max_bytes` (default 16000, char-boundary-safe
+  truncation with a marker).
+- **Deferred as planned**: hermes's in-band `wakeAgent` JSON gate on the last
+  stdout line, pre-run script injection into a prompt job's context, and
+  messaging-platform delivery.
 
 ## Problem
 

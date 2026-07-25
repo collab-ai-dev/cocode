@@ -30,6 +30,7 @@ use crate::sections::PartialMcpRuntimeSettings;
 use crate::sections::PartialMemorySettings;
 use crate::sections::PartialOutputRewriteSettings;
 use crate::sections::PartialPathSettings;
+use crate::sections::PartialSchedulingSettings;
 use crate::sections::PartialServerSettings;
 use crate::sections::PartialShellSettings;
 use crate::sections::PartialSkillLearnSettings;
@@ -123,6 +124,10 @@ pub struct Settings {
     pub loop_config: PartialLoopSettings,
     #[serde(default)]
     pub tool: PartialToolSettings,
+    /// Zero-LLM cron script-job knobs. Resolved into
+    /// `RuntimeConfig.scheduling` (`SchedulingConfig`).
+    #[serde(default)]
+    pub scheduling: PartialSchedulingSettings,
     #[serde(default)]
     pub shell: PartialShellSettings,
     /// Bash output-compression knobs (`Feature::OutputRewrite`). Resolved into

@@ -34,6 +34,37 @@ async fn test_cwd_tracking() {
     assert_eq!(exec.cwd(), std::path::Path::new("/usr"));
 }
 
+/// `remove_env` is applied after `extra_env`, so a name in both is stripped.
+/// Unattended paths (cron script jobs) rely on this ordering to keep provider
+/// credentials out of the child no matter what else set them.
+#[tokio::test]
+async fn test_remove_env_strips_a_name_extra_env_had_set() {
+    let mut exec = ShellExecutor::new(std::path::Path::new("/tmp"));
+    let opts = ExecOptions {
+        extra_env: [
+            ("COCO_TEST_KEPT".to_string(), "kept".to_string()),
+            ("COCO_TEST_SECRET".to_string(), "leaked".to_string()),
+        ]
+        .into_iter()
+        .collect(),
+        remove_env: vec!["COCO_TEST_SECRET".to_string()],
+        ..Default::default()
+    };
+    let result = exec
+        .execute(
+            "echo \"kept=${COCO_TEST_KEPT-unset} secret=${COCO_TEST_SECRET-unset}\"",
+            &opts,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.exit_code, 0);
+    assert!(
+        result.stdout.contains("kept=kept secret=unset"),
+        "got: {}",
+        result.stdout
+    );
+}
+
 #[tokio::test]
 async fn test_timeout() {
     let mut exec = ShellExecutor::new(std::path::Path::new("/tmp"));

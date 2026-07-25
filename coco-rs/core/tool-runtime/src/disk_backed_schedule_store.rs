@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::sync::RwLock;
 
+use crate::schedule_store::CronPayload;
 use crate::schedule_store::CronTask;
 use crate::schedule_store::ScheduleStore;
 use crate::schedule_store::TriggerEntry;
@@ -93,12 +94,12 @@ impl ScheduleStore for DiskBackedScheduleStore {
     async fn add_cron_task(
         &self,
         cron: &str,
-        prompt: &str,
+        payload: CronPayload,
         recurring: bool,
         durable: bool,
         agent_id: Option<&str>,
     ) -> Result<CronTask, coco_error::BoxedError> {
-        let task = new_cron_task(cron, prompt, recurring, durable, agent_id);
+        let task = new_cron_task(cron, payload, recurring, durable, agent_id);
         if durable {
             let mut tasks = self.read_file_tasks().await;
             tasks.push(task.clone());

@@ -115,7 +115,7 @@ session unless you filter it out yourself.
 
 | Tool | What it does | Gate (default) |
 |---|---|---|
-| `CronCreate` | Schedules a prompt to run on a cron schedule or once at a future time. | `agent_triggers` (on) |
+| `CronCreate` | Schedules a prompt — or a zero-LLM shell script — to run on a cron schedule or once at a future time. | `agent_triggers` (on) |
 | `CronDelete` | Cancels a scheduled job. | `agent_triggers` (on) |
 | `CronList` | Lists active scheduled jobs. | `agent_triggers` (on) |
 | `ScheduleWakeup` | Sets the delay before the next self-paced iteration. | `agent_triggers` (on) |
@@ -164,6 +164,19 @@ present, use that; otherwise fall back to the native name. That means plan-mode 
 prompt examples, and post-compaction plan references all name a tool the model can actually call,
 with no per-model special-casing. A future model family that follows the same "drop native, add
 `apply_patch`" shape works automatically.
+
+**A scheduled job can skip the model entirely.** `CronCreate` takes either a `prompt` or a `script`,
+never both. A `prompt` job enqueues an agent turn on every fire — which is the wrong shape for
+"poll something and tell me only if it changed", because it bills a full turn per tick even when
+nothing changed. A `script` job runs the shell command instead: empty stdout is a silent success,
+non-empty stdout either surfaces to you (`onOutput: "notify"`, the default) or starts one turn with
+the output attached (`onOutput: "wake_agent"`), and a non-zero exit or timeout always surfaces even
+when stdout was empty. Scripts run with the session working directory, a hard timeout
+(`scheduling.script_timeout_secs`, default 120), delivered output capped at
+`scheduling.script_output_max_bytes` (default 16000), and provider credentials stripped from the
+child environment — an unattended job has nobody to approve an exfiltration, so it never inherits the
+keys. Commands that fail the shell security analysis or read as destructive are rejected when the job
+is created, not when it fires.
 
 **Goal tools are snake_case and only exist while a goal is live.** `get_goal` and `report_goal_turn`
 appear only when the session has an active goal, which you create with [`/goal`](slash-commands.md).

@@ -770,6 +770,40 @@ fn test_loop_config_resolves_sub_toggles_and_env_override() {
 }
 
 #[test]
+fn test_scheduling_config_defaults_and_overrides() {
+    let defaults = crate::sections::SchedulingConfig::resolve(&Settings::default());
+    assert_eq!(defaults.script_timeout_secs, 120);
+    assert_eq!(defaults.script_output_max_bytes, 16_000);
+
+    let settings = Settings {
+        scheduling: crate::sections::PartialSchedulingSettings {
+            script_timeout_secs: Some(30),
+            script_output_max_bytes: Some(500),
+        },
+        ..Default::default()
+    };
+    let config = crate::sections::SchedulingConfig::resolve(&settings);
+    assert_eq!(config.script_timeout_secs, 30);
+    assert_eq!(config.script_output_max_bytes, 500);
+}
+
+/// Nonsense values (0 / negative) fall back to the defaults rather than
+/// producing a job that times out instantly or delivers nothing.
+#[test]
+fn test_scheduling_config_rejects_non_positive_values() {
+    let settings = Settings {
+        scheduling: crate::sections::PartialSchedulingSettings {
+            script_timeout_secs: Some(0),
+            script_output_max_bytes: Some(-1),
+        },
+        ..Default::default()
+    };
+    let config = crate::sections::SchedulingConfig::resolve(&settings);
+    assert_eq!(config.script_timeout_secs, 120);
+    assert_eq!(config.script_output_max_bytes, 16_000);
+}
+
+#[test]
 fn test_tool_config_json_first_env_override() {
     let settings = Settings {
         tool: PartialToolSettings {
