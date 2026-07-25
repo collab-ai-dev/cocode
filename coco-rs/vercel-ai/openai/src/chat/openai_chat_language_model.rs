@@ -133,8 +133,9 @@ impl OpenAIChatLanguageModel {
                     ReasoningLevel::Medium => Some(ReasoningEffort::Medium),
                     ReasoningLevel::High => Some(ReasoningEffort::High),
                     ReasoningLevel::Xhigh => Some(ReasoningEffort::Xhigh),
-                    ReasoningLevel::Max => Some(ReasoningEffort::Max),
-                    ReasoningLevel::Ultra => Some(ReasoningEffort::Ultra),
+                    // `ultra` is a client-side selector, never a wire
+                    // value — see the Responses model for the full note.
+                    ReasoningLevel::Max | ReasoningLevel::Ultra => Some(ReasoningEffort::Max),
                     ReasoningLevel::ProviderDefault => Option::None,
                 })
             } else {

@@ -148,11 +148,18 @@ model's nearest rung, resolving **upward** on a tie, so you never silently get
 less thinking than you asked for. `"effort": "ultra"` is therefore always safe
 to write; on a model that stops at `xhigh` it simply lands there.
 
-`ultra` is declared only by `gpt-5-6-sol` and `gpt-5-6-terra`, where it means
-maximum reasoning with autonomous task delegation. `max` is the GPT-5.6
-family's second-highest rung and Anthropic's top one. Every declared rung is
-reachable the same way — `Ctrl+T`, the `/model` picker's effort axis, or a
-slot's `effort` field.
+`max` is the GPT-5.6 family's top wire rung and Anthropic's top one.
+
+`ultra` is declared only by `gpt-5-6-sol` and `gpt-5-6-terra`, and **today it
+sends exactly the same request as `max`**. It is not a wire value at all: the
+vendor's own client advertises it in its picker but maps it down to `max`
+before building the request. What it really selects is a client-side policy —
+the harness proactively delegating work to subagents instead of waiting to be
+asked. cocode does not implement that policy yet, so the rung is selectable
+but currently has no effect beyond `max`.
+
+Every declared rung is reachable the same way — `Ctrl+T`, the `/model`
+picker's effort axis, or a slot's `effort` field.
 
 ## Mixture of Agents
 

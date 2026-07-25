@@ -265,7 +265,15 @@ fn openai_reasoning_levels() -> Vec<ThinkingLevel> {
 }
 
 /// Whether a 5.6 tier advertises the `ultra` rung. `sol` and `terra` do;
-/// `luna` stops at `max`.
+/// `luna` stops at `max` — the vendor gates `ultra` on its v2 multi-agent
+/// backend, which `luna` does not run, so there the rung would be pure
+/// duplication.
+///
+/// Note that `ultra` currently duplicates `max` in coco-rs too: it is a
+/// client-side delegation switch, not a wire value (see
+/// [`coco_types::ReasoningEffort::Ultra`]), and the delegation policy is
+/// not implemented here. It stays advertised so the choice is available
+/// and so the rung is already in place when that policy lands.
 enum UltraSupport {
     Yes,
     No,

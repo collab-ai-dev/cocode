@@ -17,11 +17,9 @@ pub enum ReasoningEffort {
     Medium,
     High,
     Xhigh,
-    /// GPT-5.6 family.
+    /// GPT-5.6 family. Top of the wire vocabulary — there is no
+    /// `ultra` here, that rung is a client-side selector only.
     Max,
-    /// GPT-5.6 `sol` / `terra` — maximum reasoning with autonomous task
-    /// delegation.
-    Ultra,
 }
 
 impl ReasoningEffort {
@@ -34,7 +32,6 @@ impl ReasoningEffort {
             Self::High => "high",
             Self::Xhigh => "xhigh",
             Self::Max => "max",
-            Self::Ultra => "ultra",
         }
     }
 }

@@ -195,11 +195,15 @@ impl OpenAIResponsesLanguageModel {
                     ReasoningLevel::Xhigh => {
                         Some(crate::chat::openai_chat_options::ReasoningEffort::Xhigh)
                     }
-                    ReasoningLevel::Max => {
+                    // The Responses effort vocabulary tops out at `max`.
+                    // `ultra` is a CLIENT-side selector, not a wire value:
+                    // codex advertises it in its model picker but maps it
+                    // down in `reasoning_effort_for_request` before building
+                    // the request, so the API never sees it. Mirror that —
+                    // sending `"ultra"` would be a value the backend does
+                    // not accept.
+                    ReasoningLevel::Max | ReasoningLevel::Ultra => {
                         Some(crate::chat::openai_chat_options::ReasoningEffort::Max)
-                    }
-                    ReasoningLevel::Ultra => {
-                        Some(crate::chat::openai_chat_options::ReasoningEffort::Ultra)
                     }
                     ReasoningLevel::ProviderDefault => Option::None,
                 })
