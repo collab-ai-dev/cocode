@@ -389,9 +389,11 @@ fn model_selection_accepts_configured_moa_preset() {
                 provider: "anthropic".to_string(),
                 model_id: "claude-sonnet-4-6".to_string(),
             }),
-            reference_models: vec![ProviderModelSelection {
+            reference_models: vec![coco_config::MoaReferenceSlot {
                 provider: "openai".to_string(),
                 model_id: "gpt-5-4".to_string(),
+                enabled: true,
+                effort: None,
             }],
             ..Default::default()
         },
@@ -442,9 +444,11 @@ async fn model_role_selection_keeps_moa_display_binding_for_main() {
                 provider: "anthropic".to_string(),
                 model_id: "claude-sonnet-4-6".to_string(),
             }),
-            reference_models: vec![ProviderModelSelection {
+            reference_models: vec![coco_config::MoaReferenceSlot {
                 provider: "openai".to_string(),
                 model_id: "gpt-5-4".to_string(),
+                enabled: true,
+                effort: None,
             }],
             ..Default::default()
         },
