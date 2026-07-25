@@ -91,7 +91,7 @@ fn status_bar_view_renders_model_tokens_context_and_messages() {
     let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
         panic!("expected built-in status bar");
     };
-    let spans: Vec<&StatusSpan> = lines.iter().flatten().collect();
+    let spans: Vec<&StatusSpan> = lines.iter().flatten().flatten().collect();
     let text = spans
         .iter()
         .map(|span| span.text.as_str())
@@ -154,7 +154,7 @@ fn status_bar_view_keeps_low_context_usage_green_with_low_compact_trigger() {
     let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
         panic!("expected built-in status bar");
     };
-    let spans: Vec<&StatusSpan> = lines.iter().flatten().collect();
+    let spans: Vec<&StatusSpan> = lines.iter().flatten().flatten().collect();
 
     assert!(
         spans
@@ -191,6 +191,7 @@ fn status_bar_merges_permission_pill_and_directory_onto_environment_line() {
     let line_text = |i: usize| {
         lines[i]
             .iter()
+            .flatten()
             .map(|span| span.text.as_str())
             .collect::<String>()
     };
@@ -262,6 +263,7 @@ fn status_bar_view_renders_active_goal_badge() {
     let text = lines
         .iter()
         .flatten()
+        .flatten()
         .map(|span| span.text.as_str())
         .collect::<String>();
 
@@ -280,6 +282,7 @@ fn status_bar_surfaces_manual_mode_and_cycle_hint_in_default_state() {
     assert_eq!(lines.len(), 2);
     let line2 = lines[1]
         .iter()
+        .flatten()
         .map(|span| span.text.as_str())
         .collect::<String>();
     // Baseline mode is surfaced as `⏯ manual mode on` (play glyph, like other
@@ -303,6 +306,7 @@ fn status_bar_sidechat_keeps_inherited_mode_without_left_hint() {
     let text = lines
         .iter()
         .flatten()
+        .flatten()
         .map(|span| span.text.as_str())
         .collect::<String>();
     assert!(!text.contains("Ctrl+C"));
@@ -319,7 +323,7 @@ fn status_bar_view_renders_lsp_badge() {
     let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
         panic!("expected built-in status bar");
     };
-    let spans: Vec<&StatusSpan> = lines.iter().flatten().collect();
+    let spans: Vec<&StatusSpan> = lines.iter().flatten().flatten().collect();
     let text = spans
         .iter()
         .map(|span| span.text.as_str())
@@ -336,7 +340,7 @@ fn status_bar_view_renders_unknown_context_without_assistant_usage() {
     let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
         panic!("expected built-in status bar");
     };
-    let spans: Vec<&StatusSpan> = lines.iter().flatten().collect();
+    let spans: Vec<&StatusSpan> = lines.iter().flatten().flatten().collect();
     let text = spans
         .iter()
         .map(|span| span.text.as_str())
@@ -358,6 +362,7 @@ fn status_bar_view_renders_zero_cache_percent_without_decimal() {
     let text = lines
         .iter()
         .flatten()
+        .flatten()
         .map(|span| span.text.as_str())
         .collect::<String>();
 
@@ -376,7 +381,7 @@ fn status_bar_view_renders_total_input_tokens_and_cache_breakdown() {
     let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
         panic!("expected built-in status bar");
     };
-    let spans: Vec<&StatusSpan> = lines.iter().flatten().collect();
+    let spans: Vec<&StatusSpan> = lines.iter().flatten().flatten().collect();
     let text = spans
         .iter()
         .map(|span| span.text.as_str())
@@ -407,7 +412,7 @@ fn status_bar_view_counts_transcript_messages_by_uuid_and_role() {
     let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
         panic!("expected built-in status bar");
     };
-    let spans: Vec<&StatusSpan> = lines.iter().flatten().collect();
+    let spans: Vec<&StatusSpan> = lines.iter().flatten().flatten().collect();
     let text = spans
         .iter()
         .map(|span| span.text.as_str())
@@ -440,6 +445,7 @@ fn status_bar_view_counts_survive_compact_history_replace() {
     let text = lines
         .iter()
         .flatten()
+        .flatten()
         .map(|span| span.text.as_str())
         .collect::<String>();
 
@@ -457,6 +463,7 @@ fn status_bar_view_renders_subagent_usage_segment_only_when_active() {
         };
         lines
             .iter()
+            .flatten()
             .flatten()
             .map(|span| span.text.as_str())
             .collect::<String>()
@@ -590,7 +597,7 @@ fn built_in_status_preserves_pending_chord_hint() {
     let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
         panic!("expected built-in status bar");
     };
-    let spans: Vec<&StatusSpan> = lines.iter().flatten().collect();
+    let spans: Vec<&StatusSpan> = lines.iter().flatten().flatten().collect();
     let text = spans
         .iter()
         .map(|span| span.text.as_str())
@@ -598,4 +605,110 @@ fn built_in_status_preserves_pending_chord_hint() {
 
     assert!(text.contains("ctrl+x"));
     assert!(text.contains("…"));
+}
+
+// ── Width degradation ladder ────────────────────────────────────────
+
+fn item(priority: StatusPriority, text: &str) -> StatusItem {
+    StatusItem::new(priority, vec![StatusSpan::new(text, StatusTone::Dim)])
+}
+
+fn fitted(items: &[StatusItem], width: usize) -> String {
+    fit_status_items(items, width)
+        .iter()
+        .map(|span| span.text.as_str())
+        .collect()
+}
+
+#[test]
+fn fit_status_items_keeps_everything_when_it_fits() {
+    let items = vec![
+        item(StatusPriority::Essential, "model"),
+        item(StatusPriority::Vitals, " | spend"),
+        item(StatusPriority::Ambient, " | LSP"),
+    ];
+    assert_eq!(fitted(&items, 100), "model | spend | LSP");
+}
+
+#[test]
+fn fit_status_items_drops_ambient_before_vitals() {
+    let items = vec![
+        item(StatusPriority::Essential, "model"),
+        item(StatusPriority::Vitals, " | spend"),
+        item(StatusPriority::Ambient, " | LSP"),
+    ];
+    assert_eq!(fitted(&items, 13), "model | spend");
+}
+
+#[test]
+fn fit_status_items_drops_vitals_once_ambient_is_gone() {
+    let items = vec![
+        item(StatusPriority::Essential, "model"),
+        item(StatusPriority::Vitals, " | spend"),
+        item(StatusPriority::Ambient, " | LSP"),
+    ];
+    assert_eq!(fitted(&items, 5), "model");
+}
+
+/// Within one priority the rightmost item goes first, so the reading order of
+/// whatever survives never changes.
+#[test]
+fn fit_status_items_drops_from_the_right_within_a_priority() {
+    let items = vec![
+        item(StatusPriority::Essential, "model"),
+        item(StatusPriority::Ambient, " | counts"),
+        item(StatusPriority::Ambient, " | MCP"),
+        item(StatusPriority::Ambient, " | LSP"),
+    ];
+    assert_eq!(fitted(&items, 20), "model | counts | MCP");
+    assert_eq!(fitted(&items, 14), "model | counts");
+}
+
+/// Essentials are never dropped — a truncated `ctx` reading is worse than an
+/// overflowing line, and the renderer clips.
+#[test]
+fn fit_status_items_never_drops_essentials() {
+    let items = vec![
+        item(StatusPriority::Essential, "model"),
+        item(StatusPriority::Essential, " | ctx 12.0%/200K"),
+        item(StatusPriority::Ambient, " | LSP"),
+    ];
+    assert_eq!(fitted(&items, 4), "model | ctx 12.0%/200K");
+    assert_eq!(fitted(&items, 0), "model | ctx 12.0%/200K");
+}
+
+/// The width budget is display columns, so a CJK directory name costs two per
+/// character rather than one.
+#[test]
+fn fit_status_items_measures_display_width_not_bytes() {
+    let items = vec![
+        item(StatusPriority::Essential, "m"),
+        item(StatusPriority::Vitals, "工作目录"),
+    ];
+    assert_eq!(fitted(&items, 9), "m工作目录");
+    assert_eq!(fitted(&items, 8), "m");
+}
+
+/// The real identity line: a narrow terminal keeps the model and context
+/// reading and sheds the cycle hint, counts, and badges.
+#[test]
+fn built_in_identity_line_sheds_badges_before_context_on_a_narrow_terminal() {
+    let _locale = locale_test_guard("en");
+    let mut state = AppState::default();
+    state.session.provider = "openai".into();
+    state.session.model = "gpt-5.4".into();
+    state.session.lsp_active = true;
+
+    let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
+        panic!("expected built-in status bar");
+    };
+    let narrow = fit_status_items(&lines[0], 30)
+        .iter()
+        .map(|span| span.text.as_str())
+        .collect::<String>();
+
+    assert!(narrow.contains("openai/gpt-5.4"));
+    assert!(narrow.contains("ctx"));
+    assert!(!narrow.contains("LSP"));
+    assert!(!narrow.contains("to cycle"));
 }

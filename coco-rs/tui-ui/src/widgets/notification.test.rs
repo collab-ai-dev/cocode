@@ -4,7 +4,10 @@ use super::NotificationBackend;
 use super::iterm2_osc;
 use super::kitty_body_osc;
 use super::kitty_title_osc;
-use super::wrap;
+use super::wrap_for;
+use crate::terminal_detect::Multiplexer;
+use crate::terminal_detect::TerminalName;
+use pretty_assertions::assert_eq;
 
 #[test]
 fn iterm2_osc_contains_title_and_message() {
@@ -33,10 +36,46 @@ fn kitty_frames_use_same_id() {
 
 #[test]
 fn wrap_outside_multiplexer_is_identity() {
-    // SAFETY in tests: we expect TMUX/STY to be unset in the test runner env.
-    if std::env::var_os("TMUX").is_none() && std::env::var_os("STY").is_none() {
-        let seq = "\x1b]9;1;hi\x1b\\";
-        assert_eq!(wrap(seq), seq);
+    let seq = "\x1b]9;1;hi\x1b\\";
+    assert_eq!(wrap_for(seq, None), seq);
+    assert_eq!(wrap_for(seq, Some(Multiplexer::Zellij)), seq);
+}
+
+#[test]
+fn wrap_inside_tmux_doubles_escapes_for_passthrough() {
+    assert_eq!(
+        wrap_for("\x1b]9;1;hi\x1b\\", Some(Multiplexer::Tmux)),
+        "\x1bPtmux;\x1b\x1b\x1b]9;1;hi\x1b\x1b\\\x1b\\"
+    );
+}
+
+#[test]
+fn wrap_inside_screen_uses_plain_dcs() {
+    assert_eq!(
+        wrap_for("\x1b]9;1;hi\x1b\\", Some(Multiplexer::Screen)),
+        "\x1bP\x1b]9;1;hi\x1b\\\x1b\\"
+    );
+}
+
+#[test]
+fn backend_for_terminal_maps_each_known_terminal() {
+    for (name, expected) in [
+        (TerminalName::Iterm2, NotificationBackend::ITerm2),
+        (TerminalName::WezTerm, NotificationBackend::ITerm2),
+        (TerminalName::Kitty, NotificationBackend::Kitty),
+        (TerminalName::Ghostty, NotificationBackend::Ghostty),
+        (
+            TerminalName::AppleTerminal,
+            NotificationBackend::TerminalBell,
+        ),
+        (TerminalName::Alacritty, NotificationBackend::Disabled),
+        (TerminalName::Unknown, NotificationBackend::Disabled),
+    ] {
+        assert_eq!(
+            NotificationBackend::for_terminal(name),
+            expected,
+            "{name:?}"
+        );
     }
 }
 

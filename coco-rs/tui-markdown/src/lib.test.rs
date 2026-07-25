@@ -1013,3 +1013,114 @@ fn table_link_keeps_post_layout_sidecar_without_visible_destination() {
     assert_eq!(rendered.links.len(), 1);
     assert_eq!(rendered.links[0].target, "https://example.com/docs");
 }
+
+// ── Narrow-table record fallback ────────────────────────────────────
+
+const NARROW_TABLE: &str = "\
+| Package | Version | Notes |
+|---|---|---|
+| coco-tui-markdown | 0.1.1-alpha.20260101 | Renders CommonMark plus GFM tables |
+| coco-tui-mermaid | 0.1.1-alpha.20260101 | Draws mermaid graphs with box glyphs |
+| coco-retrieval | 0.1.1-alpha.20260101 | BM25 and vector search over the repo |
+";
+
+#[test]
+fn test_table_stays_a_grid_when_the_columns_fit() {
+    let lines = render_with_width(NARROW_TABLE, 120)
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>();
+    assert!(lines.iter().any(|line| line.contains('┌')));
+    assert!(lines.iter().any(|line| line.contains('│')));
+}
+
+/// At a width where every column would shred its content into a one- or
+/// two-character strip, the grid is abandoned for labelled records.
+#[test]
+fn test_narrow_table_falls_back_to_labelled_records() {
+    let lines = render_with_width(NARROW_TABLE, 40)
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>();
+
+    assert!(
+        !lines.iter().any(|line| line.contains('┌')),
+        "expected no grid frame, got {lines:#?}"
+    );
+    let text = lines.join("\n");
+    assert!(text.contains("Package"));
+    assert!(text.contains("coco-tui-markdown"));
+    assert!(text.contains("Notes"));
+    // Every body row still appears.
+    assert!(text.contains("coco-retrieval"));
+}
+
+#[test]
+fn test_narrow_table_records_stay_within_the_requested_width() {
+    for width in [20u16, 30, 40, 50] {
+        let lines = render_with_width(NARROW_TABLE, width);
+        for line in &lines {
+            assert!(
+                line.width() <= usize::from(width),
+                "width {width}: line {:?} is {} cols",
+                line_text(line),
+                line.width()
+            );
+        }
+    }
+}
+
+/// A compact table is not worth converting: its columns hold their content, so
+/// the alignment that makes rows comparable is kept.
+#[test]
+fn test_compact_table_keeps_its_grid_at_narrow_width() {
+    let table = "\
+| A | B |
+|---|---|
+| 1 | 2 |
+| 3 | 4 |
+";
+    let lines = render_with_width(table, 40)
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>();
+    assert!(lines.iter().any(|line| line.contains('┌')));
+}
+
+/// One cramped cell among many comfortable rows does not justify losing the
+/// grid for every other row.
+#[test]
+fn test_single_cramped_row_does_not_convert_a_wide_table() {
+    let table = "\
+| Key | Value |
+|---|---|
+| a | 1 |
+| b | 2 |
+| c | 3 |
+| d | 4 |
+| e | supercalifragilisticexpialidociousandthensomemoretext |
+";
+    let lines = render_with_width(table, 40)
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>();
+    assert!(
+        lines.iter().any(|line| line.contains('┌')),
+        "one starved row of five must not convert the table: {lines:#?}"
+    );
+}
+
+#[test]
+fn test_narrow_table_records_separate_rows_with_a_rule() {
+    let lines = render_with_width(NARROW_TABLE, 40)
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>();
+    let rules = lines
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty() && line.chars().all(|ch| ch == '─'))
+        .count();
+    // Three records → two separators between them.
+    assert_eq!(rules, 2, "{lines:#?}");
+}

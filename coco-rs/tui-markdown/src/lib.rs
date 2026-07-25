@@ -925,6 +925,14 @@ impl<'a> Writer<'a> {
             .max(col_count);
         let widths = column_widths(&table.header, &table.rows, col_count, budget);
 
+        // A grid this narrow has stopped being a grid: its columns shred words
+        // mid-token and stack every cell into a tall strip. Rendering the same
+        // data as one labelled record per row keeps it readable.
+        if should_render_records(&table.rows, &widths) {
+            self.emit_table_records(&table, col_count);
+            return;
+        }
+
         let border = Style::default().fg(self.styles.table_border());
         self.emit_raw_line(vec![Span::styled(
             table_rule(&widths, '┌', '┬', '┐'),
@@ -944,6 +952,96 @@ impl<'a> Writer<'a> {
             table_rule(&widths, '└', '┴', '┘'),
             border,
         )]);
+        self.needs_gap = true;
+    }
+
+    /// Render a table as one labelled record per row instead of as a grid.
+    ///
+    /// Each row becomes a `header: value` block, records separated by a rule.
+    /// This is the fallback for terminals too narrow to give the columns a
+    /// scannable width — see [`should_render_records`].
+    fn emit_table_records(&mut self, table: &TableBuilder, col_count: usize) {
+        let available = (self.width as usize)
+            .saturating_sub(self.left_margin_cols())
+            .max(MIN_RECORD_WIDTH);
+        let labels: Vec<String> = (0..col_count)
+            .map(|i| {
+                table
+                    .header
+                    .get(i)
+                    .map(|cell| cell_text(cell).trim().to_string())
+                    .unwrap_or_default()
+            })
+            .collect();
+        // Align values into a column when the labels leave room for a readable
+        // value; otherwise stack each value under its own label.
+        let label_width = labels
+            .iter()
+            .map(|label| UnicodeWidthStr::width(label.as_str()))
+            .max()
+            .unwrap_or(0);
+        let aligned = available.saturating_sub(label_width + RECORD_LABEL_GAP)
+            >= MIN_RECORD_VALUE_WIDTH
+            && label_width > 0;
+
+        let border = Style::default().fg(self.styles.table_border());
+        let label_style = Style::default()
+            .fg(self.styles.table_border())
+            .add_modifier(Modifier::BOLD);
+        for (row_index, row) in table.rows.iter().enumerate() {
+            if row_index > 0 {
+                self.emit_raw_line(vec![Span::styled("─".repeat(available), border)]);
+            }
+            for (col, label) in labels.iter().enumerate() {
+                let cell: &[LinkedSpan] = row.get(col).map(Vec::as_slice).unwrap_or(&[]);
+                if cell_text(cell).trim().is_empty() {
+                    continue;
+                }
+                let (indent, value_width) = if aligned {
+                    (
+                        label_width + RECORD_LABEL_GAP,
+                        available - label_width - RECORD_LABEL_GAP,
+                    )
+                } else {
+                    (
+                        RECORD_STACKED_INDENT,
+                        available.saturating_sub(RECORD_STACKED_INDENT).max(1),
+                    )
+                };
+                let wrapped = wrap_styled_cell(cell, value_width);
+                if !aligned && !label.is_empty() {
+                    self.emit_raw_line(vec![Span::styled(label.clone(), label_style)]);
+                }
+                for (line_index, line) in wrapped.into_iter().enumerate() {
+                    let mut spans = Vec::new();
+                    if aligned {
+                        let lead = if line_index == 0 {
+                            format!(
+                                "{label}{}",
+                                " ".repeat(
+                                    label_width - UnicodeWidthStr::width(label.as_str())
+                                        + RECORD_LABEL_GAP
+                                )
+                            )
+                        } else {
+                            " ".repeat(indent)
+                        };
+                        spans.push(LinkedSpan::plain(Span::styled(
+                            lead,
+                            if line_index == 0 {
+                                label_style
+                            } else {
+                                Style::default()
+                            },
+                        )));
+                    } else {
+                        spans.push(LinkedSpan::plain(Span::raw(" ".repeat(indent))));
+                    }
+                    spans.extend(line);
+                    self.emit_linked_raw_line(spans);
+                }
+            }
+        }
         self.needs_gap = true;
     }
 
@@ -1087,6 +1185,73 @@ fn table_rule(widths: &[usize], left: char, mid: char, right: char) -> String {
     }
     s.push(right);
     s
+}
+
+/// Floor on the width the record fallback lays itself out against, so a
+/// pathologically narrow terminal still produces lines rather than nothing.
+const MIN_RECORD_WIDTH: usize = 8;
+
+/// Columns between a record label and its value.
+const RECORD_LABEL_GAP: usize = 2;
+
+/// Indent for a record value stacked under its own label.
+const RECORD_STACKED_INDENT: usize = 2;
+
+/// Below this, an aligned `label  value` layout leaves the value too narrow to
+/// read, and the fallback stacks instead.
+const MIN_RECORD_VALUE_WIDTH: usize = 12;
+
+/// A cell wrapping past this many lines has stopped being a table cell and
+/// become a vertical strip.
+const MAX_SCANNABLE_CELL_LINES: usize = 4;
+
+/// Whether the grid has become unreadable at these column widths.
+///
+/// Two symptoms count as starvation, both of which mean the column is narrower
+/// than its content's own structure: a word broken mid-token because the column
+/// cannot hold it, and a cell wrapped into a tall strip. A table is switched to
+/// records only when enough rows are affected that the grid as a whole no longer
+/// scans — one cramped cell in a wide table is not worth losing the alignment
+/// that makes the other rows comparable.
+fn should_render_records(rows: &[Vec<TableCell>], widths: &[usize]) -> bool {
+    // A single-column table is already a list: labelling its values buys
+    // nothing, and the grid's per-glyph width floor is what keeps a CJK cell
+    // from being dropped at very narrow widths.
+    if rows.is_empty() || widths.len() < 2 {
+        return false;
+    }
+    let affected = rows
+        .iter()
+        .filter(|row| {
+            row.iter()
+                .zip(widths)
+                .any(|(cell, width)| cell_is_starved(cell, *width))
+        })
+        .count();
+    let threshold = if rows.len() == 1 {
+        1
+    } else {
+        2.max(rows.len().div_ceil(3))
+    };
+    affected >= threshold
+}
+
+fn cell_is_starved(cell: &[LinkedSpan], width: usize) -> bool {
+    if width == 0 {
+        return true;
+    }
+    let text = cell_text(cell);
+    let breaks_a_word = text
+        .split_whitespace()
+        .any(|token| UnicodeWidthStr::width(token) > width);
+    breaks_a_word || wrap_styled_cell(cell, width).len() > MAX_SCANNABLE_CELL_LINES
+}
+
+/// Plain text of a cell, with styling and link targets dropped.
+fn cell_text(cell: &[LinkedSpan]) -> String {
+    cell.iter()
+        .map(|span| span.span.content.as_ref())
+        .collect::<String>()
 }
 
 /// Total display width of a cell's spans.

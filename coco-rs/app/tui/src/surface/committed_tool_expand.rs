@@ -283,6 +283,7 @@ mod tests {
             cwd: None,
             kb_handle: None,
             replay_cache_policy: Default::default(),
+            max_reflow_rows: Default::default(),
             reasoning_metadata: None,
             subagent_summaries: None,
         };

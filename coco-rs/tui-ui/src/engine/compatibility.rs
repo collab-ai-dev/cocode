@@ -3,6 +3,10 @@
 use std::sync::OnceLock;
 use std::sync::RwLock;
 
+use crate::terminal_detect::Multiplexer;
+use crate::terminal_detect::TerminalName;
+use crate::terminal_detect::terminal_info_with;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum TerminalCompatibility {
     #[default]
@@ -37,11 +41,7 @@ pub fn repaints_pane_out_of_band_with<F>(get_env: F) -> bool
 where
     F: Fn(&str) -> Option<String>,
 {
-    // TMUX: tmux. STY: GNU screen. ZELLIJ*: Zellij (the same vars the
-    // native-scrollback decision above keys on).
-    ["TMUX", "STY", "ZELLIJ", "ZELLIJ_SESSION_NAME"]
-        .into_iter()
-        .any(|name| get_env(name).is_some_and(|value| !value.is_empty()))
+    terminal_info_with(get_env).in_multiplexer()
 }
 
 /// Whether finalized history may safely emit OSC 8 hyperlinks.
@@ -58,44 +58,40 @@ pub fn osc8_hyperlinks_supported_with<F>(get_env: F) -> bool
 where
     F: Fn(&str) -> Option<String>,
 {
-    if ["STY", "ZELLIJ", "ZELLIJ_SESSION_NAME"]
-        .into_iter()
-        .any(|name| get_env(name).is_some_and(|value| !value.is_empty()))
-    {
+    let info = terminal_info_with(&get_env);
+    if info.is_inside(Multiplexer::Screen) || info.is_inside(Multiplexer::Zellij) {
         return false;
     }
 
-    let term_program = get_env("TERM_PROGRAM").unwrap_or_default();
-    let term_program_lower = term_program.to_ascii_lowercase();
-    if get_env("TMUX").is_some_and(|value| !value.is_empty()) {
-        return term_program_lower == "tmux"
+    if info.is_inside(Multiplexer::Tmux) {
+        return get_env("TERM_PROGRAM").is_some_and(|program| program.eq_ignore_ascii_case("tmux"))
             && get_env("TERM_PROGRAM_VERSION")
                 .as_deref()
                 .is_some_and(|version| version_at_least(version, 3, 4));
     }
 
-    if ["iterm", "wezterm", "kitty", "ghostty"]
-        .into_iter()
-        .any(|known| term_program_lower.contains(known))
-    {
-        return true;
+    match info.name {
+        TerminalName::Iterm2
+        | TerminalName::WezTerm
+        | TerminalName::Kitty
+        | TerminalName::Ghostty => true,
+        // Every other terminal must prove VTE ≥ 0.50, which is where OSC 8
+        // landed. Unknown terminals stay off: an ordinary copyable URL beats
+        // an unrecognized escape printed into the transcript.
+        TerminalName::Alacritty
+        | TerminalName::AppleTerminal
+        | TerminalName::Dumb
+        | TerminalName::GnomeTerminal
+        | TerminalName::Hyper
+        | TerminalName::Konsole
+        | TerminalName::Unknown
+        | TerminalName::VsCode
+        | TerminalName::Vte
+        | TerminalName::Warp
+        | TerminalName::WindowsTerminal => get_env("VTE_VERSION")
+            .and_then(|version| version.parse::<u32>().ok())
+            .is_some_and(|version| version >= 5_000),
     }
-    if [
-        "WEZTERM_EXECUTABLE",
-        "WEZTERM_PANE",
-        "KITTY_WINDOW_ID",
-        "GHOSTTY_RESOURCES_DIR",
-        "GHOSTTY_BIN_DIR",
-    ]
-    .into_iter()
-    .any(|name| get_env(name).is_some_and(|value| !value.is_empty()))
-    {
-        return true;
-    }
-
-    get_env("VTE_VERSION")
-        .and_then(|version| version.parse::<u32>().ok())
-        .is_some_and(|version| version >= 5_000)
 }
 
 fn version_at_least(version: &str, required_major: u32, required_minor: u32) -> bool {
@@ -122,10 +118,9 @@ impl TerminalCompatibility {
     where
         F: Fn(&str) -> Option<String>,
     {
-        if ["ZELLIJ", "ZELLIJ_SESSION_NAME", "ZELLIJ_VERSION"]
-            .into_iter()
-            .any(|name| get_env(name).is_some_and(|value| !value.is_empty()))
-        {
+        // Zellij anywhere in the chain governs: an inner tmux cannot restore
+        // the scrollback semantics the outer Zellij pane took away.
+        if terminal_info_with(get_env).is_inside(Multiplexer::Zellij) {
             Self::ZellijNativeScrollbackDisabled
         } else {
             Self::NativeScrollback

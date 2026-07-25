@@ -1,10 +1,14 @@
 //! Terminal notification backends — OSC escape sequences for 5 terminals.
 //!
-//! Detects the terminal from `$TERM_PROGRAM` / `$LC_TERMINAL` / `$TERM` and
-//! emits the appropriate OSC sequence. All writes are best-effort; failures
-//! degrade silently to no notification.
+//! Terminal identity comes from [`crate::terminal_detect`]; this module only
+//! maps an identity to the OSC dialect that terminal speaks. All writes are
+//! best-effort; failures degrade silently to no notification.
 
 use std::io::Write;
+
+use crate::terminal_detect::Multiplexer;
+use crate::terminal_detect::TerminalName;
+use crate::terminal_detect::terminal_info;
 
 /// Terminal-specific notification delivery method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,23 +26,33 @@ pub enum NotificationBackend {
 }
 
 impl NotificationBackend {
-    /// Auto-detect the backend from the environment.
-    /// Matches behaviour: uses `$TERM_PROGRAM` first, then
-    /// falls back to `$LC_TERMINAL` / `$TERM` for terminals that don't set
-    /// `TERM_PROGRAM` (Kitty without its wrapper, Ghostty via SSH, etc.).
+    /// Auto-detect the backend from the terminal's identity.
     pub fn detect() -> Self {
-        let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
-        let lc_terminal = std::env::var("LC_TERMINAL").unwrap_or_default();
-        let term = std::env::var("TERM").unwrap_or_default();
+        Self::for_terminal(terminal_info().name)
+    }
 
-        match term_program.as_str() {
-            "iTerm.app" => Self::ITerm2,
-            "ghostty" => Self::Ghostty,
-            "WezTerm" => Self::ITerm2, // wezterm supports OSC 9;1
-            "Apple_Terminal" => Self::TerminalBell,
-            _ if lc_terminal.eq_ignore_ascii_case("iterm2") => Self::ITerm2,
-            _ if term.starts_with("xterm-kitty") || term_program == "kitty" => Self::Kitty,
-            _ => Self::Disabled,
+    /// Map a terminal identity onto the OSC dialect it understands.
+    ///
+    /// Terminals with no notification protocol coco can rely on stay
+    /// [`Self::Disabled`] rather than falling back to BEL: an unexpected bell
+    /// is more disruptive than a missing notification.
+    pub fn for_terminal(name: TerminalName) -> Self {
+        match name {
+            // WezTerm implements iTerm2's OSC 9;1.
+            TerminalName::Iterm2 | TerminalName::WezTerm => Self::ITerm2,
+            TerminalName::Kitty => Self::Kitty,
+            TerminalName::Ghostty => Self::Ghostty,
+            TerminalName::AppleTerminal => Self::TerminalBell,
+            TerminalName::Alacritty
+            | TerminalName::GnomeTerminal
+            | TerminalName::Hyper
+            | TerminalName::Konsole
+            | TerminalName::VsCode
+            | TerminalName::Vte
+            | TerminalName::Warp
+            | TerminalName::WindowsTerminal
+            | TerminalName::Dumb
+            | TerminalName::Unknown => Self::Disabled,
         }
     }
 
@@ -122,16 +136,22 @@ fn kitty_id() -> u32 {
 /// Wrap `seq` for tmux/screen DCS passthrough if either multiplexer is
 /// active. Outside a multiplexer, returns the sequence unchanged.
 fn wrap(seq: &str) -> String {
-    if std::env::var_os("TMUX").is_some() {
+    wrap_for(seq, terminal_info().multiplexer())
+}
+
+fn wrap_for(seq: &str, multiplexer: Option<Multiplexer>) -> String {
+    match multiplexer {
         // tmux passthrough: ESC P tmux; ESC <payload with ESC doubled> ESC \
-        let escaped = seq.replace('\x1b', "\x1b\x1b");
-        return format!("\x1bPtmux;\x1b{escaped}\x1b\\");
-    }
-    if std::env::var_os("STY").is_some() {
+        Some(Multiplexer::Tmux) => {
+            let escaped = seq.replace('\x1b', "\x1b\x1b");
+            format!("\x1bPtmux;\x1b{escaped}\x1b\\")
+        }
         // GNU screen DCS: ESC P <payload> ESC \
-        return format!("\x1bP{seq}\x1b\\");
+        Some(Multiplexer::Screen) => format!("\x1bP{seq}\x1b\\"),
+        // Zellij has no documented passthrough; emit the sequence unwrapped
+        // and let it be swallowed rather than leaking DCS bytes to the screen.
+        Some(Multiplexer::Zellij) | None => seq.to_string(),
     }
-    seq.to_string()
 }
 
 #[cfg(test)]

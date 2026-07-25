@@ -17,6 +17,10 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthStr;
 
+use crate::motion::MotionMode;
+use crate::motion::ReducedMotionIndicator;
+use crate::motion::STATIC_ACTIVITY_GLYPH;
+use crate::motion::animation_frame;
 use crate::style::UiStyles;
 
 /// Token-display threshold. Below this elapsed time the token segment
@@ -64,6 +68,10 @@ pub struct StatusIndicatorView<'a> {
     ///
     /// `verbose || hasRunningTeammates || effectiveElapsedMs > SHOW_TOKENS_AFTER_MS`).
     pub has_running_teammates: bool,
+    /// Whether the spinner may turn. Under [`MotionMode::Reduced`] it is
+    /// replaced by a static glyph rather than removed — a missing indicator
+    /// reads as "coco is stuck".
+    pub motion: MotionMode,
 }
 
 impl<'a> StatusIndicatorView<'a> {
@@ -79,6 +87,7 @@ impl<'a> StatusIndicatorView<'a> {
             show_interrupt_hint: true,
             force_show_tokens: false,
             has_running_teammates: false,
+            motion: MotionMode::Animated,
         }
     }
 }
@@ -96,10 +105,15 @@ impl<'a> StatusIndicator<'a> {
 
     /// Pure-function frame selection so callers (and tests) can pick
     /// a spinner glyph without instantiating any state.
-    pub fn spinner_frame(elapsed_ms: i64) -> &'static str {
-        let len = SPINNER_FRAMES.len() as i64;
-        let idx = ((elapsed_ms.max(0) / SPINNER_INTERVAL_MS) % len) as usize;
-        SPINNER_FRAMES[idx]
+    pub fn spinner_frame(elapsed_ms: i64, motion: MotionMode) -> &'static str {
+        animation_frame(
+            SPINNER_FRAMES,
+            SPINNER_INTERVAL_MS,
+            elapsed_ms,
+            motion,
+            ReducedMotionIndicator::StaticGlyph(STATIC_ACTIVITY_GLYPH),
+        )
+        .unwrap_or(STATIC_ACTIVITY_GLYPH)
     }
 }
 
@@ -109,7 +123,7 @@ impl Widget for StatusIndicator<'_> {
             return;
         }
 
-        let frame = StatusIndicator::spinner_frame(self.view.elapsed_ms);
+        let frame = StatusIndicator::spinner_frame(self.view.elapsed_ms, self.view.motion);
         let elapsed = fmt_elapsed_compact(self.view.elapsed_ms / 1000);
         let has_tokens = self.view.input_tokens.unwrap_or(0) > 0 || self.view.output_tokens > 0;
         let want_tokens = has_tokens

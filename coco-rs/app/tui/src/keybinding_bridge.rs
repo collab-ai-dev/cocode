@@ -209,6 +209,7 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
 pub fn map_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
     let ctx = active_context(state);
     let (cmd, source) = resolve_key(state, key, ctx);
+    let cmd = cmd.map(|cmd| apply_paste_burst(state, ctx, key, cmd));
     if let Some(c) = cmd.as_ref()
         && should_log_key_command(ctx, c)
     {
@@ -223,6 +224,42 @@ pub fn map_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
         );
     }
     cmd
+}
+
+/// Reinterpret a bare Enter as a newline while a paste is arriving as
+/// individual key events.
+///
+/// On terminals that do not honour bracketed paste, a multi-line paste reaches
+/// coco as a fast stream of `Char` and `Enter` presses, and each `Enter` reads
+/// as "submit" — pasting a five-line prompt sends five messages. When
+/// [`coco_tui_ui::paste_burst`] says input is mid-paste, the newline the user
+/// pasted is restored to meaning a newline.
+///
+/// Deliberately scoped to `Chat` + `SubmitInput` + an unmodified `Enter`: those
+/// are the keys a paste can contain and the one place the misreading does
+/// damage. A false positive costs a newline the user deletes; a false negative
+/// leaves today's behavior.
+fn apply_paste_burst(
+    state: &AppState,
+    ctx: KeybindingContext,
+    key: KeyEvent,
+    cmd: TuiCommand,
+) -> TuiCommand {
+    if ctx != KeybindingContext::Chat
+        || !matches!(cmd, TuiCommand::SubmitInput)
+        || key.code != KeyCode::Enter
+        || key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        || !state.ui.paste_burst.is_bursting(state.clock.now())
+    {
+        return cmd;
+    }
+    tracing::debug!(
+        target: "coco_tui::input",
+        "paste burst: Enter treated as newline",
+    );
+    TuiCommand::InsertNewline
 }
 
 // In the `Chat` context the user is typing into the input editor — Backspace,

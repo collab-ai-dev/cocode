@@ -5,9 +5,9 @@ use super::DisableModifyOtherKeys;
 use super::EnableModifyOtherKeys;
 use super::ResetKeyboardEnhancementFlags;
 use super::keyboard_enhancement_disabled_for;
-use super::tmux_session_detected;
 use super::tmux_should_enable_modify_other_keys_for;
 use super::vscode_terminal_detected;
+use coco_tui_ui::terminal_detect::TerminalName;
 
 fn ansi_for(command: impl Command) -> String {
     let mut out = String::new();
@@ -47,33 +47,27 @@ fn test_keyboard_enhancement_env_override_beats_auto_detection() {
 }
 
 #[test]
-fn test_vscode_terminal_detection_uses_linux_and_windows_term_program() {
+fn test_vscode_terminal_detection_uses_local_identity_and_windows_term_program() {
     assert!(vscode_terminal_detected(
-        Some("vscode"),
+        TerminalName::VsCode,
         /*windows_term_program*/ None
     ));
     assert!(vscode_terminal_detected(
-        /*linux_term_program*/ None,
+        TerminalName::Unknown,
         Some("vscode")
     ));
     assert!(!vscode_terminal_detected(
-        /*linux_term_program*/ None,
+        TerminalName::Unknown,
         Some("WindowsTerminal")
     ));
     assert!(!vscode_terminal_detected(
-        /*linux_term_program*/ None, /*windows_term_program*/ None
+        TerminalName::Unknown,
+        /*windows_term_program*/ None
     ));
-}
-
-#[test]
-fn test_tmux_session_detection_accepts_tmux_or_tmux_pane() {
-    assert!(tmux_session_detected(
-        Some("/tmp/tmux-501/default,1,0"),
-        /*tmux_pane*/ None
-    ));
-    assert!(tmux_session_detected(/*tmux*/ None, Some("%0")));
-    assert!(!tmux_session_detected(
-        /*tmux*/ None, /*tmux_pane*/ None
+    // A WSL shell under a non-VS-Code Windows terminal must not opt out.
+    assert!(!vscode_terminal_detected(
+        TerminalName::WindowsTerminal,
+        /*windows_term_program*/ None
     ));
 }
 

@@ -17,6 +17,7 @@ use ratatui::layout::Rect;
 use ratatui::layout::Size;
 use uuid::Uuid;
 
+use crate::reflow_cap::MaxReflowRows;
 use crate::state::AppState;
 use crate::state::ui::StreamingState;
 use crate::surface::controller::NativeSurfaceController;
@@ -28,7 +29,6 @@ use crate::terminal::native_viewport_area_with_max;
 use crate::theme::Theme;
 use crate::transcript::cells::RenderedCell;
 use crate::transcript::derive::message_to_cells;
-use crate::transcript::render::DEFAULT_MAX_REFLOW_ROWS;
 use crate::transcript::render::HistoryLineRenderOptions;
 use crate::transcript::render::HistoryReplayCache;
 use crate::transcript::render::HistoryReplayCachePolicy;
@@ -256,7 +256,7 @@ impl NativeReplayBench {
         render_replay_history_lines(
             &self.cells,
             replay_options(&self.theme, width, self.content),
-            DEFAULT_MAX_REFLOW_ROWS,
+            MaxReflowRows::default().get(),
         )
         .lines
         .len()
@@ -266,7 +266,7 @@ impl NativeReplayBench {
         let replay = render_replay_history_lines(
             &self.cells,
             replay_options(&self.theme, width, self.content),
-            DEFAULT_MAX_REFLOW_ROWS,
+            MaxReflowRows::default().get(),
         );
         insert_replay_lines(width, height, replay.lines.iter().cloned())
     }
@@ -275,7 +275,7 @@ impl NativeReplayBench {
         let replay = render_replay_history_lines_cached(
             &self.cells,
             replay_options(&self.theme, width, self.content),
-            DEFAULT_MAX_REFLOW_ROWS,
+            MaxReflowRows::default().get(),
             &mut self.cache,
         );
         ReplayBenchOutput {
@@ -290,7 +290,7 @@ impl NativeReplayBench {
         let replay = render_replay_history_lines_cached(
             &self.cells,
             replay_options(&self.theme, width, self.content),
-            DEFAULT_MAX_REFLOW_ROWS,
+            MaxReflowRows::default().get(),
             &mut self.cache,
         );
         let rows = insert_replay_lines(width, height, replay.lines.iter().cloned());
@@ -592,6 +592,7 @@ fn replay_options(
         cwd: None,
         kb_handle: None,
         replay_cache_policy: HistoryReplayCachePolicy::default(),
+        max_reflow_rows: MaxReflowRows::default(),
         reasoning_metadata: None,
         subagent_summaries: None,
     }

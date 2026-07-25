@@ -1,3 +1,4 @@
+use crate::reflow_cap::MaxReflowRows;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -1127,6 +1128,7 @@ fn options(theme: &Theme, width: u16) -> HistoryLineRenderOptions<'_> {
         cwd: None,
         kb_handle: None,
         replay_cache_policy: HistoryReplayCachePolicy::default(),
+        max_reflow_rows: MaxReflowRows::default(),
         reasoning_metadata: None,
         subagent_summaries: None,
     }

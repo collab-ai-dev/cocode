@@ -10,6 +10,9 @@ use std::sync::OnceLock;
 
 use ratatui::style::Color;
 
+use crate::terminal_detect::TerminalName;
+use crate::terminal_detect::terminal_info;
+
 /// The terminal's color depth, detected once from the environment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -29,19 +32,19 @@ pub enum ColorCapability {
 /// Environment signals consulted when detecting terminal color capability.
 ///
 /// Kept as a plain struct (rather than reading env inside the detector) so the
-/// heuristics are unit-testable without mutating process env.
+/// heuristics are unit-testable without mutating process env. Terminal
+/// *identity* is not re-sniffed here — it arrives already typed from
+/// [`crate::terminal_detect`].
 #[derive(Debug, Default, Clone, Copy)]
 struct ColorEnv<'a> {
     /// `COLORTERM` — the canonical truecolor advertisement.
     colorterm: Option<&'a str>,
-    /// `TERM_PROGRAM` — GUI terminal identity; many truecolor terminals set
-    /// this but omit `COLORTERM` (notably on macOS app launches).
-    term_program: Option<&'a str>,
-    /// `TERM` — terminfo name, substring-matched as a last resort.
+    /// Which emulator this is. Many truecolor terminals omit `COLORTERM`
+    /// (notably on macOS app launches), so identity is the second signal.
+    terminal: TerminalName,
+    /// `TERM` — terminfo name, consulted only for the classic 16-color
+    /// allow-list, which is a capability claim rather than an identity.
     term: Option<&'a str>,
-    /// Set when a terminal-specific env var implying truecolor is present
-    /// (`GHOSTTY_*`, `WEZTERM_*`, `KITTY_WINDOW_ID`).
-    truecolor_env_marker: bool,
     /// `NO_COLOR` is present and non-empty (per no-color.org): disable color.
     no_color: bool,
 }
@@ -51,22 +54,38 @@ pub fn color_capability() -> ColorCapability {
     static CAP: OnceLock<ColorCapability> = OnceLock::new();
     *CAP.get_or_init(|| {
         let colorterm = std::env::var("COLORTERM").ok();
-        let term_program = std::env::var("TERM_PROGRAM").ok();
         let term = std::env::var("TERM").ok();
-        let truecolor_env_marker = std::env::var_os("GHOSTTY_RESOURCES_DIR").is_some()
-            || std::env::var_os("GHOSTTY_BIN_DIR").is_some()
-            || std::env::var_os("WEZTERM_EXECUTABLE").is_some()
-            || std::env::var_os("WEZTERM_PANE").is_some()
-            || std::env::var_os("KITTY_WINDOW_ID").is_some();
         let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
         detect_from_env(ColorEnv {
             colorterm: colorterm.as_deref(),
-            term_program: term_program.as_deref(),
+            terminal: terminal_info().name,
             term: term.as_deref(),
-            truecolor_env_marker,
             no_color,
         })
     })
+}
+
+/// Terminals that render 24-bit color even when they advertise nothing.
+fn is_truecolor_terminal(terminal: TerminalName) -> bool {
+    match terminal {
+        TerminalName::Alacritty
+        | TerminalName::Ghostty
+        | TerminalName::Hyper
+        | TerminalName::Iterm2
+        | TerminalName::Kitty
+        | TerminalName::Warp
+        | TerminalName::WezTerm => true,
+        // Apple Terminal is 256-color only and must never be promoted. The
+        // rest fall through to COLORTERM / the Ansi256 default.
+        TerminalName::AppleTerminal
+        | TerminalName::Dumb
+        | TerminalName::GnomeTerminal
+        | TerminalName::Konsole
+        | TerminalName::Unknown
+        | TerminalName::VsCode
+        | TerminalName::Vte
+        | TerminalName::WindowsTerminal => false,
+    }
 }
 
 fn detect_from_env(env: ColorEnv<'_>) -> ColorCapability {
@@ -74,10 +93,7 @@ fn detect_from_env(env: ColorEnv<'_>) -> ColorCapability {
     //    ahead of every truecolor heuristic. An *empty* TERM is NOT treated as
     //    no-color — it falls through exactly like an unset TERM (to COLORTERM /
     //    the Ansi256 default), so `TERM="" COLORTERM=truecolor` stays truecolor.
-    if env.no_color {
-        return ColorCapability::None;
-    }
-    if env.term.is_some_and(|t| t.eq_ignore_ascii_case("dumb")) {
+    if env.no_color || env.terminal == TerminalName::Dumb {
         return ColorCapability::None;
     }
     // 1. COLORTERM is the canonical signal when present.
@@ -87,40 +103,19 @@ fn detect_from_env(env: ColorEnv<'_>) -> ColorCapability {
             return ColorCapability::TrueColor;
         }
     }
-    // 2. Trust the identity of known-truecolor GUI terminals, which frequently
-    //    omit COLORTERM when launched from a desktop environment.
-    if let Some(program) = env.term_program {
-        let program = program.to_ascii_lowercase();
-        const TRUECOLOR_PROGRAMS: [&str; 6] = [
-            "ghostty",
-            "iterm.app",
-            "wezterm",
-            "warp",
-            "alacritty",
-            "hyper",
-        ];
-        if TRUECOLOR_PROGRAMS.iter().any(|p| program.contains(p)) {
-            return ColorCapability::TrueColor;
-        }
-    }
-    // 3. Terminal-specific env markers (GHOSTTY_*, WEZTERM_*, KITTY_WINDOW_ID).
-    if env.truecolor_env_marker {
+    // 2. Trust the identity of known-truecolor terminals, which frequently omit
+    //    COLORTERM when launched from a desktop environment.
+    if is_truecolor_terminal(env.terminal) {
         return ColorCapability::TrueColor;
     }
-    // 4. TERM substring as a last resort.
+    // 3. Classic 16-color terminals that advertise no 256-color support.
+    //    Conservative allow-list — a bare `TERM=xterm` still leans on
+    //    COLORTERM/`Ansi256` above, since most such terminals do 256 colors.
     if let Some(term) = env.term {
-        let term = term.to_ascii_lowercase();
-        const TRUECOLOR_TERMS: [&str; 4] = ["kitty", "ghostty", "alacritty", "wezterm"];
-        if TRUECOLOR_TERMS.iter().any(|t| term.contains(t)) {
-            return ColorCapability::TrueColor;
-        }
-        // 5. Classic 16-color terminals that advertise no 256-color support.
-        //    Conservative allow-list — a bare `TERM=xterm` still leans on
-        //    COLORTERM/`Ansi256` above, since most such terminals do 256 colors.
         const BASIC_TERMS: [&str; 7] = [
             "ansi", "linux", "vt100", "vt220", "vt320", "cons25", "wsvt25",
         ];
-        if BASIC_TERMS.contains(&term.as_str()) {
+        if BASIC_TERMS.contains(&term.to_ascii_lowercase().as_str()) {
             return ColorCapability::Basic;
         }
     }

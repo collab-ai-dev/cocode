@@ -11,6 +11,7 @@ use crate::state::AppState;
 use crate::status_bar::StatusBarView;
 use crate::status_bar::StatusSpan;
 use crate::status_bar::StatusTone;
+use crate::status_bar::fit_status_items;
 use crate::status_bar::status_bar_view;
 use coco_tui_ui::style::UiStyles;
 
@@ -35,7 +36,19 @@ impl Widget for StatusBarWidget<'_> {
         if area.height == 0 {
             return;
         }
-        let (lines, allow_side_chat_hint): (Vec<Line>, bool) = match status_bar_view(self.state) {
+        // The side-chat hint claims part of row 0, so row 0 fits against the
+        // width left over; later rows get the full area.
+        let hint = match status_bar_view(self.state) {
+            StatusBarView::ExitPrompt { .. } => None,
+            StatusBarView::BuiltIn { .. } | StatusBarView::Custom { .. } => {
+                side_chat_hint_line(self.state, self.styles, area.width)
+            }
+        };
+        let hint_width = hint.as_ref().map_or(0, |line| line.width() as u16);
+        let gap = u16::from(hint_width > 0 && area.width > hint_width);
+        let main_width = area.width.saturating_sub(hint_width).saturating_sub(gap);
+
+        let lines: Vec<Line> = match status_bar_view(self.state) {
             StatusBarView::ExitPrompt { key, text } => {
                 tracing::info!(
                     key = key.label(),
@@ -43,44 +56,29 @@ impl Widget for StatusBarWidget<'_> {
                     width = area.width,
                     "status bar rendering exit prompt"
                 );
-                (
-                    vec![Line::from(Span::styled(
-                        text,
-                        Style::default().fg(self.styles.warning()).bold(),
-                    ))],
-                    false,
-                )
-            }
-            StatusBarView::Custom { line } => (
                 vec![Line::from(Span::styled(
-                    line,
-                    Style::default().fg(self.styles.primary()),
-                ))],
-                true,
-            ),
-            StatusBarView::BuiltIn { lines } => (
-                lines
-                    .iter()
-                    .map(|spans| {
-                        Line::from(
-                            spans
-                                .iter()
-                                .map(|span| status_span(span, self.styles))
-                                .collect::<Vec<_>>(),
-                        )
-                    })
-                    .collect(),
-                true,
-            ),
+                    text,
+                    Style::default().fg(self.styles.warning()).bold(),
+                ))]
+            }
+            StatusBarView::Custom { line } => vec![Line::from(Span::styled(
+                line,
+                Style::default().fg(self.styles.primary()),
+            ))],
+            StatusBarView::BuiltIn { lines } => lines
+                .iter()
+                .enumerate()
+                .map(|(row, items)| {
+                    let width = if row == 0 { main_width } else { area.width };
+                    Line::from(
+                        fit_status_items(items, usize::from(width))
+                            .iter()
+                            .map(|span| status_span(span, self.styles))
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect(),
         };
-        let hint = if allow_side_chat_hint {
-            side_chat_hint_line(self.state, self.styles, area.width)
-        } else {
-            None
-        };
-        let hint_width = hint.as_ref().map_or(0, |line| line.width() as u16);
-        let gap = u16::from(hint_width > 0 && area.width > hint_width);
-        let main_width = area.width.saturating_sub(hint_width).saturating_sub(gap);
         if let Some(hint) = hint {
             let main_area = Rect {
                 width: main_width,
