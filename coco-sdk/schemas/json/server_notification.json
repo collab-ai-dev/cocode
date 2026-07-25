@@ -4628,6 +4628,16 @@
           "description": "\"Let the provider decide\". Convert layer omits reasoning fields;\nthe server-side default applies. This is the default state when\nno thinking level is configured.",
           "type": "string",
           "const": "auto"
+        },
+        {
+          "description": "Above `XHigh`. Anthropic's top `output_config.effort` rung, and\nthe GPT-5.6 family's second-highest. A model that does not declare\nit has the request resolved against its own ladder by\n`ModelInfo::resolve_thinking_level`, so asking for it is never a\nwire error.",
+          "type": "string",
+          "const": "max"
+        },
+        {
+          "description": "Top of the ladder. On the GPT-5.6 family this is \"maximum\nreasoning with automatic task delegation\".",
+          "type": "string",
+          "const": "ultra"
         }
       ]
     },

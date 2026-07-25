@@ -143,6 +143,9 @@ fn claude_thinking_levels() -> Vec<ThinkingLevel> {
         ThinkingLevel::with_budget(ReasoningEffort::Low, 6_400),
         ThinkingLevel::with_budget(ReasoningEffort::Medium, 19_200),
         ThinkingLevel::with_budget(ReasoningEffort::High, 38_400),
-        ThinkingLevel::with_budget(ReasoningEffort::XHigh, 128_000),
+        // Anthropic's `output_config.effort` vocabulary is
+        // low/medium/high/max — declare `Max`, not `XHigh`. The convert
+        // layer then emits the rung verbatim instead of translating.
+        ThinkingLevel::with_budget(ReasoningEffort::Max, 128_000),
     ]
 }

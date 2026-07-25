@@ -105,7 +105,7 @@ pub fn parse_agent_markdown(
             Err(_) => warnings.push(ValidationError::InvalidFrontmatter {
                 message: format!(
                     "effort: unrecognized value `{effort}` (expected one of \
-                     off/auto/minimal/low/medium/high/xhigh, or alias `max`)"
+                     off/auto/minimal/low/medium/high/xhigh/max/ultra)"
                 ),
             }),
         }
@@ -118,7 +118,7 @@ pub fn parse_agent_markdown(
         warnings.push(ValidationError::InvalidFrontmatter {
             message: "effort: numeric form is not accepted — `effort:` is a lookup key into \
                       the model's `supported_thinking_levels`, not a budget number. Use one \
-                      of off/auto/minimal/low/medium/high/xhigh (or `max`). For a custom \
+                      of off/auto/minimal/low/medium/high/xhigh/max/ultra. For a custom \
                       budget, configure `settings.models.<role>.thinking_level.budget_tokens`."
                 .into(),
         });

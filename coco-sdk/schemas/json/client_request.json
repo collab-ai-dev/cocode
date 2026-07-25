@@ -2000,6 +2000,16 @@
           "description": "\"Let the provider decide\". Convert layer omits reasoning fields;\nthe server-side default applies. This is the default state when\nno thinking level is configured.",
           "type": "string",
           "const": "auto"
+        },
+        {
+          "description": "Above `XHigh`. Anthropic's top `output_config.effort` rung, and\nthe GPT-5.6 family's second-highest. A model that does not declare\nit has the request resolved against its own ladder by\n`ModelInfo::resolve_thinking_level`, so asking for it is never a\nwire error.",
+          "type": "string",
+          "const": "max"
+        },
+        {
+          "description": "Top of the ladder. On the GPT-5.6 family this is \"maximum\nreasoning with automatic task delegation\".",
+          "type": "string",
+          "const": "ultra"
         }
       ]
     },
@@ -2544,7 +2554,7 @@
       ]
     },
     "ThinkingLevel": {
-      "description": "Unified thinking configuration for all providers.\n\n`effort` carries provider-agnostic intent — `Disable`, `Auto`, or\none of the numeric levels (`Minimal`..`XHigh`). Provider-specific\nwire toggles (e.g. DeepSeek's `{\"thinking\":{\"type\":\"enabled\"}}`)\nflow through `options` verbatim.\n\nSemantic states:\n  * `Disable` — explicit \"thinking off\"; emit explicit-off signals\n    where the provider supports them, otherwise omit reasoning fields.\n  * `Auto`    — \"let the provider decide\"; omit reasoning fields\n    so the server-side default applies.\n  * `Minimal`..`XHigh` — explicit numeric efforts; emitted via the\n    provider's typed reasoning channel.",
+      "description": "Unified thinking configuration for all providers.\n\n`effort` carries provider-agnostic intent — `Disable`, `Auto`, or\none of the numeric levels (`Minimal`..`Ultra`). Provider-specific\nwire toggles (e.g. DeepSeek's `{\"thinking\":{\"type\":\"enabled\"}}`)\nflow through `options` verbatim.\n\nSemantic states:\n  * `Disable` — explicit \"thinking off\"; emit explicit-off signals\n    where the provider supports them, otherwise omit reasoning fields.\n  * `Auto`    — \"let the provider decide\"; omit reasoning fields\n    so the server-side default applies.\n  * `Minimal`..`Ultra` — explicit numeric efforts; emitted via the\n    provider's typed reasoning channel.",
       "type": "object",
       "properties": {
         "budget_tokens": {

@@ -1511,6 +1511,57 @@ async fn idle_ctrl_c_closes_sidechat_instead_of_arming_process_exit() {
 }
 
 #[tokio::test]
+async fn ctrl_t_cycle_walks_every_declared_effort_including_max_and_ultra() {
+    use coco_types::ReasoningEffort;
+
+    // GPT-5.6-shaped ladder. Ctrl+T walks whatever the model declares, in
+    // declaration order — no rung is held back behind a second confirmation
+    // step, so `max` and `ultra` are as reachable as any other level.
+    let mut state = AppState::new();
+    state.session.provider = "openai".into();
+    state.session.model = "gpt-5-6-sol".into();
+    state.session.thinking_effort = ReasoningEffort::Low;
+    let ladder = vec![
+        ReasoningEffort::Low,
+        ReasoningEffort::Medium,
+        ReasoningEffort::High,
+        ReasoningEffort::XHigh,
+        ReasoningEffort::Max,
+        ReasoningEffort::Ultra,
+    ];
+    state.session.model_catalog = vec![crate::state::ModelCatalogEntry {
+        provider: "openai".into(),
+        provider_display: "OpenAI".into(),
+        model_id: "gpt-5-6-sol".into(),
+        display_name: "GPT-5.6 Sol".into(),
+        context_window: Some(272_000),
+        supported_efforts: ladder.clone(),
+        default_effort: Some(ReasoningEffort::Low),
+    }];
+    let (tx, mut rx) = drained_channel();
+
+    let mut visited = Vec::new();
+    for _ in 0..ladder.len() {
+        handle_command(&mut state, TuiCommand::CycleThinkingLevel, &tx).await;
+        visited.push(state.session.thinking_effort);
+    }
+    while rx.try_recv().is_ok() {}
+
+    assert_eq!(
+        visited,
+        vec![
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::XHigh,
+            ReasoningEffort::Max,
+            ReasoningEffort::Ultra,
+            ReasoningEffort::Low,
+        ],
+        "Ctrl+T must walk the declared ladder and wrap"
+    );
+}
+
+#[tokio::test]
 async fn sidechat_rejects_session_level_controls() {
     use coco_types::PermissionMode;
     use coco_types::ReasoningEffort;

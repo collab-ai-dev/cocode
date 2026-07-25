@@ -60,7 +60,7 @@ pub struct PerCallOverrides {
     /// - `Some(level)` with `effort == ReasoningEffort::Auto` —
     ///   explicitly defer to the provider's server-side default.
     /// - `Some(level)` with `effort.is_explicit_level()` — use this
-    ///   numeric level (Minimal..XHigh) on the typed reasoning lane.
+    ///   numeric level (Minimal..Ultra) on the typed reasoning lane.
     pub thinking_level: Option<ThinkingLevel>,
     pub extra_body: BTreeMap<String, serde_json::Value>,
     /// Anthropic `context_management` payload (camelCase wire shape).
@@ -157,7 +157,7 @@ pub fn build_call_options_with_extra(
     //   per_call.thinking_level == None                           → info.default_thinking()
     //
     // The typed `call.reasoning` slot is only set for explicit numeric
-    // efforts (Minimal..XHigh). `Disable` and `Auto` leave it `None`
+    // efforts (Minimal..Ultra). `Disable` and `Auto` leave it `None`
     // so the wire body omits any typed reasoning hint — `Disable` may
     // still emit an explicit-off toggle via `level.options`, and `Auto`
     // lets the server-side default apply.
@@ -169,10 +169,11 @@ pub fn build_call_options_with_extra(
     // `supported_thinking_levels` ladder before it reaches the wire.
     // `resolve_thinking_level`: exact match → nearest declared level →
     // verbatim passthrough when the model declares no ladder (trust the
-    // caller). For an over-ceiling request (e.g. `--effort max` / XHigh on a
-    // model whose top declared level is High) nearest-match lands on the top
-    // declared level — a graceful degrade instead of emitting
-    // `output_config.effort="max"`, which 400s on models that reject it.
+    // caller). For an over-ceiling request (e.g. `--effort ultra` on a model
+    // whose top declared level is XHigh) nearest-match lands on the top
+    // declared level — a graceful degrade instead of emitting an effort the
+    // model would reject with a 400. This is what keeps the GPT-5.6-only
+    // `max` / `ultra` rungs safe to request against any model.
     // This is the single wire choke point, so it covers every explicit
     // override source uniformly (CLI `--effort`, SDK `set_thinking_level`,
     // subagent frontmatter, the model picker) against the *resolved*
@@ -406,6 +407,8 @@ fn reasoning_effort_to_level(effort: ReasoningEffort) -> ReasoningLevel {
         ReasoningEffort::Medium => ReasoningLevel::Medium,
         ReasoningEffort::High => ReasoningLevel::High,
         ReasoningEffort::XHigh => ReasoningLevel::Xhigh,
+        ReasoningEffort::Max => ReasoningLevel::Max,
+        ReasoningEffort::Ultra => ReasoningLevel::Ultra,
         ReasoningEffort::Off | ReasoningEffort::Auto => unreachable!(
             "reasoning_effort_to_level called with non-explicit effort {effort:?}; \
              Lane A2 must gate on `effort.is_explicit_level()` before invoking this"

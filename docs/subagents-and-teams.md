@@ -138,7 +138,7 @@ Everything else is optional:
 |---|---|---|
 | `model` | — | `provider/model_id`, or `inherit` to use the parent's model. Prefer `modelRole`. |
 | `modelRole` | `model_role` | `main`, `fast`, `plan`, `explore`, `review`, `subagent`, `memory`, `hook_agent`. Case-insensitive. |
-| `effort` | — | `off`, `auto`, `minimal`, `low`, `medium`, `high`, `xhigh`, or the alias `max`. A **numeric** value is rejected with a warning — this is a lookup key into the model's supported thinking levels, not a token budget. |
+| `effort` | — | `off`, `auto`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`. `max` / `ultra` are declared only by the GPT-5.6 family; against any other model they clamp down to that model's top declared rung. A **numeric** value is rejected with a warning — this is a lookup key into the model's supported thinking levels, not a token budget. |
 | `tools` | `allowed_tools` | YAML list or comma-separated string. `['*']` or omitting the key means every tool. `[]` means **no** tools. |
 | `disallowedTools` | `disallowed_tools` | YAML list or comma-separated string of tool names to deny. |
 | `permissionMode` | `permission_mode` | `default`, `plan`, `dontAsk`, `acceptEdits`, `bubble`, `bypassPermissions`, `auto`, `ask`, `deny`. |

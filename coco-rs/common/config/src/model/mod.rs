@@ -249,7 +249,13 @@ impl ModelInfo {
     /// Resolve a requested effort to the best matching supported ThinkingLevel.
     /// Resolution semantics:
     /// - `Some(non-empty)` — exact-effort match wins; otherwise fall
-    /// back to the closest declared level by effort distance.
+    /// back to the closest declared level by effort distance. Equal
+    /// distance resolves **upward**: the caller asked for a level this
+    /// model does not have, and rounding down silently buys them less
+    /// thinking than they paid for. This is what lets each vendor
+    /// declare only the rungs it really has — Anthropic's ladder stops
+    /// at `Max` with no `XHigh`, so an `xhigh` request lands on `Max`
+    /// rather than dropping to `High`.
     /// - `None` (field absent) — pass `requested` through unchanged;
     /// the model has not declared its thinking surface, so trust
     /// the caller.
@@ -267,7 +273,12 @@ impl ModelInfo {
                 .unwrap_or_else(|| {
                     levels
                         .iter()
-                        .min_by_key(|l| (l.effort as i32 - requested.effort as i32).abs())
+                        .min_by_key(|l| {
+                            (
+                                (l.effort as i32 - requested.effort as i32).abs(),
+                                std::cmp::Reverse(l.effort),
+                            )
+                        })
                         .cloned()
                         .unwrap_or_else(|| requested.clone())
                 }),

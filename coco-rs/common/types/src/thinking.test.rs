@@ -72,9 +72,16 @@ fn test_thinking_level_from_str() {
 
 #[test]
 fn test_reasoning_effort_from_str_aliases() {
+    // `max` used to alias `xhigh`. It is now its own rung (GPT-5.6);
+    // models that stop at `xhigh` still land on `XHigh` via the ladder
+    // clamp in `ModelInfo::resolve_thinking_level`, not via parsing.
     assert_eq!(
         "max".parse::<ReasoningEffort>().unwrap(),
-        ReasoningEffort::XHigh
+        ReasoningEffort::Max
+    );
+    assert_eq!(
+        "ultra".parse::<ReasoningEffort>().unwrap(),
+        ReasoningEffort::Ultra
     );
     assert_eq!(
         "xhigh".parse::<ReasoningEffort>().unwrap(),
@@ -104,10 +111,28 @@ fn test_reasoning_effort_display_round_trip() {
         ReasoningEffort::Medium,
         ReasoningEffort::High,
         ReasoningEffort::XHigh,
+        ReasoningEffort::Max,
+        ReasoningEffort::Ultra,
     ] {
         let s = variant.to_string();
         assert_eq!(s.parse::<ReasoningEffort>().unwrap(), variant, "round-trip");
     }
+}
+
+#[test]
+fn test_ladder_orders_max_and_ultra_above_xhigh() {
+    // `ModelInfo::resolve_thinking_level` clamps an over-ceiling request by
+    // discriminant distance, so the two new rungs must sit at the top of the
+    // ladder for a `max`/`ultra` request to degrade to `xhigh` rather than
+    // snapping down to `off`.
+    assert!(ReasoningEffort::Max > ReasoningEffort::XHigh);
+    assert!(ReasoningEffort::Ultra > ReasoningEffort::Max);
+}
+
+#[test]
+fn test_new_rungs_are_explicit_levels() {
+    assert!(ReasoningEffort::Max.is_explicit_level());
+    assert!(ReasoningEffort::Ultra.is_explicit_level());
 }
 
 #[test]

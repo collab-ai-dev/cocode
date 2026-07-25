@@ -273,6 +273,22 @@ fn info_with_ladder_low_to_high() -> ModelInfo {
     ModelInfo::from_partial("test", "test", partial).unwrap()
 }
 
+fn info_with_ladder_low_to_xhigh() -> ModelInfo {
+    let partial = PartialModelInfo {
+        context_window: Some(PositiveTokens::new(200_000)),
+        max_output_tokens: Some(PositiveTokens::new(64_000)),
+        supported_thinking_levels: Some(vec![
+            ThinkingLevel::low(),
+            ThinkingLevel::medium(),
+            ThinkingLevel::high(),
+            ThinkingLevel::xhigh(),
+        ]),
+        default_thinking_level: Some(ReasoningEffort::Medium),
+        ..Default::default()
+    };
+    ModelInfo::from_partial("test", "test", partial).unwrap()
+}
+
 fn anthropic_wire_effort(call: &LanguageModelV4CallOptions) -> Option<String> {
     call.provider_options
         .as_ref()?
@@ -336,6 +352,38 @@ fn per_call_exact_match_effort_is_preserved() {
 
     assert_eq!(call.reasoning, Some(ReasoningLevel::Low));
     assert_eq!(anthropic_wire_effort(&call).as_deref(), Some("low"));
+}
+
+#[test]
+fn per_call_max_and_ultra_clamp_to_xhigh_on_pre_5_6_ladders() {
+    // `max` / `ultra` exist only on the GPT-5.6 ladder. Every other model
+    // stops at `xhigh`, so the two new rungs must degrade there rather than
+    // reach the wire. This is what keeps a pre-existing `--effort max`
+    // (which used to parse straight to `XHigh`) behaviorally unchanged.
+    for requested in [ThinkingLevel::max(), ThinkingLevel::ultra()] {
+        let info = info_with_ladder_low_to_xhigh();
+        let per_call = PerCallOverrides {
+            thinking_level: Some(requested.clone()),
+            ..Default::default()
+        };
+
+        let call = build_call_options(
+            &info,
+            ProviderApi::Anthropic,
+            "anthropic",
+            &per_call,
+            Vec::new(),
+            None,
+        );
+
+        assert_eq!(
+            call.reasoning,
+            Some(ReasoningLevel::Xhigh),
+            "{:?} must clamp to the top declared rung",
+            requested.effort
+        );
+        assert_eq!(anthropic_wire_effort(&call).as_deref(), Some("max"));
+    }
 }
 
 #[test]

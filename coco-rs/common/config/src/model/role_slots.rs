@@ -419,13 +419,13 @@ fn parse_slot_effort<E: Error>(
             let s = value.as_str().ok_or_else(|| {
                 E::custom(format!(
                     "{label}.effort must be a string \
-                     (one of off/auto/minimal/low/medium/high/xhigh)"
+                     (one of off/auto/minimal/low/medium/high/xhigh/max/ultra)"
                 ))
             })?;
             s.parse::<ReasoningEffort>().map(Some).map_err(|_| {
                 E::custom(format!(
                     "{label}.effort `{s}` is invalid — expected one of \
-                     off/auto/minimal/low/medium/high/xhigh"
+                     off/auto/minimal/low/medium/high/xhigh/max/ultra"
                 ))
             })
         }

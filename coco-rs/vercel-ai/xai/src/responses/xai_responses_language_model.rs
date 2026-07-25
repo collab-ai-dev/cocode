@@ -66,6 +66,8 @@ static REASONING_EFFORT_MAP: LazyLock<HashMap<ReasoningLevel, &'static str>> =
             (ReasoningLevel::Medium, "medium"),
             (ReasoningLevel::High, "high"),
             (ReasoningLevel::Xhigh, "high"),
+            (ReasoningLevel::Max, "high"),
+            (ReasoningLevel::Ultra, "high"),
         ])
     });
 

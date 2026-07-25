@@ -6,7 +6,7 @@ use std::str::FromStr;
 /// Unified thinking configuration for all providers.
 ///
 /// `effort` carries provider-agnostic intent — `Disable`, `Auto`, or
-/// one of the numeric levels (`Minimal`..`XHigh`). Provider-specific
+/// one of the numeric levels (`Minimal`..`Ultra`). Provider-specific
 /// wire toggles (e.g. DeepSeek's `{"thinking":{"type":"enabled"}}`)
 /// flow through `options` verbatim.
 ///
@@ -15,7 +15,7 @@ use std::str::FromStr;
 ///     where the provider supports them, otherwise omit reasoning fields.
 ///   * `Auto`    — "let the provider decide"; omit reasoning fields
 ///     so the server-side default applies.
-///   * `Minimal`..`XHigh` — explicit numeric efforts; emitted via the
+///   * `Minimal`..`Ultra` — explicit numeric efforts; emitted via the
 ///     provider's typed reasoning channel.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +82,20 @@ impl ThinkingLevel {
         }
     }
 
+    pub fn max() -> Self {
+        Self {
+            effort: ReasoningEffort::Max,
+            ..Self::auto()
+        }
+    }
+
+    pub fn ultra() -> Self {
+        Self {
+            effort: ReasoningEffort::Ultra,
+            ..Self::auto()
+        }
+    }
+
     /// Returns `true` for any state where thinking *might* happen on
     /// the wire — i.e. anything other than `Disable`. `Auto` returns
     /// `true` because the user has not opted out, even though the
@@ -142,6 +156,15 @@ pub enum ReasoningEffort {
     Medium,
     High,
     XHigh,
+    /// Above `XHigh`. Anthropic's top `output_config.effort` rung, and
+    /// the GPT-5.6 family's second-highest. A model that does not declare
+    /// it has the request resolved against its own ladder by
+    /// `ModelInfo::resolve_thinking_level`, so asking for it is never a
+    /// wire error.
+    Max,
+    /// Top of the ladder. On the GPT-5.6 family this is "maximum
+    /// reasoning with automatic task delegation".
+    Ultra,
 }
 
 impl ReasoningEffort {
@@ -152,7 +175,13 @@ impl ReasoningEffort {
     pub fn is_explicit_level(self) -> bool {
         matches!(
             self,
-            Self::Minimal | Self::Low | Self::Medium | Self::High | Self::XHigh
+            Self::Minimal
+                | Self::Low
+                | Self::Medium
+                | Self::High
+                | Self::XHigh
+                | Self::Max
+                | Self::Ultra
         )
     }
 
@@ -169,6 +198,8 @@ impl ReasoningEffort {
             Self::Medium => "medium",
             Self::High => "high",
             Self::XHigh => "xhigh",
+            Self::Max => "max",
+            Self::Ultra => "ultra",
         }
     }
 }
@@ -184,7 +215,14 @@ impl FromStr for ReasoningEffort {
             "low" => Ok(Self::Low),
             "medium" => Ok(Self::Medium),
             "high" => Ok(Self::High),
-            "xhigh" | "x_high" | "max" => Ok(Self::XHigh),
+            "xhigh" | "x_high" => Ok(Self::XHigh),
+            // `max` used to be an alias for `xhigh`. It is now its own
+            // rung: on models that stop at `xhigh` the ladder clamp in
+            // `ModelInfo::resolve_thinking_level` still lands it on
+            // `XHigh`, so existing `--effort max` configs keep their
+            // effective wire value while GPT-5.6 gets the real level.
+            "max" => Ok(Self::Max),
+            "ultra" => Ok(Self::Ultra),
             _ => Err(format!("unknown reasoning effort: {s}")),
         }
     }

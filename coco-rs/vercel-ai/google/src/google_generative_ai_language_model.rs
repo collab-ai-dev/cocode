@@ -1625,6 +1625,9 @@ fn resolve_gemini_3_thinking_config(
         (ReasoningLevel::Medium, "medium"),
         (ReasoningLevel::High, "high"),
         (ReasoningLevel::Xhigh, "high"),
+        // Gemini tops out at "high"; the GPT-5.6-only rungs fold there.
+        (ReasoningLevel::Max, "high"),
+        (ReasoningLevel::Ultra, "high"),
     ]);
 
     let thinking_level_str = map_reasoning_to_provider_effort(level, &effort_map, warnings)?;

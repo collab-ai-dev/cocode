@@ -158,7 +158,11 @@ fn resolve_anthropic_reasoning_config(
             (ReasoningLevel::Low, "low"),
             (ReasoningLevel::Medium, "medium"),
             (ReasoningLevel::High, "high"),
+            (ReasoningLevel::Max, "max"),
+            // Anthropic's vocabulary is low/medium/high/max, so `Max` maps
+            // 1:1. `Xhigh` / `Ultra` are outside it and fold to the ceiling.
             (ReasoningLevel::Xhigh, "max"),
+            (ReasoningLevel::Ultra, "max"),
         ]);
         let mapped = map_reasoning_to_provider_effort(reasoning, &effort_map, warnings);
         let effort = mapped.as_deref().and_then(|s| match s {

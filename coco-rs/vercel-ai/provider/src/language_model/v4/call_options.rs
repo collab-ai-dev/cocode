@@ -27,8 +27,15 @@ pub enum ReasoningLevel {
     Medium,
     /// High reasoning effort.
     High,
-    /// Maximum reasoning effort.
+    /// Extra-high reasoning effort.
     Xhigh,
+    /// Maximum reasoning effort. Advertised by the GPT-5.6 family;
+    /// providers without a native rung fold it into their top tier.
+    Max,
+    /// Maximum reasoning effort with autonomous task delegation.
+    /// GPT-5.6 (`sol` / `terra`) only; other providers fold it into
+    /// their top tier.
+    Ultra,
 }
 
 impl ReasoningLevel {
@@ -42,6 +49,8 @@ impl ReasoningLevel {
             Self::Medium => "medium",
             Self::High => "high",
             Self::Xhigh => "xhigh",
+            Self::Max => "max",
+            Self::Ultra => "ultra",
         }
     }
 }

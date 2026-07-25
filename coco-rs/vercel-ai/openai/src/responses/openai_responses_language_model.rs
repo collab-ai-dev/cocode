@@ -195,6 +195,12 @@ impl OpenAIResponsesLanguageModel {
                     ReasoningLevel::Xhigh => {
                         Some(crate::chat::openai_chat_options::ReasoningEffort::Xhigh)
                     }
+                    ReasoningLevel::Max => {
+                        Some(crate::chat::openai_chat_options::ReasoningEffort::Max)
+                    }
+                    ReasoningLevel::Ultra => {
+                        Some(crate::chat::openai_chat_options::ReasoningEffort::Ultra)
+                    }
                     ReasoningLevel::ProviderDefault => Option::None,
                 })
             } else {

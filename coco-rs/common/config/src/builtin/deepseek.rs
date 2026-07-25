@@ -10,8 +10,12 @@
 //!     via `options`. Convert layer skips typed-arm emission.
 //!   * `Medium`  — UX "high". Emits `{"thinking":{"type":"enabled"}}`
 //!     via `options`; the OpenaiCompat arm adds `reasoning_effort: "medium"`.
-//!   * `XHigh`   — UX "max". Emits `{"thinking":{"type":"enabled"}}`
-//!     via `options`; the OpenaiCompat arm adds `reasoning_effort: "xhigh"`.
+//!   * `XHigh`   — the top rung. Emits `{"thinking":{"type":"enabled"}}`
+//!     via `options`; the OpenaiCompat arm adds `reasoning_effort: "xhigh"`,
+//!     the value DeepSeek's OpenAI-compatible endpoint accepts — that wire
+//!     contract is why this stays `XHigh` instead of moving to `Max` the way
+//!     the Anthropic catalog did. On the anthropic-compat route it folds to
+//!     `output_config.effort = "max"`.
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;

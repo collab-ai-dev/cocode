@@ -57,7 +57,8 @@ use super::xai_prepare_tools::prepare_xai_tools;
 static IMAGE_URL_RE: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"^https?://.*$").ok());
 
 /// Maps a provider-agnostic `ReasoningLevel` to xAI's `reasoning_effort`.
-/// xAI has no `minimal`/`xhigh` tiers, so they fold into `low`/`high`. The
+/// xAI has no `minimal`/`xhigh`/`max`/`ultra` tiers, so they fold into
+/// `low`/`high`. The
 /// `off` level is handled separately (mapped to the literal `"none"`).
 static REASONING_EFFORT_MAP: LazyLock<HashMap<ReasoningLevel, &'static str>> =
     LazyLock::new(|| {
@@ -67,6 +68,8 @@ static REASONING_EFFORT_MAP: LazyLock<HashMap<ReasoningLevel, &'static str>> =
             (ReasoningLevel::Medium, "medium"),
             (ReasoningLevel::High, "high"),
             (ReasoningLevel::Xhigh, "high"),
+            (ReasoningLevel::Max, "high"),
+            (ReasoningLevel::Ultra, "high"),
         ])
     });
 

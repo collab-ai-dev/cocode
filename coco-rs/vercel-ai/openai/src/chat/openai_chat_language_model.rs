@@ -133,6 +133,8 @@ impl OpenAIChatLanguageModel {
                     ReasoningLevel::Medium => Some(ReasoningEffort::Medium),
                     ReasoningLevel::High => Some(ReasoningEffort::High),
                     ReasoningLevel::Xhigh => Some(ReasoningEffort::Xhigh),
+                    ReasoningLevel::Max => Some(ReasoningEffort::Max),
+                    ReasoningLevel::Ultra => Some(ReasoningEffort::Ultra),
                     ReasoningLevel::ProviderDefault => Option::None,
                 })
             } else {
