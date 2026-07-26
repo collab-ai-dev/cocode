@@ -26,6 +26,7 @@ pub mod paste_burst;
 pub mod style;
 pub mod system_theme;
 pub mod terminal_detect;
+pub mod terminal_title;
 pub mod theme;
 pub mod truncate;
 pub mod widgets;

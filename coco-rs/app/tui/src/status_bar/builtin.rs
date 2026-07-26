@@ -202,6 +202,22 @@ fn identity_line(state: &AppState) -> Vec<StatusItem> {
         ));
     }
 
+    // Outlives the toast that announced it, so a user who looked away can still
+    // find the version. Ambient: it is news, not session state, and a narrow
+    // terminal should drop it before anything that describes the session.
+    if let Some(notice) = state.ui.upgrade_notice.as_ref() {
+        items.push(StatusItem::new(
+            StatusPriority::Ambient,
+            vec![
+                separator(),
+                StatusSpan::new(
+                    crate::update_check::status_label(notice),
+                    StatusTone::Accent,
+                ),
+            ],
+        ));
+    }
+
     items
 }
 

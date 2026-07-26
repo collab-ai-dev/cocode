@@ -4,7 +4,7 @@
 //! 24-bit color render `Color::Rgb` poorly (or not at all), so we detect the
 //! capability once and quantize RGB to the nearest xterm-256 palette index when
 //! truecolor is unavailable. Quantization picks the closer of the 6×6×6 color
-//! cube and the 24-step grayscale ramp under a green-weighted distance.
+//! cube and the 24-step grayscale ramp under a perceptual (CIE76) distance.
 
 use std::sync::OnceLock;
 
@@ -170,7 +170,7 @@ pub fn adapt_runtime(color: Color) -> Color {
 
 /// Map a 24-bit RGB triple to the nearest xterm-256 palette index, choosing the
 /// closer of the 6×6×6 color cube (indices 16–231) and the grayscale ramp
-/// (232–255) under a green-weighted squared distance.
+/// (232–255) under [`perceptual_distance`].
 pub fn rgb_to_xterm256(r: u8, g: u8, b: u8) -> u8 {
     const CUBE_STEPS: [i32; 6] = [0, 95, 135, 175, 215, 255];
 
@@ -185,11 +185,6 @@ pub fn rgb_to_xterm256(r: u8, g: u8, b: u8) -> u8 {
             }
         }
         best
-    }
-
-    // Eye is most sensitive to green; weight the channels accordingly.
-    fn weighted_dist(a: (i32, i32, i32), b: (i32, i32, i32)) -> i32 {
-        2 * (a.0 - b.0).pow(2) + 4 * (a.1 - b.1).pow(2) + 3 * (a.2 - b.2).pow(2)
     }
 
     let (r, g, b) = (r as i32, g as i32, b as i32);
@@ -211,11 +206,59 @@ pub fn rgb_to_xterm256(r: u8, g: u8, b: u8) -> u8 {
     let gray_rgb = (gray_value, gray_value, gray_value);
 
     let target = (r, g, b);
-    if weighted_dist(target, gray_rgb) < weighted_dist(target, cube_rgb) {
+    if perceptual_distance(target, gray_rgb) < perceptual_distance(target, cube_rgb) {
         gray_index as u8
     } else {
         cube_index as u8
     }
+}
+
+/// Perceptual distance between two RGB colors, as squared CIE76 ΔE — Euclidean
+/// distance in CIE L\*a\*b\*.
+///
+/// Distance in raw RGB is not distance to the eye: it rates a shift between two
+/// dark tones the same as the identical shift between two light ones, so a
+/// channel-weighted RGB metric picks visibly wrong palette entries in shadows
+/// and near-neutrals. Lab is built to make equal numeric steps read as equal
+/// perceptual steps, which is exactly the question a downsampler asks. The
+/// square root is skipped: every caller only compares distances.
+fn perceptual_distance(a: (i32, i32, i32), b: (i32, i32, i32)) -> f32 {
+    let (l1, a1, b1) = srgb_to_lab(a);
+    let (l2, a2, b2) = srgb_to_lab(b);
+    (l1 - l2).powi(2) + (a1 - a2).powi(2) + (b1 - b2).powi(2)
+}
+
+/// Convert an sRGB triple to CIE L\*a\*b\* under the D65 white point.
+fn srgb_to_lab((r, g, b): (i32, i32, i32)) -> (f32, f32, f32) {
+    // sRGB → linear RGB (undo the display gamma curve).
+    fn linearize(channel: i32) -> f32 {
+        let c = channel as f32 / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    // Lab's cube-root companding, with the linear segment near black that keeps
+    // the slope finite.
+    fn pivot(t: f32) -> f32 {
+        const EPSILON: f32 = 216.0 / 24389.0;
+        const KAPPA: f32 = 24389.0 / 27.0;
+        if t > EPSILON {
+            t.cbrt()
+        } else {
+            (KAPPA * t + 16.0) / 116.0
+        }
+    }
+
+    let (r, g, b) = (linearize(r), linearize(g), linearize(b));
+    // linear RGB → CIE XYZ, normalized by the D65 white point.
+    let x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047;
+    let y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    let z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883;
+
+    let (fx, fy, fz) = (pivot(x), pivot(y), pivot(z));
+    (116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz))
 }
 
 /// Standard xterm RGB values for the 16 ANSI system colors (indices 0–15).
@@ -238,17 +281,16 @@ const ANSI16_RGB: [(i32, i32, i32); 16] = [
     (255, 255, 255),
 ];
 
-/// Map a 24-bit RGB triple to the nearest of the 16 ANSI system colors under a
-/// green-weighted squared distance, returned as a named ANSI color. Named
-/// colors serialize as the portable 30–37/90–97 SGR forms rather than the
-/// 256-color `38;5;n` sequence that a Basic terminal may not understand.
+/// Map a 24-bit RGB triple to the nearest of the 16 ANSI system colors under
+/// [`perceptual_distance`], returned as a named ANSI color. Named colors
+/// serialize as the portable 30–37/90–97 SGR forms rather than the 256-color
+/// `38;5;n` sequence that a Basic terminal may not understand.
 pub fn rgb_to_ansi16(r: u8, g: u8, b: u8) -> Color {
     let target = (r as i32, g as i32, b as i32);
     let mut best = 0usize;
-    let mut best_dist = i32::MAX;
+    let mut best_dist = f32::INFINITY;
     for (i, &c) in ANSI16_RGB.iter().enumerate() {
-        let dist =
-            2 * (target.0 - c.0).pow(2) + 4 * (target.1 - c.1).pow(2) + 3 * (target.2 - c.2).pow(2);
+        let dist = perceptual_distance(target, c);
         if dist < best_dist {
             best_dist = dist;
             best = i;

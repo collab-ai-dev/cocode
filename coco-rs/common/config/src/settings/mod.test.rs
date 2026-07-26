@@ -369,6 +369,54 @@ fn test_classify_all_shell_requires_literal_boolean_true() {
 }
 
 #[test]
+fn test_parse_settings_accepts_tui_terminal_title_items() {
+    let settings = parse_settings(
+        r#"{
+            "tui": {
+                "terminal_title": ["run_state", "git_branch", "context_used", "app_name"]
+            }
+        }"#,
+    )
+    .expect("parse terminal title settings");
+
+    assert_eq!(
+        settings.tui.terminal_title,
+        vec![
+            TerminalTitleItem::RunState,
+            TerminalTitleItem::GitBranch,
+            TerminalTitleItem::ContextUsed,
+            TerminalTitleItem::AppName,
+        ],
+    );
+}
+
+#[test]
+fn test_tui_terminal_title_empty_list_is_distinct_from_unset() {
+    // `[]` is the documented way to leave the terminal's own title alone; it
+    // must not fall back to the default items.
+    let settings =
+        parse_settings(r#"{"tui": {"terminal_title": []}}"#).expect("parse empty terminal title");
+    assert!(settings.tui.terminal_title.is_empty());
+
+    let unset = parse_settings(r#"{"tui": {}}"#).expect("parse defaults");
+    assert_eq!(
+        unset.tui.terminal_title,
+        TerminalTitleItem::default_items().to_vec(),
+    );
+}
+
+#[test]
+fn test_tui_tips_default_on_and_toggleable() {
+    assert!(parse_settings(r#"{"tui": {}}"#).expect("defaults").tui.tips);
+    assert!(
+        !parse_settings(r#"{"tui": {"tips": false}}"#)
+            .expect("parse tips")
+            .tui
+            .tips
+    );
+}
+
+#[test]
 fn test_parse_settings_accepts_tui_native_replay_cache_policy() {
     let settings = parse_settings(
         r#"{

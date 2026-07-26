@@ -46,6 +46,7 @@ members = [
     "utils/stream-parser",
     "utils/string",
     "utils/symbol-search",
+    "utils/version-check",
 
     # ─── tests/ (3) ── shared integration-test scaffolding + live API runner ───
     "tests/harness",
@@ -183,6 +184,7 @@ coco-utils-json-repair = { path = "utils/json-repair" }
 coco-utils-json-to-toml = { path = "utils/json-to-toml" }
 coco-utils-pty = { path = "utils/pty" }
 coco-utils-readiness = { path = "utils/readiness" }
+coco-utils-version-check = { path = "utils/version-check" }
 coco-utils-string = { path = "utils/string" }
 coco-stdio-to-uds = { path = "utils/stdio-to-uds" }
 coco-shell-discovery = { path = "utils/shell-discovery" }

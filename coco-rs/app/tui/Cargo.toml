@@ -17,6 +17,8 @@ jemalloc = ["coco-utils-jemalloc/jemalloc"]
 
 [dependencies]
 coco-config.workspace = true
+coco-utils-version-check.workspace = true
+chrono.workspace = true
 coco-coordinator.workspace = true
 coco-messages.workspace = true
 coco-permissions.workspace = true

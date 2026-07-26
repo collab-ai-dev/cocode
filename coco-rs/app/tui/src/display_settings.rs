@@ -6,6 +6,7 @@ use coco_config::settings::NativeReplayCacheSettings;
 use coco_config::settings::ReflowMaxRows;
 use coco_config::settings::SYNTAX_HIGHLIGHTING_KEY;
 use coco_config::settings::SyntaxHighlightingLevel;
+use coco_config::settings::TerminalTitleItem;
 use coco_config::settings::TuiPerformanceSettings;
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::motion::MotionMode;
@@ -48,6 +49,11 @@ pub struct DisplaySettings {
     pub max_reflow_rows: MaxReflowRows,
     /// Whether time-varying UI may animate. Defaults to `Animated`.
     pub motion: MotionMode,
+    /// Segments of the terminal window/tab title, in order. Empty leaves the
+    /// terminal's own title untouched.
+    pub terminal_title: Vec<TerminalTitleItem>,
+    /// Whether the startup header shows a rotating usage tip.
+    pub tips: bool,
     pub performance: TuiPerformanceConfig,
 }
 
@@ -80,6 +86,8 @@ impl DisplaySettings {
             native_replay_cache: replay_cache_policy(settings.tui.native_replay_cache),
             max_reflow_rows: max_reflow_rows(settings.tui.reflow_max_rows),
             motion: MotionMode::from_animations_enabled(settings.tui.animations),
+            terminal_title: settings.tui.terminal_title.clone(),
+            tips: settings.tui.tips,
             performance: performance_config(settings.tui.performance),
         }
     }
@@ -96,6 +104,8 @@ impl DisplaySettings {
             native_replay_cache: replay_cache_policy(settings.merged.tui.native_replay_cache),
             max_reflow_rows: max_reflow_rows(settings.merged.tui.reflow_max_rows),
             motion: MotionMode::from_animations_enabled(settings.merged.tui.animations),
+            terminal_title: settings.merged.tui.terminal_title.clone(),
+            tips: settings.merged.tui.tips,
             performance: performance_config(settings.merged.tui.performance),
         }
     }

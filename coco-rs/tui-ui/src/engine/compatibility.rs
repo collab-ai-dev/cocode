@@ -174,6 +174,33 @@ pub fn synchronized_update_probed() -> Option<bool> {
         .and_then(|guard| *guard)
 }
 
+fn keyboard_enhancement_cache() -> &'static RwLock<Option<bool>> {
+    static CACHE: OnceLock<RwLock<Option<bool>>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(None))
+}
+
+/// Record whether the terminal answered the kitty keyboard-protocol query
+/// (`CSI ? u`). `coco-tui` calls this once at startup from the merged probe.
+pub fn set_keyboard_enhancement_supported(supported: bool) {
+    if let Ok(mut guard) = keyboard_enhancement_cache().write() {
+        *guard = Some(supported);
+    }
+}
+
+/// The probed keyboard-enhancement support, or `None` until a probe records one.
+///
+/// Deliberately not collapsed to a `bool` with a default: the two "we don't
+/// know" cases pull in opposite directions. Pushing the flags is harmless on a
+/// terminal that ignores them, so an unprobed terminal still gets the push; but
+/// telling the user "Shift+Enter inserts a newline" when it does not is a lie,
+/// so hint text needs to distinguish unknown from confirmed.
+pub fn keyboard_enhancement_probed() -> Option<bool> {
+    keyboard_enhancement_cache()
+        .read()
+        .ok()
+        .and_then(|guard| *guard)
+}
+
 #[cfg(test)]
 #[path = "compatibility.test.rs"]
 mod tests;

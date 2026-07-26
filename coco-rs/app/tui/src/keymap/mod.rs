@@ -123,6 +123,50 @@ pub fn entries_for_group(group: KeymapGroup) -> impl Iterator<Item = &'static Ke
     KEYMAP.iter().filter(move |e| e.group == group)
 }
 
+/// Whether a terminal can only report `combo` when it speaks the kitty keyboard
+/// protocol.
+///
+/// Legacy terminal input has no way to encode a modifier on Enter: Shift+Enter
+/// and Ctrl+Enter both arrive as a bare CR, indistinguishable from a plain
+/// Enter. Every other combo in the keymap survives without the protocol.
+fn combo_requires_enhanced_keys(combo: &str) -> bool {
+    matches!(combo, "Shift+Enter" | "Ctrl+Enter")
+}
+
+/// The combo to *show* for an entry, given whether the terminal can report
+/// enhanced keys.
+///
+/// Printing `Shift+Enter` on a terminal that cannot report it is worse than
+/// printing nothing: the user tries it, gets a submitted message instead of a
+/// newline, and concludes the feature is broken. Where the primary needs the
+/// protocol and the terminal has confirmed it has none, the first alternate
+/// that works is promoted in its place.
+fn preferred_combo(
+    combo: &'static str,
+    alternates: &[&'static str],
+    enhanced_keys: Option<bool>,
+) -> &'static str {
+    // Only a confirmed "no" demotes the primary. Unprobed terminals keep the
+    // documented default rather than being downgraded on a guess.
+    if enhanced_keys != Some(false) || !combo_requires_enhanced_keys(combo) {
+        return combo;
+    }
+    alternates
+        .iter()
+        .copied()
+        .find(|alternate| !combo_requires_enhanced_keys(alternate))
+        .unwrap_or(combo)
+}
+
+/// [`preferred_combo`] against the terminal probed at startup.
+pub fn displayed_combo(entry: &KeymapEntry) -> &'static str {
+    preferred_combo(
+        entry.combo,
+        entry.alternates,
+        coco_tui_ui::engine::compatibility::keyboard_enhancement_probed(),
+    )
+}
+
 /// All groups in canonical display order. Stable order is part of the
 /// public contract — `/help` and the state both rely on it.
 pub const GROUP_ORDER: &[KeymapGroup] = &[

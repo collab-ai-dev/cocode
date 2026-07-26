@@ -826,19 +826,6 @@ fn system_theme_id() -> &'static str {
     }
 }
 
-/// The `active` setting persisted in `theme.json` (without resolving it). Lets
-/// the TUI boot decide whether to run the OSC 11 background probe — only `auto`
-/// needs it. Defaults to the built-in default on any read/parse failure.
-pub(crate) fn persisted_active_setting() -> ThemeSetting {
-    let path = theme_config_path();
-    if path.exists() {
-        return load_theme_config(&path)
-            .map(|config| config.active)
-            .unwrap_or_default();
-    }
-    global_theme_setting().unwrap_or_default()
-}
-
 /// The theme selection from `GlobalConfig` (the global config file). `None` when
 /// unset/empty. Consulted only when no TUI-local `theme.json` exists; the
 /// in-app picker still writes `theme.json`, which takes precedence.

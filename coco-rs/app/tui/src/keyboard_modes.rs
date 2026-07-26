@@ -30,16 +30,30 @@ fn keyboard_enhancement_disabled() -> bool {
     let override_env = coco_config::env::env_truthy_opt(EnvKey::CocoTuiKeyboardEnhancementDisable);
     let is_wsl = running_in_wsl();
     let is_vscode_terminal = is_wsl && running_in_vscode_terminal();
-    keyboard_enhancement_disabled_for(override_env, is_wsl, is_vscode_terminal)
+    keyboard_enhancement_disabled_for(
+        override_env,
+        is_wsl,
+        is_vscode_terminal,
+        coco_tui_ui::engine::compatibility::keyboard_enhancement_probed(),
+    )
 }
 
 fn keyboard_enhancement_disabled_for(
     override_env: Option<bool>,
     is_wsl: bool,
     is_vscode_terminal: bool,
+    probed_support: Option<bool>,
 ) -> bool {
     if let Some(disabled) = override_env {
         return disabled;
+    }
+    // A terminal that answered the startup `CSI ? u` query with silence has no
+    // keyboard protocol to push flags into. Skipping the push there keeps the
+    // escape bytes off terminals that would print them literally. `None` (no
+    // probe ran — non-tty, no reply at all) still pushes: the sequence is inert
+    // where it is unsupported, and that has been the working default.
+    if probed_support == Some(false) {
+        return true;
     }
     // VS Code running a WSL shell can hide TERM_PROGRAM from the Linux
     // process environment, so `running_in_vscode_terminal` also probes the

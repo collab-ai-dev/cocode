@@ -65,7 +65,15 @@ pub fn from_crossterm(event: KeyEvent) -> Option<KeyCombo> {
     // BackTab is shift+tab from the user's perspective; surface that
     // explicitly so a `shift+tab` binding fires regardless of whether
     // the terminal also set the Shift modifier.
-    let shift = matches!(event.code, KeyCode::BackTab) || shift;
+    //
+    // An uppercase character is the same situation one level down: terminals
+    // without the kitty keyboard protocol report Shift+A as `Char('A')` with no
+    // modifier at all, because shift is already baked into the codepoint. The
+    // key name is lowercased above, so without this the shift would be lost
+    // entirely and `shift+a` could never fire there.
+    let shift = matches!(event.code, KeyCode::BackTab)
+        || shift
+        || matches!(event.code, KeyCode::Char(c) if c.is_uppercase());
 
     Some(KeyCombo {
         ctrl,

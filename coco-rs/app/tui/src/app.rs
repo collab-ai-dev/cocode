@@ -150,6 +150,13 @@ pub struct App<B: SurfaceBackend<Error = io::Error> = TerminalBackend> {
     /// Isolated stream of `VoiceEvent`s from the voice session — joined into
     /// the run loop's `tokio::select!`. `None` when voice is not initialized.
     voice_rx: Option<mpsc::Receiver<coco_voice::VoiceEvent>>,
+    /// Owns what is currently on the terminal window/tab title, so it is
+    /// rewritten only when it actually changes and cleared on exit.
+    terminal_title: crate::terminal_title::TerminalTitleDriver,
+    /// Isolated stream carrying the background update check's answer. `None`
+    /// when there is nothing to check (source build, or a fresh cache with no
+    /// newer version in it).
+    upgrade_rx: Option<mpsc::Receiver<coco_utils_version_check::UpgradeNotice>>,
 }
 
 impl App<TerminalBackend> {
@@ -212,6 +219,8 @@ impl App<TerminalBackend> {
             memory_trace: crate::memory_trace::MemoryTrace::open_default(),
             voice: None,
             voice_rx: None,
+            terminal_title: crate::terminal_title::TerminalTitleDriver::default(),
+            upgrade_rx: crate::update_check::spawn(env!("CARGO_PKG_VERSION")),
         })
     }
 }
@@ -266,6 +275,9 @@ where
             memory_trace: crate::memory_trace::MemoryTrace::default(),
             voice: None,
             voice_rx: None,
+            terminal_title: crate::terminal_title::TerminalTitleDriver::default(),
+            // Test harnesses never reach the network or the real config home.
+            upgrade_rx: None,
         }
     }
 
@@ -598,6 +610,12 @@ where
                 Some(update) = self.status_line_rx.recv() => {
                     needs_redraw = self.state.ui.status_line.apply_update(update);
                 }
+                // The background update check's answer. At most one per
+                // session; an isolated stream like voice, folded into UI state
+                // here and never bridged into CoreEvent.
+                Some(notice) = recv_optional(&mut self.upgrade_rx), if self.upgrade_rx.is_some() => {
+                    needs_redraw = crate::update_check::apply(&mut self.state, notice);
+                }
                 // Async voice events (transcript ready, recording lifecycle,
                 // errors). Isolated stream — folded into UI state here, never
                 // bridged into CoreEvent.
@@ -667,6 +685,11 @@ where
             }
         }
 
+        // Only the title coco wrote is cleared, and only on the ordinary exit
+        // path. A crash leaves it: the restore sequence is shared with the
+        // signal handler, and blanking a title coco may never have set would
+        // erase the shell's.
+        self.terminal_title.clear();
         Ok(())
     }
 
@@ -801,6 +824,11 @@ where
         if let Some(ref mut streaming) = self.state.ui.streaming {
             streaming.advance_display();
         }
+
+        // Before the paint, not after: the title and the frame then describe
+        // the same state, and a frame that is skipped for being unchanged is
+        // also a frame whose title is unchanged.
+        self.terminal_title.refresh(&self.state);
 
         let draw_start = perf_config.frame_enabled.then(Instant::now);
         let outcome = self.tui.draw_with_frame_index(&self.state, frame_index)?;
