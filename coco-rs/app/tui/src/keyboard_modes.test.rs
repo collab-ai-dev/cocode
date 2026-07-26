@@ -18,17 +18,20 @@ fn ansi_for(command: impl Command) -> String {
 #[test]
 fn test_keyboard_enhancement_auto_disables_for_vscode_in_wsl() {
     assert!(keyboard_enhancement_disabled_for(
-        /*override_env*/ None, /*is_wsl*/ true, /*is_vscode_terminal*/ true
+        /*override_env*/ None, /*is_wsl*/ true, /*is_vscode_terminal*/ true,
+        /*probed_support*/ None
     ));
 }
 
 #[test]
 fn test_keyboard_enhancement_auto_disable_requires_wsl_and_vscode() {
     assert!(!keyboard_enhancement_disabled_for(
-        /*override_env*/ None, /*is_wsl*/ true, /*is_vscode_terminal*/ false
+        /*override_env*/ None, /*is_wsl*/ true, /*is_vscode_terminal*/ false,
+        /*probed_support*/ None
     ));
     assert!(!keyboard_enhancement_disabled_for(
-        /*override_env*/ None, /*is_wsl*/ false, /*is_vscode_terminal*/ true
+        /*override_env*/ None, /*is_wsl*/ false, /*is_vscode_terminal*/ true,
+        /*probed_support*/ None
     ));
 }
 
@@ -37,12 +40,36 @@ fn test_keyboard_enhancement_env_override_beats_auto_detection() {
     assert!(!keyboard_enhancement_disabled_for(
         Some(false),
         /*is_wsl*/ true,
-        /*is_vscode_terminal*/ true
+        /*is_vscode_terminal*/ true,
+        /*probed_support*/ Some(false)
     ));
     assert!(keyboard_enhancement_disabled_for(
         Some(true),
         /*is_wsl*/ false,
-        /*is_vscode_terminal*/ false
+        /*is_vscode_terminal*/ false,
+        /*probed_support*/ Some(true)
+    ));
+}
+
+#[test]
+fn test_keyboard_enhancement_skipped_when_probe_says_unsupported() {
+    // The terminal ignored `CSI ? u`: there is no protocol to push flags into.
+    assert!(keyboard_enhancement_disabled_for(
+        /*override_env*/ None,
+        /*is_wsl*/ false,
+        /*is_vscode_terminal*/ false,
+        /*probed_support*/ Some(false)
+    ));
+    // Confirmed support, and an unprobed terminal, both still get the push.
+    assert!(!keyboard_enhancement_disabled_for(
+        /*override_env*/ None,
+        /*is_wsl*/ false,
+        /*is_vscode_terminal*/ false,
+        /*probed_support*/ Some(true)
+    ));
+    assert!(!keyboard_enhancement_disabled_for(
+        /*override_env*/ None, /*is_wsl*/ false, /*is_vscode_terminal*/ false,
+        /*probed_support*/ None
     ));
 }
 

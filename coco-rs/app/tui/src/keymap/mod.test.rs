@@ -199,3 +199,52 @@ fn combos_iterator_yields_primary_then_alternates() {
     let combos: Vec<&str> = entry.combos().collect();
     assert_eq!(combos, vec!["Ctrl+A", "Home"]);
 }
+
+#[test]
+fn preferred_combo_demotes_shift_enter_only_on_confirmed_legacy_terminals() {
+    let alternates: &[&str] = &["Alt+Enter", "Ctrl+J"];
+    // Confirmed no kitty protocol: Shift+Enter can never arrive, so the first
+    // alternate that a legacy terminal can report is shown instead.
+    assert_eq!(
+        preferred_combo("Shift+Enter", alternates, Some(false)),
+        "Alt+Enter"
+    );
+    // Confirmed support, and "no probe ran", both keep the documented primary.
+    assert_eq!(
+        preferred_combo("Shift+Enter", alternates, Some(true)),
+        "Shift+Enter"
+    );
+    assert_eq!(
+        preferred_combo("Shift+Enter", alternates, None),
+        "Shift+Enter"
+    );
+}
+
+#[test]
+fn preferred_combo_leaves_protocol_independent_combos_alone() {
+    // Ctrl+A survives on every terminal; a missing kitty protocol is irrelevant.
+    assert_eq!(preferred_combo("Ctrl+A", &["Home"], Some(false)), "Ctrl+A");
+}
+
+#[test]
+fn preferred_combo_keeps_primary_when_every_alternate_also_needs_the_protocol() {
+    // Nothing better to offer — showing the primary beats showing nothing.
+    assert_eq!(
+        preferred_combo("Shift+Enter", &["Ctrl+Enter"], Some(false)),
+        "Shift+Enter"
+    );
+}
+
+#[test]
+fn newline_entry_has_a_legacy_alternate_to_fall_back_on() {
+    // Guards the data, not the logic: if the alternates ever lose their
+    // protocol-independent entry, `/help` starts lying on legacy terminals.
+    let entry = KEYMAP
+        .iter()
+        .find(|e| e.id == "input:newline")
+        .expect("input:newline must exist");
+    assert_ne!(
+        preferred_combo(entry.combo, entry.alternates, Some(false)),
+        entry.combo,
+    );
+}

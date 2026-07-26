@@ -14,6 +14,7 @@ use crate::keybinding_bridge::KeybindingContext as TuiContext;
 use crate::keymap::GROUP_ORDER;
 use crate::keymap::KeymapBinding;
 use crate::keymap::KeymapEntry;
+use crate::keymap::displayed_combo;
 use crate::keymap::entries_for_group;
 use crate::state::AppState;
 use coco_tui_ui::style::UiStyles;
@@ -38,16 +39,19 @@ pub(crate) fn help_content(state: &AppState, styles: UiStyles<'_>) -> (String, S
 }
 
 fn render_row(state: &AppState, entry: &KeymapEntry) -> String {
+    // `displayed_combo` demotes a primary the terminal cannot report (Shift+Enter
+    // without the kitty protocol) in favour of an alternate that works.
+    let combo = displayed_combo(entry);
     let shortcut = match &entry.binding {
         KeymapBinding::Action { action } => state
             .ui
             .kb_handle
             .display_for(action, TuiContext::Chat)
-            .unwrap_or_else(|| entry.combo.to_string()),
+            .unwrap_or_else(|| combo.to_string()),
         // Built-in readline verbs and prompt-prefix markers are
         // hard-coded to the keymap entry's combo display (they're not
         // user-rebindable).
-        KeymapBinding::Verb { .. } | KeymapBinding::Marker => entry.combo.to_string(),
+        KeymapBinding::Verb { .. } | KeymapBinding::Marker => combo.to_string(),
     };
     format!("{shortcut:<SHORTCUT_COLUMN_WIDTH$} {}", entry.description())
 }

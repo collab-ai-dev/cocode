@@ -161,6 +161,10 @@ pub struct UiState {
     /// do not honour bracketed paste, so its embedded newlines insert instead
     /// of submitting. Fed every key press; read at the Enter decision.
     pub paste_burst: PasteBurst,
+    /// A newer released coco, once the background check has found one. Set at
+    /// most once per session; read by the status bar so the news outlives the
+    /// toast that announced it.
+    pub upgrade_notice: Option<coco_utils_version_check::UpgradeNotice>,
     /// Whether the terminal window currently has focus. Used to gate
     /// turn-complete notifications so they only fire when the user has
     /// switched away.
@@ -304,6 +308,7 @@ impl UiState {
             ctrl_d_tracker: DoublePressTracker::new(constants::DOUBLE_PRESS_TIMEOUT),
             esc_tracker: DoublePressTracker::new(constants::DOUBLE_PRESS_TIMEOUT),
             paste_burst: PasteBurst::new(),
+            upgrade_notice: None,
             terminal_focused: true,
             surface_visibility_known_at: None,
             surface_visibility_confirmation_pending: false,

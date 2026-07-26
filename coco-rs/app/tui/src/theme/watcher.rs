@@ -13,8 +13,6 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use super::ThemeLoadResult;
-use super::ThemeSetting;
-use super::config::persisted_active_setting;
 use super::load_theme_runtime_or_default;
 use super::theme_config_path;
 
@@ -92,19 +90,14 @@ pub async fn install_theme() -> ThemeSetup {
         }
     };
     let mut watch_rx = watcher.subscribe();
-    // `auto` resolves dark/light from the terminal background. Probe it once,
-    // best-effort (≤100ms), before the initial resolve so the first paint
-    // reflects the real background rather than just the `$COLORFGBG` seed. The
-    // probe restores the terminal mode immediately; `setup_terminal` re-enters
-    // raw mode later. Only `auto` pays for it (avoids touching others' input).
-    if matches!(persisted_active_setting(), ThemeSetting::Auto) {
-        crate::system_theme_probe::probe_terminal_background_once(Duration::from_millis(100));
-    }
-    // Probe synchronized-update (DECSET mode 2026) support once, in the same
-    // pre-`setup_terminal` window. The DA1 fence bounds the wait to one
-    // round-trip on responsive terminals; the native surface uses the result to
-    // pick a non-flickering grow-only viewport where mode 2026 is absent.
-    crate::sync_update_probe::probe_synchronized_update_once(Duration::from_millis(100));
+    // One probe answers everything the terminal alone knows: background color
+    // (so `auto` resolves from the real background rather than the `$COLORFGBG`
+    // seed), synchronized-update support (the native surface falls back to a
+    // grow-only viewport without mode 2026), and keyboard-enhancement support
+    // (whether Shift+Enter can ever reach us). Reading the reply consumes
+    // whatever the user typed in the window, so it happens exactly once, before
+    // `setup_terminal`, bounded by a single ≤100ms deadline.
+    crate::terminal_probe::probe_terminal_once(Duration::from_millis(100));
     let initial = load_theme_runtime_or_default();
     let (reload_tx, reload_rx) = mpsc::channel::<ThemeLoadResult>(8);
     tokio::spawn(async move {

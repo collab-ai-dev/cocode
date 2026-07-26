@@ -124,6 +124,36 @@ Settings files are parsed as JSONC, so comments and trailing commas are both acc
 
 One naming gotcha: the top-level key is `models.main`, and a bare `model` key is **rejected** with an explicit error rather than ignored. Unknown top-level keys are rejected the same way, so a typo fails loudly at startup instead of silently doing nothing.
 
+### Terminal UI settings
+
+Everything under `tui` shapes the terminal surface. All of it is optional.
+
+```jsonc
+{
+  "tui": {
+    // Window/tab title segments, in order. `[]` leaves the title alone.
+    // Items: app_name, project, cwd, run_state, model, git_branch, context_used.
+    "terminal_title": ["run_state", "project", "app_name"],
+
+    // Rotating one-line usage tip under the startup header. One tip per day.
+    "tips": true,
+
+    // Whether time-varying UI animates. `false` holds the spinner still as a
+    // static glyph — for reduced motion, screen readers, or clean logs.
+    "animations": true,
+
+    // Rows of transcript rebuilt into native scrollback on resize or replay.
+    // "auto" derives the cap from the detected terminal's scrollback default;
+    // "unlimited", or {"rows": 5000}, override it.
+    "reflow_max_rows": "auto",
+  },
+}
+```
+
+`run_state` is the item worth keeping first: it reads `working`, `idle`, or
+`● needs input` when the session is blocked on a permission prompt, and a tab
+bar truncates from the right, so a leading run state survives.
+
 ### Reload semantics
 
 Settings are read into memory when a session starts. Writes that happen afterward do not retroactively change the running session.

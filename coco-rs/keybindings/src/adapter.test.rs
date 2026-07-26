@@ -99,3 +99,29 @@ fn meta_modifier_kept_distinct_from_super() {
 fn null_keycode_returns_none() {
     assert!(from_crossterm(key(KeyCode::Null, KeyModifiers::NONE)).is_none());
 }
+
+#[test]
+fn uppercase_char_implies_shift_without_the_modifier() {
+    // Legacy terminals bake shift into the codepoint and report no modifier;
+    // the combo must still be shift+a, not a bare `a`.
+    let combo = from_crossterm(key(KeyCode::Char('A'), KeyModifiers::NONE)).unwrap();
+    assert_eq!(combo.key, "a");
+    assert!(combo.shift);
+}
+
+#[test]
+fn lowercase_char_stays_unshifted() {
+    let combo = from_crossterm(key(KeyCode::Char('a'), KeyModifiers::NONE)).unwrap();
+    assert_eq!(combo.key, "a");
+    assert!(!combo.shift);
+}
+
+#[test]
+fn caseless_char_is_not_treated_as_shifted() {
+    // Punctuation and CJK have no case; inferring shift from them would make a
+    // plain `?` binding unreachable.
+    for ch in ['?', '/', '中'] {
+        let combo = from_crossterm(key(KeyCode::Char(ch), KeyModifiers::NONE)).unwrap();
+        assert!(!combo.shift, "{ch} must not imply shift");
+    }
+}

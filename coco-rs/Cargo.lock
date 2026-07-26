@@ -2879,6 +2879,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "base64 0.22.1",
+ "chrono",
  "coco-config",
  "coco-context",
  "coco-coordinator",
@@ -2900,6 +2901,7 @@ dependencies = [
  "coco-utils-jemalloc",
  "coco-utils-pty",
  "coco-utils-string",
+ "coco-utils-version-check",
  "coco-voice",
  "criterion",
  "crossterm",
@@ -3188,6 +3190,23 @@ version = "0.1.1"
 dependencies = [
  "pretty_assertions",
  "regex-lite",
+]
+
+[[package]]
+name = "coco-utils-version-check"
+version = "0.1.1"
+dependencies = [
+ "chrono",
+ "coco-utils-common",
+ "pretty_assertions",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "wiremock",
 ]
 
 [[package]]

@@ -129,9 +129,17 @@ pub(crate) fn header_bar_view(
         ));
     }
 
+    let mut info_lines = vec![row1, row2, Line::from(row3_spans)];
+    // One dim aside, appended rather than woven in, so nothing above it moves
+    // when tips are off. Deterministic per day (`crate::tips`), so it cannot
+    // change mid-session and trigger a history replay.
+    if let Some(tip) = crate::tips::todays_tip(state.ui.display_settings.tips, info_width) {
+        info_lines.push(Line::from(Span::styled(tip.text(), styles.dim_style())));
+    }
+
     HeaderBarView {
         logo_lines,
-        info_lines: vec![row1, row2, Line::from(row3_spans)],
+        info_lines,
     }
 }
 
@@ -163,6 +171,9 @@ pub(crate) fn header_input_key(state: &AppState, theme_hash: u64, width: u16) ->
     state.session.git_branch.hash(&mut h);
     state.session.worktree_path.hash(&mut h);
     state.is_viewing_side_chat().hash(&mut h);
+    // The tip is stable for the day, but the setting behind it hot-reloads —
+    // an unhashed toggle would leave a stale header in scrollback.
+    crate::tips::todays_tip(state.ui.display_settings.tips, width).hash(&mut h);
     h.finish()
 }
 

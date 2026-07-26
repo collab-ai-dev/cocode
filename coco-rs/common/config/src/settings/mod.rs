@@ -393,6 +393,11 @@ pub struct TuiSettings {
     /// reduced motion, screen readers, or clean captured terminal logs;
     /// indicators stay visible as static glyphs.
     pub animations: bool,
+    /// What the terminal window/tab title shows, in order. Empty leaves the
+    /// title alone entirely.
+    pub terminal_title: Vec<TerminalTitleItem>,
+    /// Whether the startup header shows a rotating usage tip.
+    pub tips: bool,
 }
 
 impl Default for TuiSettings {
@@ -402,7 +407,44 @@ impl Default for TuiSettings {
             performance: TuiPerformanceSettings::default(),
             reflow_max_rows: ReflowMaxRows::default(),
             animations: true,
+            terminal_title: TerminalTitleItem::default_items().to_vec(),
+            tips: true,
         }
+    }
+}
+
+/// One segment of the terminal window/tab title.
+///
+/// A tab label is read at a glance, from across a row of other tabs, so the
+/// vocabulary is deliberately small and each item answers one question: which
+/// project, what is it doing, does it want me.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalTitleItem {
+    /// Product name.
+    AppName,
+    /// Working-directory basename — the project as the user names it.
+    Project,
+    /// Full working-directory path.
+    Cwd,
+    /// What the session is doing: working / waiting for input / idle. Carries
+    /// the attention marker, so a tab that needs the user says so.
+    RunState,
+    /// Active main model.
+    Model,
+    /// Current git branch.
+    GitBranch,
+    /// Percentage of the context window used.
+    ContextUsed,
+}
+
+impl TerminalTitleItem {
+    /// The default title: what the session wants, then which project it is.
+    ///
+    /// Ordered attention-first because a tab bar truncates from the right —
+    /// the part that survives is the part that says whether to switch to it.
+    pub const fn default_items() -> &'static [Self] {
+        &[Self::RunState, Self::Project, Self::AppName]
     }
 }
 
