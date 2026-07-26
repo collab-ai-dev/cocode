@@ -131,3 +131,31 @@ fn announced_tools_are_scoped_by_agent_id() {
         HashSet::from(["TaskOutput".to_string()])
     );
 }
+
+#[test]
+fn date_change_latch_is_scoped_by_agent_id() {
+    let mut s = ToolAppState::default();
+    assert_eq!(s.last_emitted_date_for_scope(None), None);
+
+    s.set_last_emitted_date_for_scope(None, "2026-07-25".to_string());
+
+    assert_eq!(
+        s.last_emitted_date_for_scope(None).as_deref(),
+        Some("2026-07-25")
+    );
+    // A subagent starts unseeded — it must not inherit the main session's
+    // latch, or its first turn after midnight would silently skip the notice.
+    assert_eq!(s.last_emitted_date_for_scope(Some("agent-a")), None);
+
+    s.set_last_emitted_date_for_scope(Some("agent-a"), "2026-07-26".to_string());
+
+    assert_eq!(
+        s.last_emitted_date_for_scope(Some("agent-a")).as_deref(),
+        Some("2026-07-26")
+    );
+    assert_eq!(
+        s.last_emitted_date_for_scope(None).as_deref(),
+        Some("2026-07-25"),
+        "a subagent rollover must not consume the main session's latch"
+    );
+}

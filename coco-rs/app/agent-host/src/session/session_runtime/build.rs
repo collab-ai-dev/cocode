@@ -322,7 +322,7 @@ impl SessionRuntime {
         }
 
         // Shared per-session ToolAppState (plan-mode reminder cadence,
-        // exited_plan_mode flag, last_emitted_date latch, etc.).
+        // exited_plan_mode flag, per-scope date-change latches, etc.).
         let app_state: Arc<RwLock<ToolAppState>> = Arc::new(RwLock::new(ToolAppState::default()));
         let auto_mode_state = Arc::new(coco_permissions::AutoModeState::new());
         auto_mode_state.set_active(permission_mode == coco_types::PermissionMode::Auto);

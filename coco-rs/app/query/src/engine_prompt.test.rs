@@ -13,6 +13,8 @@ use coco_llm_types::ToolResultPart;
 use coco_llm_types::UserContentPart;
 use coco_types::messages::{Message, ToolResultMessage};
 
+use crate::QueryEngineConfig;
+
 use super::*;
 
 #[test]
@@ -254,4 +256,103 @@ fn builtin_mcp_boundary_is_none_without_a_real_split() {
     assert_eq!(builtin_mcp_boundary_idx(0, 4), None);
     // Empty tool set ⇒ no breakpoint, no underflow.
     assert_eq!(builtin_mcp_boundary_idx(0, 0), None);
+}
+
+/// Engine over an empty model-runtime registry — `observe_date_change` never
+/// reaches a model, so no stub `LanguageModel` is needed.
+fn date_latch_engine(
+    config: QueryEngineConfig,
+    app_state: &Arc<tokio::sync::RwLock<coco_types::ToolAppState>>,
+) -> QueryEngine {
+    let registry = Arc::new(
+        coco_inference::ModelRuntimeRegistry::from_prebuilt_role_runtimes(Vec::<(
+            coco_types::ModelRole,
+            coco_inference::ModelRuntime,
+        )>::new()),
+    );
+    QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("date-latch-session").unwrap(),
+        registry,
+        Arc::new(coco_tool_runtime::ToolRegistry::new()),
+        tokio_util::sync::CancellationToken::new(),
+        None,
+    )
+    .with_app_state(Arc::clone(app_state))
+}
+
+/// The rollover latch is per visibility scope, and cache-shared forks sit out.
+///
+/// Regression: with one shared latch, whichever engine ran first after
+/// midnight consumed the rollover and every other engine on the same
+/// session-global `ToolAppState` silently never emitted its one-shot
+/// `date_change` reminder — a background fork could swallow the main
+/// conversation's notice.
+#[tokio::test]
+async fn date_change_latch_is_per_scope_and_forks_never_consume_it() {
+    const STALE: &str = "1970-01-01";
+    let app_state = Arc::new(tokio::sync::RwLock::new(coco_types::ToolAppState::default()));
+    {
+        let mut guard = app_state.write().await;
+        guard.set_last_emitted_date_for_scope(None, STALE.to_string());
+        guard.set_last_emitted_date_for_scope(Some("agent-a"), STALE.to_string());
+    }
+
+    // A cache-shared fork observes first: no reminder, and the main scope's
+    // latch is left untouched for the main thread to consume.
+    let fork = date_latch_engine(
+        QueryEngineConfig {
+            fork_label: Some(coco_types::ForkLabel::AutoDream),
+            ..Default::default()
+        },
+        &app_state,
+    );
+    assert_eq!(fork.observe_date_change().await, None);
+    assert_eq!(
+        app_state
+            .read()
+            .await
+            .last_emitted_date_for_scope(None)
+            .as_deref(),
+        Some(STALE),
+    );
+
+    // A subagent gets its own rollover notice and consumes only its own scope.
+    let subagent = date_latch_engine(
+        QueryEngineConfig {
+            agent_id: Some(coco_types::AgentId::try_new("agent-a").unwrap()),
+            ..Default::default()
+        },
+        &app_state,
+    );
+    let subagent_date = subagent
+        .observe_date_change()
+        .await
+        .expect("subagent scope rolled over");
+    assert_ne!(subagent_date, STALE);
+    assert_eq!(
+        app_state
+            .read()
+            .await
+            .last_emitted_date_for_scope(Some("agent-a")),
+        Some(subagent_date),
+    );
+    assert_eq!(
+        app_state
+            .read()
+            .await
+            .last_emitted_date_for_scope(None)
+            .as_deref(),
+        Some(STALE),
+        "subagent must not consume the main thread's rollover",
+    );
+
+    // The main thread still gets its notice — exactly once.
+    let main = date_latch_engine(QueryEngineConfig::default(), &app_state);
+    let main_date = main
+        .observe_date_change()
+        .await
+        .expect("main scope rolled over");
+    assert_ne!(main_date, STALE);
+    assert_eq!(main.observe_date_change().await, None);
 }
