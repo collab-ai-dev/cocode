@@ -37,6 +37,15 @@ pub use version::is_newer;
 /// which is a few hundred bytes — not the full packument.
 const NPM_LATEST_URL: &str = "https://registry.npmjs.org/@cocode-cli/cocode-cli/latest";
 
+/// Homebrew's cask metadata endpoint.
+///
+/// A Homebrew install must be compared against the cask, not against npm: the
+/// cask is updated by a separate PR and routinely lags the npm release by days.
+/// Comparing a brew install to npm would announce a version that `brew upgrade`
+/// cannot install yet, and the user would run the command, see "already
+/// installed", and stop believing the notice.
+const HOMEBREW_CASK_URL: &str = "https://formulae.brew.sh/api/cask/cocode.json";
+
 /// How long a cached answer stays fresh. A day: releases are not frequent
 /// enough for a tighter interval to inform anyone, and a looser one makes the
 /// notice arrive long after the release.
@@ -142,7 +151,24 @@ pub async fn refresh_cache(
     path: &Path,
     now: DateTime<Utc>,
 ) -> Result<VersionCache, VersionCheckError> {
-    refresh_cache_from(path, NPM_LATEST_URL, now).await
+    refresh_cache_from(path, latest_version_url(InstallMethod::detect()), now).await
+}
+
+/// Where "the latest version" means something for a given installation.
+///
+/// Each channel publishes on its own schedule, so the only version worth
+/// comparing against is the one *this* install could actually receive.
+pub fn latest_version_url(method: InstallMethod) -> &'static str {
+    match method {
+        InstallMethod::Homebrew => HOMEBREW_CASK_URL,
+        // npm is the source the other channels repackage, and the fallback for
+        // an install cocode could not classify.
+        InstallMethod::Npm
+        | InstallMethod::Pnpm
+        | InstallMethod::Bun
+        | InstallMethod::Cargo
+        | InstallMethod::Unknown => NPM_LATEST_URL,
+    }
 }
 
 /// [`refresh_cache`] against an explicit endpoint. The cache is written only
@@ -190,8 +216,9 @@ async fn write_cache(path: &Path, cache: &VersionCache) -> Result<(), VersionChe
     Ok(())
 }
 
+/// Both endpoints answer with a top-level `version`, so one shape covers them.
 #[derive(Deserialize)]
-struct NpmDistTag {
+struct VersionManifest {
     version: String,
 }
 
@@ -200,7 +227,7 @@ async fn fetch_latest_version(url: &str) -> Result<String, VersionCheckError> {
         .timeout(REQUEST_TIMEOUT)
         .user_agent(concat!("coco/", env!("CARGO_PKG_VERSION")))
         .build()?;
-    let manifest: NpmDistTag = client
+    let manifest: VersionManifest = client
         .get(url)
         .send()
         .await?

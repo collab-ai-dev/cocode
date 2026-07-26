@@ -25,14 +25,23 @@ use tokio::sync::mpsc;
 const TOAST_DURATION: Duration = Duration::from_secs(12);
 
 /// Spawn the check. Returns the receiver the run loop selects on, or `None`
-/// when there is nothing to check for (a source build, or a fresh-enough
-/// cached answer with no upgrade in it).
+/// when there is nothing to check for — `tui.update_check` is off, this is a
+/// source build, or the cache is fresh and holds no upgrade.
 ///
 /// The cached answer is consulted *synchronously* first and, when it already
 /// names a newer version, delivered immediately — startup never waits on the
 /// network for news that is already on disk.
-pub(crate) fn spawn(current_version: &'static str) -> Option<mpsc::Receiver<UpgradeNotice>> {
-    // `App::new` is a public constructor; a caller outside a runtime would
+pub(crate) fn spawn(
+    enabled: bool,
+    current_version: &'static str,
+) -> Option<mpsc::Receiver<UpgradeNotice>> {
+    // Checked before anything else touches the disk or the network: `false`
+    // means cocode makes no outbound request on its own behalf, and reads no
+    // cache to decide that.
+    if !enabled {
+        return None;
+    }
+    // The caller is a public constructor; a caller outside a runtime would
     // otherwise take a `tokio::spawn` panic at startup for the sake of a
     // version banner. Nothing about this feature is worth that.
     if tokio::runtime::Handle::try_current().is_err() {

@@ -398,6 +398,7 @@ pub async fn run_tui(
             .collect();
         app.state_mut().ui.input.hydrate_history_entries(entries);
     }
+    app = app.with_update_check(runtime.runtime_config().settings.merged.tui.update_check);
     app = app.with_display_settings_reload(display_settings_rx);
     app = app.with_config_reload_errors(config_reload_errors_rx);
     // Voice input (Feature::Voice): build the STT engine + capture + session and
