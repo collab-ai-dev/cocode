@@ -171,3 +171,47 @@ async fn refresh_cache_round_trips_through_disk() {
     assert_eq!(stored.latest_version, "1.4.0");
     assert!(!should_refresh(Some(&stored), "0.1.1", now()));
 }
+
+#[test]
+fn homebrew_installs_are_compared_against_the_cask_not_npm() {
+    // The cask lags the npm release; announcing an npm version to a brew user
+    // names something `brew upgrade` cannot install yet.
+    let brew = super::latest_version_url(super::InstallMethod::Homebrew);
+    assert!(brew.contains("formulae.brew.sh"), "{brew}");
+
+    for method in [
+        super::InstallMethod::Npm,
+        super::InstallMethod::Pnpm,
+        super::InstallMethod::Bun,
+        super::InstallMethod::Cargo,
+        super::InstallMethod::Unknown,
+    ] {
+        let url = super::latest_version_url(method);
+        assert!(url.contains("registry.npmjs.org"), "{method:?} → {url}");
+    }
+}
+
+#[tokio::test]
+async fn the_brew_cask_payload_shape_is_understood() {
+    // Both endpoints answer with a top-level `version`, but the cask body
+    // carries much more around it; the extra fields must not break decoding.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "token": "cocode",
+            "version": "0.4.2,17",
+            "url": "https://example.invalid/cocode.zip",
+            "artifacts": [{"binary": ["cocode"]}],
+        })))
+        .mount(&server)
+        .await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("version-check.json");
+
+    let cache = refresh_cache_from(&path, &server.uri(), now())
+        .await
+        .expect("refresh");
+    assert_eq!(cache.latest_version, "0.4.2,17");
+    let notice = notice_from_cache(&cache, "0.1.1").expect("notice");
+    assert_eq!(notice.latest_version, "0.4.2,17");
+}

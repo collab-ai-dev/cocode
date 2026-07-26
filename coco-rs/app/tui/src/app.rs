@@ -220,7 +220,9 @@ impl App<TerminalBackend> {
             voice: None,
             voice_rx: None,
             terminal_title: crate::terminal_title::TerminalTitleDriver::default(),
-            upgrade_rx: crate::update_check::spawn(env!("CARGO_PKG_VERSION")),
+            // Armed by `with_update_check` once the bootstrap has resolved
+            // settings; `App::new` runs before `tui.update_check` is known.
+            upgrade_rx: None,
         })
     }
 }
@@ -313,6 +315,18 @@ where
         rx: mpsc::Receiver<crate::display_settings::DisplaySettings>,
     ) -> Self {
         self.display_settings_rx = Some(rx);
+        self
+    }
+
+    /// Arm the background check for a newer released cocode.
+    ///
+    /// Takes the resolved `tui.update_check` value rather than reading state,
+    /// because this is the one outbound request cocode makes on its own behalf
+    /// and the setting that governs it must be read from the authoritative
+    /// config, not from a display projection. Called once at bootstrap; a later
+    /// hot-reload of the setting does not retract an already-running check.
+    pub fn with_update_check(mut self, enabled: bool) -> Self {
+        self.upgrade_rx = crate::update_check::spawn(enabled, env!("CARGO_PKG_VERSION"));
         self
     }
 

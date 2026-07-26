@@ -138,6 +138,14 @@ Everything under `tui` shapes the terminal surface. All of it is optional.
     // Rotating one-line usage tip under the startup header. One tip per day.
     "tips": true,
 
+    // Background check for a newer released cocode — the only outbound request
+    // cocode makes on its own behalf. `false` stops it entirely: no request,
+    // and no cache read to decide. The check never blocks startup (it answers
+    // from a cache written by a previous run) and is compared against the
+    // channel this binary was installed from, so a Homebrew install is checked
+    // against the cask rather than npm.
+    "update_check": true,
+
     // Whether time-varying UI animates. `false` holds the spinner still as a
     // static glyph — for reduced motion, screen readers, or clean logs.
     "animations": true,

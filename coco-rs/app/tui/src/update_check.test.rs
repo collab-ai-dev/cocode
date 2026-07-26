@@ -58,7 +58,14 @@ fn applying_a_notice_toasts_once_and_persists_it_for_the_status_bar() {
 
 #[test]
 fn spawning_outside_a_tokio_runtime_is_a_no_op_not_a_panic() {
-    // `App::new` is public; a caller without a runtime must lose the banner,
-    // not the session.
-    assert!(super::spawn("0.1.1").is_none());
+    // The caller is a public constructor; a caller without a runtime must lose
+    // the banner, not the session.
+    assert!(super::spawn(/*enabled*/ true, "0.1.1").is_none());
+}
+
+#[tokio::test]
+async fn a_disabled_check_makes_no_request_and_reads_no_cache() {
+    // `tui.update_check = false` has to mean *nothing happens* — not "check
+    // anyway and stay quiet about it".
+    assert!(super::spawn(/*enabled*/ false, "0.1.1").is_none());
 }

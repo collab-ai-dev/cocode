@@ -1181,3 +1181,21 @@ fn test_denied_mcp_servers_unions_every_source() {
     names.sort();
     assert_eq!(names, vec!["banned", "miner"]);
 }
+
+#[test]
+fn test_tui_update_check_defaults_on_and_toggleable() {
+    // The one outbound request cocode makes on its own behalf; turning it off
+    // in settings must be enough to stop it.
+    assert!(
+        parse_settings(r#"{"tui": {}}"#)
+            .expect("defaults")
+            .tui
+            .update_check
+    );
+    assert!(
+        !parse_settings(r#"{"tui": {"update_check": false}}"#)
+            .expect("parse update_check")
+            .tui
+            .update_check
+    );
+}

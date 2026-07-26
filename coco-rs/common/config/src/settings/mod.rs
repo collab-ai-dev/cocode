@@ -398,6 +398,10 @@ pub struct TuiSettings {
     pub terminal_title: Vec<TerminalTitleItem>,
     /// Whether the startup header shows a rotating usage tip.
     pub tips: bool,
+    /// Whether the TUI checks in the background for a newer released cocode.
+    /// The only outbound request cocode makes on its own behalf; turn it off to
+    /// stop it entirely.
+    pub update_check: bool,
 }
 
 impl Default for TuiSettings {
@@ -409,6 +413,7 @@ impl Default for TuiSettings {
             animations: true,
             terminal_title: TerminalTitleItem::default_items().to_vec(),
             tips: true,
+            update_check: true,
         }
     }
 }

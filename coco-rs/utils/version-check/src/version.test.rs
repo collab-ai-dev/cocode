@@ -58,3 +58,12 @@ fn source_builds_are_recognized() {
     assert!(!is_source_build("0.1.1"));
     assert!(!is_source_build("1.2.0-rc.1"));
 }
+
+#[test]
+fn homebrew_cask_revisions_do_not_block_comparison() {
+    // Cask versions look like `1.2.3,45`; the revision tracks the cask, not the
+    // software. Failing to parse it would mean brew installs never update.
+    assert!(is_newer("0.2.0,7", "0.1.1"));
+    assert!(!is_newer("0.1.1,9", "0.1.1"));
+    assert!(!is_newer("0.1.0,99", "0.1.1"));
+}

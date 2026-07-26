@@ -30,6 +30,11 @@ pub fn is_source_build(version: &str) -> bool {
 /// `1.2.0` above `1.2.0-rc.1`, because `true > false`.
 fn parse(version: &str) -> Option<([u32; 3], bool)> {
     let version = version.trim().trim_start_matches('v');
+    // Homebrew cask versions carry a packaging revision after a comma
+    // (`1.2.3,45`). It tracks the cask, not the software, so it says nothing
+    // about which build is newer; without dropping it the whole version would
+    // fail to parse and every brew install would silently never see an update.
+    let version = version.split(',').next().unwrap_or(version);
     let (core, pre) = match version.split_once('-') {
         Some((core, pre)) => (core, Some(pre)),
         None => (version, None),
