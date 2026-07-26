@@ -927,29 +927,44 @@ impl QueryEngine {
     }
 
     /// Detect local-date rollover for the `date_change` system reminder.
-    /// Reads `ToolAppState::last_emitted_date`, compares it to today's
+    /// Reads this engine's scope entry in
+    /// `ToolAppState::last_emitted_date_by_scope`, compares it to today's
     /// local ISO date, and:
-    /// - seeds the latch on first observation, returning `None`
+    /// - seeds the scope on first observation, returning `None`
     /// (no reminder — `getDateChangeAttachments` matches: the first
     /// turn of a session never emits because there's no prior date);
-    /// - returns `Some(today)` and updates the latch on a mismatch
+    /// - returns `Some(today)` and updates the scope on a mismatch
     /// (engine passes it to `TurnReminderInput.new_date` and the
     /// `DateChangeGenerator` emits once);
-    /// - returns `None` when the latch already matches today.
+    /// - returns `None` when the scope already matches today.
     /// No-op (returns `None`) when `self.app_state` is `None`.
+    ///
+    /// Scoped by `agent_id` because the main session and its subagents share
+    /// one `ToolAppState` Arc: on a single latch, whichever thread runs first
+    /// after midnight consumes the rollover and every other thread never gets
+    /// its notice.
+    ///
+    /// Cache-shared forks (`fork_label.is_some()`) sit out entirely — they
+    /// inherit the parent's history (which already carries the date), must not
+    /// append a message of their own, and would otherwise consume the parent's
+    /// one-shot notice in a transcript that is thrown away.
     pub(crate) async fn observe_date_change(&self) -> Option<String> {
+        if self.config.fork_label.is_some() {
+            return None;
+        }
         let state = self.app_state.as_ref()?;
+        let scope = self.config.agent_id_str();
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let mut guard = state.write().await;
-        match guard.last_emitted_date.as_deref() {
+        match guard.last_emitted_date_for_scope(scope).as_deref() {
             Some(prev) if prev == today => None,
             Some(_) => {
-                guard.last_emitted_date = Some(today.clone());
+                guard.set_last_emitted_date_for_scope(scope, today.clone());
                 Some(today)
             }
             None => {
                 // First observation: seed without emitting.
-                guard.last_emitted_date = Some(today);
+                guard.set_last_emitted_date_for_scope(scope, today);
                 None
             }
         }

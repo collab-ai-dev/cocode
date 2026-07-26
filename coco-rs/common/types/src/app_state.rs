@@ -200,14 +200,22 @@ pub struct ToolAppState {
     pub panel_generation: i64,
 
     // ── Date-change latch ────────────────────────────────────────────
-    /// Most recent local ISO date (`YYYY-MM-DD`) the engine emitted a
-    /// `date_change` system-reminder for. The reminder subsystem fires
-    /// when the current local date differs from this value and updates
-    /// the latch atomically. `None` means no reminder has fired yet in
-    /// this session — the first turn seeds the latch without emitting.
+    /// Most recent local ISO date (`YYYY-MM-DD`) each visibility scope
+    /// emitted a `date_change` system-reminder for, keyed by
+    /// [`agent_scope_key`]. The reminder subsystem fires when the current
+    /// local date differs from the scope's value and updates it atomically;
+    /// a missing entry means the scope hasn't observed a date yet — its
+    /// first turn seeds without emitting.
+    ///
+    /// Scoped rather than a single latch because the main session and its
+    /// subagents share this `ToolAppState` by `Arc`: one shared value lets
+    /// whichever thread crosses midnight first consume the rollover, and
+    /// every other thread then silently never gets its one-shot notice.
+    /// Use [`Self::last_emitted_date_for_scope`] /
+    /// [`Self::set_last_emitted_date_for_scope`].
     /// `appState.lastEmittedDate` in `bootstrap/state.ts`,
     /// consumed by `getDateChangeAttachments`.
-    pub last_emitted_date: Option<String>,
+    pub last_emitted_date_by_scope: HashMap<String, String>,
 
     // ── Plan verification ────────────────────────────────────────────
     /// Tracks a plan exit that has not yet been verified via
@@ -344,7 +352,7 @@ pub struct ToolAppState {
 
 impl ToolAppState {
     pub fn last_announced_tools_for_scope(&self, agent_id: Option<&str>) -> HashSet<String> {
-        let key = announced_tools_scope_key(agent_id);
+        let key = agent_scope_key(agent_id);
         self.last_announced_tools_by_scope
             .get(&key)
             .cloned()
@@ -366,7 +374,7 @@ impl ToolAppState {
             self.last_announced_tools = tools.clone();
         }
         self.last_announced_tools_by_scope
-            .insert(announced_tools_scope_key(agent_id), tools);
+            .insert(agent_scope_key(agent_id), tools);
     }
 
     pub fn last_announced_mcp_servers_for_scope(
@@ -374,7 +382,7 @@ impl ToolAppState {
         agent_id: Option<&str>,
     ) -> BTreeMap<String, McpServerAnnouncementState> {
         self.last_announced_mcp_servers_by_scope
-            .get(&announced_tools_scope_key(agent_id))
+            .get(&agent_scope_key(agent_id))
             .cloned()
             .unwrap_or_default()
     }
@@ -385,7 +393,21 @@ impl ToolAppState {
         servers: BTreeMap<String, McpServerAnnouncementState>,
     ) {
         self.last_announced_mcp_servers_by_scope
-            .insert(announced_tools_scope_key(agent_id), servers);
+            .insert(agent_scope_key(agent_id), servers);
+    }
+
+    /// The local ISO date this scope last emitted (or seeded) a
+    /// `date_change` reminder for. `None` ⇒ the scope hasn't observed a
+    /// date yet, so its next observation seeds without emitting.
+    pub fn last_emitted_date_for_scope(&self, agent_id: Option<&str>) -> Option<String> {
+        self.last_emitted_date_by_scope
+            .get(&agent_scope_key(agent_id))
+            .cloned()
+    }
+
+    pub fn set_last_emitted_date_for_scope(&mut self, agent_id: Option<&str>, date: String) {
+        self.last_emitted_date_by_scope
+            .insert(agent_scope_key(agent_id), date);
     }
 }
 
@@ -395,7 +417,11 @@ pub struct McpServerAnnouncementState {
     pub description: Option<String>,
 }
 
-fn announced_tools_scope_key(agent_id: Option<&str>) -> String {
+/// Visibility-scope key for the per-agent baselines on [`ToolAppState`]
+/// (announced tools, announced MCP servers, date-change latch). The main
+/// session and each subagent see different worlds, so they must not share
+/// one baseline entry.
+fn agent_scope_key(agent_id: Option<&str>) -> String {
     match agent_id {
         Some(id) => format!("agent:{id}"),
         None => "main".to_string(),

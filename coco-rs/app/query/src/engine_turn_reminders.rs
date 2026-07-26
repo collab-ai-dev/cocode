@@ -320,11 +320,12 @@ impl QueryEngine {
             &reminder_current_agents,
             &app_state_snapshot.last_announced_agents,
         );
-        // Date-change latch: current local ISO date vs. the one stored
-        // on `ToolAppState.last_emitted_date`. When they differ, emit
-        // once + update the latch. Runs at turn start so the reminder
-        // sees today's date even for long-running sessions that cross
-        // midnight.
+        // Date-change latch: current local ISO date vs. the one stored for
+        // this engine's scope in `ToolAppState.last_emitted_date_by_scope`.
+        // When they differ, emit once + update that scope. Runs at turn start
+        // so the reminder sees today's date even for long-running sessions
+        // that cross midnight. Scoping + the fork exclusion live inside
+        // `observe_date_change`.
         let reminder_new_date = self.observe_date_change().await;
         // Today's local ISO date injected every turn (independent of the
         // rollover latch above) so the model always has the date.
