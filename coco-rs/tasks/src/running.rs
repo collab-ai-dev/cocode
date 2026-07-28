@@ -40,6 +40,8 @@ use coco_types::TeammateExtras;
 use coco_types::TeammateRef;
 use coco_types::TeammateTaskMessage;
 use coco_types::WorkflowProgressEvent;
+
+use crate::workflow_progress::apply_workflow_progress;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -1083,12 +1085,19 @@ impl TaskManager {
             .await;
     }
 
-    /// Append a workflow progress delta to a `LocalWorkflow` row's
-    /// `workflow_progress` vec and emit a `task/progress` carrying the
-    /// cumulative vec. No-op for non-`LocalWorkflow` rows or unknown ids.
+    /// Fold a workflow progress delta into a `LocalWorkflow` row's
+    /// `workflow_progress` array and emit a `task/progress` carrying the
+    /// cumulative array. No-op for non-`LocalWorkflow` rows or unknown ids.
     /// (The generic `set_progress`/`emit_progress` paths intentionally drop
     /// workflow deltas — only `emit_task_progress` carries `workflow_progress`.)
-    pub async fn push_workflow_progress(&self, id: &str, event: WorkflowProgressEvent) {
+    ///
+    /// The fold is an index-keyed upsert plus a log trim
+    /// ([`apply_workflow_progress`]), so the array stays bounded and one
+    /// `agent()` call stays one node however many frames it emits — the array
+    /// is cloned into a protocol event on every delta, so an append-only vec
+    /// would make a large fan-out quadratic.
+    pub async fn push_workflow_progress(&self, id: &str, mut event: WorkflowProgressEvent) {
+        crate::workflow_progress::stamp_progress_time(&mut event, current_time_ms());
         let snapshot = {
             let mut rows = self.rows.write().await;
             let Some(row) = rows.get_mut(id) else {
@@ -1097,7 +1106,7 @@ impl TaskManager {
             let TaskExtras::LocalWorkflow(extras) = &mut row.extras else {
                 return;
             };
-            extras.workflow_progress.push(event);
+            apply_workflow_progress(&mut extras.workflow_progress, event);
             row.clone()
         };
         self.emit_task_progress(id, &snapshot).await;

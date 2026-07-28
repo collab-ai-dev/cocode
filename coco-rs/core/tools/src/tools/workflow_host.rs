@@ -37,6 +37,8 @@ use coco_workflow_runtime::WorkflowAgentOpts;
 use coco_workflow_runtime::WorkflowAgentResult;
 use coco_workflow_runtime::WorkflowEngine;
 use coco_workflow_runtime::WorkflowHost;
+use coco_workflow_runtime::WorkflowRun;
+use coco_workflow_runtime::WorkflowRunState;
 use tokio_util::sync::CancellationToken;
 
 use super::workflow_journal::WorkflowJournal;
@@ -54,7 +56,10 @@ pub(crate) struct WorkflowSpawnContext {
     pub parent_tool_filter: coco_types::ToolFilter,
     pub active_shell_tool: coco_types::ActiveShellTool,
     pub log_assistant_responses: Option<bool>,
-    pub parent_mode: coco_types::PermissionMode,
+    /// The launching turn's permission context. Carried whole (not just its
+    /// `mode`) because `agent({agentType})` resolves against the same
+    /// `Agent(<type>)` rule surface as the Agent tool.
+    pub permission_context: coco_types::ToolPermissionContext,
     pub mcp_tool_exposure: coco_types::McpToolExposure,
     pub mcp_server_tool_exposure: std::collections::HashMap<String, coco_types::McpToolExposure>,
     pub agent_catalog: Option<Arc<coco_subagent::AgentCatalogSnapshot>>,
@@ -99,6 +104,11 @@ struct WorkflowRunHost {
     /// records each result; on resume it is hydrated from the prior journal so
     /// completed `agent()` results replay without re-spawning.
     journal: Arc<WorkflowJournal>,
+    /// Run-scoped counters (agent ordinal, phase table, replay cursor). Held
+    /// here — not inside the engine — so `run_nested_workflow` hands the child
+    /// engine the SAME state and the child continues the parent's numbering
+    /// instead of restarting the lifetime agent cap.
+    run_state: Arc<WorkflowRunState>,
     /// Weak self-reference so `run_nested_workflow` can re-enter
     /// [`WorkflowEngine::run`] with the SAME `Arc<dyn WorkflowHost>` — that
     /// shared host is exactly what shares the parent's semaphore, token budget,
@@ -146,7 +156,7 @@ impl WorkflowRunHost {
             },
             permissions: AgentSpawnPermissions {
                 mode: Some(coco_permissions::resolve_subagent_mode(
-                    ctx.parent_mode,
+                    ctx.permission_context.mode,
                     None,
                 )),
                 ..Default::default()
@@ -180,23 +190,15 @@ impl WorkflowRunHost {
         &self,
         opts: &WorkflowAgentOpts,
     ) -> Result<Arc<coco_types::AgentDefinition>, String> {
-        let agent_name = opts
+        let requested = opts
             .agent_type
             .as_deref()
-            .unwrap_or(coco_types::SubagentType::GeneralPurpose.as_str());
-        let mut definition = self
-            .spawn_ctx
-            .agent_catalog
-            .as_ref()
-            .and_then(|catalog| catalog.find_active(agent_name).cloned())
-            .unwrap_or_else(|| coco_types::AgentDefinition {
-                agent_type: agent_name
-                    .parse()
-                    .expect("AgentTypeId::from_str is Infallible"),
-                name: agent_name.to_string(),
-                source: coco_types::AgentSource::BuiltIn,
-                ..Default::default()
-            });
+            .map(str::trim)
+            .filter(|name| !name.is_empty());
+        let mut definition = match requested {
+            Some(name) => self.resolve_requested_agent_type(name)?,
+            None => self.default_agent_definition(),
+        };
 
         if let Some(model) = opts.model.as_ref().filter(|model| !model.trim().is_empty()) {
             definition.model = Some(model.trim().to_string());
@@ -212,6 +214,76 @@ impl WorkflowRunHost {
             definition.isolation = isolation;
         }
         Ok(Arc::new(definition))
+    }
+
+    /// Resolve an explicit `agent({agentType})` against the live catalog and the
+    /// Agent tool's permission rules.
+    ///
+    /// A workflow script is model-authored code and the Workflow tool is
+    /// approved once, so reading the unfiltered catalog here would make
+    /// `deny: ["Agent(deploy-bot)"]` unenforceable — a script could ask for the
+    /// denied type and get it. Unknown types are a hard error rather than a
+    /// silent fall back to general-purpose: a typo'd agentType that quietly runs
+    /// a different agent is worse than a failed slot the script can see.
+    fn resolve_requested_agent_type(
+        &self,
+        name: &str,
+    ) -> Result<coco_types::AgentDefinition, String> {
+        if let Some(denied) = crate::tools::agent::agent_tool::find_agent_deny_rule(
+            &self.spawn_ctx.permission_context,
+            name,
+        ) {
+            return Err(format!(
+                "agent({{agentType}}): '{name}' is denied by permission rule '{tool}({name})' from {source:?}.",
+                tool = coco_types::ToolName::Agent.as_str(),
+                source = denied.source,
+            ));
+        }
+        let Some(catalog) = self.spawn_ctx.agent_catalog.as_ref() else {
+            return Err(format!(
+                "agent({{agentType}}): agent type '{name}' not found — no agent catalog is loaded."
+            ));
+        };
+        catalog.find_active(name).cloned().ok_or_else(|| {
+            // List only the types the caller could actually have used; naming
+            // denied ones would leak the existence of restricted agents.
+            let available: Vec<&str> = catalog
+                .active()
+                .map(|def| def.name.as_str())
+                .filter(|candidate| {
+                    crate::tools::agent::agent_tool::find_agent_deny_rule(
+                        &self.spawn_ctx.permission_context,
+                        candidate,
+                    )
+                    .is_none()
+                })
+                .collect();
+            format!(
+                "agent({{agentType}}): agent type '{name}' not found. Available agents: {}",
+                if available.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    available.join(", ")
+                }
+            )
+        })
+    }
+
+    /// The definition an `agent()` call with no `agentType` runs under: the
+    /// catalog's general-purpose entry, or a bare synthesized one when no
+    /// catalog is loaded.
+    fn default_agent_definition(&self) -> coco_types::AgentDefinition {
+        let name = coco_types::SubagentType::GeneralPurpose.as_str();
+        self.spawn_ctx
+            .agent_catalog
+            .as_ref()
+            .and_then(|catalog| catalog.find_active(name).cloned())
+            .unwrap_or_else(|| coco_types::AgentDefinition {
+                agent_type: name.parse().expect("AgentTypeId::from_str is Infallible"),
+                name: name.to_string(),
+                source: coco_types::AgentSource::BuiltIn,
+                ..Default::default()
+            })
     }
 }
 
@@ -310,8 +382,19 @@ impl WorkflowHost for WorkflowRunHost {
             .is_some_and(|total| total > 0 && self.budget_spent_tokens() >= total)
     }
 
-    async fn cached_agent_result(&self, key: &AgentCacheKey) -> Option<serde_json::Value> {
-        self.journal.lookup(key).await
+    fn cached_agent_result(&self, key: &AgentCacheKey) -> Option<serde_json::Value> {
+        let hit = self.journal.lookup(key);
+        if hit.is_none() {
+            // Crash-forensics breadcrumb only (hydration ignores `started`
+            // lines), so it is fire-and-forget on the main runtime rather than
+            // an await on the pre-spawn path.
+            let journal = self.journal.clone();
+            let key = key.clone();
+            self.main_handle.spawn(async move {
+                journal.record_started(&key).await;
+            });
+        }
+        hit
     }
 
     async fn record_agent_result(&self, key: &AgentCacheKey, value: &serde_json::Value) {
@@ -348,23 +431,24 @@ impl WorkflowHost for WorkflowRunHost {
         let script = coco_workflow::parse_workflow_script(&spec.source, true)
             .map_err(|error| format!("workflow('{name_or_ref}') was not launched: {error}"))?;
 
-        // Re-enter the engine on THIS thread with the SAME host Arc so the child
-        // shares the parent's semaphore, token budget, journal, abort signal, and
-        // agent counter (no fresh governance is allocated). The child runs at
-        // `depth >= 1`, so its own `workflow()` throws the one-level guard.
+        // Re-enter the engine on THIS thread with the SAME host Arc AND the SAME
+        // run state, so the child shares the parent's semaphore, token budget,
+        // journal, abort signal, agent ordinal, phase table and replay cursor
+        // (no fresh governance is allocated). The child runs at `depth >= 1`, so
+        // its own `workflow()` throws the one-level guard.
         let host = self
             .me
             .upgrade()
             .ok_or_else(|| "workflow host was dropped".to_string())?;
-        let cancel = self.spawn_ctx.workflow_abort.token();
-        WorkflowEngine::run(
-            script.script_body,
+        WorkflowEngine::run(WorkflowRun {
+            script: script.script_body,
             args,
             host,
-            cancel,
-            WORKFLOW_SYNC_EVAL_BUDGET,
+            state: self.run_state.clone(),
+            cancel: self.spawn_ctx.workflow_abort.token(),
+            sync_eval_budget: WORKFLOW_SYNC_EVAL_BUDGET,
             depth,
-        )
+        })
         .await
         .map_err(|error| error.to_string())
     }
@@ -431,28 +515,54 @@ impl std::future::Future for LocalOnlyReady {
     }
 }
 
+/// Everything the engine thread needs beyond the script itself. Bundled so the
+/// launch seam stays a two-argument call as the run's governance grows.
+pub(crate) struct WorkflowLaunch {
+    pub args: serde_json::Value,
+    pub agent: AgentHandleRef,
+    pub task_handle: TaskHandleRef,
+    pub task_id: String,
+    pub cancel: CancellationToken,
+    pub spawn_ctx: WorkflowSpawnContext,
+    pub main_handle: tokio::runtime::Handle,
+    pub journal: Arc<WorkflowJournal>,
+    /// `meta.phases[].title`, pre-interned so declared phases hold indices
+    /// `1..=N` before any agent runs and the progress tree renders its full
+    /// skeleton immediately.
+    pub seed_phases: Vec<String>,
+    /// This run's `wf_…` id, quoted back in the completion notification's
+    /// resume instruction.
+    pub run_id: String,
+    /// `journal.jsonl` for this run, named in the completion notification so the
+    /// model can read each agent's actual return value.
+    pub journal_path: Option<PathBuf>,
+}
+
 /// Launch the workflow engine on a dedicated OS thread (the engine is `!Send`).
 /// Fire-and-forget: returns immediately; the thread runs the script to
 /// completion, then marks the task terminal. `agent()`/progress bridge to
 /// `main_handle`.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn spawn_workflow_engine(
-    script: String,
-    args: serde_json::Value,
-    agent: AgentHandleRef,
-    task_handle: TaskHandleRef,
-    task_id: String,
-    cancel: CancellationToken,
-    spawn_ctx: WorkflowSpawnContext,
-    main_handle: tokio::runtime::Handle,
-    journal: Arc<WorkflowJournal>,
-) {
+pub(crate) fn spawn_workflow_engine(script: String, launch: WorkflowLaunch) {
+    let WorkflowLaunch {
+        args,
+        agent,
+        task_handle,
+        task_id,
+        cancel,
+        spawn_ctx,
+        main_handle,
+        journal,
+        seed_phases,
+        run_id,
+        journal_path,
+    } = launch;
     let thread = std::thread::Builder::new()
         .name(format!("workflow-{task_id}"))
         .spawn(move || {
             // `new_cyclic` lets the host hold a `Weak` to itself so
             // `run_nested_workflow` can re-enter the engine with the SAME host
             // Arc — the mechanism that shares all governance with a child run.
+            let run_state = Arc::new(WorkflowRunState::new(seed_phases));
             let host: Arc<WorkflowRunHost> = Arc::new_cyclic(|me| WorkflowRunHost {
                 agent,
                 task_handle: task_handle.clone(),
@@ -462,6 +572,7 @@ pub(crate) fn spawn_workflow_engine(
                 budget_spent_tokens: AtomicI64::new(0),
                 semaphore: Arc::new(Semaphore::new(workflow_local_concurrency())),
                 journal,
+                run_state: run_state.clone(),
                 // `new_cyclic` hands a `Weak<WorkflowRunHost>`; coerce to the
                 // trait-object weak the field stores.
                 me: me.clone() as Weak<dyn WorkflowHost>,
@@ -475,15 +586,17 @@ pub(crate) fn spawn_workflow_engine(
                 }
             };
             runtime.block_on(async move {
-                let outcome = WorkflowEngine::run(
+                let outcome = WorkflowEngine::run(WorkflowRun {
                     script,
                     args,
                     host,
+                    state: run_state,
                     cancel,
-                    WORKFLOW_SYNC_EVAL_BUDGET,
-                    /*depth*/ 0,
-                )
+                    sync_eval_budget: WORKFLOW_SYNC_EVAL_BUDGET,
+                    depth: 0,
+                })
                 .await;
+                let census = agent_census(task_handle.as_ref(), &task_id).await;
                 match outcome {
                     Ok(value) => {
                         task_handle
@@ -491,14 +604,24 @@ pub(crate) fn spawn_workflow_engine(
                                 &task_id,
                                 AgentCompletionPayload {
                                     result: Some(render_result(&value)),
-                                    usage: None,
-                                    worktree: None,
+                                    diagnostics: Some(completed_diagnostics(
+                                        &run_id,
+                                        journal_path.as_deref(),
+                                        &census,
+                                    )),
+                                    ..AgentCompletionPayload::default()
                                 },
                             )
                             .await;
                     }
                     Err(error) => {
-                        task_handle.mark_failed(&task_id, &error.to_string()).await;
+                        task_handle
+                            .mark_failed_with_diagnostics(
+                                &task_id,
+                                &error.to_string(),
+                                failed_diagnostics(&run_id, journal_path.as_deref(), &census),
+                            )
+                            .await;
                     }
                 }
             });
@@ -506,6 +629,141 @@ pub(crate) fn spawn_workflow_engine(
     if let Err(error) = thread {
         tracing::error!(target: "coco::workflow", %error, "failed to spawn workflow engine thread");
     }
+}
+
+/// How the run's `agent()` calls ended, counted off the progress array.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct AgentCensus {
+    done: i32,
+    errored: i32,
+    skipped: i32,
+    /// Done agents whose result was absent or an empty container. Counted
+    /// separately because "12 done, 12 empty" and "12 done, 1 empty" call for
+    /// completely different follow-ups: the first says the fan-out found nothing
+    /// anywhere (suspect the prompt), the second says one agent came back empty
+    /// (probably genuine).
+    empty: i32,
+}
+
+impl AgentCensus {
+    fn render(&self) -> String {
+        format!(
+            "agents_done={} agents_error={} agents_skipped={} agents_empty_result={}",
+            self.done, self.errored, self.skipped, self.empty
+        )
+    }
+}
+
+/// Whether a result preview is one of the shapes an agent produces when it found
+/// nothing: `[]`, `{}`, or a single key holding an empty array. Deliberately not
+/// a general emptiness test — `{"count": 0}` is a real answer, and treating it
+/// as empty would blunt the signal.
+fn is_empty_result_preview(preview: Option<&str>) -> bool {
+    let Some(preview) = preview else {
+        return true;
+    };
+    let trimmed = preview.trim();
+    if trimmed.is_empty() || trimmed == "[]" || trimmed == "{}" {
+        return true;
+    }
+    let Some(inner) = trimmed
+        .strip_prefix('{')
+        .and_then(|rest| rest.strip_suffix('}'))
+    else {
+        return false;
+    };
+    let Some((key, value)) = inner.split_once(':') else {
+        return false;
+    };
+    let key = key.trim();
+    key.len() >= 2
+        && key.starts_with('"')
+        && key.ends_with('"')
+        && !key[1..key.len() - 1].contains('"')
+        && value.trim() == "[]"
+}
+
+async fn agent_census(
+    task_handle: &dyn coco_tool_runtime::TaskHandle,
+    task_id: &str,
+) -> AgentCensus {
+    let Ok(state) = task_handle.get_task_status(task_id).await else {
+        return AgentCensus::default();
+    };
+    let Some(extras) = state.extras.local_workflow_extras() else {
+        return AgentCensus::default();
+    };
+    let mut census = AgentCensus::default();
+    for event in &extras.workflow_progress {
+        let coco_types::WorkflowProgressEvent::WorkflowAgent {
+            state,
+            skipped,
+            result_preview,
+            ..
+        } = event
+        else {
+            continue;
+        };
+        match state {
+            coco_types::WorkflowAgentState::Done => {
+                census.done += 1;
+                if is_empty_result_preview(result_preview.as_deref()) {
+                    census.empty += 1;
+                }
+            }
+            coco_types::WorkflowAgentState::Error if *skipped => census.skipped += 1,
+            coco_types::WorkflowAgentState::Error => census.errored += 1,
+            coco_types::WorkflowAgentState::Start | coco_types::WorkflowAgentState::Progress => {}
+        }
+    }
+    census
+}
+
+/// The `<diagnostics>` block for a run that finished.
+///
+/// A workflow can complete and return `[]` for two very different reasons — the
+/// agents found nothing, or the agents returned nothing — and the run's own
+/// return value cannot tell them apart. The journal can, so the model is pointed
+/// at it before it draws a conclusion.
+fn completed_diagnostics(
+    run_id: &str,
+    journal_path: Option<&std::path::Path>,
+    census: &AgentCensus,
+) -> String {
+    let mut text = String::new();
+    if let Some(path) = journal_path {
+        text.push_str(&format!(
+            "Per-agent results: {} — one JSON line per completed agent with its full return value.\n\
+             If the result above is empty or unexpected, Read this file BEFORE diagnosing — do not \
+             assume the agents returned non-empty results.\n",
+            path.display()
+        ));
+    }
+    text.push_str(&format!("Agent outcomes: {}\n", census.render()));
+    text.push_str(&format!(
+        "To re-run with edited post-processing: Workflow({{resumeFromRunId: \"{run_id}\"}}) — agents \
+         whose prompt and opts are unchanged replay from the journal instead of re-spawning."
+    ));
+    text
+}
+
+/// The `<diagnostics>` block for a run that failed or was stopped: the literal
+/// next action, so the model is not left reconstructing a resume call from the
+/// tool schema.
+fn failed_diagnostics(
+    run_id: &str,
+    journal_path: Option<&std::path::Path>,
+    census: &AgentCensus,
+) -> String {
+    let mut text = format!(
+        "To resume after fixing the script, call: Workflow({{resumeFromRunId: \"{run_id}\"}}) — \
+         completed agents replay from the journal, so only the failed tail re-runs.\n"
+    );
+    if let Some(path) = journal_path {
+        text.push_str(&format!("Per-agent results so far: {}\n", path.display()));
+    }
+    text.push_str(&format!("Agent outcomes: {}", census.render()));
+    text
 }
 
 /// Convert a completed `AgentSpawnResponse` into a `WorkflowAgentResult`.

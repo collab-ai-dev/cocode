@@ -16,8 +16,27 @@ runtime via its `Handle`. `WorkflowHost` is `#[async_trait(?Send)]` (host
 futures are awaited on the engine thread) but the trait object is still
 `Send + Sync` so `Arc<dyn WorkflowHost>` can be shared. Awaiting on the
 engine thread is what lets `run_nested_workflow` re-enter the `!Send`
-engine inline for `workflow()` (same host Arc ⇒ shared semaphore, budget,
-journal, abort, agent counter).
+engine inline for `workflow()`.
+
+## Run-scoped vs engine-scoped state (`run_state.rs`)
+
+A nested `workflow()` re-enters `run()` with a **fresh JS context**, so
+anything the engine keeps in that context restarts for the child. Two
+things must NOT restart, and they live on `WorkflowRunState` instead:
+
+- the lifetime `agent()` ordinal — it feeds the agent cap, the progress
+  row index, and the resume cache key;
+- the interned phase table and the replay-divergence latch.
+
+`WorkflowRun` therefore carries **both** `host` and `state`. The host Arc
+shares the semaphore, token budget, journal and abort token; the state
+Arc shares the counters. `run_nested_workflow` implementors must forward
+both — `WorkflowRunHost` parks the `Arc<WorkflowRunState>` on itself for
+exactly that reason.
+
+Phase indices are 1-based and interned by **exact** title, so
+`meta.phases`, `phase('X')` and `agent({phase:'X'})` converge on one
+group; index `0` stays reserved for the renderer's ungrouped fallback.
 
 ## DSL globals contract (`engine.rs`)
 
@@ -27,7 +46,8 @@ journal, abort, agent counter).
   combinators over `Promise.allSettled`, `WORKFLOW_ARRAY_CAP` items max;
   concurrency is bounded host-side (each `agent()` waits on a permit).
 - `phase(title)` / `log(msg)` — **sync**; `push_progress` must stay
-  non-blocking (fire into a channel).
+  non-blocking (fire into a channel). `phase()` interns; the group node
+  is published only on first sight of a title.
 - `workflow(nameOrRef, args?)` — host-backed at depth 0, always throws
   `WORKFLOW_NESTING_LIMIT_ERROR` at depth ≥ 1 (one-level nesting).
 - `args` (frozen JSON input) and `budget`
@@ -58,12 +78,27 @@ limit; `runtime.idle()` flushes tail microtasks regardless of outcome.
 
 ## Resume replay (longest-unchanged-prefix)
 
-The journal cache is consulted only while the per-run `diverged` flag is
-false; the first miss flips it permanently, so every later `agent()`
-re-spawns. `AgentCacheKey` = phase title + verbatim prompt + canonical
-opts whitelist (`schema`/`model`/`effort`/`isolation`/`agentType` —
-cosmetic opts like `label`/`stall_ms` never change the key). Hashing is
-host-side so the engine carries no crypto dep.
+The journal cache is consulted only while `WorkflowRunState::replay_allowed`
+holds; the first miss latches divergence, so every later `agent()`
+re-spawns.
+
+`AgentCacheKey` = **run-global call ordinal** + verbatim prompt +
+canonical opts whitelist (`schema`/`model`/`effort`/`isolation`/
+`agentType`). Two rules the key encodes, both load-bearing:
+
+- The **ordinal must be in the key.** Without it every iteration of a
+  `loop-until-count` / `loop-until-dry` script — and every `parallel()`
+  fan-out over one prompt — collapses onto a single journal entry, and a
+  resumed run replays that one recorded value for all of them.
+- **Cosmetic opts must not be** (`label`, `phase`, `stall_ms`). The key
+  hashes what changes an agent's output, not its presentation, so
+  relabelling a step or regrouping the progress tree between runs does
+  not re-spawn it.
+
+Lookup is **synchronous** (`WorkflowJournal` hydrates once at launch), so
+replay decisions and the divergence latch happen in `agent()` call order
+even inside `parallel()`. Hashing is host-side so the engine carries no
+crypto dep; bump `JOURNAL_KEY_VERSION` when the hashed tuple changes.
 
 ## Conventions
 

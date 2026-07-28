@@ -13,6 +13,61 @@ fn test_abort() -> coco_tool_runtime::TurnAbortSignal {
     coco_tool_runtime::TurnAbortSignal::from_token(tokio_util::sync::CancellationToken::new())
 }
 
+/// A default-mode permission context carrying `deny_rules` for the named agent
+/// types, so tests can exercise the `agent({agentType})` gate.
+fn permission_context(denied_agent_types: Vec<&str>) -> coco_types::ToolPermissionContext {
+    let mut deny_rules = coco_types::PermissionRulesBySource::new();
+    if !denied_agent_types.is_empty() {
+        deny_rules.insert(
+            coco_types::PermissionRuleSource::Session,
+            denied_agent_types
+                .into_iter()
+                .map(|agent_type| coco_types::PermissionRule {
+                    source: coco_types::PermissionRuleSource::Session,
+                    behavior: coco_types::PermissionBehavior::Deny,
+                    value: coco_types::PermissionRuleValue {
+                        tool_pattern: coco_types::ToolName::Agent.as_str().to_string(),
+                        rule_content: Some(agent_type.to_string()),
+                    },
+                })
+                .collect(),
+        );
+    }
+    coco_types::ToolPermissionContext {
+        mode: coco_types::PermissionMode::Default,
+        additional_dirs: Default::default(),
+        permission_rule_source_roots: Default::default(),
+        allow_rules: Default::default(),
+        deny_rules,
+        ask_rules: Default::default(),
+        bypass_available: false,
+        pre_plan_mode: None,
+        stripped_dangerous_rules: None,
+        session_plan_file: None,
+    }
+}
+
+/// A catalog holding the named agent types, so `agent({agentType})` resolution
+/// has something to find. Definitions are bare — the test cares about lookup and
+/// about the per-call overrides layered on top, not about their frontmatter.
+fn catalog(agent_types: Vec<&str>) -> Arc<coco_subagent::AgentCatalogSnapshot> {
+    let active = agent_types
+        .into_iter()
+        .map(|name| {
+            (
+                name.to_string(),
+                coco_types::AgentDefinition {
+                    agent_type: name.parse().expect("AgentTypeId::from_str is Infallible"),
+                    name: name.to_string(),
+                    source: coco_types::AgentSource::BuiltIn,
+                    ..Default::default()
+                },
+            )
+        })
+        .collect();
+    Arc::new(coco_subagent::AgentCatalogSnapshot::new(active, Vec::new()))
+}
+
 fn host() -> WorkflowRunHost {
     WorkflowRunHost {
         agent: Arc::new(NoOpAgentHandle),
@@ -29,7 +84,7 @@ fn host() -> WorkflowRunHost {
             parent_tool_filter: coco_types::ToolFilter::unrestricted(),
             active_shell_tool: coco_types::ActiveShellTool::Disabled,
             log_assistant_responses: None,
-            parent_mode: coco_types::PermissionMode::Default,
+            permission_context: permission_context(Vec::new()),
             mcp_tool_exposure: coco_types::McpToolExposure::UseTool,
             mcp_server_tool_exposure: Default::default(),
             agent_catalog: None,
@@ -44,6 +99,7 @@ fn host() -> WorkflowRunHost {
             super::workflow_local_concurrency(),
         )),
         journal: Arc::new(super::WorkflowJournal::new(None)),
+        run_state: Arc::new(coco_workflow_runtime::WorkflowRunState::default()),
         // Tests construct the host directly (not via `Arc::new_cyclic`), and none
         // exercise nested `workflow()`, so a dangling weak self-ref is fine.
         me: std::sync::Weak::<super::WorkflowRunHost>::new(),
@@ -75,8 +131,9 @@ async fn budget_exhausted_reflects_total_and_spent() {
 }
 
 #[tokio::test]
-async fn build_request_synthesizes_definition_for_workflow_overrides() {
-    let host = host();
+async fn build_request_layers_workflow_overrides_onto_the_catalog_definition() {
+    let mut host = host();
+    host.spawn_ctx.agent_catalog = Some(catalog(vec!["Explore"]));
     let request = host
         .build_request(
             "research".to_string(),
@@ -477,7 +534,7 @@ fn cyclic_host_with_cwd(cwd: std::path::PathBuf) -> Arc<WorkflowRunHost> {
             parent_tool_filter: coco_types::ToolFilter::unrestricted(),
             active_shell_tool: coco_types::ActiveShellTool::Disabled,
             log_assistant_responses: None,
-            parent_mode: coco_types::PermissionMode::Default,
+            permission_context: permission_context(Vec::new()),
             mcp_tool_exposure: coco_types::McpToolExposure::UseTool,
             mcp_server_tool_exposure: Default::default(),
             agent_catalog: None,
@@ -492,6 +549,7 @@ fn cyclic_host_with_cwd(cwd: std::path::PathBuf) -> Arc<WorkflowRunHost> {
             super::workflow_local_concurrency(),
         )),
         journal: Arc::new(super::WorkflowJournal::new(None)),
+        run_state: Arc::new(coco_workflow_runtime::WorkflowRunState::default()),
         me: me.clone() as std::sync::Weak<dyn coco_workflow_runtime::WorkflowHost>,
     })
 }
@@ -603,4 +661,118 @@ fn run_nested_workflow_child_workflow_call_is_guarded() {
         result,
         serde_json::json!(coco_workflow_runtime::WORKFLOW_NESTING_LIMIT_ERROR)
     );
+}
+
+/// Build a host whose spawn context carries `deny_rules` for the given agent
+/// types, so `agent({agentType})` resolution can be exercised against them.
+fn host_denying(denied_agent_types: Vec<&str>) -> WorkflowRunHost {
+    let mut host = host();
+    host.spawn_ctx.permission_context = permission_context(denied_agent_types);
+    host
+}
+
+#[tokio::test]
+async fn agent_type_denied_by_permission_rule_is_rejected() {
+    let host = host_denying(vec!["deploy-bot"]);
+    let opts = WorkflowAgentOpts {
+        agent_type: Some("deploy-bot".to_string()),
+        ..WorkflowAgentOpts::default()
+    };
+    let error = host
+        .build_request("do it".to_string(), &opts, test_abort())
+        .expect_err("a denied agent type must not resolve");
+    assert!(
+        error.contains("denied by permission rule 'Agent(deploy-bot)'"),
+        "error should name the rule that blocked it: {error}"
+    );
+}
+
+#[tokio::test]
+async fn unknown_agent_type_is_rejected_rather_than_silently_defaulted() {
+    // Falling back to general-purpose here would run a different agent than the
+    // script asked for, with no signal to the script or the user.
+    let mut host = host();
+    host.spawn_ctx.agent_catalog = Some(catalog(vec!["Explore", "general-purpose"]));
+    let opts = WorkflowAgentOpts {
+        agent_type: Some("typo-agent".to_string()),
+        ..WorkflowAgentOpts::default()
+    };
+    let error = host
+        .build_request("do it".to_string(), &opts, test_abort())
+        .expect_err("an unknown agent type must not resolve");
+    assert!(
+        error.contains("'typo-agent' not found"),
+        "error should name the missing type: {error}"
+    );
+    assert!(
+        error.contains("Explore"),
+        "error should list the permitted alternatives: {error}"
+    );
+}
+
+#[tokio::test]
+async fn unknown_agent_type_error_omits_denied_alternatives() {
+    // Listing a denied type would leak the existence of restricted agents.
+    let mut host = host_denying(vec!["deploy-bot"]);
+    host.spawn_ctx.agent_catalog = Some(catalog(vec!["Explore", "deploy-bot"]));
+    let opts = WorkflowAgentOpts {
+        agent_type: Some("typo-agent".to_string()),
+        ..WorkflowAgentOpts::default()
+    };
+    let error = host
+        .build_request("do it".to_string(), &opts, test_abort())
+        .expect_err("an unknown agent type must not resolve");
+    assert!(error.contains("Explore"), "{error}");
+    assert!(!error.contains("deploy-bot"), "{error}");
+}
+
+#[tokio::test]
+async fn no_agent_type_still_resolves_to_general_purpose() {
+    let host = host();
+    let request = host
+        .build_request(
+            "do it".to_string(),
+            &WorkflowAgentOpts::default(),
+            test_abort(),
+        )
+        .expect("default resolution succeeds");
+    assert_eq!(
+        request
+            .input
+            .definition
+            .as_ref()
+            .expect("definition")
+            .name
+            .as_str(),
+        coco_types::SubagentType::GeneralPurpose.as_str()
+    );
+}
+
+#[test]
+fn empty_result_preview_matches_only_the_found_nothing_shapes() {
+    for empty in [
+        None,
+        Some(""),
+        Some("[]"),
+        Some("{}"),
+        Some("{\"findings\": []}"),
+    ] {
+        assert!(
+            super::is_empty_result_preview(empty),
+            "{empty:?} should count as an empty result"
+        );
+    }
+    // A real answer that happens to be small is NOT empty — collapsing these
+    // would blunt the signal the census exists to carry.
+    for present in [
+        Some("{\"count\": 0}"),
+        Some("{\"findings\": [], \"notes\": \"x\"}"),
+        Some("[1]"),
+        Some("no findings"),
+    ] {
+        assert!(
+            !super::is_empty_result_preview(present),
+            "{present:?} should NOT count as an empty result"
+        );
+    }
 }

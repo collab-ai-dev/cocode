@@ -47,16 +47,28 @@ pub struct WorkflowAgentOpts {
     pub stall_ms: Option<i64>,
 }
 
-/// Cache key for resume replay (mirrors CC's `journalKey` inputs). The engine
-/// builds one of these per `agent()` call from the prompt, the phase title, and
-/// the canonicalized cache-relevant opts; the HOST hashes it
-/// (`version:sha256(phase \0 prompt \0 canonical_opts)`) before consulting the
-/// journal. Keeping the hashing host-side lets the host pick the digest + version
-/// without pulling a crypto dep into the engine crate.
+/// Cache key for resume replay. The engine builds one per `agent()` call from
+/// the run-global call ordinal, the prompt, and the canonicalized
+/// cache-relevant opts; the HOST hashes it
+/// (`version:sha256(call_index \0 prompt \0 canonical_opts)`) before consulting
+/// the journal. Keeping the hashing host-side lets the host pick the digest +
+/// version without pulling a crypto dep into the engine crate.
+///
+/// **Why the ordinal is in the key.** Without it a script that calls `agent()`
+/// with the same prompt more than once — every `loop-until-count` and
+/// `loop-until-dry` pattern the tool prose teaches, and any `parallel()` fan-out
+/// over one prompt — produces a single journal key, so a resumed run replays one
+/// recorded value for every one of those calls. The ordinal makes each call
+/// site's key distinct while preserving the longest-unchanged-prefix contract:
+/// editing, inserting or deleting a call shifts every later ordinal, so the
+/// first changed call misses and the divergence latch re-runs the tail. (CC gets
+/// the same property from a chained prefix hash; the ordinal is the same
+/// guarantee without carrying chain state across the nesting boundary.)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentCacheKey {
-    /// Phase title this agent belongs to (`""` when none) — `opts.phase`.
-    pub phase_title: String,
+    /// 0-based lifetime `agent()` ordinal within the run, shared with nested
+    /// child workflows.
+    pub call_index: i32,
     /// The verbatim `agent()` prompt.
     pub prompt: String,
     /// Deterministic serialization of the cache-relevant opts whitelist
@@ -67,11 +79,10 @@ pub struct AgentCacheKey {
 }
 
 impl AgentCacheKey {
-    /// Build a cache key from the resolved call inputs. `phase_title` defaults to
-    /// the empty string when the call has no phase, matching CC's `journalKey`.
-    pub fn new(prompt: String, opts: &WorkflowAgentOpts) -> Self {
+    /// Build a cache key from the resolved call inputs.
+    pub fn new(call_index: i32, prompt: String, opts: &WorkflowAgentOpts) -> Self {
         Self {
-            phase_title: opts.phase.clone().unwrap_or_default(),
+            call_index,
             prompt,
             canonical_opts: canonical_agent_opts(opts),
         }
@@ -81,6 +92,9 @@ impl AgentCacheKey {
 /// The cache-relevant `agent()` opts whitelist (CC `canonicalizeAgentOpts`):
 /// only these fields participate in the resume cache key, so cosmetic opts
 /// (`label`, `phase`, `stall_ms`) never change which cached result is replayed.
+/// The key hashes what changes the agent's **output**, not its presentation —
+/// relabelling a step or regrouping the progress tree between runs must not
+/// re-spawn it.
 const CACHE_OPTS_WHITELIST: [&str; 5] = ["schema", "model", "effort", "isolation", "agentType"];
 
 /// Canonicalize the cache-relevant opts into a deterministic string. Serializes
@@ -184,10 +198,16 @@ pub trait WorkflowHost: Send + Sync + 'static {
 
     /// Resume cache lookup: `Some(value)` on a journal hit (the prior run
     /// completed this exact `agent()` call), `None` on a miss. The engine
-    /// consults this *only while the replay cursor has not diverged* (see the
-    /// per-run `diverged` flag); a hit short-circuits the spawn and emits a
-    /// `cached: true` progress event. Default no-op (no journal ⇒ always miss).
-    async fn cached_agent_result(&self, _key: &AgentCacheKey) -> Option<serde_json::Value> {
+    /// consults this *only while the replay cursor has not diverged* (see
+    /// [`WorkflowRunState::replay_allowed`](crate::WorkflowRunState::replay_allowed));
+    /// a hit short-circuits the spawn and emits a `cached: true` progress event.
+    /// Default no-op (no journal ⇒ always miss).
+    ///
+    /// **Synchronous by contract.** The journal is hydrated once at launch, so
+    /// a lookup is a map probe. Keeping it off the await path means replay
+    /// decisions — including the divergence latch — happen in `agent()` call
+    /// order even when the calls were fired concurrently by `parallel()`.
+    fn cached_agent_result(&self, _key: &AgentCacheKey) -> Option<serde_json::Value> {
         None
     }
 
@@ -197,11 +217,14 @@ pub trait WorkflowHost: Send + Sync + 'static {
     async fn record_agent_result(&self, _key: &AgentCacheKey, _value: &serde_json::Value) {}
 
     /// `workflow(nameOrRef, args)` → run a saved or `{scriptPath}` child workflow
-    /// inline, sharing this run's governance (the same concurrency semaphore,
-    /// token budget, journal, abort signal, and agent counter — because the child
-    /// engine is re-entered on the SAME thread with the SAME host). `depth` is the
-    /// child engine's depth (the parent installs `workflow()` at depth 0, so the
-    /// child is invoked at depth 1); the child engine installs a throwing
+    /// inline, sharing this run's governance: the same concurrency semaphore,
+    /// token budget, journal and abort signal (from the SAME host Arc) plus the
+    /// same agent ordinal, phase table and replay cursor (from the SAME
+    /// [`WorkflowRunState`](crate::WorkflowRunState)). The implementor MUST
+    /// forward both — re-entering with fresh state would let a child restart the
+    /// lifetime agent cap and collide with the parent's progress rows. `depth`
+    /// is the child engine's depth (the parent installs `workflow()` at depth 0,
+    /// so the child is invoked at depth 1); the child engine installs a throwing
     /// `workflow()`, enforcing the one-level nesting limit. Returns the child's
     /// resolved value, or `Err` (unknown name, unreadable scriptPath, child syntax
     /// error, child runtime failure) which the JS `workflow()` rejects with so the

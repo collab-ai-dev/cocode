@@ -207,6 +207,12 @@ impl TaskRuntime {
         fields(task_id = %task_id, error_bytes = error.len())
     )]
     pub async fn mark_failed(&self, task_id: &str, error: &str) {
+        self.mark_failed_with(task_id, error, None).await;
+    }
+
+    /// [`Self::mark_failed`] carrying an optional `<diagnostics>` block — the
+    /// recovery instructions a failed workflow hands its owning agent.
+    pub async fn mark_failed_with(&self, task_id: &str, error: &str, diagnostics: Option<String>) {
         self.append_output(task_id, error).await;
         // Record the error text on the sidecar for task inspection paths.
         self.manager.set_error(task_id, error.to_string()).await;
@@ -214,7 +220,10 @@ impl TaskRuntime {
         self.push_agent_notification(
             task_id,
             TerminalStatus::Failed,
-            AgentCompletionPayload::default(),
+            AgentCompletionPayload {
+                diagnostics,
+                ..AgentCompletionPayload::default()
+            },
             Some(error.to_string()),
         )
         .await;
@@ -278,6 +287,7 @@ impl TaskRuntime {
                     path: w.path,
                     branch: w.branch,
                 }),
+                diagnostics: payload.diagnostics,
                 error,
                 killed_by: state.killed_by,
             },
@@ -515,6 +525,9 @@ impl TaskHandle for TaskRuntime {
     }
     async fn mark_failed(&self, task_id: &str, error: &str) {
         TaskRuntime::mark_failed(self, task_id, error).await
+    }
+    async fn mark_failed_with_diagnostics(&self, task_id: &str, error: &str, diagnostics: String) {
+        TaskRuntime::mark_failed_with(self, task_id, error, Some(diagnostics)).await
     }
     async fn mark_stopped(&self, task_id: &str) {
         TaskRuntime::mark_stopped(self, task_id).await

@@ -11,7 +11,7 @@
 //!
 //! Hashing lives here (host side) so the engine crate stays crypto-free, exactly
 //! as [`coco_workflow_runtime::AgentCacheKey`] documents. The key is
-//! `"<VERSION>:" + sha256(phase \0 prompt \0 canonical_opts)`.
+//! `"<VERSION>:" + sha256(call_index \0 prompt \0 canonical_opts)`.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -25,7 +25,9 @@ use sha2::Sha256;
 
 /// Cache-key schema version. Bump when the hashed-tuple layout or
 /// canonicalization changes so stale journals never produce false hits.
-const JOURNAL_KEY_VERSION: &str = "wfj1";
+/// `wfj2` swapped the phase title for the run-global call ordinal — see
+/// [`coco_workflow_runtime::AgentCacheKey`].
+const JOURNAL_KEY_VERSION: &str = "wfj2";
 
 /// NUL separator between the hashed tuple fields (CC `journalKey`).
 const FIELD_SEP: u8 = 0;
@@ -62,11 +64,13 @@ pub fn script_path_for_output(output_path: &std::path::Path) -> PathBuf {
     output_path.with_extension("workflow.js")
 }
 
-/// Compute the resume cache key: `"<VERSION>:" + hex(sha256(phase \0 prompt \0
-/// canonical_opts))`. Mirrors CC's `journalKey`.
+/// Compute the resume cache key: `"<VERSION>:" + hex(sha256(call_index \0
+/// prompt \0 canonical_opts))`. The ordinal is what keeps repeated identical
+/// `agent()` prompts — every `loop-until-count` script — from collapsing onto a
+/// single journal entry that then replays one value for all of them.
 pub fn journal_key(key: &AgentCacheKey) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(key.phase_title.as_bytes());
+    hasher.update(key.call_index.to_string().as_bytes());
     hasher.update([FIELD_SEP]);
     hasher.update(key.prompt.as_bytes());
     hasher.update([FIELD_SEP]);
@@ -104,20 +108,25 @@ impl WorkflowJournal {
         Self { cache, path }
     }
 
-    /// Replay lookup: `Some(value)` on a cache hit. On a miss, append a
-    /// `started` marker (best-effort) so a later resume can see the call was
-    /// attempted, mirroring CC's "started before run".
-    pub async fn lookup(&self, key: &AgentCacheKey) -> Option<serde_json::Value> {
+    /// Replay lookup: `Some(value)` on a cache hit. Synchronous — the cache is
+    /// hydrated once at construction, so this is a map probe and the engine can
+    /// settle replay decisions in `agent()` call order without awaiting.
+    pub fn lookup(&self, key: &AgentCacheKey) -> Option<serde_json::Value> {
         let hash = journal_key(key);
-        let hit = self
-            .cache
+        self.cache
             .lock()
             .ok()
-            .and_then(|cache| cache.get(&hash).cloned());
-        if hit.is_none() {
-            self.append(JournalEntry::Started { key: hash }).await;
-        }
-        hit
+            .and_then(|cache| cache.get(&hash).cloned())
+    }
+
+    /// Append a `started` marker so a post-crash journal shows which calls began
+    /// but never finished. Best-effort forensics: hydration ignores these lines,
+    /// so callers fire it without blocking the spawn.
+    pub async fn record_started(&self, key: &AgentCacheKey) {
+        self.append(JournalEntry::Started {
+            key: journal_key(key),
+        })
+        .await;
     }
 
     /// Record a completed result: update the in-memory cache and append a
