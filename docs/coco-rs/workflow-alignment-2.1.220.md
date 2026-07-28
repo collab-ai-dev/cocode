@@ -181,15 +181,15 @@ CC's deliberately narrow empty-shape test (`[]`, `{}`, `{"k": []}` — not
 
 Ordered by value. None is a correctness bug in what ships today.
 
-1. **Auto-mode hand-off classifier** (`tin` `:345816`; runtime_core §7.4, the
-   window's one undocumented behavioural DELTA). In `auto` mode CC retains every
-   workflow subagent's transcript and runs it through the two-stage classifier
-   before the result reaches the script, routing the verdict to `failures` +
-   `workflow_log` for `{schema}` agents because their text channel is not their
-   return channel. It also classifies the *dispatch* (`:387236`) and fails
-   **closed** on an unclassifiable schema. coco's subagents inherit auto mode so
-   their own tool calls are screened, but the hand-off boundary is open. This is
-   the largest remaining behavioural gap and is security-shaped.
+1. **Auto-mode subagent screening.** Two separate mechanisms, analysed and
+   designed in
+   [workflow-auto-mode-screening.md](workflow-auto-mode-screening.md):
+   the **dispatch screen** (`j`/`vpd` — blocks a workflow `agent()` before it
+   spawns; **workflow-only**, because only the workflow path dispatches a
+   subagent without a model tool call to classify) and the **hand-off review**
+   (`tin` — advisory, never blocks, absent on all three of coco's subagent
+   boundaries). The dispatch screen is the real gap; the hand-off review is a
+   deferred product decision.
 2. **`agent({schema})` size bound.** CC caps a user schema at 1e5 nodes / 1e4
    depth before Ajv codegen (`uPu` `:231097`) and at 4 KiB for the classifier
    prompt. coco passes the schema straight through to `output_schema`.
