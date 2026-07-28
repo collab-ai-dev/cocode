@@ -858,6 +858,21 @@ impl QueryEngine {
             permission_bridge: self.permission_bridge.clone(),
             app_state: self.app_state.clone(),
             auto_mode_state: self.auto_mode_state.clone(),
+            // Built here rather than cached on the engine so it always reads
+            // the live auto-mode rules — `engine_builder` can set them after
+            // construction, and a snapshot taken any earlier would go stale.
+            //
+            // Gated on the same wiring the tool-call classifier is gated on: no
+            // denial tracker means auto-mode classification is not configured
+            // for this session, so there is nothing to screen with.
+            subagent_screen: self.denial_tracker.as_ref().map(|_| {
+                Arc::new(crate::subagent_screen_impl::AutoModeSubagentScreen::new(
+                    self.model_runtimes.clone(),
+                    self.usage_accounting.clone(),
+                    self.auto_mode_rules.clone(),
+                    self.tools.clone(),
+                )) as coco_tool_runtime::SubagentDispatchScreenHandle
+            }),
             file_read_state: self.file_read_state.clone(),
             file_history: self.file_history.clone(),
             config_home: self.config_home.clone(),

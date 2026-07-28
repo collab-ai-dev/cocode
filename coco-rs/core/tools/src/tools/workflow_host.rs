@@ -34,6 +34,7 @@ use coco_workflow_runtime::WORKFLOW_STALL_MS_DEFAULT;
 use coco_workflow_runtime::WORKFLOW_STALL_RETRY;
 use coco_workflow_runtime::WORKFLOW_SYNC_EVAL_BUDGET;
 use coco_workflow_runtime::WorkflowAgentOpts;
+use coco_workflow_runtime::WorkflowAgentOutcome;
 use coco_workflow_runtime::WorkflowAgentResult;
 use coco_workflow_runtime::WorkflowEngine;
 use coco_workflow_runtime::WorkflowHost;
@@ -58,8 +59,15 @@ pub(crate) struct WorkflowSpawnContext {
     pub log_assistant_responses: Option<bool>,
     /// The launching turn's permission context. Carried whole (not just its
     /// `mode`) because `agent({agentType})` resolves against the same
-    /// `Agent(<type>)` rule surface as the Agent tool.
+    /// `Agent(<type>)` rule surface as the Agent tool, and the dispatch screen
+    /// reads its mode.
     pub permission_context: coco_types::ToolPermissionContext,
+    /// The launching agent's transcript, so the dispatch screen's classifier
+    /// judges each `agent()` request in the context that produced it.
+    pub messages: Arc<Vec<Arc<coco_messages::Message>>>,
+    /// Screens each `agent()` dispatch — see
+    /// [`coco_tool_runtime::subagent_screen`].
+    pub subagent_screen: coco_tool_runtime::SubagentDispatchScreenHandle,
     pub mcp_tool_exposure: coco_types::McpToolExposure,
     pub mcp_server_tool_exposure: std::collections::HashMap<String, coco_types::McpToolExposure>,
     pub agent_catalog: Option<Arc<coco_subagent::AgentCatalogSnapshot>>,
@@ -293,7 +301,30 @@ impl WorkflowHost for WorkflowRunHost {
         &self,
         prompt: String,
         opts: WorkflowAgentOpts,
-    ) -> Result<WorkflowAgentResult, String> {
+    ) -> Result<WorkflowAgentOutcome, String> {
+        // Auto-mode dispatch screen. This call never passed through the tool
+        // pipeline — it is a script call, not a model tool call — so without
+        // this the Workflow tool would be a way to dispatch subagents that the
+        // equivalent `Agent` call could not. Runs before the permit so a
+        // refused dispatch never occupies a concurrency slot.
+        let ctx = &self.spawn_ctx;
+        let dispatch = coco_tool_runtime::SubagentDispatch {
+            prompt: &prompt,
+            subagent_type: opts.agent_type.as_deref(),
+            output_schema: opts.schema.as_ref(),
+            permission_context: &ctx.permission_context,
+            messages: &ctx.messages,
+            cwd: ctx.cwd.as_deref().and_then(std::path::Path::to_str),
+        };
+        if let coco_tool_runtime::SubagentDispatchVerdict::Block { reason } =
+            ctx.subagent_screen.screen(dispatch).await
+        {
+            return Ok(WorkflowAgentOutcome::Refused {
+                reason: format!("blocked by safety classifier: {reason}"),
+                blocked: true,
+            });
+        }
+
         // Bound concurrent subagent spawns: each agent() call queues on the
         // shared FIFO semaphore. Held across every retry; released on return.
         let _permit = self
@@ -335,7 +366,7 @@ impl WorkflowHost for WorkflowRunHost {
                 Ok(join_result) => {
                     let response = join_result
                         .map_err(|e| format!("workflow subagent task join error: {e}"))??;
-                    return convert_response(response, &opts);
+                    return convert_response(response, &opts).map(WorkflowAgentOutcome::Completed);
                 }
                 Err(_elapsed) => {
                     // Stall: abort this attempt's subagent. Retry if budget
@@ -637,6 +668,9 @@ struct AgentCensus {
     done: i32,
     errored: i32,
     skipped: i32,
+    /// Refused by the auto-mode dispatch screen. Separate from `errored` so a
+    /// policy block never reads as an agent that tried and failed.
+    blocked: i32,
     /// Done agents whose result was absent or an empty container. Counted
     /// separately because "12 done, 12 empty" and "12 done, 1 empty" call for
     /// completely different follow-ups: the first says the fan-out found nothing
@@ -648,8 +682,9 @@ struct AgentCensus {
 impl AgentCensus {
     fn render(&self) -> String {
         format!(
-            "agents_done={} agents_error={} agents_skipped={} agents_empty_result={}",
-            self.done, self.errored, self.skipped, self.empty
+            "agents_done={} agents_error={} agents_skipped={} agents_blocked={} \
+             agents_empty_result={}",
+            self.done, self.errored, self.skipped, self.blocked, self.empty
         )
     }
 }
@@ -697,6 +732,7 @@ async fn agent_census(
     for event in &extras.workflow_progress {
         let coco_types::WorkflowProgressEvent::WorkflowAgent {
             state,
+            blocked,
             skipped,
             result_preview,
             ..
@@ -711,6 +747,7 @@ async fn agent_census(
                     census.empty += 1;
                 }
             }
+            coco_types::WorkflowAgentState::Error if *blocked => census.blocked += 1,
             coco_types::WorkflowAgentState::Error if *skipped => census.skipped += 1,
             coco_types::WorkflowAgentState::Error => census.errored += 1,
             coco_types::WorkflowAgentState::Start | coco_types::WorkflowAgentState::Progress => {}

@@ -34,6 +34,7 @@ use crate::error::ScriptSnafu;
 use crate::error::SetupSnafu;
 use crate::error::WorkflowRuntimeError;
 use crate::host::WorkflowAgentOpts;
+use crate::host::WorkflowAgentOutcome;
 use crate::host::WorkflowHost;
 use crate::run_state::WorkflowRunState;
 
@@ -440,7 +441,30 @@ fn install_globals<'js>(
                 // sync window for the chunk that follows.
                 sync_budget.reset();
                 match agent_outcome {
-                    Ok(result) => {
+                    // Refused before any spawn: resolve to `null` rather than
+                    // rejecting. The row records why, and `parallel`/`pipeline`
+                    // treat the slot exactly like any other dropped one.
+                    Ok(WorkflowAgentOutcome::Refused { reason, blocked }) => {
+                        host.push_progress(agent_event(
+                            index,
+                            WorkflowAgentState::Error,
+                            label,
+                            phase_title,
+                            phase_index,
+                            /*cached*/ false,
+                            DoneDetails {
+                                error: Some(reason),
+                                refusal: Some(if blocked {
+                                    Refusal::Blocked
+                                } else {
+                                    Refusal::Skipped
+                                }),
+                                ..DoneDetails::default()
+                            },
+                        ));
+                        Ok(rquickjs::Value::new_null(ctx2.clone()))
+                    }
+                    Ok(WorkflowAgentOutcome::Completed(result)) => {
                         if let Some(tokens) = result.tokens {
                             host.record_agent_tokens(tokens);
                         }
@@ -462,6 +486,7 @@ fn install_globals<'js>(
                                 duration_ms: result.duration_ms,
                                 result_preview,
                                 error: None,
+                                refusal: None,
                             },
                         ));
                         json_to_js(&ctx2, &result.value)
@@ -595,8 +620,20 @@ fn agent_event(
         result_preview: details.result_preview,
         prompt_preview: None,
         error: details.error,
-        skipped: false,
+        blocked: matches!(details.refusal, Some(Refusal::Blocked)),
+        skipped: matches!(details.refusal, Some(Refusal::Skipped)),
     }
+}
+
+/// Why an `agent()` call ended without running. Kept distinct because the
+/// completion census must not read a policy block as an agent failure, nor a
+/// user skip as a policy block.
+#[derive(Clone, Copy)]
+enum Refusal {
+    /// Refused by the auto-mode dispatch screen.
+    Blocked,
+    /// Refused by a person.
+    Skipped,
 }
 
 #[derive(Default)]
@@ -607,6 +644,7 @@ struct DoneDetails {
     duration_ms: Option<i64>,
     result_preview: Option<String>,
     error: Option<String>,
+    refusal: Option<Refusal>,
 }
 
 fn preview_value(value: &serde_json::Value) -> Option<String> {

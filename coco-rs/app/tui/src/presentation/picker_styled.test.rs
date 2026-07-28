@@ -562,6 +562,7 @@ fn background_tasks_detail_workflow_shows_progress_events() {
                 result_preview: Some("mapped crates".to_string()),
                 prompt_preview: None,
                 error: None,
+                blocked: false,
                 skipped: false,
             },
             coco_types::WorkflowProgressEvent::WorkflowLog {
@@ -621,6 +622,7 @@ fn background_tasks_detail_workflow_localizes_progress_units() {
             result_preview: None,
             prompt_preview: None,
             error: None,
+            blocked: false,
             skipped: false,
         }],
     )];
@@ -668,6 +670,7 @@ fn background_tasks_detail_workflow_shows_prompt_preview_for_running_agent() {
             result_preview: None,
             prompt_preview: Some("map the crates and summarize risk".to_string()),
             error: None,
+            blocked: false,
             skipped: false,
         }],
     )];
@@ -713,6 +716,7 @@ fn background_tasks_detail_workflow_filters_agent_progress_by_status() {
                 result_preview: None,
                 prompt_preview: Some("map crates".to_string()),
                 error: None,
+                blocked: false,
                 skipped: false,
             },
             coco_types::WorkflowProgressEvent::WorkflowAgent {
@@ -733,6 +737,7 @@ fn background_tasks_detail_workflow_filters_agent_progress_by_status() {
                 result_preview: Some("passed".to_string()),
                 prompt_preview: None,
                 error: None,
+                blocked: false,
                 skipped: false,
             },
             coco_types::WorkflowProgressEvent::WorkflowLog {
@@ -784,6 +789,7 @@ fn background_tasks_detail_workflow_renders_queued_and_skipped_statuses() {
                 result_preview: None,
                 prompt_preview: Some("wait your turn".to_string()),
                 error: None,
+                blocked: false,
                 skipped: false,
             },
             coco_types::WorkflowProgressEvent::WorkflowAgent {
@@ -804,6 +810,7 @@ fn background_tasks_detail_workflow_renders_queued_and_skipped_statuses() {
                 result_preview: None,
                 prompt_preview: None,
                 error: Some("skipped by user".to_string()),
+                blocked: false,
                 skipped: true,
             },
         ],

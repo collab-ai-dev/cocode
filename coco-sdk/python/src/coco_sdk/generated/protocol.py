@@ -3586,6 +3586,7 @@ class WorkflowProgressEventWorkflowAgent(BaseModel):
     label: str
     state: WorkflowAgentState
     agent_id: str | None = Field(default=None, alias="agentId")
+    blocked: bool = False
     cached: bool = False
     duration_ms: int | None = Field(default=None, alias="durationMs")
     error: str | None = None

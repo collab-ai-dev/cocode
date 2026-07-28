@@ -740,6 +740,7 @@ fn task_progress_adopts_the_cumulative_workflow_snapshot() {
         result_preview: None,
         prompt_preview: None,
         error: None,
+        blocked: false,
         skipped: false,
     };
 
@@ -844,6 +845,7 @@ fn task_progress_localizes_workflow_agent_summary() {
         result_preview: None,
         prompt_preview: None,
         error: None,
+        blocked: false,
         skipped: false,
     }];
     super::handle(

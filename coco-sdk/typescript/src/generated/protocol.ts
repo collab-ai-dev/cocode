@@ -2645,7 +2645,7 @@ export type RateLimitStatus = "allowed" | "allowed_warning" | "rejected";
  * Reasoning effort. Ordered from "off" through numeric intensity.
  * Provider-agnostic — `thinking_convert` maps to per-provider wire shapes.
  */
-export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "x_high" | "off" | "auto";
+export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "x_high" | "off" | "auto" | "max" | "ultra";
 
 /**
  * A reasoning file content part (file data that is part of reasoning).
@@ -3965,7 +3965,7 @@ export interface TextPart {
  * Unified thinking configuration for all providers.
  *
  * `effort` carries provider-agnostic intent — `Disable`, `Auto`, or
- * one of the numeric levels (`Minimal`..`XHigh`). Provider-specific
+ * one of the numeric levels (`Minimal`..`Ultra`). Provider-specific
  * wire toggles (e.g. DeepSeek's `{"thinking":{"type":"enabled"}}`)
  * flow through `options` verbatim.
  *
@@ -3974,7 +3974,7 @@ export interface TextPart {
  *     where the provider supports them, otherwise omit reasoning fields.
  *   * `Auto`    — "let the provider decide"; omit reasoning fields
  *     so the server-side default applies.
- *   * `Minimal`..`XHigh` — explicit numeric efforts; emitted via the
+ *   * `Minimal`..`Ultra` — explicit numeric efforts; emitted via the
  *     provider's typed reasoning channel.
  */
 export interface ThinkingLevel {
@@ -4446,6 +4446,12 @@ export type TuiOnlyEvent = {
   count: number;
   type: "cron_jobs_missed";
 } | {
+  command: string;
+  is_error: boolean;
+  job_id: string;
+  output: string;
+  type: "cron_script_result";
+} | {
   call_id: string;
   name: string;
   type: "tool_call_stream_start";
@@ -4799,6 +4805,7 @@ export interface WorkflowDialogPayload {
  */
 export type WorkflowProgressEvent = {
   agentId?: string | null;
+  blocked?: boolean;
   cached?: boolean;
   durationMs?: number | null;
   error?: string | null;

@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 use super::WorkflowEngine;
 use super::WorkflowRun;
 use crate::host::WorkflowAgentOpts;
+use crate::host::WorkflowAgentOutcome;
 use crate::host::WorkflowAgentResult;
 use crate::host::WorkflowHost;
 use crate::run_state::WorkflowRunState;
@@ -31,7 +32,7 @@ impl WorkflowHost for FakeHost {
         &self,
         prompt: String,
         opts: WorkflowAgentOpts,
-    ) -> Result<WorkflowAgentResult, String> {
+    ) -> Result<WorkflowAgentOutcome, String> {
         if self.fail_on.lock().unwrap().contains(&prompt) {
             return Err(format!("boom: {prompt}"));
         }
@@ -40,13 +41,13 @@ impl WorkflowHost for FakeHost {
             None => serde_json::Value::String(format!("ran: {prompt}")),
         };
         let model = opts.model;
-        Ok(WorkflowAgentResult {
+        Ok(WorkflowAgentOutcome::Completed(WorkflowAgentResult {
             value,
             model,
             tokens: Some(10),
             tool_calls: Some(1),
             duration_ms: Some(25),
-        })
+        }))
     }
 
     fn push_progress(&self, event: WorkflowProgressEvent) {
@@ -96,7 +97,7 @@ impl WorkflowHost for ConcurrencyHost {
         &self,
         prompt: String,
         _opts: WorkflowAgentOpts,
-    ) -> Result<WorkflowAgentResult, String> {
+    ) -> Result<WorkflowAgentOutcome, String> {
         let _permit = self
             .semaphore
             .clone()
@@ -109,13 +110,13 @@ impl WorkflowHost for ConcurrencyHost {
         tokio::task::yield_now().await;
         tokio::task::yield_now().await;
         self.in_flight.fetch_sub(1, Ordering::SeqCst);
-        Ok(WorkflowAgentResult {
+        Ok(WorkflowAgentOutcome::Completed(WorkflowAgentResult {
             value: serde_json::Value::String(format!("ran: {prompt}")),
             model: None,
             tokens: Some(1),
             tool_calls: Some(0),
             duration_ms: Some(1),
-        })
+        }))
     }
 
     fn push_progress(&self, _event: WorkflowProgressEvent) {}
@@ -158,15 +159,15 @@ impl WorkflowHost for SlowHost {
         &self,
         prompt: String,
         _opts: WorkflowAgentOpts,
-    ) -> Result<WorkflowAgentResult, String> {
+    ) -> Result<WorkflowAgentOutcome, String> {
         tokio::time::sleep(self.delay).await;
-        Ok(WorkflowAgentResult {
+        Ok(WorkflowAgentOutcome::Completed(WorkflowAgentResult {
             value: serde_json::Value::String(format!("ran: {prompt}")),
             model: None,
             tokens: Some(1),
             tool_calls: Some(0),
             duration_ms: Some(self.delay.as_millis() as i64),
-        })
+        }))
     }
 
     fn push_progress(&self, _event: WorkflowProgressEvent) {}
@@ -465,15 +466,15 @@ impl WorkflowHost for CacheHost {
         &self,
         prompt: String,
         _opts: WorkflowAgentOpts,
-    ) -> Result<WorkflowAgentResult, String> {
+    ) -> Result<WorkflowAgentOutcome, String> {
         self.spawns.fetch_add(1, Ordering::SeqCst);
-        Ok(WorkflowAgentResult {
+        Ok(WorkflowAgentOutcome::Completed(WorkflowAgentResult {
             value: serde_json::Value::String(format!("ran: {prompt}")),
             model: None,
             tokens: Some(1),
             tool_calls: Some(0),
             duration_ms: Some(1),
-        })
+        }))
     }
 
     fn push_progress(&self, _event: WorkflowProgressEvent) {}
@@ -556,7 +557,7 @@ impl WorkflowHost for ProgressTee {
         &self,
         prompt: String,
         opts: WorkflowAgentOpts,
-    ) -> Result<WorkflowAgentResult, String> {
+    ) -> Result<WorkflowAgentOutcome, String> {
         self.inner.run_agent(prompt, opts).await
     }
 
@@ -608,7 +609,7 @@ impl WorkflowHost for NestedHost {
         &self,
         prompt: String,
         _opts: WorkflowAgentOpts,
-    ) -> Result<WorkflowAgentResult, String> {
+    ) -> Result<WorkflowAgentOutcome, String> {
         // Shared admission gate: both parent and child agents queue here. If the
         // child allocated its own governance, more than `cap` could run at once.
         let _permit = self
@@ -623,13 +624,13 @@ impl WorkflowHost for NestedHost {
         tokio::task::yield_now().await;
         tokio::task::yield_now().await;
         self.in_flight.fetch_sub(1, Ordering::SeqCst);
-        Ok(WorkflowAgentResult {
+        Ok(WorkflowAgentOutcome::Completed(WorkflowAgentResult {
             value: serde_json::Value::String(format!("ran: {prompt}")),
             model: None,
             tokens: Some(1),
             tool_calls: Some(0),
             duration_ms: Some(1),
-        })
+        }))
     }
 
     fn push_progress(&self, _event: WorkflowProgressEvent) {}
@@ -763,14 +764,14 @@ fn repeated_identical_prompts_get_distinct_cache_keys() {
             &self,
             prompt: String,
             _opts: WorkflowAgentOpts,
-        ) -> Result<WorkflowAgentResult, String> {
-            Ok(WorkflowAgentResult {
+        ) -> Result<WorkflowAgentOutcome, String> {
+            Ok(WorkflowAgentOutcome::Completed(WorkflowAgentResult {
                 value: serde_json::Value::String(prompt),
                 model: None,
                 tokens: None,
                 tool_calls: None,
                 duration_ms: None,
-            })
+            }))
         }
 
         fn push_progress(&self, _event: WorkflowProgressEvent) {}
@@ -863,5 +864,76 @@ fn nested_workflow_continues_the_parent_agent_ordinal() {
         host.run_state.next_agent_index(),
         4,
         "parent 1 + child 2 + parent 1 = 4 ordinals consumed across the nesting boundary"
+    );
+}
+
+#[test]
+fn refused_dispatch_resolves_to_null_instead_of_rejecting() {
+    // A policy refusal must not blow up a script that did nothing wrong: the
+    // call resolves to `null`, the row records why, and the script keeps going.
+    struct RefusingHost {
+        progress: Mutex<Vec<WorkflowProgressEvent>>,
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl WorkflowHost for RefusingHost {
+        async fn run_agent(
+            &self,
+            _prompt: String,
+            _opts: WorkflowAgentOpts,
+        ) -> Result<WorkflowAgentOutcome, String> {
+            Ok(WorkflowAgentOutcome::Refused {
+                reason: "blocked by safety classifier: nope".to_string(),
+                blocked: true,
+            })
+        }
+
+        fn push_progress(&self, event: WorkflowProgressEvent) {
+            self.progress.lock().unwrap().push(event);
+        }
+    }
+
+    let host = Arc::new(RefusingHost {
+        progress: Mutex::new(Vec::new()),
+    });
+    let script = r#"
+        const a = await agent("do something");
+        const p = await parallel([() => agent("x"), () => agent("y")]);
+        return { a, p, reached_end: true };
+    "#;
+    let result = run_with_host(host.clone(), script, serde_json::Value::Null).expect("run");
+    assert_eq!(result["a"], serde_json::Value::Null);
+    assert_eq!(result["p"], serde_json::json!([null, null]));
+    assert_eq!(result["reached_end"], serde_json::json!(true));
+
+    // The row carries `blocked`, NOT `skipped` — a policy block is not a
+    // person's choice, and the completion census counts them apart.
+    let events = host.progress.lock().unwrap();
+    let refusals: Vec<(bool, bool)> = events
+        .iter()
+        .filter_map(|e| match e {
+            WorkflowProgressEvent::WorkflowAgent {
+                state: WorkflowAgentState::Error,
+                blocked,
+                skipped,
+                ..
+            } => Some((*blocked, *skipped)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(refusals, vec![(true, false); 3]);
+    // The Start row is emitted before the host is consulted, so a refusal
+    // arrives as a second frame on the SAME index. That is fine — the progress
+    // reducer upserts by `(kind, index)`, so the refusal supersedes the Start
+    // rather than adding a row. Assert the last frame per index is the refusal.
+    let mut last_state_by_index = std::collections::BTreeMap::new();
+    for event in events.iter() {
+        if let WorkflowProgressEvent::WorkflowAgent { index, state, .. } = event {
+            last_state_by_index.insert(*index, *state);
+        }
+    }
+    assert_eq!(
+        last_state_by_index.values().copied().collect::<Vec<_>>(),
+        vec![WorkflowAgentState::Error; 3]
     );
 }

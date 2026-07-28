@@ -7,6 +7,18 @@ use coco_workflow_runtime::WorkflowAgentOpts;
 use super::WorkflowRunHost;
 use super::WorkflowSpawnContext;
 
+/// Unwrap a completed `agent()` outcome; a refusal is a test failure.
+fn completed(
+    outcome: coco_workflow_runtime::WorkflowAgentOutcome,
+) -> coco_workflow_runtime::WorkflowAgentResult {
+    match outcome {
+        coco_workflow_runtime::WorkflowAgentOutcome::Completed(result) => result,
+        coco_workflow_runtime::WorkflowAgentOutcome::Refused { reason, .. } => {
+            panic!("expected a completed agent, got refusal: {reason}")
+        }
+    }
+}
+
 /// A throwaway per-attempt abort signal for tests that call `build_request`
 /// directly (production threads a fresh child-token signal per attempt).
 fn test_abort() -> coco_tool_runtime::TurnAbortSignal {
@@ -85,6 +97,8 @@ fn host() -> WorkflowRunHost {
             active_shell_tool: coco_types::ActiveShellTool::Disabled,
             log_assistant_responses: None,
             permission_context: permission_context(Vec::new()),
+            messages: Arc::new(Vec::new()),
+            subagent_screen: Arc::new(coco_tool_runtime::NoOpSubagentDispatchScreen),
             mcp_tool_exposure: coco_types::McpToolExposure::UseTool,
             mcp_server_tool_exposure: Default::default(),
             agent_catalog: None,
@@ -254,6 +268,7 @@ async fn run_agent_uses_captured_structured_output() {
         .await
         .expect("run_agent ok");
     // The captured StructuredOutput tool-call input wins over the text parse.
+    let result = completed(result);
     assert_eq!(result.value, serde_json::json!({ "answer": "from-tool" }));
 }
 
@@ -387,6 +402,7 @@ async fn run_agent_retries_after_stall_then_succeeds() {
 
     // Two attempts ran (the first stalled), and the second's result surfaced.
     assert_eq!(handle.calls.load(Ordering::SeqCst), 2);
+    let result = completed(result);
     assert_eq!(result.value, serde_json::json!("done"));
     assert_eq!(result.model.as_deref(), Some("anthropic/resolved-model"));
 }
@@ -495,7 +511,7 @@ async fn run_agent_surfaces_resolved_model() {
         .run_agent("compute".to_string(), WorkflowAgentOpts::default())
         .await
         .expect("run_agent ok");
-    assert_eq!(result.model.as_deref(), Some("anthropic/opus"));
+    assert_eq!(completed(result).model.as_deref(), Some("anthropic/opus"));
 }
 
 #[tokio::test]
@@ -535,6 +551,8 @@ fn cyclic_host_with_cwd(cwd: std::path::PathBuf) -> Arc<WorkflowRunHost> {
             active_shell_tool: coco_types::ActiveShellTool::Disabled,
             log_assistant_responses: None,
             permission_context: permission_context(Vec::new()),
+            messages: Arc::new(Vec::new()),
+            subagent_screen: Arc::new(coco_tool_runtime::NoOpSubagentDispatchScreen),
             mcp_tool_exposure: coco_types::McpToolExposure::UseTool,
             mcp_server_tool_exposure: Default::default(),
             agent_catalog: None,

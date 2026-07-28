@@ -77,6 +77,7 @@ async fn f_cycles_workflow_detail_filter_skipping_empty_statuses() {
             result_preview: None,
             prompt_preview: None,
             error: None,
+            blocked: false,
             skipped: false,
         },
         coco_types::WorkflowProgressEvent::WorkflowAgent {
@@ -97,6 +98,7 @@ async fn f_cycles_workflow_detail_filter_skipping_empty_statuses() {
             result_preview: None,
             prompt_preview: None,
             error: Some("failed".to_string()),
+            blocked: false,
             skipped: false,
         },
     ];
@@ -152,6 +154,7 @@ async fn f_cycles_to_queued_and_skipped_workflow_statuses() {
             result_preview: None,
             prompt_preview: None,
             error: None,
+            blocked: false,
             skipped: false,
         },
         coco_types::WorkflowProgressEvent::WorkflowAgent {
@@ -172,6 +175,7 @@ async fn f_cycles_to_queued_and_skipped_workflow_statuses() {
             result_preview: None,
             prompt_preview: None,
             error: Some("skipped by user".to_string()),
+            blocked: false,
             skipped: true,
         },
     ];

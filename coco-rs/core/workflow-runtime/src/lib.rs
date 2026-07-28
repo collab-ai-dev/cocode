@@ -31,6 +31,7 @@ pub use host::AgentCacheKey;
 pub use host::WORKFLOW_STALL_MS_DEFAULT;
 pub use host::WORKFLOW_STALL_RETRY;
 pub use host::WorkflowAgentOpts;
+pub use host::WorkflowAgentOutcome;
 pub use host::WorkflowAgentResult;
 pub use host::WorkflowHost;
 pub use host::canonical_agent_opts;

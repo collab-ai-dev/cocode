@@ -248,7 +248,24 @@ about that cost — not something folded into a correctness fix.
 
 ## 4. Status
 
-Analysis and design only. **Nothing in §3 is implemented.** The design is
-validated against the real seams (handle pattern, factory defaults,
-`can_use_tool_in_auto_mode`'s signature, `ToolUseContext.messages`), but it
-touches the permission path, so it is worth reviewing the plan before the code.
+**§3.1–3.4 (the dispatch screen) are implemented.** §3.5 (the hand-off review)
+is not, and is deliberately deferred per the recommendation above.
+
+Shipped:
+
+- `core/tool-runtime/src/subagent_screen.rs` — the seam, with
+  `NoOpSubagentDispatchScreen` as the unwired default.
+- `app/query/src/subagent_screen_impl.rs` — `AutoModeSubagentScreen`, which
+  rebuilds the `Agent` tool call and calls `try_classify_in_auto_mode`. Holds
+  a dispatch-scoped `DenialTracker`, deliberately not the turn's: a detached
+  run has nobody to escalate an interactive prompt to.
+- `WorkflowAgentOutcome::{Completed, Refused}` — a refused dispatch resolves to
+  `null` instead of rejecting.
+- `WorkflowProgressEvent::WorkflowAgent.blocked`, counted as `agents_blocked`
+  in the completion census, separate from `agents_error`.
+
+One behaviour worth recording, because it looks wrong and is not: the `Start`
+row is emitted before the host is consulted, so a refusal arrives as a *second*
+frame on the same index. CC does the same (`at()` at `:387394` precedes the
+screen inside `K` at `:387424`), and the index-keyed progress reducer collapses
+the pair onto one node whose final state is the refusal.

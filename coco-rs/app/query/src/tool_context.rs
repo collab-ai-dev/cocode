@@ -109,6 +109,11 @@ pub(crate) struct ToolContextFactory {
     pub(crate) permission_bridge: Option<ToolPermissionBridgeRef>,
     pub(crate) app_state: Option<Arc<RwLock<ToolAppState>>>,
     pub(crate) auto_mode_state: Option<Arc<coco_permissions::AutoModeState>>,
+    /// Screens subagent dispatches that bypass the tool pipeline (the workflow
+    /// runtime's `agent()`). `None` resolves to
+    /// `NoOpSubagentDispatchScreen` — no classifier wired, so nothing to
+    /// screen with.
+    pub(crate) subagent_screen: Option<coco_tool_runtime::SubagentDispatchScreenHandle>,
     pub(crate) file_read_state: Option<Arc<RwLock<coco_context::FileReadState>>>,
     pub(crate) file_history: Option<Arc<RwLock<FileHistoryState>>>,
     pub(crate) config_home: Option<PathBuf>,
@@ -616,6 +621,10 @@ impl ToolContextFactory {
             critical_system_reminder: None,
             in_progress_tool_use_ids: Arc::new(RwLock::new(Default::default())),
             side_query: Arc::new(coco_tool_runtime::NoOpSideQuery),
+            subagent_screen: self
+                .subagent_screen
+                .clone()
+                .unwrap_or_else(|| Arc::new(coco_tool_runtime::NoOpSubagentDispatchScreen)),
             mcp: self
                 .mcp_handle
                 .clone()

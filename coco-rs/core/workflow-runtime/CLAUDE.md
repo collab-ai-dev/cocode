@@ -40,8 +40,14 @@ group; index `0` stays reserved for the renderer's ungrouped fallback.
 
 ## DSL globals contract (`engine.rs`)
 
-- `agent(prompt, opts?)` — async, host-backed. Failure rejects; inside
-  `parallel`/`pipeline` a rejected slot becomes `null`.
+- `agent(prompt, opts?)` — async, host-backed, returning a
+  `WorkflowAgentOutcome`. A **failure** (`Err`) rejects; inside
+  `parallel`/`pipeline` a rejected slot becomes `null`. A **refusal**
+  (`Ok(Refused)` — the auto-mode dispatch screen, or a user skip) resolves
+  to `null` *without* raising: a script that did nothing wrong must not
+  blow up because policy declined one of its dispatches. The two are
+  distinct on the progress row too (`blocked` vs `skipped`), so the
+  completion census never reads a policy block as an agent that failed.
 - `parallel(funcs)` / `pipeline(items, ...stages)` — JS-defined
   combinators over `Promise.allSettled`, `WORKFLOW_ARRAY_CAP` items max;
   concurrency is bounded host-side (each `agent()` waits on a permit).
