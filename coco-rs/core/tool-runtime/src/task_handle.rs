@@ -266,6 +266,12 @@ pub struct AgentCompletionPayload {
     pub result: Option<String>,
     pub usage: Option<AgentUsage>,
     pub worktree: Option<AgentWorktree>,
+    /// Task-kind-specific guidance rendered as its own `<diagnostics>` block,
+    /// kept out of `<result>` so it can never be mistaken for the run's answer.
+    /// Workflows use it to point at the per-agent journal and to report how many
+    /// of their agents came back empty — the difference between "the agents
+    /// found nothing" and "the agents returned nothing".
+    pub diagnostics: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -511,6 +517,14 @@ pub trait TaskHandle: Send + Sync {
     async fn mark_completed(&self, _task_id: &str, _payload: AgentCompletionPayload) {}
 
     async fn mark_failed(&self, _task_id: &str, _error: &str) {}
+
+    /// [`Self::mark_failed`] plus a `<diagnostics>` block. A failed workflow
+    /// uses it to hand the model the literal `resumeFromRunId` call rather than
+    /// leaving it to reconstruct one from the tool schema. Defaults to the plain
+    /// failure so implementors opt in.
+    async fn mark_failed_with_diagnostics(&self, task_id: &str, error: &str, _diagnostics: String) {
+        self.mark_failed(task_id, error).await;
+    }
 
     async fn mark_stopped(&self, _task_id: &str) {}
 

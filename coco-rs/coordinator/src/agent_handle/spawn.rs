@@ -931,7 +931,7 @@ impl SwarmAgentHandle {
                                 .take(8)
                                 .collect::<String>()
                         );
-                        match m.create_for(&slug) {
+                        match m.create_for_serialized(&slug).await {
                             Ok(s) => {
                                 // Fire WorktreeCreate hook so user hooks can
                                 // react to per-agent worktree creation.
@@ -2015,6 +2015,7 @@ impl SwarmAgentHandle {
                                         branch: response.worktree_branch.clone(),
                                     }
                                 }),
+                                diagnostics: None,
                             };
                             task_registry_for_engine.mark_completed(tid, payload).await;
                         }
@@ -2416,6 +2417,7 @@ impl SwarmAgentHandle {
                                 result,
                                 usage,
                                 worktree,
+                                diagnostics: None,
                             },
                         )
                         .await;

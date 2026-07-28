@@ -39,6 +39,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
 
 use coco_error::ErrorExt;
 use coco_error::Location;
@@ -209,6 +210,13 @@ pub struct AgentWorktreeConfig {
 pub struct AgentWorktreeManager {
     canonical_git_root: PathBuf,
     config: AgentWorktreeConfig,
+    /// Serialises `git worktree add` against this root. `git` takes a
+    /// repository-wide lock and mutates `.git/worktrees/`, so concurrent adds
+    /// race: a `parallel()` fan-out of `isolation: "worktree"` agents would
+    /// otherwise fail some of its spawns outright. Width 1 costs the fan-out
+    /// ~N × setup serially before the agents themselves overlap — the price the
+    /// tool prose already warns about.
+    create_lock: tokio::sync::Mutex<()>,
 }
 
 impl AgentWorktreeManager {
@@ -219,6 +227,7 @@ impl AgentWorktreeManager {
         Self {
             canonical_git_root,
             config: AgentWorktreeConfig::default(),
+            create_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -276,7 +285,30 @@ impl AgentWorktreeManager {
         &self.canonical_git_root
     }
 
-    /// Create a fresh agent worktree with the given slug.
+    /// Serialised, non-blocking [`Self::create_for`] — the entry point every
+    /// async caller must use.
+    ///
+    /// Two hazards it closes over the raw sync form: concurrent `git worktree
+    /// add` invocations contending for the repository lock, and a multi-hundred
+    /// millisecond `git` subprocess parked on an async worker thread.
+    pub async fn create_for_serialized(
+        self: &Arc<Self>,
+        slug: &str,
+    ) -> Result<AgentWorktreeSession, WorktreeError> {
+        let _guard = self.create_lock.lock().await;
+        let manager = Arc::clone(self);
+        let slug = slug.to_string();
+        tokio::task::spawn_blocking(move || manager.create_for(&slug))
+            .await
+            .map_err(|error| WorktreeError::GitFailed {
+                stderr: format!("worktree creation task failed: {error}"),
+                location: Location::default(),
+            })?
+    }
+
+    /// Create a fresh agent worktree with the given slug. **Blocking** — async
+    /// callers go through [`Self::create_for_serialized`], which also holds the
+    /// per-root creation lock.
     ///
     /// Slug format: `agent-<first-8-hex>` derived from the agent id.
     /// Validated here to reject path separators + shell metacharacters.

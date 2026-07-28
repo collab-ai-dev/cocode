@@ -420,8 +420,10 @@ impl Tool for WorkflowTool {
             .and_then(workflow_journal::journal_path_for_output);
         let hydrate_source = resume_journal_source.or_else(|| journal_path.clone());
         let journal = std::sync::Arc::new(match hydrate_source {
-            Some(source) => workflow_journal::WorkflowJournal::resumed(&source, journal_path),
-            None => workflow_journal::WorkflowJournal::new(journal_path),
+            Some(source) => {
+                workflow_journal::WorkflowJournal::resumed(&source, journal_path.clone())
+            }
+            None => workflow_journal::WorkflowJournal::new(journal_path.clone()),
         });
 
         // Launch the engine on a dedicated thread (it is `!Send`); run the
@@ -431,31 +433,41 @@ impl Tool for WorkflowTool {
             .map_err(ToolError::execution_failed)?;
         workflow_host::spawn_workflow_engine(
             script.script_body,
-            input.args.clone(),
-            ctx.agent.clone(),
-            task_handle,
-            task_id.clone(),
-            cancel.clone(),
-            workflow_host::WorkflowSpawnContext {
-                session_id,
-                invoking_agent_id: ctx.agent_id.as_ref().map(|id| id.as_str().to_string()),
-                tool_use_id: ctx.tool_use_id.clone(),
-                features: ctx.features.clone(),
-                skill_overrides: ctx.skill_overrides.clone(),
-                tool_overrides: ctx.tool_overrides.clone(),
-                parent_tool_filter: ctx.tool_filter.clone(),
-                active_shell_tool: ctx.active_shell_tool,
-                log_assistant_responses: ctx.log_assistant_responses,
-                parent_mode: ctx.permission_context.mode,
-                mcp_tool_exposure: ctx.mcp_tool_exposure,
-                mcp_server_tool_exposure: ctx.mcp_server_tool_exposure.as_ref().clone(),
-                agent_catalog: ctx.agent_catalog.clone(),
-                total_token_budget: ctx.total_token_budget,
-                workflow_abort: coco_tool_runtime::TurnAbortSignal::from_token(cancel.clone()),
-                cwd: ctx.cwd_override.clone(),
+            workflow_host::WorkflowLaunch {
+                args: input.args.clone(),
+                agent: ctx.agent.clone(),
+                task_handle,
+                task_id: task_id.clone(),
+                cancel: cancel.clone(),
+                spawn_ctx: workflow_host::WorkflowSpawnContext {
+                    session_id,
+                    invoking_agent_id: ctx.agent_id.as_ref().map(|id| id.as_str().to_string()),
+                    tool_use_id: ctx.tool_use_id.clone(),
+                    features: ctx.features.clone(),
+                    skill_overrides: ctx.skill_overrides.clone(),
+                    tool_overrides: ctx.tool_overrides.clone(),
+                    parent_tool_filter: ctx.tool_filter.clone(),
+                    active_shell_tool: ctx.active_shell_tool,
+                    log_assistant_responses: ctx.log_assistant_responses,
+                    permission_context: ctx.permission_context.clone(),
+                    mcp_tool_exposure: ctx.mcp_tool_exposure,
+                    mcp_server_tool_exposure: ctx.mcp_server_tool_exposure.as_ref().clone(),
+                    agent_catalog: ctx.agent_catalog.clone(),
+                    total_token_budget: ctx.total_token_budget,
+                    workflow_abort: coco_tool_runtime::TurnAbortSignal::from_token(cancel.clone()),
+                    cwd: ctx.cwd_override.clone(),
+                },
+                main_handle: tokio::runtime::Handle::current(),
+                journal,
+                seed_phases: script
+                    .meta
+                    .phases
+                    .iter()
+                    .map(|phase| phase.title.clone())
+                    .collect(),
+                run_id: run_id.clone(),
+                journal_path,
             },
-            tokio::runtime::Handle::current(),
-            journal,
         );
 
         Ok(ToolResult::data(WorkflowLaunchResult {

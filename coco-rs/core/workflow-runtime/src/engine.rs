@@ -35,6 +35,7 @@ use crate::error::SetupSnafu;
 use crate::error::WorkflowRuntimeError;
 use crate::host::WorkflowAgentOpts;
 use crate::host::WorkflowHost;
+use crate::run_state::WorkflowRunState;
 
 /// Cap on a single *synchronous* JS-evaluation chunk between `await`
 /// boundaries (CC's `vm.runInContext({timeout})` ceiling — 30s). This is NOT a
@@ -98,34 +99,54 @@ fn dsl_combinators() -> String {
     )
 }
 
+/// One engine invocation: either the top-level run or a child re-entered by
+/// `workflow()`.
+///
+/// A child MUST carry the parent's `host` **and** `state`. That pair is the
+/// whole sharing mechanism: the host Arc shares the concurrency semaphore,
+/// token budget, journal and abort token; the run state shares the lifetime
+/// agent ordinal, the phase table and the replay cursor.
+pub struct WorkflowRun {
+    /// The script body to evaluate (meta already excised).
+    pub script: String,
+    /// Value exposed to the script as the frozen global `args`.
+    pub args: serde_json::Value,
+    /// Backs `agent()`, `workflow()`, progress and the token budget.
+    pub host: Arc<dyn WorkflowHost>,
+    /// Run-scoped counters shared with nested child workflows.
+    pub state: Arc<WorkflowRunState>,
+    /// Cancels the whole run.
+    pub cancel: CancellationToken,
+    /// Caps a single *synchronous* JS-evaluation chunk between `await`
+    /// boundaries — NOT a whole-run wall clock. See
+    /// [`WORKFLOW_SYNC_EVAL_BUDGET`].
+    pub sync_eval_budget: Duration,
+    /// Nesting level. A top-level run is `0` and its `workflow()` global is
+    /// host-backed; a child runs at `depth >= 1`, where `workflow()` always
+    /// throws [`WORKFLOW_NESTING_LIMIT_ERROR`] (the one-level guard).
+    pub depth: i32,
+}
+
 /// The workflow execution engine.
 pub struct WorkflowEngine;
 
 impl WorkflowEngine {
-    /// Run `script` to completion, returning its resolved JSON value. `args` is
-    /// exposed to the script as the global `args`; `host` backs `agent()` and
-    /// progress. `cancel` cancels the whole run; `sync_eval_budget` caps a
-    /// single *synchronous* JS-evaluation chunk between `await` boundaries (NOT
-    /// a whole-run wall clock — see [`WORKFLOW_SYNC_EVAL_BUDGET`]). The run
-    /// itself is bounded by the agent cap, the per-agent stall watchdog, the
-    /// token budget, and `cancel`.
-    ///
-    /// `depth` is the nesting level: a top-level run is `0` (its `workflow()`
-    /// global is host-backed and callable); a child workflow re-entered via
-    /// [`WorkflowHost::run_nested_workflow`] runs at `depth >= 1`, where
-    /// `workflow()` always throws [`WORKFLOW_NESTING_LIMIT_ERROR`] (the one-level
-    /// guard). Re-entering with the SAME `host` Arc is what shares governance.
+    /// Run a [`WorkflowRun`] to completion, returning its resolved JSON value.
+    /// The run is bounded by the agent cap, the per-agent stall watchdog, the
+    /// token budget, and cancellation.
     ///
     /// MUST be awaited on a tokio current-thread runtime inside a `LocalSet`
     /// (the engine is `!Send`).
-    pub async fn run(
-        script: String,
-        args: serde_json::Value,
-        host: Arc<dyn WorkflowHost>,
-        cancel: CancellationToken,
-        sync_eval_budget: Duration,
-        depth: i32,
-    ) -> Result<serde_json::Value, WorkflowRuntimeError> {
+    pub async fn run(run: WorkflowRun) -> Result<serde_json::Value, WorkflowRuntimeError> {
+        let WorkflowRun {
+            script,
+            args,
+            host,
+            state,
+            cancel,
+            sync_eval_budget,
+            depth,
+        } = run;
         let runtime = AsyncRuntime::new().map_err(setup_err)?;
         let context = AsyncContext::full(&runtime).await.map_err(setup_err)?;
 
@@ -149,6 +170,7 @@ impl WorkflowEngine {
 
         // Setup: sandbox + DSL combinators + host-backed globals. Sync block.
         let setup_host = host.clone();
+        let setup_state = state.clone();
         let setup_args = args.clone();
         let setup_sync_deadline = SyncBudget {
             deadline: sync_deadline.clone(),
@@ -158,7 +180,14 @@ impl WorkflowEngine {
             .with(move |ctx| -> rquickjs::Result<()> {
                 crate::install_sandbox(&ctx)?;
                 ctx.eval::<(), _>(dsl_combinators())?;
-                install_globals(&ctx, setup_host, &setup_args, setup_sync_deadline, depth)?;
+                install_globals(
+                    &ctx,
+                    setup_host,
+                    setup_state,
+                    &setup_args,
+                    setup_sync_deadline,
+                    depth,
+                )?;
                 Ok(())
             })
             .await
@@ -236,21 +265,19 @@ impl SyncBudget {
 /// Install the host-backed globals: `agent` (async), `phase`/`log` (sync),
 /// `args` (frozen JSON), `budget` (frozen), and `workflow` (async, depth-aware:
 /// host-backed at depth 0, throwing the one-level guard at depth >= 1).
+///
+/// The agent ordinal, phase table and replay cursor come from `state` rather
+/// than from context-local cells, so a nested `workflow()` continues the
+/// parent's numbering instead of restarting it.
 fn install_globals<'js>(
     ctx: &Ctx<'js>,
     host: Arc<dyn WorkflowHost>,
+    state: Arc<WorkflowRunState>,
     args: &serde_json::Value,
     sync_budget: SyncBudget,
     depth: i32,
 ) -> rquickjs::Result<()> {
     let globals = ctx.globals();
-    let agent_index = Rc::new(Cell::new(0i32));
-    let phase_index = Rc::new(Cell::new(0i32));
-    // Resume replay cursor: the cache is consulted only while `diverged` is
-    // false. The first cache miss flips this permanently, so every subsequent
-    // `agent()` call re-spawns — the longest-unchanged-prefix guarantee (CC's
-    // `{cursor, diverged}` in `journal.ts`). Single-threaded engine ⇒ `Cell`.
-    let diverged = Rc::new(Cell::new(false));
 
     // args — the workflow input value, frozen.
     globals.set("args", json_to_js(ctx, args)?)?;
@@ -291,24 +318,26 @@ fn install_globals<'js>(
         )?;
     }
 
-    // phase(title) — sync; assigns the next phase index.
+    // phase(title) — sync; interns the title and emits the group node once.
+    // Re-entering a phase (or naming one already declared in `meta.phases`)
+    // resolves to the same index instead of forking a second group.
     {
         let host = host.clone();
+        let state = state.clone();
         let sync_budget = sync_budget.clone();
         globals.set(
             "phase",
             Func::from(move |title: String| {
                 sync_budget.reset();
-                let index = phase_index.get();
-                phase_index.set(index + 1);
-                host.push_progress(WorkflowProgressEvent::WorkflowPhase { index, title });
+                emit_phase(host.as_ref(), state.as_ref(), &title);
             }),
         )?;
     }
 
     // Clones reserved for the `workflow()` global below: the `agent` block moves
     // `host` and `sync_budget`, so capture what the nested-workflow global needs
-    // first.
+    // first. The child's run state is not threaded here — the host owns the
+    // `Arc<WorkflowRunState>` and hands the same one to the child engine.
     let workflow_host = host.clone();
     let workflow_sync_budget = sync_budget.clone();
 
@@ -317,21 +346,52 @@ fn install_globals<'js>(
         let agent_sync_budget = sync_budget;
         let agent = move |ctx: Ctx<'js>, prompt: String, opts: Opt<Object<'js>>| {
             let host = host.clone();
-            let diverged = diverged.clone();
+            let state = state.clone();
             // Entry resets the sync window — JS ran synchronously to reach this
             // host call. The post-await reset below restarts it for the chunk
             // that runs after the subagent resolves.
             let sync_budget = agent_sync_budget.clone();
             sync_budget.reset();
-            let index = agent_index.get();
-            agent_index.set(index + 1);
-            // Convert opts on the sync side so the future holds only owned data.
+
+            // Everything up to the first await runs in call order, even when
+            // `parallel()` fired the calls together: the ordinal, the phase
+            // grouping, the cache key and the replay decision are all settled
+            // here so a concurrent fan-out cannot interleave them.
+            let index = state.next_agent_index();
             let opts_json = opts
                 .0
                 .and_then(|o| js_to_json(&ctx, o.into_value()).ok())
                 .unwrap_or(serde_json::Value::Null);
+            let opts: WorkflowAgentOpts = serde_json::from_value(opts_json).unwrap_or_default();
+            let label = opts.label.clone().unwrap_or_else(|| derive_label(&prompt));
+            let phase_title = opts.phase.clone();
+            let phase_index = phase_title
+                .as_deref()
+                .map(|title| emit_phase(host.as_ref(), state.as_ref(), title));
+            // The resume cache key for this call (lookup + record-after-run).
+            let cache_key = crate::host::AgentCacheKey::new(index, prompt.clone(), &opts);
+            // Resume replay: while the cursor has not diverged, consult the
+            // journal before doing any work. A hit replays the cached result
+            // with NO spawn (emitted as `state: done`, `cached: true`); the
+            // first miss latches divergence so the tail re-runs
+            // (longest-unchanged-prefix). The Start event is only emitted on the
+            // spawn path so a replay row reads as a single cached Done.
+            let replayed = if state.replay_allowed() {
+                let hit = host.cached_agent_result(&cache_key);
+                if hit.is_none() {
+                    state.mark_replay_diverged();
+                }
+                hit
+            } else {
+                None
+            };
+
             let ctx2 = ctx.clone();
             async move {
+                // Both caps gate the *call*, not the spawn, so they run ahead of
+                // the replay branch: a resumed run that would blow the cap blows
+                // it at the same call it did originally.
+                //
                 // Lifetime agent cap: `index` is 0-based, so the (index+1)th
                 // call exceeding the cap throws (matches CC's pre-increment gate).
                 if index >= WORKFLOW_AGENT_CAP {
@@ -348,38 +408,22 @@ fn install_globals<'js>(
                     let thrown = msg.into_js(&ctx2)?;
                     return Err(ctx2.throw(thrown));
                 }
-                let opts: WorkflowAgentOpts = serde_json::from_value(opts_json).unwrap_or_default();
-                let label = opts.label.clone().unwrap_or_else(|| derive_label(&prompt));
-                let phase_title = opts.phase.clone();
-                // The resume cache key for this call (lookup + record-after-run).
-                let cache_key = crate::host::AgentCacheKey::new(prompt.clone(), &opts);
 
-                // Resume replay: while the cursor has not diverged, consult the
-                // journal before doing any work. A hit replays the cached result
-                // with NO spawn (emitted as `state: done`, `cached: true`); the
-                // first miss flips `diverged` permanently so every later call
-                // re-spawns (longest-unchanged-prefix). The Start event is only
-                // emitted on the spawn path so a replay row reads as a single
-                // cached Done.
-                if !diverged.get() {
-                    if let Some(value) = host.cached_agent_result(&cache_key).await {
-                        sync_budget.reset();
-                        let result_preview = preview_value(&value);
-                        host.push_progress(agent_event(
-                            index,
-                            WorkflowAgentState::Done,
-                            label,
-                            phase_title,
-                            /*cached*/ true,
-                            DoneDetails {
-                                result_preview,
-                                ..DoneDetails::default()
-                            },
-                        ));
-                        return json_to_js(&ctx2, &value);
-                    }
-                    // First miss: the cursor diverges and stays diverged.
-                    diverged.set(true);
+                if let Some(value) = replayed {
+                    let result_preview = preview_value(&value);
+                    host.push_progress(agent_event(
+                        index,
+                        WorkflowAgentState::Done,
+                        label,
+                        phase_title,
+                        phase_index,
+                        /*cached*/ true,
+                        DoneDetails {
+                            result_preview,
+                            ..DoneDetails::default()
+                        },
+                    ));
+                    return json_to_js(&ctx2, &value);
                 }
 
                 host.push_progress(agent_event(
@@ -387,6 +431,7 @@ fn install_globals<'js>(
                     WorkflowAgentState::Start,
                     label.clone(),
                     phase_title.clone(),
+                    phase_index,
                     /*cached*/ false,
                     DoneDetails::default(),
                 ));
@@ -408,6 +453,7 @@ fn install_globals<'js>(
                             WorkflowAgentState::Done,
                             label,
                             phase_title,
+                            phase_index,
                             /*cached*/ false,
                             DoneDetails {
                                 model: result.model.clone(),
@@ -426,6 +472,7 @@ fn install_globals<'js>(
                             WorkflowAgentState::Error,
                             label,
                             phase_title,
+                            phase_index,
                             /*cached*/ false,
                             DoneDetails {
                                 error: Some(message.clone()),
@@ -447,8 +494,9 @@ fn install_globals<'js>(
     // workflow(nameOrRef, args?) — depth-aware. At depth 0 (top-level run) it is
     // host-backed: a saved/`{scriptPath}` child workflow runs inline via
     // `run_nested_workflow`, sharing this run's governance (same host ⇒ same
-    // semaphore, budget, journal, abort, agent counter). At depth >= 1 (already
-    // inside a child) it always throws — the one-level nesting guard.
+    // semaphore, budget, journal, abort; same run state ⇒ same agent ordinal,
+    // phase table and replay cursor). At depth >= 1 (already inside a child) it
+    // always throws — the one-level nesting guard.
     {
         if depth == 0 {
             let host = workflow_host;
@@ -506,11 +554,26 @@ fn install_globals<'js>(
     Ok(())
 }
 
+/// Intern `title` and, the first time it is seen, publish its group node.
+/// Returns the 1-based phase index the caller stamps onto agent rows.
+fn emit_phase(host: &dyn WorkflowHost, state: &WorkflowRunState, title: &str) -> i32 {
+    let slot = state.resolve_phase(title);
+    if slot.is_new {
+        host.push_progress(WorkflowProgressEvent::WorkflowPhase {
+            index: slot.index,
+            title: title.to_string(),
+        });
+    }
+    slot.index
+}
+
+#[allow(clippy::too_many_arguments)]
 fn agent_event(
     index: i32,
     state: WorkflowAgentState,
     label: String,
     phase_title: Option<String>,
+    phase_index: Option<i32>,
     cached: bool,
     details: DoneDetails,
 ) -> WorkflowProgressEvent {
@@ -519,7 +582,7 @@ fn agent_event(
         state,
         label,
         phase_title,
-        phase_index: None,
+        phase_index,
         agent_id: None,
         model: details.model,
         started_at: None,

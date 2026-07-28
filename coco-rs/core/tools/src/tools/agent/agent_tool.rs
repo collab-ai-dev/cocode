@@ -1255,7 +1255,11 @@ async fn mcp_servers_with_tools(ctx: &ToolUseContext) -> Vec<String> {
 /// Find an `Agent(<agent_type>)` deny rule: matches deny rules whose
 /// `tool_pattern == Agent` and `rule_content == agent_type`. The central
 /// evaluator defers these content denies to the tool, so `execute` enforces them.
-fn find_agent_deny_rule<'a>(
+///
+/// Shared with the workflow runtime: `agent({agentType})` inside a workflow
+/// script resolves through the same rule surface, so a `deny: ["Agent(x)"]`
+/// cannot be sidestepped by asking a workflow to spawn `x`.
+pub(crate) fn find_agent_deny_rule<'a>(
     context: &'a coco_types::ToolPermissionContext,
     agent_type: &str,
 ) -> Option<&'a coco_types::PermissionRule> {

@@ -1385,46 +1385,74 @@ fn token_usage_from_session_snapshot(
 
 /// A one-line summary of the most recent workflow progress event, for the task
 /// panel's live description.
+///
+/// The array is index-keyed upsert order, not emit order, so the freshest agent
+/// node is the one with the greatest `last_progress_at` rather than the last
+/// element. Falls back to the last element while no agent has reported yet
+/// (phase and log nodes carry no timestamp).
 fn latest_workflow_progress_summary(
     events: &[coco_types::WorkflowProgressEvent],
 ) -> Option<String> {
     use coco_types::WorkflowProgressEvent;
-    events.last().map(|event| match event {
-        WorkflowProgressEvent::WorkflowPhase { title, .. } => format!("▸ {title}"),
-        WorkflowProgressEvent::WorkflowAgent { label, cached, .. } => {
-            let status = WorkflowAgentStatusFilter::from_progress_event(event, true)
-                .unwrap_or(WorkflowAgentStatusFilter::Running);
-            let verb = match status {
-                WorkflowAgentStatusFilter::All => unreachable!("agent status cannot be all"),
-                WorkflowAgentStatusFilter::Running => {
-                    t!("dialog.workflow_agent_state_running").to_string()
+    let freshest_agent = events
+        .iter()
+        .filter_map(|event| match event {
+            WorkflowProgressEvent::WorkflowAgent {
+                last_progress_at: Some(at),
+                ..
+            } => Some((*at, event)),
+            _ => None,
+        })
+        .max_by_key(|(at, _)| *at)
+        .map(|(_, event)| event);
+    freshest_agent
+        .or_else(|| events.last())
+        .map(|event| match event {
+            WorkflowProgressEvent::WorkflowPhase { title, .. } => format!("▸ {title}"),
+            WorkflowProgressEvent::WorkflowAgent { label, cached, .. } => {
+                let status = WorkflowAgentStatusFilter::from_progress_event(event, true)
+                    .unwrap_or(WorkflowAgentStatusFilter::Running);
+                let verb = match status {
+                    WorkflowAgentStatusFilter::All => unreachable!("agent status cannot be all"),
+                    WorkflowAgentStatusFilter::Running => {
+                        t!("dialog.workflow_agent_state_running").to_string()
+                    }
+                    WorkflowAgentStatusFilter::Queued => {
+                        t!("dialog.workflow_filter_status_queued").to_string()
+                    }
+                    WorkflowAgentStatusFilter::Failed => {
+                        t!("dialog.workflow_filter_status_failed").to_string()
+                    }
+                    WorkflowAgentStatusFilter::Done => {
+                        t!("dialog.workflow_agent_state_done").to_string()
+                    }
+                    WorkflowAgentStatusFilter::Skipped => {
+                        t!("dialog.workflow_filter_status_skipped").to_string()
+                    }
+                    WorkflowAgentStatusFilter::Interrupted => {
+                        t!("dialog.workflow_filter_status_interrupted").to_string()
+                    }
+                };
+                if *cached {
+                    format!("{label} — {verb} · {}", t!("dialog.workflow_cached"))
+                } else {
+                    format!("{label} — {verb}")
                 }
-                WorkflowAgentStatusFilter::Queued => {
-                    t!("dialog.workflow_filter_status_queued").to_string()
-                }
-                WorkflowAgentStatusFilter::Failed => {
-                    t!("dialog.workflow_filter_status_failed").to_string()
-                }
-                WorkflowAgentStatusFilter::Done => {
-                    t!("dialog.workflow_agent_state_done").to_string()
-                }
-                WorkflowAgentStatusFilter::Skipped => {
-                    t!("dialog.workflow_filter_status_skipped").to_string()
-                }
-                WorkflowAgentStatusFilter::Interrupted => {
-                    t!("dialog.workflow_filter_status_interrupted").to_string()
-                }
-            };
-            if *cached {
-                format!("{label} — {verb} · {}", t!("dialog.workflow_cached"))
-            } else {
-                format!("{label} — {verb}")
             }
-        }
-        WorkflowProgressEvent::WorkflowLog { message } => message.clone(),
-    })
+            WorkflowProgressEvent::WorkflowLog { message } => message.clone(),
+        })
 }
 
+/// Adopt the producer's workflow progress array.
+///
+/// `task/progress` always carries the **cumulative** array for a workflow row
+/// (`TaskManager::emit_task_progress`), so the incoming value replaces rather
+/// than extends. An empty payload means the frame came from one of the generic
+/// progress emitters, which drop workflow deltas — keep what we have.
+///
+/// Concatenating instead would double the array on the producer side's
+/// index-keyed upsert, where a later snapshot is not a prefix-extension of the
+/// one before it.
 fn merge_workflow_progress(
     existing: &[coco_types::WorkflowProgressEvent],
     incoming: &[coco_types::WorkflowProgressEvent],
@@ -1432,12 +1460,7 @@ fn merge_workflow_progress(
     if incoming.is_empty() {
         return existing.to_vec();
     }
-    if incoming.starts_with(existing) {
-        return incoming.to_vec();
-    }
-    let mut merged = existing.to_vec();
-    merged.extend_from_slice(incoming);
-    merged
+    incoming.to_vec()
 }
 
 #[cfg(test)]

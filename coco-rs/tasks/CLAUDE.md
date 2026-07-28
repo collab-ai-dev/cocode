@@ -8,6 +8,7 @@ their lifecycles differ:
 | [`running`](src/running.rs) | Running background tasks (shell / agent / workflow). `TaskManager` emits `CoreEvent::Protocol(TaskStarted/Progress/Completed)` via an optional `with_event_sink(tx)` channel. |
 | [`task_list`](src/task_list.rs) | Durable plan items stored on disk per task-list-id with `fs2` file locking + high-water-mark. Shared across a team. |
 | [`todos`](src/todos.rs) | Ephemeral per-agent TodoWrite (V1) checklist. In-memory only — not persisted to disk. |
+| [`workflow_progress`](src/workflow_progress.rs) | Pure reducer folding workflow `agent()`/`phase()`/`log()` deltas into the bounded node array on a `LocalWorkflow` row. |
 
 V1 (`TodoWrite`) and V2 (`Task*` tools) are gated by `Feature::TaskV2` via `Tool::is_enabled` (`core/tools/src/tools/task_tools.rs`): the `Task*` tools require the feature enabled, `TodoWrite` requires it disabled — never both at once. Running-task state is orthogonal and always on.
 
@@ -16,6 +17,12 @@ V1 (`TodoWrite`) and V2 (`Task*` tools) are gated by `Feature::TaskV2` via `Tool
 ### running
 - `TaskManager` — `Arc<RwLock<HashMap<id, TaskStateBase>>>` + outputs map; optional `mpsc::Sender<CoreEvent>` sink for SDK NDJSON parity. `create` / `get` / `update_status` / `stop` / `set_output` / `get_output` / `list` / `remove_completed`.
 - `TaskOutput` — `{stdout, stderr, exit_code}`.
+- `push_workflow_progress` folds each delta through
+  `workflow_progress::apply_workflow_progress` (index-keyed upsert for
+  agent/phase nodes, append + oldest-first trim at `2 ×
+  MAX_WORKFLOW_PROGRESS_NODES` for logs) and emits the **cumulative** array on
+  `task/progress`. Consumers replace, never extend — the array is not
+  append-only, so a later snapshot is not a prefix-extension of the one before.
 - Event-emission coverage: `TaskStarted` on `create`, `TaskProgress` on non-terminal transitions, `TaskCompleted` on terminal (with `TaskCompletionStatus` mapping: Completed→Completed, Failed→Failed, Killed|Cancelled→Stopped).
 
 ### task_list

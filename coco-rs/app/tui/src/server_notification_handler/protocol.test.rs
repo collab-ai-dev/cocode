@@ -693,7 +693,7 @@ fn task_progress_stores_workflow_progress_events() {
 }
 
 #[test]
-fn task_progress_merges_workflow_delta_and_cumulative_batches() {
+fn task_progress_adopts_the_cumulative_workflow_snapshot() {
     let _locale = crate::i18n::locale_test_guard("en");
     let mut state = AppState::new();
     let (tx, _rx) = channel();
@@ -743,19 +743,16 @@ fn task_progress_merges_workflow_delta_and_cumulative_batches() {
         skipped: false,
     };
 
+    // Every workflow `task/progress` frame carries the producer's CUMULATIVE
+    // array, so each one replaces what we hold rather than extending it. The
+    // producer upserts agent nodes in place, so a later snapshot is not
+    // necessarily a prefix-extension of the one before it — concatenating would
+    // double the array.
     let mut first = progress_params("wf_123", None, Vec::new());
-    first.workflow_progress = vec![phase.clone()];
+    first.workflow_progress = vec![phase.clone(), log.clone()];
     super::handle(
         &mut state,
         coco_types::ServerNotification::TaskProgress(first),
-        &tx,
-    );
-
-    let mut delta = progress_params("wf_123", None, Vec::new());
-    delta.workflow_progress = vec![log.clone()];
-    super::handle(
-        &mut state,
-        coco_types::ServerNotification::TaskProgress(delta),
         &tx,
     );
 
@@ -782,8 +779,27 @@ fn task_progress_merges_workflow_delta_and_cumulative_batches() {
         .iter()
         .find(|task| task.task_id == "wf_123")
         .expect("workflow task row exists");
-    assert_eq!(task.workflow_progress, vec![phase, log, done]);
+    assert_eq!(
+        task.workflow_progress,
+        vec![phase.clone(), log.clone(), done.clone()]
+    );
     assert_eq!(task.description, "Explore — done");
+
+    // A frame from one of the generic progress emitters carries no workflow
+    // array; it must not wipe what we already have.
+    let generic = progress_params("wf_123", None, Vec::new());
+    super::handle(
+        &mut state,
+        coco_types::ServerNotification::TaskProgress(generic),
+        &tx,
+    );
+    let task = state
+        .session
+        .active_tasks
+        .iter()
+        .find(|task| task.task_id == "wf_123")
+        .expect("workflow task row exists");
+    assert_eq!(task.workflow_progress, vec![phase, log, done]);
 }
 
 #[test]

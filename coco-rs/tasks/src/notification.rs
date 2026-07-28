@@ -155,6 +155,9 @@ pub enum NotificationKind {
         usage: Option<TaskUsage>,
         /// Isolation worktree info rendered as `<worktree>...</worktree>`.
         worktree: Option<Worktree>,
+        /// Task-kind-specific guidance rendered as `<diagnostics>...</diagnostics>`,
+        /// deliberately outside `<result>` so it is never read as the answer.
+        diagnostics: Option<String>,
         /// Summary differs per status (`Agent "..." finished` / `failed: ...`
         /// / `was stopped`). `None` triggers the default per-status text in
         /// [`render`].
@@ -229,13 +232,14 @@ pub fn render(n: &TaskNotification) -> String {
             } else {
                 Some(SHELL_TERMINAL_OUTPUT_NOTE)
             };
-            render_terminal(n, *status, &summary, None, None, None, note)
+            render_terminal(n, *status, &summary, None, None, None, None, note)
         }
         NotificationKind::AgentTerminal {
             status,
             result,
             usage,
             worktree,
+            diagnostics,
             error: _,
             killed_by: _,
         } => {
@@ -247,6 +251,7 @@ pub fn render(n: &TaskNotification) -> String {
                 result.as_deref(),
                 usage.as_ref(),
                 worktree.as_ref(),
+                diagnostics.as_deref(),
                 Some(agent_terminal_note(*status)),
             )
         }
@@ -283,6 +288,7 @@ fn agent_terminal_note(status: TerminalStatus) -> &'static str {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_terminal(
     n: &TaskNotification,
     status: TerminalStatus,
@@ -290,6 +296,7 @@ fn render_terminal(
     result: Option<&str>,
     usage: Option<&TaskUsage>,
     worktree: Option<&Worktree>,
+    diagnostics: Option<&str>,
     note: Option<&str>,
 ) -> String {
     let mut xml = String::with_capacity(384);
@@ -303,6 +310,12 @@ fn render_terminal(
     xml.push_str(&format!("<summary>{}</summary>", escape_xml(summary)));
     if let Some(text) = result {
         xml.push_str(&format!("\n<result>{}</result>", escape_xml(text)));
+    }
+    if let Some(text) = diagnostics {
+        xml.push_str(&format!(
+            "\n<diagnostics>{}</diagnostics>",
+            escape_xml(text)
+        ));
     }
     if let Some(u) = usage {
         xml.push_str(&format!(

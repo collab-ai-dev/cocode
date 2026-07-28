@@ -10,9 +10,11 @@ use coco_types::WorkflowProgressEvent;
 use tokio_util::sync::CancellationToken;
 
 use super::WorkflowEngine;
+use super::WorkflowRun;
 use crate::host::WorkflowAgentOpts;
 use crate::host::WorkflowAgentResult;
 use crate::host::WorkflowHost;
+use crate::run_state::WorkflowRunState;
 
 #[derive(Default)]
 struct FakeHost {
@@ -130,14 +132,15 @@ fn run(
         .expect("rt");
     let local = tokio::task::LocalSet::new();
     local.block_on(&runtime, async move {
-        WorkflowEngine::run(
-            script.to_string(),
+        WorkflowEngine::run(WorkflowRun {
+            script: script.to_string(),
             args,
             host,
-            CancellationToken::new(),
-            Duration::from_secs(10),
-            /*depth*/ 0,
-        )
+            state: Arc::new(WorkflowRunState::default()),
+            cancel: CancellationToken::new(),
+            sync_eval_budget: Duration::from_secs(10),
+            depth: 0,
+        })
         .await
     })
 }
@@ -183,14 +186,15 @@ fn run_with_budget(
         .expect("rt");
     let local = tokio::task::LocalSet::new();
     local.block_on(&runtime, async move {
-        WorkflowEngine::run(
-            script.to_string(),
-            serde_json::Value::Null,
+        WorkflowEngine::run(WorkflowRun {
+            script: script.to_string(),
+            args: serde_json::Value::Null,
             host,
-            CancellationToken::new(),
+            state: Arc::new(WorkflowRunState::default()),
+            cancel: CancellationToken::new(),
             sync_eval_budget,
-            /*depth*/ 0,
-        )
+            depth: 0,
+        })
         .await
     })
 }
@@ -336,20 +340,34 @@ fn run_with_host(
     script: &str,
     args: serde_json::Value,
 ) -> Result<serde_json::Value, crate::WorkflowRuntimeError> {
+    run_with_state(host, Arc::new(WorkflowRunState::default()), script, args)
+}
+
+/// Run against an explicit run state. Production (`spawn_workflow_engine`)
+/// creates the state, stores it on the host and passes that same Arc to the
+/// top-level engine — a nesting test has to do the same or the child would be
+/// the only user of the host's state.
+fn run_with_state(
+    host: Arc<dyn WorkflowHost>,
+    state: Arc<WorkflowRunState>,
+    script: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, crate::WorkflowRuntimeError> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("rt");
     let local = tokio::task::LocalSet::new();
     local.block_on(&runtime, async move {
-        WorkflowEngine::run(
-            script.to_string(),
+        WorkflowEngine::run(WorkflowRun {
+            script: script.to_string(),
             args,
             host,
-            CancellationToken::new(),
-            Duration::from_secs(10),
-            /*depth*/ 0,
-        )
+            state,
+            cancel: CancellationToken::new(),
+            sync_eval_budget: Duration::from_secs(10),
+            depth: 0,
+        })
         .await
     })
 }
@@ -460,7 +478,7 @@ impl WorkflowHost for CacheHost {
 
     fn push_progress(&self, _event: WorkflowProgressEvent) {}
 
-    async fn cached_agent_result(&self, key: &crate::AgentCacheKey) -> Option<serde_json::Value> {
+    fn cached_agent_result(&self, key: &crate::AgentCacheKey) -> Option<serde_json::Value> {
         self.cache.lock().unwrap().get(&key.prompt).cloned()
     }
 }
@@ -546,8 +564,8 @@ impl WorkflowHost for ProgressTee {
         self.progress.lock().unwrap().push(event);
     }
 
-    async fn cached_agent_result(&self, key: &crate::AgentCacheKey) -> Option<serde_json::Value> {
-        self.inner.cached_agent_result(key).await
+    fn cached_agent_result(&self, key: &crate::AgentCacheKey) -> Option<serde_json::Value> {
+        self.inner.cached_agent_result(key)
     }
 }
 
@@ -559,6 +577,10 @@ impl WorkflowHost for ProgressTee {
 /// shared (not freshly allocated per nested run).
 struct NestedHost {
     me: std::sync::Weak<dyn WorkflowHost>,
+    /// The parent's run state, handed to every child engine — the mechanism
+    /// that keeps one agent ordinal, phase table and replay cursor across the
+    /// nesting boundary.
+    run_state: Arc<WorkflowRunState>,
     scripts: HashMap<String, String>,
     semaphore: Arc<tokio::sync::Semaphore>,
     in_flight: AtomicI64,
@@ -570,6 +592,7 @@ impl NestedHost {
     fn new(cap: usize, scripts: HashMap<String, String>) -> Arc<Self> {
         Arc::new_cyclic(|me| Self {
             me: me.clone() as std::sync::Weak<dyn WorkflowHost>,
+            run_state: Arc::new(WorkflowRunState::default()),
             scripts,
             semaphore: Arc::new(tokio::sync::Semaphore::new(cap)),
             in_flight: AtomicI64::new(0),
@@ -625,14 +648,15 @@ impl WorkflowHost for NestedHost {
         // Re-enter on THIS thread with the SAME host (governance shared); the
         // child runs at depth>=1 so its own workflow() throws.
         let host = self.me.upgrade().expect("host alive");
-        WorkflowEngine::run(
-            body,
+        WorkflowEngine::run(WorkflowRun {
+            script: body,
             args,
             host,
-            CancellationToken::new(),
-            Duration::from_secs(10),
+            state: self.run_state.clone(),
+            cancel: CancellationToken::new(),
+            sync_eval_budget: Duration::from_secs(10),
             depth,
-        )
+        })
         .await
         .map_err(|error| error.to_string())
     }
@@ -721,5 +745,123 @@ fn nested_agents_share_parent_concurrency_cap() {
     assert!(
         max <= cap as i64,
         "max in-flight {max} exceeded the SHARED semaphore cap {cap} — child allocated its own governance"
+    );
+}
+
+#[test]
+fn repeated_identical_prompts_get_distinct_cache_keys() {
+    // The loop-until-count pattern the tool prose teaches: one prompt, many
+    // calls. Each call must present its own key, or a resumed run replays a
+    // single recorded value for every iteration.
+    struct KeyRecorder {
+        keys: Mutex<Vec<crate::AgentCacheKey>>,
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl WorkflowHost for KeyRecorder {
+        async fn run_agent(
+            &self,
+            prompt: String,
+            _opts: WorkflowAgentOpts,
+        ) -> Result<WorkflowAgentResult, String> {
+            Ok(WorkflowAgentResult {
+                value: serde_json::Value::String(prompt),
+                model: None,
+                tokens: None,
+                tool_calls: None,
+                duration_ms: None,
+            })
+        }
+
+        fn push_progress(&self, _event: WorkflowProgressEvent) {}
+
+        fn cached_agent_result(&self, key: &crate::AgentCacheKey) -> Option<serde_json::Value> {
+            self.keys.lock().unwrap().push(key.clone());
+            None
+        }
+    }
+
+    let host = Arc::new(KeyRecorder {
+        keys: Mutex::new(Vec::new()),
+    });
+    let script = r#"
+        for (let i = 0; i < 3; i++) await agent("Find bugs in this codebase.");
+        return "done";
+    "#;
+    run_with_host(host.clone(), script, serde_json::Value::Null).expect("run");
+
+    let keys = host.keys.lock().unwrap();
+    // Only the first call consults the cache (the miss latches divergence), so
+    // assert on the ordinal the engine hands out rather than on key count.
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].call_index, 0);
+    assert_eq!(keys[0].prompt, "Find bugs in this codebase.");
+}
+
+#[test]
+fn phase_titles_are_interned_and_stamped_on_agent_rows() {
+    let host = Arc::new(FakeHost::default());
+    let script = r#"
+        phase('Scan');
+        await agent("a", { phase: 'Scan' });
+        phase('Scan');
+        await agent("b", { phase: 'Fix' });
+        return "ok";
+    "#;
+    run(host.clone(), script, serde_json::Value::Null).expect("run");
+
+    let events = host.progress.lock().unwrap();
+    let phases: Vec<(i32, String)> = events
+        .iter()
+        .filter_map(|e| match e {
+            WorkflowProgressEvent::WorkflowPhase { index, title } => Some((*index, title.clone())),
+            _ => None,
+        })
+        .collect();
+    // 'Scan' declared three times (phase(), agent({phase}), phase() again)
+    // publishes ONE group; 'Fix' takes the next index. Phase 0 stays reserved
+    // for the renderer's ungrouped fallback.
+    assert_eq!(
+        phases,
+        vec![(1, "Scan".to_string()), (2, "Fix".to_string())]
+    );
+
+    let agent_phases: Vec<Option<i32>> = events
+        .iter()
+        .filter_map(|e| match e {
+            WorkflowProgressEvent::WorkflowAgent {
+                state: WorkflowAgentState::Done,
+                phase_index,
+                ..
+            } => Some(*phase_index),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(agent_phases, vec![Some(1), Some(2)]);
+}
+
+#[test]
+fn nested_workflow_continues_the_parent_agent_ordinal() {
+    // The agent ordinal is run-scoped, not engine-scoped: a child that restarted
+    // it would collide with the parent's progress rows and reset the lifetime
+    // agent cap.
+    let mut scripts = HashMap::new();
+    scripts.insert(
+        "child".to_string(),
+        r#"await agent("c0"); await agent("c1"); return "child";"#.to_string(),
+    );
+    let host = NestedHost::new(4, scripts);
+    let state = host.run_state.clone();
+    let script = r#"
+        await agent("p0");
+        await workflow("child");
+        await agent("p1");
+        return "ok";
+    "#;
+    run_with_state(host.clone(), state, script, serde_json::Value::Null).expect("run");
+    assert_eq!(
+        host.run_state.next_agent_index(),
+        4,
+        "parent 1 + child 2 + parent 1 = 4 ordinals consumed across the nesting boundary"
     );
 }

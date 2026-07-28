@@ -649,6 +649,7 @@ async fn mark_completed_pushes_rich_agent_notification() {
                 path: "/tmp/wt".into(),
                 branch: Some("feat/x".into()),
             }),
+            diagnostics: None,
         },
     )
     .await;

@@ -23,6 +23,7 @@ pub mod running;
 pub mod stall;
 pub mod task_list;
 pub mod todos;
+pub mod workflow_progress;
 
 pub use error::Result;
 pub use error::TasksError;
@@ -53,3 +54,5 @@ pub use task_list::TaskUpdate;
 pub use task_list::resolve_task_list_id;
 pub use todos::TodoItem;
 pub use todos::TodoStore;
+pub use workflow_progress::MAX_WORKFLOW_PROGRESS_NODES;
+pub use workflow_progress::apply_workflow_progress;

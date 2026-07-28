@@ -21,4 +21,5 @@ tokio-util.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+pretty_assertions.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time", "sync"] }

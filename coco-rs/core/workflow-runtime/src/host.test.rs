@@ -47,19 +47,24 @@ fn canonical_opts_distinguishes_cache_relevant_fields() {
 }
 
 #[test]
-fn cache_key_uses_phase_prompt_and_canonical_opts() {
+fn cache_key_uses_call_index_prompt_and_canonical_opts() {
     let opts = WorkflowAgentOpts {
         phase: Some("Build".to_string()),
         model: Some("claude-opus-4-8".to_string()),
         ..WorkflowAgentOpts::default()
     };
-    let key = AgentCacheKey::new("do the thing".to_string(), &opts);
-    assert_eq!(key.phase_title, "Build");
+    let key = AgentCacheKey::new(3, "do the thing".to_string(), &opts);
+    assert_eq!(key.call_index, 3);
     assert_eq!(key.prompt, "do the thing");
     assert_eq!(key.canonical_opts, canonical_agent_opts(&opts));
+}
 
-    // No phase → empty phase_title.
-    let no_phase = WorkflowAgentOpts::default();
-    let key2 = AgentCacheKey::new("x".to_string(), &no_phase);
-    assert_eq!(key2.phase_title, "");
+#[test]
+fn cache_key_distinguishes_repeated_identical_calls() {
+    // Same prompt, same opts, different call site — distinct keys, so a resumed
+    // loop replays each iteration's own recorded result.
+    let opts = WorkflowAgentOpts::default();
+    let first = AgentCacheKey::new(0, "same prompt".to_string(), &opts);
+    let second = AgentCacheKey::new(1, "same prompt".to_string(), &opts);
+    assert_ne!(first, second);
 }
