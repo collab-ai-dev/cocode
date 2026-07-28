@@ -62,6 +62,7 @@ fn factory_with_live_rules(
         permission_bridge: None,
         app_state: None,
         auto_mode_state: None,
+        subagent_screen: None,
         file_read_state: None,
         file_history: None,
         config_home: None,

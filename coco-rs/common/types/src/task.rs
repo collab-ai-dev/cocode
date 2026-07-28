@@ -464,6 +464,11 @@ pub enum WorkflowProgressEvent {
         prompt_preview: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        /// Refused by the auto-mode dispatch screen before any spawn. Kept
+        /// distinct from `skipped` so a policy block is never counted as an
+        /// agent failure, nor as a person's choice.
+        #[serde(default)]
+        blocked: bool,
         /// Error events produced by a user skip are displayed separately
         /// from ordinary failures.
         #[serde(default)]

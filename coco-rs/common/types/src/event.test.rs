@@ -815,6 +815,7 @@ fn workflow_progress_events_use_ts_wire_shape() {
             result_preview: Some("ok".into()),
             prompt_preview: Some("do the thing".into()),
             error: None,
+            blocked: false,
             skipped: false,
         },
         WorkflowProgressEvent::WorkflowLog {
@@ -844,6 +845,7 @@ fn workflow_progress_events_use_ts_wire_shape() {
                 "cached": true,
                 "resultPreview": "ok",
                 "promptPreview": "do the thing",
+                "blocked": false,
                 "skipped": false
             },
             {"type": "workflow_log", "message": "hello"}

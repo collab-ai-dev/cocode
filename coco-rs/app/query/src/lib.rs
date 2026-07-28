@@ -57,6 +57,7 @@ mod session_state;
 pub mod side_chat_tool_gate;
 pub mod single_turn;
 pub mod skill_runtime;
+mod subagent_screen_impl;
 pub mod test_support;
 mod tool_call_preparer;
 mod tool_call_runner;

@@ -450,6 +450,8 @@ impl Tool for WorkflowTool {
                     active_shell_tool: ctx.active_shell_tool,
                     log_assistant_responses: ctx.log_assistant_responses,
                     permission_context: ctx.permission_context.clone(),
+                    messages: ctx.messages.clone(),
+                    subagent_screen: ctx.subagent_screen.clone(),
                     mcp_tool_exposure: ctx.mcp_tool_exposure,
                     mcp_server_tool_exposure: ctx.mcp_server_tool_exposure.as_ref().clone(),
                     agent_catalog: ctx.agent_catalog.clone(),

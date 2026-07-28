@@ -881,7 +881,7 @@ fn sandbox_auto_allow_bash(tool_id: &ToolId, input: &Value, ctx: &ToolUseContext
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
+pub(crate) async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
     tool_name: &str,
     input: &Value,
     is_read_only: bool,

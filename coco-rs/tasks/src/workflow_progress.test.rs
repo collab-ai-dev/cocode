@@ -25,6 +25,7 @@ fn agent(index: i32, state: WorkflowAgentState, label: &str) -> WorkflowProgress
         result_preview: None,
         prompt_preview: None,
         error: None,
+        blocked: false,
         skipped: false,
     }
 }

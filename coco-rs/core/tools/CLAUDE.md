@@ -11,6 +11,19 @@ Built-in tool implementations. Statically-typed tools (`type Input = SomeStruct`
 - Tool input enums (`input_types.rs`): `GrepOutputMode`, `LspAction`
 - One file per tool under `src/tools/` (`lsp_tool.rs` is suffixed because `lsp.rs` holds the shared DTOs + formatters the tool consumes)
 
+### Workflow `agent()` is screened, because it is not a tool call
+
+A workflow script's `agent()` reaches `AgentHandle::spawn_agent` directly — it
+never passes through the tool pipeline, so in auto mode nothing would classify
+it. `WorkflowRunHost::run_agent` therefore presents each dispatch to
+`ctx.subagent_screen` (`coco_tool_runtime::subagent_screen`) *before* taking a
+concurrency permit; the implementor rebuilds the equivalent `Agent` tool call
+and runs the same auto-mode decision the real call would hit. Removing that
+call re-opens a path that dispatches subagents an `Agent(...)` call could not.
+
+A blocked dispatch is `WorkflowAgentOutcome::Refused`, not `Err` — the slot
+resolves to `null` rather than raising into the script.
+
 ## Cross-Cutting Helpers (crate-private)
 
 - `record_file_read` / `record_file_edit` — updates `FileReadState` for @mention dedup + Read-tool `file_unchanged` detection

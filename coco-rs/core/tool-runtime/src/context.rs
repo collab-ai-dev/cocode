@@ -30,6 +30,7 @@ use crate::permission_bridge::ToolPermissionBridgeRef;
 use crate::registry::ToolRegistry;
 use crate::schedule_store::ScheduleStoreRef;
 use crate::side_query::SideQueryHandle;
+use crate::subagent_screen::SubagentDispatchScreenHandle;
 use crate::task_handle::BackgroundTaskHandleRef;
 use crate::task_list_handle::TaskListHandleRef;
 use crate::task_list_handle::TeamTaskListRouterRef;
@@ -409,6 +410,10 @@ pub struct ToolUseContext {
     // ── LLM Side Queries ──
     /// Handle for making LLM side-queries from tools.
     pub side_query: SideQueryHandle,
+    /// Screens subagent dispatches that never reach the tool pipeline — the
+    /// workflow runtime's `agent()`. See
+    /// [`crate::subagent_screen`] for why the seam exists.
+    pub subagent_screen: SubagentDispatchScreenHandle,
 
     // ── MCP ──
     /// Handle for MCP operations (list/read resources, call tools, auth).
@@ -731,6 +736,7 @@ impl ToolUseContext {
             critical_system_reminder: self.critical_system_reminder.clone(),
             in_progress_tool_use_ids: self.in_progress_tool_use_ids.clone(),
             side_query: self.side_query.clone(),
+            subagent_screen: self.subagent_screen.clone(),
             mcp: self.mcp.clone(),
             lsp: self.lsp.clone(),
             schedules: self.schedules.clone(),
@@ -1050,6 +1056,7 @@ impl ToolUseContext {
             critical_system_reminder: None,
             in_progress_tool_use_ids: Arc::new(RwLock::new(HashSet::new())),
             side_query: Arc::new(crate::side_query::NoOpSideQuery),
+            subagent_screen: Arc::new(crate::subagent_screen::NoOpSubagentDispatchScreen),
             mcp: Arc::new(crate::mcp_handle::NoOpMcpHandle),
             lsp: Arc::new(crate::lsp_handle::NoOpLspHandle),
             schedules: Arc::new(crate::schedule_store::NoOpScheduleStore),

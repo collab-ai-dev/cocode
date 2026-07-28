@@ -16535,6 +16535,11 @@
                 "null"
               ]
             },
+            "blocked": {
+              "default": false,
+              "description": "Refused by the auto-mode dispatch screen before any spawn. Kept\ndistinct from `skipped` so a policy block is never counted as an\nagent failure, nor as a person's choice.",
+              "type": "boolean"
+            },
             "cached": {
               "default": false,
               "description": "Cache-replay hit: emitted as `state: done` with `cached: true`\n(TS does not use a distinct state for cache hits).",

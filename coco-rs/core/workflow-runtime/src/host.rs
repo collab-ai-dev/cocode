@@ -150,6 +150,28 @@ pub struct WorkflowAgentResult {
     pub duration_ms: Option<i64>,
 }
 
+/// How one `agent()` call ended.
+///
+/// The third state is the point: a dispatch can be *refused before it runs*,
+/// which is neither a result nor a script error. `Err` from
+/// [`WorkflowHost::run_agent`] rejects the promise, and a policy refusal must
+/// not blow up a script that never did anything wrong — so a refusal resolves
+/// to `null`, exactly like a slot that failed inside `parallel()`.
+#[derive(Debug, Clone)]
+pub enum WorkflowAgentOutcome {
+    /// The subagent ran and produced a value.
+    Completed(WorkflowAgentResult),
+    /// Refused before any spawn — the auto-mode dispatch screen, or a user
+    /// skip. `agent()` resolves to `null`.
+    Refused {
+        /// Human-readable cause, surfaced on the progress row and in the log.
+        reason: String,
+        /// Refused by policy rather than by a person. Drives the completion
+        /// census, which must not read a policy block as an agent failure.
+        blocked: bool,
+    },
+}
+
 /// Callback surface the engine drives. The implementor bridges to the real
 /// subagent system and the task progress channel.
 ///
@@ -160,14 +182,18 @@ pub struct WorkflowAgentResult {
 /// still `Send + Sync` so `Arc<dyn WorkflowHost>` can be constructed and shared.
 #[async_trait::async_trait(?Send)]
 pub trait WorkflowHost: Send + Sync + 'static {
-    /// `agent()` → spawn one subagent and await its result. Returns `Err` with a
-    /// human message on failure; the DSL maps that to a rejected promise (so the
-    /// surrounding `parallel`/`pipeline` records `null` for that item).
+    /// `agent()` → spawn one subagent and await its result.
+    ///
+    /// `Err` is a *failure* (the subagent errored, stalled out, or could not be
+    /// built) and rejects the promise, so the surrounding `parallel`/`pipeline`
+    /// records `null` for that slot. A dispatch the host *refuses* — policy
+    /// screen, user skip — is `Ok(Refused)` instead, which resolves to `null`
+    /// without raising into the script.
     async fn run_agent(
         &self,
         prompt: String,
         opts: WorkflowAgentOpts,
-    ) -> Result<WorkflowAgentResult, String>;
+    ) -> Result<WorkflowAgentOutcome, String>;
 
     /// Emit one progress delta (phase / log / agent state). Synchronous and
     /// non-blocking (fire into a channel) so `log()`/`phase()` stay sync JS
