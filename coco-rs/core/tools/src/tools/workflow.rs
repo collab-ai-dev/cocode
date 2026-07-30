@@ -77,7 +77,8 @@ Globals available to the script:\n\
 - `agent(prompt, opts?)` — spawn one subagent and `await` its result text. opts: {{ label, phase, agentType, model, effort, isolation, schema }}. isolation may be \"worktree\"; \"remote\" is not available.\n\
 - `parallel(thunks)` — run `[() => agent(...), ...]` concurrently (a barrier); a failed call resolves to `null`.\n\
 - `pipeline(items, ...stages)` — flow each item independently through all stages; a stage gets `(prev, item, index)`.\n\
-- `phase(title)` / `log(message)` — emit progress.\n\
+- `phase(title)` / `log(message)` — emit progress. Use the SAME phase titles here as in `meta.phases`; they are matched exactly.\n\
+- `workflow(nameOrRef, args?)` — run a saved workflow (by `meta.name`) or a `.js`/`.ts` path inline and await its value. Its agents appear under one `▸ name` group and share this run's concurrency, token budget and journal. Nesting is one level: a child's own `workflow()` throws.\n\
 - `args` — the value passed as the `args` parameter; `budget` — the token budget.\n\n\
 Provide the source via `scriptPath`, `name` (loaded from {dirs}), or an inline `script`. Pass `resumeFromRunId` to resume a prior (stopped or finished) run in this session: completed `agent()` results replay from the prior run's journal instead of re-spawning. The prior run's on-disk script is authoritative on resume.\n\
 The workflow runs in the BACKGROUND: this returns immediately with a taskId, and progress + the final result arrive via task notifications.",
@@ -196,8 +197,17 @@ impl Tool for WorkflowTool {
             .unwrap_or_else(|| "Run workflow".to_string())
     }
 
-    async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
-        workflow_prompt()
+    async fn prompt(&self, options: &coco_tool_runtime::PromptOptions) -> String {
+        let mut prompt = workflow_prompt();
+        // Advisory sizing, appended rather than interpolated so the guideline
+        // reads as the last word on scale and the prose above it stays the
+        // byte-identical block every session shares.
+        let sentence = options.workflow_size.tool_description_sentence();
+        if !sentence.is_empty() {
+            prompt.push_str("\n\n");
+            prompt.push_str(&sentence);
+        }
+        prompt
     }
 
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {

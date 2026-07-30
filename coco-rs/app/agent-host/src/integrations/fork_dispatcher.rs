@@ -124,6 +124,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             lsp_config: runtime_config.lsp.clone(),
             compact: runtime_config.compact.clone(),
             features: Arc::new(runtime_config.features.clone()),
+            workflow_size: runtime_config.workflow_size,
             skill_overrides: Arc::new(runtime_config.skill_overrides.clone()),
             tool_overrides: runtime_config.tool_overrides.clone(),
             mcp_tool_exposure: parent_engine_config.mcp_tool_exposure,

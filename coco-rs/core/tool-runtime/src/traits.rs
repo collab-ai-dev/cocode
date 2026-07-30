@@ -160,6 +160,15 @@ pub struct PromptOptions {
     /// 3p builds keep this off because coco-rs ships only the local
     /// `worktree` isolation runtime. Only enabled on internal builds.
     pub ant_build: bool,
+    /// Advisory dynamic-workflow sizing, rendered into a sentence at the end of
+    /// the Workflow tool's description.
+    ///
+    /// This is the **session-pinned** value, not the live setting: the
+    /// description is part of the request's cached prefix, so a value that
+    /// tracked settings reload would re-bill the whole tool block. Mid-session
+    /// changes reach the model as a reminder instead — see
+    /// [`coco_types::WorkflowSizeAnnouncement`].
+    pub workflow_size: coco_types::ResolvedWorkflowSize,
 }
 
 impl PromptOptions {

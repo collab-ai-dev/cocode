@@ -23,7 +23,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// Every `AttachmentKind` discriminator, plus coco-rs-synthetic
-/// reminder kinds. 69 variants.
+/// reminder kinds. 70 variants.
 /// Wire format is snake_case via `#[serde(rename_all = "snake_case")]`
 /// to match `AttachmentKind` exactly, so transcripts round-trip.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -70,6 +70,11 @@ pub enum AttachmentKind {
     VerifyPlanReminder,
     UltrathinkEffort,
     WorkflowKeywordRequest,
+    /// One-shot notice that the dynamic-workflow size guideline moved
+    /// mid-session. The Workflow tool description is pinned at session start to
+    /// keep the cached tool block stable, so a settings change reaches the model
+    /// here instead.
+    WorkflowSizeGuidelineChange,
     TokenUsage,
     BudgetUsd,
     OutputTokenUsage,
@@ -162,6 +167,7 @@ impl AttachmentKind {
             Self::VerifyPlanReminder => "verify_plan_reminder",
             Self::UltrathinkEffort => "ultrathink_effort",
             Self::WorkflowKeywordRequest => "workflow_keyword_request",
+            Self::WorkflowSizeGuidelineChange => "workflow_size_guideline_change",
             Self::TokenUsage => "token_usage",
             Self::BudgetUsd => "budget_usd",
             Self::OutputTokenUsage => "output_token_usage",
@@ -247,6 +253,7 @@ impl AttachmentKind {
             | VerifyPlanReminder
             | UltrathinkEffort
             | WorkflowKeywordRequest
+            | WorkflowSizeGuidelineChange
             | TokenUsage
             | BudgetUsd
             | OutputTokenUsage
@@ -364,6 +371,7 @@ impl AttachmentKind {
             | TokenUsage
             | UltrathinkEffort
             | WorkflowKeywordRequest
+            | WorkflowSizeGuidelineChange
             | MaxTurnsReached
             | AutoMode
             | AutoModeExit
@@ -435,9 +443,10 @@ impl AttachmentKind {
         }
     }
 
-    /// Every variant in declaration order. Length must equal 69 (61 TS
+    /// Every variant in declaration order. Length must equal 70 (61 TS
     /// `Attachment` union members + coco-rs-synthetic `UserContext`,
-    /// `SlashCommandMetadata`, `WorkflowKeywordRequest`, and
+    /// `SlashCommandMetadata`, `WorkflowKeywordRequest`,
+    /// `WorkflowSizeGuidelineChange`, and
     /// memory reminder kinds, and `SkillLearnedReminder`) — enforced by the parity test.
     pub const fn all() -> &'static [AttachmentKind] {
         &[
@@ -459,6 +468,7 @@ impl AttachmentKind {
             Self::VerifyPlanReminder,
             Self::UltrathinkEffort,
             Self::WorkflowKeywordRequest,
+            Self::WorkflowSizeGuidelineChange,
             Self::TokenUsage,
             Self::BudgetUsd,
             Self::OutputTokenUsage,
@@ -658,6 +668,10 @@ pub const fn coverage_of(kind: AttachmentKind) -> Coverage {
         WorkflowKeywordRequest => Coverage::OutsideReminder {
             owner_crate: "app/query",
             note: "ultracode keyword reminder injected when workflow keyword trigger is enabled",
+        },
+        WorkflowSizeGuidelineChange => Coverage::OutsideReminder {
+            owner_crate: "app/query",
+            note: "announced when the resolved workflow size guideline moves away from the value                    pinned into this session's Workflow tool description",
         },
         TokenUsage => Coverage::Reminder {
             generator: "TokenUsageGenerator",

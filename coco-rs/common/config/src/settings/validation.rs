@@ -701,6 +701,8 @@ const KNOWN_SETTINGS_FIELDS: &[&str] = &[
     "strict_known_marketplaces",
     "blocked_marketplaces",
     "file_checkpointing_enabled",
+    "workflowSizeGuideline",
+    "workflow_size_guideline",
 ];
 
 /// Check if a setting field name is a known field.

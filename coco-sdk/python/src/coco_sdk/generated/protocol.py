@@ -143,6 +143,7 @@ class AttachmentKind(str, Enum):
     skill_learned_reminder = "skill_learned_reminder"
     slash_command_metadata = "slash_command_metadata"
     user_context = "user_context"
+    workflow_size_guideline_change = "workflow_size_guideline_change"
     tool_search_usage_reminder = "tool_search_usage_reminder"
 
 

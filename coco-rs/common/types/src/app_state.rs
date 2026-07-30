@@ -91,6 +91,34 @@ impl LiveToolPermissionState {
     }
 }
 
+/// Two views of the dynamic-workflow size guideline, kept apart because they
+/// answer different questions and must move at different rates.
+///
+/// The guideline reaches the model twice: once inside the Workflow tool's
+/// description, and again — only when it changes mid-session — as a reminder.
+/// The description sits in the request's largest cacheable prefix, so it is
+/// pinned at first render and never re-read; a settings edit that moved the
+/// live value would otherwise re-bill the whole tool block for the rest of the
+/// session. The reminder carries the change instead, and costs one short
+/// message-level block that invalidates nothing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WorkflowSizeAnnouncement {
+    /// What the Workflow tool description states for this session. `None`
+    /// before the first tool block is rendered.
+    pub pinned: Option<crate::ResolvedWorkflowSize>,
+    /// The most recent value announced by a change reminder. `None` ⇒ none was
+    /// sent, so [`Self::pinned`] is still what the model believes.
+    pub last_announced: Option<crate::ResolvedWorkflowSize>,
+}
+
+impl WorkflowSizeAnnouncement {
+    /// The guideline the model currently believes is in force, or `None` before
+    /// anything has told it one.
+    pub fn believed(&self) -> Option<crate::ResolvedWorkflowSize> {
+        self.last_announced.or(self.pinned)
+    }
+}
+
 /// Cross-turn shared state carried on `ToolUseContext.app_state`.
 /// Grouped by lifecycle:
 /// - **Live permission mode** (`permission_mode`, `pre_plan_mode`,
@@ -284,6 +312,11 @@ pub struct ToolAppState {
     /// value is the instruction text (hashable on content).
     /// reconstructed from prior delta attachments.
     pub last_announced_mcp_instructions: std::collections::HashMap<String, String>,
+
+    /// Dynamic-workflow size guideline as the model currently understands it.
+    /// See [`WorkflowSizeAnnouncement`] for why the pinned and announced values
+    /// are tracked separately.
+    pub workflow_size: WorkflowSizeAnnouncement,
 
     /// Full normalized MCP-server announcement baseline per visibility scope.
     /// Counts and descriptions are part of the comparison so reconnects and

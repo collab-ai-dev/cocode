@@ -301,7 +301,20 @@ impl WorkflowHost for WorkflowRunHost {
         &self,
         prompt: String,
         opts: WorkflowAgentOpts,
+        started: coco_workflow_runtime::WorkflowAgentStarted<'_>,
     ) -> Result<WorkflowAgentOutcome, String> {
+        // Compile the script's schema up front so a bad one fails the `agent()`
+        // call the script can see, rather than surfacing turns later as a
+        // subagent that never called StructuredOutput. It also bounds what the
+        // dispatch screen below is asked to reason about. The compiled
+        // validator is discarded — the subagent builds its own — but the
+        // meta-validation and the size bounds are what this is for.
+        if let Some(schema) = opts.schema.as_ref() {
+            coco_tool_runtime::ToolInputSchema::from_value(schema.clone()).map_err(|error| {
+                format!("agent({{schema}}) received an invalid JSON Schema: {error}")
+            })?;
+        }
+
         // Auto-mode dispatch screen. This call never passed through the tool
         // pipeline — it is a script call, not a model tool call — so without
         // this the Workflow tool would be a way to dispatch subagents that the
@@ -333,6 +346,9 @@ impl WorkflowHost for WorkflowRunHost {
             .acquire_owned()
             .await
             .map_err(|e| format!("workflow concurrency semaphore closed: {e}"))?;
+        // The wait is over — flip the row from queued to running. Retries below
+        // reuse the same permit, so this fires exactly once per `agent()` call.
+        started();
 
         // Per-agent stall watchdog (CC parity): a spawn that produces no result
         // within `stall` is aborted and retried up to WORKFLOW_STALL_RETRY
@@ -471,6 +487,9 @@ impl WorkflowHost for WorkflowRunHost {
             .me
             .upgrade()
             .ok_or_else(|| "workflow host was dropped".to_string())?;
+        // The child's own `meta.name` — not the caller's `nameOrRef`, which may
+        // be a path — names the group its agents render under.
+        let child_group = self.run_state.next_child_group(&script.meta.name);
         WorkflowEngine::run(WorkflowRun {
             script: script.script_body,
             args,
@@ -479,6 +498,7 @@ impl WorkflowHost for WorkflowRunHost {
             cancel: self.spawn_ctx.workflow_abort.token(),
             sync_eval_budget: WORKFLOW_SYNC_EVAL_BUDGET,
             depth,
+            child_group: Some(child_group),
         })
         .await
         .map_err(|error| error.to_string())
@@ -625,6 +645,7 @@ pub(crate) fn spawn_workflow_engine(script: String, launch: WorkflowLaunch) {
                     cancel,
                     sync_eval_budget: WORKFLOW_SYNC_EVAL_BUDGET,
                     depth: 0,
+                    child_group: None,
                 })
                 .await;
                 let census = agent_census(task_handle.as_ref(), &task_id).await;

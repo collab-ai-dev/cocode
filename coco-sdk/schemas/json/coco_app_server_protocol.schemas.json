@@ -1098,7 +1098,7 @@
       ]
     },
     "AttachmentKind": {
-      "description": "Every `AttachmentKind` discriminator, plus coco-rs-synthetic\nreminder kinds. 69 variants.\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]`\nto match `AttachmentKind` exactly, so transcripts round-trip.",
+      "description": "Every `AttachmentKind` discriminator, plus coco-rs-synthetic\nreminder kinds. 70 variants.\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]`\nto match `AttachmentKind` exactly, so transcripts round-trip.",
       "oneOf": [
         {
           "enum": [
@@ -1195,6 +1195,11 @@
         {
           "const": "user_context",
           "description": "coco-rs per-turn baseline user context (`prependUserContext`\nInjected\nevery turn as an `is_meta` `<system-reminder>` carrying\n`Today's date is <local ISO>.` \u2014 distinct from the one-shot\n[`DateChange`](Self::DateChange) rollover notice.",
+          "type": "string"
+        },
+        {
+          "const": "workflow_size_guideline_change",
+          "description": "One-shot notice that the dynamic-workflow size guideline moved\nmid-session. The Workflow tool description is pinned at session start to\nkeep the cached tool block stable, so a settings change reaches the model\nhere instead.",
           "type": "string"
         },
         {

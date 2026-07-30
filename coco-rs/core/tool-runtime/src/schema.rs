@@ -106,6 +106,7 @@ impl ToolInputSchema {
     /// fetches, with `resolve-http` off).
     pub fn from_value(mut raw: Value) -> Result<Self, SchemaError> {
         normalize_root_object(&mut raw)?;
+        ensure_schema_within_bounds(&raw)?;
         let validator =
             jsonschema::validator_for(&raw).map_err(|e| SchemaError::InvalidSchema {
                 message: e.to_string(),
@@ -151,6 +152,53 @@ impl ToolInputSchema {
             Err(issues)
         }
     }
+}
+
+/// Node ceiling for a schema compiled at runtime. Every JSON value in the
+/// document counts, so it bounds *width* — a schema with a million sibling
+/// properties is shallow and would sail past a depth check.
+pub const MAX_SCHEMA_NODES: usize = 100_000;
+
+/// Nesting ceiling for a schema compiled at runtime.
+///
+/// The validator compiler recurses, so an unbounded schema is a stack-overflow
+/// vector, and a crash cannot be caught the way a rejected schema can. 128 is
+/// `serde_json`'s own default recursion limit: any schema that arrived as JSON
+/// text was already held to it, and this extends the same bound to documents
+/// assembled in-process. Real schemas nest well under 20.
+pub const MAX_SCHEMA_DEPTH: usize = 128;
+
+/// Reject a runtime-supplied schema that is too large or too deep to hand to
+/// the validator compiler.
+///
+/// The walk keeps its own stack: recursing here would be the very failure the
+/// depth bound exists to prevent.
+fn ensure_schema_within_bounds(root: &Value) -> Result<(), SchemaError> {
+    let mut pending = vec![(root, 1usize)];
+    let mut nodes = 0usize;
+    while let Some((value, depth)) = pending.pop() {
+        nodes += 1;
+        if nodes > MAX_SCHEMA_NODES {
+            return Err(SchemaError::TooLarge {
+                found: nodes,
+                limit: MAX_SCHEMA_NODES,
+                unit: "nodes",
+            });
+        }
+        if depth > MAX_SCHEMA_DEPTH {
+            return Err(SchemaError::TooLarge {
+                found: depth,
+                limit: MAX_SCHEMA_DEPTH,
+                unit: "levels deep",
+            });
+        }
+        match value {
+            Value::Object(map) => pending.extend(map.values().map(|v| (v, depth + 1))),
+            Value::Array(items) => pending.extend(items.iter().map(|v| (v, depth + 1))),
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+        }
+    }
+    Ok(())
 }
 
 /// Fold-in `type:"object"` when the root omits `type` AND carries no
@@ -316,6 +364,16 @@ pub enum SchemaError {
 
     #[error("schema failed JSON Schema meta-validation: {message}")]
     InvalidSchema { message: String },
+
+    #[error(
+        "schema is too large to compile safely ({found} {unit}, limit {limit}) — \
+         simplify it or split the work across calls"
+    )]
+    TooLarge {
+        found: usize,
+        limit: usize,
+        unit: &'static str,
+    },
 }
 
 impl StackError for SchemaError {

@@ -126,6 +126,14 @@ pub struct WorkflowRun {
     /// host-backed; a child runs at `depth >= 1`, where `workflow()` always
     /// throws [`WORKFLOW_NESTING_LIMIT_ERROR`] (the one-level guard).
     pub depth: i32,
+    /// For a child run, the single phase group its agents are pinned to
+    /// (`▸ name`). `None` for a top-level run.
+    ///
+    /// Presence rewires three globals — `phase()` becomes a no-op, `log()` is
+    /// prefixed, and `agent()` ignores `opts.phase` — so that a script behaves
+    /// identically whether it is launched directly or invoked as a child. Built
+    /// by [`WorkflowRunState::next_child_group`].
+    pub child_group: Option<String>,
 }
 
 /// The workflow execution engine.
@@ -147,6 +155,7 @@ impl WorkflowEngine {
             cancel,
             sync_eval_budget,
             depth,
+            child_group,
         } = run;
         let runtime = AsyncRuntime::new().map_err(setup_err)?;
         let context = AsyncContext::full(&runtime).await.map_err(setup_err)?;
@@ -177,17 +186,21 @@ impl WorkflowEngine {
             deadline: sync_deadline.clone(),
             budget: sync_eval_budget,
         };
+        let setup_child_group = child_group;
         context
             .with(move |ctx| -> rquickjs::Result<()> {
                 crate::install_sandbox(&ctx)?;
                 ctx.eval::<(), _>(dsl_combinators())?;
                 install_globals(
                     &ctx,
-                    setup_host,
-                    setup_state,
-                    &setup_args,
-                    setup_sync_deadline,
-                    depth,
+                    GlobalsSetup {
+                        host: setup_host,
+                        state: setup_state,
+                        args: setup_args,
+                        sync_budget: setup_sync_deadline,
+                        depth,
+                        child_group: setup_child_group,
+                    },
                 )?;
                 Ok(())
             })
@@ -263,6 +276,20 @@ impl SyncBudget {
     }
 }
 
+/// What one JS context gets bound into it. A struct rather than a parameter
+/// list because every field is run-scoped state the context must agree with the
+/// rest of the run about — a positional call site invites binding the wrong
+/// `Arc` to a nested run, which is exactly the class of bug
+/// [`WorkflowRunState`] exists to prevent.
+struct GlobalsSetup {
+    host: Arc<dyn WorkflowHost>,
+    state: Arc<WorkflowRunState>,
+    args: serde_json::Value,
+    sync_budget: SyncBudget,
+    depth: i32,
+    child_group: Option<String>,
+}
+
 /// Install the host-backed globals: `agent` (async), `phase`/`log` (sync),
 /// `args` (frozen JSON), `budget` (frozen), and `workflow` (async, depth-aware:
 /// host-backed at depth 0, throwing the one-level guard at depth >= 1).
@@ -270,18 +297,20 @@ impl SyncBudget {
 /// The agent ordinal, phase table and replay cursor come from `state` rather
 /// than from context-local cells, so a nested `workflow()` continues the
 /// parent's numbering instead of restarting it.
-fn install_globals<'js>(
-    ctx: &Ctx<'js>,
-    host: Arc<dyn WorkflowHost>,
-    state: Arc<WorkflowRunState>,
-    args: &serde_json::Value,
-    sync_budget: SyncBudget,
-    depth: i32,
-) -> rquickjs::Result<()> {
+fn install_globals<'js>(ctx: &Ctx<'js>, setup: GlobalsSetup) -> rquickjs::Result<()> {
+    let GlobalsSetup {
+        host,
+        state,
+        args,
+        sync_budget,
+        depth,
+        child_group,
+    } = setup;
+    let child_group = child_group.map(Rc::new);
     let globals = ctx.globals();
 
     // args — the workflow input value, frozen.
-    globals.set("args", json_to_js(ctx, args)?)?;
+    globals.set("args", json_to_js(ctx, &args)?)?;
 
     // budget — frozen object with live spent/remaining views backed by the
     // host. `remaining()` stays Infinity only when no token cap is known.
@@ -306,14 +335,20 @@ fn install_globals<'js>(
         )?;
     }
 
-    // log(message) — sync.
+    // log(message) — sync. A child's output is prefixed with its group name so
+    // interleaved parent and child logs stay attributable in one flat stream.
     {
         let host = host.clone();
         let sync_budget = sync_budget.clone();
+        let child_group = child_group.clone();
         globals.set(
             "log",
             Func::from(move |message: String| {
                 sync_budget.reset();
+                let message = match child_group.as_deref() {
+                    Some(group) => format!("[{group}] {message}"),
+                    None => message,
+                };
                 host.push_progress(WorkflowProgressEvent::WorkflowLog { message });
             }),
         )?;
@@ -322,14 +357,23 @@ fn install_globals<'js>(
     // phase(title) — sync; interns the title and emits the group node once.
     // Re-entering a phase (or naming one already declared in `meta.phases`)
     // resolves to the same index instead of forking a second group.
+    //
+    // In a child run it is an explicit no-op: the child's agents are already
+    // pinned to its `▸ name` group, so honouring `phase()` would open sibling
+    // top-level groups and break the one-box contract. Doing nothing *and
+    // saying so* is what lets one script run standalone or nested unchanged.
     {
         let host = host.clone();
         let state = state.clone();
         let sync_budget = sync_budget.clone();
+        let is_child = child_group.is_some();
         globals.set(
             "phase",
             Func::from(move |title: String| {
                 sync_budget.reset();
+                if is_child {
+                    return;
+                }
                 emit_phase(host.as_ref(), state.as_ref(), &title);
             }),
         )?;
@@ -345,6 +389,7 @@ fn install_globals<'js>(
     // agent(prompt, opts?) — async; spawns one subagent and awaits its result.
     {
         let agent_sync_budget = sync_budget;
+        let agent_child_group = child_group;
         let agent = move |ctx: Ctx<'js>, prompt: String, opts: Opt<Object<'js>>| {
             let host = host.clone();
             let state = state.clone();
@@ -365,7 +410,13 @@ fn install_globals<'js>(
                 .unwrap_or(serde_json::Value::Null);
             let opts: WorkflowAgentOpts = serde_json::from_value(opts_json).unwrap_or_default();
             let label = opts.label.clone().unwrap_or_else(|| derive_label(&prompt));
-            let phase_title = opts.phase.clone();
+            // A child's group overrides `opts.phase` outright — every agent it
+            // spawns belongs to the one `▸ name` box, whatever the script asked
+            // for.
+            let phase_title = match agent_child_group.as_deref() {
+                Some(group) => Some(group.to_string()),
+                None => opts.phase.clone(),
+            };
             let phase_index = phase_title
                 .as_deref()
                 .map(|title| emit_phase(host.as_ref(), state.as_ref(), title));
@@ -410,14 +461,19 @@ fn install_globals<'js>(
                     return Err(ctx2.throw(thrown));
                 }
 
+                let row = Rc::new(AgentRow {
+                    index,
+                    label,
+                    phase_title,
+                    phase_index,
+                    queued_at: Cell::new(None),
+                    started_at: Cell::new(None),
+                });
+
                 if let Some(value) = replayed {
                     let result_preview = preview_value(&value);
-                    host.push_progress(agent_event(
-                        index,
+                    host.push_progress(row.event(
                         WorkflowAgentState::Done,
-                        label,
-                        phase_title,
-                        phase_index,
                         /*cached*/ true,
                         DoneDetails {
                             result_preview,
@@ -427,16 +483,29 @@ fn install_globals<'js>(
                     return json_to_js(&ctx2, &value);
                 }
 
-                host.push_progress(agent_event(
-                    index,
+                // Queued: emitted before the host takes a concurrency permit, so
+                // a wide fan-out shows every call immediately. `started_at`
+                // stays absent until the permit lands — that absence is what
+                // "queued" means downstream.
+                row.queued_at.set(Some(now_ms()));
+                host.push_progress(row.event(
                     WorkflowAgentState::Start,
-                    label.clone(),
-                    phase_title.clone(),
-                    phase_index,
                     /*cached*/ false,
                     DoneDetails::default(),
                 ));
-                let agent_outcome = host.run_agent(prompt, opts).await;
+                let started = {
+                    let host = host.clone();
+                    let row = row.clone();
+                    move || {
+                        row.started_at.set(Some(now_ms()));
+                        host.push_progress(row.event(
+                            WorkflowAgentState::Progress,
+                            /*cached*/ false,
+                            DoneDetails::default(),
+                        ));
+                    }
+                };
+                let agent_outcome = host.run_agent(prompt, opts, &started).await;
                 // Resolving the await hands control back to JS — open a fresh
                 // sync window for the chunk that follows.
                 sync_budget.reset();
@@ -445,12 +514,8 @@ fn install_globals<'js>(
                     // rejecting. The row records why, and `parallel`/`pipeline`
                     // treat the slot exactly like any other dropped one.
                     Ok(WorkflowAgentOutcome::Refused { reason, blocked }) => {
-                        host.push_progress(agent_event(
-                            index,
+                        host.push_progress(row.event(
                             WorkflowAgentState::Error,
-                            label,
-                            phase_title,
-                            phase_index,
                             /*cached*/ false,
                             DoneDetails {
                                 error: Some(reason),
@@ -472,12 +537,8 @@ fn install_globals<'js>(
                         // without re-spawning. Null results are skipped host-side.
                         host.record_agent_result(&cache_key, &result.value).await;
                         let result_preview = preview_value(&result.value);
-                        host.push_progress(agent_event(
-                            index,
+                        host.push_progress(row.event(
                             WorkflowAgentState::Done,
-                            label,
-                            phase_title,
-                            phase_index,
                             /*cached*/ false,
                             DoneDetails {
                                 model: result.model.clone(),
@@ -492,12 +553,8 @@ fn install_globals<'js>(
                         json_to_js(&ctx2, &result.value)
                     }
                     Err(message) => {
-                        host.push_progress(agent_event(
-                            index,
+                        host.push_progress(row.event(
                             WorkflowAgentState::Error,
-                            label,
-                            phase_title,
-                            phase_index,
                             /*cached*/ false,
                             DoneDetails {
                                 error: Some(message.clone()),
@@ -592,37 +649,66 @@ fn emit_phase(host: &dyn WorkflowHost, state: &WorkflowRunState, title: &str) ->
     slot.index
 }
 
-#[allow(clippy::too_many_arguments)]
-fn agent_event(
+/// One `agent()` call's progress row: the identity that stays fixed across
+/// every frame it emits, plus the lifecycle timestamps.
+///
+/// The timestamps live here rather than being passed per-frame because the
+/// downstream reducer replaces a node **wholesale** on each delta — a field
+/// omitted from the terminal frame is a field erased from the run's record.
+/// `Cell` because everything on the engine thread is single-threaded, and the
+/// start timestamp is written by the host's callback after the row is built.
+struct AgentRow {
     index: i32,
-    state: WorkflowAgentState,
     label: String,
     phase_title: Option<String>,
     phase_index: Option<i32>,
-    cached: bool,
-    details: DoneDetails,
-) -> WorkflowProgressEvent {
-    WorkflowProgressEvent::WorkflowAgent {
-        index,
-        state,
-        label,
-        phase_title,
-        phase_index,
-        agent_id: None,
-        model: details.model,
-        started_at: None,
-        queued_at: None,
-        last_progress_at: None,
-        tokens: details.tokens,
-        tool_calls: details.tool_calls,
-        duration_ms: details.duration_ms,
-        cached,
-        result_preview: details.result_preview,
-        prompt_preview: None,
-        error: details.error,
-        blocked: matches!(details.refusal, Some(Refusal::Blocked)),
-        skipped: matches!(details.refusal, Some(Refusal::Skipped)),
+    /// Set when the call is handed to the host, before it waits for a permit.
+    queued_at: Cell<Option<i64>>,
+    /// Set when the permit lands. Its **absence is the definition of "queued"**
+    /// for every consumer of the progress array.
+    started_at: Cell<Option<i64>>,
+}
+
+impl AgentRow {
+    fn event(
+        &self,
+        state: WorkflowAgentState,
+        cached: bool,
+        details: DoneDetails,
+    ) -> WorkflowProgressEvent {
+        WorkflowProgressEvent::WorkflowAgent {
+            index: self.index,
+            state,
+            label: self.label.clone(),
+            phase_title: self.phase_title.clone(),
+            phase_index: self.phase_index,
+            agent_id: None,
+            model: details.model,
+            started_at: self.started_at.get(),
+            queued_at: self.queued_at.get(),
+            last_progress_at: None,
+            tokens: details.tokens,
+            tool_calls: details.tool_calls,
+            duration_ms: details.duration_ms,
+            cached,
+            result_preview: details.result_preview,
+            prompt_preview: None,
+            error: details.error,
+            blocked: matches!(details.refusal, Some(Refusal::Blocked)),
+            skipped: matches!(details.refusal, Some(Refusal::Skipped)),
+        }
     }
+}
+
+/// Wall clock for progress rows only. Deliberately host-side: the determinism
+/// shim bans clocks *inside the script* because they break replay, and these
+/// timestamps never reach the script, the journal, or a cache key.
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok())
+        .unwrap_or_default()
 }
 
 /// Why an `agent()` call ended without running. Kept distinct because the

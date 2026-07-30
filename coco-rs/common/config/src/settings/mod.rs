@@ -344,6 +344,19 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub file_checkpointing_enabled: bool,
 
+    // === Dynamic workflows ===
+    /// Advisory ceiling on how many subagents a dynamic workflow should spawn.
+    /// Absent ⇒ [`coco_types::WorkflowSizeGuideline::DEFAULT`] applies and the
+    /// model is told the guideline is a default it may argue with; present ⇒
+    /// the user chose, and the sentence drops the "you can change it" pointer.
+    /// **Nothing enforces it** — see [`coco_types::WorkflowSizeGuideline`].
+    #[serde(
+        rename = "workflowSizeGuideline",
+        alias = "workflow_size_guideline",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub workflow_size_guideline: Option<coco_types::WorkflowSizeGuideline>,
+
     // === Attribution ===
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_co_authored_by: Option<bool>,

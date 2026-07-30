@@ -19,6 +19,10 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
+/// Prefix marking a phase group as a nested `workflow()` rather than a phase
+/// the script declared.
+pub const CHILD_GROUP_MARKER: &str = "▸";
+
 /// A phase title's resolved slot.
 pub struct PhaseSlot {
     /// 1-based phase index. `0` is never assigned — it is reserved for the
@@ -42,6 +46,9 @@ pub struct WorkflowRunState {
     /// Resume-replay cursor: once a lookup misses, the run has diverged from
     /// the journalled prefix and later calls stop consulting the cache.
     replay_diverged: AtomicBool,
+    /// How many times each child workflow name has been entered, so a script
+    /// that calls the same child twice gets two distinct groups.
+    child_group_counts: Mutex<Vec<(String, i32)>>,
 }
 
 impl WorkflowRunState {
@@ -66,6 +73,36 @@ impl WorkflowRunState {
             next_agent_index: AtomicI32::new(0),
             phases: Mutex::new(phases),
             replay_diverged: AtomicBool::new(false),
+            child_group_counts: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The phase title every agent of one `workflow(name)` invocation is pinned
+    /// to: `▸ name`, or `▸ name #2` for the second entry of the same name.
+    ///
+    /// A child runs under exactly one group. Letting its agents scatter into the
+    /// parent's phases — or letting its own `phase()` calls open sibling
+    /// top-level groups — would make a script's progress tree depend on whether
+    /// it happened to be invoked directly or as a child, which is precisely the
+    /// substitutability the `workflow()` primitive promises.
+    pub fn next_child_group(&self, name: &str) -> String {
+        let Ok(mut counts) = self.child_group_counts.lock() else {
+            return format!("{CHILD_GROUP_MARKER} {name}");
+        };
+        let count = match counts.iter_mut().find(|(known, _)| known == name) {
+            Some((_, count)) => {
+                *count += 1;
+                *count
+            }
+            None => {
+                counts.push((name.to_string(), 1));
+                1
+            }
+        };
+        if count > 1 {
+            format!("{CHILD_GROUP_MARKER} {name} #{count}")
+        } else {
+            format!("{CHILD_GROUP_MARKER} {name}")
         }
     }
 

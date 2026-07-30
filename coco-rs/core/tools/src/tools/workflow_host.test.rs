@@ -264,6 +264,7 @@ async fn run_agent_uses_captured_structured_output() {
                 schema: Some(serde_json::json!({ "type": "object" })),
                 ..WorkflowAgentOpts::default()
             },
+            &|| {},
         )
         .await
         .expect("run_agent ok");
@@ -323,6 +324,7 @@ async fn run_agent_schema_errors_without_capture() {
                 schema: Some(serde_json::json!({ "type": "object" })),
                 ..WorkflowAgentOpts::default()
             },
+            &|| {},
         )
         .await
         .expect_err("schema run must require StructuredOutput");
@@ -396,6 +398,7 @@ async fn run_agent_retries_after_stall_then_succeeds() {
                 stall_ms: Some(20),
                 ..WorkflowAgentOpts::default()
             },
+            &|| {},
         )
         .await
         .expect("run_agent retries to success");
@@ -455,6 +458,7 @@ async fn run_agent_fails_after_exhausting_stall_retries() {
                 stall_ms: Some(10),
                 ..WorkflowAgentOpts::default()
             },
+            &|| {},
         )
         .await
         .expect_err("all attempts stall");
@@ -508,7 +512,7 @@ async fn run_agent_surfaces_resolved_model() {
     let mut host = host();
     host.agent = Arc::new(ModelHandle);
     let result = host
-        .run_agent("compute".to_string(), WorkflowAgentOpts::default())
+        .run_agent("compute".to_string(), WorkflowAgentOpts::default(), &|| {})
         .await
         .expect("run_agent ok");
     assert_eq!(completed(result).model.as_deref(), Some("anthropic/opus"));

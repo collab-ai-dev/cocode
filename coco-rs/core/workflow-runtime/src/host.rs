@@ -172,6 +172,17 @@ pub enum WorkflowAgentOutcome {
     },
 }
 
+/// Signals that a dispatch stopped waiting for a concurrency permit and is
+/// about to run.
+///
+/// A fan-out of 200 `agent()` calls has 200 rows the instant the script fires
+/// them, but only as many as the host's concurrency width are actually running;
+/// the rest are queued. Downstream that distinction is carried by one thing —
+/// whether the row has a start timestamp — and the host is the only place that
+/// knows when the wait ended. The engine keeps ownership of the row's shape and
+/// hands the host this callback to flip it.
+pub type WorkflowAgentStarted<'a> = &'a dyn Fn();
+
 /// Callback surface the engine drives. The implementor bridges to the real
 /// subagent system and the task progress channel.
 ///
@@ -189,10 +200,14 @@ pub trait WorkflowHost: Send + Sync + 'static {
     /// records `null` for that slot. A dispatch the host *refuses* — policy
     /// screen, user skip — is `Ok(Refused)` instead, which resolves to `null`
     /// without raising into the script.
+    ///
+    /// The implementor MUST call `started` once the dispatch has taken its
+    /// concurrency permit and is about to run — see [`WorkflowAgentStarted`].
     async fn run_agent(
         &self,
         prompt: String,
         opts: WorkflowAgentOpts,
+        started: WorkflowAgentStarted<'_>,
     ) -> Result<WorkflowAgentOutcome, String>;
 
     /// Emit one progress delta (phase / log / agent state). Synchronous and

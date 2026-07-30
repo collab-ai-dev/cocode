@@ -49,3 +49,15 @@ fn test_replay_divergence_is_a_one_way_latch() {
     state.mark_replay_diverged();
     assert!(!state.replay_allowed());
 }
+
+#[test]
+fn test_child_group_is_marked_and_counted_per_name() {
+    let state = WorkflowRunState::default();
+    assert_eq!(state.next_child_group("build"), "▸ build");
+    // Same child invoked again: a distinct group, so its agents do not merge
+    // into the first invocation's box.
+    assert_eq!(state.next_child_group("build"), "▸ build #2");
+    // A different child starts its own count.
+    assert_eq!(state.next_child_group("test"), "▸ test");
+    assert_eq!(state.next_child_group("build"), "▸ build #3");
+}
