@@ -791,7 +791,7 @@ impl McpConnectionManager {
                         }
                         break Err(McpClientError::ToolCallIdleTimeout {
                             message: format!(
-                                "MCP server \"{server_name}\" tool \"{tool_name}\" sent no response or progress for {}s; aborting. Set COCO_MCP_TOOL_IDLE_TIMEOUT_MS or CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT higher or to 0 if this tool is expected to run silently for longer.",
+                                "MCP server \"{server_name}\" tool \"{tool_name}\" sent no response or progress for {}s; aborting. Set COCO_MCP_TOOL_IDLE_TIMEOUT_MS higher or to 0 if this tool is expected to run silently for longer.",
                                 idle_timeout.as_secs()
                             ),
                         });

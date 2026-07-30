@@ -331,7 +331,7 @@ pub fn emit_api_request(model: &str, input_tokens: i64, output_tokens: i64, cost
 ///
 /// Mirrors Claude Code v2.1.193: tool-only/empty text does not emit; response
 /// body logging is controlled by
-/// `OTEL_LOG_ASSISTANT_RESPONSES ?? OTEL_LOG_USER_PROMPTS`.
+/// `COCO_OTEL_LOG_ASSISTANT_RESPONSES ?? COCO_OTEL_LOG_USER_PROMPTS`.
 pub fn emit_assistant_response(
     response_text: &str,
     model: &str,
@@ -339,7 +339,7 @@ pub fn emit_assistant_response(
     query_source: &str,
     log_assistant_responses: Option<bool>,
 ) {
-    let log_user_prompts = is_env_truthy(EnvKey::OtelLogUserPrompts);
+    let log_user_prompts = is_env_truthy(EnvKey::CocoOtelLogUserPrompts);
     let Some(payload) =
         build_assistant_response_payload(response_text, log_user_prompts, log_assistant_responses)
     else {
@@ -359,7 +359,7 @@ pub fn emit_assistant_response(
 }
 
 pub fn emit_prompt_suggestion_filtered(payload: PromptSuggestionFilteredPayload<'_>) {
-    let log_user_prompts = is_env_truthy(EnvKey::OtelLogUserPrompts);
+    let log_user_prompts = is_env_truthy(EnvKey::CocoOtelLogUserPrompts);
     let suggestion_text =
         if resolve_log_assistant_responses(payload.log_assistant_responses, log_user_prompts) {
             truncate_for_telemetry(payload.suggestion_text)

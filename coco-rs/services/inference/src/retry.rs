@@ -106,8 +106,8 @@ impl RetryConfig {
 
     /// Whether a retry delay is acceptable for the interactive retry loop.
     ///
-    /// Claude Code caps normal sleeps at 60s and requires the explicit
-    /// `CLAUDE_CODE_RETRY_WATCHDOG` opt-in for longer unattended backoffs.
+    /// Normal sleeps are capped at 60s; longer unattended backoffs need the
+    /// explicit `COCO_API_RETRY_WATCHDOG` opt-in.
     pub fn should_wait_for_retry(&self, delay: Duration) -> bool {
         retry_delay_allowed(delay, retry_watchdog_enabled())
     }
@@ -185,7 +185,7 @@ impl RetryConfig {
 }
 
 fn retry_watchdog_enabled() -> bool {
-    coco_config::env::is_env_truthy(EnvKey::ClaudeCodeRetryWatchdog)
+    coco_config::env::is_env_truthy(EnvKey::CocoApiRetryWatchdog)
 }
 
 fn retry_delay_allowed(delay: Duration, watchdog_enabled: bool) -> bool {

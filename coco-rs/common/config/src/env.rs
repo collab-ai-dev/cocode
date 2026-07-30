@@ -159,13 +159,13 @@ pub enum EnvKey {
     /// Timezone for log timestamps: `local | utc`. Lower priority than
     /// `--log-timezone`. Defaults to `local`.
     CocoLogTimezone,
-    /// Claude Code compatibility toggle: truthy values allow prompt bodies in
-    /// OTEL logs. `OTEL_LOG_ASSISTANT_RESPONSES` inherits this when unset.
-    OtelLogUserPrompts,
-    /// Claude Code compatibility tri-state toggle for assistant response body
-    /// logging. Unset/unrecognized inherits `OTEL_LOG_USER_PROMPTS`; falsy
+    /// Truthy values allow prompt bodies in OTel logs.
+    /// `COCO_OTEL_LOG_ASSISTANT_RESPONSES` inherits this when unset.
+    CocoOtelLogUserPrompts,
+    /// Tri-state toggle for assistant response body logging.
+    /// Unset/unrecognized inherits `COCO_OTEL_LOG_USER_PROMPTS`; falsy
     /// explicitly redacts responses even when prompt logging is enabled.
-    OtelLogAssistantResponses,
+    CocoOtelLogAssistantResponses,
     /// `LspConfig::max_file_size_bytes` override. Wins over settings.
     /// Files exceeding this size are rejected at the tool layer before
     /// reaching the LSP server (rust-analyzer / pyright OOM-guard).
@@ -209,10 +209,6 @@ pub enum EnvKey {
     CocoMcpToolTimeoutMs,
     /// Default MCP server exposure: `load` / `defer` / `use_tool`.
     CocoMcpToolExposure,
-    /// Claude Code compatibility knob for remote MCP tool-call silence.
-    /// `COCO_MCP_TOOL_IDLE_TIMEOUT_MS` is the native coco-rs spelling; this
-    /// variant preserves the upstream env surface.
-    ClaudeCodeMcpToolIdleTimeout,
     CocoMcpToolIdleTimeoutMs,
     CocoModelMain,
     CocoParentSessionId,
@@ -349,10 +345,10 @@ pub enum EnvKey {
     /// Override `api.retry.max_retries`. Applies after settings.json and is
     /// clamped by `ApiRetryConfig::finalize`.
     CocoApiMaxRetries,
-    /// Claude Code compatibility alias for `CocoApiMaxRetries`.
-    ClaudeCodeMaxRetries,
-    /// Claude Code compatibility opt-in for long unattended retry backoffs.
-    ClaudeCodeRetryWatchdog,
+    /// Opt-in for retry backoffs longer than the interactive ceiling. Off by
+    /// default: an unattended run may want to wait out a multi-minute
+    /// rate-limit window, an interactive one almost never does.
+    CocoApiRetryWatchdog,
     /// Disable the startup auto-install of the official plugin marketplace
     /// (`anthropics/claude-plugins-official`). When set truthy, coco does not
     /// fetch/register the official marketplace on launch.
@@ -468,8 +464,8 @@ impl EnvKey {
             Self::CocoLogLocation => "COCO_LOG_LOCATION",
             Self::CocoLogStderr => "COCO_LOG_STDERR",
             Self::CocoLogTimezone => "COCO_LOG_TIMEZONE",
-            Self::OtelLogUserPrompts => "OTEL_LOG_USER_PROMPTS",
-            Self::OtelLogAssistantResponses => "OTEL_LOG_ASSISTANT_RESPONSES",
+            Self::CocoOtelLogUserPrompts => "COCO_OTEL_LOG_USER_PROMPTS",
+            Self::CocoOtelLogAssistantResponses => "COCO_OTEL_LOG_ASSISTANT_RESPONSES",
             Self::CocoLspMaxFileSizeBytes => "COCO_LSP_MAX_FILE_SIZE_BYTES",
             Self::CocoMaxContextTokens => "COCO_MAX_CONTEXT_TOKENS",
             Self::CocoMaxStructuredOutputRetries => "COCO_MAX_STRUCTURED_OUTPUT_RETRIES",
@@ -485,7 +481,6 @@ impl EnvKey {
             Self::CocoCoworkMemoryExtraGuidelines => "COCO_COWORK_MEMORY_EXTRA_GUIDELINES",
             Self::CocoMcpToolTimeoutMs => "COCO_MCP_TOOL_TIMEOUT_MS",
             Self::CocoMcpToolExposure => "COCO_MCP_TOOL_EXPOSURE",
-            Self::ClaudeCodeMcpToolIdleTimeout => "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT",
             Self::CocoMcpToolIdleTimeoutMs => "COCO_MCP_TOOL_IDLE_TIMEOUT_MS",
             Self::CocoModelMain => "COCO_MODEL_MAIN",
             Self::CocoParentSessionId => "COCO_PARENT_SESSION_ID",
@@ -547,8 +542,7 @@ impl EnvKey {
             Self::CocoBareMode => "COCO_BARE_MODE",
             Self::CocoBackgroundTasksDisable => "COCO_BACKGROUND_TASKS_DISABLE",
             Self::CocoApiMaxRetries => "COCO_API_MAX_RETRIES",
-            Self::ClaudeCodeMaxRetries => "CLAUDE_CODE_MAX_RETRIES",
-            Self::ClaudeCodeRetryWatchdog => "CLAUDE_CODE_RETRY_WATCHDOG",
+            Self::CocoApiRetryWatchdog => "COCO_API_RETRY_WATCHDOG",
             Self::CocoPluginsDisableOfficialMarketplace => {
                 "COCO_PLUGINS_DISABLE_OFFICIAL_MARKETPLACE"
             }
@@ -630,7 +624,7 @@ pub fn env_truthy_opt<K: AsRef<OsStr>>(key: K) -> Option<bool> {
 
 /// Resolve assistant response body logging.
 ///
-/// `OTEL_LOG_ASSISTANT_RESPONSES` is a tri-state override: recognised truthy
+/// `COCO_OTEL_LOG_ASSISTANT_RESPONSES` is a tri-state override: recognised truthy
 /// and falsy values win; unset or unrecognised values inherit prompt logging.
 pub fn log_assistant_responses_enabled(log_user_prompts: bool) -> bool {
     resolve_log_assistant_responses(None, log_user_prompts)
@@ -638,13 +632,13 @@ pub fn log_assistant_responses_enabled(log_user_prompts: bool) -> bool {
 
 /// Resolve assistant response body logging with an optional settings value.
 ///
-/// Priority: `OTEL_LOG_ASSISTANT_RESPONSES` > settings
-/// `log.assistant_responses` > `OTEL_LOG_USER_PROMPTS`.
+/// Priority: `COCO_OTEL_LOG_ASSISTANT_RESPONSES` > settings
+/// `log.assistant_responses` > `COCO_OTEL_LOG_USER_PROMPTS`.
 pub fn resolve_log_assistant_responses(
     settings_assistant_responses: Option<bool>,
     log_user_prompts: bool,
 ) -> bool {
-    env_truthy_opt(EnvKey::OtelLogAssistantResponses)
+    env_truthy_opt(EnvKey::CocoOtelLogAssistantResponses)
         .or(settings_assistant_responses)
         .unwrap_or(log_user_prompts)
 }
