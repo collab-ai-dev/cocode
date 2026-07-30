@@ -9,8 +9,8 @@ fn lock_env() -> std::sync::MutexGuard<'static, ()> {
 
 fn clear_assistant_response_env() {
     unsafe {
-        std::env::remove_var(EnvKey::OtelLogAssistantResponses);
-        std::env::remove_var(EnvKey::OtelLogUserPrompts);
+        std::env::remove_var(EnvKey::CocoOtelLogAssistantResponses);
+        std::env::remove_var(EnvKey::CocoOtelLogUserPrompts);
     }
 }
 
@@ -134,7 +134,7 @@ fn assistant_response_logging_explicit_false_overrides_prompt_logging() {
     let _guard = lock_env();
     clear_assistant_response_env();
     unsafe {
-        std::env::set_var(EnvKey::OtelLogAssistantResponses, "0");
+        std::env::set_var(EnvKey::CocoOtelLogAssistantResponses, "0");
     }
 
     let payload =
@@ -155,7 +155,7 @@ fn assistant_response_logging_explicit_true_overrides_prompt_redaction() {
     let _guard = lock_env();
     clear_assistant_response_env();
     unsafe {
-        std::env::set_var(EnvKey::OtelLogAssistantResponses, "1");
+        std::env::set_var(EnvKey::CocoOtelLogAssistantResponses, "1");
     }
 
     let payload =
@@ -184,7 +184,7 @@ fn assistant_response_length_matches_js_utf16_length() {
     let _guard = lock_env();
     clear_assistant_response_env();
     unsafe {
-        std::env::set_var(EnvKey::OtelLogAssistantResponses, "1");
+        std::env::set_var(EnvKey::CocoOtelLogAssistantResponses, "1");
     }
 
     let payload = build_assistant_response_payload("a😀", false, None).expect("payload emitted");
@@ -198,7 +198,7 @@ fn assistant_response_logging_truncates_at_utf8_boundary() {
     let _guard = lock_env();
     clear_assistant_response_env();
     unsafe {
-        std::env::set_var(EnvKey::OtelLogAssistantResponses, "1");
+        std::env::set_var(EnvKey::CocoOtelLogAssistantResponses, "1");
     }
     let content = format!("{}é", "a".repeat(TELEMETRY_CONTENT_LIMIT_BYTES - 1));
 
@@ -219,12 +219,12 @@ fn emit_assistant_response_uses_env_inheritance() {
     let _guard = lock_env();
     clear_assistant_response_env();
     unsafe {
-        std::env::set_var(EnvKey::OtelLogUserPrompts, "1");
+        std::env::set_var(EnvKey::CocoOtelLogUserPrompts, "1");
     }
 
     let payload = build_assistant_response_payload(
         "visible response",
-        is_env_truthy(EnvKey::OtelLogUserPrompts),
+        is_env_truthy(EnvKey::CocoOtelLogUserPrompts),
         None,
     )
     .expect("payload emitted");

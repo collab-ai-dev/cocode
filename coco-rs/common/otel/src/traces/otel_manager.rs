@@ -329,8 +329,8 @@ impl OtelManager {
     /// Log assistant visible text for a completed model turn.
     ///
     /// Mirrors Claude Code v2.1.193: empty/tool-only responses do not emit;
-    /// response body logging inherits `OTEL_LOG_USER_PROMPTS` unless
-    /// `OTEL_LOG_ASSISTANT_RESPONSES` explicitly opts in or out.
+    /// response body logging inherits `COCO_OTEL_LOG_USER_PROMPTS` unless
+    /// `COCO_OTEL_LOG_ASSISTANT_RESPONSES` explicitly opts in or out.
     pub fn assistant_response(
         &self,
         response_text: &str,

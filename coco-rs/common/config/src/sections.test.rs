@@ -871,63 +871,6 @@ fn test_api_retry_env_max_retries_overrides_settings() {
 }
 
 #[test]
-fn test_api_retry_claude_code_max_retries_alias_overrides_settings() {
-    let settings = Settings {
-        api: PartialApiSettings {
-            retry: Some(PartialApiRetrySettings {
-                max_retries: Some(3),
-                ..Default::default()
-            }),
-        },
-        ..Default::default()
-    };
-    let env = EnvSnapshot::from_pairs([(EnvKey::ClaudeCodeMaxRetries, "11")]);
-
-    let config = ApiConfig::resolve(&settings, &env);
-
-    assert_eq!(config.retry.max_retries, 11);
-}
-
-#[test]
-fn test_api_retry_claude_code_max_retries_alias_ignores_negative_values() {
-    let settings = Settings {
-        api: PartialApiSettings {
-            retry: Some(PartialApiRetrySettings {
-                max_retries: Some(3),
-                ..Default::default()
-            }),
-        },
-        ..Default::default()
-    };
-    let env = EnvSnapshot::from_pairs([(EnvKey::ClaudeCodeMaxRetries, "-4")]);
-
-    let config = ApiConfig::resolve(&settings, &env);
-
-    assert_eq!(config.retry.max_retries, 3);
-}
-
-#[test]
-fn test_api_retry_claude_code_max_retries_alias_is_clamped_to_upper_cap() {
-    let env = EnvSnapshot::from_pairs([(EnvKey::ClaudeCodeMaxRetries, "99")]);
-
-    let config = ApiConfig::resolve(&Settings::default(), &env);
-
-    assert_eq!(config.retry.max_retries, 15);
-}
-
-#[test]
-fn test_api_retry_coco_env_wins_over_claude_code_alias() {
-    let env = EnvSnapshot::from_pairs([
-        (EnvKey::ClaudeCodeMaxRetries, "11"),
-        (EnvKey::CocoApiMaxRetries, "12"),
-    ]);
-
-    let config = ApiConfig::resolve(&Settings::default(), &env);
-
-    assert_eq!(config.retry.max_retries, 12);
-}
-
-#[test]
 fn test_api_retry_env_max_retries_is_clamped_to_lower_bound() {
     let env = EnvSnapshot::from_pairs([(EnvKey::CocoApiMaxRetries, "-4")]);
 
@@ -1135,14 +1078,12 @@ fn test_mcp_runtime_config_json_first_env_override() {
     });
     let env = EnvSnapshot::from_pairs([
         (EnvKey::CocoMcpToolTimeoutMs, "2500"),
-        (EnvKey::ClaudeCodeMcpToolIdleTimeout, "0"),
         (EnvKey::CocoMcpToolIdleTimeoutMs, "750"),
     ]);
 
     let config = McpRuntimeConfig::resolve(&settings, &env);
 
     assert_eq!(config.tool_timeout_ms, Some(2_500));
-    // Native COCO spelling beats the Claude Code compatibility env, and
     // positive idle values are floored to 1s; 0 still disables when selected.
     assert_eq!(config.tool_idle_timeout_ms, Some(1_000));
 }

@@ -831,12 +831,6 @@ impl ApiConfig {
                 max_retries_source = MaxRetriesSource::Settings;
             }
         }
-        if let Some(v) = env.get_i32(EnvKey::ClaudeCodeMaxRetries)
-            && v >= 0
-        {
-            config.retry.max_retries = v;
-            max_retries_source = MaxRetriesSource::ClaudeCodeEnv;
-        }
         if let Some(v) = env.get_i32(EnvKey::CocoApiMaxRetries) {
             config.retry.max_retries = v;
             max_retries_source = MaxRetriesSource::CocoEnv;
@@ -850,7 +844,6 @@ impl ApiConfig {
 enum MaxRetriesSource {
     Default,
     Settings,
-    ClaudeCodeEnv,
     CocoEnv,
 }
 
@@ -859,7 +852,6 @@ impl MaxRetriesSource {
         match self {
             Self::Default => "default api retry max_retries",
             Self::Settings => "api.retry.max_retries",
-            Self::ClaudeCodeEnv => "CLAUDE_CODE_MAX_RETRIES",
             Self::CocoEnv => "COCO_API_MAX_RETRIES",
         }
     }
@@ -1796,9 +1788,6 @@ impl McpRuntimeConfig {
         }
         if let Some(v) = env.get_i32(EnvKey::CocoMcpToolTimeoutMs) {
             config.tool_timeout_ms = Some(v);
-        }
-        if let Some(v) = env.get_i32(EnvKey::ClaudeCodeMcpToolIdleTimeout) {
-            config.tool_idle_timeout_ms = Some(v);
         }
         if let Some(v) = env.get_i32(EnvKey::CocoMcpToolIdleTimeoutMs) {
             config.tool_idle_timeout_ms = Some(v);

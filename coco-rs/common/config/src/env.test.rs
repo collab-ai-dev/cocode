@@ -10,21 +10,14 @@ fn test_env_key_as_str() {
         EnvKey::CocoMaxToolUseConcurrency.as_str(),
         "COCO_MAX_TOOL_USE_CONCURRENCY"
     );
+    assert_eq!(EnvKey::CocoApiMaxRetries.as_str(), "COCO_API_MAX_RETRIES");
     assert_eq!(
-        EnvKey::ClaudeCodeMaxRetries.as_str(),
-        "CLAUDE_CODE_MAX_RETRIES"
-    );
-    assert_eq!(
-        EnvKey::ClaudeCodeRetryWatchdog.as_str(),
-        "CLAUDE_CODE_RETRY_WATCHDOG"
+        EnvKey::CocoApiRetryWatchdog.as_str(),
+        "COCO_API_RETRY_WATCHDOG"
     );
     assert_eq!(
         EnvKey::CocoMcpToolTimeoutMs.as_str(),
         "COCO_MCP_TOOL_TIMEOUT_MS"
-    );
-    assert_eq!(
-        EnvKey::ClaudeCodeMcpToolIdleTimeout.as_str(),
-        "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT"
     );
     assert_eq!(
         EnvKey::CocoMcpToolIdleTimeoutMs.as_str(),
@@ -63,10 +56,13 @@ fn test_env_key_as_str() {
         EnvKey::CocoServerTurnDrainTimeoutSecs.as_str(),
         "COCO_SERVER_TURN_DRAIN_TIMEOUT_SECS"
     );
-    assert_eq!(EnvKey::OtelLogUserPrompts.as_str(), "OTEL_LOG_USER_PROMPTS");
     assert_eq!(
-        EnvKey::OtelLogAssistantResponses.as_str(),
-        "OTEL_LOG_ASSISTANT_RESPONSES"
+        EnvKey::CocoOtelLogUserPrompts.as_str(),
+        "COCO_OTEL_LOG_USER_PROMPTS"
+    );
+    assert_eq!(
+        EnvKey::CocoOtelLogAssistantResponses.as_str(),
+        "COCO_OTEL_LOG_ASSISTANT_RESPONSES"
     );
 }
 
@@ -139,7 +135,7 @@ fn test_is_env_falsy_values() {
 #[test]
 fn test_log_assistant_responses_enabled_inherits_prompt_logging_when_unset() {
     let _guard = ENV_LOCK.lock().expect("env test lock");
-    unsafe { std::env::remove_var(EnvKey::OtelLogAssistantResponses) };
+    unsafe { std::env::remove_var(EnvKey::CocoOtelLogAssistantResponses) };
 
     assert!(log_assistant_responses_enabled(true));
     assert!(!log_assistant_responses_enabled(false));
@@ -156,7 +152,7 @@ fn test_log_assistant_responses_enabled_uses_tristate_override() {
         ("maybe", true, true),
         ("maybe", false, false),
     ] {
-        unsafe { std::env::set_var(EnvKey::OtelLogAssistantResponses, raw) };
+        unsafe { std::env::set_var(EnvKey::CocoOtelLogAssistantResponses, raw) };
         assert_eq!(
             log_assistant_responses_enabled(prompt_enabled),
             expected,
@@ -164,13 +160,13 @@ fn test_log_assistant_responses_enabled_uses_tristate_override() {
         );
     }
 
-    unsafe { std::env::remove_var(EnvKey::OtelLogAssistantResponses) };
+    unsafe { std::env::remove_var(EnvKey::CocoOtelLogAssistantResponses) };
 }
 
 #[test]
 fn test_resolve_log_assistant_responses_uses_settings_before_prompt_logging() {
     let _guard = ENV_LOCK.lock().expect("env test lock");
-    unsafe { std::env::remove_var(EnvKey::OtelLogAssistantResponses) };
+    unsafe { std::env::remove_var(EnvKey::CocoOtelLogAssistantResponses) };
 
     assert!(resolve_log_assistant_responses(Some(true), false));
     assert!(!resolve_log_assistant_responses(Some(false), true));
@@ -182,13 +178,13 @@ fn test_resolve_log_assistant_responses_uses_settings_before_prompt_logging() {
 fn test_resolve_log_assistant_responses_env_overrides_settings() {
     let _guard = ENV_LOCK.lock().expect("env test lock");
 
-    unsafe { std::env::set_var(EnvKey::OtelLogAssistantResponses, "1") };
+    unsafe { std::env::set_var(EnvKey::CocoOtelLogAssistantResponses, "1") };
     assert!(resolve_log_assistant_responses(Some(false), false));
 
-    unsafe { std::env::set_var(EnvKey::OtelLogAssistantResponses, "0") };
+    unsafe { std::env::set_var(EnvKey::CocoOtelLogAssistantResponses, "0") };
     assert!(!resolve_log_assistant_responses(Some(true), true));
 
-    unsafe { std::env::remove_var(EnvKey::OtelLogAssistantResponses) };
+    unsafe { std::env::remove_var(EnvKey::CocoOtelLogAssistantResponses) };
 }
 
 #[test]
