@@ -174,8 +174,8 @@ pub struct QueryEngineConfig {
     /// `ToolUseContext.verbose`. Defaults to `false`.
     pub verbose: bool,
     /// Settings-level assistant response body logging override. `None`
-    /// falls back to `OTEL_LOG_USER_PROMPTS` unless
-    /// `OTEL_LOG_ASSISTANT_RESPONSES` is set.
+    /// falls back to `COCO_OTEL_LOG_USER_PROMPTS` unless
+    /// `COCO_OTEL_LOG_ASSISTANT_RESPONSES` is set.
     pub log_assistant_responses: Option<bool>,
     /// Thinking level applied to the main-loop model for this session.
     /// Surfaced on `ToolUseContext.thinking_level` so tools (and tool-
@@ -340,6 +340,10 @@ pub struct QueryEngineConfig {
     /// Centralized feature gates (Layer 1 of the tool filter pipeline).
     /// See `docs/internal/feature-gates-and-tool-filtering.md`.
     pub features: Arc<Features>,
+    /// Live advisory dynamic-workflow sizing. The Workflow tool description is
+    /// rendered from the session-*pinned* copy on `ToolAppState`, not from this
+    /// — this is what the pin is diffed against to notice a settings reload.
+    pub workflow_size: coco_types::ResolvedWorkflowSize,
     /// Per-tier `skill_overrides` map preserved without merging.
     /// Threaded through the per-turn reminder pipeline and the
     /// SkillTool gate so the model only sees what the user permitted.
@@ -487,6 +491,7 @@ impl Default for QueryEngineConfig {
             web_search_config: WebSearchConfig::default(),
             lsp_config: coco_config::LspConfig::default(),
             features: Arc::new(Features::with_defaults()),
+            workflow_size: coco_types::ResolvedWorkflowSize::default(),
             skill_overrides: Arc::new(coco_config::SkillOverrideTiers::default()),
             tool_overrides: Arc::new(ToolOverrides::none()),
             tool_filter: ToolFilter::unrestricted(),

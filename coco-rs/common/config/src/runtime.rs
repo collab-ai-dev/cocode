@@ -126,6 +126,12 @@ pub struct RuntimeConfig {
     /// Coarse-grained capability gates. See
     /// `docs/internal/feature-gates-and-tool-filtering.md`.
     pub features: Features,
+    /// Advisory dynamic-workflow sizing, folded with its provenance so callers
+    /// never have to ask "was this chosen or defaulted?" a second way. Read the
+    /// session-pinned copy on
+    /// [`coco_types::ToolAppState`](coco_types::ToolAppState) for prompt text —
+    /// this field is the *live* value and moves on settings reload.
+    pub workflow_size: coco_types::ResolvedWorkflowSize,
     /// Per-tier `skill_overrides` map preserved without merging.
     /// Drives the 4-state Skill tool gate, listing filters, and the
     /// `/skills` dialog. Resolution semantics are non-trivial — see
@@ -415,6 +421,7 @@ pub fn build_runtime_config_with(
         prompt_cache: PromptCacheRuntimeConfig::resolve(merged, &env),
         account: AccountConfig::resolve(merged, &env),
         features,
+        workflow_size: coco_types::ResolvedWorkflowSize::resolve(merged.workflow_size_guideline),
         skill_overrides,
         tool_overrides,
         enabled_setting_sources,

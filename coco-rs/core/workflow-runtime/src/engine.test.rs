@@ -32,7 +32,12 @@ impl WorkflowHost for FakeHost {
         &self,
         prompt: String,
         opts: WorkflowAgentOpts,
+        started: crate::WorkflowAgentStarted<'_>,
     ) -> Result<WorkflowAgentOutcome, String> {
+        // A real host signals this once its concurrency permit lands; the fake
+        // does it unconditionally so the queued -> running transition is
+        // exercised by every test that runs an agent.
+        started();
         if self.fail_on.lock().unwrap().contains(&prompt) {
             return Err(format!("boom: {prompt}"));
         }
@@ -97,6 +102,7 @@ impl WorkflowHost for ConcurrencyHost {
         &self,
         prompt: String,
         _opts: WorkflowAgentOpts,
+        _started: crate::WorkflowAgentStarted<'_>,
     ) -> Result<WorkflowAgentOutcome, String> {
         let _permit = self
             .semaphore
@@ -141,6 +147,7 @@ fn run(
             cancel: CancellationToken::new(),
             sync_eval_budget: Duration::from_secs(10),
             depth: 0,
+            child_group: None,
         })
         .await
     })
@@ -159,6 +166,7 @@ impl WorkflowHost for SlowHost {
         &self,
         prompt: String,
         _opts: WorkflowAgentOpts,
+        _started: crate::WorkflowAgentStarted<'_>,
     ) -> Result<WorkflowAgentOutcome, String> {
         tokio::time::sleep(self.delay).await;
         Ok(WorkflowAgentOutcome::Completed(WorkflowAgentResult {
@@ -195,6 +203,7 @@ fn run_with_budget(
             cancel: CancellationToken::new(),
             sync_eval_budget,
             depth: 0,
+            child_group: None,
         })
         .await
     })
@@ -368,6 +377,7 @@ fn run_with_state(
             cancel: CancellationToken::new(),
             sync_eval_budget: Duration::from_secs(10),
             depth: 0,
+            child_group: None,
         })
         .await
     })
@@ -466,6 +476,7 @@ impl WorkflowHost for CacheHost {
         &self,
         prompt: String,
         _opts: WorkflowAgentOpts,
+        _started: crate::WorkflowAgentStarted<'_>,
     ) -> Result<WorkflowAgentOutcome, String> {
         self.spawns.fetch_add(1, Ordering::SeqCst);
         Ok(WorkflowAgentOutcome::Completed(WorkflowAgentResult {
@@ -557,8 +568,9 @@ impl WorkflowHost for ProgressTee {
         &self,
         prompt: String,
         opts: WorkflowAgentOpts,
+        _started: crate::WorkflowAgentStarted<'_>,
     ) -> Result<WorkflowAgentOutcome, String> {
-        self.inner.run_agent(prompt, opts).await
+        self.inner.run_agent(prompt, opts, _started).await
     }
 
     fn push_progress(&self, event: WorkflowProgressEvent) {
@@ -587,6 +599,7 @@ struct NestedHost {
     in_flight: AtomicI64,
     max_in_flight: AtomicI64,
     spawns: AtomicI64,
+    progress: Mutex<Vec<WorkflowProgressEvent>>,
 }
 
 impl NestedHost {
@@ -599,6 +612,7 @@ impl NestedHost {
             in_flight: AtomicI64::new(0),
             max_in_flight: AtomicI64::new(0),
             spawns: AtomicI64::new(0),
+            progress: Mutex::new(Vec::new()),
         })
     }
 }
@@ -609,6 +623,7 @@ impl WorkflowHost for NestedHost {
         &self,
         prompt: String,
         _opts: WorkflowAgentOpts,
+        started: crate::WorkflowAgentStarted<'_>,
     ) -> Result<WorkflowAgentOutcome, String> {
         // Shared admission gate: both parent and child agents queue here. If the
         // child allocated its own governance, more than `cap` could run at once.
@@ -618,6 +633,7 @@ impl WorkflowHost for NestedHost {
             .acquire_owned()
             .await
             .map_err(|e| format!("semaphore closed: {e}"))?;
+        started();
         self.spawns.fetch_add(1, Ordering::SeqCst);
         let current = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
         self.max_in_flight.fetch_max(current, Ordering::SeqCst);
@@ -633,7 +649,9 @@ impl WorkflowHost for NestedHost {
         }))
     }
 
-    fn push_progress(&self, _event: WorkflowProgressEvent) {}
+    fn push_progress(&self, event: WorkflowProgressEvent) {
+        self.progress.lock().unwrap().push(event);
+    }
 
     async fn run_nested_workflow(
         &self,
@@ -649,6 +667,7 @@ impl WorkflowHost for NestedHost {
         // Re-enter on THIS thread with the SAME host (governance shared); the
         // child runs at depth>=1 so its own workflow() throws.
         let host = self.me.upgrade().expect("host alive");
+        let child_group = self.run_state.next_child_group(&name_or_ref);
         WorkflowEngine::run(WorkflowRun {
             script: body,
             args,
@@ -657,6 +676,7 @@ impl WorkflowHost for NestedHost {
             cancel: CancellationToken::new(),
             sync_eval_budget: Duration::from_secs(10),
             depth,
+            child_group: Some(child_group),
         })
         .await
         .map_err(|error| error.to_string())
@@ -764,6 +784,7 @@ fn repeated_identical_prompts_get_distinct_cache_keys() {
             &self,
             prompt: String,
             _opts: WorkflowAgentOpts,
+            _started: crate::WorkflowAgentStarted<'_>,
         ) -> Result<WorkflowAgentOutcome, String> {
             Ok(WorkflowAgentOutcome::Completed(WorkflowAgentResult {
                 value: serde_json::Value::String(prompt),
@@ -881,6 +902,7 @@ fn refused_dispatch_resolves_to_null_instead_of_rejecting() {
             &self,
             _prompt: String,
             _opts: WorkflowAgentOpts,
+            _started: crate::WorkflowAgentStarted<'_>,
         ) -> Result<WorkflowAgentOutcome, String> {
             Ok(WorkflowAgentOutcome::Refused {
                 reason: "blocked by safety classifier: nope".to_string(),
@@ -936,4 +958,163 @@ fn refused_dispatch_resolves_to_null_instead_of_rejecting() {
         last_state_by_index.values().copied().collect::<Vec<_>>(),
         vec![WorkflowAgentState::Error; 3]
     );
+}
+
+/// The queued row must land before the host takes a permit, carrying only
+/// `queued_at`; the running row adds `started_at`. That single field is the
+/// whole queued-vs-running signal downstream, so both frames matter.
+#[test]
+fn agent_rows_report_queued_then_running_then_done() {
+    let host = Arc::new(FakeHost::default());
+    run(
+        host.clone(),
+        r#"return await agent("one");"#,
+        serde_json::Value::Null,
+    )
+    .expect("run");
+
+    let frames: Vec<(WorkflowAgentState, Option<i64>, Option<i64>)> = host
+        .progress
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|event| match event {
+            WorkflowProgressEvent::WorkflowAgent {
+                state,
+                queued_at,
+                started_at,
+                ..
+            } => Some((*state, *queued_at, *started_at)),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(frames.len(), 3, "queued + running + done: {frames:?}");
+    assert_eq!(frames[0].0, WorkflowAgentState::Start);
+    assert!(frames[0].1.is_some(), "queued row carries queued_at");
+    assert!(
+        frames[0].2.is_none(),
+        "queued row must NOT carry started_at — its absence is what 'queued' means"
+    );
+    assert_eq!(frames[1].0, WorkflowAgentState::Progress);
+    assert!(frames[1].2.is_some(), "running row carries started_at");
+    // The reducer replaces a node wholesale, so the terminal frame has to
+    // re-state both timestamps or they are erased from the run's record.
+    assert_eq!(frames[2].0, WorkflowAgentState::Done);
+    assert_eq!(frames[2].1, frames[0].1);
+    assert_eq!(frames[2].2, frames[1].2);
+}
+
+/// A replayed agent never queues or runs, so it reports neither timestamp — a
+/// cached row that claimed a start time would be counted as a real dispatch.
+#[test]
+fn cached_row_reports_no_queue_or_start_time() {
+    let host = Arc::new(CacheHost::new());
+    host.cache
+        .lock()
+        .unwrap()
+        .insert("one".to_string(), serde_json::json!("replayed-one"));
+    let progress: Arc<Mutex<Vec<WorkflowProgressEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink_host = Arc::new(ProgressTee {
+        inner: host,
+        progress: progress.clone(),
+    });
+    run_with_host(
+        sink_host,
+        r#"return await agent("one");"#,
+        serde_json::Value::Null,
+    )
+    .expect("run");
+
+    let events = progress.lock().unwrap();
+    let agent_rows: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, WorkflowProgressEvent::WorkflowAgent { .. }))
+        .collect();
+    assert_eq!(agent_rows.len(), 1, "a cache hit is one row, not three");
+    let WorkflowProgressEvent::WorkflowAgent {
+        cached,
+        queued_at,
+        started_at,
+        ..
+    } = agent_rows[0]
+    else {
+        unreachable!("filtered above")
+    };
+    assert!(cached);
+    assert_eq!(*queued_at, None);
+    assert_eq!(*started_at, None);
+}
+
+/// A child workflow renders as ONE group. Its agents are pinned to `▸ name`
+/// whatever `opts.phase` says, its `phase()` calls are ignored, and its logs are
+/// prefixed — so the same script reads identically standalone or nested.
+#[test]
+fn child_workflow_pins_agents_to_one_group_and_prefixes_logs() {
+    let mut scripts = HashMap::new();
+    scripts.insert(
+        "child".to_string(),
+        r#"phase('Child Phase'); log('inner'); await agent('a', { phase: 'Ignored' }); return 1;"#
+            .to_string(),
+    );
+    let host = NestedHost::new(4, scripts);
+    let script = r#"phase('Parent'); log('outer'); await workflow('child'); return 'ok';"#;
+    run_with_host(host.clone(), script, serde_json::Value::Null).expect("run");
+
+    let progress = host.progress.lock().unwrap();
+    let phases: Vec<&str> = progress
+        .iter()
+        .filter_map(|event| match event {
+            WorkflowProgressEvent::WorkflowPhase { title, .. } => Some(title.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        phases,
+        vec!["Parent", "▸ child"],
+        "the child contributes exactly one group, and never its own phase()"
+    );
+
+    let agent_phase = progress.iter().find_map(|event| match event {
+        WorkflowProgressEvent::WorkflowAgent { phase_title, .. } => phase_title.clone(),
+        _ => None,
+    });
+    assert_eq!(
+        agent_phase.as_deref(),
+        Some("▸ child"),
+        "opts.phase inside a child is overridden by the child's group"
+    );
+
+    let logs: Vec<&str> = progress
+        .iter()
+        .filter_map(|event| match event {
+            WorkflowProgressEvent::WorkflowLog { message } => Some(message.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(logs, vec!["outer", "[▸ child] inner"]);
+}
+
+/// Invoking the same child twice gives two groups, so their agents do not pile
+/// into one box.
+#[test]
+fn repeated_child_invocations_get_distinct_groups() {
+    let mut scripts = HashMap::new();
+    scripts.insert(
+        "child".to_string(),
+        r#"await agent('a'); return 1;"#.to_string(),
+    );
+    let host = NestedHost::new(4, scripts);
+    let script = r#"await workflow('child'); await workflow('child'); return 'ok';"#;
+    run_with_host(host.clone(), script, serde_json::Value::Null).expect("run");
+
+    let progress = host.progress.lock().unwrap();
+    let phases: Vec<&str> = progress
+        .iter()
+        .filter_map(|event| match event {
+            WorkflowProgressEvent::WorkflowPhase { title, .. } => Some(title.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(phases, vec!["▸ child", "▸ child #2"]);
 }

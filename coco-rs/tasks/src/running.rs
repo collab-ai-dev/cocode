@@ -111,6 +111,28 @@ pub struct TaskManager {
     event_tx: Option<mpsc::Sender<CoreEvent>>,
     sdk_summaries_enabled: Option<Arc<AtomicBool>>,
     job_ledger: Option<Arc<JobLedger>>,
+    /// Emit gates for `LocalWorkflow` progress, keyed by task id.
+    /// See [`WORKFLOW_PROGRESS_COALESCE_MS`].
+    workflow_emit: Arc<std::sync::Mutex<HashMap<String, WorkflowEmitGate>>>,
+}
+
+/// Minimum wall-clock gap between two `task/progress` frames for one workflow.
+///
+/// Every frame carries the run's **whole** progress array, so emitting one per
+/// delta makes a run quadratic in its own delta count — a `log()` loop or a
+/// wide fan-out pays it in full. Coalescing bounds the emit rate; the trailing
+/// flush bounds the staleness, so no consumer is ever further behind than this.
+const WORKFLOW_PROGRESS_COALESCE_MS: i64 = 16;
+
+/// Per-workflow emit gate.
+#[derive(Debug, Default)]
+struct WorkflowEmitGate {
+    /// When the last frame went out.
+    last_emit_ms: i64,
+    /// A trailing flush is already pending, so a suppressed delta does not need
+    /// to schedule a second one — the pending flush reads the array fresh and
+    /// therefore already carries it.
+    flush_pending: bool,
 }
 
 /// Durable job-ledger binding for this manager's background tasks. When
@@ -185,6 +207,7 @@ impl TaskManager {
             event_tx: None,
             sdk_summaries_enabled: None,
             job_ledger: None,
+            workflow_emit: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -771,6 +794,12 @@ impl TaskManager {
             /*error*/ None,
             snapshot.start_time,
         );
+        // A coalesced progress delta may still be pending; deliver the final
+        // array before the completion event so no consumer's last view of the
+        // run is one frame stale.
+        if matches!(snapshot.extras.task_type(), TaskType::LocalWorkflow) {
+            self.settle_workflow_progress(id).await;
+        }
         self.emit_task_completed(id, &snapshot).await;
         Some(snapshot)
     }
@@ -1086,19 +1115,23 @@ impl TaskManager {
     }
 
     /// Fold a workflow progress delta into a `LocalWorkflow` row's
-    /// `workflow_progress` array and emit a `task/progress` carrying the
+    /// `workflow_progress` array and publish a `task/progress` carrying the
     /// cumulative array. No-op for non-`LocalWorkflow` rows or unknown ids.
     /// (The generic `set_progress`/`emit_progress` paths intentionally drop
-    /// workflow deltas — only `emit_task_progress` carries `workflow_progress`.)
+    /// workflow deltas — only the workflow frame carries `workflow_progress`.)
     ///
     /// The fold is an index-keyed upsert plus a log trim
     /// ([`apply_workflow_progress`]), so the array stays bounded and one
-    /// `agent()` call stays one node however many frames it emits — the array
-    /// is cloned into a protocol event on every delta, so an append-only vec
-    /// would make a large fan-out quadratic.
+    /// `agent()` call stays one node however many frames it emits.
+    ///
+    /// **The fold always runs; only publishing is rate-limited.** The row is
+    /// therefore always current, while frames — each carrying the whole array —
+    /// are capped at one per [`WORKFLOW_PROGRESS_COALESCE_MS`]. Deltas inside
+    /// that window ride a trailing flush, which re-reads the row and so carries
+    /// everything accumulated, not just the delta that scheduled it.
     pub async fn push_workflow_progress(&self, id: &str, mut event: WorkflowProgressEvent) {
         crate::workflow_progress::stamp_progress_time(&mut event, current_time_ms());
-        let snapshot = {
+        {
             let mut rows = self.rows.write().await;
             let Some(row) = rows.get_mut(id) else {
                 return;
@@ -1107,38 +1140,76 @@ impl TaskManager {
                 return;
             };
             apply_workflow_progress(&mut extras.workflow_progress, event);
-            row.clone()
+        }
+        // The fold above is unconditional — the row is always current. Only the
+        // *publishing* is rate-limited.
+        match self.claim_workflow_emit(id) {
+            WorkflowEmitDecision::Now => self.emit_workflow_frame(id).await,
+            WorkflowEmitDecision::After(delay) => {
+                let rows = self.rows.clone();
+                let event_tx = self.event_tx.clone();
+                let gates = self.workflow_emit.clone();
+                let id = id.to_string();
+                tokio::spawn(async move {
+                    tokio::time::sleep(delay).await;
+                    if let Ok(mut gates) = gates.lock()
+                        && let Some(gate) = gates.get_mut(&id)
+                    {
+                        gate.flush_pending = false;
+                        gate.last_emit_ms = current_time_ms();
+                    }
+                    emit_workflow_frame(&rows, event_tx.as_ref(), &id).await;
+                });
+            }
+            WorkflowEmitDecision::Coalesced => {}
+        }
+    }
+
+    /// Decide whether this delta publishes now, rides a pending flush, or
+    /// schedules one. Updates the gate in the same critical section so two
+    /// concurrent deltas cannot both schedule a flush.
+    fn claim_workflow_emit(&self, task_id: &str) -> WorkflowEmitDecision {
+        let now = current_time_ms();
+        let Ok(mut gates) = self.workflow_emit.lock() else {
+            // Poisoned by a panicking holder: publish rather than lose the
+            // frame — a stale panel is worse than an extra event.
+            return WorkflowEmitDecision::Now;
         };
-        self.emit_task_progress(id, &snapshot).await;
+        let gate = gates.entry(task_id.to_string()).or_default();
+        let elapsed = now.saturating_sub(gate.last_emit_ms);
+        if elapsed >= WORKFLOW_PROGRESS_COALESCE_MS {
+            gate.last_emit_ms = now;
+            return WorkflowEmitDecision::Now;
+        }
+        if gate.flush_pending {
+            return WorkflowEmitDecision::Coalesced;
+        }
+        gate.flush_pending = true;
+        WorkflowEmitDecision::After(std::time::Duration::from_millis(
+            (WORKFLOW_PROGRESS_COALESCE_MS - elapsed).max(0) as u64,
+        ))
+    }
+
+    /// Publish the run's current progress array unconditionally.
+    async fn emit_workflow_frame(&self, task_id: &str) {
+        emit_workflow_frame(&self.rows, self.event_tx.as_ref(), task_id).await;
+    }
+
+    /// Deliver the final progress array and retire the gate. Called on the
+    /// terminal transition so a coalesced tail delta is never the frame a
+    /// consumer is left holding.
+    async fn settle_workflow_progress(&self, task_id: &str) {
+        if let Ok(mut gates) = self.workflow_emit.lock() {
+            gates.remove(task_id);
+        }
+        self.emit_workflow_frame(task_id).await;
     }
 
     async fn emit_task_progress(&self, task_id: &str, state: &TaskStateBase) {
         let Some(tx) = &self.event_tx else { return };
-        let duration_ms = current_time_ms().saturating_sub(state.start_time);
-        let params = TaskProgressParams {
-            task_id: task_id.to_string(),
-            tool_use_id: state.tool_use_id.clone(),
-            description: state.description.clone(),
-            usage: TaskUsage {
-                total_tokens: 0,
-                input_tokens: 0,
-                output_tokens: 0,
-                cache_read_tokens: 0,
-                tool_uses: 0,
-                duration_ms,
-                cost_usd: 0.0,
-                input_cost_usd: 0.0,
-                output_cost_usd: 0.0,
-            },
-            last_tool_name: None,
-            summary: None,
-            agent_type: state.progress().and_then(|p| p.agent_type.clone()),
-            recent_activities: Vec::new(),
-            workflow_progress: workflow_progress(state),
-        };
         let _ = tx
             .send(CoreEvent::Protocol(ServerNotification::TaskProgress(
-                params,
+                task_progress_params(task_id, state),
             )))
             .await;
     }
@@ -1201,6 +1272,66 @@ pub enum KillTaskError {
     NotFound,
     #[error("task is not running")]
     NotRunning,
+}
+
+/// What [`TaskManager::claim_workflow_emit`] decided for one delta.
+enum WorkflowEmitDecision {
+    /// Publish immediately — the coalescing window has elapsed.
+    Now,
+    /// Publish after this delay; this delta owns the trailing flush.
+    After(std::time::Duration),
+    /// Nothing to do: a trailing flush is already pending and will read the
+    /// array fresh, so it carries this delta too.
+    Coalesced,
+}
+
+/// Build the `task/progress` payload for one task. Free-standing so the
+/// detached trailing flush can reuse it without a `TaskManager` handle.
+fn task_progress_params(task_id: &str, state: &TaskStateBase) -> TaskProgressParams {
+    TaskProgressParams {
+        task_id: task_id.to_string(),
+        tool_use_id: state.tool_use_id.clone(),
+        description: state.description.clone(),
+        usage: TaskUsage {
+            total_tokens: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            tool_uses: 0,
+            duration_ms: current_time_ms().saturating_sub(state.start_time),
+            cost_usd: 0.0,
+            input_cost_usd: 0.0,
+            output_cost_usd: 0.0,
+        },
+        last_tool_name: None,
+        summary: None,
+        agent_type: state.progress().and_then(|p| p.agent_type.clone()),
+        recent_activities: Vec::new(),
+        workflow_progress: workflow_progress(state),
+    }
+}
+
+/// Publish one task's current progress array. Re-reads the row rather than
+/// taking a snapshot argument, so a delayed flush always carries the newest
+/// state instead of the state as of when it was scheduled.
+async fn emit_workflow_frame(
+    rows: &RwLock<HashMap<String, TaskStateBase>>,
+    event_tx: Option<&mpsc::Sender<CoreEvent>>,
+    task_id: &str,
+) {
+    let Some(tx) = event_tx else { return };
+    let params = {
+        let rows = rows.read().await;
+        let Some(state) = rows.get(task_id) else {
+            return;
+        };
+        task_progress_params(task_id, state)
+    };
+    let _ = tx
+        .send(CoreEvent::Protocol(ServerNotification::TaskProgress(
+            params,
+        )))
+        .await;
 }
 
 fn current_time_ms() -> i64 {

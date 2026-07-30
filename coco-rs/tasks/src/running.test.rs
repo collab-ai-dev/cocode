@@ -315,22 +315,83 @@ async fn push_workflow_progress_emits_cumulative_task_progress() {
     mgr.push_workflow_progress(&id, phase.clone()).await;
     mgr.push_workflow_progress(&id, log.clone()).await;
 
-    let events = collect(&mut rx);
-    assert_eq!(events.len(), 2, "expected progress events, got: {events:?}");
-    match &events[0] {
+    // The first delta publishes immediately. The second lands inside the
+    // coalescing window, so it does NOT get its own frame — every frame carries
+    // the whole array, and one per delta is quadratic.
+    let immediate = collect(&mut rx);
+    assert_eq!(
+        immediate.len(),
+        1,
+        "second delta must be coalesced, got: {immediate:?}"
+    );
+    match &immediate[0] {
         ServerNotification::TaskProgress(p) => {
             assert_eq!(p.task_id, id);
             assert_eq!(p.workflow_progress, vec![phase.clone()]);
         }
         other => panic!("expected TaskProgress, got {other:?}"),
     }
-    match &events[1] {
-        ServerNotification::TaskProgress(p) => {
-            assert_eq!(p.task_id, id);
+
+    // The trailing flush delivers it, and reads the array fresh — so it carries
+    // both nodes, not just the one that scheduled it.
+    let flushed = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("trailing flush must fire")
+        .expect("channel open");
+    match flushed {
+        CoreEvent::Protocol(ServerNotification::TaskProgress(p)) => {
             assert_eq!(p.workflow_progress, vec![phase, log]);
         }
         other => panic!("expected TaskProgress, got {other:?}"),
     }
+}
+
+/// Whatever the coalescing window swallowed, the terminal transition settles it:
+/// no consumer is left holding a frame that is missing the run's last deltas.
+#[tokio::test]
+async fn terminal_transition_flushes_the_coalesced_workflow_progress() {
+    let (tx, mut rx) = mpsc::channel::<CoreEvent>(32);
+    let mgr = TaskManager::new().with_event_sink(tx);
+    let id = coco_types::generate_task_id(TaskType::LocalWorkflow);
+    mgr.create_task(TaskCreateRequest {
+        task_id: id.clone(),
+        task_type: TaskType::LocalWorkflow,
+        description: "ship workflow".to_string(),
+        output_file: None,
+        tool_use_id: None,
+        is_backgrounded: true,
+        status: TaskStatus::Running,
+        cancel: tokio_util::sync::CancellationToken::new(),
+        invoking_agent: None,
+        workflow_run_id: "wf_ship02".to_string(),
+        workflow_name: Some("ship".to_string()),
+        workflow_prompt: None,
+        shell_extras: None,
+    })
+    .await;
+
+    // Back-to-back deltas: only the first escapes the window.
+    for index in 0..5 {
+        mgr.push_workflow_progress(
+            &id,
+            coco_types::WorkflowProgressEvent::WorkflowPhase {
+                index,
+                title: format!("p{index}"),
+            },
+        )
+        .await;
+    }
+    mgr.transition_terminal(&id, TaskStatus::Completed).await;
+
+    let frames: Vec<_> = collect(&mut rx)
+        .into_iter()
+        .filter_map(|n| match n {
+            ServerNotification::TaskProgress(p) => Some(p.workflow_progress),
+            _ => None,
+        })
+        .collect();
+    let last = frames.last().expect("at least one progress frame");
+    assert_eq!(last.len(), 5, "the final frame carries every phase node");
 }
 
 #[tokio::test]

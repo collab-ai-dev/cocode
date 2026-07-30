@@ -162,6 +162,35 @@ Everything under `tui` shapes the terminal surface. All of it is optional.
 `● needs input` when the session is blocked on a permission prompt, and a tab
 bar truncates from the right, so a leading run state survives.
 
+### Dynamic workflow size
+
+A dynamic workflow is a script the model writes that spawns subagents, and
+nothing in the runtime counts them. `workflowSizeGuideline` is the one control
+over how many it *should* spawn, and it is deliberately advisory: it renders to
+a sentence appended to the Workflow tool's description, where the model reads it
+as guidance it may override when your prompt calls for a different scale.
+
+```jsonc
+{
+  // "unrestricted" | "small" (<5 agents) | "medium" (<15) | "large" (<50).
+  // Absent means "medium", presented to the model as a default it may argue
+  // with. Setting it explicitly — even to "medium" — drops that hedge.
+  "workflowSizeGuideline": "large",
+}
+```
+
+`/config workflowSizeGuideline large` writes the same key, and is the pointer
+the model is given when nobody has set one.
+
+`unrestricted` emits no sentence at all rather than a large number, because any
+number still biases the model downward.
+
+This key has one behavior worth knowing: the sentence is **pinned when the
+session's tool list is first built and never re-rendered**, because the tool
+descriptions sit in the request's largest cacheable prefix. Editing the key
+mid-session still reaches the model — as a short reminder on the next turn — but
+without re-billing the whole tool block.
+
 ### Reload semantics
 
 Settings are read into memory when a session starts. Writes that happen afterward do not retroactively change the running session.

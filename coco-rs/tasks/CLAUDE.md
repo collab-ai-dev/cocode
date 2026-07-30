@@ -23,6 +23,13 @@ V1 (`TodoWrite`) and V2 (`Task*` tools) are gated by `Feature::TaskV2` via `Tool
   MAX_WORKFLOW_PROGRESS_NODES` for logs) and emits the **cumulative** array on
   `task/progress`. Consumers replace, never extend — the array is not
   append-only, so a later snapshot is not a prefix-extension of the one before.
+  The **fold is unconditional; only publishing is rate-limited.** Frames carry
+  the whole array, so one per delta is quadratic in the delta count — a `log()`
+  loop or a wide fan-out pays it in full. Deltas inside
+  `WORKFLOW_PROGRESS_COALESCE_MS` ride a single trailing flush, which re-reads
+  the row so it carries everything that accumulated (not just the delta that
+  scheduled it). `transition_terminal` settles any pending frame before
+  `TaskCompleted`, so no consumer's last view of a run is stale.
 - Event-emission coverage: `TaskStarted` on `create`, `TaskProgress` on non-terminal transitions, `TaskCompleted` on terminal (with `TaskCompletionStatus` mapping: Completed→Completed, Failed→Failed, Killed|Cancelled→Stopped).
 
 ### task_list

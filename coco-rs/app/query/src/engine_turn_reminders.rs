@@ -549,17 +549,26 @@ impl QueryEngine {
         // `AttachmentEmitter` and are drained from the inbox at the
         // head of `inject_reminders_into_history` below — there is no
         // separate mailbox state to thread into `TurnReminderInput`.
+        let workflow_tool_loaded = reminder_loaded_tools
+            .iter()
+            .any(|name| name == ToolName::Workflow.as_str());
         let workflow_keyword_message = should_fire_workflow_keyword_reminder(
             reminder_user_input.as_deref(),
             reminder_orchestrator
                 .config()
                 .attachments
                 .workflow_keyword_request,
-            reminder_loaded_tools
-                .iter()
-                .any(|name| name == ToolName::Workflow.as_str()),
+            workflow_tool_loaded,
         )
         .then(workflow_keyword_reminder_message);
+        // Dynamic-workflow size guideline. The tool description states the
+        // value pinned when this session's tool block was first rendered; a
+        // mid-session settings change is announced here instead of by
+        // re-rendering that block, which sits in the cached prefix.
+        let workflow_size_message = self
+            .reconcile_workflow_size_guideline(workflow_tool_loaded)
+            .await
+            .map(workflow_size_change_message);
         let structured_output_enforcement_message = should_fire_structured_output_enforcement(
             history,
             self.config.requires_structured_output,
@@ -839,6 +848,9 @@ impl QueryEngine {
         if let Some(msg) = workflow_keyword_message {
             crate::history_sync::history_push_and_emit(history, msg, event_tx).await;
         }
+        if let Some(msg) = workflow_size_message {
+            crate::history_sync::history_push_and_emit(history, msg, event_tx).await;
+        }
         if let Some(msg) = structured_output_enforcement_message {
             crate::history_sync::history_push_and_emit(history, msg, event_tx).await;
         }
@@ -938,6 +950,57 @@ fn workflow_keyword_reminder_message() -> Message {
         coco_types::AttachmentKind::WorkflowKeywordRequest,
         LlmMessage::user_text(wrap_in_system_reminder(WORKFLOW_KEYWORD_REMINDER)),
     ))
+}
+
+fn workflow_size_change_message(size: coco_types::ResolvedWorkflowSize) -> Message {
+    Message::Attachment(coco_messages::AttachmentMessage::api(
+        coco_types::AttachmentKind::WorkflowSizeGuidelineChange,
+        LlmMessage::user_text(wrap_in_system_reminder(&size.change_notice())),
+    ))
+}
+
+/// Decide, from the live setting and what the model has already been told,
+/// whether this turn must announce a new dynamic-workflow size guideline.
+///
+/// Also owns the *pin*: the first turn that renders the Workflow tool records
+/// what its description says, and never revises it. Everything downstream —
+/// the tool prompt and this diff — reads that pinned value, which is what keeps
+/// the tool block byte-stable across a settings reload.
+///
+/// Returns the value to announce, or `None` when the model is already current
+/// (the overwhelmingly common case).
+pub(crate) fn reconcile_workflow_size(
+    state: &mut coco_types::ToolAppState,
+    live: coco_types::ResolvedWorkflowSize,
+) -> Option<coco_types::ResolvedWorkflowSize> {
+    let Some(believed) = state.workflow_size.believed() else {
+        // First sight: the tool description is being rendered with `live` this
+        // very turn, so pinning is enough — announcing would repeat it.
+        state.workflow_size.pinned = Some(live);
+        return None;
+    };
+    if believed == live {
+        return None;
+    }
+    state.workflow_size.last_announced = Some(live);
+    Some(live)
+}
+
+impl QueryEngine {
+    /// Pin-and-diff the workflow size guideline against `self.config`. `None`
+    /// when workflows are unavailable this turn (nothing to size), when no
+    /// `app_state` is wired, or when the model is already current.
+    async fn reconcile_workflow_size_guideline(
+        &self,
+        workflow_tool_loaded: bool,
+    ) -> Option<coco_types::ResolvedWorkflowSize> {
+        if !workflow_tool_loaded {
+            return None;
+        }
+        let state = self.app_state.as_ref()?;
+        let mut guard = state.write().await;
+        reconcile_workflow_size(&mut guard, self.config.workflow_size)
+    }
 }
 
 fn should_fire_structured_output_enforcement(

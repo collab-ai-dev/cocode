@@ -294,3 +294,58 @@ fn validate_enumerates_multiple_expected_types() {
         "must not emit the literal placeholder"
     );
 }
+
+/// A runtime-supplied schema is compiled by a recursive validator builder, so an
+/// unbounded one is a stack-overflow vector — and a crash cannot be reported the
+/// way a rejected schema can. Both bounds are checked before compilation.
+#[test]
+fn from_value_rejects_a_schema_deeper_than_the_bound() {
+    let mut schema = serde_json::json!({ "type": "object" });
+    for _ in 0..(super::MAX_SCHEMA_DEPTH + 10) {
+        schema = serde_json::json!({ "type": "object", "properties": { "n": schema } });
+    }
+    let error = super::ToolInputSchema::from_value(schema).expect_err("must reject");
+    assert!(
+        matches!(
+            error,
+            super::SchemaError::TooLarge {
+                unit: "levels deep",
+                ..
+            }
+        ),
+        "expected a depth rejection, got {error}"
+    );
+}
+
+#[test]
+fn from_value_rejects_a_schema_wider_than_the_bound() {
+    // Shallow but enormous: a depth check alone would let this through.
+    let mut properties = serde_json::Map::new();
+    for i in 0..=super::MAX_SCHEMA_NODES {
+        properties.insert(format!("p{i}"), serde_json::json!({ "type": "string" }));
+    }
+    let schema = serde_json::json!({ "type": "object", "properties": properties });
+    let error = super::ToolInputSchema::from_value(schema).expect_err("must reject");
+    assert!(
+        matches!(error, super::SchemaError::TooLarge { unit: "nodes", .. }),
+        "expected a node-count rejection, got {error}"
+    );
+}
+
+#[test]
+fn from_value_accepts_an_ordinary_nested_schema() {
+    // Real schemas are nowhere near the bounds; the guard must not narrow them.
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "findings": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": { "file": { "type": "string" }, "line": { "type": "integer" } }
+                }
+            }
+        }
+    });
+    assert!(super::ToolInputSchema::from_value(schema).is_ok());
+}

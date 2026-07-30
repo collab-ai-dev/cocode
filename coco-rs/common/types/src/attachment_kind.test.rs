@@ -7,11 +7,11 @@ use std::collections::HashSet;
 /// continuing. Update both the constant and the TS `Attachment` union
 /// size in the README.
 #[test]
-fn attachment_kind_all_has_68_variants() {
+fn attachment_kind_all_has_70_variants() {
     assert_eq!(
         AttachmentKind::all().len(),
-        69,
-        "61 TS Attachment union members + coco-rs-synthetic user_context, slash_command_metadata, workflow_keyword_request, tool_search_usage_reminder, memory_index_warning, memory_update_reminder, and mcp_servers_delta"
+        70,
+        "61 TS Attachment union members + coco-rs-synthetic user_context, slash_command_metadata, workflow_keyword_request, workflow_size_guideline_change, tool_search_usage_reminder, memory_index_warning, memory_update_reminder, and mcp_servers_delta"
     );
 }
 
@@ -75,7 +75,7 @@ fn coverage_distribution_matches_readme_snapshot() {
     );
     assert_eq!(silent_reminder, 2, "in-crate silent reminders");
     assert_eq!(
-        outside, 11,
+        outside, 12,
         "owned by sister crates (incl. skill_learned_reminder)"
     );
     assert_eq!(silent_event, 10, "typed API-hidden events");
@@ -83,7 +83,7 @@ fn coverage_distribution_matches_readme_snapshot() {
     assert_eq!(runtime, 3, "inactive runtime bookkeeping");
     assert_eq!(
         reminder + silent_reminder + outside + silent_event + feature_gated + runtime,
-        69,
+        70,
         "total must match union size + synthetic user_context + slash_command_metadata + workflow_keyword_request + tool_search_usage_reminder + memory reminders + mcp_servers_delta"
     );
 }

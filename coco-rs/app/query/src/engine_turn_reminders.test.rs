@@ -741,3 +741,79 @@ async fn agent_mentions_reminder_sources_from_wired_catalog() {
          dead session_bootstrap.agents and silently dropped in production)"
     );
 }
+
+mod workflow_size_guideline {
+    use coco_types::ResolvedWorkflowSize;
+    use coco_types::ToolAppState;
+    use coco_types::WorkflowSizeGuideline;
+    use pretty_assertions::assert_eq;
+
+    use crate::engine_turn_reminders::reconcile_workflow_size;
+
+    /// The first turn pins whatever the tool description was rendered with and
+    /// stays silent: announcing would only repeat what the description says.
+    #[test]
+    fn test_first_turn_pins_without_announcing() {
+        let mut state = ToolAppState::default();
+        let live = ResolvedWorkflowSize::resolve(None);
+        assert_eq!(reconcile_workflow_size(&mut state, live), None);
+        assert_eq!(state.workflow_size.pinned, Some(live));
+        assert_eq!(state.workflow_size.last_announced, None);
+    }
+
+    #[test]
+    fn test_unchanged_guideline_announces_nothing() {
+        let mut state = ToolAppState::default();
+        let live = ResolvedWorkflowSize::resolve(Some(WorkflowSizeGuideline::Large));
+        reconcile_workflow_size(&mut state, live);
+        assert_eq!(reconcile_workflow_size(&mut state, live), None);
+        assert_eq!(reconcile_workflow_size(&mut state, live), None);
+    }
+
+    /// A settings reload moves the live value. The pin must NOT follow it — the
+    /// tool description is in the request's cached prefix — so the change
+    /// travels as an announcement instead.
+    #[test]
+    fn test_settings_change_announces_once_and_leaves_the_pin_alone() {
+        let mut state = ToolAppState::default();
+        let pinned = ResolvedWorkflowSize::resolve(None);
+        reconcile_workflow_size(&mut state, pinned);
+
+        let changed = ResolvedWorkflowSize::resolve(Some(WorkflowSizeGuideline::Small));
+        assert_eq!(reconcile_workflow_size(&mut state, changed), Some(changed));
+        assert_eq!(
+            state.workflow_size.pinned,
+            Some(pinned),
+            "the pin is what the tool block already said; moving it would re-bill it"
+        );
+        // Announced once, not every turn thereafter.
+        assert_eq!(reconcile_workflow_size(&mut state, changed), None);
+    }
+
+    /// Reverting to the pinned value is itself a change the model has to hear —
+    /// it currently believes the announced one.
+    #[test]
+    fn test_reverting_to_the_pinned_value_is_announced() {
+        let mut state = ToolAppState::default();
+        let pinned = ResolvedWorkflowSize::resolve(None);
+        reconcile_workflow_size(&mut state, pinned);
+        let changed = ResolvedWorkflowSize::resolve(Some(WorkflowSizeGuideline::Small));
+        reconcile_workflow_size(&mut state, changed);
+        assert_eq!(reconcile_workflow_size(&mut state, pinned), Some(pinned));
+    }
+
+    /// `medium` chosen by hand and `medium` defaulted are different states: only
+    /// the second tells the model it may argue with the constraint.
+    #[test]
+    fn test_default_and_explicit_same_size_are_distinct() {
+        let mut state = ToolAppState::default();
+        let defaulted = ResolvedWorkflowSize::resolve(None);
+        reconcile_workflow_size(&mut state, defaulted);
+        let explicit = ResolvedWorkflowSize::resolve(Some(WorkflowSizeGuideline::Medium));
+        assert_eq!(defaulted.size, explicit.size);
+        assert_eq!(
+            reconcile_workflow_size(&mut state, explicit),
+            Some(explicit)
+        );
+    }
+}

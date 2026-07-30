@@ -24,6 +24,12 @@ call re-opens a path that dispatches subagents an `Agent(...)` call could not.
 A blocked dispatch is `WorkflowAgentOutcome::Refused`, not `Err` — the slot
 resolves to `null` rather than raising into the script.
 
+`run_agent` also compiles `opts.schema` before the screen, so an invalid or
+oversized one fails the `agent()` call the script can see instead of
+surfacing turns later as a subagent that never called StructuredOutput. The
+compiled validator is discarded (the subagent builds its own); the
+meta-validation and `ToolInputSchema`'s size bounds are the point.
+
 ## Cross-Cutting Helpers (crate-private)
 
 - `record_file_read` / `record_file_edit` — updates `FileReadState` for @mention dedup + Read-tool `file_unchanged` detection

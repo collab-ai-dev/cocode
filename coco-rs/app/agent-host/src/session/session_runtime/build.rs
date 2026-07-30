@@ -564,6 +564,7 @@ impl SessionRuntime {
                 })
             },
             features: Arc::new(runtime_config.features.clone()),
+            workflow_size: runtime_config.workflow_size,
             skill_overrides: Arc::new(runtime_config.skill_overrides.clone()),
             tool_overrides: runtime_config.tool_overrides.clone(),
             include_hook_events: cli.include_hook_events,

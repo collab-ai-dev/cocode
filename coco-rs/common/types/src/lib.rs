@@ -59,6 +59,7 @@ mod tool_filter;
 pub mod tool_summary;
 mod tool_wire_name;
 mod wire_tagged;
+mod workflow;
 
 // === Re-exports ===
 
@@ -71,7 +72,7 @@ pub use composer::{
 pub use app_state::{
     ActiveWorktreeState, AppStatePatch, AppStateReadHandle, ElicitationGuard,
     LiveToolPermissionState, McpServerAnnouncementState, PendingPermissionGuard,
-    PendingPlanVerificationState, ToolAppState,
+    PendingPlanVerificationState, ToolAppState, WorkflowSizeAnnouncement,
 };
 
 // Per-provider rate-limit state (lives on `ToolAppState.rate_limits`).
@@ -285,6 +286,7 @@ pub use goal::{
 
 // Tool filter pipeline (Layers 2 + 4)
 pub use tool_filter::{ToolFilter, ToolOverrides};
+pub use workflow::{ResolvedWorkflowSize, WORKFLOW_SIZE_GUIDELINE_CAVEAT, WorkflowSizeGuideline};
 
 // Side-query types (data only; async trait in coco-tool-runtime)
 pub use side_query::{

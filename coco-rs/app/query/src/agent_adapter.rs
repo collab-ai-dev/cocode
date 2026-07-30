@@ -262,6 +262,10 @@ impl AgentQueryEngine for QueryEngineAdapter {
                 .features
                 .clone()
                 .unwrap_or_else(|| Arc::new(Features::with_defaults())),
+            // Subagents are denied the Workflow tool outright, so the guideline
+            // has no surface to render on; the default keeps the field honest
+            // rather than implying an inherited choice.
+            workflow_size: coco_types::ResolvedWorkflowSize::default(),
             // Layer 2 — inherit parent's resolved tool overrides (filled
             // in by the parent before handing off `AgentQueryConfig`).
             // Falling back to `none()` would WIDEN the set beyond what

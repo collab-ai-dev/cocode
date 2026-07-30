@@ -602,6 +602,14 @@ impl QueryEngine {
             is_pro_subscription,
             background_tasks_disabled,
             ant_build,
+            // Session-pinned, not live: this string lands in the tool block,
+            // the request's largest cacheable prefix. Before the pin exists
+            // (this turn is the one that sets it) the live value is what the
+            // reminder pass is about to pin, so the two agree.
+            workflow_size: app_state
+                .workflow_size
+                .pinned
+                .unwrap_or(self.config.workflow_size),
         };
 
         // Session context for `Tool::tool_spec`. Lets AgentTool drop

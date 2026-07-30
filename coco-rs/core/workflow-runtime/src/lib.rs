@@ -33,6 +33,7 @@ pub use host::WORKFLOW_STALL_RETRY;
 pub use host::WorkflowAgentOpts;
 pub use host::WorkflowAgentOutcome;
 pub use host::WorkflowAgentResult;
+pub use host::WorkflowAgentStarted;
 pub use host::WorkflowHost;
 pub use host::canonical_agent_opts;
 pub use run_state::PhaseSlot;

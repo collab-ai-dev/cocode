@@ -37,6 +37,19 @@ exactly that reason.
 Phase indices are 1-based and interned by **exact** title, so
 `meta.phases`, `phase('X')` and `agent({phase:'X'})` converge on one
 group; index `0` stays reserved for the renderer's ungrouped fallback.
+`next_child_group` mints the `▸ name` / `▸ name #2` title a nested
+`workflow()` runs under (per-name counter, so the same child twice is two
+groups).
+
+## A child workflow renders as exactly one group
+
+`WorkflowRun::child_group` is `Some` only for a nested run, and its presence
+rewires three globals: `phase()` becomes a no-op, `log()` is prefixed
+`[▸ name] `, and `agent()` **overrides** `opts.phase` with the group. The
+point is substitutability — a script must produce the same progress tree
+whether it is launched directly or invoked by `workflow()`. Honouring a
+child's `phase()` would open sibling top-level groups instead; making it an
+explicit no-op is the honest version of "silently does nothing".
 
 ## DSL globals contract (`engine.rs`)
 
@@ -48,6 +61,13 @@ group; index `0` stays reserved for the renderer's ungrouped fallback.
   blow up because policy declined one of its dispatches. The two are
   distinct on the progress row too (`blocked` vs `skipped`), so the
   completion census never reads a policy block as an agent that failed.
+  The engine owns the progress row (`AgentRow`) and hands the host a
+  `WorkflowAgentStarted` callback to fire once its permit lands. Only the
+  host knows when the queue wait ended, and **`started_at`'s absence is the
+  definition of "queued"** for every consumer — so an implementor that skips
+  the callback leaves a whole fan-out reading as permanently queued. Every
+  frame re-states both timestamps: the downstream reducer replaces a node
+  wholesale, so a field dropped from the terminal frame is erased.
 - `parallel(funcs)` / `pipeline(items, ...stages)` — JS-defined
   combinators over `Promise.allSettled`, `WORKFLOW_ARRAY_CAP` items max;
   concurrency is bounded host-side (each `agent()` waits on a permit).

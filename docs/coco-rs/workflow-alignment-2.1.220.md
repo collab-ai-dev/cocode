@@ -8,9 +8,13 @@ analysis was thin or wrong.
 
 **Verdict: structurally aligned.** The subsystem coco-rs ships is the same
 subsystem — same DSL, same sandbox posture, same caps, same launch/journal/
-resume shape. This pass found **three genuine correctness bugs** (all in the
-resume/nesting/state-model area, all fixed), **three robustness or policy gaps**
-(fixed), and a tail of deliberate or deferred divergences (listed in §3–§4).
+resume shape.
+
+Two passes are recorded here. The first found **three genuine correctness bugs**
+(all in the resume/nesting/state-model area) plus three robustness or policy
+gaps, and listed eight remaining differences (§2). The second worked that list:
+five implemented, one retracted with a reason, two left open (§4, §5). What
+remains different on purpose is §3.
 
 ---
 
@@ -177,47 +181,121 @@ CC's deliberately narrow empty-shape test (`[]`, `{}`, `{"k": []}` — not
 
 ---
 
-## 4. Open gaps — not addressed here
+## 4. Closed in the follow-up pass
 
-Ordered by value. None is a correctness bug in what ships today.
+The second pass, in the order the first one ranked them.
 
-1. **Auto-mode subagent screening.** Two separate mechanisms, analysed and
-   designed in
-   [workflow-auto-mode-screening.md](workflow-auto-mode-screening.md):
-   the **dispatch screen** (`j`/`vpd` — blocks a workflow `agent()` before it
-   spawns; **workflow-only**, because only the workflow path dispatches a
-   subagent without a model tool call to classify) and the **hand-off review**
-   (`tin` — advisory, never blocks, absent on all three of coco's subagent
-   boundaries). The dispatch screen is the real gap; the hand-off review is a
-   deferred product decision.
-2. **`agent({schema})` size bound.** CC caps a user schema at 1e5 nodes / 1e4
-   depth before Ajv codegen (`uPu` `:231097`) and at 4 KiB for the classifier
-   prompt. coco passes the schema straight through to `output_schema`.
-3. **`workflowSizeGuideline`** (the window's headline governance feature, `.202`
-   + `.219`). A four-value enum → an English sentence appended to the tool
-   description; `medium` default, settings key beats `/config`. ~70 lines and no
-   execution gate — cheap, and it is the only user-facing control over workflow
-   scale.
-4. **Queued vs running.** CC's only discriminator is whether `startedAt` is
-   present (`:387526`); the pre-semaphore emit sets `queuedAt` alone. coco emits
-   `Start` before the permit wait and never sets either timestamp, so
-   `/workflows` cannot show "40 queued, 12 running".
-5. **Nested-workflow presentation.** CC pins a child's agents to one `▸ name`
-   group, prefixes its `log()`, and makes the child's `phase()` a no-op. coco's
-   child writes into the parent's phase table directly.
-6. **`ultracode` on non-human input** (`.210`, `isHumanTypedPrompt` `:516671`).
-   coco's keyword matcher is a faithful port but is not gated on human origin,
-   so a relayed webhook/PR comment containing the word still opts the turn in.
-7. **`CLAUDE_WORKFLOW_NAME_ONLY`-equivalent lockdown** (`:386782`) — restricts a
-   session to bundled named workflows by rejecting `script`/`scriptPath`/
-   `resumeFromRunId`. Worth having if coco grows a managed-policy story.
-8. **Progress batching.** CC debounces at 16 ms (250 ms behind a REPL bridge)
-   and attaches the full snapshot only on a structural change or a 10 s
-   heartbeat. coco emits one protocol event per delta.
+### 4.1 `workflowSizeGuideline` — the window's headline governance feature
+
+Ported whole, including the part that makes it interesting. A four-value enum
+(`unrestricted | small | medium | large`, caps `5 / 15 / 50`) renders to one
+English sentence appended to the Workflow tool's description. Nothing enforces
+it — the caps only ever appear inside a template string, in CC as in coco.
+
+Two details carried over because they are the design, not decoration:
+
+- **The default and the explicit case are worded differently.** An unset
+  guideline says *"This session has the **default** …"* and tells the model the
+  user can change it in `/config`; an explicitly chosen one drops that clause.
+  The escape hatch is a licence to argue with the constraint — useful when
+  nobody chose anything, an invitation to override a decision the user already
+  made when they did.
+- **The value is pinned per session, not read live.** The description sits in
+  the request's largest cacheable prefix; a value that tracked settings reload
+  would re-bill the whole tool block on every edit. `ToolAppState.workflow_size`
+  holds the pin *and*, separately, the last value announced to the model — a
+  mid-session change travels as a `workflow_size_guideline_change` reminder,
+  which is message-level and invalidates nothing.
+
+coco's precedence chain is one store shorter than CC's: there is no mutable
+`.claude.json` beside settings.json, so `settings → default` replaces
+`settings → /config → default`. CC's documented failure mode (garbage in the
+settings file hides the `/config` row while the `/config` value stays in force)
+has no analogue here.
+
+### 4.2 `agent({schema})` size bound
+
+Placed at `ToolInputSchema::from_value` rather than in the workflow host, which
+is where CC's `fty` sits relative to *its* three consumers: MCP wire schemas,
+`--json-schema`, and `agent({schema})` all compile through this one seam.
+
+The bounds are `MAX_SCHEMA_NODES = 100_000` (CC parity) and
+`MAX_SCHEMA_DEPTH = 128` — **not** CC's `1e4`. CC's depth is calibrated for a
+JS engine's stack; `jsonschema`'s compiler recurses on ours, and 10_000 frames
+would overflow the guard's own reason for existing. 128 is `serde_json`'s
+default recursion limit, so any schema that arrived as JSON text was already
+held to it and nothing legitimate narrows. The bound walk keeps an explicit
+stack for the same reason.
+
+`WorkflowRunHost::run_agent` compiles the schema before the dispatch screen, so
+an invalid one fails the `agent()` call the script can see instead of surfacing
+turns later as a subagent that never called StructuredOutput.
+
+### 4.3 Queued vs running
+
+`started_at`'s absence is the whole discriminator, and coco had a live consumer
+for it (`WorkflowAgentStatusFilter::Queued` reads
+`queued_at.is_some() && started_at.is_none()`) with no producer — the filter was
+unreachable.
+
+The engine now owns an `AgentRow` and hands the host a `WorkflowAgentStarted`
+callback fired once its permit lands: only the host knows when the queue wait
+ended, and only the engine should decide what a row looks like. Every frame
+re-states both timestamps, because the reducer replaces a node wholesale — a
+field dropped from the terminal frame is a field erased from the run's record.
+
+### 4.4 Nested-workflow presentation
+
+`WorkflowRun::child_group` (`▸ name`, `▸ name #2` on re-entry) is `Some` only
+for a nested run, and its presence rewires three globals exactly as CC does:
+`phase()` becomes a no-op, `log()` is prefixed, and `agent()` overrides
+`opts.phase`. The contract being protected is substitutability — a script must
+produce the same progress tree whether launched directly or invoked by
+`workflow()`.
+
+### 4.5 Progress batching
+
+The fold stays unconditional (the row is always current); only publishing is
+rate-limited, at `WORKFLOW_PROGRESS_COALESCE_MS = 16`. Every frame carries the
+whole array, so one frame per delta is quadratic in the delta count — a `log()`
+loop or a wide fan-out pays it in full. Suppressed deltas ride a single trailing
+flush that re-reads the row, so it carries everything accumulated rather than
+just the delta that scheduled it, and `transition_terminal` settles any pending
+frame before `TaskCompleted`.
+
+### 4.6 `ultracode` on non-human input — retracted, not deferred
+
+coco has no signal for "typed by a human" distinct from "arrived through the
+SDK". `MessageOrigin` separates user input from system-injected and slash
+commands, not terminal input from a relayed webhook; `is_non_interactive` is a
+print-mode flag, and gating on it would silently disable the keyword for every
+legitimate SDK user. The analysis explicitly did not trace CC's own
+`isHumanTypedPrompt` propagation chain (it is `40_system_prompt`'s), so a port
+would be guesswork with a real regression on the other side. This needs the
+prompt-origin chain first; it is not a workflow-side change.
 
 ---
 
-## 5. Where the analysis was wrong or thin
+## 5. Still open
+
+Both need something outside the workflow subsystem before they are worth doing.
+
+1. **Name-only lockdown** — restricts a session to bundled named workflows by
+   rejecting `script` / `scriptPath` / `resumeFromRunId` (CC's
+   `CLAUDE_WORKFLOW_NAME_ONLY`, `:386782`). If ported it is
+   `COCO_WORKFLOW_NAME_ONLY` as a `coco_config::EnvKey` variant — every
+   coco-owned env var carries the `COCO_` prefix and is read through `EnvKey`,
+   never `std::env::var` at the use site. Worth having once coco has a
+   managed-policy story to hang it on; a lockdown nobody can deploy centrally
+   is a flag, not a control.
+2. **`ultracode` human-origin gate** — see §4.6. Blocked on a prompt-origin
+   signal coco does not have.
+
+Plus the deliberate divergences in §3, and the **hand-off review** half of the
+auto-mode work (`tin`, runtime_core §7.4): advisory, never blocks, and absent on
+all three of coco's subagent boundaries — a product decision, not a gap.
+
+## 6. Where the analysis was wrong or thin
 
 Recorded so the next pass does not re-derive them:
 

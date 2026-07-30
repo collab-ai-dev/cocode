@@ -54,6 +54,15 @@ fields (Bash/Agent/ExitPlanMode) or to present a `Freeform` grammar tool
 (apply_patch). There is no separate validator cache. See
 `docs/internal/tool-schema-final-plan.md` (v4.3).
 
+`from_value` bounds the document before compiling it
+(`MAX_SCHEMA_NODES` / `MAX_SCHEMA_DEPTH` → `SchemaError::TooLarge`). The
+compiler recurses, so an unbounded schema is a stack-overflow vector — and a
+crash cannot be reported the way a rejected schema can. Both bounds matter:
+depth alone lets through a shallow schema with a million sibling properties.
+The bound walk keeps its own stack rather than recursing, which would be the
+very failure it guards. Every runtime-supplied schema goes through here —
+MCP wire, `--json-schema`, and workflow `agent({schema})`.
+
 ## Tool Result Budget (Level 1/2) + Recoverable Offload
 
 Module DAG (strict, no cycles): `coco_types::persisted_output` (tags + the two

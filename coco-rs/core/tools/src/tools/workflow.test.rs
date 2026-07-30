@@ -443,3 +443,41 @@ async fn workflow_inline_script_not_auto_allowed_by_contentless_rule() {
         ToolCheckResult::Ask { .. }
     ));
 }
+
+/// The size guideline reaches the model as a suffix on the tool prose, and only
+/// as a suffix: the ~2 KB contract above it must stay byte-identical across
+/// sessions so it caches as one block.
+#[tokio::test]
+async fn prompt_appends_the_size_guideline_sentence() {
+    let tool = WorkflowTool;
+    let base = tool
+        .prompt(&coco_tool_runtime::PromptOptions {
+            workflow_size: coco_types::ResolvedWorkflowSize::resolve(Some(
+                coco_types::WorkflowSizeGuideline::Unrestricted,
+            )),
+            ..Default::default()
+        })
+        .await;
+    assert!(
+        !base.contains("workflow size guideline"),
+        "unrestricted emits no sentence at all"
+    );
+
+    let sized = tool
+        .prompt(&coco_tool_runtime::PromptOptions {
+            workflow_size: coco_types::ResolvedWorkflowSize::resolve(Some(
+                coco_types::WorkflowSizeGuideline::Small,
+            )),
+            ..Default::default()
+        })
+        .await;
+    assert!(
+        sized.starts_with(&base),
+        "the guideline is appended, never interpolated into the contract"
+    );
+    assert!(sized.ends_with(
+        "A workflow size guideline is configured for this session: small — keep workflows under 5 \
+         agents. This is a guideline, not a hard limit — follow it unless the user's prompt calls \
+         for a different scale."
+    ));
+}
