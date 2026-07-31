@@ -153,7 +153,9 @@ impl QueryEngine {
                 })
                 .await;
 
-            let built_prompt = self.build_prompt(history).await;
+            let built_prompt = self
+                .build_prompt_with_overlay(history, turn_state.recovery_overlay.messages())
+                .await;
             let built_tool_definitions = self
                 .build_tool_definitions_from_materialization(
                     &app_state_snapshot,

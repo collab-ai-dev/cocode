@@ -50,6 +50,12 @@ pub(crate) fn max_structured_output_retries() -> u32 {
 pub enum ContinueReason {
     /// Normal tool-call loop: model returned tool calls, process and continue.
     NextTurn,
+    /// Clean response carried no visible content and is being retried with an
+    /// ephemeral prompt-only nudge.
+    EmptyResponseRecovery { attempt: i32 },
+    /// Provider declared tool use but emitted no tool calls. The malformed
+    /// terminal is retried without committing it to conversation history.
+    MissingToolCallRecovery { attempt: i32 },
     /// Reactive compaction after prompt-too-long error.
     ReactiveCompactRetry,
     /// Max output tokens escalation — retry once with the active model's
@@ -268,7 +274,7 @@ pub struct QueryEngineConfig {
     pub enable_token_budget_continuation: bool,
     /// Recovery policy for clean-but-empty model responses (no text, no
     /// tool calls; thinking-only counts as empty). Resolved from
-    /// `loop.empty_response_nudge`; default nudge-and-retry.
+    /// `loop.empty_response_nudge`; default prompt-only nudge-and-retry.
     pub empty_response_nudge: coco_config::EmptyResponsePolicy,
     /// Resolved compaction configuration (auto / micro / api-native /
     /// session-memory / experimental). Single source of truth — engine

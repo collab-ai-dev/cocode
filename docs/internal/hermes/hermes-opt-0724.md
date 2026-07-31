@@ -52,7 +52,7 @@ Where the v0.19 window concentrated (agent-core-relevant axes only):
 |---|---|---|
 | P0.1 Compact summary language rule | **STILL OPEN** | zero "language" hits in `services/compact/`; templates unchanged (`prompt.rs:92,176,240`) |
 | P0.2 Compact temporal anchoring | **STILL OPEN** | no date injection / past-tense rule in `services/compact/` |
-| P0.3 Empty-response nudge/retry | **STILL OPEN** | empty finish still ends turn (`app/query/src/engine_terminal.rs:335-346`); thinking-only text dropped (`engine_stream_consume.rs:601`). Reusable in-repo patterns: max_tokens resume-nudge (`engine_recovery.rs:635-640`), budget-continuation nudge (`engine_terminal.rs:389`) |
+| P0.3 Empty-response nudge/retry | **CLOSED** ✅ (08-01) | `engine_terminal::handle_terminal_anomaly` retries clean empty and malformed `ToolUse` terminals through an ephemeral prompt overlay, capped at 3; scaffolding never enters history and exhaustion is a typed provider failure |
 | P0.4 Warning-first loop guardrail | **STILL OPEN** | `inputs_equivalent` still has zero call sites (`core/tool-runtime/src/traits.rs:308,771,1065-1072`); no `loop_guardrail` config |
 | P0.5 Edit closest-match feedback | **STILL OPEN** | bare `old_string not found` at `core/tools/src/tools/edit.rs:411,443`; `find_fuzzy_match:518` is apply-only, never surfaces a near-miss |
 | P0.6 Bash ANSI stripping | **NARROWED** | rtk-filtered path strips (`exec/shell/src/rtk/filter.rs:156-158`; `Feature::OutputRewrite` default-on, `common/types/src/features.rs:373-378`); **unfiltered/raw path still un-stripped** (`core/tools/src/tools/bash.rs:991-993`). Remaining work: strip on the always-path |
