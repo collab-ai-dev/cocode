@@ -3,6 +3,7 @@
 use super::WebSearchTool;
 use super::decode_ddg_redirect;
 use super::decode_html_entities;
+use super::domain_matches;
 use super::extract_host;
 use super::parse_duckduckgo_html;
 use super::percent_decode;
@@ -11,6 +12,42 @@ use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
+
+#[test]
+fn websearch_domain_filter_matches_only_dns_boundaries() {
+    assert!(domain_matches("github.com", "github.com"));
+    assert!(domain_matches("gist.github.com", "github.com"));
+    assert!(domain_matches("gist.github.com", ".github.com."));
+    assert!(!domain_matches("evilgithub.com", "github.com"));
+    assert!(!domain_matches("github.com.evil.test", "github.com"));
+    assert!(!domain_matches("github.com", ""));
+}
+
+#[tokio::test]
+async fn websearch_session_limit_short_circuits_before_network() {
+    let mut ctx = ToolUseContext::test_default();
+    ctx.session_usage = std::sync::Arc::new(coco_tool_runtime::SessionUsageLimits::new(200, 1));
+    assert!(matches!(
+        ctx.session_usage.try_record_web_search(),
+        coco_tool_runtime::UsageLimitDecision::Allowed { .. }
+    ));
+
+    let result = <WebSearchTool as DynTool>::execute(
+        &WebSearchTool,
+        json!({"query": "rust async runtime"}),
+        &ctx,
+    )
+    .await
+    .expect("exhaustion is a model-visible result, not a tool failure");
+
+    assert!(
+        result.data["formatted"]
+            .as_str()
+            .is_some_and(|text| text.contains("Web search limit reached"))
+    );
+    assert_eq!(result.data["results"], json!([]));
+    assert_eq!(ctx.session_usage.web_searches(), 1);
+}
 
 // ---------------------------------------------------------------------------
 // Auto-mode classifier projection (WebFetchTool.toAutoClassifierInput)

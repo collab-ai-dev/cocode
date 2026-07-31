@@ -6,6 +6,7 @@ use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
+use coco_tool_runtime::UsageLimitDecision;
 use coco_types::ToolCheckResult;
 use coco_types::ToolId;
 use coco_types::ToolName;
@@ -2057,6 +2058,28 @@ impl Tool for WebSearchTool {
     ) -> Result<ToolResult<Value>, ToolError> {
         let query = input.query.trim().to_string();
 
+        if let UsageLimitDecision::Exhausted { used, limit } =
+            ctx.session_usage.try_record_web_search()
+        {
+            let formatted = format!(
+                "Web search limit reached ({used} of {limit} searches in this session). \
+                 Continue with the sources already collected or use another available tool. \
+                 If the user explicitly requests more searches, ask them to raise \
+                 COCO_MAX_WEB_SEARCHES_PER_SESSION."
+            );
+            return Ok(ToolResult {
+                data: serde_json::json!({
+                    "query": query,
+                    "results": [],
+                    "formatted": formatted,
+                }),
+                new_messages: vec![],
+                app_state_patch: None,
+                permission_updates: Vec::new(),
+                display_data: None,
+            });
+        }
+
         let allowed: Vec<String> = input
             .allowed_domains
             .as_ref()
@@ -2090,16 +2113,16 @@ impl Tool for WebSearchTool {
             fresh
         };
 
-        // Apply domain filters. Matches host suffix so "github.com" blocks
-        // both github.com/foo and gist.github.com/foo.
+        // Apply domain filters at DNS label boundaries: "github.com" matches
+        // github.com and gist.github.com, but never evilgithub.com.
         let filtered: Vec<SearchResult> = results
             .into_iter()
             .filter(|r| {
                 let host = extract_host(&r.url).to_lowercase();
-                if !allowed.is_empty() && !allowed.iter().any(|d| host.ends_with(d)) {
+                if !allowed.is_empty() && !allowed.iter().any(|d| domain_matches(&host, d)) {
                     return false;
                 }
-                if blocked.iter().any(|d| host.ends_with(d)) {
+                if blocked.iter().any(|d| domain_matches(&host, d)) {
                     return false;
                 }
                 true
@@ -2205,6 +2228,20 @@ fn format_results(query: &str, results: &[SearchResult]) -> String {
 fn extract_host(url: &str) -> String {
     let scheme = extract_scheme(url);
     split_host_port(url, &scheme).0
+}
+
+fn domain_matches(host: &str, configured_domain: &str) -> bool {
+    let domain = configured_domain
+        .trim()
+        .trim_start_matches('.')
+        .trim_end_matches('.');
+    if domain.is_empty() {
+        return false;
+    }
+    host.eq_ignore_ascii_case(domain)
+        || host
+            .strip_suffix(domain)
+            .is_some_and(|prefix| prefix.ends_with('.'))
 }
 
 /// DuckDuckGo HTML backend. Scrapes the non-JS result page at

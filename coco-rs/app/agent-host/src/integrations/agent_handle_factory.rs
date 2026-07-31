@@ -237,15 +237,19 @@ pub async fn build_agent_team_wiring(
                     .clone();
                 engine_config.tool_config = session.runtime_config().tool.clone();
                 engine_config.sandbox_config = session.runtime_config().sandbox.clone();
+                engine_config.sandbox_state = session.sandbox_state();
                 engine_config.memory_config = session.runtime_config().memory.clone();
                 engine_config.shell_config = session.runtime_config().shell.clone();
                 engine_config.web_fetch_config = session.runtime_config().web_fetch.clone();
                 engine_config.web_search_config = session.runtime_config().web_search.clone();
+                engine_config.lsp_config = session.runtime_config().lsp.clone();
                 engine_config.plan_mode_settings =
                     session.runtime_config().settings.merged.plan_mode.clone();
+                let parent_engine_config = session.current_engine_config().await;
+                engine_config.shell_provider = parent_engine_config.shell_provider.clone();
+                engine_config.output_rewriter = parent_engine_config.output_rewriter.clone();
                 if engine_config.wire_dump.is_none()
-                    && let Some(parent_wire_dump) =
-                        session.current_engine_config().await.wire_dump.as_ref()
+                    && let Some(parent_wire_dump) = parent_engine_config.wire_dump.as_ref()
                     && let Some(agent_id) = engine_config
                         .agent_id
                         .as_ref()

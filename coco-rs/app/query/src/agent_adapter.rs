@@ -224,25 +224,20 @@ impl AgentQueryEngine for QueryEngineAdapter {
             system_reminder: coco_config::SystemReminderConfig::default(),
             tool_config: coco_config::ToolConfig::default(),
             sandbox_config: coco_config::SandboxSettings::default(),
-            // Subagent spawn path does not yet propagate parent sandbox
-            // state — `AgentQueryConfig` carries no slot for it. Children
-            // run unsandboxed via this entry point; revisit when
-            // teammate/swarm flows need parity with the CLI bootstrap.
+            // Standalone adapter default. The production engine factory
+            // replaces both sandbox config and state from SessionRuntime so
+            // child shell calls use the same hot-reloadable enforcement Arc.
             sandbox_state: None,
             memory_config: coco_config::MemoryConfig::default(),
             shell_config: coco_config::ShellConfig::default(),
             active_shell_tool: config.active_shell_tool,
-            // Subagent flows don't carry the parent's shell provider
-            // (snapshot/session-env/`/env`/shell-prefix). Worktree-isolated
-            // subagents set `cwd_override` so the bash tool's spawn already
-            // points at the right directory; running without snapshot is
-            // an acceptable tradeoff for an isolated transient session.
+            // Standalone adapter default. Production replaces this with the
+            // parent's session-scoped provider, preserving snapshots,
+            // session-env hooks, `/env`, and the shell prefix while the
+            // child's own cwd_override still selects its working directory.
             shell_provider: None,
-            // Subagents don't inherit the parent's output rewriter in phase 1
-            // (mirrors `shell_provider: None`); their Bash description omits the
-            // compression note accordingly (gated on `output_rewriter_active`).
-            // Threading the parent rewriter through `AgentQueryConfig` is a clean
-            // follow-up so subagent Bash output compresses too.
+            // Production inherits the parent's shared output rewriter through
+            // the engine factory; standalone adapters remain inert.
             output_rewriter: None,
             // No session-level CWD persistence for subagents — their cwd
             // is fenced via `cwd_override` and they don't share state

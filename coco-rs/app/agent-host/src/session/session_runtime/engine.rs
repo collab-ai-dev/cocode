@@ -408,6 +408,8 @@ impl SessionRuntime {
             app_state_override.unwrap_or_else(|| self.engine_state_resources.app_state().clone());
         engine = engine.with_file_read_state(self.engine_state_resources.file_read_state().clone());
         engine = engine.with_app_state(app_state.clone());
+        engine =
+            engine.with_session_usage_limits(self.engine_state_resources.session_usage().clone());
         // `auto_mode_state` is a SESSION-GLOBAL flag shared by every engine in
         // this runtime. Pure Auto still keys off the per-call
         // `permission_context.mode`; Plan uses this flag as the authoritative

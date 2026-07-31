@@ -79,6 +79,38 @@ async fn test_spawn_agent_max_capacity() {
 }
 
 #[tokio::test]
+async fn concurrent_registration_never_exceeds_capacity() {
+    let runner = Arc::new(make_runner(1));
+    let barrier = Arc::new(tokio::sync::Barrier::new(32));
+    let attempts: Vec<_> = (0..32)
+        .map(|index| {
+            let runner = Arc::clone(&runner);
+            let barrier = Arc::clone(&barrier);
+            tokio::spawn(async move {
+                barrier.wait().await;
+                runner
+                    .register_agent(make_spawn_config(&format!("worker-{index}"), "team"))
+                    .await
+            })
+        })
+        .collect();
+
+    let mut successes = 0;
+    for attempt in attempts {
+        if attempt
+            .await
+            .expect("registration task must not panic")
+            .success
+        {
+            successes += 1;
+        }
+    }
+
+    assert_eq!(successes, 1);
+    assert_eq!(runner.active_count().await, 1);
+}
+
+#[tokio::test]
 async fn test_cancel_agent() {
     let runner = make_runner(5);
     let result = runner
@@ -143,19 +175,74 @@ async fn test_start_agent_forwards_join_handle_to_collect_result() {
 #[tokio::test]
 async fn test_start_agent_returns_false_for_unknown_id() {
     use crate::runner_loop::InProcessRunnerResult;
+
+    struct NotifyOnDrop(Option<oneshot::Sender<()>>);
+
+    impl Drop for NotifyOnDrop {
+        fn drop(&mut self) {
+            if let Some(tx) = self.0.take() {
+                let _ = tx.send(());
+            }
+        }
+    }
+
     let runner = make_runner(5);
-    let handle = tokio::spawn(async {
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let (dropped_tx, dropped_rx) = oneshot::channel();
+    let handle = tokio::spawn(async move {
+        let _notify = NotifyOnDrop(Some(dropped_tx));
+        let _ = ready_tx.send(());
+        std::future::pending::<InProcessRunnerResult>().await
+    });
+    ready_rx.await.expect("execution task must start");
+
+    let started = runner.start_agent("does-not-exist@team", handle).await;
+    assert!(!started, "start_agent must reject unregistered agent_id");
+    tokio::time::timeout(std::time::Duration::from_secs(1), dropped_rx)
+        .await
+        .expect("rejected execution task must be aborted")
+        .expect("drop notification must be delivered");
+}
+
+#[tokio::test]
+async fn test_start_agent_rejects_duplicate_execution() {
+    use crate::runner_loop::InProcessRunnerResult;
+
+    let runner = make_runner(5);
+    let spawn = runner
+        .register_agent(make_spawn_config("worker", "team"))
+        .await;
+    assert!(spawn.success);
+
+    let first = tokio::spawn(async {
         InProcessRunnerResult {
-            success: false,
-            error: Some("never registered".into()),
-            output: None,
-            turns: 0,
+            success: true,
+            error: None,
+            output: Some("first".into()),
+            turns: 1,
             total_input_tokens: 0,
             total_output_tokens: 0,
         }
     });
-    let started = runner.start_agent("does-not-exist@team", handle).await;
-    assert!(!started, "start_agent must reject unregistered agent_id");
+    assert!(runner.start_agent("worker@team", first).await);
+
+    let second = tokio::spawn(async {
+        InProcessRunnerResult {
+            success: true,
+            error: None,
+            output: Some("second".into()),
+            turns: 1,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+        }
+    });
+    assert!(!runner.start_agent("worker@team", second).await);
+
+    let result = runner
+        .collect_result("worker@team")
+        .await
+        .expect("first execution result must remain installed");
+    assert_eq!(result.output.as_deref(), Some("first"));
 }
 
 #[tokio::test]

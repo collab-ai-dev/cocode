@@ -137,6 +137,9 @@ pub struct QueryEngine {
     /// Attached via [`Self::with_app_state`]; absent on engines that
     /// don't need this signalling.
     pub(crate) app_state: Option<Arc<RwLock<ToolAppState>>>,
+    /// Session-owned monotone Agent/WebSearch budgets. A standalone engine
+    /// gets its own counters; SessionRuntime replaces them with its shared Arc.
+    pub(crate) session_usage: Arc<coco_tool_runtime::SessionUsageLimits>,
     /// Mailbox handle for swarm teammate messaging. `None` resolves to
     /// `NoOpMailboxHandle` in [`ToolContextFactory::build`]; swarm spawn paths
     /// install a real handle via [`Self::with_mailbox`].

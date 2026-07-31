@@ -159,6 +159,8 @@ pub struct RunnerResult {
 /// Internal tracking entry for a spawned agent.
 struct AgentEntry {
     context: AgentContext,
+    /// Prevents a second execution task from replacing the first receiver.
+    started: bool,
     /// Channel to receive the agent's result.
     result_rx: Option<oneshot::Receiver<RunnerResult>>,
 }
@@ -185,7 +187,7 @@ impl InProcessAgentRunner {
         Self {
             agents: Arc::new(RwLock::new(HashMap::new())),
             default_working_dir,
-            max_agents,
+            max_agents: max_agents.max(1),
         }
     }
 
@@ -211,29 +213,28 @@ impl InProcessAgentRunner {
     pub async fn register_agent(&self, config: SpawnConfig) -> SpawnResult {
         let agent_id = Self::format_agent_id(&config.name, &config.team_name);
 
-        // Check capacity
-        {
-            let agents = self.agents.read().await;
-            if agents.len() >= self.max_agents as usize {
-                return SpawnResult {
-                    success: false,
-                    agent_id,
-                    error: Some(format!(
-                        "Max agents ({}) reached, cannot spawn '{}'",
-                        self.max_agents, config.name
-                    )),
-                };
-            }
+        // Capacity check, duplicate check, and insertion are one write-locked
+        // transaction. Splitting these across read/write locks lets concurrent
+        // registrations all observe spare capacity and oversubscribe the map.
+        let mut agents = self.agents.write().await;
+        if agents.len() >= self.max_agents as usize {
+            return SpawnResult {
+                success: false,
+                agent_id,
+                error: Some(format!(
+                    "Max agents ({}) reached, cannot spawn '{}'",
+                    self.max_agents, config.name
+                )),
+            };
+        }
 
-            // Check for duplicate
-            if agents.contains_key(&agent_id) {
-                let msg = format!("Agent '{agent_id}' already exists");
-                return SpawnResult {
-                    success: false,
-                    agent_id,
-                    error: Some(msg),
-                };
-            }
+        if agents.contains_key(&agent_id) {
+            let msg = format!("Agent '{agent_id}' already exists");
+            return SpawnResult {
+                success: false,
+                agent_id,
+                error: Some(msg),
+            };
         }
 
         let context = AgentContext {
@@ -263,10 +264,11 @@ impl InProcessAgentRunner {
 
         let entry = AgentEntry {
             context,
+            started: false,
             result_rx: None,
         };
 
-        self.agents.write().await.insert(agent_id.clone(), entry);
+        agents.insert(agent_id.clone(), entry);
 
         SpawnResult {
             success: true,
@@ -356,7 +358,7 @@ impl InProcessAgentRunner {
     /// on the registered agent entry.
     ///
     /// Returns `true` if the agent was found and started; `false` if
-    /// `agent_id` is not registered.
+    /// `agent_id` is not registered or already owns an execution task.
     ///
     /// **Why atomic**: the previous two-phase API (`set_result_channel`
     /// + separate `start_in_process_teammate`) let callers register an
@@ -369,6 +371,19 @@ impl InProcessAgentRunner {
         agent_id: &str,
         handle: tokio::task::JoinHandle<crate::runner_loop::InProcessRunnerResult>,
     ) -> bool {
+        let mut agents = self.agents.write().await;
+        let Some(entry) = agents.get_mut(agent_id) else {
+            // Dropping a Tokio JoinHandle detaches the task. Explicitly abort
+            // rejected work so a register/cancel/start race cannot leak an
+            // untracked agent execution.
+            handle.abort();
+            return false;
+        };
+        if entry.started {
+            handle.abort();
+            return false;
+        }
+
         let (tx, rx) = oneshot::channel::<RunnerResult>();
 
         // Forwarder: await the execution JoinHandle, map its result into
@@ -403,13 +418,9 @@ impl InProcessAgentRunner {
             let _ = tx.send(result);
         });
 
-        let mut agents = self.agents.write().await;
-        if let Some(entry) = agents.get_mut(agent_id) {
-            entry.result_rx = Some(rx);
-            true
-        } else {
-            false
-        }
+        entry.started = true;
+        entry.result_rx = Some(rx);
+        true
     }
 
     /// Get the agent context for an agent.
@@ -444,12 +455,16 @@ impl InProcessAgentRunner {
 
     /// Cancel all active agents.
     pub async fn cancel_all(&self) {
-        let agents = self.agents.write().await;
-        for entry in agents.values() {
+        let entries: Vec<_> = self
+            .agents
+            .write()
+            .await
+            .drain()
+            .map(|(_, entry)| entry)
+            .collect();
+        for entry in entries {
             entry.context.cancel();
         }
-        drop(agents);
-        self.agents.write().await.clear();
     }
 }
 

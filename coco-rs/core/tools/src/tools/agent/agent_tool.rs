@@ -15,6 +15,7 @@ use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
+use coco_tool_runtime::UsageLimitDecision;
 use coco_types::ToolId;
 use coco_types::ToolName;
 use schemars::JsonSchema;
@@ -570,13 +571,15 @@ impl Tool for AgentTool {
             });
         }
 
-        if ctx.query_depth >= coco_subagent::SUBAGENT_DEPTH_LIMIT {
+        let depth_limit = coco_subagent::subagent_depth_limit();
+        if ctx.query_depth >= depth_limit {
             return Err(ToolError::ExecutionFailed {
                 message: format!(
                     "Subagent nesting limit reached (depth {} of {}). Complete this task \
-                     directly using your tools instead of spawning another agent.",
-                    ctx.query_depth,
-                    coco_subagent::SUBAGENT_DEPTH_LIMIT
+                     directly using your tools instead of spawning another agent. If the user \
+                     explicitly requested deeper nesting, ask them to raise \
+                     COCO_MAX_SUBAGENT_SPAWN_DEPTH.",
+                    ctx.query_depth, depth_limit
                 ),
                 display_data: None,
                 source: None,
@@ -1082,6 +1085,21 @@ impl Tool for AgentTool {
         let request_description = request.input.description.clone();
         let request_name_for_render = request.input.name.clone();
         let request_team_for_render = request.input.team_name.clone();
+
+        if let UsageLimitDecision::Exhausted { used, limit } =
+            ctx.session_usage.try_record_agent_spawn()
+        {
+            return Err(ToolError::ExecutionFailed {
+                message: format!(
+                    "Subagent spawn limit reached ({used} of {limit} agents spawned in this \
+                     session). Complete the task directly using your tools. If the user \
+                     explicitly requests more agents, ask them to raise \
+                     COCO_MAX_SUBAGENTS_PER_SESSION."
+                ),
+                display_data: None,
+                source: None,
+            });
+        }
 
         let response =
             ctx.agent

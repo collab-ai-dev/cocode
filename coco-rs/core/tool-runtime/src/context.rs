@@ -237,6 +237,10 @@ pub struct ToolUseContext {
     /// consulting the live registry again.
     pub tool_materialization: Option<Arc<crate::ToolMaterialization>>,
 
+    /// Monotone loop-breaker counters shared by every engine in this session.
+    /// Completed work remains charged; a new session runtime starts fresh.
+    pub session_usage: Arc<crate::SessionUsageLimits>,
+
     // ── Core State ──
     /// Structured abort signal for tool execution.
     pub abort: ToolAbortSignal,
@@ -703,6 +707,7 @@ impl ToolUseContext {
             mcp_tool_exposure: self.mcp_tool_exposure,
             mcp_server_tool_exposure: self.mcp_server_tool_exposure.clone(),
             tool_materialization: self.tool_materialization.clone(),
+            session_usage: self.session_usage.clone(),
             abort: self.abort.clone(),
             messages: self.messages.clone(),
             permission_context: self.permission_context.clone(),
@@ -1015,6 +1020,7 @@ impl ToolUseContext {
             mcp_tool_exposure: coco_types::McpToolExposure::Defer,
             mcp_server_tool_exposure: Arc::new(HashMap::new()),
             tool_materialization: None,
+            session_usage: Arc::new(crate::SessionUsageLimits::default()),
             abort: ToolAbortSignal::from_turn(TurnAbortController::new().signal()),
             messages: Arc::new(Vec::new()),
             permission_context: ToolPermissionContext {

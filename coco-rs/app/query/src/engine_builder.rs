@@ -102,6 +102,7 @@ impl QueryEngine {
             denial_tracker: None,
             auto_mode_rules: coco_permissions::AutoModeRules::default(),
             app_state: None,
+            session_usage: Arc::new(coco_tool_runtime::SessionUsageLimits::from_env()),
             mailbox: None,
             pending_messages: None,
             mcp_handle: None,
@@ -840,6 +841,15 @@ impl QueryEngine {
     /// "no task runtime configured" error.
     pub fn with_task_handle(mut self, handle: coco_tool_runtime::BackgroundTaskHandleRef) -> Self {
         self.task_handle = Some(handle);
+        self
+    }
+
+    /// Share monotone Agent/WebSearch budgets across engines in one session.
+    pub fn with_session_usage_limits(
+        mut self,
+        limits: Arc<coco_tool_runtime::SessionUsageLimits>,
+    ) -> Self {
+        self.session_usage = limits;
         self
     }
 

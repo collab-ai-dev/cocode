@@ -753,6 +753,7 @@ impl SessionRuntime {
             file_read_state,
             file_history,
             app_state,
+            Arc::new(coco_tool_runtime::SessionUsageLimits::from_env()),
             session_env_vars,
             loop_sentinel_state,
             Arc::new(coco_tool_runtime::InMemoryPendingMessageStore::new()),

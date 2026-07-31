@@ -335,7 +335,40 @@ async fn test_agent_tool_rejects_spawns_at_depth_limit() {
     let err = result.expect_err("spawn at the caller depth limit must fail");
     let msg = err.to_string();
     assert!(msg.contains("Subagent nesting limit reached"));
-    assert!(msg.contains("depth 5 of 5"));
+    assert!(msg.contains(&format!(
+        "depth {0} of {0}",
+        coco_subagent::SUBAGENT_DEPTH_LIMIT
+    )));
+}
+
+#[tokio::test]
+async fn test_agent_tool_enforces_monotone_session_spawn_budget() {
+    let handle = Arc::new(CapturingAgentHandle::default());
+    let mut ctx = ToolUseContext::test_default();
+    ctx.agent = handle.clone();
+    ctx.session_usage = Arc::new(coco_tool_runtime::SessionUsageLimits::new(1, 200));
+    assert!(matches!(
+        ctx.session_usage.try_record_agent_spawn(),
+        coco_tool_runtime::UsageLimitDecision::Allowed { .. }
+    ));
+
+    let result = <AgentTool as DynTool>::execute(
+        &AgentTool,
+        serde_json::json!({
+            "prompt": "Check the implementation",
+            "description": "check implementation"
+        }),
+        &ctx,
+    )
+    .await;
+
+    let err = result.expect_err("spawn after the session cap must fail");
+    assert!(err.to_string().contains("Subagent spawn limit reached"));
+    assert_eq!(ctx.session_usage.agent_spawns(), 1);
+    assert!(
+        handle.last_request.lock().await.is_none(),
+        "exhausted work must not reach the agent runtime"
+    );
 }
 
 fn allow_agent_rule(content: &str) -> coco_types::PermissionRule {
