@@ -19,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, instrument, trace, warn};
 
 use super::TaskRuntime;
+use super::agent_liveness::spawn_agent_liveness_watchdog;
 use super::timers::spawn_agent_auto_background_timer;
 use crate::disk_task_output::DEFAULT_MAX_READ_BYTES;
 
@@ -124,10 +125,7 @@ impl TaskRuntime {
             })
             .await;
         debug_assert_eq!(assigned, task_id);
-        // NOTE: no agent stall watchdog. Agents have no stdin and never emit
-        // interactive prompts, so a silence-based stall notice only ever
-        // misfired the shell-shaped "waiting for interactive input / re-run
-        // with piped input" advice. The shell stall watchdog remains.
+        spawn_agent_liveness_watchdog(task_id.clone(), self.manager.clone(), cancel.clone());
         // When `autoBackgroundMs` is set, the foreground sub-agent
         // auto-detaches after that many ms of execution. The fg awaiter
         // (`tool.execute`'s `select!` arm) gets the detach signal and
@@ -513,6 +511,13 @@ impl TaskHandle for TaskRuntime {
     async fn set_progress(&self, task_id: &str, progress: coco_types::TaskProgress) {
         self.manager.set_progress(task_id, progress).await;
     }
+    async fn record_agent_activity(
+        &self,
+        task_id: &str,
+        phase: coco_tool_runtime::AgentExecutionPhase,
+    ) {
+        self.manager.record_agent_activity(task_id, phase).await;
+    }
     async fn push_workflow_progress(
         &self,
         task_id: &str,
@@ -535,6 +540,17 @@ impl TaskHandle for TaskRuntime {
     async fn complete_silent(&self, task_id: &str, succeeded: bool) {
         let status = if succeeded {
             TaskStatus::Completed
+        } else if self
+            .manager
+            .get(task_id)
+            .await
+            .and_then(|state| state.killed_by)
+            .is_some()
+        {
+            // Foreground agent cancellation returns inline, so it must not
+            // emit a background notification. Preserve the already-latched
+            // stop actor while still using the silent terminal path.
+            TaskStatus::Killed
         } else {
             TaskStatus::Failed
         };

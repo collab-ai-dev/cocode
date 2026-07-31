@@ -1506,6 +1506,33 @@ async fn complete_silent_marks_foreground_failed_without_notification() {
 }
 
 #[tokio::test]
+async fn complete_silent_preserves_cancel_actor_as_killed() {
+    let sink = CapturingSink::default();
+    let captured = sink.captured.clone();
+    let rt = rt_with_sink(sink);
+    let task_id = rt
+        .register_agent_task(
+            "sync-work",
+            None,
+            None,
+            CancellationToken::new(),
+            AR::Foreground,
+        )
+        .await;
+    rt.manager()
+        .kill_running_by(&task_id, coco_types::TaskKilledBy::System)
+        .await
+        .expect("cancel running task");
+
+    rt.complete_silent(&task_id, false).await;
+
+    let state = rt.get_task_status(&task_id).await.expect("task row");
+    assert_eq!(state.status, TaskStatus::Killed);
+    assert_eq!(state.killed_by, Some(coco_types::TaskKilledBy::System));
+    assert!(captured.lock().await.is_empty());
+}
+
+#[tokio::test]
 async fn complete_silent_keeps_detached_task() {
     let rt = rt();
     let task_id = rt

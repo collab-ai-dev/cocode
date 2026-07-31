@@ -24,11 +24,12 @@
 //!   (`Arc<dyn NotificationSink>`) is always wired; tests use
 //!   `NoOpNotificationSink` (default), production wires
 //!   [`crate::command_queue_sink::CommandQueueNotificationSink`].
-//! - Stall watchdog — [`stall::watchdog`] spawned per shell task (no
-//!   agent-task watchdog).
+//! - Shell prompt detection — [`stall::watchdog`]. Agent execution liveness
+//!   uses the phase-aware [`agent_liveness`] watchdog instead.
 //! - Auto-background / auto-detach / progress timers — [`timers`].
 //!
 mod agent;
+mod agent_liveness;
 mod controller;
 mod reader;
 mod reaper;

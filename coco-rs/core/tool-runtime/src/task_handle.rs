@@ -353,6 +353,20 @@ pub trait AgentTranscriptStore: Send + Sync {
 
 pub type AgentTranscriptStoreRef = Arc<dyn AgentTranscriptStore>;
 
+/// Coarse execution phase used by the agent liveness watchdog.
+///
+/// This is intentionally an interface type rather than a wire DTO: event
+/// producers report activity through [`TaskHandle`], while the task runtime
+/// owns timeout policy and cancellation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentExecutionPhase {
+    /// The agent is waiting for, or currently streaming, a model response.
+    AwaitingModel,
+    /// The agent is executing a tool. Long-running tools receive a larger
+    /// inactivity budget than model calls.
+    RunningTool,
+}
+
 /// Unified background-task seam — read, control, registration, shell
 /// spawn, teammate registry. All consumers (engine, tools, coordinator)
 /// hold the same `Arc<dyn TaskHandle>` and call the slice they need.
@@ -504,6 +518,10 @@ pub trait TaskHandle: Send + Sync {
     async fn set_progress_summary(&self, _task_id: &str, _summary: String) {}
 
     async fn set_progress(&self, _task_id: &str, _progress: coco_types::TaskProgress) {}
+
+    /// Record monotonic progress for an in-process background agent.
+    /// Implementations must treat unknown or non-agent task ids as a no-op.
+    async fn record_agent_activity(&self, _task_id: &str, _phase: AgentExecutionPhase) {}
 
     /// Append a workflow progress delta (phase/log/agent) to a
     /// `LocalWorkflow` task row and emit it on `task/progress`.

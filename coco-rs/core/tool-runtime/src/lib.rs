@@ -189,6 +189,7 @@ pub use subagent_screen::SubagentDispatchScreen;
 pub use subagent_screen::SubagentDispatchScreenHandle;
 pub use subagent_screen::SubagentDispatchVerdict;
 pub use task_handle::AgentCompletionPayload;
+pub use task_handle::AgentExecutionPhase;
 pub use task_handle::AgentRegistration;
 pub use task_handle::AgentSpawnMetadata;
 pub use task_handle::AgentTaskRegistryRef;
