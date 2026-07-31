@@ -27,6 +27,7 @@ in `coco-inference` — see "Multi-Provider Boundaries" in the workspace
 | `compute_marker_index_post_group` / `attach_marker_at` (`cache_placement`) | auto cache-marker placement on last user content block |
 | `forward_anthropic_container_id_from_last_step` (`forward_container_id`) | carries `container_id` across multi-step conversations (tool_use containers) |
 | `tool` | Anthropic-specific tool types (computer_use, bash, text_editor, web_search, web_fetch, code_execution, …) |
+| `tool_schema_alias` | Deterministic projection of invalid JSON-Schema property names to Anthropic's `^[A-Za-z0-9_.-]{1,64}$` wire subset, plus request/history projection and response restoration |
 | `anthropic_error` / `anthropic_metadata` | error mapping / provider-metadata extraction |
 
 ## Invariants
@@ -63,6 +64,12 @@ in `coco-inference` — see "Multi-Provider Boundaries" in the workspace
   messages and sets the internal `LONG_CONTEXT_CREDITS_REQUIRED_HEADER` on
   `APICallError.response_headers`. That marker is not sent on the wire;
   `coco-inference` translates it into a typed rate-limit flag.
+- **Tool-schema aliases are reversible and provider-local:** schemas,
+  input examples, and replayed `tool_use.input` use projected wire names;
+  generated inputs are restored before leaving this adapter. Nested objects,
+  arrays, local refs, and combinators share the same request-local map.
+  Alias/original collisions become structured invalid input instead of
+  silently overwriting user data.
 
 ## Extended thinking
 

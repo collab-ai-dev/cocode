@@ -8,6 +8,8 @@ use vercel_ai_provider::Warning;
 
 use crate::cache_control::CacheContext;
 use crate::cache_control::CacheControlValidator;
+use crate::tool_schema_alias::ToolSchemaAliases;
+use crate::tool_schema_alias::project_schema;
 
 /// Result of preparing tools for the Anthropic Messages API.
 pub struct PreparedAnthropicTools {
@@ -15,6 +17,7 @@ pub struct PreparedAnthropicTools {
     pub tool_choice: Option<Value>,
     pub warnings: Vec<Warning>,
     pub betas: HashSet<String>,
+    pub(crate) aliases: ToolSchemaAliases,
 }
 
 /// Convert SDK tools + tool_choice to Anthropic Messages API format.
@@ -37,6 +40,7 @@ pub fn prepare_anthropic_tools(
 ) -> PreparedAnthropicTools {
     let mut warnings = Vec::new();
     let mut betas = HashSet::new();
+    let mut aliases = ToolSchemaAliases::default();
 
     // Empty tools → no tools
     let tools_ref = tools.as_ref().filter(|ts| !ts.is_empty());
@@ -47,6 +51,7 @@ pub fn prepare_anthropic_tools(
             tool_choice: None,
             warnings,
             betas,
+            aliases,
         };
     };
 
@@ -55,10 +60,12 @@ pub fn prepare_anthropic_tools(
     for tool in tools_ref {
         match tool {
             LanguageModelV4Tool::Function(ft) => {
+                let (input_schema, projection) = project_schema(&ft.input_schema);
+                aliases.insert(ft.name.clone(), projection);
                 let mut tool_def = json!({
                     "name": ft.name,
                     "description": ft.description,
-                    "input_schema": ft.input_schema,
+                    "input_schema": input_schema,
                 });
 
                 // Strict mode (only when strict tools are supported)
@@ -73,13 +80,25 @@ pub fn prepare_anthropic_tools(
                 if let Some(ref examples) = ft.input_examples {
                     let example_inputs: Vec<Value> = examples
                         .iter()
-                        .map(|e| {
+                        .filter_map(|e| {
                             let map: serde_json::Map<String, Value> = e
                                 .input
                                 .iter()
                                 .map(|(k, v)| (k.clone(), v.clone()))
                                 .collect();
-                            Value::Object(map)
+                            let mut input = Value::Object(map);
+                            match aliases.project_input(&ft.name, &mut input) {
+                                Ok(()) => Some(input),
+                                Err(error) => {
+                                    warnings.push(Warning::Other {
+                                        message: format!(
+                                            "input example for tool '{}' was omitted: {error}",
+                                            ft.name
+                                        ),
+                                    });
+                                    None
+                                }
+                            }
                         })
                         .collect();
                     tool_def["input_examples"] = Value::Array(example_inputs);
@@ -398,6 +417,7 @@ pub fn prepare_anthropic_tools(
             tool_choice: None,
             warnings,
             betas,
+            aliases,
         };
     }
 
@@ -433,6 +453,7 @@ pub fn prepare_anthropic_tools(
                 tool_choice: None,
                 warnings,
                 betas,
+                aliases: ToolSchemaAliases::default(),
             };
         }
         Some(LanguageModelV4ToolChoice::Tool { tool_name }) => {
@@ -449,6 +470,7 @@ pub fn prepare_anthropic_tools(
         tool_choice: mapped_tool_choice,
         warnings,
         betas,
+        aliases,
     }
 }
 

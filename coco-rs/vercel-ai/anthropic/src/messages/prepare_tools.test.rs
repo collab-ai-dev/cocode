@@ -57,6 +57,55 @@ fn converts_function_tool() {
 }
 
 #[test]
+fn function_tool_projects_invalid_schema_keys_and_examples() {
+    let mut example = HashMap::new();
+    example.insert("Cloudflare API Token".into(), json!("secret"));
+    let tool = LanguageModelV4Tool::Function(LanguageModelV4FunctionTool {
+        name: "cloudflare".into(),
+        description: None,
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "Cloudflare API Token": {"type": "string"}
+            },
+            "required": ["Cloudflare API Token"]
+        }),
+        input_examples: Some(vec![vercel_ai_provider::ToolInputExample {
+            input: example,
+        }]),
+        strict: None,
+        provider_options: None,
+    });
+
+    let result = prepare_anthropic_tools(
+        &Some(vec![tool]),
+        &None,
+        None,
+        false,
+        /*context_management_eligible*/ true,
+        None,
+    );
+    let tools = result.tools.as_ref().expect("prepared tools");
+    let wire_name = tools[0]["input_schema"]["properties"]
+        .as_object()
+        .expect("properties")
+        .keys()
+        .next()
+        .expect("wire property")
+        .clone();
+    assert_ne!(wire_name, "Cloudflare API Token");
+    assert_eq!(tools[0]["input_schema"]["required"][0], wire_name);
+    assert_eq!(tools[0]["input_examples"][0][&wire_name], "secret");
+
+    let mut returned = json!({(wire_name): "secret"});
+    result
+        .aliases
+        .restore_input("cloudflare", &mut returned)
+        .expect("restore projected input");
+    assert_eq!(returned, json!({"Cloudflare API Token": "secret"}));
+}
+
+#[test]
 fn maps_tool_choice_auto() {
     let result = prepare_anthropic_tools(
         &Some(vec![LanguageModelV4Tool::Function(
@@ -110,7 +159,10 @@ fn maps_tool_choice_none_removes_tools() {
             LanguageModelV4FunctionTool {
                 name: "test".into(),
                 description: None,
-                input_schema: serde_json::json!({}),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {"invalid property": {"type": "string"}}
+                }),
                 input_examples: None,
                 strict: None,
                 provider_options: None,
@@ -124,6 +176,7 @@ fn maps_tool_choice_none_removes_tools() {
     );
     assert!(result.tools.is_none());
     assert!(result.tool_choice.is_none());
+    assert!(!result.aliases.requires_projection("test"));
 }
 
 #[test]

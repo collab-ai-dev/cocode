@@ -27,7 +27,9 @@ use vercel_ai_provider::LanguageModelV4;
 use vercel_ai_provider::LanguageModelV4CallOptions;
 use vercel_ai_provider::LanguageModelV4Message;
 use vercel_ai_provider::LanguageModelV4StreamPart;
+use vercel_ai_provider::LanguageModelV4Tool;
 use vercel_ai_provider::LanguageModelV4ToolCall;
+use vercel_ai_provider::ToolDefinitionV4;
 use vercel_ai_provider::UserContentPart;
 use vercel_ai_provider::content::TextPart;
 use wiremock::Mock;
@@ -183,4 +185,70 @@ async fn anthropic_stream_unrecoverable_is_marked_json_parse_failed() {
         }
         other => panic!("expected JsonParseFailed, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn anthropic_stream_restores_projected_schema_property_names() {
+    let server = MockServer::start().await;
+    let provider = create_anthropic(AnthropicProviderSettings {
+        base_url: Some(server.uri()),
+        api_key: Some("test-key".to_string()),
+        ..Default::default()
+    });
+    let model = provider.messages("claude-test");
+    let mut options = one_shot_options();
+    options.tools = Some(vec![LanguageModelV4Tool::Function(ToolDefinitionV4 {
+        name: "Read".into(),
+        description: None,
+        input_schema: json!({
+            "type": "object",
+            "properties": {"file path": {"type": "string"}},
+            "required": ["file path"]
+        }),
+        input_examples: None,
+        strict: None,
+        provider_options: None,
+    })]);
+
+    let (body, _, _) = model
+        .get_args(&options, true)
+        .expect("prepare Anthropic request");
+    let wire_name = body["tools"][0]["input_schema"]["properties"]
+        .as_object()
+        .expect("projected properties")
+        .keys()
+        .next()
+        .expect("wire property")
+        .clone();
+    assert_ne!(wire_name, "file path");
+    let partial_json = json!({(wire_name): "/tmp/x"}).to_string();
+
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_raw(
+                    sse_body_with_partial_json(&partial_json),
+                    "text/event-stream",
+                ),
+        )
+        .mount(&server)
+        .await;
+
+    let mut stream = model
+        .do_stream(&options, None)
+        .await
+        .expect("open Anthropic stream")
+        .stream;
+    while let Some(part) = stream.next().await {
+        if let LanguageModelV4StreamPart::ToolCall(call) = part.expect("stream part") {
+            let input: serde_json::Value =
+                serde_json::from_str(&call.input).expect("tool input JSON");
+            assert_eq!(input, json!({"file path": "/tmp/x"}));
+            assert!(!call.invalid);
+            return;
+        }
+    }
+    panic!("stream finished without a ToolCall part");
 }

@@ -26,6 +26,7 @@ pub mod messages;
 
 // Provider tools
 pub mod tool;
+mod tool_schema_alias;
 
 // Cache control and utilities
 pub mod beta_capabilities;
