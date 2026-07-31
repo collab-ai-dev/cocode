@@ -140,12 +140,12 @@ fn workflow_picker_lines_filter_and_select() {
             WorkflowPickerEntry {
                 name: "release".to_string(),
                 description: "Ship the build".to_string(),
-                source_path: ".coco/workflows/release.ts".to_string(),
+                source_path: Some(".coco/workflows/release.ts".to_string()),
             },
             WorkflowPickerEntry {
                 name: "audit".to_string(),
                 description: "Inspect auth".to_string(),
-                source_path: ".claude/workflows/audit.js".to_string(),
+                source_path: Some(".claude/workflows/audit.js".to_string()),
             },
         ],
         filter: "ship".to_string(),

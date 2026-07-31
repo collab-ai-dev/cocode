@@ -199,7 +199,10 @@ pub(crate) fn filtered_workflows(w: &WorkflowPickerState) -> Vec<&WorkflowPicker
             filter_lower.is_empty()
                 || entry.name.to_lowercase().contains(&filter_lower)
                 || entry.description.to_lowercase().contains(&filter_lower)
-                || entry.source_path.to_lowercase().contains(&filter_lower)
+                || entry
+                    .source_path
+                    .as_deref()
+                    .is_some_and(|path| path.to_lowercase().contains(&filter_lower))
         })
         .collect()
 }

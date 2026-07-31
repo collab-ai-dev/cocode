@@ -79,7 +79,8 @@ Globals available to the script:\n\
 - `pipeline(items, ...stages)` — flow each item independently through all stages; a stage gets `(prev, item, index)`.\n\
 - `phase(title)` / `log(message)` — emit progress. Use the SAME phase titles here as in `meta.phases`; they are matched exactly.\n\
 - `workflow(nameOrRef, args?)` — run a saved workflow (by `meta.name`) or a `.js`/`.ts` path inline and await its value. Its agents appear under one `▸ name` group and share this run's concurrency, token budget and journal. Nesting is one level: a child's own `workflow()` throws.\n\
-- `args` — the value passed as the `args` parameter; `budget` — the token budget.\n\n\
+- `args` — the value passed as the `args` parameter; `budget` — the token budget; `console` — aliases `log`.\n\
+The sandbox is a bare ECMAScript realm: no `URL`, `fetch`, `setTimeout`, `crypto`, `process` or `require`.\n\n\
 Provide the source via `scriptPath`, `name` (loaded from {dirs}), or an inline `script`. Pass `resumeFromRunId` to resume a prior (stopped or finished) run in this session: completed `agent()` results replay from the prior run's journal instead of re-spawning. The prior run's on-disk script is authoritative on resume.\n\
 The workflow runs in the BACKGROUND: this returns immediately with a taskId, and progress + the final result arrive via task notifications.",
         dirs = coco_workflow::workflow_dirs_hint()

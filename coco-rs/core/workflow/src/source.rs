@@ -62,11 +62,24 @@ pub struct WorkflowSourceSpec {
     pub source_path: Option<PathBuf>,
 }
 
+/// Where a workflow definition came from.
+///
+/// Also encodes precedence: a local file **shadows** a bundled workflow with
+/// the same `meta.name` (mirroring the reference's built-in < plugin < user
+/// ordering — your machine, your workflow). The picker shows the origin so a
+/// shadowed built-in is visible as such rather than silently gone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkflowOrigin {
+    /// Compiled into the binary ([`crate::bundled`]).
+    Bundled,
+    /// Loaded from a file under one of the [`workflow_dirs`].
+    Local(PathBuf),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkflowRegistryEntry {
-    pub name: String,
-    pub description: String,
-    pub source_path: PathBuf,
+    pub meta: crate::WorkflowMeta,
+    pub origin: WorkflowOrigin,
 }
 
 pub fn resolve_workflow_source(input: WorkflowSourceInput) -> Result<WorkflowSourceSpec> {
@@ -90,7 +103,7 @@ pub fn resolve_workflow_source(input: WorkflowSourceInput) -> Result<WorkflowSou
     }
 
     if let Some(name) = input.name.filter(|s| !s.trim().is_empty()) {
-        let (path, found_source) = resolve_named_workflow(&cwd, &name).ok_or_else(|| {
+        let (origin, found_source) = resolve_named_workflow(&cwd, &name).ok_or_else(|| {
             NamedWorkflowNotFoundSnafu {
                 name: name.clone(),
                 available: available_workflows_message(&cwd),
@@ -109,7 +122,13 @@ pub fn resolve_workflow_source(input: WorkflowSourceInput) -> Result<WorkflowSou
         return Ok(WorkflowSourceSpec {
             kind: WorkflowSourceKind::Name(name),
             source,
-            source_path: Some(path),
+            // A bundled workflow has no on-disk provenance. `None` here is what
+            // makes the launcher persist the resolved source into the run's own
+            // directory instead of pointing resume at a path that never existed.
+            source_path: match origin {
+                WorkflowOrigin::Local(path) => Some(path),
+                WorkflowOrigin::Bundled => None,
+            },
         });
     }
 
@@ -125,21 +144,30 @@ pub fn resolve_workflow_source(input: WorkflowSourceInput) -> Result<WorkflowSou
     MissingSourceSnafu.fail()
 }
 
+/// Every workflow reachable by name, de-duplicated with local files taking
+/// precedence over bundled ones (and, among local files, the first lookup dir
+/// winning). Bundled entries come last so the list reads local-first.
 pub fn list_workflows(cwd: Option<PathBuf>) -> Vec<WorkflowRegistryEntry> {
     let cwd = cwd.unwrap_or_else(|| PathBuf::from("."));
-    let mut out = Vec::new();
-    for (path, _, meta) in scan_workflow_registry(&cwd) {
-        if out
+    let local = scan_workflow_registry(&cwd)
+        .into_iter()
+        .map(|(path, _, meta)| WorkflowRegistryEntry {
+            meta,
+            origin: WorkflowOrigin::Local(path),
+        });
+    let bundled =
+        crate::bundled::bundled_workflows()
             .iter()
-            .any(|entry: &WorkflowRegistryEntry| entry.name == meta.name)
-        {
+            .map(|workflow| WorkflowRegistryEntry {
+                meta: workflow.meta.clone(),
+                origin: WorkflowOrigin::Bundled,
+            });
+    let mut out: Vec<WorkflowRegistryEntry> = Vec::new();
+    for entry in local.chain(bundled) {
+        if out.iter().any(|seen| seen.meta.name == entry.meta.name) {
             continue;
         }
-        out.push(WorkflowRegistryEntry {
-            name: meta.name,
-            description: meta.description,
-            source_path: path,
-        });
+        out.push(entry);
     }
     out
 }
@@ -183,7 +211,7 @@ fn read_capped(path: &Path) -> std::io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Resolve a named workflow to `(path, source)` by matching the parsed
+/// Resolve a named workflow to `(origin, source)` by matching the parsed
 /// `meta.name` of each on-disk script —
 /// over the `getAllWorkflows` registry, NOT the filename stem (a saved workflow
 /// `My Build` is slugified to `my-build.js` yet invoked by its `meta.name`).
@@ -191,11 +219,18 @@ fn read_capped(path: &Path) -> std::io::Result<Vec<u8>> {
 /// files are visited in sorted order for determinism. Because names are matched
 /// against parsed metadata rather than used to build a path, name-based path
 /// traversal is structurally impossible.
-fn resolve_named_workflow(cwd: &Path, name: &str) -> Option<(PathBuf, String)> {
-    scan_workflow_registry(cwd)
+///
+/// Bundled workflows are the **last** resort, so a local file of the same name
+/// shadows a built-in outright rather than merging with it.
+fn resolve_named_workflow(cwd: &Path, name: &str) -> Option<(WorkflowOrigin, String)> {
+    let local = scan_workflow_registry(cwd)
         .into_iter()
         .find(|(_, _, meta)| meta.name == name)
-        .map(|(path, source, _)| (path, source))
+        .map(|(path, source, _)| (WorkflowOrigin::Local(path), source));
+    local.or_else(|| {
+        crate::bundled::bundled_workflow(name)
+            .map(|workflow| (WorkflowOrigin::Bundled, workflow.script.to_string()))
+    })
 }
 
 /// The available workflow names (parsed `meta.name`), de-duplicated and sorted,
@@ -205,6 +240,11 @@ fn available_workflows_message(cwd: &Path) -> String {
     let mut names: Vec<String> = scan_workflow_registry(cwd)
         .into_iter()
         .map(|(_, _, meta)| meta.name)
+        .chain(
+            crate::bundled::bundled_workflows()
+                .iter()
+                .map(|workflow| workflow.meta.name.clone()),
+        )
         .collect();
     names.sort();
     names.dedup();

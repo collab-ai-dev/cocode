@@ -615,7 +615,7 @@ fn open_workflow_picker_opens_modal_with_entries() {
                 entries: vec![coco_types::WorkflowDialogEntry {
                     name: "release".to_string(),
                     description: "Ship the build".to_string(),
-                    source_path: ".coco/workflows/release.ts".to_string(),
+                    source_path: Some(".coco/workflows/release.ts".to_string()),
                 }],
             },
         },

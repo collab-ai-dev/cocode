@@ -999,7 +999,7 @@ fn workflow_dialog_payload_uses_camel_case_wire_shape() {
         entries: vec![WorkflowDialogEntry {
             name: "Release".into(),
             description: "Ship it".into(),
-            source_path: ".coco/workflows/release.ts".into(),
+            source_path: Some(".coco/workflows/release.ts".into()),
         }],
     };
 
@@ -1011,4 +1011,21 @@ fn workflow_dialog_payload_uses_camel_case_wire_shape() {
         json["entries"][0]["sourcePath"],
         ".coco/workflows/release.ts"
     );
+}
+
+/// A bundled workflow has no on-disk path, and the key is omitted rather than
+/// serialized as `null` — a client filtering on `sourcePath` must not match it.
+#[test]
+fn workflow_dialog_entry_omits_source_path_for_a_bundled_workflow() {
+    let payload = WorkflowDialogPayload {
+        entries: vec![WorkflowDialogEntry {
+            name: "deep-research".into(),
+            description: "Deep research harness".into(),
+            source_path: None,
+        }],
+    };
+
+    let json = serde_json::to_value(&payload).unwrap();
+
+    assert!(json["entries"][0].get("sourcePath").is_none());
 }

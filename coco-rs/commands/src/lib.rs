@@ -643,6 +643,12 @@ pub fn build_command_registry(
     );
     register_plugin_contributions(&mut registry, plugins);
 
+    // 5b. Workflow-derived commands. After skills/plugins so a workflow named
+    //     like one shadows it (matching the workflow registry's own
+    //     local-over-bundled precedence), before the P1 handlers below so a
+    //     baseline command can never be displaced by a script on disk.
+    register_workflows_as_commands(&mut registry, &features, &project_root);
+
     // 6. P1 handlers — last so they win over any name collisions
     //    from skills/plugins (`/init`, `/rewind`, `/memory` are baseline
     //    commands not overridable by user skills).
@@ -772,6 +778,76 @@ fn register_skills_as_commands(
                 hooks: skill.hooks.clone(),
             }),
             handler: Some(handler),
+            is_enabled: None,
+        });
+    }
+}
+
+/// Project every reachable workflow into its own slash command
+/// (`/deep-research`, `/<meta.name>` for anything in the lookup dirs).
+///
+/// The projection is what makes a workflow *typable*: the registry row already
+/// carries name, description, `whenToUse` and phases, and
+/// [`WorkflowLaunchPromptHandler`] turns them into the prompt that instructs the
+/// model to call `Workflow({name, args})`. Nothing here runs a script.
+///
+/// The commands are **not** advertised to the model — coco's model-facing
+/// listing is built from the skill catalog only (`core/context::build_system_prompt`),
+/// so a workflow is reachable by a person typing it, or by the model already
+/// knowing its name. That is the same restraint the reference implementation
+/// spends three enforcement layers on, obtained here from the architecture.
+fn register_workflows_as_commands(
+    registry: &mut CommandRegistry,
+    features: &coco_types::Features,
+    project_root: &Path,
+) {
+    use coco_types::CommandSource;
+    use coco_types::PromptCommandData;
+
+    if !features.enabled(coco_types::Feature::Workflow) {
+        return;
+    }
+    const PROGRESS_MESSAGE: &str = "running dynamic workflow";
+    for entry in coco_workflow::list_workflows(Some(project_root.to_path_buf())) {
+        let meta = entry.meta;
+        let mut base = builtin_base_ext(
+            &meta.name,
+            &meta.description,
+            &[],
+            coco_types::CommandSafety::LocalOnly,
+            Some("[args]"),
+        );
+        base.loaded_from = Some(match entry.origin {
+            coco_workflow::WorkflowOrigin::Bundled => CommandSource::Bundled,
+            coco_workflow::WorkflowOrigin::Local(_) => CommandSource::Project,
+        });
+        base.when_to_use = meta.when_to_use.clone();
+        base.argument_kind = CommandArgumentKind::FreeText;
+        let handler = handlers::prompt_command::WorkflowLaunchPromptHandler {
+            name: meta.name.clone(),
+            description: meta.description.clone(),
+            when_to_use: meta.when_to_use,
+            phases: meta
+                .phases
+                .into_iter()
+                .map(|phase| (phase.title, phase.detail))
+                .collect(),
+            progress_message: PROGRESS_MESSAGE.to_string(),
+        };
+        registry.register(RegisteredCommand {
+            base,
+            command_type: CommandType::Prompt(PromptCommandData {
+                progress_message: PROGRESS_MESSAGE.to_string(),
+                content_length: meta.description.len() as i64,
+                // The projection's whole job is to reach the Workflow tool.
+                allowed_tools: Some(vec![coco_types::ToolName::Workflow.as_str().to_string()]),
+                model: None,
+                context: coco_types::CommandContext::Inline,
+                agent: None,
+                thinking_level: None,
+                hooks: None,
+            }),
+            handler: Some(Arc::new(handler)),
             is_enabled: None,
         });
     }

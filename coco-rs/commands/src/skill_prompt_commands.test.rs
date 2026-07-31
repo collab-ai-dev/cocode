@@ -357,3 +357,74 @@ fn prompt_text(result: CommandResult) -> String {
         other => panic!("expected Prompt, got {other:?}"),
     }
 }
+
+/// `/deep-research` must exist as a real, typable command — the bundled
+/// workflow registry is only useful if it reaches the slash-command registry.
+#[test]
+fn deep_research_is_registered_as_a_bundled_workflow_command() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let registry = registry_for_root(dir.path().to_path_buf());
+
+    let cmd = registry
+        .get("deep-research")
+        .expect("/deep-research is registered");
+    assert_eq!(
+        cmd.base.loaded_from,
+        Some(coco_types::CommandSource::Bundled)
+    );
+    assert!(cmd.base.user_invocable);
+    assert!(
+        cmd.base
+            .when_to_use
+            .as_deref()
+            .is_some_and(|text| text.contains("fact-checked research report")),
+        "whenToUse must survive the projection: {:?}",
+        cmd.base.when_to_use
+    );
+    match &cmd.command_type {
+        CommandType::Prompt(data) => assert_eq!(
+            data.allowed_tools.as_deref(),
+            Some(["Workflow".to_string()].as_slice())
+        ),
+        other => panic!("expected a prompt command, got {other:?}"),
+    }
+}
+
+/// Turning the feature off must remove the command outright, not leave a row
+/// that fails when invoked.
+#[test]
+fn workflow_commands_are_absent_when_the_workflow_feature_is_off() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut features = Features::with_defaults();
+    features.set_enabled(coco_types::Feature::Workflow, false);
+    let registry = registry_for_root_with_features(dir.path().to_path_buf(), features);
+
+    assert!(registry.get("deep-research").is_none());
+}
+
+/// A local script shadows the bundled workflow in the command registry too —
+/// otherwise the picker and the slash command would disagree about which
+/// script `/deep-research` runs.
+#[test]
+fn a_local_workflow_file_shadows_the_bundled_command() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let workflows = dir
+        .path()
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("workflows");
+    std::fs::create_dir_all(&workflows).expect("create workflows dir");
+    std::fs::write(
+        workflows.join("mine.js"),
+        r#"export const meta = { name: "deep-research", description: "My own harness" };"#,
+    )
+    .expect("write shadowing workflow");
+
+    let registry = registry_for_root(dir.path().to_path_buf());
+
+    let cmd = registry.get("deep-research").expect("registered");
+    assert_eq!(cmd.base.description, "My own harness");
+    assert_eq!(
+        cmd.base.loaded_from,
+        Some(coco_types::CommandSource::Project)
+    );
+}

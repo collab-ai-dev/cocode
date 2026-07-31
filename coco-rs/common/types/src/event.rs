@@ -3182,7 +3182,11 @@ pub struct WorkflowDialogEntry {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
-    pub source_path: String,
+    /// Where the script lives, or `None` for a workflow bundled into the
+    /// binary. Absent rather than a placeholder path so the picker's filter
+    /// cannot match a location that does not exist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
 }
 
 /// Per-skill override state stored under `skill_overrides` in any

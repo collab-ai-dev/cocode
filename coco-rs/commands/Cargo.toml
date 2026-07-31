@@ -20,6 +20,7 @@ coco-skills.workspace = true
 coco-subagent.workspace = true
 coco-utils-common.workspace = true
 coco-utils-string.workspace = true
+coco-workflow.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
