@@ -598,6 +598,111 @@ async fn snapshot_preserves_text_tool_text_interleaving() {
     assert!(matches!(&snap.parts[2], super::TurnPart::Text(t) if t.text == "after"));
 }
 
+#[tokio::test]
+async fn sequential_duplicate_tool_call_ids_are_normalized_everywhere() {
+    let mut parts = Vec::new();
+    for tool_name in ["Read", "Write"] {
+        parts.push(Ok(LanguageModelV4StreamPart::ToolInputStart {
+            id: "reused".into(),
+            tool_name: tool_name.into(),
+            provider_executed: None,
+            dynamic: None,
+            title: None,
+            provider_metadata: None,
+        }));
+        parts.push(Ok(LanguageModelV4StreamPart::ToolInputDelta {
+            id: "reused".into(),
+            delta: "{}".into(),
+            provider_metadata: None,
+        }));
+        parts.push(Ok(LanguageModelV4StreamPart::ToolInputEnd {
+            id: "reused".into(),
+            provider_metadata: None,
+        }));
+        parts.push(Ok(LanguageModelV4StreamPart::ToolCall(
+            LanguageModelV4ToolCall::new("reused", tool_name, "{}"),
+        )));
+    }
+    parts.push(finish(StopReason::ToolUse));
+
+    let (tx, mut rx) = mpsc::channel::<StreamEvent>(32);
+    tokio::spawn(process_stream(Box::pin(futures::stream::iter(parts)), tx));
+
+    let mut start_ids = Vec::new();
+    let mut delta_ids = Vec::new();
+    let mut end_ids = Vec::new();
+    let mut snapshot = None;
+    while let Some(event) = rx.recv().await {
+        match event {
+            StreamEvent::ToolCallStart { id, .. } => start_ids.push(id),
+            StreamEvent::ToolCallDelta { id, .. } => delta_ids.push(id),
+            StreamEvent::ToolCallEnd { id, .. } => end_ids.push(id),
+            StreamEvent::Finish { snapshot: snap, .. } => snapshot = Some(snap),
+            StreamEvent::TextDelta { .. }
+            | StreamEvent::ReasoningDelta { .. }
+            | StreamEvent::ReasoningEnd { .. }
+            | StreamEvent::Error { .. } => {}
+        }
+    }
+
+    let expected = vec!["reused".to_string(), "reused_d2".to_string()];
+    assert_eq!(start_ids, expected);
+    assert_eq!(delta_ids, expected);
+    assert_eq!(end_ids, expected);
+    let snapshot = snapshot.expect("finish snapshot");
+    let snapshot_ids: Vec<&str> = snapshot
+        .parts
+        .iter()
+        .filter_map(|part| match part {
+            super::TurnPart::ToolCall(call) => Some(call.id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(snapshot_ids, vec!["reused", "reused_d2"]);
+}
+
+#[tokio::test]
+async fn overlapping_duplicate_tool_call_ids_abort_the_stream() {
+    let parts: Vec<Result<LanguageModelV4StreamPart, AISdkError>> = vec![
+        Ok(LanguageModelV4StreamPart::ToolInputStart {
+            id: "reused".into(),
+            tool_name: "Read".into(),
+            provider_executed: None,
+            dynamic: None,
+            title: None,
+            provider_metadata: None,
+        }),
+        Ok(LanguageModelV4StreamPart::ToolInputStart {
+            id: "reused".into(),
+            tool_name: "Write".into(),
+            provider_executed: None,
+            dynamic: None,
+            title: None,
+            provider_metadata: None,
+        }),
+        finish(StopReason::ToolUse),
+    ];
+
+    let (tx, mut rx) = mpsc::channel::<StreamEvent>(8);
+    tokio::spawn(process_stream(Box::pin(futures::stream::iter(parts)), tx));
+
+    assert!(matches!(
+        rx.recv().await,
+        Some(StreamEvent::ToolCallStart { id, .. }) if id == "reused"
+    ));
+    assert!(matches!(
+        rx.recv().await,
+        Some(StreamEvent::Error { message, .. })
+            if message.contains("overlapping tool calls")
+                && message.contains("Read")
+                && message.contains("Write")
+    ));
+    assert!(
+        rx.recv().await.is_none(),
+        "stream must stop after the protocol error"
+    );
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // Source-contract pin (tui-v2 §8 / §10.1 Stage 0).
 //

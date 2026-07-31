@@ -246,6 +246,62 @@ fn converts_tool_result() {
 }
 
 #[test]
+fn responses_call_id_preserves_ids_up_to_the_limit() {
+    let id = "x".repeat(64);
+    assert!(matches!(
+        responses_call_id(&id),
+        std::borrow::Cow::Borrowed(_)
+    ));
+    assert_eq!(responses_call_id(&id), id);
+}
+
+#[test]
+fn long_responses_call_id_is_stable_and_shared_by_call_and_output() {
+    let long_id = format!("codex_mcp__exec-{}", "x".repeat(100));
+    let prompt = vec![
+        LanguageModelV4Message::Assistant {
+            content: vec![AssistantContentPart::ToolCall(ToolCallPart {
+                tool_call_id: long_id.clone(),
+                tool_name: "exec".into(),
+                input: serde_json::json!({"command": "true"}),
+                provider_executed: None,
+                provider_metadata: None,
+                invalid: false,
+                invalid_reason: None,
+            })],
+            provider_options: None,
+        },
+        LanguageModelV4Message::Tool {
+            content: vec![ToolContentPart::ToolResult(ToolResultPart {
+                tool_call_id: long_id,
+                tool_name: "exec".into(),
+                output: ToolResultContent::Text {
+                    value: "ok".into(),
+                    provider_options: None,
+                },
+                is_error: false,
+                provider_metadata: None,
+            })],
+            provider_options: None,
+        },
+    ];
+
+    let (items, warnings) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+    assert!(warnings.is_empty());
+    let call_id = items[0]["call_id"].as_str().expect("assistant call id");
+    assert!(call_id.starts_with("call_"));
+    assert!(call_id.chars().count() <= MAX_RESPONSES_CALL_ID_CHARS);
+    assert_eq!(items[1]["call_id"], call_id);
+}
+
+#[test]
+fn long_responses_call_id_hashes_the_full_utf8_value() {
+    let first = "工".repeat(65);
+    let second = format!("{}具", "工".repeat(64));
+    assert_ne!(responses_call_id(&first), responses_call_id(&second));
+}
+
+#[test]
 fn converts_tool_search_result_to_native_output() {
     use std::collections::HashMap;
     use vercel_ai_provider::LanguageModelV4ProviderTool;
