@@ -16,6 +16,10 @@ V1 (`TodoWrite`) and V2 (`Task*` tools) are gated by `Feature::TaskV2` via `Tool
 
 ### running
 - `TaskManager` — `Arc<RwLock<HashMap<id, TaskStateBase>>>` + outputs map; optional `mpsc::Sender<CoreEvent>` sink for SDK NDJSON parity. `create` / `get` / `update_status` / `stop` / `set_output` / `get_output` / `list` / `remove_completed`.
+- Local-agent liveness is runtime-only control state: a `watch` heartbeat
+  carries monotonic sequence, coarse execution phase, and `tokio::time::Instant`.
+  It never enters `TaskStateBase`; event producers record activity through the
+  tool-runtime contract and agent-host subscribes to enforce policy.
 - `TaskOutput` — `{stdout, stderr, exit_code}`.
 - `push_workflow_progress` folds each delta through
   `workflow_progress::apply_workflow_progress` (index-keyed upsert for

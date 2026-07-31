@@ -15,6 +15,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use coco_tool_runtime::AgentExecutionPhase;
 use coco_tool_runtime::AgentSpawnRequest;
 use coco_tool_runtime::AgentSpawnResponse;
 use coco_tool_runtime::AgentSpawnStatus;
@@ -602,13 +603,26 @@ fn spawn_task_event_drain(
                     delta,
                     ..
                 }) => {
+                    registry
+                        .record_agent_activity(&task_id, AgentExecutionPhase::AwaitingModel)
+                        .await;
                     registry.append_output(&task_id, &delta).await;
+                }
+                coco_types::CoreEvent::Stream(coco_types::AgentStreamEvent::ThinkingDelta {
+                    ..
+                }) => {
+                    registry
+                        .record_agent_activity(&task_id, AgentExecutionPhase::AwaitingModel)
+                        .await;
                 }
                 coco_types::CoreEvent::Stream(coco_types::AgentStreamEvent::ToolUseQueued {
                     call_id,
                     name,
                     input,
                 }) => {
+                    registry
+                        .record_agent_activity(&task_id, AgentExecutionPhase::AwaitingModel)
+                        .await;
                     let summary = coco_types::tool_summary::tool_input_summary(&name, &input);
                     if !summary.is_empty() {
                         pending_summaries.insert(call_id, summary);
@@ -619,6 +633,9 @@ fn spawn_task_event_drain(
                     name,
                     ..
                 }) => {
+                    registry
+                        .record_agent_activity(&task_id, AgentExecutionPhase::RunningTool)
+                        .await;
                     tracker.tool_use_count = tracker.tool_use_count.saturating_add(1);
                     tracker.last_tool_name = Some(name.clone());
                     // Maintain a cap-5 ring buffer of recent activities
@@ -640,6 +657,24 @@ fn spawn_task_event_drain(
                     );
                     registry.set_progress(&task_id, tracker.clone()).await;
                 }
+                coco_types::CoreEvent::Stream(
+                    coco_types::AgentStreamEvent::ToolUseCompleted { .. }
+                    | coco_types::AgentStreamEvent::McpToolCallEnd { .. },
+                ) => {
+                    registry
+                        .record_agent_activity(&task_id, AgentExecutionPhase::AwaitingModel)
+                        .await;
+                }
+                coco_types::CoreEvent::Stream(coco_types::AgentStreamEvent::McpToolCallBegin {
+                    ..
+                })
+                | coco_types::CoreEvent::Protocol(coco_types::ServerNotification::ToolProgress(
+                    _,
+                )) => {
+                    registry
+                        .record_agent_activity(&task_id, AgentExecutionPhase::RunningTool)
+                        .await;
+                }
                 // Per-round usage + cost roll-up so the activity panel shows
                 // live token counts AND spend while the subagent runs. The
                 // child engine emits `SessionUsageUpdated` after every model
@@ -650,6 +685,9 @@ fn spawn_task_event_drain(
                 coco_types::CoreEvent::Protocol(
                     coco_types::ServerNotification::SessionUsageUpdated(snap),
                 ) => {
+                    registry
+                        .record_agent_activity(&task_id, AgentExecutionPhase::AwaitingModel)
+                        .await;
                     if fold_session_usage_into_task_progress(&mut tracker, &snap.totals) {
                         registry.set_progress(&task_id, tracker.clone()).await;
                     }
@@ -659,6 +697,9 @@ fn spawn_task_event_drain(
                 // even if a usage snapshot was missed; cost arrives via the
                 // completion payload.
                 coco_types::CoreEvent::Protocol(coco_types::ServerNotification::TurnEnded(p)) => {
+                    registry
+                        .record_agent_activity(&task_id, AgentExecutionPhase::AwaitingModel)
+                        .await;
                     if let Some(usage) = &p.usage {
                         let total = usage
                             .input_tokens

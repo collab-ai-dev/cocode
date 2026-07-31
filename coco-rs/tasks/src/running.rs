@@ -10,14 +10,15 @@
 //! - `controls: HashMap<String, TaskControl>` — runtime-only handles
 //!   (`CancellationToken`, `watch::Sender<TaskStatus>`, `Arc<Notify>`,
 //!   `OnceLock<exit_code>`, optional teammate `current_work_cancel`,
-//!   optional in-process teammate `JoinHandle`). Never serialized; never
-//!   leaked out as `Arc` shared refs — every mutator goes through
-//!   `TaskManager`.
+//!   optional in-process teammate `JoinHandle`, optional agent liveness
+//!   heartbeat). Never serialized; never leaked out as `Arc` shared refs —
+//!   every mutator goes through `TaskManager`.
 //!
 //! Splitting the two halves keeps `TaskStateBase` a pure DTO: future
 //! consumers (event hub, transcript JSONL) can clone the wire shape
 //! without dragging cancel-token Arcs through them.
 
+use coco_tool_runtime::AgentExecutionPhase;
 use coco_tool_runtime::DetachOutcome;
 use coco_tool_runtime::DetachSource;
 use coco_types::BackendType;
@@ -82,6 +83,10 @@ struct TaskControl {
     /// In-process teammate runner-loop join handle. Owned here so
     /// the coordinator no longer keeps a parallel `agents` map.
     join_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    /// Monotonic, runtime-only heartbeat for local background agents.
+    /// The sender lives with the task control so terminal/removal lifecycle
+    /// remains in the same keyspace as cancellation and status watches.
+    agent_liveness_tx: Option<watch::Sender<AgentLivenessSnapshot>>,
 }
 
 impl TaskControl {
@@ -89,8 +94,17 @@ impl TaskControl {
         cancel: CancellationToken,
         invoking_agent: Option<String>,
         initial_status: TaskStatus,
+        track_agent_liveness: bool,
     ) -> Self {
         let (status_tx, _) = watch::channel(initial_status);
+        let agent_liveness_tx = track_agent_liveness.then(|| {
+            let (tx, _) = watch::channel(AgentLivenessSnapshot {
+                sequence: 0,
+                phase: AgentExecutionPhase::AwaitingModel,
+                last_progress: tokio::time::Instant::now(),
+            });
+            tx
+        });
         Self {
             cancel,
             status_tx,
@@ -101,8 +115,17 @@ impl TaskControl {
             exit_code: Arc::new(OnceLock::new()),
             current_work_cancel: Arc::new(Mutex::new(None)),
             join_handle: Arc::new(Mutex::new(None)),
+            agent_liveness_tx,
         }
     }
+}
+
+/// Runtime-only liveness state consumed by the agent-host watchdog.
+#[derive(Debug, Clone, Copy)]
+pub struct AgentLivenessSnapshot {
+    pub sequence: u64,
+    pub phase: AgentExecutionPhase,
+    pub last_progress: tokio::time::Instant,
 }
 
 pub struct TaskManager {
@@ -562,7 +585,12 @@ impl TaskManager {
             output_offset: 0,
             extras,
         };
-        let control = TaskControl::new(request.cancel, request.invoking_agent, request.status);
+        let control = TaskControl::new(
+            request.cancel,
+            request.invoking_agent,
+            request.status,
+            request.task_type == TaskType::BgAgent,
+        );
         let emit_state = state.clone();
         {
             let mut rows = self.rows.write().await;
@@ -604,7 +632,7 @@ impl TaskManager {
             output_offset: 0,
             extras: TaskExtras::Teammate(extras),
         };
-        let control = TaskControl::new(request.cancel, None, TaskStatus::Running);
+        let control = TaskControl::new(request.cancel, None, TaskStatus::Running, false);
         let emit_state = state.clone();
         {
             let mut rows = self.rows.write().await;
@@ -628,6 +656,36 @@ impl TaskManager {
 
     pub async fn get(&self, id: &str) -> Option<TaskStateBase> {
         self.rows.read().await.get(id).cloned()
+    }
+
+    /// Advance an agent heartbeat without touching its serialized task row.
+    pub async fn record_agent_activity(&self, id: &str, phase: AgentExecutionPhase) {
+        let sender = self
+            .controls
+            .read()
+            .await
+            .get(id)
+            .and_then(|control| control.agent_liveness_tx.clone());
+        if let Some(sender) = sender {
+            sender.send_modify(|snapshot| {
+                snapshot.sequence = snapshot.sequence.saturating_add(1);
+                snapshot.phase = phase;
+                snapshot.last_progress = tokio::time::Instant::now();
+            });
+        }
+    }
+
+    /// Subscribe to the runtime-only heartbeat for a local background agent.
+    pub async fn subscribe_agent_liveness(
+        &self,
+        id: &str,
+    ) -> Option<watch::Receiver<AgentLivenessSnapshot>> {
+        self.controls.read().await.get(id).and_then(|control| {
+            control
+                .agent_liveness_tx
+                .as_ref()
+                .map(watch::Sender::subscribe)
+        })
     }
 
     /// Locate the live teammate row by its `name@team` identity.

@@ -59,6 +59,10 @@ coordinator, host, and surfaces share values without importing one another.
   path renders `coco_subagent::render_task_notification(...)` and pushes
   it to the leader's mailbox on worker terminate (when coordinator mode
   is active).
+- **Subagent progress is an interface heartbeat, not a DTO mutation:** the
+  child event drain maps model deltas/usage and tool/MCP lifecycle events to
+  `TaskHandle::record_agent_activity`. It does not own timeout policy;
+  `coco-agent-host::TaskRuntime` owns warnings and cancellation.
 
 ## Conventions
 

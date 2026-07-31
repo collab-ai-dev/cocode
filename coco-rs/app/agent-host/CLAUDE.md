@@ -27,6 +27,7 @@ typed errors and adapters translate failures to protocol results.
 | `session_runtime::SessionRuntimeFactory` | Owned construction seam for building `SessionHandle`s from cloneable startup inputs and a target session id. |
 | `session_runtime::SessionExecutionProfile` (`Primary` / `SideChatReadOnly`) + `HookExecutionPolicy` | Construction-time capability decision table read by the runtime installers (predicate methods: `persists_history`, `registers_pid`, `runs_goals`, …). `SideChatReadOnly` disables durable/background ownership and restricts hooks to tool-lifecycle only. |
 | `session_controls::*` | Protocol-neutral runtime controls (tasks, status/cost, context usage); adapters map results to their clients. |
+| `session::task_runtime` | Running-task lifecycle, output and notification ownership; shell prompt stalls and phase-aware local-agent liveness have separate watchdogs. |
 | `headless` (`headless/run`, `headless/support`) | Print-mode orchestration plus goal/slash, transcript, tool-filter, and additional-directory helpers. |
 | `local_host::build_local_host` | Shared local AppServer host assembly for TUI + headless; local counterpart to `remote_host::HostBuilder`. |
 | `coco_app_runtime::ProjectServices` | Project-rooted plugin/command/skill/hook/MCP/LSP discovery shared per project root (lives in `app/runtime`; see Runtime Paths). |
