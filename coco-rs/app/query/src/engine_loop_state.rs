@@ -102,8 +102,13 @@ pub(crate) struct LoopTurnState {
     pub(crate) max_tokens_recovery_count: i32,
     /// How many empty-response nudge retries have fired in this user
     /// cycle. Capped at
-    /// [`crate::engine_terminal::MAX_EMPTY_RESPONSE_NUDGES`].
+    /// [`crate::engine_terminal::MAX_TERMINAL_RECOVERY_ATTEMPTS`].
     pub(crate) empty_response_retries: i32,
+    /// How many `ToolUse`-without-tool-calls retries have fired in this user
+    /// cycle.
+    pub(crate) missing_tool_call_retries: i32,
+    /// Prompt-only assistant/user recovery pair. Never persisted or emitted.
+    pub(crate) recovery_overlay: RecoveryOverlay,
     /// UUID of the last user message already handed to UserPrompt-tier
     /// reminders. Prevents duplicate `at_mentioned_files` /
     /// `agent_mentions` / `ultrathink_effort` emissions when the same
@@ -146,12 +151,34 @@ impl LoopTurnState {
             stop_hook_active: false,
             max_tokens_recovery_count: 0,
             empty_response_retries: 0,
+            missing_tool_call_retries: 0,
+            recovery_overlay: RecoveryOverlay::default(),
             reminder_last_user_input_uuid: None,
             budget: BudgetTracker::new(total_token_budget, max_turns, max_continuations),
             count_next_iteration_as_turn: true,
             stream_capacity_retries: 0,
             wire_recorder: None,
         }
+    }
+}
+
+/// Transient context used to repair malformed terminal responses.
+#[derive(Default)]
+pub(crate) struct RecoveryOverlay {
+    messages: Vec<Arc<Message>>,
+}
+
+impl RecoveryOverlay {
+    pub(crate) fn replace(&mut self, assistant: Message, nudge: Message) {
+        self.messages = vec![Arc::new(assistant), Arc::new(nudge)];
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.messages.clear();
+    }
+
+    pub(crate) fn messages(&self) -> &[Arc<Message>] {
+        &self.messages
     }
 }
 

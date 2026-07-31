@@ -184,6 +184,14 @@ empty-content assistant message via
    `MAX_OUTPUT_TOKENS_RECOVERY_LIMIT` times; phase 3 falls through. All three
    push the synthetic message so transcripts carry the truncation marker.
 
+Clean empty terminals and `ToolUse` terminals with no reconstructed call are
+handled separately by `engine_terminal::handle_terminal_anomaly`. Each has a
+three-attempt counter and a typed `ContinueReason`; retries use a prompt-only
+assistant/user overlay, so malformed output and recovery nudges are neither
+persisted nor rendered. Exhaustion is a provider failure, not a successful
+empty turn. Structured-output retry keeps precedence over ordinary empty
+recovery.
+
 Layering: `coco-inference` is provider-agnostic and cannot construct
 `coco_messages::Message`. The typed `FinishReason` `{ unified, raw }`
 (`unified` = `vercel_ai_provider::UnifiedFinishReason`, re-exported as

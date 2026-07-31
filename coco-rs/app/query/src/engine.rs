@@ -1003,6 +1003,42 @@ impl QueryEngine {
                 api_error: None,
             });
 
+            if tool_calls.is_empty() {
+                let structured_output_pending = self.config.requires_structured_output
+                    && self.tools.get_by_name("StructuredOutput").is_some()
+                    && acc.run_artifacts.structured_output.is_none();
+                if let Some(anomaly) = crate::engine_terminal::classify_terminal_anomaly(
+                    &response_text,
+                    parsed_stop_reason,
+                    self.config.empty_response_nudge,
+                    !structured_output_pending,
+                ) {
+                    match self.handle_terminal_anomaly(
+                        anomaly,
+                        assistant_msg,
+                        &consts,
+                        &acc,
+                        &mut turn_state,
+                        history,
+                        cycle_turn_id.clone(),
+                    ) {
+                        crate::engine_terminal::NoToolCallsTerminal::ContinueLoop => continue,
+                        crate::engine_terminal::NoToolCallsTerminal::Return {
+                            result,
+                            terminal,
+                        } => return (Ok(*result), terminal),
+                    }
+                }
+            }
+
+            // A non-anomalous terminal supersedes any prompt-only recovery
+            // pair from the prior attempt.
+            turn_state.recovery_overlay.clear();
+            if !tool_calls.is_empty() {
+                turn_state.empty_response_retries = 0;
+                turn_state.missing_tool_call_retries = 0;
+            }
+
             let withheld_opt = if tool_calls.is_empty() {
                 parsed_stop_reason.and_then(crate::engine_stream_consume::withhold_reason_for_stop)
             } else {

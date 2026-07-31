@@ -1,9 +1,7 @@
 //! P0.3 — empty-response nudge/retry (hermes absorption).
 //!
-//! A clean stop with neither text nor tool calls (thinking-only counts)
-//! must nudge and retry instead of silently ending the turn, capped at
-//! three nudges per user cycle, with `loop.empty_response_nudge = "off"`
-//! restoring the legacy end-turn behavior.
+//! Empty and malformed tool-use terminals retry through a prompt-only
+//! assistant/user overlay. Recovery scaffolding must never persist.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -19,9 +17,7 @@ use tokio_util::sync::CancellationToken;
 
 const NUDGE_MARKER: &str = "empty response";
 
-/// Count nudge meta messages in the final transcript. Attachment bodies
-/// are matched via `Debug` formatting — the nudge wording is unique.
-fn count_nudges(result: &QueryResult) -> usize {
+fn count_persisted_nudges(result: &QueryResult) -> usize {
     result
         .final_messages
         .iter()
@@ -63,16 +59,26 @@ async fn run_with_mock_and_policy(
 async fn empty_then_text_gets_one_nudge_and_completes() {
     let model = MockModelBuilder::new()
         .on_call(0, |_| MockResponse::text(""))
-        .on_call(1, |_| MockResponse::text("Recovered answer"))
+        .on_call(1, |options| {
+            assert!(
+                format!("{:?}", options.prompt).contains("empty response"),
+                "retry prompt must carry the ephemeral nudge"
+            );
+            MockResponse::text("Recovered answer")
+        })
         .build();
     let result = run_with_mock(model, "hello", core_tools()).await;
     assert_eq!(result.response_text, "Recovered answer");
-    assert_eq!(count_nudges(&result), 1, "exactly one nudge injected");
+    assert_eq!(
+        count_persisted_nudges(&result),
+        0,
+        "recovery nudge must not enter durable history"
+    );
     assert_eq!(result.stop_reason.as_deref(), Some("end_turn"));
 }
 
 #[tokio::test]
-async fn persistent_empty_caps_at_three_nudges_then_ends_cleanly() {
+async fn persistent_empty_caps_at_three_nudges_then_fails() {
     let model = MockModelBuilder::new()
         .on_call(0, |_| MockResponse::text(""))
         .on_call(1, |_| MockResponse::text(""))
@@ -81,11 +87,12 @@ async fn persistent_empty_caps_at_three_nudges_then_ends_cleanly() {
         .on_call(4, |_| MockResponse::text("never reached"))
         .build();
     let result = run_with_mock(model, "hello", core_tools()).await;
-    // Three nudges fired, the fourth empty response ends the turn — no
-    // infinite loop, no fifth model call.
-    assert_eq!(count_nudges(&result), 3);
+    assert_eq!(count_persisted_nudges(&result), 0);
     assert_eq!(result.response_text, "");
-    assert_eq!(result.stop_reason.as_deref(), Some("end_turn"));
+    assert_eq!(
+        result.stop_reason.as_deref(),
+        Some("error_empty_response_retries")
+    );
     assert!(
         !result
             .final_messages
@@ -106,7 +113,7 @@ async fn reasoning_only_response_is_nudged_and_never_leaks_thinking() {
         .on_call(1, |_| MockResponse::text("Visible answer"))
         .build();
     let result = run_with_mock(model, "hello", core_tools()).await;
-    assert_eq!(count_nudges(&result), 1, "thinking-only counts as empty");
+    assert_eq!(count_persisted_nudges(&result), 0);
     assert_eq!(result.response_text, "Visible answer");
     assert!(
         !result.response_text.contains(THINKING),
@@ -131,7 +138,7 @@ async fn off_policy_keeps_legacy_end_turn() {
         .build();
     let result =
         run_with_mock_and_policy(model, "hello", coco_config::EmptyResponsePolicy::Off).await;
-    assert_eq!(count_nudges(&result), 0);
+    assert_eq!(count_persisted_nudges(&result), 0);
     assert_eq!(result.response_text, "");
     assert_eq!(result.stop_reason.as_deref(), Some("end_turn"));
 }
@@ -143,20 +150,70 @@ async fn empty_after_tool_use_gets_post_tool_wording() {
             MockResponse::tool_call("Bash", serde_json::json!({"command": "echo hi"}))
         })
         .on_call(1, |_| MockResponse::text(""))
-        .on_call(2, |_| MockResponse::text("Processed the results"))
+        .on_call(2, |options| {
+            assert!(
+                format!("{:?}", options.prompt).contains("process the tool results above"),
+                "post-tool retry must use tool-aware wording"
+            );
+            MockResponse::text("Processed the results")
+        })
         .build();
     let result = run_with_mock(model, "run echo", core_tools()).await;
     assert_eq!(result.response_text, "Processed the results");
-    let post_tool_nudges = result
-        .final_messages
-        .iter()
-        .filter(|m| {
-            matches!(m.as_ref(), coco_messages::Message::Attachment(_))
-                && format!("{m:?}").contains("process the tool results above")
+    assert_eq!(count_persisted_nudges(&result), 0);
+}
+
+#[tokio::test]
+async fn tool_use_without_calls_retries_even_when_narration_is_present() {
+    let model = MockModelBuilder::new()
+        .on_call(0, |_| {
+            MockResponse::text_with_stop(
+                "I'll inspect the file now.",
+                coco_llm_types::StopReason::ToolUse,
+            )
         })
-        .count();
-    assert_eq!(
-        post_tool_nudges, 1,
-        "post-tool empty response uses the tool-aware wording"
+        .on_call(1, |options| {
+            let prompt = format!("{:?}", options.prompt);
+            assert!(prompt.contains("no tool call was provided"));
+            assert!(prompt.contains("I'll inspect the file now."));
+            MockResponse::text("Recovered without a tool")
+        })
+        .build();
+
+    let result = run_with_mock(model, "inspect it", core_tools()).await;
+    assert_eq!(result.response_text, "Recovered without a tool");
+    assert_eq!(count_persisted_nudges(&result), 0);
+    assert!(
+        !result
+            .final_messages
+            .iter()
+            .any(|message| format!("{message:?}").contains("I'll inspect the file now.")),
+        "malformed assistant narration must remain transient"
     );
+}
+
+#[tokio::test]
+async fn persistent_tool_use_without_calls_fails_after_three_retries() {
+    let model = MockModelBuilder::new()
+        .on_call(0, |_| {
+            MockResponse::text_with_stop("", coco_llm_types::StopReason::ToolUse)
+        })
+        .on_call(1, |_| {
+            MockResponse::text_with_stop("", coco_llm_types::StopReason::ToolUse)
+        })
+        .on_call(2, |_| {
+            MockResponse::text_with_stop("", coco_llm_types::StopReason::ToolUse)
+        })
+        .on_call(3, |_| {
+            MockResponse::text_with_stop("", coco_llm_types::StopReason::ToolUse)
+        })
+        .on_call(4, |_| MockResponse::text("never reached"))
+        .build();
+
+    let result = run_with_mock(model, "use a tool", core_tools()).await;
+    assert_eq!(
+        result.stop_reason.as_deref(),
+        Some("error_missing_tool_calls")
+    );
+    assert_eq!(count_persisted_nudges(&result), 0);
 }

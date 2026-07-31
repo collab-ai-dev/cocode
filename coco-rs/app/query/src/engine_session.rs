@@ -534,6 +534,11 @@ impl QueryEngine {
                 "Failed to provide valid structured output after {cap} attempts"
             ));
         }
+        if let Some(message) =
+            crate::engine_terminal::terminal_anomaly_error_for_stop_reason(&stop_reason)
+        {
+            errors.push(message.to_string());
+        }
 
         coco_types::SessionResultParams {
             session_id: self.session_id.clone(),

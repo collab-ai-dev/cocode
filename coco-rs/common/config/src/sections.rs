@@ -984,8 +984,8 @@ impl SchedulingConfig {
 pub enum EmptyResponsePolicy {
     /// End the turn silently (legacy behavior).
     Off,
-    /// Inject a retry nudge as a meta message and continue the loop,
-    /// capped per user cycle.
+    /// Retry with a prompt-only meta message, capped per user cycle. Recovery
+    /// scaffolding is never committed to durable conversation history.
     #[default]
     Nudge,
 }
