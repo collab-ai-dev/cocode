@@ -125,6 +125,9 @@ pub(in crate::session::session_runtime) struct SessionEngineStateResources {
     pub(in crate::session::session_runtime) file_read_state: Arc<RwLock<FileReadState>>,
     pub(in crate::session::session_runtime) file_history: Option<Arc<RwLock<FileHistoryState>>>,
     pub(in crate::session::session_runtime) app_state: Arc<RwLock<ToolAppState>>,
+    /// Monotone Agent/WebSearch budgets shared by all engines in the session.
+    pub(in crate::session::session_runtime) session_usage:
+        Arc<coco_tool_runtime::SessionUsageLimits>,
     /// Session-scoped `/env` overrides consumed by shell providers before
     /// every child shell spawn. `None` when shell tools are disabled.
     pub(in crate::session::session_runtime) session_env_vars: Option<coco_shell::SessionEnvVars>,
@@ -157,6 +160,7 @@ impl SessionEngineStateResources {
         file_read_state: Arc<RwLock<FileReadState>>,
         file_history: Option<Arc<RwLock<FileHistoryState>>>,
         app_state: Arc<RwLock<ToolAppState>>,
+        session_usage: Arc<coco_tool_runtime::SessionUsageLimits>,
         session_env_vars: Option<coco_shell::SessionEnvVars>,
         loop_sentinel_state: Arc<Mutex<coco_skills::bundled::loop_skill::LoopSentinelState>>,
         pending_message_store: coco_tool_runtime::PendingMessageStoreRef,
@@ -170,6 +174,7 @@ impl SessionEngineStateResources {
             file_read_state,
             file_history,
             app_state,
+            session_usage,
             session_env_vars,
             loop_sentinel_state,
             pending_message_store,
@@ -195,6 +200,12 @@ impl SessionEngineStateResources {
 
     pub(in crate::session::session_runtime) fn app_state(&self) -> &Arc<RwLock<ToolAppState>> {
         &self.app_state
+    }
+
+    pub(in crate::session::session_runtime) fn session_usage(
+        &self,
+    ) -> &Arc<coco_tool_runtime::SessionUsageLimits> {
+        &self.session_usage
     }
 
     pub(in crate::session::session_runtime) fn session_env_vars(

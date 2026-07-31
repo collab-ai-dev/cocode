@@ -69,7 +69,7 @@ dispatch, with prompts the script computes at runtime from `args`, from files, o
 from a previous agent's output. The equivalent `Agent` tool call would have been
 screened.
 
-### 1.2 Hand-off review — NO, absent on all three boundaries
+### 1.2 Hand-off review — originally absent, now implemented
 
 CC's three `tin` call sites:
 
@@ -79,9 +79,11 @@ CC's three `tin` call sites:
 | `:387866` | workflow `agent()` | prepends to `result.text`; for `{schema}` agents routes to `failures` + a `workflow_log` line instead, because their text channel is not their return channel |
 | `:399158` | **sync `Agent` tool** | prepends a text block to the tool result content |
 
-coco-rs has **zero** hand-off review. Its only classifier invocation is the
-pre-execution tool-call gate. So this half is not a workflow bug — it is missing
-everywhere, and the workflow path is merely one of three.
+The first review found zero hand-off call sites. That finding is now closed:
+`coordinator/src/agent_handle/handoff.rs` owns the two-stage classifier, and
+`coordinator/src/agent_handle/spawn.rs` invokes it for synchronous, background,
+and workflow-backed completion paths. It remains cross-cutting rather than a
+workflow-only concern.
 
 ---
 
@@ -129,7 +131,7 @@ returning a non-empty transcript projection (`:345862`).
 | Finding | Genuine? | Severity | Scope |
 |---|---|---|---|
 | Workflow `agent()` bypasses the auto-mode dispatch screen | **Yes** | Medium — defense-in-depth + parity hole; per-call classification still gates execution | **Workflow only** |
-| No hand-off review on any subagent boundary | Yes, as a missing feature | Low — advisory, fails open, never blocks | All three paths |
+| Hand-off review on all subagent boundaries | **Resolved** | Advisory, fails open, never blocks | All three paths |
 
 ---
 
@@ -232,24 +234,22 @@ holds `auto_mode_rules` / `model_runtimes` / `usage_accounting`, and
 `WorkflowSpawnContext` capturing `ctx.messages` at launch (it already captures
 `permission_context`).
 
-### 3.5 Hand-off review — proposed, not scheduled
+### 3.5 Hand-off review — implemented in the coordinator
 
-Same handle, second method (`review_handoff`), called from the three completion
-sites. It should carry CC's two guards or it will be expensive and noisy:
-`Cpd`-equivalent transcript projection (skip when nothing block-relevant
-happened) and the `{schema}` routing rule (warning goes to `failures` + a log
-line, never into the structured payload the script is about to parse).
-
-**Recommendation: defer.** It is advisory, fails open, and costs a classifier
-round-trip per subagent completion. It should be a deliberate product decision
-about that cost — not something folded into a correctness fix.
+The follow-up implementation lives at the completion boundary rather than on
+`SubagentDispatchScreen`: `coordinator/src/agent_handle/handoff.rs` projects the
+transcript, runs both classifier stages, and returns the original result with an
+advisory warning when required. Keeping it in the coordinator gives all three
+completion paths one policy and avoids coupling post-run review to the
+pre-dispatch tool context.
 
 ---
 
 ## 4. Status
 
-**§3.1–3.4 (the dispatch screen) are implemented.** §3.5 (the hand-off review)
-is not, and is deliberately deferred per the recommendation above.
+**§3.1–3.5 are implemented.** The dispatch screen covers workflow calls that
+bypass the normal tool pipeline; the coordinator hand-off classifier covers
+all completion paths.
 
 Shipped:
 

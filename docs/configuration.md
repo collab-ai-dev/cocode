@@ -345,6 +345,9 @@ cocode owns a large number of `COCO_*` variables; most are internal tuning knobs
 | `COCO_CONFIG_DIR` | Relocates the config home. Also changes the global config file to `$COCO_CONFIG_DIR/global.json` — see [above](#the-global-config-file-is-not-in-the-config-home). |
 | `COCO_FEATURE_<KEY>` | Toggles one feature gate. See [the env form](#the-coco_feature_-environment-form). |
 | `COCO_BARE_MODE` | Truthy value skips session-start and per-turn background housekeeping: auto-dream, memory extraction, prompt suggestion, and stale-directory sweeps. Equivalent to the `--bare` flag, which sets this variable for the process. |
+| `COCO_MAX_SUBAGENTS_PER_SESSION` | Positive integer limiting Agent tool dispatches in one session. Default `200`; invalid or non-positive values fall back to the default. |
+| `COCO_MAX_SUBAGENT_SPAWN_DEPTH` | Positive integer limiting nested Agent depth. Default `3`; invalid or non-positive values fall back to the default. |
+| `COCO_MAX_WEB_SEARCHES_PER_SESSION` | Positive integer limiting WebSearch calls in one session. Default `200`; invalid or non-positive values fall back to the default. |
 | `COCO_MODEL_MAIN` | Overrides the Main model role. Deliberately environment-only — it is the escape hatch that must work before `settings.json` is parsed. Per-role models go through `settings.models.*`. |
 | `COCO_AUTH_CREDENTIAL_STORE` | Credential backend: `auto` (keychain first, file fallback), `file` (only `<config home>/auth/*.json`, mode `0600`), `keyring` (keychain only, error if unavailable), or `ephemeral` (in-memory, nothing persists). Case-insensitive. An unrecognized value logs a warning and falls through to `global.json`'s `auth_credential_store`, then to a build-provenance default. |
 | `COCO_EVENT_HUB_URL` | Event Hub WebSocket endpoint. Must start with `ws://` or `wss://` or startup fails. Overridden by `--event-hub-url`; overrides `settings.event_hub_url`. |

@@ -342,6 +342,15 @@ pub enum EnvKey {
     /// both ignored — every spawn runs synchronously. Useful for sandbox / CI
     /// environments that want deterministic blocking behavior.
     CocoBackgroundTasksDisable,
+    /// Maximum Agent tool dispatches charged to one conversation session.
+    /// Values below one or malformed values fall back to the default.
+    CocoMaxSubagentsPerSession,
+    /// Maximum nested Agent spawn depth. Values below one or malformed values
+    /// fall back to the upstream-compatible default.
+    CocoMaxSubagentSpawnDepth,
+    /// Maximum WebSearch calls charged to one conversation session.
+    /// Values below one or malformed values fall back to the default.
+    CocoMaxWebSearchesPerSession,
     /// Override `api.retry.max_retries`. Applies after settings.json and is
     /// clamped by `ApiRetryConfig::finalize`.
     CocoApiMaxRetries,
@@ -541,6 +550,9 @@ impl EnvKey {
             Self::CocoPromptSuggestionDisable => "COCO_PROMPT_SUGGESTION_DISABLE",
             Self::CocoBareMode => "COCO_BARE_MODE",
             Self::CocoBackgroundTasksDisable => "COCO_BACKGROUND_TASKS_DISABLE",
+            Self::CocoMaxSubagentsPerSession => "COCO_MAX_SUBAGENTS_PER_SESSION",
+            Self::CocoMaxSubagentSpawnDepth => "COCO_MAX_SUBAGENT_SPAWN_DEPTH",
+            Self::CocoMaxWebSearchesPerSession => "COCO_MAX_WEB_SEARCHES_PER_SESSION",
             Self::CocoApiMaxRetries => "COCO_API_MAX_RETRIES",
             Self::CocoApiRetryWatchdog => "COCO_API_RETRY_WATCHDOG",
             Self::CocoPluginsDisableOfficialMarketplace => {

@@ -300,10 +300,11 @@ fn all_agent_disallowed_tools_excludes_agent() {
 #[test]
 fn subagent_disallowed_tools_gates_agent_on_depth() {
     // Below the limit: Agent is allowed so the child can still spawn.
-    let below = crate::subagent_disallowed_tools(/*plan_mode*/ false, /*child_depth*/ 4);
+    let below =
+        crate::subagent_disallowed_tools(/*plan_mode*/ false, crate::SUBAGENT_DEPTH_LIMIT - 1);
     assert!(
         !below.contains(&ToolName::Agent.as_str()),
-        "Agent must be allowed at depth 4 (< {})",
+        "Agent must be allowed below depth {}",
         crate::SUBAGENT_DEPTH_LIMIT
     );
     // At the limit: Agent is still visible to the leaf. The AgentTool
@@ -355,11 +356,13 @@ fn async_clamp_denies_non_async_safe_builtins_keeps_async_safe() {
 fn async_clamp_gates_agent_on_depth() {
     // The depth gate is hoisted above the async clamp: below the limit a
     // background spawn keeps Agent (fg + bg share one ceiling).
-    let below =
-        crate::async_subagent_disallowed_tools(/*plan_mode*/ false, /*child_depth*/ 4);
+    let below = crate::async_subagent_disallowed_tools(
+        /*plan_mode*/ false,
+        crate::SUBAGENT_DEPTH_LIMIT - 1,
+    );
     assert!(
         !below.contains(&ToolName::Agent.as_str()),
-        "Agent must be allowed for a background spawn at depth 4"
+        "Agent must be allowed for a background spawn below the depth limit"
     );
     // Other non-async-safe builtins stay denied regardless of depth.
     assert!(below.contains(&ToolName::Repl.as_str()));

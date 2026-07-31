@@ -175,7 +175,7 @@ CC's deliberately narrow empty-shape test (`[]`, `{}`, `{"k": []}` — not
 | `isolation: 'remote'` runner (~110 lines, width-50 semaphore) | rejected with a message | Dead in **both** CC bundles (`:387393` throws unconditionally). Porting shipped-but-fenced code is pure cost. |
 | Adopt path + `scriptSha256` content pin (`sEd` `:388865`) | absent | coco resume is same-session and always goes through `checkPermissions`, so the human is in the loop. The pin exists in CC precisely because adopt has no dialog. Revisit **with** the daemon-worker lifecycle, not before. |
 | Server-authored `workflow_launch` carrier + `/__remote-workflow` | absent | Needs the CCR transport coco doesn't ship. |
-| Workflow subagents denied `Agent` outright (`eMs.disallowedTools`) | depth-gated (`< 5`) | coco's deliberate depth model; `Workflow` itself *is* denied, so the recursion guard holds. |
+| Workflow subagents denied `Agent` outright (`eMs.disallowedTools`) | depth-gated (default `< 3`, operator-configurable) | coco's deliberate depth model; `Workflow` itself *is* denied, so the recursion guard holds. |
 | Abort returns a forever-pending promise so no `catch` can observe it | `CancellationToken` ends the run | coco's is stricter, not weaker. |
 | `meta.phases[].model` | parsed, unused | Unused in CC too (`:275733`, no consumer) — matching the inertness is correct. |
 
@@ -291,9 +291,10 @@ Both need something outside the workflow subsystem before they are worth doing.
 2. **`ultracode` human-origin gate** — see §4.6. Blocked on a prompt-origin
    signal coco does not have.
 
-Plus the deliberate divergences in §3, and the **hand-off review** half of the
-auto-mode work (`tin`, runtime_core §7.4): advisory, never blocks, and absent on
-all three of coco's subagent boundaries — a product decision, not a gap.
+The earlier **hand-off review** gap is now closed. `coordinator/src/agent_handle/handoff.rs`
+implements the two-stage advisory classifier and the synchronous, background,
+and workflow completion paths call it. The warning remains fail-open and never
+blocks result delivery, matching the upstream role of this review.
 
 ## 6. Where the analysis was wrong or thin
 

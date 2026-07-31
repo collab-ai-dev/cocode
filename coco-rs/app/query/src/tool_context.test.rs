@@ -61,6 +61,7 @@ fn factory_with_live_rules(
         task_handle: None,
         permission_bridge: None,
         app_state: None,
+        session_usage: Arc::new(coco_tool_runtime::SessionUsageLimits::default()),
         auto_mode_state: None,
         subagent_screen: None,
         file_read_state: None,
