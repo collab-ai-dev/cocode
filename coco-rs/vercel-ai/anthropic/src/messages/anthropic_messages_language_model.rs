@@ -36,6 +36,7 @@ use crate::anthropic_config::AnthropicConfig;
 use crate::anthropic_error::AnthropicFailedResponseHandler;
 use crate::cache_control::CacheControlValidator;
 use crate::sanitize_json_schema::sanitize_json_schema;
+use crate::tool_schema_alias::ToolSchemaAliases;
 
 use super::anthropic_messages_api::AnthropicCitation;
 use super::anthropic_messages_api::AnthropicMessagesResponse;
@@ -56,6 +57,7 @@ use super::convert_anthropic_usage::convert_anthropic_usage;
 use super::convert_to_anthropic_messages::ToolNameMapping;
 use super::convert_to_anthropic_messages::convert_to_anthropic_messages_full;
 use super::map_anthropic_stop_reason::map_anthropic_stop_reason;
+use super::prepare_tools::PreparedAnthropicTools;
 use super::prepare_tools::prepare_anthropic_tools;
 
 /// Type alias for the result of `get_args()`: (body, headers, warnings).
@@ -63,6 +65,13 @@ use super::prepare_tools::prepare_anthropic_tools;
 /// [`AnthropicMessagesLanguageModel::get_args`]. Tuple is
 /// `(body, headers, warnings)`.
 pub type GetArgsResult = (Value, HashMap<String, String>, Vec<Warning>);
+
+struct AnthropicRequestArgs {
+    body: Value,
+    headers: HashMap<String, String>,
+    warnings: Vec<Warning>,
+    tool_schema_aliases: ToolSchemaAliases,
+}
 
 /// Model capabilities for a given model family.
 struct ModelCapabilities {
@@ -289,6 +298,15 @@ impl AnthropicMessagesLanguageModel {
         options: &LanguageModelV4CallOptions,
         stream: bool,
     ) -> Result<GetArgsResult, AISdkError> {
+        let args = self.get_args_with_aliases(options, stream)?;
+        Ok((args.body, args.headers, args.warnings))
+    }
+
+    fn get_args_with_aliases(
+        &self,
+        options: &LanguageModelV4CallOptions,
+        stream: bool,
+    ) -> Result<AnthropicRequestArgs, AISdkError> {
         let mut warnings = Vec::new();
         let (mut anthropic_options, raw_provider_options) =
             extract_anthropic_options(&options.provider_options, &self.config.provider)
@@ -486,8 +504,18 @@ impl AnthropicMessagesLanguageModel {
                 Some(&mut cache_validator),
             )
         };
-        warnings.extend(prepared.warnings);
-        let mut betas = prepared.betas;
+        let PreparedAnthropicTools {
+            tools,
+            tool_choice,
+            warnings: tool_warnings,
+            betas: tool_betas,
+            aliases: tool_schema_aliases,
+        } = prepared;
+        tool_schema_aliases
+            .project_message_tool_inputs(&mut messages)
+            .map_err(|error| AISdkError::new(error.to_string()))?;
+        warnings.extend(tool_warnings);
+        let mut betas = tool_betas;
         betas.extend(betas_from_messages);
 
         // Resolve all capability/topology/knob-driven betas in one
@@ -574,10 +602,10 @@ impl AnthropicMessagesLanguageModel {
         body["messages"] = Value::Array(messages);
 
         // Tools
-        if let Some(tools) = prepared.tools {
+        if let Some(tools) = tools {
             body["tools"] = Value::Array(tools);
         }
-        if let Some(tc) = prepared.tool_choice {
+        if let Some(tc) = tool_choice {
             body["tool_choice"] = tc;
         }
 
@@ -900,7 +928,12 @@ impl AnthropicMessagesLanguageModel {
             body = vercel_ai_provider_utils::merge_json_value(&body, &overlay);
         }
 
-        Ok((body, headers, warnings))
+        Ok(AnthropicRequestArgs {
+            body,
+            headers,
+            warnings,
+            tool_schema_aliases,
+        })
     }
 }
 
@@ -1030,7 +1063,12 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
         options: &LanguageModelV4CallOptions,
         abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
-        let (body, headers, warnings) = self.get_args(options, false)?;
+        let AnthropicRequestArgs {
+            body,
+            headers,
+            warnings,
+            tool_schema_aliases,
+        } = self.get_args_with_aliases(options, false)?;
         let url = self.config.url("/messages");
 
         let response: AnthropicMessagesResponse = post_json_to_api_with_client_tapped(
@@ -1127,10 +1165,17 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
                     caller,
                 } => {
                     let is_json_tool = uses_json_response_tool && name == "json";
+                    let mut restored_input = input.clone();
+                    let alias_error = tool_schema_aliases
+                        .restore_input(name, &mut restored_input)
+                        .err();
                     if is_json_tool {
+                        if let Some(error) = alias_error {
+                            return Err(AISdkError::new(error.to_string()));
+                        }
                         is_json_response_from_tool = true;
                         content.push(AssistantContentPart::Text(TextPart {
-                            text: serde_json::to_string(input).unwrap_or_default(),
+                            text: serde_json::to_string(&restored_input).unwrap_or_default(),
                             provider_metadata: None,
                         }));
                     } else {
@@ -1143,11 +1188,15 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
                         content.push(AssistantContentPart::ToolCall(ToolCallPart {
                             tool_call_id: id.clone(),
                             tool_name: name.clone(),
-                            input: input.clone(),
+                            input: restored_input,
                             provider_executed: None,
                             provider_metadata,
-                            invalid: false,
-                            invalid_reason: None,
+                            invalid: alias_error.is_some(),
+                            invalid_reason: alias_error.map(|error| {
+                                vercel_ai_provider::ToolInputInvalidReason::SchemaViolation {
+                                    message: error.to_string(),
+                                }
+                            }),
                         }));
                     }
                 }
@@ -1476,7 +1525,12 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
         options: &LanguageModelV4CallOptions,
         abort_signal: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
-        let (body, headers, warnings) = self.get_args(options, true)?;
+        let AnthropicRequestArgs {
+            body,
+            headers,
+            warnings,
+            tool_schema_aliases,
+        } = self.get_args_with_aliases(options, true)?;
         let url = self.config.url("/messages");
         let include_raw = options.include_raw_chunks.unwrap_or(false);
 
@@ -1529,6 +1583,7 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
             citation_documents,
             provider_options_name,
             used_custom_provider_key,
+            tool_schema_aliases,
         );
 
         Ok(LanguageModelV4StreamResult {
@@ -1767,6 +1822,7 @@ struct AnthropicStreamState {
     provider_options_name: String,
     /// Whether a custom provider key was used in provider_options
     used_custom_provider_key: bool,
+    tool_schema_aliases: ToolSchemaAliases,
 }
 
 impl AnthropicStreamState {
@@ -1781,6 +1837,7 @@ impl AnthropicStreamState {
         citation_documents: Vec<CitationDocument>,
         provider_options_name: String,
         used_custom_provider_key: bool,
+        tool_schema_aliases: ToolSchemaAliases,
     ) -> Self {
         let mut pending = std::collections::VecDeque::new();
         pending.push_back(LanguageModelV4StreamPart::StreamStart { warnings });
@@ -1810,6 +1867,7 @@ impl AnthropicStreamState {
             mcp_tool_calls: HashMap::new(),
             provider_options_name,
             used_custom_provider_key,
+            tool_schema_aliases,
         }
     }
 
@@ -1936,7 +1994,11 @@ impl AnthropicStreamState {
                                     block.get("name").and_then(|v| v.as_str()),
                                 )
                             {
-                                let input = block.get("input").cloned().unwrap_or(json!({}));
+                                let mut input = block.get("input").cloned().unwrap_or(json!({}));
+                                let alias_error = self
+                                    .tool_schema_aliases
+                                    .restore_input(name, &mut input)
+                                    .err();
                                 let input_str = serde_json::to_string(&input).unwrap_or_default();
 
                                 // Emit full tool-input-start → tool-input-delta → tool-input-end → tool-call sequence
@@ -1960,13 +2022,21 @@ impl AnthropicStreamState {
                                         id: id.to_string(),
                                         provider_metadata: None,
                                     });
-                                self.pending.push_back(LanguageModelV4StreamPart::ToolCall(
+                                let mut tool_call =
                                     vercel_ai_provider::LanguageModelV4ToolCall::new(
                                         id.to_string(),
                                         name.to_string(),
                                         input_str,
-                                    ),
-                                ));
+                                    );
+                                if let Some(error) = alias_error {
+                                    tool_call = tool_call.with_invalid_reason(
+                                        vercel_ai_provider::ToolInputInvalidReason::SchemaViolation {
+                                            message: error.to_string(),
+                                        },
+                                    );
+                                }
+                                self.pending
+                                    .push_back(LanguageModelV4StreamPart::ToolCall(tool_call));
                             }
                         }
                     }
@@ -2243,6 +2313,7 @@ impl AnthropicStreamState {
                                     input_json,
                                     started,
                                     is_json_tool,
+                                    tool_name,
                                     ..
                                 },
                                 ContentBlockDelta::InputJsonDelta { partial_json },
@@ -2250,22 +2321,27 @@ impl AnthropicStreamState {
                                 input_json.push_str(partial_json);
 
                                 if *is_json_tool {
-                                    // Emit as text for JSON response tool
-                                    if !*started {
-                                        *started = true;
+                                    // A projected schema must be reversed on
+                                    // the complete JSON value, so only the
+                                    // identity case can stream raw deltas.
+                                    if !self.tool_schema_aliases.requires_projection(tool_name) {
+                                        if !*started {
+                                            *started = true;
+                                            self.pending.push_back(
+                                                LanguageModelV4StreamPart::TextStart {
+                                                    id: id.clone(),
+                                                    provider_metadata: None,
+                                                },
+                                            );
+                                        }
                                         self.pending.push_back(
-                                            LanguageModelV4StreamPart::TextStart {
+                                            LanguageModelV4StreamPart::TextDelta {
                                                 id: id.clone(),
+                                                delta: partial_json.clone(),
                                                 provider_metadata: None,
                                             },
                                         );
                                     }
-                                    self.pending
-                                        .push_back(LanguageModelV4StreamPart::TextDelta {
-                                            id: id.clone(),
-                                            delta: partial_json.clone(),
-                                            provider_metadata: None,
-                                        });
                                 } else {
                                     // ToolInputStart already emitted in content_block_start
                                     self.pending.push_back(
@@ -2339,7 +2415,60 @@ impl AnthropicStreamState {
                                 dynamic,
                                 provider_executed,
                             } => {
-                                if *is_json_tool {
+                                if *is_json_tool
+                                    && self.tool_schema_aliases.requires_projection(tool_name)
+                                {
+                                    let input_result = if input_json.is_empty() {
+                                        Ok(Value::Object(Default::default()))
+                                    } else {
+                                        vercel_ai_provider_utils::parse_with_repair(input_json)
+                                            .map(|(input, _)| input)
+                                    };
+                                    match input_result {
+                                        Ok(mut input) => {
+                                            match self
+                                                .tool_schema_aliases
+                                                .restore_input(tool_name, &mut input)
+                                            {
+                                                Ok(()) => {
+                                                    let text = serde_json::to_string(&input)
+                                                        .unwrap_or_default();
+                                                    self.pending.push_back(
+                                                        LanguageModelV4StreamPart::TextStart {
+                                                            id: id.clone(),
+                                                            provider_metadata: None,
+                                                        },
+                                                    );
+                                                    self.pending.push_back(
+                                                        LanguageModelV4StreamPart::TextDelta {
+                                                            id: id.clone(),
+                                                            delta: text,
+                                                            provider_metadata: None,
+                                                        },
+                                                    );
+                                                    self.pending.push_back(
+                                                        LanguageModelV4StreamPart::TextEnd {
+                                                            id: id.clone(),
+                                                            provider_metadata: None,
+                                                        },
+                                                    );
+                                                }
+                                                Err(error) => self.pending.push_back(
+                                                    LanguageModelV4StreamPart::Error {
+                                                        error: vercel_ai_provider::StreamError::new(
+                                                            error.to_string(),
+                                                        ),
+                                                    },
+                                                ),
+                                            }
+                                        }
+                                        Err(error) => self.pending.push_back(
+                                            LanguageModelV4StreamPart::Error {
+                                                error: vercel_ai_provider::StreamError::new(error),
+                                            },
+                                        ),
+                                    }
+                                } else if *is_json_tool {
                                     if *started {
                                         self.pending.push_back(
                                             LanguageModelV4StreamPart::TextEnd {
@@ -2372,7 +2501,7 @@ impl AnthropicStreamState {
                                                 }
                                             })
                                     };
-                                    let (input_str, parse_error) = match input_result {
+                                    let (input_str, invalid_reason) = match input_result {
                                         Ok(mut input) => {
                                             if let Some(ptn) = provider_tool_name {
                                                 match ptn.as_str() {
@@ -2402,12 +2531,26 @@ impl AnthropicStreamState {
                                                     _ => {}
                                                 }
                                             }
-                                            (
-                                                serde_json::to_string(&input).unwrap_or_default(),
-                                                None,
-                                            )
+                                            let alias_error = self
+                                                .tool_schema_aliases
+                                                .restore_input(tool_name, &mut input)
+                                                .err();
+                                            let invalid_reason = alias_error.map(|error| {
+                                                vercel_ai_provider::ToolInputInvalidReason::SchemaViolation {
+                                                    message: error.to_string(),
+                                                }
+                                            });
+                                            (serde_json::to_string(&input).unwrap_or_default(), invalid_reason)
                                         }
-                                        Err(err) => (input_json.clone(), Some(err)),
+                                        Err(error) => (
+                                            input_json.clone(),
+                                            Some(
+                                                vercel_ai_provider::ToolInputInvalidReason::JsonParseFailed {
+                                                    raw: input_json.clone(),
+                                                    error,
+                                                },
+                                            ),
+                                        ),
                                     };
 
                                     // Build ToolCall with caller, dynamic, and provider_executed (Gap 2-4)
@@ -2422,13 +2565,8 @@ impl AnthropicStreamState {
                                     if let Some(d) = *dynamic {
                                         tc = tc.with_dynamic(d);
                                     }
-                                    if let Some(error) = parse_error {
-                                        tc = tc.with_invalid_reason(
-                                            vercel_ai_provider::ToolInputInvalidReason::JsonParseFailed {
-                                                raw: input_json.clone(),
-                                                error,
-                                            },
-                                        );
+                                    if let Some(reason) = invalid_reason {
+                                        tc = tc.with_invalid_reason(reason);
                                     }
                                     // Include caller in providerMetadata (Gap 4)
                                     if let Some(c) = caller {
@@ -2632,6 +2770,7 @@ fn create_anthropic_stream(
     citation_documents: Vec<CitationDocument>,
     provider_options_name: String,
     used_custom_provider_key: bool,
+    tool_schema_aliases: ToolSchemaAliases,
 ) -> Pin<Box<dyn Stream<Item = Result<LanguageModelV4StreamPart, AISdkError>> + Send>> {
     let stream = futures::stream::unfold(
         AnthropicStreamState::new(
@@ -2644,6 +2783,7 @@ fn create_anthropic_stream(
             citation_documents,
             provider_options_name,
             used_custom_provider_key,
+            tool_schema_aliases,
         ),
         |mut state| async move {
             loop {
