@@ -356,9 +356,12 @@ pub async fn build_workflow_dialog_payload(
     let entries = coco_workflow::list_workflows(cwd)
         .into_iter()
         .map(|entry| coco_types::WorkflowDialogEntry {
-            name: entry.name,
-            description: entry.description,
-            source_path: entry.source_path.display().to_string(),
+            name: entry.meta.name,
+            description: entry.meta.description,
+            source_path: match entry.origin {
+                coco_workflow::WorkflowOrigin::Local(path) => Some(path.display().to_string()),
+                coco_workflow::WorkflowOrigin::Bundled => None,
+            },
         })
         .collect();
     coco_types::WorkflowDialogPayload { entries }

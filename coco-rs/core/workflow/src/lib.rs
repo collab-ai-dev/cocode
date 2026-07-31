@@ -1,14 +1,19 @@
 //! Dynamic workflow source loading and validation.
 
+pub mod bundled;
 mod meta;
 mod source;
 
+pub use bundled::BundledWorkflow;
+pub use bundled::bundled_workflow;
+pub use bundled::bundled_workflows;
 pub use meta::WorkflowMeta;
 pub use meta::WorkflowPhaseMeta;
 pub use meta::WorkflowScript;
 pub use meta::parse_workflow_meta;
 pub use meta::parse_workflow_script;
 pub use source::MAX_WORKFLOW_SOURCE_BYTES;
+pub use source::WorkflowOrigin;
 pub use source::WorkflowRegistryEntry;
 pub use source::WorkflowSourceInput;
 pub use source::WorkflowSourceKind;

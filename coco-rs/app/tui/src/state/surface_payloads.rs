@@ -897,7 +897,8 @@ pub struct WorkflowPickerState {
 pub struct WorkflowPickerEntry {
     pub name: String,
     pub description: String,
-    pub source_path: String,
+    /// `None` for a workflow bundled into the binary.
+    pub source_path: Option<String>,
 }
 
 impl WorkflowPickerState {

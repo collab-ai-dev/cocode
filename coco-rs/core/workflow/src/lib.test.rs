@@ -4,7 +4,9 @@ use pretty_assertions::assert_eq;
 
 use crate::WorkflowError;
 use crate::WorkflowMeta;
+use crate::WorkflowOrigin;
 use crate::WorkflowPhaseMeta;
+use crate::WorkflowRegistryEntry;
 use crate::WorkflowSourceInput;
 use crate::WorkflowSourceKind;
 use crate::list_workflows;
@@ -105,11 +107,93 @@ fn test_list_workflows_uses_precedence_and_meta_names() {
 
     let entries = list_workflows(Some(dir.path().to_path_buf()));
 
-    assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0].name, "Release");
-    assert_eq!(entries[0].description, "Ship it");
-    assert_eq!(entries[1].name, "Audit");
-    assert_eq!(entries[1].description, "Check it");
+    // Local files come first, de-duplicated by `meta.name` with the earlier
+    // lookup dir winning; the bundled registry is appended behind them.
+    let local: Vec<(&str, &str)> = entries
+        .iter()
+        .filter(|entry| matches!(entry.origin, WorkflowOrigin::Local(_)))
+        .map(|entry| (entry.meta.name.as_str(), entry.meta.description.as_str()))
+        .collect();
+    assert_eq!(local, [("Release", "Ship it"), ("Audit", "Check it")]);
+    let bundled: Vec<&str> = entries
+        .iter()
+        .filter(|entry| entry.origin == WorkflowOrigin::Bundled)
+        .map(|entry| entry.meta.name.as_str())
+        .collect();
+    assert_eq!(bundled, ["deep-research"]);
+}
+
+/// A local file wins over a bundled workflow of the same name — outright, not
+/// merged — and the bundled row disappears from the listing entirely.
+#[test]
+fn test_list_workflows_local_file_shadows_a_bundled_workflow() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let workflows = dir
+        .path()
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("workflows");
+    fs::create_dir_all(&workflows).expect("create workflows dir");
+    fs::write(
+        workflows.join("mine.js"),
+        r#"export const meta = { name: "deep-research", description: "Mine" };"#,
+    )
+    .expect("write shadowing workflow");
+
+    let entries = list_workflows(Some(dir.path().to_path_buf()));
+
+    let matching: Vec<&WorkflowRegistryEntry> = entries
+        .iter()
+        .filter(|entry| entry.meta.name == "deep-research")
+        .collect();
+    assert_eq!(matching.len(), 1);
+    assert_eq!(matching[0].meta.description, "Mine");
+    assert_eq!(
+        matching[0].origin,
+        WorkflowOrigin::Local(workflows.join("mine.js"))
+    );
+}
+
+/// The same precedence must hold on the resolve path, not just the listing —
+/// otherwise the picker would show one script and the launcher would run another.
+#[test]
+fn test_resolve_named_workflow_prefers_a_local_file_over_the_bundled_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let workflows = dir
+        .path()
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("workflows");
+    fs::create_dir_all(&workflows).expect("create workflows dir");
+    let source = r#"export const meta = { name: "deep-research", description: "Mine" };"#;
+    fs::write(workflows.join("mine.js"), source).expect("write shadowing workflow");
+
+    let spec = resolve_workflow_source(WorkflowSourceInput {
+        name: Some("deep-research".to_string()),
+        cwd: Some(dir.path().to_path_buf()),
+        ..Default::default()
+    })
+    .expect("resolve");
+
+    assert_eq!(spec.source, source);
+    assert_eq!(spec.source_path, Some(workflows.join("mine.js")));
+}
+
+/// A bundled workflow resolves by name with no on-disk provenance — the run
+/// persists its own copy of the script, so `source_path` must stay `None`
+/// rather than pointing at a path that never existed.
+#[test]
+fn test_resolve_named_workflow_falls_back_to_the_bundled_registry() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let spec = resolve_workflow_source(WorkflowSourceInput {
+        name: Some("deep-research".to_string()),
+        cwd: Some(dir.path().to_path_buf()),
+        ..Default::default()
+    })
+    .expect("resolve");
+
+    assert_eq!(spec.kind, WorkflowSourceKind::Name("deep-research".into()));
+    assert_eq!(spec.source_path, None);
+    assert!(spec.source.contains("VOTES_PER_CLAIM"));
 }
 
 #[test]

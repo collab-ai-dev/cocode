@@ -22,6 +22,29 @@ body but keeps the path as provenance** (`source_path`).
 - Registry scans visit files in sorted order for determinism and silently
   skip unreadable / oversize / non-UTF-8 / meta-less files; the
   determinism check is intentionally NOT run during indexing.
+- **Local shadows bundled.** A local file wins over a `bundled` workflow of
+  the same `meta.name` outright — on the resolve path *and* in
+  `list_workflows`, which must agree or the picker shows one script while
+  the launcher runs another. `WorkflowOrigin` reports which won.
+
+## Bundled workflows (`bundled.rs`)
+
+`include_str!`'d scripts compiled into the binary; today only
+`deep-research`. The registry stores **only the source** and parses
+`meta` back out of it on first use (`LazyLock`), so the script literal is
+the single source of truth for name / description / `whenToUse` / phases.
+A script whose meta fails to parse is dropped rather than panicking;
+`bundled.test.rs` is what makes that a build-time failure instead of a
+silently-missing workflow.
+
+A bundled workflow resolves with `source_path: None` — it has no on-disk
+provenance, and the launcher persists the resolved source into the run's
+own directory, which is what resume replays from.
+
+`core/workflow-runtime/tests/deep_research.rs` runs the harness in the
+real QuickJS realm against a stub host. That test is the only thing
+proving the ~330 lines of embedded JavaScript actually execute (nothing
+in the build type-checks a string), so treat it as load-bearing.
 
 ## Validation invariants
 

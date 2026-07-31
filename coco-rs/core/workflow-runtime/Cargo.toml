@@ -21,5 +21,10 @@ tokio-util.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+# The bundled `deep-research` harness lives in `coco-workflow`; the
+# `tests/deep_research.rs` integration test is the only thing that proves that
+# script actually executes in this crate's realm. `coco-workflow` does not
+# depend on this crate, so the dev-edge introduces no cycle.
+coco-workflow.workspace = true
 pretty_assertions.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time", "sync"] }

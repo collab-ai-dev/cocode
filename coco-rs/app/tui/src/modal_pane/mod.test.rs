@@ -90,12 +90,12 @@ async fn workflow_picker_confirm_dispatches_selected_workflow() {
                 WorkflowPickerEntry {
                     name: "release".to_string(),
                     description: "Ship it".to_string(),
-                    source_path: ".coco/workflows/release.ts".to_string(),
+                    source_path: Some(".coco/workflows/release.ts".to_string()),
                 },
                 WorkflowPickerEntry {
                     name: "audit".to_string(),
                     description: "Inspect auth".to_string(),
-                    source_path: ".claude/workflows/audit.js".to_string(),
+                    source_path: Some(".claude/workflows/audit.js".to_string()),
                 },
             ],
             filter: "auth".to_string(),

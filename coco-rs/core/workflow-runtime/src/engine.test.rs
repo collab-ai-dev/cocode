@@ -1118,3 +1118,60 @@ fn repeated_child_invocations_get_distinct_groups() {
         .collect();
     assert_eq!(phases, vec!["▸ child", "▸ child #2"]);
 }
+
+/// The realm has no Node/web globals, so `console` has to be provided or the
+/// reflex every JS author has kills the run partway through with a
+/// ReferenceError. It routes to the same progress channel as `log()`.
+#[test]
+fn console_methods_route_to_the_log_channel() {
+    let host = Arc::new(FakeHost::default());
+    let script = r#"
+      console.log('plain');
+      console.warn('a', 1, true);
+      console.error({ k: 'v' });
+      return 'ok';
+    "#;
+    let value = run(host.clone(), script, serde_json::Value::Null).expect("run");
+
+    assert_eq!(value, serde_json::json!("ok"));
+    let logs: Vec<String> = host
+        .progress
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|event| match event {
+            WorkflowProgressEvent::WorkflowLog { message } => Some(message.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(logs, vec!["plain", "a 1 true", r#"{"k":"v"}"#]);
+}
+
+/// A value `JSON.stringify` cannot handle must degrade to a string rather than
+/// throwing out of the log call and taking the run down with it.
+#[test]
+fn console_falls_back_to_string_for_unserializable_values() {
+    let host = Arc::new(FakeHost::default());
+    let script = r#"
+      const cyclic = {};
+      cyclic.self = cyclic;
+      console.log(cyclic);
+      console.log(undefined);
+      return 'ok';
+    "#;
+    let value = run(host.clone(), script, serde_json::Value::Null).expect("run");
+
+    assert_eq!(value, serde_json::json!("ok"));
+    let logs: Vec<String> = host
+        .progress
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|event| match event {
+            WorkflowProgressEvent::WorkflowLog { message } => Some(message.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(logs.len(), 2);
+    assert_eq!(logs[1], "undefined");
+}

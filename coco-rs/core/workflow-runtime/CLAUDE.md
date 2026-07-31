@@ -76,8 +76,19 @@ explicit no-op is the honest version of "silently does nothing".
   is published only on first sight of a title.
 - `workflow(nameOrRef, args?)` — host-backed at depth 0, always throws
   `WORKFLOW_NESTING_LIMIT_ERROR` at depth ≥ 1 (one-level nesting).
+- `console` — `log`/`info`/`warn`/`error`/`debug`/`trace` all shim onto the
+  `log()` channel. Not a convenience: the realm is bare ECMAScript, so
+  without it `console.log` is a ReferenceError that kills the run.
 - `args` (frozen JSON input) and `budget`
   (`total`/`spent()`/`remaining()`, `Infinity` when no token cap).
+
+**The realm's whole non-intrinsic surface is that list.** No `URL`, `fetch`,
+`TextEncoder`, `crypto`, `process`, `require` — and no `setTimeout` /
+`clearTimeout` (the one global the reference provides that this realm does
+not; adding them needs abort-aware host tracking, so a script must not
+assume timers). The missing `URL` is load-bearing rather than incidental:
+the bundled `deep-research` harness parses hostnames with a WHATWG-shaped
+regex *because* of it.
 
 ## Sandbox (`sandbox.rs`)
 

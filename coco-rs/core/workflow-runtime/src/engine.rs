@@ -354,6 +354,27 @@ fn install_globals<'js>(ctx: &Ctx<'js>, setup: GlobalsSetup) -> rquickjs::Result
         )?;
     }
 
+    // console — a sanitizing shim onto the same progress channel as `log()`.
+    // The realm is a bare ECMAScript one: no Node and no web globals, so
+    // without this the reflex every JS author has (`console.log`) kills the run
+    // with a ReferenceError partway through. Non-strings render as JSON so an
+    // object logs as data rather than `[object Object]`, and a cyclic or
+    // unserializable value falls back to `String()` instead of throwing out of
+    // the log call.
+    ctx.eval::<(), _>(
+        r#"(() => {
+          const render = (value) => {
+            if (typeof value === 'string') return value;
+            try { return JSON.stringify(value) ?? String(value); }
+            catch (_) { return String(value); }
+          };
+          const emit = (...args) => { globalThis.log(args.map(render).join(' ')); };
+          globalThis.console = Object.freeze({
+            log: emit, info: emit, warn: emit, error: emit, debug: emit, trace: emit,
+          });
+        })()"#,
+    )?;
+
     // phase(title) — sync; interns the title and emits the group node once.
     // Re-entering a phase (or naming one already declared in `meta.phases`)
     // resolves to the same index instead of forking a second group.

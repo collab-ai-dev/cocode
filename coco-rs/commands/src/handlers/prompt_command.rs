@@ -173,6 +173,89 @@ impl CommandHandler for StaticPromptHandler {
     }
 }
 
+/// Handler for a slash command projected from a workflow definition
+/// (`/deep-research`, or any script in the workflow lookup dirs).
+///
+/// The command **executes nothing**. It expands to text telling the model the
+/// workflow's name, description, `whenToUse` and phase list, then hands it the
+/// exact `Workflow(...)` call to make. That indirection is deliberate: the human
+/// path (`/deep-research <question>`) and the model path converge on the same
+/// tool call, which is also the one place permission rules see it.
+///
+/// Advertising the phases is the workflow's own cost disclosure — a reader sees
+/// "3-vote adversarial verification per claim" *before* ~100 subagents run.
+pub struct WorkflowLaunchPromptHandler {
+    /// The workflow's `meta.name` — both the command name and the `Workflow`
+    /// tool's `name` argument.
+    pub name: String,
+    pub description: String,
+    pub when_to_use: Option<String>,
+    /// `meta.phases`, rendered as `- title: detail` lines.
+    pub phases: Vec<(String, Option<String>)>,
+    pub progress_message: String,
+}
+
+impl WorkflowLaunchPromptHandler {
+    fn build_prompt(&self, args: &str) -> String {
+        let mut text = format!(
+            "Run the \"{}\" workflow.\n\n{}",
+            self.name, self.description
+        );
+        if let Some(when_to_use) = self
+            .when_to_use
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+        {
+            text.push_str("\n\n");
+            text.push_str(when_to_use);
+        }
+        if !self.phases.is_empty() {
+            text.push_str("\n\nPhases:");
+            for (title, detail) in &self.phases {
+                match detail.as_deref().filter(|detail| !detail.is_empty()) {
+                    Some(detail) => text.push_str(&format!("\n- {title}: {detail}")),
+                    None => text.push_str(&format!("\n- {title}")),
+                }
+            }
+        }
+        // JSON-encode both fields: the model has to reproduce a syntactically
+        // valid call, and a question containing quotes or newlines otherwise
+        // would not round-trip.
+        let name = json_string(&self.name);
+        let args = args.trim();
+        let invocation = if args.is_empty() {
+            format!("{{ name: {name} }}")
+        } else {
+            format!("{{ name: {name}, args: {} }}", json_string(args))
+        };
+        text.push_str(&format!("\n\nInvoke: Workflow({invocation})"));
+        text
+    }
+}
+
+/// Render `value` as a JSON string literal (`serde_json` never fails on a
+/// `&str`, so the fallback is unreachable rather than lossy).
+fn json_string(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| format!("\"{value}\""))
+}
+
+#[async_trait]
+impl CommandHandler for WorkflowLaunchPromptHandler {
+    async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
+        Ok(CommandResult::Prompt {
+            progress_message: self.progress_message.clone(),
+            parts: vec![PromptPart::Text {
+                text: self.build_prompt(args),
+            }],
+        })
+    }
+
+    fn handler_name(&self) -> &str {
+        &self.name
+    }
+}
+
 /// Prompt handler that opens the workflow picker on bare `/workflow`, while
 /// preserving prompt-command behavior when the user supplies a target/task.
 pub struct WorkflowPromptHandler {
