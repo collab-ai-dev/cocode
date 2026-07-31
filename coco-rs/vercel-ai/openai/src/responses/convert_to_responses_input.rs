@@ -1,7 +1,9 @@
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 use serde_json::Value;
 use serde_json::json;
+use sha2::Digest as _;
 use vercel_ai_provider::AssistantContentPart;
 use vercel_ai_provider::FileRawData;
 use vercel_ai_provider::LanguageModelV4Message;
@@ -19,6 +21,24 @@ use crate::openai_capabilities::SystemMessageMode;
 use super::provider_metadata::is_raw_reasoning;
 use super::provider_metadata::read_compaction_provider_metadata;
 use super::provider_metadata::reasoning_encrypted_content;
+
+const MAX_RESPONSES_CALL_ID_CHARS: usize = 64;
+
+fn responses_call_id(id: &str) -> Cow<'_, str> {
+    if id.chars().count() <= MAX_RESPONSES_CALL_ID_CHARS {
+        return Cow::Borrowed(id);
+    }
+
+    let digest = sha2::Sha256::digest(id.as_bytes());
+    let mut projected = String::with_capacity(37);
+    projected.push_str("call_");
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for byte in &digest[..16] {
+        projected.push(HEX[(byte >> 4) as usize] as char);
+        projected.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    Cow::Owned(projected)
+}
 
 /// Flags indicating which provider tools are present, used for input conversion.
 #[derive(Default)]
@@ -271,33 +291,34 @@ fn convert_assistant_parts(
                 }
 
                 let tool_name = &tc.tool_name;
+                let call_id = responses_call_id(&tc.tool_call_id);
 
                 // Handle provider-specific tool call types
                 if flags.has_local_shell && tool_name == "local_shell" {
                     // Local shell tool calls use a specific format
                     items.push(json!({
                         "type": "local_shell_call",
-                        "call_id": tc.tool_call_id,
+                        "call_id": call_id,
                         "action": tc.input,
                     }));
                 } else if flags.has_shell && tool_name == "shell" {
                     items.push(json!({
                         "type": "shell_call",
-                        "call_id": tc.tool_call_id,
+                        "call_id": call_id,
                         "status": "completed",
                         "action": tc.input,
                     }));
                 } else if flags.has_apply_patch && tool_name == "apply_patch" {
                     items.push(json!({
                         "type": "apply_patch_call",
-                        "call_id": tc.tool_call_id,
+                        "call_id": call_id,
                         "status": "completed",
                         "operation": tc.input,
                     }));
                 } else if flags.has_tool_search && tool_name == "tool_search" {
                     items.push(json!({
                         "type": "tool_search_call",
-                        "call_id": tc.tool_call_id,
+                        "call_id": call_id,
                         "execution": "client",
                         "status": "completed",
                         "arguments": tc.input,
@@ -310,14 +331,14 @@ fn convert_assistant_parts(
                     };
                     items.push(json!({
                         "type": "custom_tool_call",
-                        "call_id": tc.tool_call_id,
+                        "call_id": call_id,
                         "name": tool_name,
                         "input": input_str,
                     }));
                 } else {
                     items.push(json!({
                         "type": "function_call",
-                        "call_id": tc.tool_call_id,
+                        "call_id": call_id,
                         "name": tool_name,
                         "arguments": serde_json::to_string(&tc.input).unwrap_or_default(),
                     }));
@@ -415,6 +436,7 @@ fn convert_tool_parts(
                 }
 
                 let tool_name = result.tool_name.as_str();
+                let call_id = responses_call_id(&result.tool_call_id);
 
                 // Handle provider-specific tool output types
                 if flags.has_local_shell
@@ -423,7 +445,7 @@ fn convert_tool_parts(
                 {
                     items.push(json!({
                         "type": "local_shell_call_output",
-                        "call_id": result.tool_call_id,
+                        "call_id": call_id,
                         "output": value,
                     }));
                     continue;
@@ -435,7 +457,7 @@ fn convert_tool_parts(
                 {
                     items.push(json!({
                         "type": "shell_call_output",
-                        "call_id": result.tool_call_id,
+                        "call_id": call_id,
                         "output": value,
                     }));
                     continue;
@@ -447,7 +469,7 @@ fn convert_tool_parts(
                 {
                     items.push(json!({
                         "type": "apply_patch_call_output",
-                        "call_id": result.tool_call_id,
+                        "call_id": call_id,
                         "output": value,
                     }));
                     continue;
@@ -459,7 +481,7 @@ fn convert_tool_parts(
                         "type": "tool_search_output",
                         "execution": "client",
                         "status": "completed",
-                        "call_id": result.tool_call_id,
+                        "call_id": call_id,
                         "tools": tools,
                     }));
                     continue;
@@ -469,7 +491,7 @@ fn convert_tool_parts(
                     let output = serialize_tool_result_for_responses(&result.output);
                     items.push(json!({
                         "type": "custom_tool_call_output",
-                        "call_id": result.tool_call_id,
+                        "call_id": call_id,
                         "output": output,
                     }));
                     continue;
@@ -478,7 +500,7 @@ fn convert_tool_parts(
                 let output = serialize_tool_result_for_responses(&result.output);
                 items.push(json!({
                     "type": "function_call_output",
-                    "call_id": result.tool_call_id,
+                    "call_id": call_id,
                     "output": output,
                 }));
             }

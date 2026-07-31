@@ -25,6 +25,8 @@ use vercel_ai_provider::LanguageModelV4FileData;
 use vercel_ai_provider::LanguageModelV4StreamPart;
 use vercel_ai_provider::LanguageModelV4StreamResult;
 
+use crate::tool_call_id::ToolCallIdNormalizer;
+
 pub use vercel_ai::StreamMetrics;
 pub use vercel_ai::StreamProcessorConfig;
 
@@ -525,7 +527,7 @@ impl AssistantTurnSnapshotState {
             // ─── Non-content / lifecycle / unhandled ─────────────────
             //
             // StreamStart / Finish / Error / ResponseMetadata / Raw /
-            // ToolResult / ToolInputAvailable / ToolApprovalResponse —
+            // ToolResult —
             // none belong in the assistant content vector. Drop.
             _ => {}
         }
@@ -629,21 +631,35 @@ pub async fn process_stream_with_config(
     // Per-turn assistant content accumulator. Walked at `Finish` to
     // produce the `Arc<AssistantTurnSnapshot>` on `StreamEvent::Finish`.
     let mut turn_state = AssistantTurnSnapshotState::new();
+    let mut tool_call_ids = ToolCallIdNormalizer::default();
 
     while let Some(result) = processor.next().await {
-        let (event, metrics) = match result {
-            Ok(part) => {
+        let (event, metrics, terminate) = match result {
+            Ok(mut part) => {
                 let metrics = processor.metrics();
-                // Update the per-turn assistant accumulator BEFORE converting
-                // to a `StreamEvent`. `StreamProcessor` is a thin metrics +
-                // idle-timeout adapter and does no accumulation of its own;
-                // content state is owned here so per-part `provider_metadata`
-                // round-trips intact.
-                turn_state.update(&part);
-                (
-                    stream_event_from_part(part, metrics, &mut turn_state),
-                    metrics,
-                )
+                match tool_call_ids.normalize(&mut part) {
+                    Ok(()) => {
+                        // Update the per-turn assistant accumulator BEFORE
+                        // converting to a `StreamEvent`. `StreamProcessor` is a
+                        // thin metrics + idle-timeout adapter and does no
+                        // accumulation of its own; content state is owned here
+                        // so per-part `provider_metadata` round-trips intact.
+                        turn_state.update(&part);
+                        (
+                            stream_event_from_part(part, metrics, &mut turn_state),
+                            metrics,
+                            false,
+                        )
+                    }
+                    Err(error) => (
+                        Some(StreamEvent::Error {
+                            message: error.to_string(),
+                            metrics,
+                        }),
+                        metrics,
+                        true,
+                    ),
+                }
             }
             Err(e) => {
                 let metrics = processor.metrics();
@@ -653,6 +669,7 @@ pub async fn process_stream_with_config(
                         metrics,
                     }),
                     metrics,
+                    false,
                 )
             }
         };
@@ -739,6 +756,9 @@ pub async fn process_stream_with_config(
 
         if tx.send(event).await.is_err() {
             break; // Receiver dropped
+        }
+        if terminate {
+            break;
         }
     }
 }

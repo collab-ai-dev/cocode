@@ -31,6 +31,7 @@ pub mod prompt_layout;
 pub mod retry;
 pub mod stream;
 pub mod thinking_convert;
+mod tool_call_id;
 mod trace_names;
 pub mod transcription;
 pub mod usage;
