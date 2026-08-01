@@ -21,6 +21,7 @@ Decouple tool → subsystem circular deps; each has a `NoOp*` test double and is
 | `HookHandle` | Pre/PostToolUse hook outcomes |
 | `McpHandle` | MCP tool schema + annotations |
 | `TaskHandle` | Running background tasks — shell/agent (`ShellTaskRequest`, `BackgroundTaskInfo`, `StallInfo`, …) |
+| `AgentLivenessReporter` | Required narrow watchdog heartbeat capability for in-process agents; production wiring has no implicit no-op |
 | `TaskListHandle` | Durable V2 plan-item store; DTOs (`TaskRecord` etc.) live in `coco-types`, re-exported here; `InMemoryTaskListHandle` / `NoOpTaskListHandle` |
 | `TodoListHandle` | Per-agent V1 TodoWrite checklist (`TodoRecord`); `InMemoryTodoListHandle` is the default |
 | `MailboxHandle` | Teammate inbox (`InboxMessage`/`MailboxEnvelope`) |

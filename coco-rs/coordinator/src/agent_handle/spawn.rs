@@ -575,6 +575,7 @@ fn resolve_engine_outcome(
 
 fn spawn_task_event_drain(
     registry: coco_tool_runtime::AgentTaskRegistryRef,
+    liveness: coco_tool_runtime::AgentLivenessReporterRef,
     task_id: String,
     agent_type: String,
     mut event_rx: tokio::sync::mpsc::Receiver<coco_types::CoreEvent>,
@@ -597,22 +598,68 @@ fn spawn_task_event_drain(
         // `Bash(cargo build)` rather than a bare `Bash`.
         let mut pending_summaries: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
+        let mut active_tool_calls = std::collections::HashSet::new();
+        let mut provisional_output: Option<(i32, String)> = None;
         while let Some(event) = event_rx.recv().await {
             match event {
+                coco_types::CoreEvent::Stream(
+                    coco_types::AgentStreamEvent::ResponseAttemptStarted { attempt, .. },
+                ) => {
+                    debug_assert!(
+                        provisional_output.is_none(),
+                        "response attempt {attempt} started before prior subagent output was finalized"
+                    );
+                    provisional_output = Some((attempt, String::new()));
+                    liveness
+                        .record_agent_activity(&task_id, activity_phase(&active_tool_calls))
+                        .await;
+                }
+                coco_types::CoreEvent::Stream(
+                    coco_types::AgentStreamEvent::ResponseAttemptCommitted { attempt, .. },
+                ) => {
+                    if provisional_output
+                        .as_ref()
+                        .is_some_and(|(active_attempt, _)| *active_attempt == attempt)
+                        && let Some((_, output)) = provisional_output.take()
+                        && !output.is_empty()
+                    {
+                        registry.append_output(&task_id, &output).await;
+                    }
+                    liveness
+                        .record_agent_activity(&task_id, activity_phase(&active_tool_calls))
+                        .await;
+                }
+                coco_types::CoreEvent::Stream(
+                    coco_types::AgentStreamEvent::ResponseAttemptDiscarded { attempt, .. },
+                ) => {
+                    if provisional_output
+                        .as_ref()
+                        .is_some_and(|(active_attempt, _)| *active_attempt == attempt)
+                    {
+                        provisional_output = None;
+                    }
+                    liveness
+                        .record_agent_activity(&task_id, activity_phase(&active_tool_calls))
+                        .await;
+                }
                 coco_types::CoreEvent::Stream(coco_types::AgentStreamEvent::TextDelta {
                     delta,
                     ..
                 }) => {
-                    registry
-                        .record_agent_activity(&task_id, AgentExecutionPhase::AwaitingModel)
+                    liveness
+                        .record_agent_activity(&task_id, activity_phase(&active_tool_calls))
                         .await;
-                    registry.append_output(&task_id, &delta).await;
+                    if let Some((_, output)) = provisional_output.as_mut() {
+                        output.push_str(&delta);
+                    } else {
+                        registry.append_output(&task_id, &delta).await;
+                    }
                 }
                 coco_types::CoreEvent::Stream(coco_types::AgentStreamEvent::ThinkingDelta {
                     ..
                 }) => {
-                    registry
-                        .record_agent_activity(&task_id, AgentExecutionPhase::AwaitingModel)
+                    liveness
+                        .record_agent_activity(&task_id, activity_phase(&active_tool_calls))
                         .await;
                 }
                 coco_types::CoreEvent::Stream(coco_types::AgentStreamEvent::ToolUseQueued {
@@ -620,8 +667,8 @@ fn spawn_task_event_drain(
                     name,
                     input,
                 }) => {
-                    registry
-                        .record_agent_activity(&task_id, AgentExecutionPhase::AwaitingModel)
+                    liveness
+                        .record_agent_activity(&task_id, activity_phase(&active_tool_calls))
                         .await;
                     let summary = coco_types::tool_summary::tool_input_summary(&name, &input);
                     if !summary.is_empty() {
@@ -633,7 +680,8 @@ fn spawn_task_event_drain(
                     name,
                     ..
                 }) => {
-                    registry
+                    active_tool_calls.insert(ActiveToolCall::Builtin(call_id.clone()));
+                    liveness
                         .record_agent_activity(&task_id, AgentExecutionPhase::RunningTool)
                         .await;
                     tracker.tool_use_count = tracker.tool_use_count.saturating_add(1);
@@ -657,23 +705,40 @@ fn spawn_task_event_drain(
                     );
                     registry.set_progress(&task_id, tracker.clone()).await;
                 }
-                coco_types::CoreEvent::Stream(
-                    coco_types::AgentStreamEvent::ToolUseCompleted { .. }
-                    | coco_types::AgentStreamEvent::McpToolCallEnd { .. },
-                ) => {
-                    registry
-                        .record_agent_activity(&task_id, AgentExecutionPhase::AwaitingModel)
+                coco_types::CoreEvent::Stream(coco_types::AgentStreamEvent::ToolUseCompleted {
+                    call_id,
+                    ..
+                }) => {
+                    active_tool_calls.remove(&ActiveToolCall::Builtin(call_id));
+                    liveness
+                        .record_agent_activity(&task_id, activity_phase(&active_tool_calls))
                         .await;
                 }
                 coco_types::CoreEvent::Stream(coco_types::AgentStreamEvent::McpToolCallBegin {
+                    call_id,
                     ..
-                })
-                | coco_types::CoreEvent::Protocol(coco_types::ServerNotification::ToolProgress(
-                    _,
-                )) => {
-                    registry
+                }) => {
+                    active_tool_calls.insert(ActiveToolCall::Mcp(call_id));
+                    liveness
                         .record_agent_activity(&task_id, AgentExecutionPhase::RunningTool)
                         .await;
+                }
+                coco_types::CoreEvent::Stream(coco_types::AgentStreamEvent::McpToolCallEnd {
+                    call_id,
+                    ..
+                }) => {
+                    active_tool_calls.remove(&ActiveToolCall::Mcp(call_id));
+                    liveness
+                        .record_agent_activity(&task_id, activity_phase(&active_tool_calls))
+                        .await;
+                }
+                coco_types::CoreEvent::Protocol(coco_types::ServerNotification::ToolProgress(
+                    _progress,
+                )) => {
+                    // Progress is a heartbeat for a known active call. Do not
+                    // invent RunningTool after its completion raced ahead.
+                    let phase = activity_phase(&active_tool_calls);
+                    liveness.record_agent_activity(&task_id, phase).await;
                 }
                 // Per-round usage + cost roll-up so the activity panel shows
                 // live token counts AND spend while the subagent runs. The
@@ -685,8 +750,8 @@ fn spawn_task_event_drain(
                 coco_types::CoreEvent::Protocol(
                     coco_types::ServerNotification::SessionUsageUpdated(snap),
                 ) => {
-                    registry
-                        .record_agent_activity(&task_id, AgentExecutionPhase::AwaitingModel)
+                    liveness
+                        .record_agent_activity(&task_id, activity_phase(&active_tool_calls))
                         .await;
                     if fold_session_usage_into_task_progress(&mut tracker, &snap.totals) {
                         registry.set_progress(&task_id, tracker.clone()).await;
@@ -697,8 +762,10 @@ fn spawn_task_event_drain(
                 // even if a usage snapshot was missed; cost arrives via the
                 // completion payload.
                 coco_types::CoreEvent::Protocol(coco_types::ServerNotification::TurnEnded(p)) => {
-                    registry
-                        .record_agent_activity(&task_id, AgentExecutionPhase::AwaitingModel)
+                    active_tool_calls.clear();
+                    provisional_output = None;
+                    liveness
+                        .record_agent_activity(&task_id, activity_phase(&active_tool_calls))
                         .await;
                     if let Some(usage) = &p.usage {
                         let total = usage
@@ -738,6 +805,22 @@ fn spawn_task_event_drain(
             "subagent event drain ended (event channel closed)"
         );
     });
+}
+
+fn activity_phase(
+    active_tool_calls: &std::collections::HashSet<ActiveToolCall>,
+) -> AgentExecutionPhase {
+    if active_tool_calls.is_empty() {
+        AgentExecutionPhase::AwaitingModel
+    } else {
+        AgentExecutionPhase::RunningTool
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ActiveToolCall {
+    Builtin(String),
+    Mcp(String),
 }
 
 fn fold_session_usage_into_task_progress(
@@ -933,6 +1016,7 @@ impl SwarmAgentHandle {
             }
         };
         let task_registry = self.task_registry().clone();
+        let agent_liveness = self.agent_liveness().clone();
         let is_dream = matches!(
             request.telemetry.fork_label,
             Some(coco_types::ForkLabel::AutoDream)
@@ -1777,6 +1861,7 @@ impl SwarmAgentHandle {
             query_config.agent_task_id = Some(tid.clone());
             spawn_task_event_drain(
                 task_registry.clone(),
+                agent_liveness.clone(),
                 tid.clone(),
                 agent_type_for_engine.clone(),
                 event_rx,
@@ -2180,6 +2265,7 @@ impl SwarmAgentHandle {
 
         let cancel = tokio_util::sync::CancellationToken::new();
         let task_registry = self.task_registry().clone();
+        let agent_liveness = self.agent_liveness().clone();
         let description = request
             .input
             .description
@@ -2240,6 +2326,7 @@ impl SwarmAgentHandle {
         query_config.agent_task_id = Some(task_id.clone());
         spawn_task_event_drain(
             task_registry.clone(),
+            agent_liveness,
             task_id.clone(),
             agent_type.to_string(),
             event_rx,

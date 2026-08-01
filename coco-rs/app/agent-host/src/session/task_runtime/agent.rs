@@ -511,13 +511,6 @@ impl TaskHandle for TaskRuntime {
     async fn set_progress(&self, task_id: &str, progress: coco_types::TaskProgress) {
         self.manager.set_progress(task_id, progress).await;
     }
-    async fn record_agent_activity(
-        &self,
-        task_id: &str,
-        phase: coco_tool_runtime::AgentExecutionPhase,
-    ) {
-        self.manager.record_agent_activity(task_id, phase).await;
-    }
     async fn push_workflow_progress(
         &self,
         task_id: &str,
@@ -695,5 +688,16 @@ impl TaskHandle for TaskRuntime {
             .await;
         let _ = self.manager.transition_terminal(&state.id, status).await;
         let _ = self.manager.mark_notified_once(&state.id).await;
+    }
+}
+
+#[async_trait]
+impl coco_tool_runtime::AgentLivenessReporter for TaskRuntime {
+    async fn record_agent_activity(
+        &self,
+        task_id: &str,
+        phase: coco_tool_runtime::AgentExecutionPhase,
+    ) {
+        self.manager.record_agent_activity(task_id, phase).await;
     }
 }

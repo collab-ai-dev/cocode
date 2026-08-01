@@ -139,6 +139,7 @@ async fn test_spawn_task_event_drain_bridges_task_panel_changed_only() {
     let (panel_tx, mut panel_rx) = tokio::sync::mpsc::channel(8);
     spawn_task_event_drain(
         registry,
+        Arc::new(coco_tool_runtime::NoOpAgentLivenessReporter),
         "task-1".into(),
         "Explore".into(),
         event_rx,
@@ -183,5 +184,107 @@ async fn test_spawn_task_event_drain_bridges_task_panel_changed_only() {
     assert!(
         panel_rx.recv().await.is_none(),
         "only TaskPanelChanged is bridged to the panel sink"
+    );
+}
+
+struct ChannelLivenessReporter {
+    tx: tokio::sync::mpsc::UnboundedSender<coco_tool_runtime::AgentExecutionPhase>,
+}
+
+#[async_trait::async_trait]
+impl coco_tool_runtime::AgentLivenessReporter for ChannelLivenessReporter {
+    async fn record_agent_activity(
+        &self,
+        _task_id: &str,
+        phase: coco_tool_runtime::AgentExecutionPhase,
+    ) {
+        let _ = self.tx.send(phase);
+    }
+}
+
+#[tokio::test]
+async fn event_drain_stays_in_running_tool_until_parallel_batch_finishes() {
+    let registry: coco_tool_runtime::AgentTaskRegistryRef =
+        Arc::new(coco_tool_runtime::NoOpBackgroundTaskHandle);
+    let (phase_tx, mut phase_rx) = tokio::sync::mpsc::unbounded_channel();
+    let liveness = Arc::new(ChannelLivenessReporter { tx: phase_tx });
+    let (event_tx, event_rx) = tokio::sync::mpsc::channel(8);
+    spawn_task_event_drain(
+        registry,
+        liveness,
+        "task-parallel".into(),
+        "Explore".into(),
+        event_rx,
+        None,
+    );
+
+    for call_id in ["first", "second"] {
+        event_tx
+            .send(coco_types::CoreEvent::Stream(
+                coco_types::AgentStreamEvent::ToolUseStarted {
+                    call_id: call_id.into(),
+                    name: "Read".into(),
+                    batch_id: Some("batch".into()),
+                },
+            ))
+            .await
+            .expect("drain alive");
+    }
+    event_tx
+        .send(coco_types::CoreEvent::Stream(
+            coco_types::AgentStreamEvent::ToolUseCompleted {
+                call_id: "first".into(),
+                name: "Read".into(),
+                output: String::new(),
+                is_error: false,
+            },
+        ))
+        .await
+        .expect("drain alive");
+    event_tx
+        .send(coco_types::CoreEvent::Stream(
+            coco_types::AgentStreamEvent::ToolUseCompleted {
+                call_id: "second".into(),
+                name: "Read".into(),
+                output: String::new(),
+                is_error: false,
+            },
+        ))
+        .await
+        .expect("drain alive");
+
+    assert_eq!(
+        phase_rx.recv().await,
+        Some(coco_tool_runtime::AgentExecutionPhase::RunningTool)
+    );
+    assert_eq!(
+        phase_rx.recv().await,
+        Some(coco_tool_runtime::AgentExecutionPhase::RunningTool)
+    );
+    assert_eq!(
+        phase_rx.recv().await,
+        Some(coco_tool_runtime::AgentExecutionPhase::RunningTool)
+    );
+    assert_eq!(
+        phase_rx.recv().await,
+        Some(coco_tool_runtime::AgentExecutionPhase::AwaitingModel)
+    );
+}
+
+#[test]
+fn builtin_and_mcp_lifecycles_with_same_id_are_independent() {
+    let mut active = std::collections::HashSet::from([
+        ActiveToolCall::Builtin("shared".into()),
+        ActiveToolCall::Mcp("shared".into()),
+    ]);
+    active.remove(&ActiveToolCall::Mcp("shared".into()));
+    assert_eq!(
+        activity_phase(&active),
+        coco_tool_runtime::AgentExecutionPhase::RunningTool
+    );
+    active.remove(&ActiveToolCall::Builtin("shared".into()));
+    assert_eq!(
+        activity_phase(&active),
+        coco_tool_runtime::AgentExecutionPhase::AwaitingModel
     );
 }

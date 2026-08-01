@@ -95,6 +95,9 @@ pub struct SwarmAgentHandle {
     /// here are addressable through `Task*` tools the model invokes later.
     /// There is no Swarm-side LocalAgent fallback store.
     task_registry: coco_tool_runtime::AgentTaskRegistryRef,
+    /// Required watchdog heartbeat seam. Kept separate from the broad task
+    /// registry so production wiring cannot silently inherit a no-op default.
+    agent_liveness: coco_tool_runtime::AgentLivenessReporterRef,
     /// Long-lived surface `CoreEvent` sender used to bridge a child
     /// engine's `TaskPanelChanged` snapshots to the TUI. Subagent
     /// engines share the leader's `ToolAppState` (`wire_engine` passes
@@ -196,6 +199,7 @@ impl SwarmAgentHandle {
         cwd: String,
         runtime_config: Arc<coco_config::RuntimeConfig>,
         task_registry: coco_tool_runtime::AgentTaskRegistryRef,
+        agent_liveness: coco_tool_runtime::AgentLivenessReporterRef,
     ) -> Self {
         let roster_store = TeamRosterStore::new(team_manager.clone());
         Self {
@@ -207,6 +211,7 @@ impl SwarmAgentHandle {
             worktree_manager: None,
             side_query: None,
             task_registry,
+            agent_liveness,
             panel_event_tx: None,
             task_list: None,
             transcript_store: None,
@@ -414,6 +419,10 @@ impl SwarmAgentHandle {
 
     pub(crate) fn task_registry(&self) -> &coco_tool_runtime::AgentTaskRegistryRef {
         &self.task_registry
+    }
+
+    pub(crate) fn agent_liveness(&self) -> &coco_tool_runtime::AgentLivenessReporterRef {
+        &self.agent_liveness
     }
 
     /// Required for `resume_agent`; optional for fresh spawns (the bg path

@@ -2,13 +2,13 @@
 //! task subsystem.
 //!
 //!
-//! ## One trait, one Arc
+//! ## Task operations and liveness are separate capabilities
 //!
-//! [`TaskHandle`] is a single trait spanning read / control / spawn /
-//! teammate-registry methods. Test mocks override only what they
-//! exercise (every method has a default no-op / error implementation);
-//! the production impl (`coco_agent_host::task_runtime::TaskRuntime`)
-//! overrides everything.
+//! [`TaskHandle`] spans read / control / spawn / teammate-registry methods.
+//! [`AgentLivenessReporter`] is deliberately separate and required at agent
+//! orchestration boundaries, so a broad task mock's default methods cannot
+//! silently disable watchdog heartbeats. Production implements both on
+//! `coco_agent_host::task_runtime::TaskRuntime`.
 //!
 //! Phase-3a follow-up: split into `TaskReader` / `TaskLifecycle` /
 //! `ShellSpawner` (+ a coordinator-owned `TeammateRegistry`). Tracked
@@ -519,10 +519,6 @@ pub trait TaskHandle: Send + Sync {
 
     async fn set_progress(&self, _task_id: &str, _progress: coco_types::TaskProgress) {}
 
-    /// Record monotonic progress for an in-process background agent.
-    /// Implementations must treat unknown or non-agent task ids as a no-op.
-    async fn record_agent_activity(&self, _task_id: &str, _phase: AgentExecutionPhase) {}
-
     /// Append a workflow progress delta (phase/log/agent) to a
     /// `LocalWorkflow` task row and emit it on `task/progress`.
     async fn push_workflow_progress(
@@ -593,6 +589,28 @@ pub type TaskHandleRef = Arc<dyn TaskHandle>;
 // underlying type is the same `Arc<dyn TaskHandle>`.
 pub type BackgroundTaskHandleRef = TaskHandleRef;
 pub type AgentTaskRegistryRef = TaskHandleRef;
+
+/// Required liveness capability for an in-process background agent.
+///
+/// Kept separate from [`TaskHandle`] so orchestration cannot accidentally
+/// accept the broad handle's default no-op as a watchdog implementation.
+#[async_trait::async_trait]
+pub trait AgentLivenessReporter: Send + Sync {
+    /// Record monotonic progress. Unknown or non-agent task ids are a no-op.
+    async fn record_agent_activity(&self, task_id: &str, phase: AgentExecutionPhase);
+}
+
+pub type AgentLivenessReporterRef = Arc<dyn AgentLivenessReporter>;
+
+/// Explicit test/runtime opt-out for contexts that do not supervise agents.
+/// Production agent-team wiring requires a concrete reporter instead.
+#[derive(Debug, Clone, Default)]
+pub struct NoOpAgentLivenessReporter;
+
+#[async_trait::async_trait]
+impl AgentLivenessReporter for NoOpAgentLivenessReporter {
+    async fn record_agent_activity(&self, _task_id: &str, _phase: AgentExecutionPhase) {}
+}
 
 /// No-op implementation for contexts without background tasks.
 #[derive(Debug, Clone, Default)]
