@@ -66,10 +66,15 @@ in `coco-inference` — see "Multi-Provider Boundaries" in the workspace
   `coco-inference` translates it into a typed rate-limit flag.
 - **Tool-schema aliases are reversible and provider-local:** schemas,
   input examples, and replayed `tool_use.input` use projected wire names;
-  generated inputs are restored before leaving this adapter. Nested objects,
-  arrays, local refs, and combinators share the same request-local map.
-  Alias/original collisions become structured invalid input instead of
-  silently overwriting user data.
+  generated inputs are restored before leaving this adapter. One immutable,
+  `Arc`-shared compiled schema graph covers `$defs`/legacy definitions,
+  arbitrary recursive local refs, object/array applicators, conditionals,
+  dependencies (including the legacy schema form), required-only keys, and
+  alias-aware `patternProperties` in a schema-wide injective namespace.
+  Prompt projection and response restoration are atomic and carry an explicit
+  per-transaction rename ledger; alias/original collisions, unexpected
+  pre-projected keys, or unresolved refs become structured invalid input
+  instead of partially mutating or silently overwriting user data.
 
 ## Extended thinking
 

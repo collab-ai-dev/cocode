@@ -1,12 +1,17 @@
 use std::collections::HashMap;
-use std::collections::HashSet;
+use std::sync::Arc;
 
-use serde_json::Map;
+use regex::Regex;
 use serde_json::Value;
-use sha2::Digest as _;
 use thiserror::Error;
 
-const MAX_PROPERTY_NAME_CHARS: usize = 64;
+mod schema;
+mod transform;
+
+pub(crate) use schema::project_schema;
+#[cfg(test)]
+use schema::{escape_json_pointer, is_valid_property_name};
+use transform::transform_value;
 
 #[derive(Debug, Error)]
 pub(crate) enum ToolSchemaAliasError {
@@ -17,6 +22,15 @@ pub(crate) enum ToolSchemaAliasError {
         wire_name: String,
         original_name: String,
     },
+    #[error(
+        "tool input contains unexpected property form {encountered_name:?}; expected {expected_name:?} before alias transformation"
+    )]
+    UnexpectedPropertyForm {
+        expected_name: String,
+        encountered_name: String,
+    },
+    #[error("tool schema contains an unresolved local reference {reference:?}")]
+    UnresolvedReference { reference: String },
 }
 
 #[derive(Clone, Default)]
@@ -26,16 +40,23 @@ pub(crate) struct ToolSchemaAliases {
 
 #[derive(Clone, Default)]
 pub(crate) struct SchemaProjection {
-    root: AliasNode,
-    definitions: HashMap<String, AliasNode>,
+    root: Arc<AliasNode>,
+    nodes_by_pointer: HashMap<String, Arc<AliasNode>>,
 }
 
 #[derive(Clone, Default)]
 struct AliasNode {
+    pointer: String,
     properties: Vec<PropertyAlias>,
-    items: Option<Box<AliasNode>>,
-    prefix_items: Vec<AliasNode>,
-    alternatives: Vec<AliasNode>,
+    pattern_properties: Vec<PatternProperty>,
+    dependent_schemas: Vec<DependentSchema>,
+    additional_properties: Option<Arc<AliasNode>>,
+    unevaluated_properties: Option<Arc<AliasNode>>,
+    items: Option<Arc<AliasNode>>,
+    prefix_items: Vec<Arc<AliasNode>>,
+    contains: Option<Arc<AliasNode>>,
+    array_item_applicators: Vec<Arc<AliasNode>>,
+    applicators: Vec<Arc<AliasNode>>,
     reference: Option<String>,
 }
 
@@ -43,7 +64,20 @@ struct AliasNode {
 struct PropertyAlias {
     original_name: String,
     wire_name: String,
-    child: AliasNode,
+    child: Arc<AliasNode>,
+}
+
+#[derive(Clone)]
+struct PatternProperty {
+    pattern: Regex,
+    child: Arc<AliasNode>,
+}
+
+#[derive(Clone)]
+struct DependentSchema {
+    original_name: String,
+    wire_name: String,
+    child: Arc<AliasNode>,
 }
 
 #[derive(Clone, Copy)]
@@ -83,7 +117,10 @@ impl ToolSchemaAliases {
         &self,
         messages: &mut [Value],
     ) -> Result<(), ToolSchemaAliasError> {
-        for message in messages {
+        // A replayed prompt is one transaction: never leave earlier messages
+        // projected when a later tool input collides.
+        let mut projected = messages.to_vec();
+        for message in &mut projected {
             let Some(content) = message.get_mut("content").and_then(Value::as_array_mut) else {
                 continue;
             };
@@ -99,10 +136,11 @@ impl ToolSchemaAliases {
                     continue;
                 };
                 if let Some(input) = block.get_mut("input") {
-                    self.project_input(&tool_name, input)?;
+                    self.transform_in_place(&tool_name, input, ProjectionDirection::ToWire)?;
                 }
             }
         }
+        messages.clone_from_slice(&projected);
         Ok(())
     }
 
@@ -112,240 +150,44 @@ impl ToolSchemaAliases {
         input: &mut Value,
         direction: ProjectionDirection,
     ) -> Result<(), ToolSchemaAliasError> {
+        // Tool input projection is atomic. This is intentionally a full JSON
+        // clone: provider inputs are small, while partially renamed input is
+        // impossible for callers to recover safely after an error.
+        let mut projected = input.clone();
+        self.transform_in_place(tool_name, &mut projected, direction)?;
+        *input = projected;
+        Ok(())
+    }
+
+    fn transform_in_place(
+        &self,
+        tool_name: &str,
+        input: &mut Value,
+        direction: ProjectionDirection,
+    ) -> Result<(), ToolSchemaAliasError> {
         let Some(projection) = self.by_tool.get(tool_name) else {
             return Ok(());
         };
-        transform_value(&projection.root, &projection.definitions, input, direction)
+        let mut traversal = transform::TransformTraversal::default();
+        transform_value(
+            &projection.root,
+            &projection.nodes_by_pointer,
+            input,
+            direction,
+            "",
+            &mut traversal,
+        )
     }
 }
 
 impl SchemaProjection {
     fn has_aliases(&self) -> bool {
-        self.root.has_aliases() || self.definitions.values().any(AliasNode::has_aliases)
-    }
-}
-
-impl AliasNode {
-    fn has_aliases(&self) -> bool {
-        self.properties.iter().any(|property| {
-            property.original_name != property.wire_name || property.child.has_aliases()
-        }) || self.items.as_deref().is_some_and(AliasNode::has_aliases)
-            || self.prefix_items.iter().any(AliasNode::has_aliases)
-            || self.alternatives.iter().any(AliasNode::has_aliases)
-    }
-}
-
-pub(crate) fn project_schema(schema: &Value) -> (Value, SchemaProjection) {
-    let mut projected = schema.clone();
-    let mut definitions = HashMap::new();
-    let root = project_node(&mut projected, &mut definitions);
-    (projected, SchemaProjection { root, definitions })
-}
-
-fn project_node(schema: &mut Value, definitions: &mut HashMap<String, AliasNode>) -> AliasNode {
-    let Some(object) = schema.as_object_mut() else {
-        return AliasNode::default();
-    };
-
-    let mut node = AliasNode {
-        reference: object
-            .get("$ref")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        ..AliasNode::default()
-    };
-
-    for definitions_key in ["$defs", "definitions"] {
-        if let Some(definitions_object) = object
-            .get_mut(definitions_key)
-            .and_then(Value::as_object_mut)
-        {
-            let mut names: Vec<String> = definitions_object.keys().cloned().collect();
-            names.sort();
-            for name in names {
-                if let Some(definition) = definitions_object.get_mut(&name) {
-                    let alias_node = project_node(definition, definitions);
-                    definitions.insert(
-                        format!("#/{definitions_key}/{}", escape_json_pointer(&name)),
-                        alias_node,
-                    );
-                }
-            }
-        }
-    }
-
-    if let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut) {
-        let original_properties = std::mem::take(properties);
-        let mut entries: Vec<(String, Value)> = original_properties.into_iter().collect();
-        entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-
-        let mut reserved: HashSet<String> = entries
-            .iter()
-            .filter(|(name, _)| is_valid_property_name(name))
-            .map(|(name, _)| name.clone())
-            .collect();
-        let mut original_to_wire = HashMap::new();
-        let mut projected_properties = Map::new();
-
-        for (original_name, mut property_schema) in entries {
-            let wire_name = if is_valid_property_name(&original_name) {
-                original_name.clone()
-            } else {
-                allocate_wire_name(&original_name, &mut reserved)
-            };
-            original_to_wire.insert(original_name.clone(), wire_name.clone());
-            let child = project_node(&mut property_schema, definitions);
-            projected_properties.insert(wire_name.clone(), property_schema);
-            node.properties.push(PropertyAlias {
-                original_name,
-                wire_name,
-                child,
-            });
-        }
-        *properties = projected_properties;
-
-        if let Some(required) = object.get_mut("required").and_then(Value::as_array_mut) {
-            for name in required {
-                if let Some(original_name) = name.as_str()
-                    && let Some(wire_name) = original_to_wire.get(original_name)
-                {
-                    *name = Value::String(wire_name.clone());
-                }
-            }
-        }
-    }
-
-    if let Some(items) = object.get_mut("items") {
-        node.items = Some(Box::new(project_node(items, definitions)));
-    }
-    if let Some(prefix_items) = object.get_mut("prefixItems").and_then(Value::as_array_mut) {
-        node.prefix_items = prefix_items
-            .iter_mut()
-            .map(|item| project_node(item, definitions))
-            .collect();
-    }
-    for alternative_key in ["allOf", "anyOf", "oneOf"] {
-        if let Some(alternatives) = object
-            .get_mut(alternative_key)
-            .and_then(Value::as_array_mut)
-        {
-            node.alternatives.extend(
-                alternatives
-                    .iter_mut()
-                    .map(|alternative| project_node(alternative, definitions)),
-            );
-        }
-    }
-
-    node
-}
-
-fn transform_value(
-    node: &AliasNode,
-    definitions: &HashMap<String, AliasNode>,
-    value: &mut Value,
-    direction: ProjectionDirection,
-) -> Result<(), ToolSchemaAliasError> {
-    if let Some(reference) = &node.reference
-        && let Some(referenced) = definitions.get(reference)
-    {
-        transform_value(referenced, definitions, value, direction)?;
-    }
-
-    if let Some(object) = value.as_object_mut() {
-        for property in &node.properties {
-            let (source, destination) = match direction {
-                ProjectionDirection::ToWire => (&property.original_name, &property.wire_name),
-                ProjectionDirection::FromWire => (&property.wire_name, &property.original_name),
-            };
-
-            if source == destination {
-                if let Some(child_value) = object.get_mut(source) {
-                    transform_value(&property.child, definitions, child_value, direction)?;
-                }
-                continue;
-            }
-            if !object.contains_key(source) {
-                continue;
-            }
-            if object.contains_key(destination) {
-                return Err(ToolSchemaAliasError::PropertyCollision {
-                    wire_name: property.wire_name.clone(),
-                    original_name: property.original_name.clone(),
-                });
-            }
-            if let Some(mut child_value) = object.remove(source) {
-                transform_value(&property.child, definitions, &mut child_value, direction)?;
-                object.insert(destination.clone(), child_value);
-            }
-        }
-    }
-
-    if let Some(array) = value.as_array_mut() {
-        for (index, item) in array.iter_mut().enumerate() {
-            if let Some(prefix_node) = node.prefix_items.get(index) {
-                transform_value(prefix_node, definitions, item, direction)?;
-            } else if let Some(items) = &node.items {
-                transform_value(items, definitions, item, direction)?;
-            }
-        }
-    }
-
-    for alternative in &node.alternatives {
-        transform_value(alternative, definitions, value, direction)?;
-    }
-    Ok(())
-}
-
-fn is_valid_property_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.chars().count() <= MAX_PROPERTY_NAME_CHARS
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
-}
-
-fn allocate_wire_name(original: &str, reserved: &mut HashSet<String>) -> String {
-    let mut base: String = original
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-') {
-                character
-            } else {
-                '_'
-            }
+        self.nodes_by_pointer.values().any(|node| {
+            node.properties
+                .iter()
+                .any(|property| property.original_name != property.wire_name)
         })
-        .collect();
-    if base.is_empty() {
-        base.push_str("property");
     }
-
-    let digest = format!("{:x}", sha2::Sha256::digest(original.as_bytes()));
-    for digest_chars in (8..=56).step_by(4) {
-        let base_chars = MAX_PROPERTY_NAME_CHARS - digest_chars - 1;
-        let prefix: String = base.chars().take(base_chars).collect();
-        let candidate = format!("{prefix}_{}", &digest[..digest_chars]);
-        if reserved.insert(candidate.clone()) {
-            return candidate;
-        }
-    }
-    let mut ordinal = 2_i64;
-    loop {
-        let suffix = format!("_{}_{ordinal}", &digest[..48]);
-        let prefix: String = base
-            .chars()
-            .take(MAX_PROPERTY_NAME_CHARS.saturating_sub(suffix.len()))
-            .collect();
-        let candidate = format!("{prefix}{suffix}");
-        if reserved.insert(candidate.clone()) {
-            return candidate;
-        }
-        ordinal += 1;
-    }
-}
-
-fn escape_json_pointer(value: &str) -> String {
-    value.replace('~', "~0").replace('/', "~1")
 }
 
 #[cfg(test)]
