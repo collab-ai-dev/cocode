@@ -107,7 +107,11 @@ impl TraceEvent {
                 is_error: *is_error,
             }),
             // Content deltas reconstruct from the transcript, not the trace.
-            AgentStreamEvent::TextDelta { .. } | AgentStreamEvent::ThinkingDelta { .. } => None,
+            AgentStreamEvent::ResponseAttemptStarted { .. }
+            | AgentStreamEvent::ResponseAttemptCommitted { .. }
+            | AgentStreamEvent::ResponseAttemptDiscarded { .. }
+            | AgentStreamEvent::TextDelta { .. }
+            | AgentStreamEvent::ThinkingDelta { .. } => None,
         }
     }
 

@@ -24,6 +24,7 @@ pub(crate) fn make_query_result(
     final_history: MessageHistory,
 ) -> QueryResult {
     QueryResult {
+        outcome: crate::QueryOutcome::Completed,
         response_text,
         final_history,
         turns: turn_state.turn,
@@ -40,4 +41,12 @@ pub(crate) fn make_query_result(
         structured_output: acc.run_artifacts.structured_output.clone(),
         max_turns_reached: acc.run_artifacts.max_turns_reached.clone(),
     }
+}
+
+pub(crate) fn mark_query_failed(
+    mut result: QueryResult,
+    error: coco_types::ErrorPayload,
+) -> QueryResult {
+    result.outcome = crate::QueryOutcome::Failed(error);
+    result
 }

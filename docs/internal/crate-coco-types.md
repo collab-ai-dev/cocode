@@ -231,16 +231,19 @@ section serves as the ownership declaration.
 ```rust
 /// 3-layer event envelope. See event-system-design.md §1.4.
 pub enum CoreEvent {
-    Protocol(ServerNotification),  // 52 variants, shared with SDK/IDE/TUI
-    Stream(AgentStreamEvent),      // 7 variants, fed through StreamAccumulator
+    Protocol(ServerNotification),  // shared with SDK/IDE/TUI
+    Stream(AgentStreamEvent),      // 10 variants, fed through StreamAccumulator
     Tui(TuiOnlyEvent),             // 20 variants, dropped by SDK consumers
 }
 
 /// Accumulation-layer stream events. Higher-level than the inference-layer
 /// `coco_types::StreamEvent`. See event-system-design.md §1.5.
 pub enum AgentStreamEvent {
-    TextDelta { turn_id: String, delta: String },
-    ThinkingDelta { turn_id: String, delta: String },
+    ResponseAttemptStarted { turn_id: TurnId, attempt: i32 },
+    ResponseAttemptCommitted { turn_id: TurnId, attempt: i32 },
+    ResponseAttemptDiscarded { turn_id: TurnId, attempt: i32 },
+    TextDelta { turn_id: TurnId, delta: String },
+    ThinkingDelta { turn_id: TurnId, delta: String },
     ToolUseQueued { call_id: String, name: String, input: Value },
     ToolUseStarted { call_id: String, name: String, batch_id: Option<String> },
     ToolUseCompleted { call_id: String, name: String, output: String, is_error: bool },

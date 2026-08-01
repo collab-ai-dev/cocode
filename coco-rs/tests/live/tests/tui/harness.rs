@@ -1090,6 +1090,15 @@ fn event_summary(evt: &CoreEvent) -> String {
     match evt {
         CoreEvent::Protocol(n) => format!("Protocol::{:?}", n.method()),
         CoreEvent::Stream(s) => match s {
+            AgentStreamEvent::ResponseAttemptStarted { .. } => {
+                "Stream::ResponseAttemptStarted".into()
+            }
+            AgentStreamEvent::ResponseAttemptCommitted { .. } => {
+                "Stream::ResponseAttemptCommitted".into()
+            }
+            AgentStreamEvent::ResponseAttemptDiscarded { .. } => {
+                "Stream::ResponseAttemptDiscarded".into()
+            }
             AgentStreamEvent::TextDelta { .. } => "Stream::TextDelta".into(),
             AgentStreamEvent::ThinkingDelta { .. } => "Stream::ThinkingDelta".into(),
             AgentStreamEvent::ToolUseQueued { name, .. } => {

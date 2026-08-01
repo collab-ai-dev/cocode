@@ -83,6 +83,7 @@ pub use command_queue::QueuedImage;
 pub use config::ContinueReason;
 pub use config::PermissionDerivation;
 pub use config::QueryEngineConfig;
+pub use config::QueryOutcome;
 pub use config::QueryResult;
 pub use config::SessionBootstrap;
 pub use engine::QueryEngine;

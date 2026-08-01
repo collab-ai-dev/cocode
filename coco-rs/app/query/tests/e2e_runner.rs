@@ -464,6 +464,9 @@ fn classify_event(event: &CoreEvent) -> &'static str {
             _ => "Other",
         },
         CoreEvent::Stream(s) => match s {
+            AgentStreamEvent::ResponseAttemptStarted { .. }
+            | AgentStreamEvent::ResponseAttemptCommitted { .. }
+            | AgentStreamEvent::ResponseAttemptDiscarded { .. } => "Other",
             AgentStreamEvent::TextDelta { .. } => "TextDelta",
             AgentStreamEvent::ThinkingDelta { .. } => "ReasoningDelta",
             AgentStreamEvent::ToolUseQueued { .. } => "ToolUseStart",

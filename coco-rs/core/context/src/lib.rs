@@ -4,6 +4,7 @@
 
 pub mod attachment;
 pub mod changed_files;
+pub mod contextual_user_fragment;
 pub mod environment;
 mod error;
 pub mod file_cache;
@@ -51,6 +52,8 @@ pub use changed_files::attachments_from_changed_file_observations;
 pub use changed_files::changed_file_candidates;
 pub use changed_files::changed_file_observation_from_loaded;
 pub use changed_files::deleted_changed_file_observation;
+pub use contextual_user_fragment::ContextualUserFragment;
+pub use contextual_user_fragment::TerminalRecoveryNudgeFragment;
 pub use environment::EnvironmentInfo;
 pub use environment::GitStatus;
 pub use environment::Platform;

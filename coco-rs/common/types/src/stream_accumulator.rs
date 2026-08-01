@@ -9,6 +9,11 @@
 //!
 //! ```text
 //! AgentStreamEvent flow:
+//!   AttemptStarted → (ThinkingDelta | TextDelta | Tool lifecycle)* → Commit/Discard
+//!                            ↓                                      ↓
+//!                   ordered provisional buffer          publish all / tools only
+//!
+//!   Published flow:
 //!   ThinkingDelta* → TextDelta* → ToolUseQueued → ToolUseStarted → ToolUseCompleted
 //!        ↓               ↓              ↓                ↓                ↓
 //!   ItemStarted     ItemStarted    ItemStarted     ItemUpdated      ItemCompleted
@@ -16,8 +21,8 @@
 //!   ReasoningDelta  AgentMsgDelta
 //! ```
 //!
-//! Text and thinking start a new item on first delta, emit content deltas
-//! incrementally, and flush to ItemCompleted when:
+//! Once an attempt commits, text and thinking start a new item on first delta,
+//! emit content deltas in source order, and flush to ItemCompleted when:
 //! - A new item of a different type starts (text → thinking transition)
 //! - A tool use begins
 //! - The turn completes (`flush()`)
@@ -46,6 +51,15 @@ pub struct StreamAccumulator {
     active_items: HashMap<String, ThreadItem>,
     /// Monotonic counter for generating unique item IDs.
     item_counter: i64,
+    /// Provider response events are transactional: a matching commit feeds
+    /// them into semantic accumulation in source order. Discard keeps real
+    /// tool lifecycle events but removes malformed assistant presentation.
+    response_attempt: Option<ProvisionalResponseAttempt>,
+}
+
+struct ProvisionalResponseAttempt {
+    attempt: i32,
+    events: Vec<AgentStreamEvent>,
 }
 
 impl StreamAccumulator {
@@ -59,12 +73,74 @@ impl StreamAccumulator {
             thinking_buffer: String::new(),
             active_items: HashMap::new(),
             item_counter: 0,
+            response_attempt: None,
         }
     }
 
     /// Process a single stream event and return any notifications it produces.
     pub fn process(&mut self, event: AgentStreamEvent) -> Vec<ServerNotification> {
         match event {
+            AgentStreamEvent::ResponseAttemptStarted { attempt, .. } => {
+                debug_assert!(
+                    self.response_attempt.is_none(),
+                    "response attempt {attempt} started before the prior attempt reached a terminal boundary"
+                );
+                self.response_attempt = Some(ProvisionalResponseAttempt {
+                    attempt,
+                    events: Vec::new(),
+                });
+                Vec::new()
+            }
+            AgentStreamEvent::ResponseAttemptCommitted { attempt, .. } => {
+                if self
+                    .response_attempt
+                    .as_ref()
+                    .is_none_or(|response| response.attempt != attempt)
+                {
+                    return Vec::new();
+                }
+                let Some(response) = self.response_attempt.take() else {
+                    return Vec::new();
+                };
+                response
+                    .events
+                    .into_iter()
+                    .flat_map(|event| self.process(event))
+                    .collect()
+            }
+            AgentStreamEvent::ResponseAttemptDiscarded { attempt, .. } => {
+                if self
+                    .response_attempt
+                    .as_ref()
+                    .is_none_or(|response| response.attempt != attempt)
+                {
+                    return Vec::new();
+                }
+                let Some(response) = self.response_attempt.take() else {
+                    return Vec::new();
+                };
+                // Tool execution may already have happened while the provider
+                // stream was open. Preserve those lifecycle events, in order,
+                // while dropping only the malformed assistant presentation.
+                response
+                    .events
+                    .into_iter()
+                    .filter(|event| {
+                        !matches!(
+                            event,
+                            AgentStreamEvent::TextDelta { .. }
+                                | AgentStreamEvent::ThinkingDelta { .. }
+                        )
+                    })
+                    .flat_map(|event| self.process(event))
+                    .collect()
+            }
+            event if self.response_attempt.is_some() => {
+                if let Some(response) = self.response_attempt.as_mut() {
+                    response.events.push(event);
+                }
+                Vec::new()
+            }
             AgentStreamEvent::TextDelta { delta, .. } => self.handle_text_delta(delta),
             AgentStreamEvent::ThinkingDelta { delta, .. } => self.handle_thinking_delta(delta),
             AgentStreamEvent::ToolUseQueued {
@@ -96,6 +172,7 @@ impl StreamAccumulator {
     /// Flush any pending text/thinking items and return completion notifications.
     /// Call at turn end.
     pub fn flush(&mut self) -> Vec<ServerNotification> {
+        self.response_attempt = None;
         let mut out = Vec::new();
         out.extend(self.flush_text());
         out.extend(self.flush_thinking());

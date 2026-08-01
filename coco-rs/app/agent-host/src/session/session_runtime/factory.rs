@@ -226,7 +226,7 @@ impl SessionRuntimeFactory {
         cwd: PathBuf,
         seed: super::SideChatSeed,
     ) -> Result<SessionHandle> {
-        use coco_context::side_chat::ContextualUserFragment;
+        use coco_context::ContextualUserFragment;
 
         let super::SideChatSeed {
             context,

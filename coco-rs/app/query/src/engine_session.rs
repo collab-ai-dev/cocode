@@ -245,7 +245,7 @@ impl QueryEngine {
         // Stamp F9 envelope so every emit from this engine invocation
         // carries the active session + agent identity.
         history.set_envelope(self.session_id.clone(), self.config.agent_id_string());
-        let (result, accumulated_usage, pending_success_terminal) = self
+        let (result, accumulated_usage, pending_loop_terminal) = self
             .run_session_loop(
                 turn_messages,
                 event_tx.clone(),
@@ -324,24 +324,44 @@ impl QueryEngine {
                 },
             ));
         }
+        if let (Ok(qr), Some(id)) = (&result, cycle_turn_id.as_ref())
+            && let Some(error) = qr.failure()
+        {
+            // QueryOutcome is the sole failure-terminal source of truth.
+            // Loop helpers return typed failures and never construct a second
+            // TurnEnded payload in parallel.
+            pending_failure_terminal = Some(coco_types::TurnEndedParams::failed(
+                id.clone(),
+                Some(accumulated_usage),
+                error.clone(),
+            ));
+        }
 
         // StopFailure — fire-and-forget hooks when the turn ended in an
         // API / runtime error rather than a clean stop. Output and exit
         // codes are intentionally ignored — this is observability only,
         // not a recovery path.
-        if let (Err(e), Some(hooks)) = (
-            &result,
+        let failure = match &result {
+            Ok(qr) => qr.failure().map(|error| {
+                (
+                    qr.stop_reason.as_deref().unwrap_or("unknown"),
+                    error.message.clone(),
+                )
+            }),
+            Err(error) => Some(("unknown", error.to_string())),
+        };
+        if let (Some((error_label, err_msg)), Some(hooks)) = (
+            failure,
             self.hooks_for(coco_types::HookEventType::StopFailure),
         ) {
-            let err_msg = e.to_string();
             let hook_ctx = self.orchestration_ctx();
             let last_text = extract_last_assistant_text(&history);
             let last_assistant_message = (!last_text.is_empty()).then_some(last_text);
             if let Err(hook_err) = coco_hooks::orchestration::execute_stop_failure(
                 hooks,
                 &hook_ctx,
-                /*error_label*/ "unknown",
-                Some(err_msg.as_str()),
+                error_label,
+                Some(&err_msg),
                 last_assistant_message.as_deref(),
             )
             .await
@@ -356,7 +376,7 @@ impl QueryEngine {
             Ok(qr) => self.build_session_result_params(qr, /*error_messages*/ Vec::new()),
             Err(e) => self.build_session_error_params(e.to_string()),
         };
-        if let Some(terminal) = pending_failure_terminal.or(pending_success_terminal) {
+        if let Some(terminal) = pending_failure_terminal.or(pending_loop_terminal) {
             let _delivered = emit_protocol(
                 &event_tx,
                 ServerNotification::TurnEnded(terminal.with_session_result(params.clone())),
@@ -364,17 +384,24 @@ impl QueryEngine {
             .await;
         }
         match &result {
-            Ok(qr) => info!(
-                turns = qr.turns,
-                duration_ms = qr.duration_ms,
-                duration_api_ms = qr.duration_api_ms,
-                tokens_in = qr.total_usage.input_tokens.total,
-                tokens_out = qr.total_usage.output_tokens.total,
-                cancelled = qr.cancelled,
-                budget_exhausted = qr.budget_exhausted,
-                stop_reason = ?qr.stop_reason,
-                "session complete"
-            ),
+            Ok(qr) => match qr.failure() {
+                None => info!(
+                    turns = qr.turns,
+                    duration_ms = qr.duration_ms,
+                    duration_api_ms = qr.duration_api_ms,
+                    tokens_in = qr.total_usage.input_tokens.total,
+                    tokens_out = qr.total_usage.output_tokens.total,
+                    cancelled = qr.cancelled,
+                    budget_exhausted = qr.budget_exhausted,
+                    stop_reason = ?qr.stop_reason,
+                    "session complete"
+                ),
+                Some(error) => warn!(
+                    error = %error.message,
+                    turns = qr.turns,
+                    "session terminated with typed query failure"
+                ),
+            },
             Err(e) => warn!(
                 error = %e,
                 "session terminated with error"
@@ -514,30 +541,19 @@ impl QueryEngine {
             .stop_reason
             .clone()
             .unwrap_or_else(|| "end_turn".to_string());
-        // `error_*` stop_reason subtypes are themselves error terminations,
-        // even with no accumulated error message.
-        let stop_reason_is_error = stop_reason.starts_with("error_");
         let is_error = qr.cancelled
             || qr.budget_exhausted
-            || stop_reason_is_error
+            || qr.failure().is_some()
             || !error_messages.is_empty();
         let mut errors = error_messages;
+        if let Some(error) = qr.failure() {
+            errors.push(error.message.clone());
+        }
         if let Some(payload) = qr.max_turns_reached.as_ref() {
             errors.push(format!(
                 "Reached maximum number of turns ({})",
                 payload.max_turns
             ));
-        }
-        if stop_reason == "error_max_structured_output_retries" {
-            let cap = self.config.max_structured_output_retries;
-            errors.push(format!(
-                "Failed to provide valid structured output after {cap} attempts"
-            ));
-        }
-        if let Some(message) =
-            crate::engine_terminal::terminal_anomaly_error_for_stop_reason(&stop_reason)
-        {
-            errors.push(message.to_string());
         }
 
         coco_types::SessionResultParams {

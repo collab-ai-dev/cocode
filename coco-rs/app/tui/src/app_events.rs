@@ -183,34 +183,45 @@ pub(super) fn coalesce_lossy_deferred_event(
     match event {
         CoreEvent::Stream(AgentStreamEvent::TextDelta { turn_id, delta }) => {
             for existing in buffer.iter_mut().rev() {
-                if let CoreEvent::Stream(AgentStreamEvent::TextDelta {
-                    turn_id: existing_turn_id,
-                    delta: existing_delta,
-                }) = existing
-                    && existing_turn_id == turn_id
-                {
-                    existing_delta.push_str(delta);
-                    return true;
+                if is_response_attempt_boundary(existing) {
+                    break;
+                }
+                match existing {
+                    CoreEvent::Stream(AgentStreamEvent::TextDelta {
+                        turn_id: existing_turn_id,
+                        delta: existing_delta,
+                    }) if existing_turn_id == turn_id => {
+                        existing_delta.push_str(delta);
+                        return true;
+                    }
+                    _ => {}
                 }
             }
             false
         }
         CoreEvent::Stream(AgentStreamEvent::ThinkingDelta { turn_id, delta }) => {
             for existing in buffer.iter_mut().rev() {
-                if let CoreEvent::Stream(AgentStreamEvent::ThinkingDelta {
-                    turn_id: existing_turn_id,
-                    delta: existing_delta,
-                }) = existing
-                    && existing_turn_id == turn_id
-                {
-                    existing_delta.push_str(delta);
-                    return true;
+                if is_response_attempt_boundary(existing) {
+                    break;
+                }
+                match existing {
+                    CoreEvent::Stream(AgentStreamEvent::ThinkingDelta {
+                        turn_id: existing_turn_id,
+                        delta: existing_delta,
+                    }) if existing_turn_id == turn_id => {
+                        existing_delta.push_str(delta);
+                        return true;
+                    }
+                    _ => {}
                 }
             }
             false
         }
         CoreEvent::Tui(TuiOnlyEvent::ToolCallDelta { call_id, delta }) => {
             for existing in buffer.iter_mut().rev() {
+                if is_response_attempt_boundary(existing) {
+                    break;
+                }
                 if let CoreEvent::Tui(TuiOnlyEvent::ToolCallDelta {
                     call_id: existing_call_id,
                     delta: existing_delta,
@@ -224,7 +235,7 @@ pub(super) fn coalesce_lossy_deferred_event(
             false
         }
         CoreEvent::Tui(TuiOnlyEvent::ToolProgress { tool_use_id, .. }) => {
-            replace_matching_deferred(buffer, event, |candidate| {
+            replace_matching_deferred_since_response_boundary(buffer, event, |candidate| {
                 matches!(
                     candidate,
                     CoreEvent::Tui(TuiOnlyEvent::ToolProgress {
@@ -252,7 +263,7 @@ pub(super) fn coalesce_lossy_deferred_event(
             false
         }
         CoreEvent::Protocol(ServerNotification::ToolProgress(p)) => {
-            replace_matching_deferred(buffer, event, |candidate| {
+            replace_matching_deferred_since_response_boundary(buffer, event, |candidate| {
                 matches!(
                     candidate,
                     CoreEvent::Protocol(ServerNotification::ToolProgress(existing))
@@ -261,6 +272,35 @@ pub(super) fn coalesce_lossy_deferred_event(
             })
         }
         _ => false,
+    }
+}
+
+fn is_response_attempt_boundary(event: &CoreEvent) -> bool {
+    matches!(
+        event,
+        CoreEvent::Stream(
+            AgentStreamEvent::ResponseAttemptStarted { .. }
+                | AgentStreamEvent::ResponseAttemptCommitted { .. }
+                | AgentStreamEvent::ResponseAttemptDiscarded { .. }
+        )
+    )
+}
+
+fn replace_matching_deferred_since_response_boundary(
+    buffer: &mut VecDeque<CoreEvent>,
+    event: &CoreEvent,
+    matches_event: impl Fn(&CoreEvent) -> bool,
+) -> bool {
+    if let Some(existing) = buffer
+        .iter_mut()
+        .rev()
+        .take_while(|candidate| !is_response_attempt_boundary(candidate))
+        .find(|candidate| matches_event(candidate))
+    {
+        *existing = event.clone();
+        true
+    } else {
+        false
     }
 }
 
@@ -388,23 +428,6 @@ pub(super) fn merge_deferred_workflow_progress(
     let mut merged = existing.to_vec();
     merged.extend_from_slice(incoming);
     merged
-}
-
-pub(super) fn replace_matching_deferred(
-    buffer: &mut VecDeque<CoreEvent>,
-    event: &CoreEvent,
-    matches_event: impl Fn(&CoreEvent) -> bool,
-) -> bool {
-    if let Some(existing) = buffer
-        .iter_mut()
-        .rev()
-        .find(|candidate| matches_event(candidate))
-    {
-        *existing = event.clone();
-        true
-    } else {
-        false
-    }
 }
 
 pub(super) fn is_lossy_deferred_event(event: &CoreEvent) -> bool {

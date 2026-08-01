@@ -233,7 +233,7 @@ async fn c15_empty_history_proceeds() {
     let turn_state = loop_turn_state();
 
     match engine.check_blocking_limit(
-        &history,
+        history.as_slice(),
         &slot_snapshot(&client),
         &turn_state,
         /*effective_max_tokens*/ None,
@@ -268,7 +268,7 @@ async fn c15_overlimit_history_blocks() {
 
     let turn_state = loop_turn_state();
     match engine.check_blocking_limit(
-        &history,
+        history.as_slice(),
         &slot_snapshot(&client),
         &turn_state,
         /*effective_max_tokens*/ None,
@@ -313,7 +313,7 @@ async fn c15_skips_post_compact() {
     // inside `check_blocking_limit` rather than a typed variant). The
     // caller's behavior is identical: proceed to `query_stream`.
     match engine.check_blocking_limit(
-        &history,
+        history.as_slice(),
         &slot_snapshot(&client),
         &turn_state,
         /*effective_max_tokens*/ None,
@@ -336,7 +336,7 @@ async fn c15_no_model_info_uses_default_window() {
 
     let turn_state = loop_turn_state();
     match engine.check_blocking_limit(
-        &history,
+        history.as_slice(),
         &slot_snapshot(&client),
         &turn_state,
         /*effective_max_tokens*/ None,
@@ -1068,7 +1068,7 @@ async fn r5_check_blocking_limit_skips_compact_fork_even_when_overlimit() {
     let turn_state = loop_turn_state();
 
     match engine.check_blocking_limit(
-        &history,
+        history.as_slice(),
         &slot_snapshot(&client),
         &turn_state,
         /*effective_max_tokens*/ None,
@@ -1111,7 +1111,7 @@ async fn r5_check_blocking_limit_skips_session_memory_fork() {
         let turn_state = loop_turn_state();
 
         match engine.check_blocking_limit(
-            &history,
+            history.as_slice(),
             &slot_snapshot(&client),
             &turn_state,
             /*effective_max_tokens*/ None,
@@ -1145,7 +1145,7 @@ async fn r5_check_blocking_limit_does_not_skip_prompt_suggestion_fork() {
     let turn_state = loop_turn_state();
 
     match engine.check_blocking_limit(
-        &history,
+        history.as_slice(),
         &slot_snapshot(&client),
         &turn_state,
         /*effective_max_tokens*/ None,
@@ -1187,7 +1187,7 @@ async fn r8_check_blocking_limit_uses_effective_max_tokens_threshold() {
     let turn_state = loop_turn_state();
 
     match engine.check_blocking_limit(
-        &history,
+        history.as_slice(),
         &slot_snapshot(&client),
         &turn_state,
         /*effective_max_tokens*/ Some(64_000),
@@ -1234,7 +1234,7 @@ async fn r8_check_blocking_limit_falls_back_to_model_info_baseline() {
     let turn_state = loop_turn_state();
 
     match engine.check_blocking_limit(
-        &history,
+        history.as_slice(),
         &slot_snapshot(&client),
         &turn_state,
         /*effective_max_tokens*/ None,
@@ -1273,7 +1273,7 @@ fn r8_check_blocking_limit_requires_model_info() {
     snapshot.model_info = None;
 
     let _ = engine.check_blocking_limit(
-        &history,
+        history.as_slice(),
         &snapshot,
         &turn_state,
         /*effective_max_tokens*/ None,

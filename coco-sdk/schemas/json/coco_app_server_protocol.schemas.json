@@ -146,6 +146,72 @@
       "description": "Agent-loop stream events. Higher-level than `coco_types::StreamEvent`\n(which represents raw LLM inference deltas). Adds:\n- Tool lifecycle states (Queued \u2192 Started \u2192 Completed)\n- MCP tool call tracking\n- Turn-scoped item IDs\n\nInput to `StreamAccumulator`.\nSee `event-system-design.md` Section 1.5.",
       "oneOf": [
         {
+          "description": "Begin one provider response attempt within a logical turn. Text and\nthinking deltas remain provisional until the matching commit.",
+          "properties": {
+            "attempt": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "turn_id": {
+              "$ref": "#/$defs/TurnId"
+            },
+            "type": {
+              "const": "response_attempt_started",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "turn_id",
+            "attempt"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Commit the provisional text/thinking deltas for an attempt.",
+          "properties": {
+            "attempt": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "turn_id": {
+              "$ref": "#/$defs/TurnId"
+            },
+            "type": {
+              "const": "response_attempt_committed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "turn_id",
+            "attempt"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Discard provisional deltas from a malformed attempt before retrying.",
+          "properties": {
+            "attempt": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "turn_id": {
+              "$ref": "#/$defs/TurnId"
+            },
+            "type": {
+              "const": "response_attempt_discarded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "turn_id",
+            "attempt"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Text content delta from assistant response.",
           "properties": {
             "delta": {
@@ -16504,12 +16570,15 @@
           "type": "string"
         },
         "sourcePath": {
-          "type": "string"
+          "description": "Where the script lives, or `None` for a workflow bundled into the\nbinary. Absent rather than a placeholder path so the picker's filter\ncannot match a location that does not exist.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
-        "name",
-        "sourcePath"
+        "name"
       ],
       "type": "object"
     },

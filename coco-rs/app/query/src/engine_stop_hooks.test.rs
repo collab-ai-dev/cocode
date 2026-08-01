@@ -240,13 +240,14 @@ async fn c3_run_stop_hooks_skips_when_last_assistant_is_api_error() {
         .await;
 
     match &decision {
-        StopHookDecision::SkippedApiError { error_type } => {
+        StopHookDecision::SkippedApiError { payload } => {
             assert_eq!(
-                error_type.as_deref(),
+                payload.error_type.as_deref(),
                 Some("prompt_too_long"),
                 "C3 must propagate the trailing api_error's error_type so the engine \
                  can use it as QueryResult.stop_reason (Finding R1)",
             );
+            assert_eq!(payload.message, "API Error: context window exceeded");
         }
         other => panic!("api_error trailer must short-circuit to SkippedApiError, got {other:?}"),
     }

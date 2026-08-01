@@ -151,6 +151,29 @@ fn helpers_reflect_turn_state() {
 }
 
 #[test]
+fn response_attempt_is_atomic_and_attempt_scoped() {
+    let mut state = UiEphemeralState::new();
+    state.start_turn("Pondering", Instant::now());
+    state.add_output_delta("prior");
+    state.begin_response_attempt(1, true, 5, 3, crate::state::StreamMode::Text, 2);
+    state.add_output_delta("malformed");
+    assert!(!state.commit_response_attempt(2));
+    let rollback = state
+        .discard_response_attempt(1)
+        .expect("matching attempt rolls back");
+    assert!(rollback.had_streaming);
+    assert_eq!(rollback.text_bytes, 5);
+    assert_eq!(rollback.thinking_bytes, 3);
+    assert_eq!(rollback.mode, crate::state::StreamMode::Text);
+    assert_eq!(rollback.display_cursor, 2);
+    assert_eq!(state.live_output_tokens(), 2);
+
+    state.begin_response_attempt(2, true, 5, 3, crate::state::StreamMode::Text, 2);
+    assert!(state.commit_response_attempt(2));
+    assert!(state.discard_response_attempt(2).is_none());
+}
+
+#[test]
 fn mark_interrupting_is_noop_without_a_turn() {
     let mut s = UiEphemeralState::new();
     s.mark_interrupting();

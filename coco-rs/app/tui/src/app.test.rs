@@ -405,6 +405,78 @@ fn deferred_event_buffer_coalesces_stream_deltas() {
 }
 
 #[test]
+fn deferred_event_buffer_never_coalesces_across_attempt_boundaries() {
+    let mut buffer = VecDeque::from([
+        CoreEvent::Stream(AgentStreamEvent::ResponseAttemptStarted {
+            turn_id: "t1".into(),
+            attempt: 1,
+        }),
+        CoreEvent::Stream(AgentStreamEvent::TextDelta {
+            turn_id: "t1".into(),
+            delta: "discarded".into(),
+        }),
+        CoreEvent::Stream(AgentStreamEvent::ResponseAttemptDiscarded {
+            turn_id: "t1".into(),
+            attempt: 1,
+        }),
+        CoreEvent::Stream(AgentStreamEvent::ResponseAttemptStarted {
+            turn_id: "t1".into(),
+            attempt: 2,
+        }),
+    ]);
+
+    defer_core_event(
+        &mut buffer,
+        CoreEvent::Stream(AgentStreamEvent::TextDelta {
+            turn_id: "t1".into(),
+            delta: "committed".into(),
+        }),
+    );
+
+    assert_eq!(buffer.len(), 5);
+    let CoreEvent::Stream(AgentStreamEvent::TextDelta { delta, .. }) = &buffer[1] else {
+        panic!("first attempt delta");
+    };
+    assert_eq!(delta, "discarded");
+    let CoreEvent::Stream(AgentStreamEvent::TextDelta { delta, .. }) = &buffer[4] else {
+        panic!("second attempt delta");
+    };
+    assert_eq!(delta, "committed");
+}
+
+#[test]
+fn deferred_tool_input_never_coalesces_across_attempt_boundaries() {
+    let mut buffer = VecDeque::from([
+        CoreEvent::Tui(coco_types::TuiOnlyEvent::ToolCallDelta {
+            call_id: "reused".into(),
+            delta: "discarded".into(),
+        }),
+        CoreEvent::Stream(AgentStreamEvent::ResponseAttemptDiscarded {
+            turn_id: "t1".into(),
+            attempt: 1,
+        }),
+        CoreEvent::Stream(AgentStreamEvent::ResponseAttemptStarted {
+            turn_id: "t1".into(),
+            attempt: 2,
+        }),
+    ]);
+
+    defer_core_event(
+        &mut buffer,
+        CoreEvent::Tui(coco_types::TuiOnlyEvent::ToolCallDelta {
+            call_id: "reused".into(),
+            delta: "fresh".into(),
+        }),
+    );
+
+    assert_eq!(buffer.len(), 4);
+    let CoreEvent::Tui(coco_types::TuiOnlyEvent::ToolCallDelta { delta, .. }) = &buffer[3] else {
+        panic!("second attempt tool delta");
+    };
+    assert_eq!(delta, "fresh");
+}
+
+#[test]
 fn deferred_event_buffer_merges_workflow_task_progress_deltas() {
     let mut buffer = VecDeque::new();
     let phase = WorkflowProgressEvent::WorkflowPhase {

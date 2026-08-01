@@ -728,7 +728,7 @@ impl QueryEngine {
             let mut streaming_model_index = streaming_model_index;
 
             match self.check_blocking_limit(
-                history,
+                messages_snapshot.as_ref(),
                 &active_snapshot,
                 &turn_state,
                 params.max_tokens,
@@ -765,7 +765,7 @@ impl QueryEngine {
                             continue;
                         }
                     }
-                    let terminal_result = self
+                    let result = self
                         .handle_blocking_limit_terminal(
                             &consts,
                             &acc,
@@ -775,11 +775,9 @@ impl QueryEngine {
                             context_window,
                             history,
                             &event_tx,
-                            cycle_turn_id.clone(),
-                            &*total_usage,
                         )
                         .await;
-                    return (Ok(terminal_result.result), terminal_result.terminal);
+                    return (Ok(result), None);
                 }
                 crate::engine_recovery::BlockingLimitDecision::Proceed => {}
             }
@@ -792,7 +790,7 @@ impl QueryEngine {
                 &params.prompt,
                 coco_config::constants::API_IMAGE_MAX_BASE64_SIZE as usize,
             ) {
-                let terminal_result = self
+                let result = self
                     .handle_image_too_large_terminal(
                         &consts,
                         &acc,
@@ -800,11 +798,9 @@ impl QueryEngine {
                         &img_err,
                         history,
                         &event_tx,
-                        cycle_turn_id.clone(),
-                        &*total_usage,
                     )
                     .await;
-                return (Ok(terminal_result.result), terminal_result.terminal);
+                return (Ok(result), None);
             }
 
             let api_start = std::time::Instant::now();
@@ -870,6 +866,14 @@ impl QueryEngine {
                     &stream_token,
                     coco_inference::ModelCommunicationOutcome::Failure,
                 );
+                let _ = crate::emit::emit_stream(
+                    &event_tx,
+                    crate::AgentStreamEvent::ResponseAttemptCommitted {
+                        turn_id: event_turn_id.clone(),
+                        attempt: turn_state.attempt,
+                    },
+                )
+                .await;
                 self.cancel_epilogue(
                     &mut streaming_handle,
                     &tool_order,
@@ -888,6 +892,17 @@ impl QueryEngine {
                     message,
                     had_output,
                 } => {
+                    // A provider error never owns a complete assistant message.
+                    // Keep partial deltas out of every consumer even when the
+                    // retry policy ultimately gives up.
+                    let _ = crate::emit::emit_stream(
+                        &event_tx,
+                        crate::AgentStreamEvent::ResponseAttemptDiscarded {
+                            turn_id: event_turn_id.clone(),
+                            attempt: turn_state.attempt,
+                        },
+                    )
+                    .await;
                     match self
                         .handle_stream_error(
                             message,
@@ -914,31 +929,41 @@ impl QueryEngine {
                     usage,
                     stop_reason,
                 } => (snapshot, usage, Some(stop_reason)),
-                crate::engine_stream_consume::StreamOutcome::PrematureClose => match self
-                    .handle_stream_error(
-                        "LLM stream closed before finish event".to_string(),
-                        // Conservative: a premature close carries no
-                        // content signal and never classifies as a
-                        // capacity error, so in-place retry is moot —
-                        // pass `true` to keep this path's behavior fixed.
-                        /*had_output*/
-                        true,
-                        &mut services,
-                        &stream_token,
-                        &mut turn_state,
-                        &mut *history,
+                crate::engine_stream_consume::StreamOutcome::PrematureClose => {
+                    let _ = crate::emit::emit_stream(
                         &event_tx,
-                        &mut streaming_handle,
-                        &turn_id,
-                        &event_turn_id,
+                        crate::AgentStreamEvent::ResponseAttemptDiscarded {
+                            turn_id: event_turn_id.clone(),
+                            attempt: turn_state.attempt,
+                        },
                     )
-                    .await
-                {
-                    crate::engine_recovery::StreamErrorOutcome::Continue => continue,
-                    crate::engine_recovery::StreamErrorOutcome::Bail(err) => {
-                        return (Err(err), None);
+                    .await;
+                    match self
+                        .handle_stream_error(
+                            "LLM stream closed before finish event".to_string(),
+                            // Conservative: a premature close carries no
+                            // content signal and never classifies as a
+                            // capacity error, so in-place retry is moot —
+                            // pass `true` to keep this path's behavior fixed.
+                            /*had_output*/
+                            true,
+                            &mut services,
+                            &stream_token,
+                            &mut turn_state,
+                            &mut *history,
+                            &event_tx,
+                            &mut streaming_handle,
+                            &turn_id,
+                            &event_turn_id,
+                        )
+                        .await
+                    {
+                        crate::engine_recovery::StreamErrorOutcome::Continue => continue,
+                        crate::engine_recovery::StreamErrorOutcome::Bail(err) => {
+                            return (Err(err), None);
+                        }
                     }
-                },
+                }
             };
 
             self.model_runtimes.finish_call(
@@ -972,14 +997,6 @@ impl QueryEngine {
                 coco_types::UsageSource::Main,
             )
             .await;
-            coco_otel::events::emit_assistant_response(
-                &response_text,
-                &model_id,
-                response_id.as_deref(),
-                self.query_source_label(),
-                self.config.log_assistant_responses,
-            );
-
             self.stamp_assistant_now();
 
             let (content_parts, tool_calls) = assistant_content_from_snapshot(
@@ -999,7 +1016,7 @@ impl QueryEngine {
                 stop_reason: parsed_stop_reason,
                 usage: Some(usage),
                 cost_usd: None,
-                request_id: response_id,
+                request_id: response_id.clone(),
                 api_error: None,
             });
 
@@ -1013,6 +1030,14 @@ impl QueryEngine {
                     self.config.empty_response_nudge,
                     !structured_output_pending,
                 ) {
+                    let _ = crate::emit::emit_stream(
+                        &event_tx,
+                        crate::AgentStreamEvent::ResponseAttemptDiscarded {
+                            turn_id: event_turn_id.clone(),
+                            attempt: turn_state.attempt,
+                        },
+                    )
+                    .await;
                     match self.handle_terminal_anomaly(
                         anomaly,
                         assistant_msg,
@@ -1020,7 +1045,6 @@ impl QueryEngine {
                         &acc,
                         &mut turn_state,
                         history,
-                        cycle_turn_id.clone(),
                     ) {
                         crate::engine_terminal::NoToolCallsTerminal::ContinueLoop => continue,
                         crate::engine_terminal::NoToolCallsTerminal::Return {
@@ -1031,9 +1055,22 @@ impl QueryEngine {
                 }
             }
 
-            // A non-anomalous terminal supersedes any prompt-only recovery
-            // pair from the prior attempt.
-            turn_state.recovery_overlay.clear();
+            let _ = crate::emit::emit_stream(
+                &event_tx,
+                crate::AgentStreamEvent::ResponseAttemptCommitted {
+                    turn_id: event_turn_id.clone(),
+                    attempt: turn_state.attempt,
+                },
+            )
+            .await;
+            coco_otel::events::emit_assistant_response(
+                &response_text,
+                &model_id,
+                response_id.as_deref(),
+                self.query_source_label(),
+                self.config.log_assistant_responses,
+            );
+
             if !tool_calls.is_empty() {
                 turn_state.empty_response_retries = 0;
                 turn_state.missing_tool_call_retries = 0;
@@ -1115,7 +1152,7 @@ impl QueryEngine {
                         )
                         .await;
                     }
-                    let terminal_result = self
+                    let result = self
                         .handle_usd_budget_terminal(
                             &consts,
                             &acc,
@@ -1123,14 +1160,12 @@ impl QueryEngine {
                             response_text,
                             history,
                             &event_tx,
-                            cycle_turn_id,
-                            &*total_usage,
                             &tool_calls,
                             total_cost_usd,
                             max_budget_usd,
                         )
                         .await;
-                    return (Ok(terminal_result.result), terminal_result.terminal);
+                    return (Ok(result), None);
                 }
             }
 

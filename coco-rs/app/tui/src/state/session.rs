@@ -537,6 +537,14 @@ impl SessionState {
         });
     }
 
+    /// Drop tool-input previews that never reached `ToolUseQueued` before a
+    /// provider response attempt was discarded. Queued/running calls represent
+    /// real execution and are intentionally preserved.
+    pub fn discard_uncommitted_tool_streams(&mut self) {
+        self.tool_executions
+            .retain(|tool| tool.status != ToolStatus::Streaming);
+    }
+
     /// Append a streamed input fragment to the matching row and refresh its
     /// live argument preview (the partial command / path / pattern) so the
     /// activity strip shows arguments filling in before the call is queued.

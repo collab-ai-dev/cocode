@@ -56,8 +56,8 @@
 //! at the dispatch site in `engine.rs` (push assistant + synthetic,
 //! fall through). The [`crate::engine_stream_consume::withhold_reason_for_stop`]
 //! function returns `None` for it on purpose, and the
-//! `isApiErrorMessage` short-circuit in commit 5 prevents Stop hooks
-//! from cycling on the refusal.
+//! typed `api_error` guard prevents ordinary Stop hooks from cycling on the
+//! refusal and routes the payload through the session failure lifecycle.
 
 use coco_inference::ModelRuntimeSnapshot;
 use coco_messages::Message;
@@ -237,8 +237,8 @@ pub(crate) enum RecoveryDisposition {
     /// Recovery exhausted (max-output-tokens retry budget hit). The
     /// dispatcher has pushed `assistant_msg` + the synthetic api_error
     /// message; caller should fall through to the no-tool-calls
-    /// terminal so Stop hooks (with the `isApiErrorMessage` guard
-    /// from commit 5) can finalize the turn cleanly.
+    /// terminal so the `api_error` guard can finalize one typed provider
+    /// failure without running ordinary Stop hooks.
     TerminateExhausted,
 }
 
@@ -380,7 +380,7 @@ impl QueryEngine {
     ///   the provider with their original input (Finding **R5**).
     pub(crate) fn check_blocking_limit(
         &self,
-        history: &MessageHistory,
+        messages_for_api: &[std::sync::Arc<coco_messages::Message>],
         active_snapshot: &ModelRuntimeSnapshot,
         turn_state: &LoopTurnState,
         effective_max_tokens: Option<i64>,
@@ -421,7 +421,7 @@ impl QueryEngine {
         };
         let context_window = i64::from(model_info.context_window);
 
-        let estimated_tokens = coco_messages::estimate_tokens_for_messages(history.as_slice());
+        let estimated_tokens = coco_messages::estimate_tokens_for_messages(messages_for_api);
 
         // Finding **R8** — reserved budget tracks what the provider will
         // actually enforce as `prompt + max_tokens ≤ window`. Two tiers,
