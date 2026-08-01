@@ -56,6 +56,44 @@ async fn test_no_op_engine_returns_error() {
     assert!(result.is_err());
 }
 
+#[tokio::test]
+async fn terminal_recovery_failure_is_not_reported_as_agent_success() {
+    let model = coco_test_harness::model::MockModelBuilder::new()
+        .on_call(0, |_| coco_test_harness::model::MockResponse::text(""))
+        .on_call(1, |_| coco_test_harness::model::MockResponse::text(""))
+        .on_call(2, |_| coco_test_harness::model::MockResponse::text(""))
+        .on_call(3, |_| coco_test_harness::model::MockResponse::text(""))
+        .build();
+    let runtimes = crate::test_support::model_runtime_registry(model);
+    let factory: super::QueryEngineFactory = Arc::new(move |config, _, cancel| {
+        let runtimes = runtimes.clone();
+        Box::pin(async move {
+            crate::QueryEngine::new(
+                config,
+                coco_types::SessionId::try_new("agent-failure").expect("session id"),
+                runtimes,
+                Arc::new(coco_tool_runtime::ToolRegistry::new()),
+                cancel.unwrap_or_else(tokio_util::sync::CancellationToken::new),
+                None,
+            )
+        })
+    });
+    let adapter = super::QueryEngineAdapter::new(factory);
+    let result = adapter
+        .execute_query(
+            "respond",
+            AgentQueryConfig {
+                system_prompt: "test".into(),
+                max_turns: Some(10),
+                ..Default::default()
+            },
+        )
+        .await;
+    let error = result.expect_err("typed query failure must cross the adapter as Err");
+    assert_eq!(error.status_code(), coco_error::StatusCode::ProviderError);
+    assert!(error.to_string().contains("empty response"));
+}
+
 /// Test-only factory variant that observes the role argument and
 /// returns an error via a synthetic `QueryEngine`-less path. We
 /// can't return a `QueryEngine` here without building a whole

@@ -679,6 +679,71 @@ fn test_thinking_delta_before_turn_started_creates_streaming_state() {
 }
 
 #[test]
+fn discarded_response_attempt_rolls_back_live_preview() {
+    let mut state = AppState::new();
+    state
+        .ui
+        .ephemeral
+        .start_turn("Pondering", std::time::Instant::now());
+    state.ui.ephemeral.add_output_delta("prior");
+    let mut prior = crate::state::StreamingState::new();
+    prior.append_text("prior");
+    prior.display_cursor = 2;
+    state.ui.streaming = Some(prior);
+    handle_core_event(
+        &mut state,
+        CoreEvent::Stream(AgentStreamEvent::ResponseAttemptStarted {
+            turn_id: "t1".into(),
+            attempt: 1,
+        }),
+    );
+    handle_core_event(
+        &mut state,
+        CoreEvent::Stream(AgentStreamEvent::TextDelta {
+            turn_id: "t1".into(),
+            delta: "malformed".into(),
+        }),
+    );
+    handle_core_event(
+        &mut state,
+        CoreEvent::Stream(AgentStreamEvent::ThinkingDelta {
+            turn_id: "t1".into(),
+            delta: "private".into(),
+        }),
+    );
+    handle_core_event(
+        &mut state,
+        CoreEvent::Tui(coco_types::TuiOnlyEvent::ToolCallStreamStart {
+            call_id: "partial-tool".into(),
+            name: "Bash".into(),
+        }),
+    );
+    assert_eq!(
+        state
+            .ui
+            .streaming
+            .as_ref()
+            .map(|stream| stream.content.as_str()),
+        Some("priormalformed")
+    );
+
+    assert!(handle_core_event(
+        &mut state,
+        CoreEvent::Stream(AgentStreamEvent::ResponseAttemptDiscarded {
+            turn_id: "t1".into(),
+            attempt: 1,
+        }),
+    ));
+    let restored = state.ui.streaming.as_ref().expect("prior preview restored");
+    assert_eq!(restored.content, "prior");
+    assert!(restored.thinking.is_empty());
+    assert_eq!(restored.mode, crate::state::StreamMode::Text);
+    assert_eq!(restored.display_cursor, 2);
+    assert_eq!(state.ui.ephemeral.live_output_tokens(), 2);
+    assert!(state.session.tool_executions.is_empty());
+}
+
+#[test]
 fn test_session_reset_clears_transcript_adjacent_state() {
     let mut state = AppState::new();
     handle_core_event(

@@ -840,6 +840,33 @@ AgentSkillLifecycleWire = Annotated[
 ]
 
 
+class AgentStreamEventResponseAttemptStarted(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal["response_attempt_started"] = Field(
+        default="response_attempt_started", alias="type"
+    )
+    attempt: int
+    turn_id: TurnId
+
+
+class AgentStreamEventResponseAttemptCommitted(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal["response_attempt_committed"] = Field(
+        default="response_attempt_committed", alias="type"
+    )
+    attempt: int
+    turn_id: TurnId
+
+
+class AgentStreamEventResponseAttemptDiscarded(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal["response_attempt_discarded"] = Field(
+        default="response_attempt_discarded", alias="type"
+    )
+    attempt: int
+    turn_id: TurnId
+
+
 class AgentStreamEventTextDelta(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal["text_delta"] = Field(default="text_delta", alias="type")
@@ -904,6 +931,9 @@ class AgentStreamEventMcpToolCallEnd(BaseModel):
 
 AgentStreamEvent = Annotated[
     Union[
+        AgentStreamEventResponseAttemptStarted,
+        AgentStreamEventResponseAttemptCommitted,
+        AgentStreamEventResponseAttemptDiscarded,
         AgentStreamEventTextDelta,
         AgentStreamEventThinkingDelta,
         AgentStreamEventToolUseQueued,
@@ -6906,8 +6936,8 @@ class WorkerBadge(BaseModel):
 
 class WorkflowDialogEntry(BaseModel):
     name: str
-    source_path: str = Field(alias="sourcePath")
     description: str | None = None
+    source_path: str | None = Field(default=None, alias="sourcePath")
 
 
 class WorkflowDialogPayload(BaseModel):

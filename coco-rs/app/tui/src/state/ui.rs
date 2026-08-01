@@ -1163,6 +1163,23 @@ impl StreamingState {
         self.mode = StreamMode::Thinking;
     }
 
+    /// Restore the byte-exact visible document checkpoint captured before a
+    /// provisional provider attempt. Checkpoints are always prior String
+    /// lengths, so both truncation offsets are UTF-8 boundaries.
+    pub(crate) fn rollback_response_attempt(
+        &mut self,
+        text_bytes: usize,
+        thinking_bytes: usize,
+        mode: StreamMode,
+        display_cursor: usize,
+    ) {
+        truncate_to_byte_checkpoint(&mut self.content, text_bytes);
+        truncate_to_byte_checkpoint(&mut self.thinking, thinking_bytes);
+        self.mode = mode;
+        self.display_cursor = display_cursor.min(self.content.len());
+        self.visible_generation = next_stream_generation();
+    }
+
     /// Get visible content up to display cursor.
     pub fn visible_content(&self) -> &str {
         let end = self.display_cursor.min(self.content.len());
@@ -1198,6 +1215,11 @@ impl StreamingState {
         self.display_cursor = self.content.len();
         self.visible_generation = next_stream_generation();
     }
+}
+
+fn truncate_to_byte_checkpoint(text: &mut String, checkpoint: usize) {
+    let end = text.floor_char_boundary(checkpoint.min(text.len()));
+    text.truncate(end);
 }
 
 impl Default for StreamingState {

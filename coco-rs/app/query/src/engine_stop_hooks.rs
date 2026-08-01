@@ -38,12 +38,11 @@ mod tests;
 /// Map to the four exit shapes of the stop hook arm.
 #[derive(Debug)]
 pub(crate) enum StopHookDecision {
-    /// `isApiErrorMessage(lastMessage)` returned `true`: skip stop hooks AND
-    /// token-budget continuation; let the natural end-turn path close out so the
-    /// user sees the api_error explanation and a fresh turn can be
-    /// initiated by user input. Finding **C3**.
+    /// `isApiErrorMessage(lastMessage)` returned `true`: skip normal Stop hooks
+    /// and token-budget continuation, then close through the session's typed
+    /// failure path. Finding **C3**.
     ///
-    /// `error_type` carries the short canonical code lifted off the
+    /// `payload.error_type` carries the short canonical code lifted off the
     /// trailing assistant's [`coco_types::ApiError::error_type`]
     /// (`prompt_too_long` / `max_output_tokens` / `content_filter` /
     /// `invalid_request` / `model_error` / …). The engine uses it as
@@ -52,7 +51,7 @@ pub(crate) enum StopHookDecision {
     /// SkippedApiError exit collapsed to the generic
     /// `"end_turn_api_error"`). `None` only when the synthesis site
     /// didn't classify; the caller falls back to that legacy label.
-    SkippedApiError { error_type: Option<String> },
+    SkippedApiError { payload: LastApiErrorPayload },
     /// No hooks installed / all hooks passed cleanly. Caller proceeds
     /// to the token-budget continuation check, then the clean
     /// end-turn emit.
@@ -70,24 +69,24 @@ pub(crate) enum StopHookDecision {
     Prevented,
 }
 
-/// `ApiError` payload lifted off the most recent assistant message,
-/// when present. Returned by [`last_assistant_api_error_payload`] and
-/// consumed by the C3 death-spiral guard to populate the StopFailure
-/// hook input.
+/// `ApiError` payload lifted off the most recent assistant message.
+/// The session lifecycle consumes it as the typed terminal failure; keeping
+/// the full payload here avoids reconstructing failure semantics from a stop
+/// reason string.
 #[derive(Debug, Clone)]
 pub(crate) struct LastApiErrorPayload {
     /// Human-readable details.
     pub(crate) message: String,
-    /// Short canonical code. `None` when the synthesis site didn't
-    /// classify the error — the C3 guard then falls back to `"unknown"`.
+    /// Short canonical code. `None` when the synthesis site did not classify
+    /// the error.
     pub(crate) error_type: Option<String>,
 }
 
 /// Extract the `ApiError` payload from the most recent assistant
 /// message in `history`, when present. `Some(_)` is the typed
-/// predicate that drives the C3 death-spiral short-circuit; the payload
-/// is forwarded to `executeStopFailureHooks` so hook matchers can
-/// filter by specific error code. Walks backwards; ignores tool
+/// predicate that drives the C3 death-spiral short-circuit; the payload is
+/// returned to the session lifecycle so its single StopFailure hook path can
+/// preserve the specific error code. Walks backwards; ignores tool
 /// results / attachments / system messages / progress / tombstones /
 /// user trailers.
 fn last_assistant_api_error_payload(history: &MessageHistory) -> Option<LastApiErrorPayload> {
@@ -119,8 +118,8 @@ impl QueryEngine {
     /// Order of operations:
     ///
     /// 1. Check `last_assistant_api_error_message(history)` — if
-    ///    `Some(_)`, fire StopFailure hooks then return
-    ///    [`StopHookDecision::SkippedApiError`] (Finding C3).
+    ///    `Some(_)`, return [`StopHookDecision::SkippedApiError`] (Finding C3).
+    ///    The session lifecycle is the single StopFailure-hook owner.
     /// 2. If `self.hooks` is `None`, return [`StopHookDecision::Continue`].
     /// 3. Invoke `coco_hooks::orchestration::execute_stop` with the
     ///    current `stop_hook_active` flag and the assistant text
@@ -163,37 +162,7 @@ impl QueryEngine {
                 "skipping Stop hooks — last assistant message is api_error \
                  (C3 death-spiral guard)"
             );
-            // Fire StopFailure hooks before returning from the api_error
-            // short-circuit so observability / cleanup handlers still see
-            // the terminal signal. Fire-and-forget; swallow registry errors
-            // per the established
-            // engine_session.rs:246-256 pattern.
-            //
-            // `error_label` is the canonical short code
-            // (`max_output_tokens` / `prompt_too_long` /
-            // `content_filter` / `model_error` / …) so hook matchers
-            // can filter by specific error.
-            if let Some(hooks) = self.hooks_for(coco_types::HookEventType::StopFailure) {
-                let hook_ctx = self.orchestration_ctx();
-                let error_label = payload.error_type.as_deref().unwrap_or("unknown");
-                if let Err(e) = orchestration::execute_stop_failure(
-                    hooks,
-                    &hook_ctx,
-                    error_label,
-                    Some(payload.message.as_str()),
-                    /*last_assistant_message*/ None,
-                )
-                .await
-                {
-                    warn!(
-                        error = %e,
-                        "StopFailure hook execution failed (C3 api_error path)"
-                    );
-                }
-            }
-            return StopHookDecision::SkippedApiError {
-                error_type: payload.error_type,
-            };
+            return StopHookDecision::SkippedApiError { payload };
         }
 
         let Some(hooks) = self.hooks_for(coco_types::HookEventType::Stop) else {

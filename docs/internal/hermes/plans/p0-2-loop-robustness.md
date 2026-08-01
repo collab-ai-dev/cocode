@@ -1,8 +1,8 @@
 # P0-2 — Loop Robustness: Empty-Response Nudge · Edit Closest-Match · Bash ANSI Strip
 
-Status: not started · Size: S (three independent fixes; may split into
-separate commits) · Owner crates: `coco-query` (a), `coco-tools` (b, c),
-`coco-utils-string` (c helper)
+Status: (a) complete 2026-08-01; (b, c) not started · Size: S (three
+independent fixes; may split into separate commits) · Owner crates:
+`coco-query` (a), `coco-tools` (b, c), `coco-utils-string` (c helper)
 
 ---
 
@@ -64,10 +64,10 @@ In `handle_no_tool_calls_terminal`:
      (verbatim above);
    - otherwise → "You returned an empty response. Please respond to the
      request above."
-3. Mark nudge messages with the existing meta/virtual message flags so
-   they are filtered from the API payload after the turn resolves and
-   never rendered to the user (coco's `is_meta`/`is_virtual` machinery
-   replaces hermes's `_empty_recovery_synthetic` scrubbing).
+3. Keep malformed assistant/nudge pairs in a bounded, append-only API working
+   context anchored to durable message UUIDs. They never enter `MessageHistory`
+   or persistence, and retain causal order across intervening tool rounds and
+   compaction.
 4. Thinking-only responses (reasoning present, content empty): count as
    empty and nudge, but do NOT attempt hermes's provider-level thinking
    prefill continuation — that is a `vercel-ai-*` provider concern and
@@ -80,9 +80,16 @@ In `handle_no_tool_calls_terminal`:
 
 - Empty response ×1 then normal response → one nudge injected, turn
   completes, nudge absent from the persisted/normalized API view.
-- Empty ×4 → three nudges then clean `end_turn` (no infinite loop).
+- Empty ×4 → three nudges then one typed provider failure and exactly one
+  `TurnEnded(Failed)` (no infinite loop or false-success terminal).
 - Reasoning-only response → nudged (not silently completed).
 - `Off` policy → old behavior.
+
+As built, each provider response is also wrapped by
+`ResponseAttemptStarted`/`Committed`/`Discarded`. SDK and subagent output buffer
+text/thinking until commit; the TUI previews live and restores an exact
+checkpoint on discard, so malformed attempts cannot leak into external or
+durable output.
 
 ---
 

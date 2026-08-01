@@ -1,5 +1,6 @@
 use super::RunChatOptions;
 use super::parse_headless_goal_slash;
+use super::run::terminal_failure_message;
 use super::run_chat_with_options;
 use crate::AgentHostOptions;
 
@@ -47,6 +48,38 @@ fn parse_headless_goal_slash_rejects_other_inputs() {
     assert_eq!(parse_headless_goal_slash("goal finish"), None);
     assert_eq!(parse_headless_goal_slash("/goalx finish"), None);
     assert_eq!(parse_headless_goal_slash("/loop 5m /goal done"), None);
+}
+
+#[test]
+fn typed_turn_failure_is_a_headless_process_failure() {
+    let error = coco_types::ErrorPayload {
+        code: coco_types::ErrorCode::Provider,
+        message: "provider returned no terminal content".into(),
+    };
+    let outcome =
+        coco_types::TurnEndedParams::failed("failed-turn".into(), None, error.clone()).outcome;
+    let session_result = coco_types::SessionResultParams {
+        session_id: coco_types::SessionId::generate(),
+        total_turns: 1,
+        duration_ms: 0,
+        duration_api_ms: 0,
+        is_error: true,
+        stop_reason: "error_empty_response_retries".into(),
+        total_cost_usd: 0.0,
+        usage: coco_types::TokenUsage::default(),
+        model_usage: Default::default(),
+        permission_denials: Vec::new(),
+        result: None,
+        errors: vec![error.message],
+        structured_output: None,
+        fast_mode_state: None,
+        num_api_calls: Some(4),
+    };
+
+    assert_eq!(
+        terminal_failure_message(&outcome, &session_result).as_deref(),
+        Some("provider returned no terminal content")
+    );
 }
 
 #[test]

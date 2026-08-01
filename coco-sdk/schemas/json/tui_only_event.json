@@ -8031,12 +8031,15 @@
           "type": "string"
         },
         "sourcePath": {
-          "type": "string"
+          "description": "Where the script lives, or `None` for a workflow bundled into the\nbinary. Absent rather than a placeholder path so the picker's filter\ncannot match a location that does not exist.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
-        "name",
-        "sourcePath"
+        "name"
       ]
     },
     "WorkflowDialogPayload": {

@@ -630,6 +630,8 @@ pub async fn run_chat_with_options(
     cancel_monitor.abort();
     request_drain.abort();
 
+    let terminal_failure =
+        terminal_failure_message(&completion.ended.outcome, &completion.session_result);
     let session_result = completion.session_result;
 
     // Wait for scheduled turn-end extraction/session-memory work before
@@ -681,6 +683,10 @@ pub async fn run_chat_with_options(
         )
         .await;
 
+    if let Some(error) = terminal_failure {
+        return Err(anyhow::anyhow!(error));
+    }
+
     Ok(RunChatOutcome {
         effective_cwd: cwd.clone(),
         additional_dirs,
@@ -704,4 +710,24 @@ pub async fn run_chat_with_options(
         installed_fallback_count,
         final_messages,
     })
+}
+
+pub(super) fn terminal_failure_message(
+    outcome: &coco_types::TurnOutcome,
+    session_result: &coco_types::SessionResultParams,
+) -> Option<String> {
+    match outcome {
+        coco_types::TurnOutcome::Failed(failed) => Some(failed.error.message.clone()),
+        coco_types::TurnOutcome::Completed(_) if session_result.is_error => Some(
+            session_result
+                .errors
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "turn completed with an error session result".into()),
+        ),
+        coco_types::TurnOutcome::Completed(_)
+        | coco_types::TurnOutcome::Interrupted(_)
+        | coco_types::TurnOutcome::MaxTurnsReached(_)
+        | coco_types::TurnOutcome::BudgetExhausted(_) => None,
+    }
 }

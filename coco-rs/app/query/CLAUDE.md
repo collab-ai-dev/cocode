@@ -10,7 +10,7 @@ decisions. Emits `coco_types::CoreEvent` directly (no intermediate event enum).
 |------|---------|
 | `QueryEngine` | Orchestrator: owns tool/command registries, model runtime registry, state |
 | `QueryEngineConfig` | max_turns, total_token_budget (session cap), permission_mode, streaming_tool_execution, bypass_permissions_available, fallback_model, plan_mode_settings. Per-call `max_output_tokens` lives on `ModelInfo`, not here. |
-| `QueryResult`, `ContinueReason` | Loop control: `NextTurn`, `ReactiveCompactRetry`, `MaxOutputTokensEscalate`, `MaxOutputTokensRecovery`, `StopHookBlocking`, `TokenBudgetContinuation`, `CollapseDrainRetry` |
+| `QueryResult`, `QueryOutcome`, `ContinueReason` | Typed terminal result (`Completed`/`Failed`) plus loop control: `NextTurn`, `ReactiveCompactRetry`, `MaxOutputTokensEscalate`, `MaxOutputTokensRecovery`, `StopHookBlocking`, `TokenBudgetContinuation`, `CollapseDrainRetry` |
 | `SessionBootstrap` | Initial system prompt, messages, cost tracker |
 | `BudgetTracker`, `BudgetDecision` | Token budget; 3-continuation cap, 90% threshold, diminishing-returns stop |
 | `CommandQueue`, `QueuedCommand`, `QueuePriority`, `QueueOrigin` | `Now`/`Next`/`Later`; FIFO within priority; per-item `Uuid` for id-based removal; `QueueOrigin` drives framing prose. Every mutation advances a watch revision + activity timestamp for event-driven host supervision. |
@@ -46,8 +46,13 @@ Protocol: `TurnStarted` (runner-emitted, once per cycle — see
 `Completed`/`Failed`/`Interrupted`/`MaxTurnsReached`/`BudgetExhausted`),
 `CompactionStarted`, `ContextCompacted`, `Error` (budget nudge),
 `QueueStateChanged`, `CommandQueued`, `CommandDequeued`. Stream:
-`TextDelta`, `ThinkingDelta`, `ToolUseQueued`, `ToolUseStarted`,
-`ToolUseCompleted`. (Full catalog: `docs/internal/event-system-design.md`.)
+`ResponseAttemptStarted`/`Committed`/`Discarded`, `TextDelta`,
+`ThinkingDelta`, `ToolUseQueued`, `ToolUseStarted`, `ToolUseCompleted`.
+Text/thinking between attempt boundaries is provisional: SDK, TUI, and
+subagent-output consumers treat it transactionally. SDK/subagent output
+publishes only on `Committed`; TUI may preview it live but restores its
+byte-exact checkpoint on `Discarded`. (Full catalog:
+`docs/internal/event-system-design.md`.)
 
 **Cycle TurnId contract.** Hosts (the local-AppServer `turn/start` handler →
 `SessionTurnExecutor` in `app/agent-host`, harnesses) mint one `TurnId` per
@@ -166,8 +171,8 @@ empty-content assistant message via
 1. **`StopReason::ContentFilter`** — multi-LLM unified bucket (Anthropic
    `refusal`, OpenAI `content_filter`, Google `SAFETY`/`RECITATION`). No
    recovery — retry won't change a policy decision. Push partial + synthetic
-   message, fall through to the natural end-of-turn exit. Message text is
-   provider-agnostic (never names a vendor).
+   message, then terminate through the typed provider-failure exit. Message
+   text is provider-agnostic (never names a vendor).
 2. **`StopReason::ContextWindowExceeded`** — Anthropic-only finish reason on
    the extended-context beta (others report HTTP 400). Routes to
    `QueryEngine::handle_context_overflow` (reactive compaction), the same
@@ -181,16 +186,27 @@ empty-content assistant message via
    when unset — a hardcoded 64k would 4xx on smaller models), read from the
    **post-plan-swap** client so plan-mode sessions escalate against the Plan
    role; phase 2 injects the resume-nudge meta message up to
-   `MAX_OUTPUT_TOKENS_RECOVERY_LIMIT` times; phase 3 falls through. All three
-   push the synthetic message so transcripts carry the truncation marker.
+   `MAX_OUTPUT_TOKENS_RECOVERY_LIMIT` times; phase 3 terminates through the
+   typed provider-failure exit. All three push the synthetic message so
+   transcripts carry the truncation marker.
+
+The C3 `api_error` guard skips ordinary Stop hooks to avoid a retry spiral, but
+does not report success. Its full payload becomes `QueryOutcome::Failed`, and
+the session lifecycle is the single owner of the corresponding StopFailure
+hook and `TurnEnded(Failed)` emission.
 
 Clean empty terminals and `ToolUse` terminals with no reconstructed call are
 handled separately by `engine_terminal::handle_terminal_anomaly`. Each has a
 three-attempt counter and a typed `ContinueReason`; retries use a prompt-only
-assistant/user overlay, so malformed output and recovery nudges are neither
-persisted nor rendered. Exhaustion is a provider failure, not a successful
-empty turn. Structured-output retry keeps precedence over ordinary empty
-recovery.
+append-only working context. Each bounded assistant/nudge pair is anchored
+after the durable message that caused it; later request-preparation context may
+move before the pair, while the first durable assistant/tool response is a hard
+causal boundary. The transaction is included in prompt preflight but never
+persisted. Discarded attempt deltas never enter SDK/subagent output or the
+committed TUI transcript; a local live preview is rolled back.
+Exhaustion is `QueryOutcome::Failed(Provider)` and the same typed payload
+drives `TurnEnded`, `SessionResult`, agent adapters, and headless exit status.
+Structured-output retry keeps precedence over ordinary empty recovery.
 
 Layering: `coco-inference` is provider-agnostic and cannot construct
 `coco_messages::Message`. The typed `FinishReason` `{ unified, raw }`

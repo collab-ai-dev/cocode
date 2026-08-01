@@ -9,8 +9,9 @@
 use std::sync::Arc;
 
 use coco_messages::Message;
-use coco_messages::estimate_text_tokens;
 use coco_types::MessageOrigin;
+
+use crate::ContextualUserFragment;
 
 /// Max estimated tokens for any single inherited fragment.
 pub const MAX_TOKENS_PER_INHERITED_FRAGMENT: i64 = 8_192;
@@ -31,19 +32,6 @@ pub fn max_inherited_tokens(model_context_window: i64) -> i64 {
     MAX_INHERITED_TOKENS_ABSOLUTE_CAP
         .min((model_context_window / 2).max(0))
         .min((model_context_window - MIN_RESERVED_TOKENS).max(0))
-}
-
-/// A bounded, user-visible context fragment inserted into a prompt exactly once.
-/// Implementors render deterministic, budget-bounded text.
-pub trait ContextualUserFragment {
-    /// Render the fragment's text.
-    fn render(&self) -> String;
-
-    /// Estimated token cost of the rendered text. Reuses coco-messages so the
-    /// estimate matches history accounting.
-    fn estimated_tokens(&self) -> i64 {
-        estimate_text_tokens(&self.render())
-    }
 }
 
 /// Fidelity of a captured [`BoundedContext`].

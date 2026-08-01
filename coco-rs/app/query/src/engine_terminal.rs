@@ -1,5 +1,6 @@
 //! Terminal branch helpers for `QueryEngine::run_session_loop_inner`.
 
+use coco_context::ContextualUserFragment as _;
 use coco_llm_types::ToolCallPart;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
@@ -15,13 +16,9 @@ use crate::engine_loop_state::LoopAccumulator;
 use crate::engine_loop_state::LoopConstants;
 use crate::engine_loop_state::LoopTurnState;
 use crate::engine_result::make_query_result;
+use crate::engine_result::mark_query_failed;
 use crate::helpers::budget_pct_used;
 use crate::helpers::should_continue_for_budget;
-
-pub(crate) struct TerminalQueryResult {
-    pub(crate) result: QueryResult,
-    pub(crate) terminal: Option<coco_types::TurnEndedParams>,
-}
 
 pub(crate) enum NoToolCallsTerminal {
     ContinueLoop,
@@ -51,14 +48,6 @@ const MISSING_TOOL_CALL_FAILURE: &str =
 pub(crate) enum TerminalAnomaly {
     EmptyCleanResponse,
     ToolUseWithoutCalls,
-}
-
-pub(crate) fn terminal_anomaly_error_for_stop_reason(stop_reason: &str) -> Option<&'static str> {
-    match stop_reason {
-        "error_empty_response_retries" => Some(EMPTY_RESPONSE_FAILURE),
-        "error_missing_tool_calls" => Some(MISSING_TOOL_CALL_FAILURE),
-        _ => None,
-    }
 }
 
 pub(crate) fn classify_terminal_anomaly(
@@ -105,7 +94,6 @@ impl QueryEngine {
         acc: &LoopAccumulator,
         turn_state: &mut LoopTurnState,
         history: &MessageHistory,
-        cycle_turn_id: Option<coco_types::TurnId>,
     ) -> NoToolCallsTerminal {
         let (attempt, nudge, transition, failure_reason, failure_message) = match anomaly {
             TerminalAnomaly::EmptyCleanResponse => {
@@ -144,40 +132,40 @@ impl QueryEngine {
                 ?anomaly,
                 "retrying malformed terminal response"
             );
-            turn_state
-                .recovery_overlay
-                .replace(assistant_msg, coco_messages::create_meta_message(nudge));
+            let fragment = coco_context::TerminalRecoveryNudgeFragment::new(nudge);
+            turn_state.recovery_context.append(
+                history,
+                assistant_msg,
+                coco_messages::create_meta_message(&fragment.render()),
+            );
             turn_state.transition = Some(transition);
             turn_state.stop_hook_active = false;
             turn_state.max_tokens_recovery_count = 0;
             return NoToolCallsTerminal::ContinueLoop;
         }
 
-        turn_state.recovery_overlay.clear();
+        turn_state.recovery_context.clear();
         warn!(turn = turn_state.turn, ?anomaly, %failure_message);
-        let terminal = cycle_turn_id.map(|id| {
-            coco_types::TurnEndedParams::failed(
-                id,
-                Some(acc.total_usage),
-                coco_types::ErrorPayload {
-                    message: failure_message.to_string(),
-                    code: coco_types::ErrorCode::Provider,
-                },
-            )
-        });
+        let error = coco_types::ErrorPayload {
+            message: failure_message.to_string(),
+            code: coco_types::ErrorCode::Provider,
+        };
         NoToolCallsTerminal::Return {
-            result: Box::new(make_query_result(
-                consts,
-                acc,
-                turn_state,
-                String::new(),
-                /*cancelled*/ false,
-                /*budget_exhausted*/ false,
-                Some(failure_reason.into()),
-                history.to_vec(),
-                history.snapshot(),
+            result: Box::new(mark_query_failed(
+                make_query_result(
+                    consts,
+                    acc,
+                    turn_state,
+                    String::new(),
+                    /*cancelled*/ false,
+                    /*budget_exhausted*/ false,
+                    Some(failure_reason.into()),
+                    history.to_vec(),
+                    history.snapshot(),
+                ),
+                error,
             )),
-            terminal,
+            terminal: None,
         }
     }
 
@@ -191,9 +179,7 @@ impl QueryEngine {
         context_window: i64,
         history: &mut MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
-        cycle_turn_id: Option<coco_types::TurnId>,
-        total_usage: &TokenUsage,
-    ) -> TerminalQueryResult {
+    ) -> QueryResult {
         warn!(
             estimated_tokens,
             context_window,
@@ -210,23 +196,17 @@ impl QueryEngine {
             event_tx,
         )
         .await;
-        let terminal = cycle_turn_id.map(|id| {
-            coco_types::TurnEndedParams::failed(
-                id,
-                Some(*total_usage),
-                coco_types::ErrorPayload {
-                    message: format!(
-                        "blocking_limit: estimated {estimated_tokens} tokens \
-                             exceeds active model context window {context_window} \
-                             (provider={}, model={})",
-                        active_snapshot.provider, active_snapshot.model_id,
-                    ),
-                    code: coco_types::ErrorCode::Provider,
-                },
-            )
-        });
-        TerminalQueryResult {
-            result: make_query_result(
+        let error = coco_types::ErrorPayload {
+            message: format!(
+                "blocking_limit: estimated {estimated_tokens} tokens \
+                 exceeds active model context window {context_window} \
+                 (provider={}, model={})",
+                active_snapshot.provider, active_snapshot.model_id,
+            ),
+            code: coco_types::ErrorCode::Provider,
+        };
+        mark_query_failed(
+            make_query_result(
                 consts,
                 acc,
                 turn_state,
@@ -237,13 +217,13 @@ impl QueryEngine {
                 history.to_vec(),
                 history.snapshot(),
             ),
-            terminal,
-        }
+            error,
+        )
     }
 
     /// Terminal handler for an oversized image at the API boundary.
-    /// Push a synthetic api_error assistant message, emit `TurnEnded(failed)`,
-    /// and end the turn without sending the request — the image can't be
+    /// Push a synthetic api_error assistant message and return a typed failure;
+    /// the session lifecycle owns `TurnEnded(Failed)`. The image cannot be
     /// auto-shrunk here, so the user must resize and retry.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn handle_image_too_large_terminal(
@@ -254,9 +234,7 @@ impl QueryEngine {
         err: &coco_messages::ImageSizeError,
         history: &mut MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
-        cycle_turn_id: Option<coco_types::TurnId>,
-        total_usage: &TokenUsage,
-    ) -> TerminalQueryResult {
+    ) -> QueryResult {
         let message = err.message();
         warn!(
             base64_len = err.base64_len,
@@ -269,18 +247,12 @@ impl QueryEngine {
             event_tx,
         )
         .await;
-        let terminal = cycle_turn_id.map(|id| {
-            coco_types::TurnEndedParams::failed(
-                id,
-                Some(*total_usage),
-                coco_types::ErrorPayload {
-                    message: message.clone(),
-                    code: coco_types::ErrorCode::Provider,
-                },
-            )
-        });
-        TerminalQueryResult {
-            result: make_query_result(
+        let error = coco_types::ErrorPayload {
+            message: message.clone(),
+            code: coco_types::ErrorCode::Input,
+        };
+        mark_query_failed(
+            make_query_result(
                 consts,
                 acc,
                 turn_state,
@@ -291,8 +263,8 @@ impl QueryEngine {
                 history.to_vec(),
                 history.snapshot(),
             ),
-            terminal,
-        }
+            error,
+        )
     }
 
     pub(crate) async fn handle_usd_budget_terminal(
@@ -303,27 +275,19 @@ impl QueryEngine {
         response_text: String,
         history: &mut MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
-        cycle_turn_id: Option<coco_types::TurnId>,
-        total_usage: &TokenUsage,
         tool_calls: &[ToolCallPart],
         total_cost_usd: f64,
         max_budget_usd: f64,
-    ) -> TerminalQueryResult {
+    ) -> QueryResult {
         append_budget_skipped_tool_results(history, event_tx, tool_calls, &self.tools).await;
-        let terminal = cycle_turn_id.map(|id| {
-            coco_types::TurnEndedParams::failed(
-                id,
-                Some(*total_usage),
-                coco_types::ErrorPayload {
-                    message: format!(
-                        "maximum USD budget reached (${total_cost_usd:.4} / ${max_budget_usd:.4})"
-                    ),
-                    code: coco_types::ErrorCode::Resource,
-                },
-            )
-        });
-        TerminalQueryResult {
-            result: make_query_result(
+        let error = coco_types::ErrorPayload {
+            message: format!(
+                "maximum USD budget reached (${total_cost_usd:.4} / ${max_budget_usd:.4})"
+            ),
+            code: coco_types::ErrorCode::Resource,
+        };
+        mark_query_failed(
+            make_query_result(
                 consts,
                 acc,
                 turn_state,
@@ -334,28 +298,16 @@ impl QueryEngine {
                 history.to_vec(),
                 history.snapshot(),
             ),
-            terminal,
-        }
+            error,
+        )
     }
 
-    pub(crate) fn build_structured_output_retry_cap_failed(
-        &self,
-        cycle_turn_id: Option<coco_types::TurnId>,
-        usage: TokenUsage,
-    ) -> Option<coco_types::TurnEndedParams> {
-        cycle_turn_id.map(|id| {
-            let cap = self.config.max_structured_output_retries;
-            coco_types::TurnEndedParams::failed(
-                id,
-                Some(usage),
-                coco_types::ErrorPayload {
-                    message: format!(
-                        "Failed to provide valid structured output after {cap} attempts"
-                    ),
-                    code: coco_types::ErrorCode::Provider,
-                },
-            )
-        })
+    pub(crate) fn structured_output_retry_cap_error(&self) -> coco_types::ErrorPayload {
+        let cap = self.config.max_structured_output_retries;
+        coco_types::ErrorPayload {
+            message: format!("Failed to provide valid structured output after {cap} attempts"),
+            code: coco_types::ErrorCode::Provider,
+        }
     }
 
     pub(crate) async fn handle_no_tool_calls_terminal(
@@ -383,21 +335,22 @@ impl QueryEngine {
                 &acc.run_artifacts,
                 self.config.max_structured_output_retries,
             ) {
-                let terminal =
-                    self.build_structured_output_retry_cap_failed(cycle_turn_id.clone(), usage);
                 return NoToolCallsTerminal::Return {
-                    result: Box::new(make_query_result(
-                        consts,
-                        acc,
-                        turn_state,
-                        response_text,
-                        /*cancelled*/ false,
-                        /*budget_exhausted*/ false,
-                        Some("error_max_structured_output_retries".into()),
-                        history.to_vec(),
-                        history.snapshot(),
+                    result: Box::new(mark_query_failed(
+                        make_query_result(
+                            consts,
+                            acc,
+                            turn_state,
+                            response_text,
+                            /*cancelled*/ false,
+                            /*budget_exhausted*/ false,
+                            Some("error_max_structured_output_retries".into()),
+                            history.to_vec(),
+                            history.snapshot(),
+                        ),
+                        self.structured_output_retry_cap_error(),
                     )),
-                    terminal,
+                    terminal: None,
                 };
             }
             turn_state.transition = Some(crate::ContinueReason::NextTurn);
@@ -498,35 +451,36 @@ impl QueryEngine {
             crate::engine_stop_hooks::StopHookDecision::BlockedContinueLoop => {
                 NoToolCallsTerminal::ContinueLoop
             }
-            crate::engine_stop_hooks::StopHookDecision::SkippedApiError { error_type } => {
-                let stop_reason = error_type.unwrap_or_else(|| "end_turn_api_error".into());
+            crate::engine_stop_hooks::StopHookDecision::SkippedApiError { payload } => {
+                let stop_reason = payload
+                    .error_type
+                    .clone()
+                    .unwrap_or_else(|| "end_turn_api_error".into());
                 info!(
                     turn = turn_state.turn,
                     stop_reason = %stop_reason,
-                    "ending turn early — last message is api_error (C3 guard)"
+                    "ending turn with typed failure — last message is api_error (C3 guard)"
                 );
-                let terminal = self
-                    .finish_successful_turn_completed(
-                        event_tx,
-                        history,
-                        usage,
-                        cycle_turn_id.clone(),
-                        parsed_stop_reason,
-                    )
-                    .await;
+                let error = coco_types::ErrorPayload {
+                    message: payload.message,
+                    code: coco_types::ErrorCode::Provider,
+                };
                 NoToolCallsTerminal::Return {
-                    result: Box::new(make_query_result(
-                        consts,
-                        &*acc,
-                        &*turn_state,
-                        response_text,
-                        /*cancelled*/ false,
-                        /*budget_exhausted*/ false,
-                        Some(stop_reason),
-                        history.to_vec(),
-                        history.snapshot(),
+                    result: Box::new(mark_query_failed(
+                        make_query_result(
+                            consts,
+                            &*acc,
+                            &*turn_state,
+                            response_text,
+                            /*cancelled*/ false,
+                            /*budget_exhausted*/ false,
+                            Some(stop_reason),
+                            history.to_vec(),
+                            history.snapshot(),
+                        ),
+                        error,
                     )),
-                    terminal,
+                    terminal: None,
                 }
             }
             crate::engine_stop_hooks::StopHookDecision::Continue => {

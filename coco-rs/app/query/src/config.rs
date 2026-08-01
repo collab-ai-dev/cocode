@@ -572,6 +572,10 @@ pub struct SessionBootstrap {
 /// Result of running the query engine.
 #[derive(Debug)]
 pub struct QueryResult {
+    /// Typed terminal disposition. This is the source of truth for callers;
+    /// `stop_reason` remains diagnostic/model metadata and is never parsed to
+    /// decide whether the query succeeded.
+    pub outcome: QueryOutcome,
     /// Final assistant text response.
     pub response_text: String,
     /// Total turns executed.
@@ -612,4 +616,24 @@ pub struct QueryResult {
     pub structured_output: Option<serde_json::Value>,
     /// Max-turn terminal signal captured from this engine invocation.
     pub max_turns_reached: Option<coco_types::MaxTurnsReachedPayload>,
+}
+
+/// Semantic disposition of a finished query invocation.
+#[derive(Debug, Clone)]
+pub enum QueryOutcome {
+    /// The engine reached a valid terminal response or an intentional
+    /// non-error stop such as cancellation.
+    Completed,
+    /// The engine exhausted recovery or hit a terminal runtime constraint.
+    Failed(coco_types::ErrorPayload),
+}
+
+impl QueryResult {
+    /// Return the terminal error when this invocation failed.
+    pub fn failure(&self) -> Option<&coco_types::ErrorPayload> {
+        match &self.outcome {
+            QueryOutcome::Completed => None,
+            QueryOutcome::Failed(error) => Some(error),
+        }
+    }
 }

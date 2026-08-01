@@ -453,6 +453,13 @@ impl AgentQueryEngine for QueryEngineAdapter {
                 })?
         };
 
+        if let Some(error) = result.failure() {
+            return Err(Box::new(coco_error::PlainError::new(
+                error.message.clone(),
+                status_for_query_error(error.code),
+            )));
+        }
+
         // Count ToolResult messages as a proxy for tool_use_count —
         // every committed tool_use produces exactly one tool_result,
         // so this tracks the actual tool_use count.
@@ -481,6 +488,23 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // when `output_schema` forced the contract; `None` otherwise.
             structured_output: result.structured_output,
         })
+    }
+}
+
+fn status_for_query_error(code: coco_types::ErrorCode) -> coco_error::StatusCode {
+    match code {
+        coco_types::ErrorCode::Common | coco_types::ErrorCode::Unknown => {
+            coco_error::StatusCode::Internal
+        }
+        coco_types::ErrorCode::Input => coco_error::StatusCode::InvalidRequest,
+        coco_types::ErrorCode::Io => coco_error::StatusCode::IoError,
+        coco_types::ErrorCode::Network => coco_error::StatusCode::NetworkError,
+        coco_types::ErrorCode::Auth => coco_error::StatusCode::AuthenticationFailed,
+        coco_types::ErrorCode::HookBlocked => coco_error::StatusCode::PermissionDenied,
+        coco_types::ErrorCode::Config => coco_error::StatusCode::InvalidConfig,
+        coco_types::ErrorCode::Provider => coco_error::StatusCode::ProviderError,
+        coco_types::ErrorCode::Resource => coco_error::StatusCode::ResourcesExhausted,
+        coco_types::ErrorCode::SystemReminder => coco_error::StatusCode::ReminderGeneratorFailed,
     }
 }
 

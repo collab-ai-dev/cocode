@@ -16,9 +16,56 @@ use coco_types::MCP_TOOL_SEPARATOR;
 
 use super::projection::flush_streaming_to_messages;
 use crate::state::AppState;
+use crate::state::StreamMode;
 
 pub(super) fn handle(state: &mut AppState, event: AgentStreamEvent) -> bool {
     match event {
+        AgentStreamEvent::ResponseAttemptStarted { attempt, .. } => {
+            let had_streaming = state.ui.streaming.is_some();
+            let (text_bytes, thinking_bytes, mode, display_cursor) = state
+                .ui
+                .streaming
+                .as_ref()
+                .map_or((0, 0, StreamMode::Text, 0), |streaming| {
+                    (
+                        streaming.content.len(),
+                        streaming.thinking.len(),
+                        streaming.mode,
+                        streaming.display_cursor,
+                    )
+                });
+            state.ui.ephemeral.begin_response_attempt(
+                attempt,
+                had_streaming,
+                text_bytes,
+                thinking_bytes,
+                mode,
+                display_cursor,
+            );
+            false
+        }
+        AgentStreamEvent::ResponseAttemptCommitted { attempt, .. } => {
+            state.ui.ephemeral.commit_response_attempt(attempt);
+            false
+        }
+        AgentStreamEvent::ResponseAttemptDiscarded { attempt, .. } => {
+            let Some(rollback) = state.ui.ephemeral.discard_response_attempt(attempt) else {
+                return false;
+            };
+            state.session.discard_uncommitted_tool_streams();
+            if let Some(streaming) = state.ui.streaming.as_mut() {
+                streaming.rollback_response_attempt(
+                    rollback.text_bytes,
+                    rollback.thinking_bytes,
+                    rollback.mode,
+                    rollback.display_cursor,
+                );
+            }
+            if !rollback.had_streaming {
+                state.ui.streaming = None;
+            }
+            true
+        }
         AgentStreamEvent::TextDelta { delta, .. } => {
             state.ui.ephemeral.add_output_delta(&delta);
             // Defensive: in normal flow TurnStarted creates the streaming

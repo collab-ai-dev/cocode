@@ -46,6 +46,10 @@ use crate::engine_helpers::ProgressThrottle;
 use crate::engine_helpers::drain_one_progress;
 use crate::plan_mode_reminder::PlanModeReminder;
 
+#[cfg(test)]
+#[path = "engine_loop_state.test.rs"]
+mod tests;
+
 /// Alias for the iteration-transition signal. The Rust enum carrying these
 /// variants is [`crate::config::ContinueReason`] — defined there so the
 /// public [`crate::QueryResult::last_continue_reason`] field type stays
@@ -107,8 +111,8 @@ pub(crate) struct LoopTurnState {
     /// How many `ToolUse`-without-tool-calls retries have fired in this user
     /// cycle.
     pub(crate) missing_tool_call_retries: i32,
-    /// Prompt-only assistant/user recovery pair. Never persisted or emitted.
-    pub(crate) recovery_overlay: RecoveryOverlay,
+    /// API-only recovery transaction. Never persisted or emitted.
+    pub(crate) recovery_context: RecoveryWorkingContext,
     /// UUID of the last user message already handed to UserPrompt-tier
     /// reminders. Prevents duplicate `at_mentioned_files` /
     /// `agent_mentions` / `ultrathink_effort` emissions when the same
@@ -152,7 +156,7 @@ impl LoopTurnState {
             max_tokens_recovery_count: 0,
             empty_response_retries: 0,
             missing_tool_call_retries: 0,
-            recovery_overlay: RecoveryOverlay::default(),
+            recovery_context: RecoveryWorkingContext::default(),
             reminder_last_user_input_uuid: None,
             budget: BudgetTracker::new(total_token_budget, max_turns, max_continuations),
             count_next_iteration_as_turn: true,
@@ -162,23 +166,143 @@ impl LoopTurnState {
     }
 }
 
-/// Transient context used to repair malformed terminal responses.
+/// Transient, append-only context used to repair malformed terminal responses.
+/// Each segment is anchored after the last durable message that preceded the
+/// malformed attempt. Request-preparation context appended on a later retry is
+/// allowed to precede the recovery transaction, while the first durable
+/// assistant/tool response remains a hard causal boundary.
 #[derive(Default)]
-pub(crate) struct RecoveryOverlay {
-    messages: Vec<Arc<Message>>,
+pub(crate) struct RecoveryWorkingContext {
+    segments: Vec<RecoverySegment>,
+    assistant_bytes: usize,
 }
 
-impl RecoveryOverlay {
-    pub(crate) fn replace(&mut self, assistant: Message, nudge: Message) {
-        self.messages = vec![Arc::new(assistant), Arc::new(nudge)];
+struct RecoverySegment {
+    after: Option<uuid::Uuid>,
+    assistant: Arc<Message>,
+    nudge: Arc<Message>,
+}
+
+impl RecoveryWorkingContext {
+    const MAX_TOTAL_ASSISTANT_BYTES: usize = 24_000;
+    const EMPTY_ASSISTANT_PLACEHOLDER: &str = "[No message content]";
+    const OMITTED_ASSISTANT_PLACEHOLDER: &str = "[Assistant response omitted]";
+
+    pub(crate) fn append(&mut self, history: &MessageHistory, assistant: Message, nudge: Message) {
+        let remaining = Self::MAX_TOTAL_ASSISTANT_BYTES.saturating_sub(self.assistant_bytes);
+        let (assistant, retained_bytes) = Self::bounded_assistant(assistant, remaining);
+        self.assistant_bytes = self.assistant_bytes.saturating_add(retained_bytes);
+        self.segments.push(RecoverySegment {
+            after: history.last().and_then(|message| message.uuid().copied()),
+            assistant: Arc::new(assistant),
+            nudge: Arc::new(nudge),
+        });
     }
 
     pub(crate) fn clear(&mut self) {
-        self.messages.clear();
+        self.segments.clear();
+        self.assistant_bytes = 0;
     }
 
-    pub(crate) fn messages(&self) -> &[Arc<Message>] {
-        &self.messages
+    pub(crate) fn assemble(&self, durable: &[Arc<Message>]) -> Vec<Arc<Message>> {
+        if self.segments.is_empty() {
+            return durable.to_vec();
+        }
+        let recovery_len = self.segments.len().saturating_mul(2);
+        let mut insertion_boundaries = Vec::with_capacity(self.segments.len());
+        let mut previous_boundary = 0;
+        for segment in &self.segments {
+            let raw_boundary = match segment.after.as_ref() {
+                None => 0,
+                Some(anchor) => durable
+                    .iter()
+                    .position(|message| message.uuid() == Some(anchor))
+                    .map_or(durable.len(), |index| index + 1),
+            };
+            // The reminder pipeline runs before every provider request and
+            // appends ambient context (notably UserContext) after the anchor
+            // captured at the malformed terminal. Keep that request context
+            // before the recovery transaction so its nudge remains the most
+            // recent user instruction. Never cross a committed provider
+            // response: a valid assistant/tool round happened after the
+            // recovery exchange and must stay after it.
+            let raw_boundary = durable[raw_boundary..]
+                .iter()
+                .position(|message| {
+                    matches!(
+                        message.as_ref(),
+                        Message::Assistant(_) | Message::ToolResult(_)
+                    )
+                })
+                .map_or(durable.len(), |offset| raw_boundary + offset);
+            // Compaction may replace an anchor while retaining a later one.
+            // Once that happens, the compacted durable history is the new
+            // prefix for this and every later recovery segment. Enforcing a
+            // monotonic boundary preserves the transaction's causal order.
+            let boundary = raw_boundary.max(previous_boundary);
+            insertion_boundaries.push(boundary);
+            previous_boundary = boundary;
+        }
+
+        let mut assembled = Vec::with_capacity(durable.len() + recovery_len);
+        let mut next_segment = 0;
+        for boundary in 0..=durable.len() {
+            while insertion_boundaries.get(next_segment) == Some(&boundary) {
+                let segment = &self.segments[next_segment];
+                assembled.push(segment.assistant.clone());
+                assembled.push(segment.nudge.clone());
+                next_segment += 1;
+            }
+            if let Some(message) = durable.get(boundary) {
+                assembled.push(message.clone());
+            }
+        }
+        assembled
+    }
+
+    fn bounded_assistant(assistant: Message, max_bytes: usize) -> (Message, usize) {
+        let mut assistant = match assistant {
+            Message::Assistant(assistant) => assistant,
+            other => return (other, 0),
+        };
+        let coco_messages::LlmMessage::Assistant {
+            content,
+            provider_options,
+        } = &mut assistant.message
+        else {
+            return (Message::Assistant(assistant), 0);
+        };
+        let source_text = content
+            .iter()
+            .filter_map(|part| match part {
+                coco_messages::AssistantContent::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        let text =
+            coco_utils_string::take_bytes_at_char_boundary(&source_text, max_bytes).to_string();
+        let retained_bytes = text.len();
+        // Normalization intentionally drops empty/whitespace-only assistant
+        // messages. Recovery, however, is an explicit assistant/user pair:
+        // losing the assistant role changes the causal prompt shape and can
+        // merge the nudge with the original user request. Keep a fixed,
+        // prompt-only marker when there is no safe assistant text to retain.
+        // The byte budget above covers model-produced text; these bounded
+        // protocol markers are constant overhead and never enter history.
+        let text = if text.trim().is_empty() {
+            if source_text.trim().is_empty() {
+                Self::EMPTY_ASSISTANT_PLACEHOLDER.to_string()
+            } else {
+                Self::OMITTED_ASSISTANT_PLACEHOLDER.to_string()
+            }
+        } else {
+            text
+        };
+        *content = vec![coco_messages::AssistantContent::Text(
+            coco_llm_types::TextPart::new(text),
+        )];
+        *provider_options = None;
+        (Message::Assistant(assistant), retained_bytes)
     }
 }
 

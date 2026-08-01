@@ -108,10 +108,16 @@ pub enum CoreEvent {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentStreamEvent {
+    /// Starts one provisional provider response inside the logical turn.
+    ResponseAttemptStarted { turn_id: TurnId, attempt: i32 },
+    /// Publishes buffered semantic events in their original order.
+    ResponseAttemptCommitted { turn_id: TurnId, attempt: i32 },
+    /// Drops text/thinking while retaining real tool lifecycle events.
+    ResponseAttemptDiscarded { turn_id: TurnId, attempt: i32 },
     /// Text content delta from assistant response.
-    TextDelta { turn_id: String, delta: String },
+    TextDelta { turn_id: TurnId, delta: String },
     /// Thinking/reasoning delta from extended thinking.
-    ThinkingDelta { turn_id: String, delta: String },
+    ThinkingDelta { turn_id: TurnId, delta: String },
     /// Tool use block received from API (input complete). Creates a ThreadItem.
     ToolUseQueued { call_id: String, name: String, input: serde_json::Value },
     /// Tool execution has begun (after permission check).
@@ -216,7 +222,7 @@ pub enum ItemStatus {
 |------|-------------|-----------|
 | `CoreEvent` | `coco-types` | Shared across coco-query (producer), coco-tui, coco-cli, coco-bridge (consumers) |
 | `ServerNotification` (56 base + 9 TS gaps = 65 target) | `coco-types` | Protocol-level, shared across all consumers and serialized to SDK. Phase 0 implemented 56 base + 4 P1 gaps = 60. |
-| `AgentStreamEvent` (7 variants) | `coco-types` | Shared across coco-query (producer) and coco-tui/StreamAccumulator (consumers) |
+| `AgentStreamEvent` (10 variants) | `coco-types` | Shared across coco-query (producer) and coco-tui/StreamAccumulator (consumers) |
 | `TuiOnlyEvent` (20 variants) | `coco-types` | Although UI-exclusive in semantics, the type must live in `coco-types` because `CoreEvent::Tui(TuiOnlyEvent)` is part of the envelope enum defined in `coco-types`. Moving it to `coco-tui` would create a cyclic dependency (coco-types → coco-tui → coco-types). The TUI-only semantic contract is preserved via consumer dispatch rules in `StreamAccumulator` and `handle_core_event()` — SDK and App-Server consumers drop these events. |
 | `ThreadItem`, `ThreadItemDetails`, `ItemStatus` | `coco-types` | Used in ServerNotification params and StreamAccumulator output |
 | `StreamAccumulator` | `coco-query` | Stateful converter, only used inside the query/SDK output path |
@@ -376,10 +382,13 @@ The following events are design enhancements in cocode-rs with no TS counterpart
 
 > **Not to be confused with** `coco_types::StreamEvent` (inference-layer raw LLM stream). See Section 1.5 for the distinction.
 
-### 3.1 Existing (7 variants) — KEEP
+### 3.1 Existing (10 variants) — KEEP
 
 | Variant | Fields | Accumulates To |
 |---------|--------|---------------|
+| `ResponseAttemptStarted` | turn_id, attempt | Opens a provisional semantic-event transaction; no notification |
+| `ResponseAttemptCommitted` | turn_id, attempt | Publishes matching buffered events in source order |
+| `ResponseAttemptDiscarded` | turn_id, attempt | Drops malformed text/thinking; publishes real tool lifecycle events |
 | `TextDelta` | turn_id, delta | → ItemStarted(AgentMessage) + AgentMessageDelta + ItemCompleted |
 | `ThinkingDelta` | turn_id, delta | → ItemStarted(Reasoning) + ReasoningDelta + ItemCompleted |
 | `ToolUseQueued` | call_id, name, input | → ItemStarted(tool-specific ThreadItem) |
@@ -398,7 +407,14 @@ TS raw `StreamEvent` (from `@anthropic-ai/sdk`) is internal to `queryModelWithSt
 - `content_block_delta` (with `delta.type`: `text_delta`, `thinking_delta`, `input_json_delta`)
 - `message_delta` (stop_reason, usage)
 
-The 7 `AgentStreamEvent` variants are a high-level abstraction of these raw SSE events, adding tool lifecycle semantics (Queued → Started → Completed) and MCP tracking that TS handles implicitly inside `query()`. No alignment needed.
+The 10 `AgentStreamEvent` variants are a high-level abstraction of these raw
+SSE events, adding response-attempt transactions, tool lifecycle semantics
+(Queued → Started → Completed), and MCP tracking that TS handles implicitly
+inside `query()`. A malformed, errored, or prematurely closed provider
+attempt is discarded before SDK/subagent-output consumers publish its deltas;
+the TUI may preview deltas but restores an exact text/thinking checkpoint on
+discard. A complete or explicitly cancelled attempt is committed. No
+alignment needed.
 
 ### 3.3 Gap: ToolCallDelta in Stream Layer
 
@@ -609,18 +625,24 @@ pub struct PluginReloadResult {
 
 ```
 AgentStreamEvent flow:
-  ThinkingDelta* → TextDelta* → ToolUseQueued → ToolUseStarted → ToolUseCompleted
-       ↓                ↓              ↓                ↓                ↓
-  ItemStarted      ItemStarted    ItemStarted     ItemUpdated     ItemCompleted
-  (Reasoning)      (AgentMsg)     (Tool-specific)
-  ReasoningDelta   AgentMsgDelta
-  ...
-  ItemCompleted    ItemCompleted
-  (on text start   (on flush)
-   or flush)
+  ResponseAttemptStarted
+       → (ThinkingDelta | TextDelta)*
+       → ResponseAttemptCommitted  → publish buffered semantic items
+       → ResponseAttemptDiscarded  → drop buffered deltas
+
+  ToolUseQueued → ToolUseStarted → ToolUseCompleted
+       ↓                ↓                ↓
+  ItemStarted      ItemUpdated       ItemCompleted
+  (Tool-specific; buffered in source order while an attempt is open)
 ```
 
-**State**: `text_buffer`, `text_item_id`, `thinking_buffer`, `thinking_item_id`, `active_items: HashMap<call_id, ThreadItem>`
+**State**: `text_buffer`, `text_item_id`, `thinking_buffer`,
+`thinking_item_id`, `active_items: HashMap<call_id, ThreadItem>`, plus the
+attempt-scoped provisional event buffer. The coordinator owns an equivalent
+attempt-local output buffer. The TUI deliberately previews live deltas and
+instead records exact text/thinking/output-count/mode/cursor/existence
+checkpoints to roll back on discard; uncommitted tool-input previews are also
+removed. Discarded assistant content never reaches durable or external output.
 
 ### 6.2 ThreadItem Tool Mapping (KEEP)
 
@@ -946,7 +968,7 @@ The cocode-rs approach is more standardized and extensible.
 | Event Layer | TUI | SDK/CLI (NDJSON) | App-Server (WebSocket) | IDE Extension |
 |-------------|-----|------------------|----------------------|---------------|
 | `ServerNotification` (57 implemented) | exhaustive `handle_protocol()` — no intermediate bridge type | `server_notification_to_jsonrpc()` → NDJSON | broadcast to clients | broadcast |
-| `AgentStreamEvent` (7) | exhaustive `handle_stream()` — direct display | `StreamAccumulator` → `ServerNotification` → NDJSON | `StreamAccumulator` → `ServerNotification` | accumulator |
+| `AgentStreamEvent` (10) | exhaustive `handle_stream()` — live preview + exact rollback | attempt buffer → `StreamAccumulator` → `ServerNotification` → NDJSON | attempt buffer → `StreamAccumulator` → `ServerNotification` | accumulator |
 | `TuiOnlyEvent` (20) | exhaustive `handle_tui_only()` — overlays/toasts | **dropped** | **dropped** | partial (approval only) |
 
 > **Note**: The TUI consumer path was simplified (April 2026) by deleting the `TuiNotification` bridge type. The TUI now matches on `CoreEvent`'s three layers directly. See §1.7 and §1.8 for rationale.
@@ -1057,7 +1079,7 @@ Architecture:       3-layer CoreEvent ✓             Flat SDKMessage
 Protocol events:    57 ServerNotification           ~24 SDKMessage
                     (Phase 0 complete)              (already exceeded)
 
-Stream events:      7 AgentStreamEvent              Raw SSE events (content_block_delta, etc.)
+Stream events:      10 AgentStreamEvent             Raw SSE events plus attempt transactions
                     + StreamAccumulator ✓            + normalizeMessage() in queryHelpers.ts
                     (explicit state machine)
 

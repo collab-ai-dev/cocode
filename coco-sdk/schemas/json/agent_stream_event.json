@@ -4,6 +4,72 @@
   "description": "Agent-loop stream events. Higher-level than `coco_types::StreamEvent`\n(which represents raw LLM inference deltas). Adds:\n- Tool lifecycle states (Queued → Started → Completed)\n- MCP tool call tracking\n- Turn-scoped item IDs\n\nInput to `StreamAccumulator`.\nSee `event-system-design.md` Section 1.5.",
   "oneOf": [
     {
+      "description": "Begin one provider response attempt within a logical turn. Text and\nthinking deltas remain provisional until the matching commit.",
+      "type": "object",
+      "properties": {
+        "attempt": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "turn_id": {
+          "$ref": "#/$defs/TurnId"
+        },
+        "type": {
+          "type": "string",
+          "const": "response_attempt_started"
+        }
+      },
+      "required": [
+        "type",
+        "turn_id",
+        "attempt"
+      ]
+    },
+    {
+      "description": "Commit the provisional text/thinking deltas for an attempt.",
+      "type": "object",
+      "properties": {
+        "attempt": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "turn_id": {
+          "$ref": "#/$defs/TurnId"
+        },
+        "type": {
+          "type": "string",
+          "const": "response_attempt_committed"
+        }
+      },
+      "required": [
+        "type",
+        "turn_id",
+        "attempt"
+      ]
+    },
+    {
+      "description": "Discard provisional deltas from a malformed attempt before retrying.",
+      "type": "object",
+      "properties": {
+        "attempt": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "turn_id": {
+          "$ref": "#/$defs/TurnId"
+        },
+        "type": {
+          "type": "string",
+          "const": "response_attempt_discarded"
+        }
+      },
+      "required": [
+        "type",
+        "turn_id",
+        "attempt"
+      ]
+    },
+    {
       "description": "Text content delta from assistant response.",
       "type": "object",
       "properties": {

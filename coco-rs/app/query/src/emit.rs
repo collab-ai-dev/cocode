@@ -180,6 +180,9 @@ pub(crate) fn emit_feature_state_metrics(features: &coco_types::Features) {
 /// `Debug` representation just for the trace log.
 fn stream_kind(evt: &AgentStreamEvent) -> &'static str {
     match evt {
+        AgentStreamEvent::ResponseAttemptStarted { .. } => "response_attempt_started",
+        AgentStreamEvent::ResponseAttemptCommitted { .. } => "response_attempt_committed",
+        AgentStreamEvent::ResponseAttemptDiscarded { .. } => "response_attempt_discarded",
         AgentStreamEvent::TextDelta { .. } => "text_delta",
         AgentStreamEvent::ThinkingDelta { .. } => "thinking_delta",
         AgentStreamEvent::ToolUseQueued { .. } => "tool_use_queued",

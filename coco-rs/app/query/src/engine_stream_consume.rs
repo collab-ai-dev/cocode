@@ -203,6 +203,14 @@ impl QueryEngine {
         F: Fn(PreparedToolCall, RunOneRuntime) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = UnstampedToolCallOutcome> + Send + 'static,
     {
+        let _ = crate::emit::emit_stream(
+            event_tx,
+            crate::AgentStreamEvent::ResponseAttemptStarted {
+                turn_id: event_turn_id.clone(),
+                attempt: turn_state.attempt,
+            },
+        )
+        .await;
         // Accumulate stream state. `tool_order` preserves the order tool
         // calls first appeared (by `ToolInputStart`) so the downstream
         // exec path keeps the same ordering contract as the blocking path.

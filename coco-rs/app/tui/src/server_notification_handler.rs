@@ -169,6 +169,9 @@ fn core_event_variant(notif: &coco_types::ServerNotification) -> &'static str {
 fn stream_event_variant(s: &coco_types::AgentStreamEvent) -> &'static str {
     use coco_types::AgentStreamEvent as E;
     match s {
+        E::ResponseAttemptStarted { .. } => "ResponseAttemptStarted",
+        E::ResponseAttemptCommitted { .. } => "ResponseAttemptCommitted",
+        E::ResponseAttemptDiscarded { .. } => "ResponseAttemptDiscarded",
         E::TextDelta { .. } => "TextDelta",
         E::ThinkingDelta { .. } => "ThinkingDelta",
         E::ToolUseQueued { .. } => "ToolUseQueued",

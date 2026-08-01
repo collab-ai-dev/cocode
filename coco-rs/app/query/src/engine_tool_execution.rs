@@ -19,6 +19,7 @@ use crate::engine_loop_state::LoopConstants;
 use crate::engine_loop_state::LoopServices;
 use crate::engine_loop_state::LoopTurnState;
 use crate::engine_result::make_query_result;
+use crate::engine_result::mark_query_failed;
 use crate::tool_call_runner::ToolCallRunner;
 
 pub(crate) enum ToolExecutionBranch {
@@ -151,21 +152,22 @@ impl QueryEngine {
                 };
             }
             if structured_output_failure_limit_reached {
-                let terminal =
-                    self.build_structured_output_retry_cap_failed(cycle_turn_id.clone(), usage);
                 return ToolExecutionBranch::Return {
-                    result: Box::new(make_query_result(
-                        consts,
-                        &*acc,
-                        &*turn_state,
-                        response_text,
-                        /*cancelled*/ false,
-                        /*budget_exhausted*/ false,
-                        Some("error_max_structured_output_retries".into()),
-                        history.to_vec(),
-                        history.snapshot(),
+                    result: Box::new(mark_query_failed(
+                        make_query_result(
+                            consts,
+                            &*acc,
+                            &*turn_state,
+                            response_text,
+                            /*cancelled*/ false,
+                            /*budget_exhausted*/ false,
+                            Some("error_max_structured_output_retries".into()),
+                            history.to_vec(),
+                            history.snapshot(),
+                        ),
+                        self.structured_output_retry_cap_error(),
                     )),
-                    terminal,
+                    terminal: None,
                 };
             }
             if structured_output_recall_limit_reached {
@@ -367,21 +369,22 @@ impl QueryEngine {
             };
         }
         if structured_output_failure_limit_reached {
-            let terminal =
-                self.build_structured_output_retry_cap_failed(cycle_turn_id.clone(), usage);
             return ToolExecutionBranch::Return {
-                result: Box::new(make_query_result(
-                    consts,
-                    &*acc,
-                    &*turn_state,
-                    response_text,
-                    /*cancelled*/ false,
-                    /*budget_exhausted*/ false,
-                    Some("error_max_structured_output_retries".into()),
-                    history.to_vec(),
-                    history.snapshot(),
+                result: Box::new(mark_query_failed(
+                    make_query_result(
+                        consts,
+                        &*acc,
+                        &*turn_state,
+                        response_text,
+                        /*cancelled*/ false,
+                        /*budget_exhausted*/ false,
+                        Some("error_max_structured_output_retries".into()),
+                        history.to_vec(),
+                        history.snapshot(),
+                    ),
+                    self.structured_output_retry_cap_error(),
                 )),
-                terminal,
+                terminal: None,
             };
         }
         if structured_output_recall_limit_reached {

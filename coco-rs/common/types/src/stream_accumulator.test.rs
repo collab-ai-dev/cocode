@@ -60,6 +60,97 @@ fn consecutive_text_deltas_share_item() {
 }
 
 #[test]
+fn response_attempt_publishes_only_on_matching_commit() {
+    let mut acc = StreamAccumulator::new("turn-1");
+    assert!(
+        acc.process(AgentStreamEvent::ResponseAttemptStarted {
+            turn_id: "turn-1".into(),
+            attempt: 1,
+        })
+        .is_empty()
+    );
+    assert!(acc.process(text_delta("hello")).is_empty());
+    assert!(
+        acc.process(AgentStreamEvent::ResponseAttemptCommitted {
+            turn_id: "turn-1".into(),
+            attempt: 2,
+        })
+        .is_empty()
+    );
+    let published = acc.process(AgentStreamEvent::ResponseAttemptCommitted {
+        turn_id: "turn-1".into(),
+        attempt: 1,
+    });
+    assert_eq!(published.len(), 2);
+}
+
+#[test]
+fn discarded_response_attempt_does_not_flush_content() {
+    let mut acc = StreamAccumulator::new("turn-1");
+    acc.process(AgentStreamEvent::ResponseAttemptStarted {
+        turn_id: "turn-1".into(),
+        attempt: 1,
+    });
+    acc.process(text_delta("malformed"));
+    acc.process(AgentStreamEvent::ResponseAttemptDiscarded {
+        turn_id: "turn-1".into(),
+        attempt: 1,
+    });
+    assert!(acc.flush().is_empty());
+}
+
+#[test]
+fn response_attempt_preserves_text_before_tool_order_on_commit() {
+    let mut acc = StreamAccumulator::new("turn-1");
+    acc.process(AgentStreamEvent::ResponseAttemptStarted {
+        turn_id: "turn-1".into(),
+        attempt: 1,
+    });
+    assert!(acc.process(text_delta("before tool")).is_empty());
+    assert!(
+        acc.process(tool_queued("call-1", "Bash", json!({"command": "true"}),))
+            .is_empty()
+    );
+
+    let published = acc.process(AgentStreamEvent::ResponseAttemptCommitted {
+        turn_id: "turn-1".into(),
+        attempt: 1,
+    });
+    assert!(matches!(
+        published.first(),
+        Some(ServerNotification::ItemStarted { item, .. })
+            if matches!(&item.details, ThreadItemDetails::AgentMessage { .. })
+    ));
+    assert!(matches!(
+        published.last(),
+        Some(ServerNotification::ItemStarted { item, .. })
+            if matches!(&item.details, ThreadItemDetails::CommandExecution { .. })
+    ));
+}
+
+#[test]
+fn discarded_response_keeps_real_tool_lifecycle_but_not_text() {
+    let mut acc = StreamAccumulator::new("turn-1");
+    acc.process(AgentStreamEvent::ResponseAttemptStarted {
+        turn_id: "turn-1".into(),
+        attempt: 1,
+    });
+    acc.process(text_delta("malformed"));
+    acc.process(tool_queued("call-1", "Bash", json!({"command": "true"})));
+
+    let published = acc.process(AgentStreamEvent::ResponseAttemptDiscarded {
+        turn_id: "turn-1".into(),
+        attempt: 1,
+    });
+    assert_eq!(published.len(), 1);
+    assert!(matches!(
+        &published[0],
+        ServerNotification::ItemStarted { item, .. }
+            if matches!(&item.details, ThreadItemDetails::CommandExecution { .. })
+    ));
+}
+
+#[test]
 fn flush_emits_item_completed_for_text() {
     let mut acc = StreamAccumulator::new("turn-1");
     let _ = acc.process(text_delta("hello"));

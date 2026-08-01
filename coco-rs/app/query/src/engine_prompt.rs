@@ -86,13 +86,17 @@ impl QueryEngine {
     /// `ToolUseContext.messages` so tools observe the same view the
     /// model just received.
     pub(crate) async fn build_prompt(&self, history: &MessageHistory) -> BuiltPrompt {
-        self.build_prompt_with_overlay(history, &[]).await
+        self.build_prompt_with_recovery(
+            history,
+            &crate::engine_loop_state::RecoveryWorkingContext::default(),
+        )
+        .await
     }
 
-    pub(crate) async fn build_prompt_with_overlay(
+    pub(crate) async fn build_prompt_with_recovery(
         &self,
         history: &MessageHistory,
-        recovery_overlay: &[Arc<Message>],
+        recovery_context: &crate::engine_loop_state::RecoveryWorkingContext,
     ) -> BuiltPrompt {
         let mut prompt = Vec::new();
 
@@ -148,7 +152,7 @@ impl QueryEngine {
         } else {
             history.to_vec()
         };
-        messages_for_api.extend(recovery_overlay.iter().cloned());
+        messages_for_api = recovery_context.assemble(&messages_for_api);
 
         // Budget rewrites: CoW — only the K messages with selected
         // tool-result replacements pay a deep `Message` clone +

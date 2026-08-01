@@ -354,6 +354,22 @@ impl SessionEnvelope {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentStreamEvent {
+    /// Begin one provider response attempt within a logical turn. Text and
+    /// thinking deltas remain provisional until the matching commit.
+    ResponseAttemptStarted {
+        turn_id: crate::TurnId,
+        attempt: i32,
+    },
+    /// Commit the provisional text/thinking deltas for an attempt.
+    ResponseAttemptCommitted {
+        turn_id: crate::TurnId,
+        attempt: i32,
+    },
+    /// Discard provisional deltas from a malformed attempt before retrying.
+    ResponseAttemptDiscarded {
+        turn_id: crate::TurnId,
+        attempt: i32,
+    },
     /// Text content delta from assistant response.
     TextDelta {
         turn_id: crate::TurnId,
@@ -405,9 +421,11 @@ pub enum AgentStreamEvent {
 impl AgentStreamEvent {
     pub fn turn_id(&self) -> Option<crate::TurnId> {
         match self {
-            Self::TextDelta { turn_id, .. } | Self::ThinkingDelta { turn_id, .. } => {
-                Some(turn_id.clone())
-            }
+            Self::ResponseAttemptStarted { turn_id, .. }
+            | Self::ResponseAttemptCommitted { turn_id, .. }
+            | Self::ResponseAttemptDiscarded { turn_id, .. }
+            | Self::TextDelta { turn_id, .. }
+            | Self::ThinkingDelta { turn_id, .. } => Some(turn_id.clone()),
             Self::ToolUseQueued { .. }
             | Self::ToolUseStarted { .. }
             | Self::ToolUseCompleted { .. }

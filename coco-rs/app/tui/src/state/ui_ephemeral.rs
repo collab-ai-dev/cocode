@@ -89,6 +89,28 @@ pub(crate) struct UiEphemeralState {
     /// suppresses itself once this stamp is ≥5s old. Cleared the
     /// moment any non-completed task reappears.
     pub(crate) tasks_all_completed_since_ms: Option<i64>,
+    /// Rollback checkpoint for the provider response currently previewed.
+    response_attempt: Option<ResponseAttemptCheckpoint>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ResponseAttemptRollback {
+    pub(crate) had_streaming: bool,
+    pub(crate) text_bytes: usize,
+    pub(crate) thinking_bytes: usize,
+    pub(crate) mode: crate::state::ui::StreamMode,
+    pub(crate) display_cursor: usize,
+}
+
+#[derive(Debug, Clone)]
+struct ResponseAttemptCheckpoint {
+    attempt: i32,
+    output_chars: i64,
+    had_streaming: bool,
+    text_bytes: usize,
+    thinking_bytes: usize,
+    mode: crate::state::ui::StreamMode,
+    display_cursor: usize,
 }
 
 impl UiEphemeralState {
@@ -109,6 +131,7 @@ impl UiEphemeralState {
             interrupting: false,
         });
         self.last_total_paused_ms = 0;
+        self.response_attempt = None;
     }
 
     /// End the current turn. Preserves the final `total_paused_ms`
@@ -119,6 +142,7 @@ impl UiEphemeralState {
         if let Some(turn) = self.turn.take() {
             self.last_total_paused_ms = turn.total_paused_ms;
         }
+        self.response_attempt = None;
     }
 
     /// Tick the status-indicator pause clock based on the current
@@ -203,6 +227,66 @@ impl UiEphemeralState {
         turn.output_chars = turn
             .output_chars
             .saturating_add(delta.chars().count() as i64);
+    }
+
+    pub(crate) fn begin_response_attempt(
+        &mut self,
+        attempt: i32,
+        had_streaming: bool,
+        text_bytes: usize,
+        thinking_bytes: usize,
+        mode: crate::state::ui::StreamMode,
+        display_cursor: usize,
+    ) {
+        debug_assert!(
+            self.response_attempt.is_none(),
+            "response attempt {attempt} started before the prior preview was finalized"
+        );
+        self.response_attempt = Some(ResponseAttemptCheckpoint {
+            attempt,
+            output_chars: self.turn.as_ref().map_or(0, |turn| turn.output_chars),
+            had_streaming,
+            text_bytes,
+            thinking_bytes,
+            mode,
+            display_cursor,
+        });
+    }
+
+    pub(crate) fn commit_response_attempt(&mut self, attempt: i32) -> bool {
+        if self
+            .response_attempt
+            .as_ref()
+            .is_none_or(|response| response.attempt != attempt)
+        {
+            return false;
+        }
+        self.response_attempt = None;
+        true
+    }
+
+    pub(crate) fn discard_response_attempt(
+        &mut self,
+        attempt: i32,
+    ) -> Option<ResponseAttemptRollback> {
+        if self
+            .response_attempt
+            .as_ref()
+            .is_none_or(|response| response.attempt != attempt)
+        {
+            return None;
+        }
+        let response = self.response_attempt.take()?;
+        if let Some(turn) = self.turn.as_mut() {
+            turn.output_chars = response.output_chars;
+        }
+        Some(ResponseAttemptRollback {
+            had_streaming: response.had_streaming,
+            text_bytes: response.text_bytes,
+            thinking_bytes: response.thinking_bytes,
+            mode: response.mode,
+            display_cursor: response.display_cursor,
+        })
     }
 
     /// Approximate live output tokens for the current running turn.
