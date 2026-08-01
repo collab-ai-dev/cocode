@@ -3,6 +3,24 @@ use vercel_ai_provider::TextPart;
 use vercel_ai_provider::ToolCallPart;
 use vercel_ai_provider::ToolResultPart;
 
+fn projected_call_id(id: &str) -> String {
+    let prompt = vec![LanguageModelV4Message::Assistant {
+        content: vec![AssistantContentPart::ToolCall(ToolCallPart {
+            tool_call_id: id.to_string(),
+            tool_name: "test".into(),
+            input: serde_json::Value::Null,
+            provider_executed: None,
+            provider_metadata: None,
+            invalid: false,
+            invalid_reason: None,
+        })],
+        provider_options: None,
+    }];
+    ResponsesCallIdProjector::for_prompt(&prompt)
+        .project(id)
+        .to_string()
+}
+
 #[test]
 fn converts_system_as_developer() {
     let prompt = vec![LanguageModelV4Message::system("Be helpful")];
@@ -248,11 +266,7 @@ fn converts_tool_result() {
 #[test]
 fn responses_call_id_preserves_ids_up_to_the_limit() {
     let id = "x".repeat(64);
-    assert!(matches!(
-        responses_call_id(&id),
-        std::borrow::Cow::Borrowed(_)
-    ));
-    assert_eq!(responses_call_id(&id), id);
+    assert_eq!(projected_call_id(&id), id);
 }
 
 #[test]
@@ -298,7 +312,40 @@ fn long_responses_call_id_is_stable_and_shared_by_call_and_output() {
 fn long_responses_call_id_hashes_the_full_utf8_value() {
     let first = "工".repeat(65);
     let second = format!("{}具", "工".repeat(64));
-    assert_ne!(responses_call_id(&first), responses_call_id(&second));
+    assert_ne!(projected_call_id(&first), projected_call_id(&second));
+}
+
+#[test]
+fn long_call_id_never_shadows_a_caller_provided_short_id() {
+    let long_id = format!("tool-call-{}", "x".repeat(100));
+    let digest = format!("{:x}", sha2::Sha256::digest(long_id.as_bytes()));
+    let colliding_short_id = format!("call_{}", &digest[..32]);
+    let make_call = |id: String| {
+        AssistantContentPart::ToolCall(ToolCallPart {
+            tool_call_id: id,
+            tool_name: "exec".into(),
+            input: serde_json::json!({}),
+            provider_executed: None,
+            provider_metadata: None,
+            invalid: false,
+            invalid_reason: None,
+        })
+    };
+    let prompt = vec![LanguageModelV4Message::Assistant {
+        content: vec![make_call(colliding_short_id.clone()), make_call(long_id)],
+        provider_options: None,
+    }];
+    let (items, _) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+    assert_eq!(items[0]["call_id"], colliding_short_id);
+    assert_ne!(items[0]["call_id"], items[1]["call_id"]);
+    assert!(
+        items[1]["call_id"]
+            .as_str()
+            .expect("projected call id")
+            .chars()
+            .count()
+            <= MAX_RESPONSES_CALL_ID_CHARS
+    );
 }
 
 #[test]

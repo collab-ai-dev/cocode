@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 use serde_json::Value;
@@ -24,20 +24,80 @@ use super::provider_metadata::reasoning_encrypted_content;
 
 const MAX_RESPONSES_CALL_ID_CHARS: usize = 64;
 
-fn responses_call_id(id: &str) -> Cow<'_, str> {
-    if id.chars().count() <= MAX_RESPONSES_CALL_ID_CHARS {
-        return Cow::Borrowed(id);
+struct ResponsesCallIdProjector {
+    by_original: HashMap<String, String>,
+}
+
+impl ResponsesCallIdProjector {
+    fn for_prompt(prompt: &LanguageModelV4Prompt) -> Self {
+        let mut ids = HashSet::new();
+        for message in prompt {
+            match message {
+                LanguageModelV4Message::Assistant { content, .. } => {
+                    for part in content {
+                        if let AssistantContentPart::ToolCall(call) = part {
+                            ids.insert(call.tool_call_id.clone());
+                        }
+                    }
+                }
+                LanguageModelV4Message::Tool { content, .. } => {
+                    for part in content {
+                        if let ToolContentPart::ToolResult(result) = part {
+                            ids.insert(result.tool_call_id.clone());
+                        }
+                    }
+                }
+                LanguageModelV4Message::System { .. }
+                | LanguageModelV4Message::Developer { .. }
+                | LanguageModelV4Message::User { .. } => {}
+            }
+        }
+
+        let mut reserved: HashSet<String> = ids
+            .iter()
+            .filter(|id| id.chars().count() <= MAX_RESPONSES_CALL_ID_CHARS)
+            .cloned()
+            .collect();
+        let mut long_ids: Vec<String> = ids
+            .into_iter()
+            .filter(|id| id.chars().count() > MAX_RESPONSES_CALL_ID_CHARS)
+            .collect();
+        long_ids.sort();
+
+        let mut by_original = HashMap::new();
+        for original in long_ids {
+            let digest = format!("{:x}", sha2::Sha256::digest(original.as_bytes()));
+            let mut projected = None;
+            // Start with 128 bits, then deterministically lengthen the digest
+            // when a short caller-provided ID or another projection occupies
+            // the candidate. `call_` leaves 59 ASCII characters available.
+            for digest_chars in 32..=59 {
+                let candidate = format!("call_{}", &digest[..digest_chars]);
+                if reserved.insert(candidate.clone()) {
+                    projected = Some(candidate);
+                    break;
+                }
+            }
+            let projected = projected.unwrap_or_else(|| {
+                let mut ordinal = 2_i64;
+                loop {
+                    let suffix = format!("_{ordinal}");
+                    let digest_chars = MAX_RESPONSES_CALL_ID_CHARS - "call_".len() - suffix.len();
+                    let candidate = format!("call_{}{suffix}", &digest[..digest_chars]);
+                    if reserved.insert(candidate.clone()) {
+                        break candidate;
+                    }
+                    ordinal += 1;
+                }
+            });
+            by_original.insert(original, projected);
+        }
+        Self { by_original }
     }
 
-    let digest = sha2::Sha256::digest(id.as_bytes());
-    let mut projected = String::with_capacity(37);
-    projected.push_str("call_");
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    for byte in &digest[..16] {
-        projected.push(HEX[(byte >> 4) as usize] as char);
-        projected.push(HEX[(byte & 0x0f) as usize] as char);
+    fn project<'a>(&'a self, id: &'a str) -> &'a str {
+        self.by_original.get(id).map_or(id, String::as_str)
     }
-    Cow::Owned(projected)
 }
 
 /// Flags indicating which provider tools are present, used for input conversion.
@@ -116,6 +176,7 @@ pub fn convert_to_openai_responses_input_with_flags(
 ) -> (Vec<Value>, Vec<Warning>) {
     let mut items = Vec::new();
     let mut warnings = Vec::new();
+    let call_ids = ResponsesCallIdProjector::for_prompt(prompt);
 
     for msg in prompt {
         match msg {
@@ -166,14 +227,14 @@ pub fn convert_to_openai_responses_input_with_flags(
                 content,
                 provider_options: _,
             } => {
-                convert_assistant_parts(content, &mut items, flags);
+                convert_assistant_parts(content, &mut items, flags, &call_ids);
             }
 
             LanguageModelV4Message::Tool {
                 content,
                 provider_options: _,
             } => {
-                convert_tool_parts(content, &mut items, flags);
+                convert_tool_parts(content, &mut items, flags, &call_ids);
             }
         }
     }
@@ -264,6 +325,7 @@ fn convert_assistant_parts(
     parts: &[AssistantContentPart],
     items: &mut Vec<Value>,
     flags: &ProviderToolFlags,
+    call_ids: &ResponsesCallIdProjector,
 ) {
     // Collect text parts into a message, and emit tool calls as separate items
     let mut text_parts = Vec::new();
@@ -291,7 +353,7 @@ fn convert_assistant_parts(
                 }
 
                 let tool_name = &tc.tool_name;
-                let call_id = responses_call_id(&tc.tool_call_id);
+                let call_id = call_ids.project(&tc.tool_call_id);
 
                 // Handle provider-specific tool call types
                 if flags.has_local_shell && tool_name == "local_shell" {
@@ -426,6 +488,7 @@ fn convert_tool_parts(
     parts: &[ToolContentPart],
     items: &mut Vec<Value>,
     flags: &ProviderToolFlags,
+    call_ids: &ResponsesCallIdProjector,
 ) {
     for part in parts {
         match part {
@@ -436,7 +499,7 @@ fn convert_tool_parts(
                 }
 
                 let tool_name = result.tool_name.as_str();
-                let call_id = responses_call_id(&result.tool_call_id);
+                let call_id = call_ids.project(&result.tool_call_id);
 
                 // Handle provider-specific tool output types
                 if flags.has_local_shell
