@@ -106,12 +106,15 @@ pub async fn build_agent_team_wiring(
         .current_task_runtime()
         .await
         .context("TaskRuntime must be attached before AgentTeam wiring")?;
+    let task_registry: coco_tool_runtime::AgentTaskRegistryRef = task_rt.clone();
+    let agent_liveness: coco_tool_runtime::AgentLivenessReporterRef = task_rt;
     let mut handle = SwarmAgentHandle::new(
         runner.clone(),
         team_manager,
         cwd.clone(),
         Arc::clone(session.runtime_config()),
-        task_rt as coco_tool_runtime::AgentTaskRegistryRef,
+        task_registry,
+        agent_liveness,
     );
     // Bridge subagent `TaskPanelChanged` snapshots to the surface (TUI).
     // Same source channel as the TaskManager sink wired at bootstrap.

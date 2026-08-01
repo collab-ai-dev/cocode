@@ -121,6 +121,7 @@ fn create_test_handle_with_registry(
         "/tmp".to_string(),
         runtime_config,
         task_registry,
+        Arc::new(coco_tool_runtime::NoOpAgentLivenessReporter),
     )
 }
 

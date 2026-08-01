@@ -61,8 +61,11 @@ coordinator, host, and surfaces share values without importing one another.
   is active).
 - **Subagent progress is an interface heartbeat, not a DTO mutation:** the
   child event drain maps model deltas/usage and tool/MCP lifecycle events to
-  `TaskHandle::record_agent_activity`. It does not own timeout policy;
-  `coco-agent-host::TaskRuntime` owns warnings and cancellation.
+  the required, narrow `AgentLivenessReporter` capability. Builtin and MCP
+  calls use distinct active-call identities, so parallel/overlapping
+  lifecycles remain `RunningTool` until the final matching completion. The
+  drain does not own timeout policy; `coco-agent-host::TaskRuntime` owns
+  warnings and cancellation.
 
 ## Conventions
 
