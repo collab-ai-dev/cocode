@@ -546,3 +546,99 @@ fn negated_schema_uses_the_same_key_projection() {
         .expect("restore negated-schema key");
     assert_eq!(input["forbidden value"], true);
 }
+
+#[test]
+fn restoration_accepts_input_the_model_wrote_with_the_original_name() {
+    // Aliases are opaque digests, so a model will sometimes emit the
+    // human-readable key it saw in the tool description instead. In the
+    // from-wire direction that key is already correct — rejecting it would
+    // cost a `<tool_use_error>` round trip for input that needs no repair.
+    let schema = json!({
+        "type": "object",
+        "properties": {"display name": {"type": "string"}}
+    });
+    let (_, projection) = project_schema(&schema);
+    let mut aliases = ToolSchemaAliases::default();
+    aliases.insert("user".into(), projection);
+
+    let mut input = json!({"display name": "Ada"});
+    aliases.restore_input("user", &mut input).expect("restored");
+    assert_eq!(input, json!({"display name": "Ada"}));
+}
+
+#[test]
+fn a_schema_without_invalid_names_allocates_no_projection() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "file_path": {"type": "string"},
+            "limit": {"type": "integer"},
+            "nested": {
+                "type": "object",
+                "properties": {"offset": {"type": "integer"}}
+            }
+        },
+        "required": ["file_path"]
+    });
+    let (projected, projection) = project_schema(&schema);
+
+    assert_eq!(projected, schema, "a clean schema goes out untouched");
+    let mut aliases = ToolSchemaAliases::default();
+    aliases.insert("Read".into(), projection);
+    assert!(!aliases.requires_projection("Read"));
+    assert!(aliases.is_empty());
+
+    // And the transform seams are no-ops rather than schema walks.
+    let mut input = json!({"file_path": "/tmp/x", "unknown": {"deep": 1}});
+    let before = input.clone();
+    aliases
+        .project_input("Read", &mut input)
+        .expect("projected");
+    aliases.restore_input("Read", &mut input).expect("restored");
+    assert_eq!(input, before);
+}
+
+#[test]
+fn unprojectable_history_input_is_kept_verbatim_instead_of_failing_the_request() {
+    // The same history is replayed on every turn: a hard error here would
+    // brick the session until compaction dropped the offending message.
+    let schema = json!({
+        "type": "object",
+        "properties": {"display name": {"type": "string"}}
+    });
+    let (projected, projection) = project_schema(&schema);
+    let wire_name = projected["properties"]
+        .as_object()
+        .expect("properties")
+        .keys()
+        .next()
+        .expect("wire key")
+        .clone();
+    let mut aliases = ToolSchemaAliases::default();
+    aliases.insert("user".into(), projection);
+
+    let poisoned = json!({(wire_name.clone()): "already projected"});
+    let mut messages = vec![json!({
+        "role": "assistant",
+        "content": [
+            {"type": "tool_use", "id": "toolu_1", "name": "user", "input": poisoned},
+            {"type": "tool_use", "id": "toolu_2", "name": "user",
+             "input": {"display name": "Grace"}},
+        ]
+    })];
+
+    let skipped = aliases.project_message_tool_inputs(&mut messages);
+    assert_eq!(skipped, vec!["user".to_string()]);
+
+    let blocks = messages[0]["content"].as_array().expect("content");
+    assert_eq!(
+        blocks[0]["input"],
+        json!({(wire_name.clone()): "already projected"}),
+        "the unprojectable block is sent exactly as it arrived"
+    );
+    assert_eq!(
+        blocks[1]["input"],
+        json!({(wire_name): "Grace"}),
+        "a sibling block still projects normally"
+    );
+}

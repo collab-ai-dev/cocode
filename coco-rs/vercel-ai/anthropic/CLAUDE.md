@@ -72,9 +72,23 @@ in `coco-inference` — see "Multi-Provider Boundaries" in the workspace
   dependencies (including the legacy schema form), required-only keys, and
   alias-aware `patternProperties` in a schema-wide injective namespace.
   Prompt projection and response restoration are atomic and carry an explicit
-  per-transaction rename ledger; alias/original collisions, unexpected
-  pre-projected keys, or unresolved refs become structured invalid input
-  instead of partially mutating or silently overwriting user data.
+  per-transaction rename ledger; alias/original collisions or unresolved refs
+  become structured invalid input instead of partially mutating or silently
+  overwriting user data.
+  - **A schema with no invalid names allocates nothing.** `project_schema`
+    returns an empty projection, so no alias graph is built and
+    `project_input` / `restore_input` / `project_message_tool_inputs` are
+    early-out no-ops. This is the path ~every session takes; do not add work
+    before that check.
+  - **History projection degrades, it never fails the request.** A replayed
+    `tool_use.input` that cannot be projected is sent verbatim with a
+    `Warning`. Failing hard would be permanent: the same history is replayed
+    every turn, so one bad block would brick the session until compaction
+    dropped it.
+  - **Restoration accepts the original name.** Aliases are opaque digests, so
+    a model may emit the human-readable key. In the from-wire direction that
+    key is already correct and passes through; only the to-wire direction
+    rejects a pre-projected key.
 
 ## Extended thinking
 

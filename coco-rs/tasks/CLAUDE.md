@@ -20,6 +20,9 @@ V1 (`TodoWrite`) and V2 (`Task*` tools) are gated by `Feature::TaskV2` via `Tool
   carries monotonic sequence, coarse execution phase, and `tokio::time::Instant`.
   It never enters `TaskStateBase`; event producers record activity through the
   tool-runtime contract and agent-host subscribes to enforce policy.
+  `record_agent_activity` is called per streamed delta, so it **samples** —
+  a same-phase heartbeat younger than 1s is dropped rather than waking the
+  watchdog (whose shortest limit is minutes).
 - `TaskOutput` — `{stdout, stderr, exit_code}`.
 - `push_workflow_progress` folds each delta through
   `workflow_progress::apply_workflow_progress` (index-keyed upsert for

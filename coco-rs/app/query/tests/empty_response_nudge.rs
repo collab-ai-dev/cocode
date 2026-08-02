@@ -294,6 +294,24 @@ async fn off_policy_keeps_legacy_end_turn() {
     assert_eq!(result.stop_reason.as_deref(), Some("end_turn"));
 }
 
+/// `Off` opts out of the whole mechanism, not just the empty-response half —
+/// otherwise opting out still leaves the turn able to fail with a typed
+/// provider error after three silent retries.
+#[tokio::test]
+async fn off_policy_also_disables_missing_tool_call_recovery() {
+    let model = MockModelBuilder::new()
+        .on_call(0, |_| {
+            MockResponse::text_with_stop("I will run it.", coco_llm_types::StopReason::ToolUse)
+        })
+        .on_call(1, |_| MockResponse::text("never reached"))
+        .build();
+    let result =
+        run_with_mock_and_policy(model, "run it", coco_config::EmptyResponsePolicy::Off).await;
+    assert_eq!(result.response_text, "I will run it.");
+    assert_eq!(result.stop_reason.as_deref(), Some("end_turn"));
+    assert!(matches!(result.outcome, QueryOutcome::Completed));
+}
+
 #[tokio::test]
 async fn empty_after_tool_use_gets_post_tool_wording() {
     let model = MockModelBuilder::new()
@@ -351,28 +369,42 @@ async fn tool_use_without_calls_retries_even_when_narration_is_present() {
 }
 
 #[tokio::test]
-async fn recovery_context_survives_a_valid_tool_round_in_causal_order() {
+async fn recovery_context_is_retired_once_a_response_commits() {
     let model = MockModelBuilder::new()
         .on_call(0, |_| {
             MockResponse::text_with_stop("I will run it.", coco_llm_types::StopReason::ToolUse)
         })
-        .on_call(1, |_| {
+        .on_call(1, |options| {
+            // The retry request carries the malformed attempt + its nudge, so
+            // the model can see what it did wrong.
+            let (assistant_role, malformed) =
+                llm_role_and_text(&options.prompt[options.prompt.len() - 2]);
+            let (nudge_role, nudge) = llm_role_and_text(&options.prompt[options.prompt.len() - 1]);
+            assert_eq!(assistant_role, "assistant");
+            assert_eq!(malformed, "I will run it.");
+            assert_eq!(nudge_role, "user");
+            assert!(nudge.contains("no tool call was provided"));
             MockResponse::tool_call("Bash", serde_json::json!({"command": "echo recovered"}))
         })
         .on_call(2, |options| {
+            // That response committed, so the scaffolding is gone: the nudge is
+            // phrased as a standing user instruction and must not linger in
+            // every later request of the cycle.
             let roles: Vec<_> = options
                 .prompt
                 .iter()
                 .map(|message| llm_role_and_text(message).0)
                 .collect();
-            assert_eq!(
-                &roles[roles.len() - 4..],
-                ["assistant", "user", "assistant", "tool"]
+            assert_eq!(&roles[roles.len() - 2..], ["assistant", "tool"]);
+            assert!(
+                !options
+                    .prompt
+                    .iter()
+                    .any(|message| llm_role_and_text(message)
+                        .1
+                        .contains("no tool call was provided")),
+                "retired nudge must not reach a later request: {roles:?}"
             );
-            let (_, malformed) = llm_role_and_text(&options.prompt[options.prompt.len() - 4]);
-            let (_, nudge) = llm_role_and_text(&options.prompt[options.prompt.len() - 3]);
-            assert_eq!(malformed, "I will run it.");
-            assert!(nudge.contains("no tool call was provided"));
             MockResponse::text("Tool result processed")
         })
         .build();

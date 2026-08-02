@@ -28,11 +28,11 @@ async fn running_agent() -> (std::sync::Arc<TaskManager>, String, CancellationTo
 
 fn fast_policy() -> AgentLivenessPolicy {
     AgentLivenessPolicy {
-        model_warning_after: Duration::from_secs(2),
-        model_timeout_after: Duration::from_secs(4),
-        tool_warning_after: Duration::from_secs(5),
-        tool_timeout_after: Duration::from_secs(8),
-        absolute_timeout: Duration::from_secs(20),
+        model_warning_after: Some(Duration::from_secs(2)),
+        model_timeout_after: Some(Duration::from_secs(4)),
+        tool_warning_after: Some(Duration::from_secs(5)),
+        tool_timeout_after: Some(Duration::from_secs(8)),
+        absolute_timeout: Some(Duration::from_secs(20)),
     }
 }
 
@@ -109,4 +109,46 @@ async fn continuous_activity_cannot_bypass_absolute_timeout() {
     assert!(cancel.is_cancelled());
     let state = manager.get(&task_id).await.expect("task row");
     assert_eq!(state.killed_by, Some(TaskKilledBy::System));
+}
+
+/// The absolute cap is opt-in: an agent that is still reporting progress is
+/// working, and coco does not decide for the operator when to stop it.
+#[tokio::test(start_paused = true)]
+async fn default_policy_never_kills_a_progressing_agent() {
+    let (manager, task_id, cancel) = running_agent().await;
+    let policy = AgentLivenessPolicy::from(&coco_config::AgentLivenessConfig::default());
+    assert!(policy.absolute_timeout.is_none());
+    tokio::spawn(watch_agent_liveness(
+        task_id.clone(),
+        manager.clone(),
+        cancel.clone(),
+        policy,
+    ));
+    tokio::task::yield_now().await;
+
+    // Twelve hours of steady tool progress.
+    for _ in 0..144 {
+        tokio::time::advance(Duration::from_secs(5 * 60)).await;
+        manager
+            .record_agent_activity(&task_id, AgentExecutionPhase::RunningTool)
+            .await;
+        tokio::task::yield_now().await;
+    }
+    assert!(!cancel.is_cancelled());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_fully_disabled_policy_spawns_no_watchdog() {
+    let (manager, task_id, cancel) = running_agent().await;
+    let config = coco_config::AgentLivenessConfig {
+        model_warning_after_secs: 0,
+        model_timeout_after_secs: 0,
+        tool_warning_after_secs: 0,
+        tool_timeout_after_secs: 0,
+        absolute_timeout_secs: None,
+    };
+    spawn_agent_liveness_watchdog(task_id.clone(), manager.clone(), cancel.clone(), &config);
+    tokio::time::advance(Duration::from_secs(24 * 60 * 60)).await;
+    tokio::task::yield_now().await;
+    assert!(!cancel.is_cancelled());
 }

@@ -59,6 +59,9 @@ pub struct TaskRuntime {
     /// jobs / bare AppServer runs). Production attaches the
     /// `CommandQueueNotificationSink`.
     pub(in crate::session::task_runtime) notification_sink: NotificationSinkRef,
+    /// Watchdog limits for local background agents. Defaults are the
+    /// inactivity-only policy; the absolute wall-clock cap is opt-in.
+    pub(in crate::session::task_runtime) agent_liveness: coco_config::AgentLivenessConfig,
 }
 
 impl std::fmt::Debug for TaskRuntime {
@@ -92,7 +95,14 @@ impl TaskRuntime {
             manager,
             disk: Arc::new(DiskOutputs::new(session_dir)),
             notification_sink: Arc::new(NoOpNotificationSink),
+            agent_liveness: coco_config::AgentLivenessConfig::default(),
         }
+    }
+
+    /// Install the resolved background-agent watchdog limits.
+    pub fn with_agent_liveness(mut self, config: coco_config::AgentLivenessConfig) -> Self {
+        self.agent_liveness = config;
+        self
     }
 
     /// Attach the notification sink. After this call, every terminal

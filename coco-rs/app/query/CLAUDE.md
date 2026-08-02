@@ -49,9 +49,15 @@ Protocol: `TurnStarted` (runner-emitted, once per cycle — see
 `ResponseAttemptStarted`/`Committed`/`Discarded`, `TextDelta`,
 `ThinkingDelta`, `ToolUseQueued`, `ToolUseStarted`, `ToolUseCompleted`.
 Text/thinking between attempt boundaries is provisional: SDK, TUI, and
-subagent-output consumers treat it transactionally. SDK/subagent output
-publishes only on `Committed`; TUI may preview it live but restores its
-byte-exact checkpoint on `Discarded`. (Full catalog:
+subagent-output consumers treat it transactionally. The TUI previews live and
+restores its byte-exact checkpoint on `Discarded`. SDK/subagent output buffers
+**text and thinking only**, and only until the attempt proves committable — a
+tool lifecycle event does that (the malformed-terminal path requires zero
+reconstructed tool calls), so the buffer publishes in source order and the
+rest of the attempt streams live. Do not widen that buffer back to every
+event: `Committed` fires after the whole stream is consumed, so buffering
+tool lifecycle too would collapse an entire response into one burst and strip
+SDK consumers of incremental output. (Full catalog:
 `docs/internal/event-system-design.md`.)
 
 **Cycle TurnId contract.** Hosts (the local-AppServer `turn/start` handler →
@@ -204,6 +210,15 @@ move before the pair, while the first durable assistant/tool response is a hard
 causal boundary. The transaction is included in prompt preflight but never
 persisted. Discarded attempt deltas never enter SDK/subagent output or the
 committed TUI transcript; a local live preview is rolled back.
+
+The working context is **retired at `ResponseAttemptCommitted`**, and a segment
+whose anchor no longer exists (compaction rewrote it) is dropped rather than
+relocated. Both rules exist for the same reason: the nudge is phrased as a
+standing user instruction, so leaving it in the prompt after a good response —
+or re-appending it at the tail of a compacted history — invites the model to
+answer it a second time against context that is gone. `query.empty_response_nudge
+= off` disables the whole mechanism, both anomaly classes, not just the empty
+one.
 Exhaustion is `QueryOutcome::Failed(Provider)` and the same typed payload
 drives `TurnEnded`, `SessionResult`, agent adapters, and headless exit status.
 Structured-output retry keeps precedence over ordinary empty recovery.

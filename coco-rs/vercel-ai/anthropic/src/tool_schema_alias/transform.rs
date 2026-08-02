@@ -66,6 +66,12 @@ pub(super) fn transform_value(
                     let rename_key = (value_pointer.to_string(), destination.to_string());
                     if traversal.canonical_property_names.get(&rename_key)
                         != Some(&property.original_name)
+                        // Restoring input the model wrote with the ORIGINAL
+                        // name (aliases are opaque digests, so models do emit
+                        // the human name) is unambiguous: the key is already
+                        // where it belongs. Only the to-wire direction can
+                        // legitimately reject a pre-projected key.
+                        && matches!(direction, ProjectionDirection::ToWire)
                     {
                         return Err(ToolSchemaAliasError::UnexpectedPropertyForm {
                             expected_name: source.to_string(),

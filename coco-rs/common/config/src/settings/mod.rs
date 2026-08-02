@@ -21,6 +21,7 @@ use crate::prompt_cache_settings::PartialAccountSettings;
 use crate::prompt_cache_settings::PartialPromptCacheSettings;
 use crate::provider::PartialProviderConfig;
 use crate::sandbox_settings::SandboxSettings;
+use crate::sections::PartialAgentLivenessSettings;
 use crate::sections::PartialAgentTeamsSettings;
 use crate::sections::PartialApiSettings;
 use crate::sections::PartialDiagnosticsSettings;
@@ -128,6 +129,10 @@ pub struct Settings {
     /// `RuntimeConfig.scheduling` (`SchedulingConfig`).
     #[serde(default)]
     pub scheduling: PartialSchedulingSettings,
+    /// Background-agent watchdog limits. Resolved into
+    /// `RuntimeConfig.agent_liveness` (`AgentLivenessConfig`).
+    #[serde(default)]
+    pub agent_liveness: PartialAgentLivenessSettings,
     #[serde(default)]
     pub shell: PartialShellSettings,
     /// Bash output-compression knobs (`Feature::OutputRewrite`). Resolved into

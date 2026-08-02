@@ -34,6 +34,7 @@ use crate::prompt_cache_settings::PromptCacheRuntimeConfig;
 use crate::provider::PartialProviderConfig;
 use crate::provider::ProviderConfig;
 use crate::sandbox_settings::SandboxSettings;
+use crate::sections::AgentLivenessConfig;
 use crate::sections::AgentTeamsConfig;
 use crate::sections::ApiConfig;
 use crate::sections::DiagnosticsConfig;
@@ -81,6 +82,8 @@ pub struct RuntimeConfig {
     pub tool: ToolConfig,
     /// Zero-LLM cron script-job knobs (timeout, output cap).
     pub scheduling: SchedulingConfig,
+    /// Watchdog limits for local background agents.
+    pub agent_liveness: AgentLivenessConfig,
     pub shell: ShellConfig,
     /// Bash output-compression config (`Feature::OutputRewrite`). Consumed at
     /// session bootstrap to build the session-scoped output rewriter.
@@ -400,6 +403,7 @@ pub fn build_runtime_config_with(
         api: ApiConfig::resolve(merged, &env),
         loop_config: LoopConfig::resolve(merged, &overrides, &env),
         scheduling: SchedulingConfig::resolve(merged),
+        agent_liveness: AgentLivenessConfig::resolve(merged),
         tool: ToolConfig::resolve(merged, &env),
         shell: ShellConfig::resolve(merged, &env),
         output_rewrite: OutputRewriteConfig::resolve(merged, &env),

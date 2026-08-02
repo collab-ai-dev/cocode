@@ -659,20 +659,35 @@ impl TaskManager {
     }
 
     /// Advance an agent heartbeat without touching its serialized task row.
+    ///
+    /// Called on every streamed delta, so it samples: a heartbeat that is
+    /// already fresh and in the same phase is dropped without taking the
+    /// controls lock twice or waking the watchdog. The watchdog's shortest
+    /// limit is minutes, so sub-second resolution buys nothing.
     pub async fn record_agent_activity(&self, id: &str, phase: AgentExecutionPhase) {
+        const HEARTBEAT_RESOLUTION: std::time::Duration = std::time::Duration::from_secs(1);
+
         let sender = self
             .controls
             .read()
             .await
             .get(id)
             .and_then(|control| control.agent_liveness_tx.clone());
-        if let Some(sender) = sender {
-            sender.send_modify(|snapshot| {
-                snapshot.sequence = snapshot.sequence.saturating_add(1);
-                snapshot.phase = phase;
-                snapshot.last_progress = tokio::time::Instant::now();
-            });
+        let Some(sender) = sender else {
+            return;
+        };
+        let now = tokio::time::Instant::now();
+        let current = *sender.borrow();
+        if current.phase == phase
+            && now.saturating_duration_since(current.last_progress) < HEARTBEAT_RESOLUTION
+        {
+            return;
         }
+        sender.send_modify(|snapshot| {
+            snapshot.sequence = snapshot.sequence.saturating_add(1);
+            snapshot.phase = phase;
+            snapshot.last_progress = now;
+        });
     }
 
     /// Subscribe to the runtime-only heartbeat for a local background agent.

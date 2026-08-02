@@ -56,12 +56,17 @@ pub(crate) fn classify_terminal_anomaly(
     empty_response_policy: coco_config::EmptyResponsePolicy,
     allow_empty_response_recovery: bool,
 ) -> Option<TerminalAnomaly> {
+    // `Off` means "old behavior" for the whole recovery mechanism, not just
+    // one of its two anomaly classes — otherwise opting out still leaves the
+    // turn able to fail with a typed provider error after three retries.
+    if empty_response_policy == coco_config::EmptyResponsePolicy::Off {
+        return None;
+    }
     if stop_reason == Some(coco_messages::StopReason::ToolUse) {
         return Some(TerminalAnomaly::ToolUseWithoutCalls);
     }
     if allow_empty_response_recovery
         && response_text.trim().is_empty()
-        && empty_response_policy == coco_config::EmptyResponsePolicy::Nudge
         && matches!(
             stop_reason,
             None | Some(coco_messages::StopReason::EndTurn)

@@ -99,23 +99,20 @@ fn discarded_response_attempt_does_not_flush_content() {
     assert!(acc.flush().is_empty());
 }
 
+/// A tool call proves the attempt is not a malformed terminal (that path
+/// requires zero reconstructed tool calls), so the accumulator stops
+/// withholding: the buffered text publishes in source order ahead of the tool
+/// item, and everything after streams live instead of waiting for commit.
 #[test]
-fn response_attempt_preserves_text_before_tool_order_on_commit() {
+fn a_tool_call_publishes_the_buffered_prefix_in_source_order() {
     let mut acc = StreamAccumulator::new("turn-1");
     acc.process(AgentStreamEvent::ResponseAttemptStarted {
         turn_id: "turn-1".into(),
         attempt: 1,
     });
     assert!(acc.process(text_delta("before tool")).is_empty());
-    assert!(
-        acc.process(tool_queued("call-1", "Bash", json!({"command": "true"}),))
-            .is_empty()
-    );
 
-    let published = acc.process(AgentStreamEvent::ResponseAttemptCommitted {
-        turn_id: "turn-1".into(),
-        attempt: 1,
-    });
+    let published = acc.process(tool_queued("call-1", "Bash", json!({"command": "true"})));
     assert!(matches!(
         published.first(),
         Some(ServerNotification::ItemStarted { item, .. })
@@ -126,28 +123,48 @@ fn response_attempt_preserves_text_before_tool_order_on_commit() {
         Some(ServerNotification::ItemStarted { item, .. })
             if matches!(&item.details, ThreadItemDetails::CommandExecution { .. })
     ));
+
+    // Published, so the rest of the attempt no longer waits for commit.
+    assert!(!acc.process(text_delta(" and after")).is_empty());
+    assert!(
+        acc.process(AgentStreamEvent::ResponseAttemptCommitted {
+            turn_id: "turn-1".into(),
+            attempt: 1,
+        })
+        .is_empty()
+    );
 }
 
+/// Discarding a published attempt (only reachable on the stream-error paths,
+/// which fire after tool execution may already have happened) replays
+/// nothing: its events are already out. Text that preceded real tool
+/// execution stays out too — that is the price of live streaming, and the
+/// malformed-terminal path this transaction exists for can never get here.
 #[test]
-fn discarded_response_keeps_real_tool_lifecycle_but_not_text() {
+fn discarding_a_published_attempt_replays_nothing() {
     let mut acc = StreamAccumulator::new("turn-1");
     acc.process(AgentStreamEvent::ResponseAttemptStarted {
         turn_id: "turn-1".into(),
         attempt: 1,
     });
-    acc.process(text_delta("malformed"));
-    acc.process(tool_queued("call-1", "Bash", json!({"command": "true"})));
+    acc.process(text_delta("streamed"));
+    let published = acc.process(tool_queued("call-1", "Bash", json!({"command": "true"})));
+    assert!(
+        published.iter().any(|notification| matches!(
+            notification,
+            ServerNotification::ItemStarted { item, .. }
+                if matches!(&item.details, ThreadItemDetails::CommandExecution { .. })
+        )),
+        "the tool call must publish before the discard: {published:?}"
+    );
 
-    let published = acc.process(AgentStreamEvent::ResponseAttemptDiscarded {
-        turn_id: "turn-1".into(),
-        attempt: 1,
-    });
-    assert_eq!(published.len(), 1);
-    assert!(matches!(
-        &published[0],
-        ServerNotification::ItemStarted { item, .. }
-            if matches!(&item.details, ThreadItemDetails::CommandExecution { .. })
-    ));
+    assert!(
+        acc.process(AgentStreamEvent::ResponseAttemptDiscarded {
+            turn_id: "turn-1".into(),
+            attempt: 1,
+        })
+        .is_empty()
+    );
 }
 
 #[test]

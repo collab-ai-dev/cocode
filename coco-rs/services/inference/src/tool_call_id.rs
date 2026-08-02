@@ -1,19 +1,31 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::VecDeque;
 use std::fmt;
 
 use vercel_ai_provider::LanguageModelV4StreamPart;
 
-/// Assigns a stable, request-local identity to every tool call.
+/// Assigns a stable, response-local identity to every tool call.
 ///
 /// Some providers reuse their wire ID for multiple sequential calls. The
 /// effective ID must be fixed before stream events and the final snapshot are
 /// emitted so every downstream map observes the same identity.
+///
+/// Scope is one provider response. Duplicates that span *messages* (a provider
+/// that restarts numbering every turn, so a replayed prompt carries the same id
+/// N times) are outside this seam and are resolved at the pre-API chokepoint by
+/// `coco_messages::normalize` — see that crate's `DedupToolCallIds` pass.
+///
+/// `ToolResult` and `ToolApprovalRequest` parts are deliberately **not**
+/// rewritten: both are dropped downstream (`stream.rs` keeps neither in the
+/// turn snapshot, and `app/query` does not reconstruct approval requests into
+/// assistant history), so binding them to a renamed call would be bookkeeping
+/// nobody reads. If either is ever round-tripped into assistant content, they
+/// need a FIFO binding per reused raw id — results preferring an unfinished
+/// call with the same tool name, preliminary results not closing a call — and
+/// a mismatch must stay non-fatal.
 #[derive(Default)]
 pub(crate) struct ToolCallIdNormalizer {
     active: HashMap<String, ActiveToolCall>,
-    provider_references: HashMap<String, VecDeque<ProviderCallReference>>,
     next_suffix: HashMap<String, i64>,
     used_effective: HashSet<String>,
 }
@@ -23,45 +35,30 @@ struct ActiveToolCall {
     tool_name: String,
 }
 
-struct ProviderCallReference {
-    effective_id: String,
-    tool_name: String,
-    approval_seen: bool,
-    result_complete: bool,
-}
-
+/// Overlapping reuse of a still-open tool-call id. Deltas for the two calls
+/// are indistinguishable, so the stream cannot be attributed and is aborted.
+///
+/// This is the ONLY fatal condition in this module. Every other mismatch
+/// (an approval or result that binds to no known call) degrades to leaving
+/// the wire id untouched — see [`ToolCallIdNormalizer::normalize`].
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum ToolCallIdError {
-    Overlapping {
-        raw_id: String,
-        active_tool_name: String,
-        incoming_tool_name: String,
-    },
-    UnmatchedReference {
-        raw_id: String,
-        reference_kind: &'static str,
-    },
+pub(crate) struct ToolCallIdError {
+    raw_id: String,
+    active_tool_name: String,
+    incoming_tool_name: String,
 }
 
 impl fmt::Display for ToolCallIdError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Overlapping {
-                raw_id,
-                active_tool_name,
-                incoming_tool_name,
-            } => write!(
-                f,
-                "provider emitted overlapping tool calls with id {raw_id:?}: active tool {active_tool_name:?}, incoming tool {incoming_tool_name:?}"
-            ),
-            Self::UnmatchedReference {
-                raw_id,
-                reference_kind,
-            } => write!(
-                f,
-                "provider emitted {reference_kind} for reused tool call id {raw_id:?} without an unambiguous matching call"
-            ),
-        }
+        let Self {
+            raw_id,
+            active_tool_name,
+            incoming_tool_name,
+        } = self;
+        write!(
+            f,
+            "provider emitted overlapping tool calls with id {raw_id:?}: active tool {active_tool_name:?}, incoming tool {incoming_tool_name:?}"
+        )
     }
 }
 
@@ -74,7 +71,7 @@ impl ToolCallIdNormalizer {
             LanguageModelV4StreamPart::ToolInputStart { id, tool_name, .. } => {
                 let raw_id = id.clone();
                 if let Some(active) = self.active.get(&raw_id) {
-                    return Err(ToolCallIdError::Overlapping {
+                    return Err(ToolCallIdError {
                         raw_id,
                         active_tool_name: active.tool_name.clone(),
                         incoming_tool_name: tool_name.clone(),
@@ -104,58 +101,12 @@ impl ToolCallIdNormalizer {
                 } else {
                     self.allocate(&raw_id)
                 };
-                if tool_call.provider_executed == Some(true) {
-                    self.provider_references
-                        .entry(raw_id)
-                        .or_default()
-                        .push_back(ProviderCallReference {
-                            effective_id: effective_id.clone(),
-                            tool_name: tool_call.tool_name.clone(),
-                            approval_seen: false,
-                            result_complete: false,
-                        });
-                }
                 tool_call.tool_call_id = effective_id;
             }
-            LanguageModelV4StreamPart::ToolApprovalRequest(request) => {
-                let raw_id = request.tool_call_id.clone();
-                if let Some(references) = self.provider_references.get_mut(&raw_id) {
-                    let reference = references
-                        .iter_mut()
-                        .find(|reference| !reference.approval_seen)
-                        .ok_or(ToolCallIdError::UnmatchedReference {
-                            raw_id,
-                            reference_kind: "tool approval request",
-                        })?;
-                    reference.approval_seen = true;
-                    request.tool_call_id = reference.effective_id.clone();
-                }
-            }
-            LanguageModelV4StreamPart::ToolResult(result) => {
-                let raw_id = result.tool_call_id.clone();
-                if let Some(references) = self.provider_references.get_mut(&raw_id) {
-                    let reference_index = references
-                        .iter()
-                        .position(|reference| {
-                            !reference.result_complete && reference.tool_name == result.tool_name
-                        })
-                        .or_else(|| {
-                            references
-                                .iter()
-                                .position(|reference| !reference.result_complete)
-                        })
-                        .ok_or(ToolCallIdError::UnmatchedReference {
-                            raw_id,
-                            reference_kind: "tool result",
-                        })?;
-                    let reference = &mut references[reference_index];
-                    if result.preliminary != Some(true) {
-                        reference.result_complete = true;
-                    }
-                    result.tool_call_id = reference.effective_id.clone();
-                }
-            }
-            LanguageModelV4StreamPart::StreamStart { .. }
+            // Left verbatim on purpose — see the type docs.
+            LanguageModelV4StreamPart::ToolApprovalRequest(_)
+            | LanguageModelV4StreamPart::ToolResult(_)
+            | LanguageModelV4StreamPart::StreamStart { .. }
             | LanguageModelV4StreamPart::TextStart { .. }
             | LanguageModelV4StreamPart::TextDelta { .. }
             | LanguageModelV4StreamPart::TextEnd { .. }
