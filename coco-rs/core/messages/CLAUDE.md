@@ -19,7 +19,7 @@ event side-channel, **not** a `Message` variant.
 - `history` — `MessageHistory` persistence
 - `cost` — `CostTracker`, `calculate_cost_usd`, `get_model_pricing`
 - `creation` — the `create_*` constructor family (user / assistant / tool-result / system / meta / progress / compact-boundary / …)
-- `normalize` — `normalize_messages_for_api(&[Arc<Message>]) -> Vec<LlmMessage>`, `to_llm_prompt`, `filter_by_options`; hosts the 7 [`MessagePass`] impls used by steps 8-13a
+- `normalize` — `normalize_messages_for_api(&[Arc<Message>]) -> Vec<LlmMessage>`, `to_llm_prompt`, `filter_by_options`; hosts the 8 [`MessagePass`] impls used by steps 8-13a
 - `pipeline` — `MessagePass` trait + `run_message_passes` + `borrow_refs` ("Arc → owned → mutate → Arc" bridge; shared with coco-compact)
 - `predicates` / `lookups` — `is_*`/`has_*` predicates; `MessageLookups` O(1) index builders
 - `wrapping` — system-reminder wrapping helpers
@@ -78,8 +78,22 @@ declare_normalize_passes!(
     OrphanedThinkingOnly, TrailingThinking, WhitespaceOnly,
     EnsureNonEmptyContent, MergeConsecutiveUsers,
     MergeAssistantsByRequestId, StripExitPlanModeInjectedFields,
+    DedupToolCallIds,
 );
 ```
+
+### `DedupToolCallIds` is the pre-API chokepoint for duplicate tool ids
+
+`coco_inference::ToolCallIdNormalizer` makes ids unique **within one provider
+response**; it never sees history. A provider that restarts its numbering each
+turn (Ollama-compatible endpoints, degraded models at long context) therefore
+produces a replayed payload carrying the same id on N `tool_use` blocks, which
+Anthropic and DeepSeek reject (`Duplicate value for 'tool_call_id'`). This pass
+renames the repeats — first occurrence keeps its id so the cached request
+prefix survives — and carries each answering `tool_result` with it. Pairing is
+positional (the answer must precede the next assistant message), so an
+interrupted call that never got a result cannot steal a later one's answer.
+It runs last because the merge passes decide the final message boundaries.
 
 The macro generates `NORMALIZE_PASS_ORDER`,
 `normalize_passes_would_mutate(&refs)`, and

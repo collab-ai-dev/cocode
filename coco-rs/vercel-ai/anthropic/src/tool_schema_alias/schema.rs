@@ -21,6 +21,13 @@ pub(crate) fn project_schema(schema: &Value) -> (Value, SchemaProjection) {
     let mut invalid_names = HashSet::new();
     collect_property_names(schema, &mut valid_names, &mut invalid_names);
 
+    // Overwhelmingly the common case: nothing to rename. Returning an empty
+    // projection here keeps `transform_*` a no-op and skips building the alias
+    // node graph for every tool on every request.
+    if invalid_names.is_empty() {
+        return (schema.clone(), SchemaProjection::default());
+    }
+
     let mut invalid_names: Vec<String> = invalid_names.into_iter().collect();
     invalid_names.sort();
     let mut reserved = valid_names;
@@ -184,12 +191,13 @@ fn project_node(
     }
 
     if let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut) {
+        // Declaration order is preserved: alias allocation is already made
+        // deterministic by the sorted `invalid_names` pass in `project_schema`,
+        // and property order is the schema author's (models read it in order).
         let original_properties = std::mem::take(properties);
-        let mut entries: Vec<(String, Value)> = original_properties.into_iter().collect();
-        entries.sort_by(|(left, _), (right, _)| left.cmp(right));
         let mut projected_properties = Map::new();
 
-        for (original_name, mut property_schema) in entries {
+        for (original_name, mut property_schema) in original_properties {
             let wire_name = aliases
                 .get(&original_name)
                 .cloned()
@@ -217,13 +225,10 @@ fn project_node(
         .and_then(Value::as_object_mut)
     {
         let original_patterns = std::mem::take(patterns);
-        let mut entries: Vec<(String, Value)> = original_patterns.into_iter().collect();
-        entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-        let mut used_patterns: HashSet<String> =
-            entries.iter().map(|(pattern, _)| pattern.clone()).collect();
+        let mut used_patterns: HashSet<String> = original_patterns.keys().cloned().collect();
         let mut supplemental = Vec::new();
 
-        for (pattern, mut child_schema) in entries {
+        for (pattern, mut child_schema) in original_patterns {
             let child = project_node(
                 &mut child_schema,
                 &child_pointer(pointer, "patternProperties", &pattern),

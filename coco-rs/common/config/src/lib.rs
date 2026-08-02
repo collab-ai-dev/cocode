@@ -127,6 +127,7 @@ pub use sandbox_settings::SandboxCredentialsConfig;
 pub use sandbox_settings::SandboxSettings;
 pub use sandbox_settings::SourcedRule;
 pub use secret::RedactedSecret;
+pub use sections::AgentLivenessConfig;
 pub use sections::AgentTeamsConfig;
 pub use sections::ApiConfig;
 pub use sections::ApiRetryConfig;

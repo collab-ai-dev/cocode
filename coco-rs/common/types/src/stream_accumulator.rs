@@ -9,9 +9,13 @@
 //!
 //! ```text
 //! AgentStreamEvent flow:
-//!   AttemptStarted → (ThinkingDelta | TextDelta | Tool lifecycle)* → Commit/Discard
-//!                            ↓                                      ↓
-//!                   ordered provisional buffer          publish all / tools only
+//!   AttemptStarted → (ThinkingDelta | TextDelta)* → Commit/Discard
+//!                            ↓                       ↓
+//!                   ordered provisional buffer   publish all / drop text
+//!
+//!   …unless a tool lifecycle event arrives first: that proves the attempt
+//!   is not a malformed terminal, so the buffer publishes in source order
+//!   and the rest of the attempt streams live.
 //!
 //!   Published flow:
 //!   ThinkingDelta* → TextDelta* → ToolUseQueued → ToolUseStarted → ToolUseCompleted
@@ -54,12 +58,29 @@ pub struct StreamAccumulator {
     /// Provider response events are transactional: a matching commit feeds
     /// them into semantic accumulation in source order. Discard keeps real
     /// tool lifecycle events but removes malformed assistant presentation.
-    response_attempt: Option<ProvisionalResponseAttempt>,
+    response_attempt: Option<ResponseAttempt>,
 }
 
-struct ProvisionalResponseAttempt {
+struct ResponseAttempt {
     attempt: i32,
-    events: Vec<AgentStreamEvent>,
+    /// Events withheld so far, in source order. `None` once the attempt has
+    /// published — see [`StreamAccumulator::is_buffering`].
+    buffered: Option<Vec<AgentStreamEvent>>,
+}
+
+/// Tool lifecycle events describe work that actually ran. They are never
+/// "malformed assistant presentation", and observing one proves the attempt
+/// cannot take the malformed-terminal discard path (which requires zero
+/// reconstructed tool calls).
+fn is_tool_lifecycle_event(event: &AgentStreamEvent) -> bool {
+    matches!(
+        event,
+        AgentStreamEvent::ToolUseQueued { .. }
+            | AgentStreamEvent::ToolUseStarted { .. }
+            | AgentStreamEvent::ToolUseCompleted { .. }
+            | AgentStreamEvent::McpToolCallBegin { .. }
+            | AgentStreamEvent::McpToolCallEnd { .. }
+    )
 }
 
 impl StreamAccumulator {
@@ -85,9 +106,9 @@ impl StreamAccumulator {
                     self.response_attempt.is_none(),
                     "response attempt {attempt} started before the prior attempt reached a terminal boundary"
                 );
-                self.response_attempt = Some(ProvisionalResponseAttempt {
+                self.response_attempt = Some(ResponseAttempt {
                     attempt,
-                    events: Vec::new(),
+                    buffered: Some(Vec::new()),
                 });
                 Vec::new()
             }
@@ -103,7 +124,8 @@ impl StreamAccumulator {
                     return Vec::new();
                 };
                 response
-                    .events
+                    .buffered
+                    .unwrap_or_default()
                     .into_iter()
                     .flat_map(|event| self.process(event))
                     .collect()
@@ -123,7 +145,8 @@ impl StreamAccumulator {
                 // stream was open. Preserve those lifecycle events, in order,
                 // while dropping only the malformed assistant presentation.
                 response
-                    .events
+                    .buffered
+                    .unwrap_or_default()
                     .into_iter()
                     .filter(|event| {
                         !matches!(
@@ -135,11 +158,32 @@ impl StreamAccumulator {
                     .flat_map(|event| self.process(event))
                     .collect()
             }
-            event if self.response_attempt.is_some() => {
-                if let Some(response) = self.response_attempt.as_mut() {
-                    response.events.push(event);
+            event if self.is_buffering() => {
+                if !is_tool_lifecycle_event(&event) {
+                    if let Some(response) = self.response_attempt.as_mut()
+                        && let Some(buffered) = response.buffered.as_mut()
+                    {
+                        buffered.push(event);
+                    }
+                    return Vec::new();
                 }
-                Vec::new()
+                // The attempt is committable: stop withholding. Everything
+                // buffered so far publishes here, in source order, so item
+                // ordering still matches the provider stream — then the rest
+                // of the attempt streams live. Without this, a whole response
+                // (including tools that already ran) would land in one burst
+                // at commit and SDK consumers would lose incremental output.
+                let buffered = self
+                    .response_attempt
+                    .as_mut()
+                    .and_then(|response| response.buffered.take())
+                    .unwrap_or_default();
+                let mut out: Vec<ServerNotification> = buffered
+                    .into_iter()
+                    .flat_map(|event| self.process(event))
+                    .collect();
+                out.extend(self.process(event));
+                out
             }
             AgentStreamEvent::TextDelta { delta, .. } => self.handle_text_delta(delta),
             AgentStreamEvent::ThinkingDelta { delta, .. } => self.handle_thinking_delta(delta),
@@ -167,6 +211,13 @@ impl StreamAccumulator {
                 is_error,
             } => self.handle_mcp_end(server, tool, call_id, is_error),
         }
+    }
+
+    /// Whether an open attempt is still withholding its events.
+    fn is_buffering(&self) -> bool {
+        self.response_attempt
+            .as_ref()
+            .is_some_and(|response| response.buffered.is_some())
     }
 
     /// Flush any pending text/thinking items and return completion notifications.

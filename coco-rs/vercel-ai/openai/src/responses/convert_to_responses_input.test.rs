@@ -517,3 +517,54 @@ fn tool_result_content_mixed_text_and_image_emits_both_parts() {
     assert_eq!(output[0]["text"], "explanation");
     assert_eq!(output[1]["type"], "input_image");
 }
+
+/// The projector runs on every Responses request, including long prompts,
+/// while an over-limit `call_id` is vanishingly rare. It must decide "nothing
+/// to do" without building any map.
+#[test]
+fn a_prompt_with_only_short_call_ids_allocates_no_projection() {
+    let make_call = |id: &str| {
+        AssistantContentPart::ToolCall(ToolCallPart {
+            tool_call_id: id.into(),
+            tool_name: "exec".into(),
+            input: serde_json::json!({}),
+            provider_executed: None,
+            provider_metadata: None,
+            invalid: false,
+            invalid_reason: None,
+        })
+    };
+    let prompt = vec![
+        LanguageModelV4Message::Assistant {
+            content: vec![make_call("call_1"), make_call(&"x".repeat(64))],
+            provider_options: None,
+        },
+        LanguageModelV4Message::Tool {
+            content: vec![ToolContentPart::ToolResult(ToolResultPart {
+                tool_call_id: "call_1".into(),
+                tool_name: "exec".into(),
+                output: vercel_ai_provider::ToolResultContent::text("ok"),
+                is_error: false,
+                provider_metadata: None,
+            })],
+            provider_options: None,
+        },
+    ];
+
+    let projector = ResponsesCallIdProjector::for_prompt(&prompt);
+    assert!(projector.by_original.is_empty());
+    assert_eq!(projector.project("call_1"), "call_1");
+}
+
+/// Multi-byte IDs must not be misjudged by the cheap byte-length pre-filter:
+/// 64 CJK characters are 192 bytes but still within the character limit.
+#[test]
+fn the_byte_prefilter_does_not_misclassify_multibyte_ids() {
+    let id = "工".repeat(64);
+    assert!(!ResponsesCallIdProjector::is_over_limit(&id));
+    assert_eq!(projected_call_id(&id), id);
+
+    let over = "工".repeat(65);
+    assert!(ResponsesCallIdProjector::is_over_limit(&over));
+    assert_ne!(projected_call_id(&over), over);
+}

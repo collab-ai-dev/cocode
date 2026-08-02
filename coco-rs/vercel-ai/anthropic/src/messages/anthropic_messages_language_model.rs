@@ -511,9 +511,14 @@ impl AnthropicMessagesLanguageModel {
             betas: tool_betas,
             aliases: tool_schema_aliases,
         } = prepared;
-        tool_schema_aliases
-            .project_message_tool_inputs(&mut messages)
-            .map_err(|error| AISdkError::new(error.to_string()))?;
+        for tool_name in tool_schema_aliases.project_message_tool_inputs(&mut messages) {
+            warnings.push(Warning::Other {
+                message: format!(
+                    "replayed tool input for '{tool_name}' kept its original property names \
+                     (projection to the Anthropic wire subset was not possible)"
+                ),
+            });
+        }
         warnings.extend(tool_warnings);
         let mut betas = tool_betas;
         betas.extend(betas_from_messages);

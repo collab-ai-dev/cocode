@@ -24,3 +24,6 @@ scope, and intentional deviations: see [`../README.md`](../README.md).
   projector reserves every caller-provided short ID before allocating long-ID
   surrogates, lengthening the digest on collision; calls and outputs share the
   same map. Shorter IDs remain byte-identical for prompt-cache stability.
+  **The projector early-outs before allocating anything when no ID is over the
+  limit** — the case for ~every request, and this runs on every Responses
+  call. Keep that guard ahead of any work added here.

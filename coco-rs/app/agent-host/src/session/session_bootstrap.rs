@@ -522,7 +522,8 @@ pub async fn install_session_late_binds(
             Arc::new(task_manager),
             task_session_dir,
         )
-        .with_notification_sink(sink),
+        .with_notification_sink(sink)
+        .with_agent_liveness(session.runtime_config().agent_liveness.clone()),
     );
     // A sidechat owns no background task runtime: no memory-pressure reaper and
     // no attachment (the read-only tool boundary already denies the Task tool).

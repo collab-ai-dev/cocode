@@ -191,6 +191,34 @@ descriptions sit in the request's largest cacheable prefix. Editing the key
 mid-session still reaches the model — as a short reminder on the next turn — but
 without re-billing the whole tool block.
 
+### Background-agent watchdog
+
+Subagents spawned by the `Task` tool are watched for stalls. Every default
+limit is **inactivity**-based — the clock resets on model output, tool progress,
+or a usage update — so a long job that keeps producing is never touched.
+
+```jsonc
+{
+  "agent_liveness": {
+    // No model output for this long → warn / cancel. Seconds; 0 disables.
+    "model_warning_after_secs": 120,
+    "model_timeout_after_secs": 900,
+    // No tool progress for this long → warn / cancel.
+    "tool_warning_after_secs": 600,
+    "tool_timeout_after_secs": 7200,
+    // Total wall-clock cap, applied even while the agent IS making progress.
+    // Unset by default: an agent still emitting output is working, and cocode
+    // does not decide for you when to stop it. Set it only if you want a hard
+    // ceiling on runaway cost.
+    "absolute_timeout_secs": null,
+  },
+}
+```
+
+A cancelled agent's task row is marked killed by the system, and the parent
+turn sees the subagent terminate. Setting every field to `0`/`null` spawns no
+watchdog at all.
+
 ### Reload semantics
 
 Settings are read into memory when a session starts. Writes that happen afterward do not retroactively change the running session.

@@ -29,68 +29,51 @@ struct ResponsesCallIdProjector {
 }
 
 impl ResponsesCallIdProjector {
+    /// Longest digest that still fits: `call_` leaves 59 ASCII characters.
+    const MAX_DIGEST_CHARS: usize = MAX_RESPONSES_CALL_ID_CHARS - "call_".len();
+
+    fn is_over_limit(id: &str) -> bool {
+        // Cheap pre-filter: the limit is on characters, and a string can only
+        // exceed it in chars if it also exceeds it in bytes.
+        id.len() > MAX_RESPONSES_CALL_ID_CHARS && id.chars().count() > MAX_RESPONSES_CALL_ID_CHARS
+    }
+
     fn for_prompt(prompt: &LanguageModelV4Prompt) -> Self {
-        let mut ids = HashSet::new();
-        for message in prompt {
-            match message {
-                LanguageModelV4Message::Assistant { content, .. } => {
-                    for part in content {
-                        if let AssistantContentPart::ToolCall(call) = part {
-                            ids.insert(call.tool_call_id.clone());
-                        }
-                    }
-                }
-                LanguageModelV4Message::Tool { content, .. } => {
-                    for part in content {
-                        if let ToolContentPart::ToolResult(result) = part {
-                            ids.insert(result.tool_call_id.clone());
-                        }
-                    }
-                }
-                LanguageModelV4Message::System { .. }
-                | LanguageModelV4Message::Developer { .. }
-                | LanguageModelV4Message::User { .. } => {}
-            }
+        // Nothing to project unless some ID is actually over the limit, which
+        // is the case for approximately no request. Bail before allocating —
+        // this runs on every Responses call, including 200-message prompts.
+        if !prompt_call_ids(prompt).any(Self::is_over_limit) {
+            return Self {
+                by_original: HashMap::new(),
+            };
         }
 
+        let ids: HashSet<&str> = prompt_call_ids(prompt).collect();
+        // Reserve every caller-provided short ID first, so a surrogate can
+        // never shadow an ID the model will also send.
         let mut reserved: HashSet<String> = ids
             .iter()
-            .filter(|id| id.chars().count() <= MAX_RESPONSES_CALL_ID_CHARS)
-            .cloned()
+            .filter(|id| !Self::is_over_limit(id))
+            .map(|id| (*id).to_string())
             .collect();
-        let mut long_ids: Vec<String> = ids
+        let mut long_ids: Vec<&str> = ids
             .into_iter()
-            .filter(|id| id.chars().count() > MAX_RESPONSES_CALL_ID_CHARS)
+            .filter(|id| Self::is_over_limit(id))
             .collect();
-        long_ids.sort();
+        long_ids.sort_unstable();
 
         let mut by_original = HashMap::new();
         for original in long_ids {
             let digest = format!("{:x}", sha2::Sha256::digest(original.as_bytes()));
-            let mut projected = None;
-            // Start with 128 bits, then deterministically lengthen the digest
-            // when a short caller-provided ID or another projection occupies
-            // the candidate. `call_` leaves 59 ASCII characters available.
-            for digest_chars in 32..=59 {
-                let candidate = format!("call_{}", &digest[..digest_chars]);
-                if reserved.insert(candidate.clone()) {
-                    projected = Some(candidate);
-                    break;
-                }
-            }
-            let projected = projected.unwrap_or_else(|| {
-                let mut ordinal = 2_i64;
-                loop {
-                    let suffix = format!("_{ordinal}");
-                    let digest_chars = MAX_RESPONSES_CALL_ID_CHARS - "call_".len() - suffix.len();
-                    let candidate = format!("call_{}{suffix}", &digest[..digest_chars]);
-                    if reserved.insert(candidate.clone()) {
-                        break candidate;
-                    }
-                    ordinal += 1;
-                }
-            });
-            by_original.insert(original, projected);
+            // Start at 128 bits, lengthening only if a reserved short ID or an
+            // earlier surrogate already occupies the candidate. Exhausting the
+            // ladder needs a caller that knows this digest, so the longest
+            // candidate is the answer rather than a further fallback scheme.
+            let projected = (32..Self::MAX_DIGEST_CHARS)
+                .map(|digest_chars| format!("call_{}", &digest[..digest_chars]))
+                .find(|candidate| reserved.insert(candidate.clone()))
+                .unwrap_or_else(|| format!("call_{}", &digest[..Self::MAX_DIGEST_CHARS]));
+            by_original.insert(original.to_string(), projected);
         }
         Self { by_original }
     }
@@ -98,6 +81,31 @@ impl ResponsesCallIdProjector {
     fn project<'a>(&'a self, id: &'a str) -> &'a str {
         self.by_original.get(id).map_or(id, String::as_str)
     }
+}
+
+/// Every `call_id` the prompt carries, from both sides of the pairing.
+fn prompt_call_ids(prompt: &LanguageModelV4Prompt) -> impl Iterator<Item = &str> {
+    prompt.iter().flat_map(|message| {
+        let (assistant, tool) = match message {
+            LanguageModelV4Message::Assistant { content, .. } => (Some(content), None),
+            LanguageModelV4Message::Tool { content, .. } => (None, Some(content)),
+            LanguageModelV4Message::System { .. }
+            | LanguageModelV4Message::Developer { .. }
+            | LanguageModelV4Message::User { .. } => (None, None),
+        };
+        let assistant = assistant
+            .into_iter()
+            .flatten()
+            .filter_map(|part| match part {
+                AssistantContentPart::ToolCall(call) => Some(call.tool_call_id.as_str()),
+                _ => None,
+            });
+        let tool = tool.into_iter().flatten().filter_map(|part| match part {
+            ToolContentPart::ToolResult(result) => Some(result.tool_call_id.as_str()),
+            _ => None,
+        });
+        assistant.chain(tool)
+    })
 }
 
 /// Flags indicating which provider tools are present, used for input conversion.

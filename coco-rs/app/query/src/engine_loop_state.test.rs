@@ -12,7 +12,7 @@ fn assistant(text: &str) -> coco_messages::Message {
 }
 
 #[test]
-fn compaction_of_an_earlier_anchor_preserves_recovery_segment_order() {
+fn compaction_drops_segments_whose_anchor_is_gone_and_keeps_the_rest_ordered() {
     let mut history = MessageHistory::new();
     let mut recovery = RecoveryWorkingContext::default();
 
@@ -30,8 +30,10 @@ fn compaction_of_an_earlier_anchor_preserves_recovery_segment_order() {
         coco_messages::create_meta_message("second nudge"),
     );
 
-    // Simulate compaction replacing only the earlier anchor. The retained
-    // later anchor must not let the second segment leapfrog the first.
+    // Compaction replaced the earlier anchor. The first pair answered context
+    // that no longer exists — relocating it would put a stale "you returned an
+    // empty response" at the tail, pointing at nothing. The retained pair keeps
+    // its position.
     let durable = vec![history.last().expect("second durable message").clone()];
     let assembled = recovery.assemble(&durable);
     let text: Vec<_> = assembled
@@ -39,16 +41,7 @@ fn compaction_of_an_earlier_anchor_preserves_recovery_segment_order() {
         .map(|message| coco_messages::wrapping::extract_text_from_message(message))
         .collect();
 
-    assert_eq!(
-        text,
-        [
-            "second durable",
-            "first malformed",
-            "first nudge",
-            "second malformed",
-            "second nudge",
-        ]
-    );
+    assert_eq!(text, ["second durable", "second malformed", "second nudge"]);
 }
 
 #[test]

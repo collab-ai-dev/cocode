@@ -1259,6 +1259,7 @@ mod pipeline_invariants {
                 "MergeConsecutiveUsers",
                 "MergeAssistantsByRequestId",
                 "StripExitPlanModeInjectedFields",
+                "DedupToolCallIds",
             ],
         );
     }
@@ -1468,6 +1469,43 @@ mod pipeline_invariants {
         );
     }
 
+    // ── Pass 8: DedupToolCallIds ────────────────────────────────────
+
+    fn bash_tool_call(id: &str) -> AssistantContent {
+        AssistantContent::ToolCall(coco_llm_types::ToolCallPart {
+            tool_call_id: id.into(),
+            tool_name: "Bash".into(),
+            input: serde_json::json!({}),
+            provider_executed: None,
+            invalid: false,
+            invalid_reason: None,
+            provider_metadata: None,
+        })
+    }
+
+    #[test]
+    fn dedup_tool_call_ids_clean_is_no_op() {
+        assert_clean(
+            passes::DedupToolCallIds,
+            vec![
+                user_msg("go"),
+                asst_with_content(vec![bash_tool_call("call_1")]),
+                asst_with_content(vec![bash_tool_call("call_2")]),
+            ],
+        );
+    }
+
+    #[test]
+    fn dedup_tool_call_ids_dirty_triggers() {
+        assert_dirty(
+            passes::DedupToolCallIds,
+            vec![
+                asst_with_content(vec![bash_tool_call("call_1")]),
+                asst_with_content(vec![bash_tool_call("call_1")]),
+            ],
+        );
+    }
+
     // ── Empty input is always a no-op ───────────────────────────────
 
     #[test]
@@ -1546,4 +1584,238 @@ fn test_validate_images_for_api_allows_small_image_and_non_image_files() {
         provider_options: None,
     }];
     assert!(validate_images_for_api(&prompt, 10).is_ok());
+}
+
+// ── Cross-message tool_call_id dedup ────────────────────────────────
+
+use coco_llm_types::ToolContentPart;
+use coco_llm_types::ToolResultContent;
+use coco_types::ToolId;
+use coco_types::ToolName;
+
+fn asst_tool_call_msg(id: &str) -> Message {
+    Message::Assistant(AssistantMessage {
+        message: LlmMessage::Assistant {
+            content: vec![AssistantContent::ToolCall(coco_llm_types::ToolCallPart {
+                tool_call_id: id.into(),
+                tool_name: "Bash".into(),
+                input: serde_json::json!({}),
+                provider_executed: None,
+                invalid: false,
+                invalid_reason: None,
+                provider_metadata: None,
+            })],
+            provider_options: None,
+        },
+        uuid: Uuid::new_v4(),
+        model: "test".into(),
+        stop_reason: Some(StopReason::ToolUse),
+        usage: None,
+        cost_usd: None,
+        request_id: None,
+        api_error: None,
+    })
+}
+
+fn tool_result_msg(id: &str, text: &str) -> Message {
+    Message::ToolResult(ToolResultMessage {
+        uuid: Uuid::new_v4(),
+        source_assistant_uuid: None,
+        display_data: None,
+        message: LlmMessage::Tool {
+            content: vec![ToolContentPart::ToolResult(
+                coco_llm_types::ToolResultPart {
+                    tool_call_id: id.into(),
+                    tool_name: "Bash".into(),
+                    output: ToolResultContent::text(text),
+                    is_error: false,
+                    provider_metadata: None,
+                },
+            )],
+            provider_options: None,
+        },
+        tool_use_id: id.into(),
+        tool_id: ToolId::Builtin(ToolName::Bash),
+        is_error: false,
+    })
+}
+
+/// Every `tool_use` id in one payload, in message order.
+fn wire_tool_use_ids(messages: &[LlmMessage]) -> Vec<String> {
+    messages
+        .iter()
+        .filter_map(|m| match m {
+            LlmMessage::Assistant { content, .. } => Some(content),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|part| match part {
+            AssistantContent::ToolCall(tc) => Some(tc.tool_call_id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn wire_tool_result_ids(messages: &[LlmMessage]) -> Vec<String> {
+    messages
+        .iter()
+        .filter_map(|m| match m {
+            LlmMessage::Tool { content, .. } => Some(content),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|part| match part {
+            ToolContentPart::ToolResult(r) => Some(r.tool_call_id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A provider that restarts its numbering every turn (Ollama-compatible
+/// endpoints, degraded models) produces the same id on several `tool_use`
+/// blocks of one replayed payload. Anthropic/DeepSeek reject that outright,
+/// so the pre-API pass must make them distinct — and carry each answering
+/// `tool_result` along, or the pairing check fails instead.
+#[test]
+fn duplicate_tool_call_ids_across_turns_are_made_unique_with_their_results() {
+    let msgs = vec![
+        user_msg("go"),
+        asst_tool_call_msg("call_1"),
+        tool_result_msg("call_1", "first"),
+        asst_tool_call_msg("call_1"),
+        tool_result_msg("call_1", "second"),
+        asst_tool_call_msg("call_1"),
+        tool_result_msg("call_1", "third"),
+    ];
+    let result = normalize_messages_for_api(&arc_vec(&msgs));
+
+    assert_eq!(
+        wire_tool_use_ids(&result),
+        vec!["call_1", "call_1_d2", "call_1_d3"],
+        "first occurrence keeps its id so the cached prefix survives"
+    );
+    assert_eq!(
+        wire_tool_result_ids(&result),
+        vec!["call_1", "call_1_d2", "call_1_d3"],
+        "each result follows the call it answers"
+    );
+    // The pairing itself must still hold: no synthetic placeholder was added.
+    assert!(
+        !serde_json::to_string(&result)
+            .expect("serializable")
+            .contains(super::SYNTHETIC_TOOL_RESULT_PLACEHOLDER),
+        "renaming must not orphan a call and trigger placeholder synthesis"
+    );
+}
+
+/// A generated `_d2` must never shadow an id the provider really used.
+#[test]
+fn generated_suffix_never_shadows_a_real_tool_call_id() {
+    let msgs = vec![
+        user_msg("go"),
+        asst_tool_call_msg("call_1"),
+        tool_result_msg("call_1", "a"),
+        asst_tool_call_msg("call_1_d2"),
+        tool_result_msg("call_1_d2", "b"),
+        asst_tool_call_msg("call_1"),
+        tool_result_msg("call_1", "c"),
+    ];
+    let result = normalize_messages_for_api(&arc_vec(&msgs));
+
+    assert_eq!(
+        wire_tool_use_ids(&result),
+        vec!["call_1", "call_1_d2", "call_1_d3"]
+    );
+    assert_eq!(
+        wire_tool_result_ids(&result),
+        vec!["call_1", "call_1_d2", "call_1_d3"]
+    );
+}
+
+/// An interrupted call that never got a result must not steal the later
+/// call's answer — pairing is scoped to the window before the next assistant.
+#[test]
+fn duplicate_id_with_a_missing_result_pairs_by_position_not_by_id() {
+    let msgs = vec![
+        user_msg("go"),
+        // Interrupted: no tool_result follows.
+        asst_tool_call_msg("call_1"),
+        asst_tool_call_msg("call_1"),
+        tool_result_msg("call_1", "answers the second call"),
+    ];
+    let result = normalize_messages_for_api(&arc_vec(&msgs));
+
+    assert_eq!(wire_tool_use_ids(&result), vec!["call_1", "call_1_d2"]);
+    let tool_results: Vec<(String, String)> = result
+        .iter()
+        .filter_map(|m| match m {
+            LlmMessage::Tool { content, .. } => Some(content),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|part| match part {
+            ToolContentPart::ToolResult(r) => Some((
+                r.tool_call_id.clone(),
+                serde_json::to_string(&r.output).unwrap_or_default(),
+            )),
+            _ => None,
+        })
+        .collect();
+    let real = tool_results
+        .iter()
+        .find(|(_, output)| output.contains("answers the second call"))
+        .expect("real tool result present");
+    assert_eq!(
+        real.0, "call_1_d2",
+        "the surviving result belongs to the call it followed"
+    );
+}
+
+/// Two calls with the same id inside ONE assistant message (a provider that
+/// reused an id within a single response on a non-streaming path).
+#[test]
+fn duplicate_tool_call_ids_within_one_assistant_message_are_made_unique() {
+    let assistant = Message::Assistant(AssistantMessage {
+        message: LlmMessage::Assistant {
+            content: vec![
+                AssistantContent::ToolCall(coco_llm_types::ToolCallPart {
+                    tool_call_id: "dup".into(),
+                    tool_name: "Bash".into(),
+                    input: serde_json::json!({}),
+                    provider_executed: None,
+                    invalid: false,
+                    invalid_reason: None,
+                    provider_metadata: None,
+                }),
+                AssistantContent::ToolCall(coco_llm_types::ToolCallPart {
+                    tool_call_id: "dup".into(),
+                    tool_name: "Bash".into(),
+                    input: serde_json::json!({}),
+                    provider_executed: None,
+                    invalid: false,
+                    invalid_reason: None,
+                    provider_metadata: None,
+                }),
+            ],
+            provider_options: None,
+        },
+        uuid: Uuid::new_v4(),
+        model: "test".into(),
+        stop_reason: Some(StopReason::ToolUse),
+        usage: None,
+        cost_usd: None,
+        request_id: None,
+        api_error: None,
+    });
+    let msgs = vec![
+        user_msg("go"),
+        assistant,
+        tool_result_msg("dup", "a"),
+        tool_result_msg("dup", "b"),
+    ];
+    let result = normalize_messages_for_api(&arc_vec(&msgs));
+    assert_eq!(wire_tool_use_ids(&result), vec!["dup", "dup_d2"]);
+    let ids = wire_tool_result_ids(&result);
+    assert!(ids.contains(&"dup".to_string()), "got {ids:?}");
+    assert!(ids.contains(&"dup_d2".to_string()), "got {ids:?}");
 }

@@ -171,6 +171,13 @@ impl LoopTurnState {
 /// malformed attempt. Request-preparation context appended on a later retry is
 /// allowed to precede the recovery transaction, while the first durable
 /// assistant/tool response remains a hard causal boundary.
+///
+/// Lifetime is "until the next committed response, or exhaustion" — the engine
+/// clears it at `ResponseAttemptCommitted`. It must not outlive the anomaly it
+/// repairs: the nudge is phrased as a standing user instruction, so leaving it
+/// in the prompt after a good response invites the model to answer it twice.
+/// A segment whose anchor no longer exists (compaction rewrote it) is dropped
+/// rather than relocated.
 #[derive(Default)]
 pub(crate) struct RecoveryWorkingContext {
     segments: Vec<RecoverySegment>,
@@ -213,11 +220,19 @@ impl RecoveryWorkingContext {
         let mut previous_boundary = 0;
         for segment in &self.segments {
             let raw_boundary = match segment.after.as_ref() {
-                None => 0,
+                None => Some(0),
                 Some(anchor) => durable
                     .iter()
                     .position(|message| message.uuid() == Some(anchor))
-                    .map_or(durable.len(), |index| index + 1),
+                    .map(|index| index + 1),
+            };
+            // Compaction replaced the message this pair answered. Re-appending
+            // it at the tail would make a stale "you returned an empty
+            // response" the most recent user instruction, pointing at context
+            // that no longer exists. Drop the segment instead.
+            let Some(raw_boundary) = raw_boundary else {
+                insertion_boundaries.push(None);
+                continue;
             };
             // The reminder pipeline runs before every provider request and
             // appends ambient context (notably UserContext) after the anchor
@@ -240,18 +255,25 @@ impl RecoveryWorkingContext {
             // prefix for this and every later recovery segment. Enforcing a
             // monotonic boundary preserves the transaction's causal order.
             let boundary = raw_boundary.max(previous_boundary);
-            insertion_boundaries.push(boundary);
+            insertion_boundaries.push(Some(boundary));
             previous_boundary = boundary;
         }
 
         let mut assembled = Vec::with_capacity(durable.len() + recovery_len);
         let mut next_segment = 0;
         for boundary in 0..=durable.len() {
-            while insertion_boundaries.get(next_segment) == Some(&boundary) {
-                let segment = &self.segments[next_segment];
-                assembled.push(segment.assistant.clone());
-                assembled.push(segment.nudge.clone());
-                next_segment += 1;
+            while let Some(planned) = insertion_boundaries.get(next_segment) {
+                match planned {
+                    // Anchor lost to compaction — the pair is dropped.
+                    None => next_segment += 1,
+                    Some(planned) if *planned == boundary => {
+                        let segment = &self.segments[next_segment];
+                        assembled.push(segment.assistant.clone());
+                        assembled.push(segment.nudge.clone());
+                        next_segment += 1;
+                    }
+                    Some(_) => break,
+                }
             }
             if let Some(message) = durable.get(boundary) {
                 assembled.push(message.clone());

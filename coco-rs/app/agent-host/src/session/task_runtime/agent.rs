@@ -125,7 +125,12 @@ impl TaskRuntime {
             })
             .await;
         debug_assert_eq!(assigned, task_id);
-        spawn_agent_liveness_watchdog(task_id.clone(), self.manager.clone(), cancel.clone());
+        spawn_agent_liveness_watchdog(
+            task_id.clone(),
+            self.manager.clone(),
+            cancel.clone(),
+            &self.agent_liveness,
+        );
         // When `autoBackgroundMs` is set, the foreground sub-agent
         // auto-detaches after that many ms of execution. The fg awaiter
         // (`tool.execute`'s `select!` arm) gets the detach signal and

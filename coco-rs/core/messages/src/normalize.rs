@@ -199,6 +199,172 @@ pub(crate) mod passes {
             strip_observable_tool_input_for_api(messages);
         }
     }
+
+    /// Pass 8: give every `tool_use` in the outgoing prompt a distinct id.
+    ///
+    /// `coco_inference::ToolCallIdNormalizer` only sees one response, so it
+    /// cannot know that a provider restarted its numbering on the next turn.
+    /// Replaying such a history puts the same id on N `tool_use` blocks in one
+    /// payload, which Anthropic and DeepSeek reject outright
+    /// (`Duplicate value for 'tool_call_id'`). This pass is the pre-API
+    /// chokepoint that resolves it.
+    pub struct DedupToolCallIds;
+    impl MessagePass for DedupToolCallIds {
+        fn would_mutate(&self, messages: &[&Message]) -> bool {
+            let mut seen = std::collections::HashSet::new();
+            messages
+                .iter()
+                .flat_map(|message| assistant_tool_call_ids(message))
+                .any(|id| !seen.insert(id))
+        }
+        fn apply(&self, messages: &mut Vec<Message>) {
+            dedup_duplicate_tool_call_ids(messages);
+        }
+    }
+}
+
+/// Tool-call ids declared by an assistant message, in part order.
+fn assistant_tool_call_ids(message: &Message) -> impl Iterator<Item = &str> {
+    let content = match message {
+        Message::Assistant(assistant) => match &assistant.message {
+            LlmMessage::Assistant { content, .. } => Some(content),
+            _ => None,
+        },
+        _ => None,
+    };
+    content.into_iter().flatten().filter_map(|part| match part {
+        crate::AssistantContent::ToolCall(call) => Some(call.tool_call_id.as_str()),
+        _ => None,
+    })
+}
+
+/// First free `{raw}_d{n}` (n from 2), reserving it in `taken`.
+///
+/// Deterministic and prefix-stable: history is append-only, so an id that
+/// already resolved keeps its assignment on every later turn and the prompt
+/// cache prefix survives. Mirrors the in-response suffix scheme in
+/// `coco_inference::tool_call_id` so both layers produce the same shape.
+fn allocate_unique_tool_call_id(
+    raw: &str,
+    taken: &mut std::collections::HashSet<String>,
+) -> String {
+    let mut ordinal = 2_i64;
+    loop {
+        let candidate = format!("{raw}_d{ordinal}");
+        if taken.insert(candidate.clone()) {
+            return candidate;
+        }
+        ordinal += 1;
+    }
+}
+
+/// Rename every repeated `tool_use` id and the `tool_result` that answers it.
+///
+/// The first occurrence always keeps its id, so the request prefix (and its
+/// cache) is untouched up to the first duplicate. A result is paired with its
+/// call by position, not by a global map: the answer to a call must appear
+/// before the next assistant message (Anthropic's adjacency rule), so the scan
+/// stops there. That keeps the pairing correct even when an earlier call was
+/// interrupted and never got a result.
+pub(crate) fn dedup_duplicate_tool_call_ids(messages: &mut [Message]) {
+    let mut taken: std::collections::HashSet<String> = messages
+        .iter()
+        .flat_map(assistant_tool_call_ids)
+        .map(str::to_string)
+        .collect();
+    let mut assigned: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // Per assistant message: the new id for each tool-call part, in part
+    // order (`None` = keep). Planned first so the follower scan can borrow
+    // `messages` immutably.
+    let mut assistant_plan: Vec<(usize, Vec<Option<String>>)> = Vec::new();
+    let mut result_plan: Vec<(usize, String)> = Vec::new();
+
+    for index in 0..messages.len() {
+        let raw_ids: Vec<String> = assistant_tool_call_ids(&messages[index])
+            .map(str::to_string)
+            .collect();
+        if raw_ids.is_empty() {
+            continue;
+        }
+
+        let mut renames: Vec<Option<String>> = Vec::with_capacity(raw_ids.len());
+        let mut pending: Vec<(String, String)> = Vec::new();
+        for raw in &raw_ids {
+            if assigned.insert(raw.clone()) {
+                renames.push(None);
+                continue;
+            }
+            let effective = allocate_unique_tool_call_id(raw, &mut taken);
+            pending.push((raw.clone(), effective.clone()));
+            renames.push(Some(effective));
+        }
+        if pending.is_empty() {
+            continue;
+        }
+
+        for (follower, message) in messages.iter().enumerate().skip(index + 1) {
+            if pending.is_empty() {
+                break;
+            }
+            match message {
+                // The answer window closes at the next assistant turn.
+                Message::Assistant(_) => break,
+                Message::ToolResult(result) => {
+                    if let Some(position) = pending
+                        .iter()
+                        .position(|(raw, _)| *raw == result.tool_use_id)
+                    {
+                        let (_, effective) = pending.remove(position);
+                        result_plan.push((follower, effective));
+                    }
+                }
+                Message::User(_)
+                | Message::System(_)
+                | Message::Attachment(_)
+                | Message::Progress(_)
+                | Message::Tombstone(_) => {}
+            }
+        }
+        assistant_plan.push((index, renames));
+    }
+
+    for (index, renames) in assistant_plan {
+        let Message::Assistant(assistant) = &mut messages[index] else {
+            continue;
+        };
+        let LlmMessage::Assistant { content, .. } = &mut assistant.message else {
+            continue;
+        };
+        let mut position = 0;
+        for part in content.iter_mut() {
+            let crate::AssistantContent::ToolCall(call) = part else {
+                continue;
+            };
+            if let Some(Some(effective)) = renames.get(position) {
+                call.tool_call_id = effective.clone();
+            }
+            position += 1;
+        }
+    }
+
+    for (index, effective) in result_plan {
+        let Message::ToolResult(result) = &mut messages[index] else {
+            continue;
+        };
+        let previous = std::mem::replace(&mut result.tool_use_id, effective.clone());
+        if let LlmMessage::Tool { content, .. } = &mut result.message {
+            for part in content.iter_mut() {
+                // A Tool message can carry several results after a merge —
+                // only the one answering this call is renamed.
+                if let coco_llm_types::ToolContentPart::ToolResult(part) = part
+                    && part.tool_call_id == previous
+                {
+                    part.tool_call_id = effective.clone();
+                }
+            }
+        }
+    }
 }
 
 macro_rules! declare_normalize_passes {
@@ -226,6 +392,9 @@ declare_normalize_passes!(
     MergeConsecutiveUsers,
     MergeAssistantsByRequestId,
     StripExitPlanModeInjectedFields,
+    // Runs last: the merges above decide the final message boundaries, and
+    // call/result pairing is scanned against those boundaries.
+    DedupToolCallIds,
 );
 
 /// Configurable filter knobs for the normalization pipeline.

@@ -1063,6 +1063,13 @@ impl QueryEngine {
                 },
             )
             .await;
+            // The model produced a usable response: the recovery scaffolding
+            // has done its job. Retiring it here keeps a stale "you returned
+            // an empty response" out of every later request in this cycle —
+            // it would otherwise stay in the prompt as a standing user
+            // instruction. Only the two synthetic messages leave the cached
+            // prefix; the durable history before them is untouched.
+            turn_state.recovery_context.clear();
             coco_otel::events::emit_assistant_response(
                 &response_text,
                 &model_id,

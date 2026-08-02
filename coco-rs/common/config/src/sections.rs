@@ -942,6 +942,16 @@ pub struct PartialSchedulingSettings {
     pub script_output_max_bytes: Option<i64>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PartialAgentLivenessSettings {
+    pub model_warning_after_secs: Option<i64>,
+    pub model_timeout_after_secs: Option<i64>,
+    pub tool_warning_after_secs: Option<i64>,
+    pub tool_timeout_after_secs: Option<i64>,
+    pub absolute_timeout_secs: Option<i64>,
+}
+
 /// Knobs for zero-LLM cron script jobs (`CronCreate` with `script`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SchedulingConfig {
@@ -971,6 +981,63 @@ impl SchedulingConfig {
         }
         if let Some(v) = partial.script_output_max_bytes.filter(|v| *v > 0) {
             config.script_output_max_bytes = v;
+        }
+        config
+    }
+}
+
+/// Watchdog limits for local background agents (`Task`-spawned subagents).
+///
+/// Every limit is inactivity-based except [`Self::absolute_timeout_secs`],
+/// which is a wall-clock kill regardless of progress and is therefore
+/// **opt-in** (`None` by default): an agent that is still producing output
+/// after N hours is working, not stuck, and coco does not cap that for you.
+/// Set any field to `0` to disable that limit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentLivenessConfig {
+    /// No model output for this long → warn.
+    pub model_warning_after_secs: i64,
+    /// No model output for this long → cancel the agent.
+    pub model_timeout_after_secs: i64,
+    /// No tool progress for this long → warn.
+    pub tool_warning_after_secs: i64,
+    /// No tool progress for this long → cancel the agent.
+    pub tool_timeout_after_secs: i64,
+    /// Total wall-clock cap, applied even while the agent is making
+    /// progress. `None` (default) leaves long-running agents alone.
+    pub absolute_timeout_secs: Option<i64>,
+}
+
+impl Default for AgentLivenessConfig {
+    fn default() -> Self {
+        Self {
+            model_warning_after_secs: 2 * 60,
+            model_timeout_after_secs: 15 * 60,
+            tool_warning_after_secs: 10 * 60,
+            tool_timeout_after_secs: 2 * 60 * 60,
+            absolute_timeout_secs: None,
+        }
+    }
+}
+
+impl AgentLivenessConfig {
+    pub fn resolve(settings: &Settings) -> Self {
+        let mut config = Self::default();
+        let partial = &settings.agent_liveness;
+        if let Some(v) = partial.model_warning_after_secs.filter(|v| *v >= 0) {
+            config.model_warning_after_secs = v;
+        }
+        if let Some(v) = partial.model_timeout_after_secs.filter(|v| *v >= 0) {
+            config.model_timeout_after_secs = v;
+        }
+        if let Some(v) = partial.tool_warning_after_secs.filter(|v| *v >= 0) {
+            config.tool_warning_after_secs = v;
+        }
+        if let Some(v) = partial.tool_timeout_after_secs.filter(|v| *v >= 0) {
+            config.tool_timeout_after_secs = v;
+        }
+        if let Some(v) = partial.absolute_timeout_secs.filter(|v| *v >= 0) {
+            config.absolute_timeout_secs = Some(v);
         }
         config
     }

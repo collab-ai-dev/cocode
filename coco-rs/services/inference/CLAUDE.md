@@ -28,14 +28,24 @@ Tool-input handling lives in three layers, each owning a distinct concern:
 
 - **Wire parsing — provider adapters + inference seam.** Adapters carry only wire strings and metadata; `services/inference` records parsed/raw state on `ToolCallSegment.input_state` (`ToolInputWireState`) so `app/query` never reparses. Empty/whitespace → `Empty`; clean or repaired JSON → `ParsedJson(Value)`; provider-marked unrecoverable raw → `UnrecoverableRaw { raw, error }` (copied to `ToolInputInvalidReason::JsonParseFailed`); possibly-legitimate freeform payloads → `RawStringAllowed { raw }`, left for tool-runtime coercion.
 - **Tool-call identity — inference stream seam.** `ToolCallIdNormalizer`
-  assigns collision-safe request-local IDs before both `StreamEvent` emission
-  and snapshot accumulation. Sequential provider ID reuse becomes `id`,
-  `id_d2`, …; an overlapping reuse is an ambiguous protocol error and
-  terminates the stream. Provider-executed approval/result references bind
-  FIFO to the corresponding reused raw ID; results prefer an unfinished call
-  with the same tool name before the FIFO fallback, and preliminary/final
-  results stay on one call. Excess references fail as ambiguous. Provider
-  adapters do not duplicate this generic policy.
+  assigns collision-safe **response-local** IDs before both `StreamEvent`
+  emission and snapshot accumulation. Sequential provider ID reuse becomes
+  `id`, `id_d2`, …; an overlapping reuse (a second `ToolInputStart` for a
+  still-open id) is the one fatal case — its deltas are unattributable, so the
+  stream aborts. `ToolResult` / `ToolApprovalRequest` ids are **left verbatim**:
+  both parts are dropped downstream (`stream.rs` keeps neither in the turn
+  snapshot; `app/query::assistant_content_from_snapshot` does not reconstruct
+  approval requests), so binding them to a renamed call is bookkeeping nobody
+  reads. Wiring either into assistant content is the trigger to add it back —
+  FIFO per reused raw ID, results preferring an unfinished call with the same
+  tool name, preliminary results not closing a call, and a mismatch that warns
+  instead of aborting. Provider adapters do not duplicate this generic policy.
+  - **Scope is one response, by construction.** Duplicates that span messages
+    (a provider that restarts numbering each turn, so a replayed prompt carries
+    the same id N times — the Anthropic/DeepSeek `Duplicate value for
+    'tool_call_id'` 400) are resolved once at the pre-API chokepoint by the
+    `DedupToolCallIds` normalize pass in `core/messages`. Do not widen this
+    seam to cover it: it never sees history.
 - **Schema validation — `app/query/src/tool_input_validate.rs`.** `validate_tool_call` runs `Value::String` recovery for calls not already wire-invalid, then JSON Schema validation via `coco_tool_runtime::ToolSchemaValidator` (pre-PreToolUse for raw input; `validate_effective_input_or_complete_error` in `tool_call_preparer.rs` catches hook-rewritten input). Sets `ToolCallPart.invalid_reason` to the structured variant (`SchemaViolation` / `NoSuchTool` / `JsonParseFailed`).
 - **Error wrap — `app/query/src/tool_call_preparer.rs::prepare_one_pending_tool_call`.** `tc.invalid` → synthetic `tool_result(is_error: true, "<tool_use_error>{prefix}: ...</tool_use_error>")`. The next turn carries the structured error back to the model and it self-corrects — no LLM repair callback, no static retry; recovery is the agent loop itself.
 
