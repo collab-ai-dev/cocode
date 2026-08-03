@@ -242,6 +242,13 @@ impl SessionHandle {
         self.runtime.agent_catalog_snapshot().await
     }
 
+    /// The session-wide Agent/WebSearch dispatch budget. Shared so every
+    /// subagent dispatch path — the `Agent` tool, workflow `agent()`, and
+    /// fork-mode skills — spends one ceiling.
+    pub(crate) fn session_safety_limits(&self) -> Arc<coco_tool_runtime::SessionUsageLimits> {
+        self.runtime.session_safety_limits()
+    }
+
     pub async fn session_usage_snapshot(&self) -> coco_types::SessionUsageSnapshot {
         self.runtime.session_usage_snapshot().await
     }

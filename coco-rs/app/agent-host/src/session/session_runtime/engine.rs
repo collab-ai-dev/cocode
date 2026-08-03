@@ -410,6 +410,11 @@ impl SessionRuntime {
         engine = engine.with_app_state(app_state.clone());
         engine =
             engine.with_session_usage_limits(self.engine_state_resources.session_usage().clone());
+        // Same choke point as the budgets above: every engine in this session —
+        // including subagent engines built through `build_engine_from_config` —
+        // enforces the one resolved nesting ceiling.
+        engine = engine
+            .with_subagent_depth_limit(self.runtime_config().agent_teams.max_subagent_spawn_depth);
         // `auto_mode_state` is a SESSION-GLOBAL flag shared by every engine in
         // this runtime. Pure Auto still keys off the per-call
         // `permission_context.mode`; Plan uses this flag as the authoritative

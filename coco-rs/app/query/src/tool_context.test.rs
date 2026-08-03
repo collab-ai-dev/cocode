@@ -62,6 +62,7 @@ fn factory_with_live_rules(
         permission_bridge: None,
         app_state: None,
         session_usage: Arc::new(coco_tool_runtime::SessionUsageLimits::default()),
+        subagent_depth_limit: coco_config::DEFAULT_MAX_SUBAGENT_SPAWN_DEPTH,
         auto_mode_state: None,
         subagent_screen: None,
         file_read_state: None,

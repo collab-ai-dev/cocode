@@ -24,7 +24,7 @@ fn trusted_tilde_memory_dir() -> String {
 
 #[test]
 fn test_agent_teams_config_defaults_to_main_model_role() {
-    let missing = AgentTeamsConfig::resolve(&Settings::default()).unwrap();
+    let missing = AgentTeamsConfig::resolve(&Settings::default(), &EnvSnapshot::default()).unwrap();
     assert_eq!(missing.default_model_role, coco_types::ModelRole::Main);
     assert!(missing.agent_type_model_roles.is_empty());
     assert_eq!(missing.default_model, None);
@@ -657,18 +657,21 @@ fn test_skill_learn_config_env_overrides_win() {
 
 #[test]
 fn test_agent_teams_config_resolves_role_overrides() {
-    let config = AgentTeamsConfig::resolve(&Settings {
-        agent_teams: PartialAgentTeamsSettings {
-            default_model_role: Some(coco_types::ModelRole::Fast),
-            agent_type_model_roles: Some(
-                [("reviewer".to_string(), coco_types::ModelRole::Review)]
-                    .into_iter()
-                    .collect(),
-            ),
+    let config = AgentTeamsConfig::resolve(
+        &Settings {
+            agent_teams: PartialAgentTeamsSettings {
+                default_model_role: Some(coco_types::ModelRole::Fast),
+                agent_type_model_roles: Some(
+                    [("reviewer".to_string(), coco_types::ModelRole::Review)]
+                        .into_iter()
+                        .collect(),
+                ),
+                ..Default::default()
+            },
             ..Default::default()
         },
-        ..Default::default()
-    })
+        &EnvSnapshot::default(),
+    )
     .unwrap();
     assert_eq!(config.default_model_role, coco_types::ModelRole::Fast);
     assert_eq!(
@@ -679,16 +682,19 @@ fn test_agent_teams_config_resolves_role_overrides() {
 
 #[test]
 fn test_agent_teams_config_resolves_concrete_default_model() {
-    let config = AgentTeamsConfig::resolve(&Settings {
-        agent_teams: PartialAgentTeamsSettings {
-            default_model: Some(coco_types::ProviderModelSelection {
-                provider: "openai".into(),
-                model_id: "gpt-5-5".into(),
-            }),
+    let config = AgentTeamsConfig::resolve(
+        &Settings {
+            agent_teams: PartialAgentTeamsSettings {
+                default_model: Some(coco_types::ProviderModelSelection {
+                    provider: "openai".into(),
+                    model_id: "gpt-5-5".into(),
+                }),
+                ..Default::default()
+            },
             ..Default::default()
         },
-        ..Default::default()
-    })
+        &EnvSnapshot::default(),
+    )
     .unwrap();
     assert_eq!(
         config.default_model,
@@ -1228,4 +1234,86 @@ fn test_voice_config_json_round_trip() {
     let json = serde_json::to_value(&c).expect("ser");
     let back: VoiceConfig = serde_json::from_value(json).expect("de");
     assert_eq!(c, back);
+}
+
+#[test]
+fn test_agent_teams_session_limits_default_when_unset() {
+    let config = AgentTeamsConfig::resolve(&Settings::default(), &EnvSnapshot::default()).unwrap();
+    assert_eq!(
+        (
+            config.max_subagents_per_session,
+            config.max_subagent_spawn_depth,
+            config.max_web_searches_per_session
+        ),
+        (
+            DEFAULT_MAX_SUBAGENTS_PER_SESSION,
+            DEFAULT_MAX_SUBAGENT_SPAWN_DEPTH,
+            DEFAULT_MAX_WEB_SEARCHES_PER_SESSION
+        )
+    );
+}
+
+#[test]
+fn test_agent_teams_session_limits_read_settings_then_env() {
+    let settings = Settings {
+        agent_teams: PartialAgentTeamsSettings {
+            max_subagents_per_session: Some(12),
+            max_subagent_spawn_depth: Some(5),
+            max_web_searches_per_session: Some(7),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let from_settings = AgentTeamsConfig::resolve(&settings, &EnvSnapshot::default()).unwrap();
+    assert_eq!(
+        (
+            from_settings.max_subagents_per_session,
+            from_settings.max_subagent_spawn_depth,
+            from_settings.max_web_searches_per_session
+        ),
+        (12, 5, 7)
+    );
+
+    let env = EnvSnapshot::from_pairs([
+        (EnvKey::CocoMaxSubagentsPerSession, "20"),
+        (EnvKey::CocoMaxSubagentSpawnDepth, "2"),
+        (EnvKey::CocoMaxWebSearchesPerSession, "30"),
+    ]);
+    let env_wins = AgentTeamsConfig::resolve(&settings, &env).unwrap();
+    assert_eq!(
+        (
+            env_wins.max_subagents_per_session,
+            env_wins.max_subagent_spawn_depth,
+            env_wins.max_web_searches_per_session
+        ),
+        (20, 2, 30)
+    );
+}
+
+#[test]
+fn test_agent_teams_session_limits_reject_non_positive() {
+    let settings = Settings {
+        agent_teams: PartialAgentTeamsSettings {
+            max_subagents_per_session: Some(0),
+            max_subagent_spawn_depth: Some(-1),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoMaxWebSearchesPerSession, "not-a-number")]);
+
+    let config = AgentTeamsConfig::resolve(&settings, &env).unwrap();
+    assert_eq!(
+        (
+            config.max_subagents_per_session,
+            config.max_subagent_spawn_depth,
+            config.max_web_searches_per_session
+        ),
+        (
+            DEFAULT_MAX_SUBAGENTS_PER_SESSION,
+            DEFAULT_MAX_SUBAGENT_SPAWN_DEPTH,
+            DEFAULT_MAX_WEB_SEARCHES_PER_SESSION
+        )
+    );
 }

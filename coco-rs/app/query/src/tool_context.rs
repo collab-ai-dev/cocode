@@ -109,6 +109,7 @@ pub(crate) struct ToolContextFactory {
     pub(crate) permission_bridge: Option<ToolPermissionBridgeRef>,
     pub(crate) app_state: Option<Arc<RwLock<ToolAppState>>>,
     pub(crate) session_usage: Arc<coco_tool_runtime::SessionUsageLimits>,
+    pub(crate) subagent_depth_limit: i32,
     pub(crate) auto_mode_state: Option<Arc<coco_permissions::AutoModeState>>,
     /// Screens subagent dispatches that bypass the tool pipeline (the workflow
     /// runtime's `agent()`). `None` resolves to
@@ -531,6 +532,7 @@ impl ToolContextFactory {
             mcp_server_tool_exposure: self.config.mcp_server_tool_exposure.clone(),
             tool_materialization: overrides.tool_materialization,
             session_usage: self.session_usage.clone(),
+            subagent_depth_limit: self.subagent_depth_limit,
             is_teammate: self.config.is_teammate,
             is_in_process_teammate: self.config.is_in_process_teammate,
             plan_mode_required: self.config.plan_mode_required,

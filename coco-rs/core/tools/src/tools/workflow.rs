@@ -463,6 +463,7 @@ impl Tool for WorkflowTool {
                     permission_context: ctx.permission_context.clone(),
                     messages: ctx.messages.clone(),
                     subagent_screen: ctx.subagent_screen.clone(),
+                    session_usage: ctx.session_usage.clone(),
                     mcp_tool_exposure: ctx.mcp_tool_exposure,
                     mcp_server_tool_exposure: ctx.mcp_server_tool_exposure.as_ref().clone(),
                     agent_catalog: ctx.agent_catalog.clone(),

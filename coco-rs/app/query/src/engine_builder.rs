@@ -102,7 +102,8 @@ impl QueryEngine {
             denial_tracker: None,
             auto_mode_rules: coco_permissions::AutoModeRules::default(),
             app_state: None,
-            session_usage: Arc::new(coco_tool_runtime::SessionUsageLimits::from_env()),
+            session_usage: Arc::new(coco_tool_runtime::SessionUsageLimits::default()),
+            subagent_depth_limit: coco_config::DEFAULT_MAX_SUBAGENT_SPAWN_DEPTH,
             mailbox: None,
             pending_messages: None,
             mcp_handle: None,
@@ -850,6 +851,12 @@ impl QueryEngine {
         limits: Arc<coco_tool_runtime::SessionUsageLimits>,
     ) -> Self {
         self.session_usage = limits;
+        self
+    }
+
+    /// Install the session's resolved nested-spawn ceiling.
+    pub fn with_subagent_depth_limit(mut self, depth_limit: i32) -> Self {
+        self.subagent_depth_limit = depth_limit;
         self
     }
 

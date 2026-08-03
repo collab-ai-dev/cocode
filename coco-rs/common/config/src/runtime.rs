@@ -420,7 +420,7 @@ pub fn build_runtime_config_with(
         server: ServerConfig::resolve(merged, &env),
         paths: PathConfig::resolve(merged),
         compact: CompactConfig::resolve(merged, &env),
-        agent_teams: AgentTeamsConfig::resolve(merged)?,
+        agent_teams: AgentTeamsConfig::resolve(merged, &env)?,
         skill_learn: SkillLearnConfig::resolve(merged, &env),
         prompt_cache: PromptCacheRuntimeConfig::resolve(merged, &env),
         account: AccountConfig::resolve(merged, &env),

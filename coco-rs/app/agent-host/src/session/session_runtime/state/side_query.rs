@@ -10,6 +10,13 @@ impl SessionRuntime {
     pub async fn session_usage_snapshot(&self) -> coco_types::SessionUsageSnapshot {
         self.turn_resources.usage_accounting().snapshot().await
     }
+    /// The session-wide Agent/WebSearch dispatch budget shared by every engine
+    /// and every non-tool subagent dispatch path.
+    pub(crate) fn session_safety_limits(
+        &self,
+    ) -> std::sync::Arc<coco_tool_runtime::SessionUsageLimits> {
+        self.engine_state_resources.session_usage().clone()
+    }
     pub fn side_query(&self) -> coco_tool_runtime::SideQueryHandle {
         self.turn_resources.side_query()
     }

@@ -10,29 +10,22 @@ use coco_types::ToolName;
 use strum::IntoEnumIterator;
 
 /// Default maximum caller depth allowed to spawn another subagent.
-/// A child whose *run depth* is `> subagent_depth_limit()` has `Agent`
-/// removed from its tool list, so it cannot spawn deeper.
+/// A child whose *run depth* is `> depth_limit` has `Agent` removed from its
+/// tool list, so it cannot spawn deeper.
 /// The main loop runs at depth 0 and a spawn is `parent + 1`, so this
 /// permits 3 spawnable levels under main (depth 1..=3; the depth-3 leaf
 /// is the first that can no longer spawn). The model-facing AgentTool
 /// boundary also rejects direct calls from a parent already at this
 /// depth, so forks and other bypass paths count toward the same cap.
-pub const SUBAGENT_DEPTH_LIMIT: i32 = 3;
-
-/// Resolve the process-level operator override for nested Agent spawning.
 ///
-/// Environment is read at the policy boundary rather than cached globally so
-/// tests and embedded hosts can establish it before building each session.
-/// Production treats process environment as immutable after startup.
-pub fn subagent_depth_limit() -> i32 {
-    coco_config::env::env_opt_i32(coco_config::EnvKey::CocoMaxSubagentSpawnDepth)
-        .filter(|value| *value >= 1)
-        .unwrap_or(SUBAGENT_DEPTH_LIMIT)
-}
+/// The effective ceiling is resolved once per session into
+/// [`coco_config::AgentTeamsConfig::max_subagent_spawn_depth`] and passed in;
+/// this constant is only the fallback that config resolution starts from.
+pub const SUBAGENT_DEPTH_LIMIT: i32 = coco_config::DEFAULT_MAX_SUBAGENT_SPAWN_DEPTH;
 
 /// Tools blocked for every spawned agent.
 /// `Agent` is intentionally NOT in this base list — nested spawning is
-/// gated by [`subagent_depth_limit`] rather than blocked outright,
+/// gated by the resolved depth limit rather than blocked outright,
 /// so [`subagent_disallowed_tools`] appends `Agent` only once the child's
 /// run depth exceeds the limit.
 pub const ALL_AGENT_DISALLOWED_TOOLS: &[&str] = &[
@@ -72,21 +65,27 @@ pub const ASYNC_AGENT_ALLOWED_TOOLS: &[&str] = &[
 /// spawned subagent is denied regardless of its allow-list. `ExitPlanMode`
 /// is re-admitted when `plan_mode` so a plan-mode subagent can still exit
 /// the plan. `Agent` is appended only when `child_depth` exceeds
-/// [`subagent_depth_limit`] — the depth gate that bounds nested spawning
-/// (`child_depth` is the depth the spawned child will RUN at = parent + 1).
+/// `depth_limit` — the depth gate that bounds nested spawning
+/// (`child_depth` is the depth the spawned child will RUN at = parent + 1,
+/// `depth_limit` is the session's resolved
+/// [`coco_config::AgentTeamsConfig::max_subagent_spawn_depth`]).
 /// coco-rs enforces tool visibility per-id via
 /// [`coco_types::ToolFilter::allows`] (`tool-runtime/registry.rs`), so a
 /// deny entry simply drops that tool from the model's list — no
 /// `available_tools` snapshot is required. The caller (coordinator spawn
 /// path) merges these into the child `ToolFilter`'s disallowed set.
-pub fn subagent_disallowed_tools(plan_mode: bool, child_depth: i32) -> Vec<&'static str> {
+pub fn subagent_disallowed_tools(
+    plan_mode: bool,
+    child_depth: i32,
+    depth_limit: i32,
+) -> Vec<&'static str> {
     let exit_plan_mode = ToolName::ExitPlanMode.as_str();
     let mut denied: Vec<&'static str> = ALL_AGENT_DISALLOWED_TOOLS
         .iter()
         .copied()
         .filter(|name| !(plan_mode && *name == exit_plan_mode))
         .collect();
-    if child_depth > subagent_depth_limit() {
+    if child_depth > depth_limit {
         denied.push(ToolName::Agent.as_str());
     }
     denied
@@ -107,14 +106,18 @@ pub fn subagent_disallowed_tools(plan_mode: bool, child_depth: i32) -> Vec<&'sta
 ///
 /// The depth gate is hoisted ABOVE the async clamp so foreground and
 /// background spawns share one nesting ceiling: while `child_depth` is at or
-/// below [`subagent_depth_limit`], the `Agent` tool is ALLOWED (filtered out of
+/// below `depth_limit`, the `Agent` tool is ALLOWED (filtered out of
 /// the deny list even though it is not in [`ASYNC_AGENT_ALLOWED_TOOLS`]);
-/// once `child_depth` exceeds the resolved limit, the clamp's normal denial of
+/// once `child_depth` exceeds that limit, the clamp's normal denial of
 /// `Agent` stands.
-pub fn async_subagent_disallowed_tools(plan_mode: bool, child_depth: i32) -> Vec<&'static str> {
+pub fn async_subagent_disallowed_tools(
+    plan_mode: bool,
+    child_depth: i32,
+    depth_limit: i32,
+) -> Vec<&'static str> {
     let exit_plan_mode = ToolName::ExitPlanMode.as_str();
     let agent = ToolName::Agent.as_str();
-    let allow_agent = child_depth <= subagent_depth_limit();
+    let allow_agent = child_depth <= depth_limit;
     ToolName::iter()
         .map(|t| t.as_str())
         .filter(|name| !ASYNC_AGENT_ALLOWED_TOOLS.contains(name))

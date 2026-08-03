@@ -7,13 +7,6 @@
 
 use std::sync::atomic::{AtomicI32, Ordering};
 
-use coco_config::EnvKey;
-
-/// Upstream-compatible default Agent dispatch budget for one session.
-pub const DEFAULT_MAX_SUBAGENT_SPAWNS_PER_SESSION: i32 = 200;
-/// Upstream-compatible default WebSearch call budget for one session.
-pub const DEFAULT_MAX_WEB_SEARCHES_PER_SESSION: i32 = 200;
-
 /// Result of atomically charging one tool call to a session budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UsageLimitDecision {
@@ -43,15 +36,12 @@ impl SessionUsageLimits {
         }
     }
 
-    /// Resolve operator overrides once when the session is constructed.
-    pub fn from_env() -> Self {
-        let max_agent_spawns = coco_config::env::env_opt_i32(EnvKey::CocoMaxSubagentsPerSession)
-            .filter(|value| *value >= 1)
-            .unwrap_or(DEFAULT_MAX_SUBAGENT_SPAWNS_PER_SESSION);
-        let max_web_searches = coco_config::env::env_opt_i32(EnvKey::CocoMaxWebSearchesPerSession)
-            .filter(|value| *value >= 1)
-            .unwrap_or(DEFAULT_MAX_WEB_SEARCHES_PER_SESSION);
-        Self::new(max_agent_spawns, max_web_searches)
+    /// Build from the session's resolved agent-teams config.
+    pub fn from_config(config: &coco_config::AgentTeamsConfig) -> Self {
+        Self::new(
+            config.max_subagents_per_session,
+            config.max_web_searches_per_session,
+        )
     }
 
     /// Atomically charge one Agent dispatch.
@@ -78,8 +68,8 @@ impl SessionUsageLimits {
 impl Default for SessionUsageLimits {
     fn default() -> Self {
         Self::new(
-            DEFAULT_MAX_SUBAGENT_SPAWNS_PER_SESSION,
-            DEFAULT_MAX_WEB_SEARCHES_PER_SESSION,
+            coco_config::DEFAULT_MAX_SUBAGENTS_PER_SESSION,
+            coco_config::DEFAULT_MAX_WEB_SEARCHES_PER_SESSION,
         )
     }
 }

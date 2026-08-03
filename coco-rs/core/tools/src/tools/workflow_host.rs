@@ -68,6 +68,9 @@ pub(crate) struct WorkflowSpawnContext {
     /// Screens each `agent()` dispatch — see
     /// [`coco_tool_runtime::subagent_screen`].
     pub subagent_screen: coco_tool_runtime::SubagentDispatchScreenHandle,
+    /// The session's Agent dispatch budget. Shared with the `Agent` tool so a
+    /// workflow cannot spawn past a ceiling the equivalent tool call honours.
+    pub session_usage: Arc<coco_tool_runtime::SessionUsageLimits>,
     pub mcp_tool_exposure: coco_types::McpToolExposure,
     pub mcp_server_tool_exposure: std::collections::HashMap<String, coco_types::McpToolExposure>,
     pub agent_catalog: Option<Arc<coco_subagent::AgentCatalogSnapshot>>,
@@ -334,6 +337,24 @@ impl WorkflowHost for WorkflowRunHost {
         {
             return Ok(WorkflowAgentOutcome::Refused {
                 reason: format!("blocked by safety classifier: {reason}"),
+                blocked: true,
+            });
+        }
+
+        // Same reasoning as the screen above: this dispatch never passed the
+        // tool pipeline, so the session spawn budget the `Agent` tool charges
+        // has to be charged here too — otherwise a workflow is a way to spawn
+        // subagents past a ceiling the equivalent `Agent` call would refuse.
+        // Charged once per `agent()` call, before the permit: the stall-retry
+        // loop below re-runs one logical dispatch, not a new one.
+        if let coco_tool_runtime::UsageLimitDecision::Exhausted { used, limit } =
+            ctx.session_usage.try_record_agent_spawn()
+        {
+            return Ok(WorkflowAgentOutcome::Refused {
+                reason: format!(
+                    "session subagent spawn limit reached ({used} of {limit} agents spawned \
+                     in this session)"
+                ),
                 blocked: true,
             });
         }

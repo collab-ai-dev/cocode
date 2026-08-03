@@ -170,8 +170,6 @@ pub use schema::ToolInputSchema;
 pub use schema::canonicalize_model_tool_schema;
 pub use schema::format_schema_error;
 pub use schema::schema_omit_properties;
-pub use session_usage::DEFAULT_MAX_SUBAGENT_SPAWNS_PER_SESSION;
-pub use session_usage::DEFAULT_MAX_WEB_SEARCHES_PER_SESSION;
 pub use session_usage::SessionUsageLimits;
 pub use session_usage::UsageLimitDecision;
 pub use side_query::NoOpSideQuery;

@@ -240,6 +240,9 @@ pub struct ToolUseContext {
     /// Monotone loop-breaker counters shared by every engine in this session.
     /// Completed work remains charged; a new session runtime starts fresh.
     pub session_usage: Arc<crate::SessionUsageLimits>,
+    /// Caller depth still permitted to spawn another subagent, resolved from
+    /// [`coco_config::AgentTeamsConfig::max_subagent_spawn_depth`].
+    pub subagent_depth_limit: i32,
 
     // ── Core State ──
     /// Structured abort signal for tool execution.
@@ -708,6 +711,7 @@ impl ToolUseContext {
             mcp_server_tool_exposure: self.mcp_server_tool_exposure.clone(),
             tool_materialization: self.tool_materialization.clone(),
             session_usage: self.session_usage.clone(),
+            subagent_depth_limit: self.subagent_depth_limit,
             abort: self.abort.clone(),
             messages: self.messages.clone(),
             permission_context: self.permission_context.clone(),
@@ -1021,6 +1025,7 @@ impl ToolUseContext {
             mcp_server_tool_exposure: Arc::new(HashMap::new()),
             tool_materialization: None,
             session_usage: Arc::new(crate::SessionUsageLimits::default()),
+            subagent_depth_limit: coco_config::DEFAULT_MAX_SUBAGENT_SPAWN_DEPTH,
             abort: ToolAbortSignal::from_turn(TurnAbortController::new().signal()),
             messages: Arc::new(Vec::new()),
             permission_context: ToolPermissionContext {

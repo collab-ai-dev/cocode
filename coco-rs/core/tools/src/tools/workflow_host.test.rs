@@ -87,6 +87,7 @@ fn host() -> WorkflowRunHost {
         task_id: "wtest".to_string(),
         main_handle: tokio::runtime::Handle::current(),
         spawn_ctx: WorkflowSpawnContext {
+            session_usage: Arc::new(coco_tool_runtime::SessionUsageLimits::default()),
             session_id: Some(coco_types::SessionId::try_new("session").unwrap()),
             invoking_agent_id: Some("parent-agent".to_string()),
             tool_use_id: Some("toolu_1".to_string()),
@@ -545,6 +546,7 @@ fn cyclic_host_with_cwd(cwd: std::path::PathBuf) -> Arc<WorkflowRunHost> {
         task_id: "wtest".to_string(),
         main_handle: tokio::runtime::Handle::current(),
         spawn_ctx: WorkflowSpawnContext {
+            session_usage: Arc::new(coco_tool_runtime::SessionUsageLimits::default()),
             session_id: Some(coco_types::SessionId::try_new("session").unwrap()),
             invoking_agent_id: None,
             tool_use_id: None,
@@ -797,4 +799,51 @@ fn empty_result_preview_matches_only_the_found_nothing_shapes() {
             "{present:?} should NOT count as an empty result"
         );
     }
+}
+
+#[tokio::test]
+async fn run_agent_charges_the_session_spawn_budget() {
+    use coco_workflow_runtime::WorkflowHost;
+
+    // A workflow `agent()` bypasses the tool pipeline, so it must charge the
+    // same counter the `Agent` tool charges — otherwise a workflow spawns past
+    // a ceiling the equivalent tool call refuses.
+    let mut host = host();
+    let limits = Arc::new(coco_tool_runtime::SessionUsageLimits::new(
+        /*max_agent_spawns*/ 1, /*max_web_searches*/ 200,
+    ));
+    host.spawn_ctx.session_usage = Arc::clone(&limits);
+
+    // The first dispatch is within budget, so it reaches the agent handle —
+    // which is the no-op one here and fails. It is still charged: the budget is
+    // spent at the dispatch boundary, matching the `Agent` tool, so a failing
+    // spawn cannot be retried for free.
+    let first = host
+        .run_agent("first".to_string(), WorkflowAgentOpts::default(), &|| {})
+        .await;
+    assert!(
+        first.is_err(),
+        "the first dispatch passes the budget and reaches the handle"
+    );
+    assert_eq!(limits.agent_spawns(), 1, "the dispatch was charged");
+
+    let second = host
+        .run_agent("second".to_string(), WorkflowAgentOpts::default(), &|| {})
+        .await
+        .expect("second dispatch resolves rather than raising");
+    match second {
+        coco_workflow_runtime::WorkflowAgentOutcome::Refused { reason, blocked } => {
+            assert!(blocked, "an exhausted budget is a hard stop");
+            assert!(
+                reason.contains("spawn limit reached"),
+                "refusal must name the budget: {reason}"
+            );
+        }
+        other => panic!("expected the exhausted budget to refuse, got {other:?}"),
+    }
+    assert_eq!(
+        limits.agent_spawns(),
+        1,
+        "a refused dispatch must not consume more budget"
+    );
 }

@@ -571,7 +571,7 @@ impl Tool for AgentTool {
             });
         }
 
-        let depth_limit = coco_subagent::subagent_depth_limit();
+        let depth_limit = ctx.subagent_depth_limit;
         if ctx.query_depth >= depth_limit {
             return Err(ToolError::ExecutionFailed {
                 message: format!(

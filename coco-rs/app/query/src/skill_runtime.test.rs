@@ -331,6 +331,60 @@ async fn test_loop_skill_invocation_uses_live_cwd_for_loop_file_fallback() {
 }
 
 #[tokio::test]
+async fn test_fork_skill_charges_the_session_spawn_budget() {
+    // A fork-mode skill becomes a real subagent without passing the `Agent`
+    // tool, so it charges the same session budget — otherwise a skill chain
+    // spawns past a ceiling the equivalent tool call refuses.
+    let skill = sample_skill(
+        "analyze",
+        "Analyze the input",
+        SkillContext::Fork,
+        false,
+        false,
+    );
+    let limits = Arc::new(coco_tool_runtime::SessionUsageLimits::new(
+        /*max_agent_spawns*/ 1, /*max_web_searches*/ 200,
+    ));
+    let rt = runtime_with(vec![skill])
+        .with_agent_engine(Arc::new(StubEngine))
+        .with_session_usage(Arc::clone(&limits));
+
+    rt.invoke_skill(
+        "analyze",
+        "",
+        SubagentInheritance::default(),
+        coco_tool_runtime::SkillGateContext::default(),
+    )
+    .await
+    .expect("the first fork is within budget");
+    assert_eq!(limits.agent_spawns(), 1, "the fork was charged");
+
+    let err = rt
+        .invoke_skill(
+            "analyze",
+            "",
+            SubagentInheritance::default(),
+            coco_tool_runtime::SkillGateContext::default(),
+        )
+        .await
+        .unwrap_err();
+    match err {
+        SkillInvocationError::Forked { reason } => {
+            assert!(
+                reason.contains("spawned its budget"),
+                "refusal must name the budget; got: {reason}"
+            );
+        }
+        other => panic!("expected Forked, got {other:?}"),
+    }
+    assert_eq!(
+        limits.agent_spawns(),
+        1,
+        "a refused fork must not consume more budget"
+    );
+}
+
+#[tokio::test]
 async fn test_fork_skill_without_engine_fails_forked() {
     let skill = sample_skill("run", "Run something", SkillContext::Fork, false, false);
     let rt = runtime_with(vec![skill]);

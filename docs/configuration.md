@@ -219,6 +219,32 @@ A cancelled agent's task row is marked killed by the system, and the parent
 turn sees the subagent terminate. Setting every field to `0`/`null` spawns no
 watchdog at all.
 
+### Session dispatch budgets
+
+Separate from liveness: these are **loop breakers**, not concurrency limits. A
+completed agent never returns its charge, and every dispatch path spends the
+same ceiling — the `Agent` tool, a workflow script's `agent()`, and fork-mode
+skills. `/clear` starts a new session runtime and therefore a fresh budget.
+
+```jsonc
+{
+  "agent_teams": {
+    // Agents alive at once. This one IS a concurrency limit.
+    "max_agents": 8,
+    // Total Agent dispatches allowed in one session.
+    "max_subagents_per_session": 200,
+    // Caller depth still permitted to spawn another subagent.
+    "max_subagent_spawn_depth": 3,
+    // Total WebSearch calls allowed in one session.
+    "max_web_searches_per_session": 200,
+  },
+}
+```
+
+The last three accept the matching `COCO_MAX_*` environment variables, which
+win over the file. A value below `1` in either place is ignored in favour of
+the default — zero would disable spawning outright rather than bound it.
+
 ### Reload semantics
 
 Settings are read into memory when a session starts. Writes that happen afterward do not retroactively change the running session.
@@ -345,9 +371,9 @@ cocode owns a large number of `COCO_*` variables; most are internal tuning knobs
 | `COCO_CONFIG_DIR` | Relocates the config home. Also changes the global config file to `$COCO_CONFIG_DIR/global.json` — see [above](#the-global-config-file-is-not-in-the-config-home). |
 | `COCO_FEATURE_<KEY>` | Toggles one feature gate. See [the env form](#the-coco_feature_-environment-form). |
 | `COCO_BARE_MODE` | Truthy value skips session-start and per-turn background housekeeping: auto-dream, memory extraction, prompt suggestion, and stale-directory sweeps. Equivalent to the `--bare` flag, which sets this variable for the process. |
-| `COCO_MAX_SUBAGENTS_PER_SESSION` | Positive integer limiting Agent tool dispatches in one session. Default `200`; invalid or non-positive values fall back to the default. |
-| `COCO_MAX_SUBAGENT_SPAWN_DEPTH` | Positive integer limiting nested Agent depth. Default `3`; invalid or non-positive values fall back to the default. |
-| `COCO_MAX_WEB_SEARCHES_PER_SESSION` | Positive integer limiting WebSearch calls in one session. Default `200`; invalid or non-positive values fall back to the default. |
+| `COCO_MAX_SUBAGENTS_PER_SESSION` | Overrides `agent_teams.max_subagents_per_session` — Agent dispatches allowed in one session, across every dispatch path. Default `200`; invalid or non-positive values fall back to the default. See [session dispatch budgets](#session-dispatch-budgets). |
+| `COCO_MAX_SUBAGENT_SPAWN_DEPTH` | Overrides `agent_teams.max_subagent_spawn_depth` — caller depth still permitted to spawn. Default `3`; invalid or non-positive values fall back to the default. |
+| `COCO_MAX_WEB_SEARCHES_PER_SESSION` | Overrides `agent_teams.max_web_searches_per_session` — WebSearch calls allowed in one session. Default `200`; invalid or non-positive values fall back to the default. |
 | `COCO_MODEL_MAIN` | Overrides the Main model role. Deliberately environment-only — it is the escape hatch that must work before `settings.json` is parsed. Per-role models go through `settings.models.*`. |
 | `COCO_AUTH_CREDENTIAL_STORE` | Credential backend: `auto` (keychain first, file fallback), `file` (only `<config home>/auth/*.json`, mode `0600`), `keyring` (keychain only, error if unavailable), or `ephemeral` (in-memory, nothing persists). Case-insensitive. An unrecognized value logs a warning and falls through to `global.json`'s `auth_credential_store`, then to a build-provenance default. |
 | `COCO_EVENT_HUB_URL` | Event Hub WebSocket endpoint. Must start with `ws://` or `wss://` or startup fails. Overridden by `--event-hub-url`; overrides `settings.event_hub_url`. |

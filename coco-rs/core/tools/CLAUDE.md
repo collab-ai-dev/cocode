@@ -24,6 +24,14 @@ call re-opens a path that dispatches subagents an `Agent(...)` call could not.
 A blocked dispatch is `WorkflowAgentOutcome::Refused`, not `Err` — the slot
 resolves to `null` rather than raising into the script.
 
+The same reasoning applies to the **session spawn budget**: `run_agent` charges
+`ctx.session_usage.try_record_agent_spawn()` before taking a concurrency permit,
+so a workflow cannot spawn past the ceiling the `Agent` tool enforces. Charged
+once per `agent()` call — the stall-retry loop re-runs one logical dispatch, not
+a new one — and at the dispatch boundary, so a spawn that then fails is still
+charged. The third path onto the same counter is fork-mode skills
+(`QuerySkillRuntime`); any future non-tool dispatch route owes the same charge.
+
 `run_agent` also compiles `opts.schema` before the screen, so an invalid or
 oversized one fails the `agent()` call the script can see instead of
 surfacing turns later as a subagent that never called StructuredOutput. The

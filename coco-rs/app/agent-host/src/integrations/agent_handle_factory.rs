@@ -298,6 +298,7 @@ pub async fn build_agent_team_wiring(
     let skill_handle: SkillHandleRef = Arc::new(
         coco_query::skill_runtime::QuerySkillRuntime::new(session.skill_manager())
             .with_agent_engine(adapter.clone())
+            .with_session_usage(session.session_safety_limits())
             .with_session_id(session.current_typed_session_id().await)
             .with_loop_context(coco_query::skill_runtime::LoopSkillContext {
                 project_root: session.project_root().clone(),
