@@ -714,6 +714,10 @@ impl SessionRuntime {
             goal_runtime,
         );
         let project_resources = SessionProjectResources::new(process_runtime, project_services);
+        // Snapshot before `runtime_config` moves into the config resources.
+        let session_usage = Arc::new(coco_tool_runtime::SessionUsageLimits::from_config(
+            &runtime_config.agent_teams,
+        ));
         let config_resources =
             SessionConfigResources::new(config_home, runtime_config, config_reloader);
         let catalog_resources = SessionCatalogResources::new(command_registry, skill_manager);
@@ -753,7 +757,7 @@ impl SessionRuntime {
             file_read_state,
             file_history,
             app_state,
-            Arc::new(coco_tool_runtime::SessionUsageLimits::from_env()),
+            session_usage,
             session_env_vars,
             loop_sentinel_state,
             Arc::new(coco_tool_runtime::InMemoryPendingMessageStore::new()),

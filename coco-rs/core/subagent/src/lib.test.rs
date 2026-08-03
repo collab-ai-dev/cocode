@@ -300,8 +300,11 @@ fn all_agent_disallowed_tools_excludes_agent() {
 #[test]
 fn subagent_disallowed_tools_gates_agent_on_depth() {
     // Below the limit: Agent is allowed so the child can still spawn.
-    let below =
-        crate::subagent_disallowed_tools(/*plan_mode*/ false, crate::SUBAGENT_DEPTH_LIMIT - 1);
+    let below = crate::subagent_disallowed_tools(
+        /*plan_mode*/ false,
+        crate::SUBAGENT_DEPTH_LIMIT - 1,
+        crate::SUBAGENT_DEPTH_LIMIT,
+    );
     assert!(
         !below.contains(&ToolName::Agent.as_str()),
         "Agent must be allowed below depth {}",
@@ -309,15 +312,21 @@ fn subagent_disallowed_tools_gates_agent_on_depth() {
     );
     // At the limit: Agent is still visible to the leaf. The AgentTool
     // call-entry guard rejects actual spawn attempts from that depth.
-    let at_limit =
-        crate::subagent_disallowed_tools(/*plan_mode*/ false, crate::SUBAGENT_DEPTH_LIMIT);
+    let at_limit = crate::subagent_disallowed_tools(
+        /*plan_mode*/ false,
+        crate::SUBAGENT_DEPTH_LIMIT,
+        crate::SUBAGENT_DEPTH_LIMIT,
+    );
     assert!(
         !at_limit.contains(&ToolName::Agent.as_str()),
         "Agent must remain visible at depth {}",
         crate::SUBAGENT_DEPTH_LIMIT
     );
-    let too_deep =
-        crate::subagent_disallowed_tools(/*plan_mode*/ false, crate::SUBAGENT_DEPTH_LIMIT + 1);
+    let too_deep = crate::subagent_disallowed_tools(
+        /*plan_mode*/ false,
+        crate::SUBAGENT_DEPTH_LIMIT + 1,
+        crate::SUBAGENT_DEPTH_LIMIT,
+    );
     assert!(
         too_deep.contains(&ToolName::Agent.as_str()),
         "Agent must be denied past depth {}",
@@ -331,12 +340,43 @@ fn subagent_disallowed_tools_gates_agent_on_depth() {
 // ── async subagent tool clamp ──
 
 #[test]
+fn depth_gate_follows_the_resolved_limit_not_the_default() {
+    // The ceiling is a parameter, so an operator-raised limit re-admits Agent
+    // at a depth the default would have denied, and a lowered one denies at a
+    // depth the default would have allowed.
+    let raised = crate::subagent_disallowed_tools(
+        /*plan_mode*/ false,
+        crate::SUBAGENT_DEPTH_LIMIT + 1,
+        crate::SUBAGENT_DEPTH_LIMIT + 2,
+    );
+    assert!(
+        !raised.contains(&ToolName::Agent.as_str()),
+        "a raised ceiling must keep Agent available past the default depth"
+    );
+    let lowered = crate::subagent_disallowed_tools(/*plan_mode*/ false, 2, 1);
+    assert!(
+        lowered.contains(&ToolName::Agent.as_str()),
+        "a lowered ceiling must deny Agent below the default depth"
+    );
+    let raised_async = crate::async_subagent_disallowed_tools(
+        /*plan_mode*/ false,
+        crate::SUBAGENT_DEPTH_LIMIT + 1,
+        crate::SUBAGENT_DEPTH_LIMIT + 2,
+    );
+    assert!(
+        !raised_async.contains(&ToolName::Agent.as_str()),
+        "foreground and background spawns must share the resolved ceiling"
+    );
+}
+
+#[test]
 fn async_clamp_denies_non_async_safe_builtins_keeps_async_safe() {
     // Past the depth limit the clamp denies Agent along with the other
     // non-async-safe builtins.
     let denied = crate::async_subagent_disallowed_tools(
         /*plan_mode*/ false,
         crate::SUBAGENT_DEPTH_LIMIT + 1,
+        crate::SUBAGENT_DEPTH_LIMIT,
     );
     // Long-lived / interactive tools are denied for background spawns.
     assert!(denied.contains(&ToolName::Repl.as_str()));
@@ -359,6 +399,7 @@ fn async_clamp_gates_agent_on_depth() {
     let below = crate::async_subagent_disallowed_tools(
         /*plan_mode*/ false,
         crate::SUBAGENT_DEPTH_LIMIT - 1,
+        crate::SUBAGENT_DEPTH_LIMIT,
     );
     assert!(
         !below.contains(&ToolName::Agent.as_str()),
@@ -369,6 +410,7 @@ fn async_clamp_gates_agent_on_depth() {
     assert!(below.contains(&ToolName::Workflow.as_str()));
     let at_limit = crate::async_subagent_disallowed_tools(
         /*plan_mode*/ false,
+        crate::SUBAGENT_DEPTH_LIMIT,
         crate::SUBAGENT_DEPTH_LIMIT,
     );
     assert!(
@@ -382,6 +424,7 @@ fn async_clamp_readmits_exit_plan_mode_in_plan_mode() {
     let denied = crate::async_subagent_disallowed_tools(
         /*plan_mode*/ true,
         crate::SUBAGENT_DEPTH_LIMIT + 1,
+        crate::SUBAGENT_DEPTH_LIMIT,
     );
     // ...but re-admitted in plan mode so a plan-mode background spawn can
     // still exit the plan.

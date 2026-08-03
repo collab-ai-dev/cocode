@@ -88,6 +88,11 @@ pub struct QuerySkillRuntime {
     /// equivalent command handler; this keeps both entry points on the same
     /// prompt builder.
     loop_context: Option<LoopSkillContext>,
+    /// The session's Agent dispatch budget. A fork-mode skill becomes a real
+    /// subagent without passing the `Agent` tool, so it charges the same
+    /// counter here — installed at bootstrap; `None` leaves the fork path
+    /// uncharged (standalone runtimes with no session).
+    session_usage: Option<Arc<coco_tool_runtime::SessionUsageLimits>>,
 }
 
 #[derive(Debug, Clone)]
@@ -106,7 +111,19 @@ impl QuerySkillRuntime {
             session_id: None,
             bash_handle: None,
             loop_context: None,
+            session_usage: None,
         }
+    }
+
+    /// Install the session-wide Agent dispatch budget charged by fork-mode
+    /// skills. Shares the counter the `Agent` tool and workflow `agent()`
+    /// charge, so all three spend one ceiling.
+    pub fn with_session_usage(
+        mut self,
+        limits: Arc<coco_tool_runtime::SessionUsageLimits>,
+    ) -> Self {
+        self.session_usage = Some(limits);
+        self
     }
 
     pub fn with_loop_context(mut self, context: LoopSkillContext) -> Self {
@@ -359,6 +376,25 @@ impl SkillHandle for QuerySkillRuntime {
                                 skill.name
                             ),
                         })?;
+
+                // This is a real subagent dispatch that never passed the
+                // `Agent` tool, so it charges the same session budget —
+                // otherwise a skill chain outlives the ceiling the tool
+                // enforces. Charged before the engine call so a refusal costs
+                // no turns.
+                if let Some(limits) = self.session_usage.as_ref()
+                    && let coco_tool_runtime::UsageLimitDecision::Exhausted { used, limit } =
+                        limits.try_record_agent_spawn()
+                {
+                    return Err(SkillInvocationError::Forked {
+                        reason: format!(
+                            "Skill '{}' is fork-mode but this session has spawned its budget \
+                             of subagents ({used} of {limit}). Do the skill's work directly \
+                             in this context instead of invoking further skills.",
+                            skill.name
+                        ),
+                    });
+                }
 
                 let agent_id = format!(
                     "skill-{}-{}",

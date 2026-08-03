@@ -1545,9 +1545,13 @@ impl SwarmAgentHandle {
                     .map(|d| d.disallowed_tools.clone())
                     .unwrap_or_default();
                 let plan_mode = request.permissions.mode == Some(coco_types::PermissionMode::Plan);
+                // Resolved once per session and hot-swappable via `ArcSwap`, so
+                // an operator override lands without a restart.
+                let depth_limit = self.runtime_config().agent_teams.max_subagent_spawn_depth;
                 for name in coco_subagent::subagent_disallowed_tools(
                     plan_mode,
                     request.routing.child_query_depth,
+                    depth_limit,
                 ) {
                     if !denied.iter().any(|d| d == name) {
                         denied.push(name.to_string());
@@ -1580,6 +1584,7 @@ impl SwarmAgentHandle {
                     for name in coco_subagent::async_subagent_disallowed_tools(
                         plan_mode,
                         request.routing.child_query_depth,
+                        depth_limit,
                     ) {
                         if !denied.iter().any(|d| d == name) {
                             denied.push(name.to_string());

@@ -140,6 +140,9 @@ pub struct QueryEngine {
     /// Session-owned monotone Agent/WebSearch budgets. A standalone engine
     /// gets its own counters; SessionRuntime replaces them with its shared Arc.
     pub(crate) session_usage: Arc<coco_tool_runtime::SessionUsageLimits>,
+    /// Caller depth still permitted to spawn another subagent. Resolved from
+    /// the session's `AgentTeamsConfig`; standalone engines keep the default.
+    pub(crate) subagent_depth_limit: i32,
     /// Mailbox handle for swarm teammate messaging. `None` resolves to
     /// `NoOpMailboxHandle` in [`ToolContextFactory::build`]; swarm spawn paths
     /// install a real handle via [`Self::with_mailbox`].

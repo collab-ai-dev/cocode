@@ -11,7 +11,8 @@ boundaries.
 The review found five actionable correctness or architecture issues in the
 shared core. All five are fixed in this change:
 
-- missing monotone Agent and WebSearch session limits;
+- missing monotone Agent and WebSearch session limits, charged on every
+  dispatch path (Agent tool, workflow `agent()`, fork-mode skills);
 - an outdated subagent nesting default and missing operator override;
 - race-prone in-process agent capacity and start transitions;
 - incomplete production child-engine sandbox/tool-runtime inheritance;
@@ -96,7 +97,8 @@ dispatches and 200 WebSearch calls per conversation session, with validated
 **How it works:**
 
 1. `SessionUsageLimits` stores each monotone count in an `AtomicI32` and each
-   resolved maximum as immutable session configuration.
+   resolved maximum as immutable session configuration, built by
+   `SessionUsageLimits::from_config` from the session's `AgentTeamsConfig`.
 2. `fetch_update` performs comparison and increment as one atomic operation;
    concurrent tool batches cannot all pass a separate load and overshoot.
 3. `SessionRuntime` owns one `Arc<SessionUsageLimits>` and installs it on every
@@ -106,8 +108,15 @@ dispatches and 200 WebSearch calls per conversation session, with validated
 5. A newly constructed session runtime, including the runtime created by
    `/clear`, receives fresh counters. Rebuilding `QueryEngine` for another user
    message does not reset them.
-6. Invalid and non-positive environment values fall back to 200. A limit can
-   never be accidentally disabled by malformed configuration.
+6. Invalid and non-positive values, from settings or environment, fall back to
+   200. A limit can never be accidentally disabled by malformed configuration.
+7. The two dispatch paths that skip the tool pipeline charge the same counter:
+   `WorkflowRunHost::run_agent` charges before taking a concurrency permit
+   (once per `agent()` call, not per stall retry), and the fork-mode arm of
+   `QuerySkillRuntime` charges before handing the prompt to the child engine.
+   Without this a workflow or a skill chain would spawn past a ceiling the
+   equivalent `Agent` call refuses — the same reasoning that already put the
+   auto-mode dispatch screen on the workflow path.
 
 Edge cases: validation failures before dispatch are not charged. Agent runtime
 failures after the dispatch boundary remain charged. WebSearch cache hits are
@@ -133,19 +142,23 @@ architectural error that causes counters to reset when tasks finish.
 
 ## Subagent depth policy
 
-**What it does:** Aligns the default maximum spawn depth to 3 and supports the
-validated `COCO_MAX_SUBAGENT_SPAWN_DEPTH` override.
+**What it does:** Aligns the default maximum spawn depth to 3 and supports both
+the `agent_teams.max_subagent_spawn_depth` setting and the
+`COCO_MAX_SUBAGENT_SPAWN_DEPTH` override.
 
 **How it works:**
 
-1. `subagent_depth_limit()` resolves an integer greater than or equal to one;
-   otherwise it returns the default constant `3`.
-2. The Agent tool resolves the limit once per call and rejects a caller whose
-   `query_depth` is already at the ceiling.
-3. Foreground and background tool-filter planners use the same resolver, so a
-   child beyond the ceiling cannot retain the Agent tool through a different
-   dispatch path.
-4. Forks count because the child depth is derived at the spawn boundary and
+1. `AgentTeamsConfig::resolve` folds env over settings over the default `3`,
+   discarding any value below one — the single merge site every other knob
+   uses. Nothing below `common/config` reads the environment.
+2. `wire_engine` installs the resolved ceiling on every engine in the session,
+   the same choke point that shares the dispatch budgets.
+3. The Agent tool rejects a caller whose `query_depth` is already at the
+   ceiling, reading it from `ToolUseContext`.
+4. Foreground and background tool-filter planners take the ceiling as an
+   explicit parameter, so a child beyond it cannot retain the Agent tool
+   through a different dispatch path.
+5. Forks count because the child depth is derived at the spawn boundary and
    installed on the child engine.
 
 Edge cases: the leaf at the exact ceiling may still see Agent in a legacy tool
@@ -154,10 +167,11 @@ overrides do not produce a zero-depth session.
 
 **Why this approach:**
 
-- A policy function keeps the default and override in the pure subagent crate,
-  shared by filtering and execution.
-- Adding the value to every spawn DTO was considered, but it would duplicate a
-  process-level operator policy across serialization boundaries.
+- Resolving in the config pipeline gives the ceiling a settings.json path and
+  hot-reload for free, and makes it testable without mutating process
+  environment — which is what an in-crate env read cost us.
+- Passing the ceiling as a parameter keeps the subagent crate pure: the
+  filtering functions stay total functions of their inputs.
 - Reading the environment at the policy boundary is a negligible cold-path
   cost and avoids a global cache that makes embedded tests order-dependent.
 
@@ -298,8 +312,12 @@ parity.
   runtime inheritance.
 - `core/tools/src/tools/agent/agent_tool.rs`: Agent session cap and depth gate.
 - `core/tools/src/tools/web.rs`: WebSearch session cap and domain predicate.
-- `core/subagent/src/filter.rs`: default depth and operator resolver.
+- `core/tools/src/tools/workflow_host.rs` and `app/query/src/skill_runtime.rs`:
+  the two non-tool dispatch paths, charged against the same budget.
+- `core/subagent/src/filter.rs`: default depth constant; the ceiling is a
+  parameter, so the crate stays pure.
 - `coordinator/src/runner.rs`: atomic registration and safe start lifecycle.
-- `common/config/src/env.rs`: typed `COCO_` environment keys.
+- `common/config/src/sections.rs`: the single merge site for all three limits
+  (`agent_teams`), plus the typed `COCO_` keys in `env.rs`.
 - Focused tests cover counter races, registration races, rejected task abort,
   duplicate starts, tool-limit short circuits, and DNS-boundary matching.

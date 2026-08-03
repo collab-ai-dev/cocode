@@ -242,6 +242,13 @@ impl ServerConfig {
     }
 }
 
+/// Agent dispatches one session may charge before the loop breaker trips.
+pub const DEFAULT_MAX_SUBAGENTS_PER_SESSION: i32 = 200;
+/// Caller depth still permitted to spawn another subagent.
+pub const DEFAULT_MAX_SUBAGENT_SPAWN_DEPTH: i32 = 3;
+/// WebSearch calls one session may charge before the loop breaker trips.
+pub const DEFAULT_MAX_WEB_SEARCHES_PER_SESSION: i32 = 200;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PartialAgentTeamsSettings {
@@ -251,6 +258,9 @@ pub struct PartialAgentTeamsSettings {
     pub default_model: Option<ProviderModelSelection>,
     pub show_spinner_tree: Option<bool>,
     pub max_agents: Option<i32>,
+    pub max_subagents_per_session: Option<i32>,
+    pub max_subagent_spawn_depth: Option<i32>,
+    pub max_web_searches_per_session: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -261,7 +271,16 @@ pub struct AgentTeamsConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_model: Option<ProviderModelSelection>,
     pub show_spinner_tree: bool,
+    /// Ceiling on agents alive at once.
     pub max_agents: i32,
+    /// Monotone per-session Agent dispatch budget. Unlike [`Self::max_agents`]
+    /// a completed agent never returns its charge — this is the loop breaker,
+    /// not a concurrency limit.
+    pub max_subagents_per_session: i32,
+    /// Caller depth still permitted to spawn another subagent.
+    pub max_subagent_spawn_depth: i32,
+    /// Monotone per-session WebSearch budget.
+    pub max_web_searches_per_session: i32,
 }
 
 impl Default for AgentTeamsConfig {
@@ -273,12 +292,15 @@ impl Default for AgentTeamsConfig {
             default_model: None,
             show_spinner_tree: true,
             max_agents: 8,
+            max_subagents_per_session: DEFAULT_MAX_SUBAGENTS_PER_SESSION,
+            max_subagent_spawn_depth: DEFAULT_MAX_SUBAGENT_SPAWN_DEPTH,
+            max_web_searches_per_session: DEFAULT_MAX_WEB_SEARCHES_PER_SESSION,
         }
     }
 }
 
 impl AgentTeamsConfig {
-    pub fn resolve(settings: &Settings) -> crate::Result<Self> {
+    pub fn resolve(settings: &Settings, env: &EnvSnapshot) -> crate::Result<Self> {
         let mut config = Self::default();
         let section = &settings.agent_teams;
         if let Some(mode) = section.teammate_mode {
@@ -299,6 +321,23 @@ impl AgentTeamsConfig {
         if let Some(max_agents) = section.max_agents {
             config.max_agents = max_agents.max(1);
         }
+        // Env wins over settings; a non-positive value in either would disable
+        // spawning outright, so it falls through to the default instead.
+        config.max_subagents_per_session = env
+            .get_i32(EnvKey::CocoMaxSubagentsPerSession)
+            .or(section.max_subagents_per_session)
+            .filter(|value| *value >= 1)
+            .unwrap_or(DEFAULT_MAX_SUBAGENTS_PER_SESSION);
+        config.max_subagent_spawn_depth = env
+            .get_i32(EnvKey::CocoMaxSubagentSpawnDepth)
+            .or(section.max_subagent_spawn_depth)
+            .filter(|value| *value >= 1)
+            .unwrap_or(DEFAULT_MAX_SUBAGENT_SPAWN_DEPTH);
+        config.max_web_searches_per_session = env
+            .get_i32(EnvKey::CocoMaxWebSearchesPerSession)
+            .or(section.max_web_searches_per_session)
+            .filter(|value| *value >= 1)
+            .unwrap_or(DEFAULT_MAX_WEB_SEARCHES_PER_SESSION);
         Ok(config)
     }
 }

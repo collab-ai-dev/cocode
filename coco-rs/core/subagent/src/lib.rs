@@ -43,7 +43,7 @@ pub use definition_store::{
 pub use filter::{
     ALL_AGENT_DISALLOWED_TOOLS, AllowedAgentTypes, SUBAGENT_DEPTH_LIMIT,
     async_subagent_disallowed_tools, parse_allowed_agent_types, parse_tool_allow_list,
-    subagent_depth_limit, subagent_disallowed_tools,
+    subagent_disallowed_tools,
 };
 pub use fork::{
     FORK_BOILERPLATE_TAG, FORK_DIRECTIVE_PREFIX, build_fork_child_message, build_fork_child_rules,

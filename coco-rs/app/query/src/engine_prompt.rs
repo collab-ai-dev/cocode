@@ -879,6 +879,7 @@ impl QueryEngine {
             permission_bridge: self.permission_bridge.clone(),
             app_state: self.app_state.clone(),
             session_usage: self.session_usage.clone(),
+            subagent_depth_limit: self.subagent_depth_limit,
             auto_mode_state: self.auto_mode_state.clone(),
             // Built here rather than cached on the engine so it always reads
             // the live auto-mode rules — `engine_builder` can set them after
