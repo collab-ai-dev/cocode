@@ -14,6 +14,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread::JoinHandle;
 use std::time::Duration;
+use std::time::Instant;
 
 use crossterm::cursor::SetCursorStyle;
 use crossterm::event::KeyCode;
@@ -340,17 +341,49 @@ fn set_winsize(fd: &impl rustix::fd::AsFd, width: u16, height: u16) {
     .expect("set PTY window size");
 }
 
+/// One scheduling quantum for the PTY reader thread.
+const PTY_SETTLE_POLL: Duration = Duration::from_millis(5);
+/// Upper bound on how long [`TestPty::drain_settled`] waits for the reader.
+/// Generous on purpose: it is only reached when the test is about to fail, so
+/// the cost is paid once and buys immunity to scheduler starvation.
+const PTY_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
+
 impl TestPty {
     fn resize(&self, width: u16, height: u16) {
         set_winsize(&self.resize_fd, width, height);
         self.size.set(Size::new(width, height));
     }
 
+    /// Take the bytes accumulated since the prior assertion after a fixed
+    /// settle window. Only for assertions that expect NO bytes — there is
+    /// nothing to wait for, so a window is all a reader can offer. Anything
+    /// asserting on content must use [`Self::drain_settled`].
     fn drain(&mut self) -> Vec<u8> {
         // The reader prevents the kernel PTY buffer from back-pressuring a
         // full viewport paint. Give it one scheduling quantum, then take the
         // bytes accumulated since the prior assertion.
-        std::thread::sleep(Duration::from_millis(5));
+        std::thread::sleep(PTY_SETTLE_POLL);
+        std::mem::take(&mut *self.output.lock().expect("PTY output lock"))
+    }
+
+    /// Wait for the reader thread to deliver a frame and go quiet, then take
+    /// it. A completed write only guarantees the bytes reached the kernel PTY
+    /// buffer; copying them into `output` needs the reader thread to be
+    /// scheduled. A fixed sleep races that scheduling — under CPU load the
+    /// assertion sees an empty slice and the test fails for no reason. Waiting
+    /// on the buffer to grow and then stabilize makes a slow scheduler cost
+    /// latency instead.
+    fn drain_settled(&mut self) -> Vec<u8> {
+        let deadline = Instant::now() + PTY_SETTLE_TIMEOUT;
+        let mut previous = 0usize;
+        loop {
+            std::thread::sleep(PTY_SETTLE_POLL);
+            let len = self.output.lock().expect("PTY output lock").len();
+            if (len > 0 && len == previous) || Instant::now() >= deadline {
+                break;
+            }
+            previous = len;
+        }
         std::mem::take(&mut *self.output.lock().expect("PTY output lock"))
     }
 }
@@ -397,7 +430,10 @@ fn real_pty_idle_frame_emits_zero_bytes() {
     };
 
     draw(&mut terminal).expect("first PTY frame");
-    assert!(!pty.drain().is_empty(), "first frame must paint the PTY");
+    assert!(
+        !pty.drain_settled().is_empty(),
+        "first frame must paint the PTY"
+    );
     draw(&mut terminal).expect("second PTY frame");
     assert_eq!(
         pty.drain(),
@@ -424,10 +460,13 @@ fn real_pty_changed_cells_restore_unchanged_cursor_position() {
     };
 
     draw(&mut terminal, "status one").expect("first PTY frame");
-    assert!(!pty.drain().is_empty(), "first frame must paint the PTY");
+    assert!(
+        !pty.drain_settled().is_empty(),
+        "first frame must paint the PTY"
+    );
     draw(&mut terminal, "status two").expect("changed PTY frame");
 
-    let bytes = pty.drain();
+    let bytes = pty.drain_settled();
     let cursor_move = b"\x1b[2;5H";
     assert!(
         bytes
@@ -457,33 +496,36 @@ async fn real_pty_resize_burst_paints_only_the_settled_size() {
     tokio::time::sleep(crate::resize_debounce::RESIZE_QUIET_PERIOD).await;
     app.redraw().expect("settled PTY frame");
     assert_eq!(app.state.ui.terminal_size, Size::new(76, 30));
-    assert!(!pty.drain().is_empty(), "settled size must paint the PTY");
+    assert!(
+        !pty.drain_settled().is_empty(),
+        "settled size must paint the PTY"
+    );
 }
 
 #[tokio::test]
 async fn real_pty_focus_gain_forces_full_repaint_only_when_gated() {
     let (mut plain, _event_tx, mut plain_pty) = pty_test_app(false);
     plain.redraw().expect("initial plain PTY frame");
-    assert!(!plain_pty.drain().is_empty());
+    assert!(!plain_pty.drain_settled().is_empty());
     assert!(
         plain
             .handle_event(TuiEvent::FocusChanged { focused: true })
             .await
     );
     plain.redraw().expect("plain focus PTY frame");
-    let plain_bytes = plain_pty.drain();
+    let plain_bytes = plain_pty.drain_settled();
     assert!(!plain_bytes.is_empty(), "focus must reassert the cursor");
 
     let (mut multiplexed, _event_tx, mut multiplexed_pty) = pty_test_app(true);
     multiplexed.redraw().expect("initial multiplexed PTY frame");
-    assert!(!multiplexed_pty.drain().is_empty());
+    assert!(!multiplexed_pty.drain_settled().is_empty());
     assert!(
         multiplexed
             .handle_event(TuiEvent::FocusChanged { focused: true })
             .await
     );
     multiplexed.redraw().expect("healed multiplexed PTY frame");
-    let healed_bytes = multiplexed_pty.drain();
+    let healed_bytes = multiplexed_pty.drain_settled();
     assert!(
         healed_bytes.len() > plain_bytes.len() + 100,
         "gated heal must repaint cells: plain={} healed={}",
@@ -505,7 +547,7 @@ fn real_pty_history_insert_emits_balanced_osc8() {
         ))
         .expect("insert linked history into PTY");
 
-    let bytes = pty.drain();
+    let bytes = pty.drain_settled();
     let open = b"\x1b]8;;https://example.com/docs\x1b\\";
     let close = b"\x1b]8;;\x1b\\";
     assert_eq!(
@@ -567,7 +609,7 @@ fn real_pty_blocked_writer_keeps_frame_submission_non_blocking() {
         .terminal_write_stats()
         .expect("physical write latency stats");
     assert!(stats.through_sequence > 0, "{stats:?}");
-    let bytes = pty.drain();
+    let bytes = pty.drain_settled();
     assert!(
         bytes
             .windows(b"responsive delayed frame".len())
@@ -598,7 +640,7 @@ async fn alt_e_reprints_committed_tool_output_through_the_app_draw_path() {
     );
 
     app.redraw().expect("commit collapsed tool output");
-    let initial = pty.drain();
+    let initial = pty.drain_settled();
     assert!(
         !initial
             .windows(b"app-expanded-line-20".len())
@@ -617,7 +659,7 @@ async fn alt_e_reprints_committed_tool_output_through_the_app_draw_path() {
     assert!(redraw, "Alt+E should request a committed-tool reprint");
     app.redraw().expect("draw committed-tool reprint");
 
-    let expanded = pty.drain();
+    let expanded = pty.drain_settled();
     assert!(
         expanded
             .windows(b"app-expanded-line-20".len())
