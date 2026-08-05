@@ -52,7 +52,7 @@ impl Cli {
             models_main: self.models_main.clone(),
             settings: self.settings.clone(),
             event_hub_url: self.event_hub_url.clone(),
-            max_tokens: self.max_tokens,
+            total_token_budget: self.total_token_budget,
             max_turns: self.max_turns,
             permission_mode: self.permission_mode.clone(),
             cwd: self.cwd.clone(),
@@ -110,9 +110,9 @@ pub struct Cli {
     #[arg(long = "hub-port", default_value_t = 8731, requires = "serve_hub")]
     pub hub_port: u16,
 
-    /// Maximum tokens.
-    #[arg(long)]
-    pub max_tokens: Option<i64>,
+    /// Maximum cumulative input plus output tokens for the whole run.
+    #[arg(long = "total-token-budget")]
+    pub total_token_budget: Option<i64>,
 
     /// Maximum turns.
     #[arg(long)]
@@ -127,7 +127,7 @@ pub struct Cli {
     pub cwd: Option<String>,
 
     /// Resume a specific session by ID (shorthand for `resume <id>`).
-    #[arg(long, short = 'r')]
+    #[arg(long, short = 'r', conflicts_with = "continue_session")]
     pub resume: Option<String>,
 
     /// System prompt override (appended to default).
@@ -226,9 +226,9 @@ pub struct Cli {
     #[arg(long)]
     pub setting_sources: Option<String>,
 
-    /// Fork a new session from the provided session ID.
+    /// Fork a new session from `--resume`, or from the most recent session.
     ///
-    /// Copies history from `--resume <id>` into a fresh session rather than continuing it.
+    /// `--session-id` optionally selects the fresh destination ID.
     #[arg(long)]
     pub fork_session: bool,
 

@@ -232,10 +232,21 @@ impl SessionGoalTurnPort {
                     usage,
                 }
             }
-            Err(err) => GoalTurnOutcome::ProviderError {
-                kind: ProviderErrorKind::Retryable,
-                message: err.to_string(),
-            },
+            Err(err) => {
+                session
+                    .commit_engine_turn_history(err.final_history.snapshot())
+                    .await;
+                let usage = UsageDelta {
+                    input_tokens: err.total_usage.input_tokens.total.max(0) as u64,
+                    output_tokens: err.total_usage.output_tokens.total.max(0) as u64,
+                    duration_ms: err.session_result.duration_ms.max(0),
+                };
+                GoalTurnOutcome::ProviderError {
+                    kind: ProviderErrorKind::Retryable,
+                    message: err.to_string(),
+                    usage,
+                }
+            }
         }
     }
 }

@@ -561,6 +561,9 @@ fn chain_options(cwd: &str) -> ChainWriteOptions {
 fn empty_cache() -> CacheSafeParams {
     CacheSafeParams {
         rendered_system_prompt: "system".into(),
+        system_prompt_blocks: vec![coco_types::CachedSystemPromptBlock::Text {
+            content: "system".into(),
+        }],
         model_id: "mock-model".into(),
         provider: "mock".into(),
         active_shell_tool: coco_types::ActiveShellTool::Bash,

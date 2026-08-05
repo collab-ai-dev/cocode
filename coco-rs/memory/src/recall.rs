@@ -343,9 +343,8 @@ pub fn load_relevant_memories(
             Err(_) => continue,
         };
         let truncated = if content.len() > MAX_BODY_BYTES {
-            let cut = content[..MAX_BODY_BYTES]
-                .rfind('\n')
-                .unwrap_or(MAX_BODY_BYTES);
+            let prefix = coco_utils_string::take_bytes_at_char_boundary(&content, MAX_BODY_BYTES);
+            let cut = prefix.rfind('\n').unwrap_or(prefix.len());
             format!(
                 "{}\n\nThis memory file was truncated ({MAX_BODY_BYTES} byte limit). Use the \
                  Read tool to view the complete file at: {path_str}",

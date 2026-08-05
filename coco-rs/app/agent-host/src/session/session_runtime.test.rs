@@ -94,7 +94,7 @@ async fn try_build_runtime_with_main_and_bridge(
                 runtime_config: Arc::new(runtime_config),
                 tools: Arc::new(coco_tool_runtime::ToolRegistry::new()),
                 model_id,
-                system_prompt: "test".to_string(),
+                system_prompt: "test".into(),
                 permission_mode_availability: coco_types::PermissionModeAvailability::default(),
                 permission_mode: coco_types::PermissionMode::default(),
                 command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(
@@ -487,7 +487,7 @@ async fn model_role_selection_keeps_moa_display_binding_for_main() {
                 model_id: crate::headless::resolve_main_model(&runtime_config).model_id,
                 runtime_config: Arc::new(runtime_config),
                 tools: Arc::new(coco_tool_runtime::ToolRegistry::new()),
-                system_prompt: "test".to_string(),
+                system_prompt: "test".into(),
                 permission_mode_availability: coco_types::PermissionModeAvailability::default(),
                 permission_mode: coco_types::PermissionMode::default(),
                 command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(

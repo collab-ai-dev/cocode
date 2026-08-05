@@ -234,7 +234,13 @@ async fn test_engine_surfaces_error_when_chain_exhausted() {
             coco_types::TurnId::generate(),
         )
         .await;
-    assert!(result.is_err(), "exhausted chain must surface error");
+    let failure = result.expect_err("exhausted chain must surface error");
+    assert!(
+        failure.final_history.last().is_some_and(|message| {
+            coco_messages::predicates::is_api_error_message(message.as_ref())
+        }),
+        "failure must retain the final API error in authoritative history"
+    );
     assert_eq!(primary.call_count(), 2);
     assert_eq!(fallback.call_count(), 2);
 

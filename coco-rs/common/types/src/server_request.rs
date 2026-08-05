@@ -175,7 +175,9 @@ pub struct RequestElicitationParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigReadResult {
-    /// Merged effective config as a JSON object.
+    /// Merged persisted settings layers as a JSON object. CLI, environment,
+    /// and other runtime-only overrides are intentionally represented only in
+    /// the runtime snapshot, not rewritten into settings-shaped JSON.
     pub config: serde_json::Value,
     /// Per-source settings keyed by source name ("user", "project", "local",
     /// "flags", "policy").

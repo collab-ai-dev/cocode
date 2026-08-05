@@ -244,6 +244,10 @@ impl SessionHandle {
         // proves they terminated, not just that they were signalled (CS-3).
         let task_deadline = tokio::time::Instant::now() + turn_drain_timeout;
         self.runtime.join_session_tasks(task_deadline).await;
+        // Close is the writable ownership boundary. Other `SessionHandle`
+        // clones may remain for final-result emission or diagnostics, but a
+        // closed runtime must no longer block resume/delete.
+        self.runtime.persistence.release_write_lease();
         drain_result?;
         Ok(())
     }

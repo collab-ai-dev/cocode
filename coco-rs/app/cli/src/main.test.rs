@@ -46,6 +46,7 @@ fn build_system_prompt_uses_model_instructions_when_present() {
 
     let prompt =
         build_system_prompt_for_model(cwd.path(), &runtime, "openai", "gpt-5-4", None, &[]);
+    let prompt = prompt.full_text();
 
     assert!(
         prompt.starts_with(&format!(
@@ -72,6 +73,7 @@ fn build_system_prompt_falls_back_when_model_has_no_instructions() {
         None,
         &[],
     );
+    let prompt = prompt.full_text();
 
     assert!(prompt.starts_with(&coco_config::default_base_instructions()));
     assert!(prompt.contains("<env>"));

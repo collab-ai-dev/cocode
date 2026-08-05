@@ -382,16 +382,25 @@ async fn terminal_transition_flushes_the_coalesced_workflow_progress() {
         .await;
     }
     mgr.transition_terminal(&id, TaskStatus::Completed).await;
+    tokio::time::sleep(std::time::Duration::from_millis(
+        WORKFLOW_PROGRESS_COALESCE_MS as u64 * 2,
+    ))
+    .await;
 
-    let frames: Vec<_> = collect(&mut rx)
-        .into_iter()
+    let events = collect(&mut rx);
+    let frames: Vec<_> = events
+        .iter()
         .filter_map(|n| match n {
-            ServerNotification::TaskProgress(p) => Some(p.workflow_progress),
+            ServerNotification::TaskProgress(p) => Some(&p.workflow_progress),
             _ => None,
         })
         .collect();
     let last = frames.last().expect("at least one progress frame");
     assert_eq!(last.len(), 5, "the final frame carries every phase node");
+    assert!(
+        matches!(events.last(), Some(ServerNotification::TaskCompleted(_))),
+        "no delayed progress frame may arrive after task completion: {events:?}"
+    );
 }
 
 #[tokio::test]

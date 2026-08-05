@@ -120,7 +120,7 @@ pub struct RunChatOptions {
 /// Honors these `AgentHostOptions` flags end-to-end:
 /// `--models.main`, `--fallback-model`, `--permission-mode`,
 /// `--dangerously-skip-permissions` / `--allow-…`, `--max-turns`,
-/// `--max-tokens`, `--settings`, `--system-prompt`,
+/// `--total-token-budget`, `--settings`, `--system-prompt`,
 /// `--append-system-prompt`, `--append-system-prompt-file`,
 /// `--cwd`, `--add-dir`, `--allowed-tools`, `--disallowed-tools`.
 pub async fn run_chat_with_options(
@@ -150,6 +150,8 @@ pub async fn run_chat_with_options(
     } else {
         coco_types::SessionId::generate()
     };
+    let is_resume = opts.resume_target.is_some();
+    let mut supplied_prior_messages = opts.prior_messages;
 
     // Local `/goal` control-plane fast path: status, clear-without-a-live-goal,
     // and parse errors resolve without building a `SessionRuntime` or resolving a
@@ -158,46 +160,57 @@ pub async fn run_chat_with_options(
     // never a model turn. Set — and clear of a live goal — fall through to the
     // runtime path below, where the goal runtime owns the mutation.
     if let Some(goal_args) = parse_headless_goal_slash(prompt) {
+        // Keep one ownership generation across the durable snapshot read and
+        // any local transcript append. Mutating goal operations fall through
+        // to the full runtime after this guard is explicitly released.
+        let local_goal_lease =
+            acquire_headless_local_session_lease(cli, &cwd, &session_id, is_resume)?;
+        if is_resume && !cli.no_session_persistence {
+            supplied_prior_messages = load_headless_prior_messages(&cwd, &session_id)?;
+        }
         match coco_commands::parse_goal_command_args(goal_args) {
             Err(text) => {
-                return Ok(headless_local_goal_text_outcome(
+                return headless_local_goal_text_outcome(
                     cli,
                     &cwd,
                     &session_id,
+                    local_goal_lease,
                     goal_args,
                     text,
-                    opts.prior_messages,
+                    supplied_prior_messages,
                 )
-                .await);
+                .await;
             }
             Ok(coco_commands::GoalCommandRequest::Status) => {
                 let text = headless_goal_snapshot(&cwd, &session_id)
                     .filter(|snapshot| !snapshot.is_terminal())
                     .map(|snapshot| crate::goal_command::format_goal_snapshot_status(&snapshot))
                     .unwrap_or_else(|| "No goal set. Usage: `/goal <objective>`".to_string());
-                return Ok(headless_local_goal_text_outcome(
+                return headless_local_goal_text_outcome(
                     cli,
                     &cwd,
                     &session_id,
+                    local_goal_lease,
                     "",
                     text,
-                    opts.prior_messages,
+                    supplied_prior_messages,
                 )
-                .await);
+                .await;
             }
             Ok(coco_commands::GoalCommandRequest::Clear) => {
                 let has_live_goal = headless_goal_snapshot(&cwd, &session_id)
                     .is_some_and(|snapshot| !snapshot.is_terminal());
                 if !has_live_goal {
-                    return Ok(headless_local_goal_text_outcome(
+                    return headless_local_goal_text_outcome(
                         cli,
                         &cwd,
                         &session_id,
+                        local_goal_lease,
                         "clear",
                         "No goal set".to_string(),
-                        opts.prior_messages,
+                        supplied_prior_messages,
                     )
-                    .await);
+                    .await;
                 }
             }
             // Set / pause / resume mutate the goal, so they fall through to the
@@ -206,13 +219,14 @@ pub async fn run_chat_with_options(
             | Ok(coco_commands::GoalCommandRequest::Pause)
             | Ok(coco_commands::GoalCommandRequest::Resume) => {}
         }
+        drop(local_goal_lease);
     }
 
     tracing::info!(
         target: "coco_agent_host::headless",
         cwd = %cwd.display(),
         prompt_len = prompt.len(),
-        has_prior_messages = !opts.prior_messages.is_empty(),
+        has_prior_messages = !supplied_prior_messages.is_empty(),
         "headless run starting"
     );
 
@@ -338,8 +352,7 @@ pub async fn run_chat_with_options(
                     cwd: Some(cwd.to_string_lossy().into_owned()),
                     model: Some(model_id.clone()),
                     permission_mode: Some(permission_mode),
-                    initial_messages: opts
-                        .prior_messages
+                    initial_messages: supplied_prior_messages
                         .iter()
                         .map(|message| (**message).clone())
                         .collect(),
@@ -399,7 +412,7 @@ pub async fn run_chat_with_options(
     // neither is set.
     let max_turns = cli.max_turns.or(runtime_config.loop_config.max_turns);
     let total_token_budget = cli
-        .max_tokens
+        .total_token_budget
         .or_else(|| runtime_config.loop_config.total_token_budget.map(i64::from));
 
     tracing::info!(
@@ -441,7 +454,10 @@ pub async fn run_chat_with_options(
 
     let mut effective_prompt = prompt.to_string();
     let mut prefix_messages: Vec<std::sync::Arc<coco_messages::Message>> = Vec::new();
-    let prior_messages = opts.prior_messages;
+    // Both fresh start and resume hydrate the admitted runtime before it is
+    // published. Use that authoritative state for local goal mutations and
+    // the final outcome instead of the caller's earlier planning snapshot.
+    let prior_messages = session.history_messages().await;
 
     if let Some(goal_args) = parse_headless_goal_slash(prompt) {
         match coco_commands::parse_goal_command_args(goal_args) {
@@ -454,7 +470,7 @@ pub async fn run_chat_with_options(
                     &prior_messages,
                     &prefix_messages,
                 )
-                .await;
+                .await?;
                 let mut final_messages = prior_messages;
                 final_messages.extend(prefix_messages);
                 return Ok(headless_text_outcome(
@@ -491,7 +507,7 @@ pub async fn run_chat_with_options(
                             &prior_messages,
                             &prefix_messages,
                         )
-                        .await;
+                        .await?;
                         let mut final_messages = prior_messages;
                         final_messages.extend(prefix_messages);
                         return Ok(headless_text_outcome(
@@ -517,7 +533,7 @@ pub async fn run_chat_with_options(
                             &prior_messages,
                             &prefix_messages,
                         )
-                        .await;
+                        .await?;
                         let mut final_messages = prior_messages;
                         final_messages.extend(prefix_messages);
                         return Ok(headless_text_outcome(

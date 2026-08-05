@@ -290,6 +290,7 @@ impl RuntimeReloader {
                     kind = change.kind.as_str(),
                     "config-watch event"
                 );
+                let revision = publisher_for_task.reserve_revision();
                 match build_with(
                     &settings_roots,
                     flag_settings.as_deref(),
@@ -304,7 +305,7 @@ impl RuntimeReloader {
                             kind = change.kind.as_str(),
                             "config change → rebuilt RuntimeConfig"
                         );
-                        publisher_for_task.publish(Arc::new(runtime));
+                        let _ = publisher_for_task.publish_reserved(revision, Arc::new(runtime));
                     }
                     Err(err) => {
                         let message = err.to_string();

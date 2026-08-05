@@ -207,9 +207,7 @@ impl SessionHandle {
         let Some(sandbox_state) = self.sandbox_state() else {
             return false;
         };
-        let Some(publisher) = self.runtime_publisher() else {
-            return false;
-        };
+        let publisher = self.runtime_publisher();
         self.install_reload_supervisor(crate::sandbox_reload::spawn_sandbox_reload(
             sandbox_state,
             &publisher,

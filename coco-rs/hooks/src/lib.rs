@@ -1144,7 +1144,7 @@ async fn execute_hook_inner(
                 }
             }
 
-            let resp = req
+            let mut resp = req
                 .send()
                 .await
                 .map_err(|e| crate::HooksError::HttpFailed {
@@ -1152,7 +1152,7 @@ async fn execute_hook_inner(
                 })?;
 
             let status = resp.status().as_u16() as i32;
-            let body = resp.text().await.unwrap_or_default();
+            let body = read_bounded_http_body(&mut resp).await?;
 
             Ok(HookExecutionResult::CommandOutput {
                 exit_code: if (200..300).contains(&(status as u16)) {
@@ -1204,6 +1204,11 @@ async fn execute_command_hook(
     let mut cmd = build_command_for_shell(&final_command, shell_kind).await?;
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
+    // The inner and orchestration-level timeouts may both drop the wait
+    // future. Ensure that cannot orphan a hook process.
+    cmd.kill_on_drop(true);
+    #[cfg(unix)]
+    cmd.process_group(0);
     cmd.envs(env_vars);
     if stdin_input.is_some() {
         cmd.stdin(std::process::Stdio::piped());
@@ -1218,29 +1223,46 @@ async fn execute_command_hook(
             .and_then(|ms| u64::try_from(ms).ok())
             .unwrap_or(30_000),
     );
-    let mut child = cmd.spawn().map_err(|e| {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let child = cmd.spawn().map_err(|e| {
         crate::HooksError::exec_failed(format!("failed to spawn hook command: {e}"))
     })?;
+    let mut process_group = Some(coco_utils_pty::process_group::ProcessGroupGuard::for_child(
+        &child,
+    ));
+    let mut child = Some(child);
     if let Some(input) = stdin_input
-        && let Some(mut stdin_handle) = child.stdin.take()
+        && let Some(mut stdin_handle) = child.as_mut().and_then(|child| child.stdin.take())
     {
         use tokio::io::AsyncWriteExt;
         let mut with_newline = input.to_string();
         if !with_newline.ends_with('\n') {
             with_newline.push('\n');
         }
-        if let Err(e) = stdin_handle.write_all(with_newline.as_bytes()).await
-            && e.kind() != std::io::ErrorKind::BrokenPipe
-        {
-            tracing::debug!("failed to write hook stdin: {e}");
+        let write_result = tokio::time::timeout_at(deadline, async {
+            stdin_handle.write_all(with_newline.as_bytes()).await?;
+            stdin_handle.shutdown().await
+        })
+        .await;
+        match write_result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) if error.kind() == std::io::ErrorKind::BrokenPipe => {}
+            Ok(Err(error)) => tracing::debug!("failed to write hook stdin: {error}"),
+            Err(_) => {
+                terminate_hook_child(&mut child, &mut process_group).await;
+                return Err(hook_timeout_error(timeout_ms));
+            }
         }
-        let _ = stdin_handle.shutdown().await;
     }
 
     if let Some(options) = async_options.clone()
         && options.async_rewake
     {
-        spawn_rewake_command(child, options);
+        spawn_rewake_command(
+            take_hook_child(&mut child)?,
+            options,
+            take_hook_process_group(&mut process_group)?,
+        );
         return Ok(empty_command_output());
     }
 
@@ -1256,71 +1278,97 @@ async fn execute_command_hook(
                 Some(options.timeout),
             )
             .await;
-        spawn_registry_command(child, options, String::new());
+        spawn_registry_command(
+            take_hook_child(&mut child)?,
+            options,
+            String::new(),
+            take_hook_process_group(&mut process_group)?,
+        );
         return Ok(empty_command_output());
     }
 
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    let stderr_task = tokio::spawn(read_to_string_opt(stderr));
-    let mut stdout_prefix = String::new();
-    let mut stdout_rest = String::new();
+    let collected = match tokio::time::timeout_at(deadline, async {
+        let stdout = child.as_mut().and_then(|child| child.stdout.take());
+        let stderr = child.as_mut().and_then(|child| child.stderr.take());
+        let stderr_task = tokio::spawn(read_bounded_opt(stderr));
+        let mut stdout_text = String::new();
 
-    if let Some(stdout) = stdout {
-        use tokio::io::AsyncBufReadExt;
-        let mut reader = tokio::io::BufReader::new(stdout);
-        let mut first_line = String::new();
-        let bytes = reader.read_line(&mut first_line).await.map_err(|e| {
-            crate::HooksError::exec_failed(format!("failed to read hook stdout: {e}"))
-        })?;
-        if bytes > 0
-            && let Some(options) = async_options.clone()
-            && first_line_is_async(&first_line)
-            && let Some(registry) = options.registry.clone()
-        {
-            registry
-                .register(
-                    options.hook_id.clone(),
-                    options.hook_name.clone(),
-                    options.hook_event.clone(),
-                    Some(options.timeout),
-                )
-                .await;
-            spawn_registry_command_with_reader(child, options, reader, stderr_task);
-            return Ok(empty_command_output());
+        if let Some(stdout) = stdout {
+            let mut reader = tokio::io::BufReader::new(stdout);
+            let first_line = read_first_line_capped(&mut reader).await.map_err(|e| {
+                crate::HooksError::exec_failed(format!("failed to read hook stdout: {e}"))
+            })?;
+            if !first_line.is_empty()
+                && first_line.len() <= HOOK_OUTPUT_CAP_BYTES
+                && let Some(options) = async_options.clone()
+                && first_line_is_async(&String::from_utf8_lossy(&first_line))
+                && let Some(registry) = options.registry.clone()
+            {
+                registry
+                    .register(
+                        options.hook_id.clone(),
+                        options.hook_name.clone(),
+                        options.hook_event.clone(),
+                        Some(options.timeout),
+                    )
+                    .await;
+                spawn_registry_command_with_reader(
+                    take_hook_child(&mut child)?,
+                    options,
+                    reader,
+                    stderr_task,
+                    take_hook_process_group(&mut process_group)?,
+                );
+                return Ok::<_, crate::HooksError>(None);
+            }
+            let mut raw = first_line;
+            if raw.len() <= HOOK_OUTPUT_CAP_BYTES {
+                use tokio::io::AsyncReadExt;
+                let remaining = HOOK_OUTPUT_CAP_BYTES + 1 - raw.len();
+                let mut limited = (&mut reader).take(remaining as u64);
+                limited.read_to_end(&mut raw).await.map_err(|e| {
+                    crate::HooksError::exec_failed(format!("failed to read hook stdout: {e}"))
+                })?;
+            }
+            // Drain past-cap output so the child cannot block on a full pipe.
+            let _ = tokio::io::copy(&mut reader, &mut tokio::io::sink()).await;
+            stdout_text = bound_hook_output(raw);
         }
-        stdout_prefix = first_line;
-        use tokio::io::AsyncReadExt;
-        // Bounded read: a misbehaving hook must not blow the context (or
-        // process memory) in one shot. Over-cap output is truncated with a
-        // visible marker; UTF-8 boundary cuts degrade to lossy.
-        let mut raw = Vec::new();
-        let mut limited = reader.take(HOOK_OUTPUT_CAP_BYTES as u64 + 1);
-        limited.read_to_end(&mut raw).await.map_err(|e| {
-            crate::HooksError::exec_failed(format!("failed to read hook stdout: {e}"))
-        })?;
-        // Drain (and discard) anything past the cap so the child never
-        // blocks on a full pipe and can exit normally.
-        let _ = tokio::io::copy(&mut limited.into_inner(), &mut tokio::io::sink()).await;
-        stdout_rest = bound_hook_output(raw);
-    }
 
-    let status = tokio::time::timeout(timeout, child.wait())
-        .await
-        .map_err(|_| crate::HooksError::HookTimeout {
-            timeout_ms: timeout_ms
-                .and_then(|ms| u64::try_from(ms).ok())
-                .unwrap_or(30_000),
-        })?
-        .map_err(|e| crate::HooksError::exec_failed(format!("hook command failed: {e}")))?;
-    let stderr = stderr_task.await.unwrap_or_default();
+        let status = child
+            .as_mut()
+            .ok_or_else(|| {
+                crate::HooksError::exec_failed(
+                    "hook child ownership was transferred before synchronous wait".to_string(),
+                )
+            })?
+            .wait()
+            .await
+            .map_err(|e| crate::HooksError::exec_failed(format!("hook command failed: {e}")))?;
+        let stderr = stderr_task.await.unwrap_or_default();
+        Ok(Some((status, stdout_text, stderr)))
+    })
+    .await
+    {
+        Ok(result) => result?,
+        Err(_) => {
+            terminate_hook_child(&mut child, &mut process_group).await;
+            return Err(hook_timeout_error(timeout_ms));
+        }
+    };
+    let Some((status, stdout, stderr)) = collected else {
+        return Ok(empty_command_output());
+    };
+    if let Some(process_group) = process_group.as_mut() {
+        process_group.disarm();
+    }
     let exit_code = status.code().unwrap_or(-1);
     if !status.success() {
         tracing::warn!("hook command exited with code {exit_code}: {command}");
     }
     Ok(HookExecutionResult::CommandOutput {
         exit_code,
-        stdout: format!("{stdout_prefix}{stdout_rest}"),
+        stdout,
         stderr,
     })
 }
@@ -1330,6 +1378,46 @@ fn empty_command_output() -> HookExecutionResult {
         exit_code: 0,
         stdout: String::new(),
         stderr: String::new(),
+    }
+}
+
+fn hook_timeout_error(timeout_ms: Option<i64>) -> crate::HooksError {
+    crate::HooksError::HookTimeout {
+        timeout_ms: timeout_ms
+            .and_then(|ms| u64::try_from(ms).ok())
+            .unwrap_or(30_000),
+    }
+}
+
+fn take_hook_child(
+    child: &mut Option<tokio::process::Child>,
+) -> crate::Result<tokio::process::Child> {
+    child.take().ok_or_else(|| {
+        crate::HooksError::exec_failed(
+            "hook child ownership was transferred more than once".to_string(),
+        )
+    })
+}
+
+fn take_hook_process_group(
+    process_group: &mut Option<coco_utils_pty::process_group::ProcessGroupGuard>,
+) -> crate::Result<coco_utils_pty::process_group::ProcessGroupGuard> {
+    process_group.take().ok_or_else(|| {
+        crate::HooksError::exec_failed(
+            "hook process-group ownership was transferred more than once".to_string(),
+        )
+    })
+}
+
+async fn terminate_hook_child(
+    child: &mut Option<tokio::process::Child>,
+    process_group: &mut Option<coco_utils_pty::process_group::ProcessGroupGuard>,
+) {
+    if let Some(process_group) = process_group.as_mut() {
+        let _ = process_group.kill();
+    }
+    if let Some(child) = child.as_mut() {
+        let _ = child.kill().await;
     }
 }
 
@@ -1345,6 +1433,7 @@ fn first_line_is_async(line: &str) -> bool {
 /// blow the context (hermes #20468 spills to disk; coco truncates with a
 /// visible marker — the offload seam is not reachable from this crate).
 const HOOK_OUTPUT_CAP_BYTES: usize = 65_536;
+const HOOK_OUTPUT_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Convert a (possibly over-cap) raw read into bounded output text. The
 /// reader was limited to cap+1 bytes, so one extra byte signals
@@ -1365,7 +1454,7 @@ fn bound_hook_output(mut raw: Vec<u8>) -> String {
     text
 }
 
-async fn read_to_string_opt<R>(reader: Option<R>) -> String
+async fn read_bounded_opt<R>(reader: Option<R>) -> String
 where
     R: tokio::io::AsyncRead + Unpin,
 {
@@ -1381,24 +1470,69 @@ where
     bound_hook_output(raw)
 }
 
+async fn read_first_line_capped<R>(reader: &mut R) -> std::io::Result<Vec<u8>>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    use tokio::io::AsyncBufReadExt;
+
+    let mut out = Vec::new();
+    while out.len() <= HOOK_OUTPUT_CAP_BYTES {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            break;
+        }
+        let through_newline = available
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(available.len(), |idx| idx + 1);
+        let remaining = HOOK_OUTPUT_CAP_BYTES + 1 - out.len();
+        let consumed = through_newline.min(remaining);
+        let found_newline = available[..consumed].contains(&b'\n');
+        out.extend_from_slice(&available[..consumed]);
+        reader.consume(consumed);
+        if found_newline || consumed < through_newline {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+async fn read_bounded_http_body(response: &mut reqwest::Response) -> crate::Result<String> {
+    let mut raw = Vec::new();
+    while raw.len() <= HOOK_OUTPUT_CAP_BYTES {
+        let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| crate::HooksError::HttpFailed {
+                message: format!("failed to read HTTP hook response: {e}"),
+            })?
+        else {
+            break;
+        };
+        let remaining = HOOK_OUTPUT_CAP_BYTES + 1 - raw.len();
+        raw.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+        if chunk.len() > remaining {
+            break;
+        }
+    }
+    Ok(bound_hook_output(raw))
+}
+
 fn spawn_registry_command(
     mut child: tokio::process::Child,
     options: AsyncCommandOptions,
     prefix: String,
+    mut process_group: coco_utils_pty::process_group::ProcessGroupGuard,
 ) {
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     tokio::spawn(async move {
-        let stdout_task = tokio::spawn(read_to_string_opt(stdout));
-        let stderr_task = tokio::spawn(read_to_string_opt(stderr));
-        let exit_code = tokio::time::timeout(options.timeout, child.wait())
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .and_then(|status| status.code())
-            .unwrap_or(-1);
-        let stdout = format!("{prefix}{}", stdout_task.await.unwrap_or_default());
-        let stderr = stderr_task.await.unwrap_or_default();
+        let stdout_task = tokio::spawn(read_bounded_opt(stdout));
+        let stderr_task = tokio::spawn(read_bounded_opt(stderr));
+        let exit_code = wait_for_hook_child(&mut child, &mut process_group, options.timeout).await;
+        let stdout = format!("{prefix}{}", finish_hook_reader(stdout_task).await);
+        let stderr = finish_hook_reader(stderr_task).await;
         if let Some(registry) = options.registry {
             registry
                 .update_output(&options.hook_id, &stdout, &stderr)
@@ -1413,24 +1547,16 @@ fn spawn_registry_command_with_reader<R>(
     options: AsyncCommandOptions,
     mut stdout_reader: tokio::io::BufReader<R>,
     stderr_task: tokio::task::JoinHandle<String>,
+    mut process_group: coco_utils_pty::process_group::ProcessGroupGuard,
 ) where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
-        let stdout_task = tokio::spawn(async move {
-            let mut out = String::new();
-            use tokio::io::AsyncReadExt;
-            let _ = stdout_reader.read_to_string(&mut out).await;
-            out
-        });
-        let exit_code = tokio::time::timeout(options.timeout, child.wait())
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .and_then(|status| status.code())
-            .unwrap_or(-1);
-        let stdout = stdout_task.await.unwrap_or_default();
-        let stderr = stderr_task.await.unwrap_or_default();
+        let stdout_task =
+            tokio::spawn(async move { read_bounded_opt(Some(&mut stdout_reader)).await });
+        let exit_code = wait_for_hook_child(&mut child, &mut process_group, options.timeout).await;
+        let stdout = finish_hook_reader(stdout_task).await;
+        let stderr = finish_hook_reader(stderr_task).await;
         if let Some(registry) = options.registry {
             registry
                 .update_output(&options.hook_id, &stdout, &stderr)
@@ -1440,20 +1566,19 @@ fn spawn_registry_command_with_reader<R>(
     });
 }
 
-fn spawn_rewake_command(mut child: tokio::process::Child, options: AsyncCommandOptions) {
+fn spawn_rewake_command(
+    mut child: tokio::process::Child,
+    options: AsyncCommandOptions,
+    mut process_group: coco_utils_pty::process_group::ProcessGroupGuard,
+) {
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     tokio::spawn(async move {
-        let stdout_task = tokio::spawn(read_to_string_opt(stdout));
-        let stderr_task = tokio::spawn(read_to_string_opt(stderr));
-        let exit_code = tokio::time::timeout(options.timeout, child.wait())
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .and_then(|status| status.code())
-            .unwrap_or(-1);
-        let stdout = stdout_task.await.unwrap_or_default();
-        let stderr = stderr_task.await.unwrap_or_default();
+        let stdout_task = tokio::spawn(read_bounded_opt(stdout));
+        let stderr_task = tokio::spawn(read_bounded_opt(stderr));
+        let exit_code = wait_for_hook_child(&mut child, &mut process_group, options.timeout).await;
+        let stdout = finish_hook_reader(stdout_task).await;
+        let stderr = finish_hook_reader(stderr_task).await;
         if exit_code == 2
             && let Some(sink) = options.rewake_sink
         {
@@ -1469,6 +1594,36 @@ fn spawn_rewake_command(mut child: tokio::process::Child, options: AsyncCommandO
             sink.enqueue_rewake(options.hook_name, message).await;
         }
     });
+}
+
+async fn wait_for_hook_child(
+    child: &mut tokio::process::Child,
+    process_group: &mut coco_utils_pty::process_group::ProcessGroupGuard,
+    timeout: std::time::Duration,
+) -> i32 {
+    match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(Ok(status)) => {
+            let _ = process_group.kill();
+            process_group.disarm();
+            status.code().unwrap_or(-1)
+        }
+        Ok(Err(_)) | Err(_) => {
+            let _ = process_group.kill();
+            let _ = child.kill().await;
+            -1
+        }
+    }
+}
+
+async fn finish_hook_reader(mut task: tokio::task::JoinHandle<String>) -> String {
+    match tokio::time::timeout(HOOK_OUTPUT_DRAIN_GRACE, &mut task).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(_)) => String::new(),
+        Err(_) => {
+            task.abort();
+            String::new()
+        }
+    }
 }
 
 /// Loader-level policy gates.

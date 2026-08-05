@@ -36,6 +36,12 @@ pub fn estimate_text_tokens(text: &str) -> i64 {
     estimate_part(ContentKind::Text, text.len() as i64)
 }
 
+/// Estimate serialized JSON at the denser structured-data rate used by tool
+/// calls and tool results.
+pub fn estimate_json_tokens(json: &str) -> i64 {
+    estimate_part(ContentKind::Json, json.len() as i64)
+}
+
 /// Estimate tokens for a slice of messages.
 ///
 /// Generic over `Borrow<Message>` so callers can pass `&[Message]` or
@@ -45,6 +51,20 @@ pub fn estimate_tokens_for_messages<M: Borrow<Message>>(messages: &[M]) -> i64 {
         .iter()
         .map(|m| estimate_message_tokens(m.borrow()))
         .sum()
+}
+
+/// Estimate the fully normalized prompt that will be sent to inference.
+///
+/// Unlike [`estimate_tokens_for_messages`], this includes synthetic system
+/// messages, reminders, and any late advisory context added after history was
+/// normalized. Callers performing a final pre-wire capacity check should use
+/// this function.
+pub fn estimate_tokens_for_prompt(prompt: &[LlmMessage]) -> i64 {
+    prompt.iter().fold(0_i64, |total, message| {
+        // Include a small role/envelope allowance per normalized message; the
+        // content walkers intentionally omit provider serialization overhead.
+        total.saturating_add(llm_message_tokens(message).saturating_add(4))
+    })
 }
 
 /// Conservative token estimate: base × 4/3 (~33% padding).

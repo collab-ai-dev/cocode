@@ -87,7 +87,7 @@ pub fn build_model_catalog_infos(
 }
 
 pub fn build_model_catalog_payload(session: &SessionHandle) -> Vec<coco_types::ModelCatalogInfo> {
-    build_model_catalog_infos(session.runtime_config())
+    build_model_catalog_infos(&session.runtime_config())
 }
 
 pub fn build_model_role_bindings(
@@ -132,7 +132,7 @@ pub fn build_model_role_bindings(
 pub fn build_model_role_bindings_payload(
     session: &SessionHandle,
 ) -> Vec<coco_types::ModelRoleChangedParams> {
-    build_model_role_bindings(session.runtime_config())
+    build_model_role_bindings(&session.runtime_config())
 }
 
 pub fn build_provider_status_infos(
@@ -186,7 +186,7 @@ pub fn build_provider_status_infos(
 pub fn build_provider_status_payload(
     session: &SessionHandle,
 ) -> Vec<coco_types::ProviderStatusInfo> {
-    build_provider_status_infos(session.runtime_config())
+    build_provider_status_infos(&session.runtime_config())
 }
 
 pub fn build_login_entries(
@@ -214,7 +214,7 @@ pub fn build_login_entries(
 }
 
 pub fn build_login_entries_payload(session: &SessionHandle) -> Vec<coco_types::LoginEntryInfo> {
-    build_login_entries(session.runtime_config())
+    build_login_entries(&session.runtime_config())
 }
 
 pub fn available_models_payload(session: &SessionHandle) -> Option<Vec<String>> {

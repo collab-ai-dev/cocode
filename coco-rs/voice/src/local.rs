@@ -28,8 +28,8 @@ use crate::engine::TranscribeParams;
 use crate::engine::Transcript;
 use crate::engine::VoiceCapabilities;
 use crate::engine::VoiceEngine;
+use crate::engine::VoiceProgress;
 use crate::error::VoiceError;
-use crate::session::VoiceEvent;
 
 /// On-device Whisper transcription. Construction is cheap and infallible; the
 /// context is loaded once on first use and then shared (kept warm) across
@@ -37,19 +37,16 @@ use crate::session::VoiceEvent;
 pub struct LocalWhisperEngine {
     config: LocalWhisperConfig,
     ctx: OnceCell<Arc<WhisperContext>>,
-    /// Voice event stream, used to report weight-download progress on first use.
-    events: Option<mpsc::Sender<VoiceEvent>>,
 }
 
 impl LocalWhisperEngine {
     /// Build the engine without touching disk. The model loads (and, if
     /// missing, downloads) on the first `transcribe` call via
-    /// [`Self::ensure_ctx`]. `events` receives download progress.
-    pub fn new(config: LocalWhisperConfig, events: Option<mpsc::Sender<VoiceEvent>>) -> Self {
+    /// [`Self::ensure_ctx`].
+    pub fn new(config: LocalWhisperConfig) -> Self {
         Self {
             config,
             ctx: OnceCell::new(),
-            events,
         }
     }
 
@@ -62,29 +59,27 @@ impl LocalWhisperEngine {
     async fn ensure_ctx(
         &self,
         cancel: &CancellationToken,
+        progress: Option<mpsc::Sender<VoiceProgress>>,
     ) -> Result<Arc<WhisperContext>, VoiceError> {
+        let config = &self.config;
+        let cancel = cancel.clone();
         let ctx = self
             .ctx
-            .get_or_try_init(|| async {
-                let model_path = crate::models::resolve_model_path(&self.config);
+            .get_or_try_init(move || async move {
+                let model_path = crate::models::resolve_model_path(config);
                 if !model_path.exists() {
-                    if !crate::models::may_auto_download(&self.config) {
+                    if !crate::models::may_auto_download(config) {
                         return Err(VoiceError::TranscriptionFailed(format!(
                             "Whisper model `{}` is missing at {} and won't auto-download \
                              (auto-download applies only to a built-in model with \
                              `auto_download` on and no custom `model_url`). Pick a built-in \
                              model with `/voice-config local model <name>` (e.g. base.en, \
                              small), or place the ggml weights at that path yourself.",
-                            self.config.model,
+                            config.model,
                             model_path.display()
                         )));
                     }
-                    crate::download::download_model(
-                        &self.config,
-                        self.events.clone(),
-                        cancel.clone(),
-                    )
-                    .await?;
+                    crate::download::download_model(config, progress, cancel).await?;
                 }
                 let path = model_path.to_string_lossy().to_string();
                 tokio::task::spawn_blocking(move || {
@@ -125,11 +120,12 @@ impl VoiceEngine for LocalWhisperEngine {
         audio: Vec<u8>,
         params: &TranscribeParams,
         cancel: CancellationToken,
+        progress: Option<mpsc::Sender<VoiceProgress>>,
     ) -> Result<Transcript, VoiceError> {
         if cancel.is_cancelled() {
             return Err(VoiceError::Cancelled);
         }
-        let ctx = self.ensure_ctx(&cancel).await?;
+        let ctx = self.ensure_ctx(&cancel, progress).await?;
         if cancel.is_cancelled() {
             return Err(VoiceError::Cancelled);
         }

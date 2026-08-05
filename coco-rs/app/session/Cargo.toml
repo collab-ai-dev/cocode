@@ -26,10 +26,10 @@ sha2.workspace = true
 fs2.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 tracing.workspace = true
+tempfile.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 
 [dev-dependencies]
-tempfile.workspace = true
 pretty_assertions.workspace = true

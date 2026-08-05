@@ -30,10 +30,17 @@ use crate::types::ReminderMessage;
 use crate::types::ReminderOutput;
 use crate::types::SystemReminder;
 use coco_config::SystemReminderConfig;
+use coco_context::ContextualUserFragment;
 
 /// Lead-in prepended to the first relevant-memory entry — these are retrieved
 /// by similarity, so the model is told to apply them only if they fit.
 const RELEVANT_MEMORIES_LEAD_IN: &str = "Retrieved for possible relevance \u{2014} use only if it actually applies to what the user asked.\n\n";
+const MAX_NESTED_MEMORY_ENTRY_BYTES: usize = 16_000;
+const MAX_NESTED_MEMORY_TOTAL_BYTES: usize = 32_000;
+const NESTED_MEMORY_ENTRY_TRUNCATED: &str = "\n...[nested memory entry truncated]...";
+const NESTED_MEMORY_TOTAL_TRUNCATED: &str = "\n\n...[additional nested memories truncated]...";
+const MAX_RELEVANT_MEMORY_ENTRY_BYTES: usize = 16_000;
+const MAX_RELEVANT_MEMORY_TOTAL_BYTES: usize = 32_000;
 
 // ---------------------------------------------------------------------------
 // Snapshot types (populated by engine from context::Attachment variants)
@@ -92,26 +99,86 @@ impl AttachmentGenerator for NestedMemoryGenerator {
         // Format per entry: `Contents of ${path}:\n\n${content}`.
         // Collapsed into one text reminder with `\n\n` separators so
         // the XML wrapping stays one pair of `<system-reminder>` tags.
-        let parts: Vec<String> = ctx
+        let fragment_overhead =
+            coco_context::BoundedExternalContextFragment::minimum_rendered_bytes(
+                coco_context::ContextFragmentKind::NestedMemory,
+            );
+        let content_budget = MAX_NESTED_MEMORY_TOTAL_BYTES.saturating_sub(fragment_overhead);
+        let mut rendered = String::with_capacity(content_budget);
+        for memory in ctx
             .nested_memories
             .iter()
-            .filter(|m| !m.content.is_empty())
-            .map(|m| {
-                format!(
+            .filter(|memory| !memory.content.is_empty())
+        {
+            let entry = truncate_with_marker(
+                &format!(
                     "Contents of {path}:\n\n{content}",
-                    path = m.path,
-                    content = m.content
-                )
-            })
-            .collect();
-        if parts.is_empty() {
+                    path = memory.path,
+                    content = memory.content
+                ),
+                MAX_NESTED_MEMORY_ENTRY_BYTES,
+                NESTED_MEMORY_ENTRY_TRUNCATED,
+            );
+            let separator = if rendered.is_empty() { "" } else { "\n\n" };
+            if rendered
+                .len()
+                .saturating_add(separator.len())
+                .saturating_add(entry.len())
+                > content_budget
+            {
+                append_complete_marker(
+                    &mut rendered,
+                    content_budget,
+                    NESTED_MEMORY_TOTAL_TRUNCATED,
+                );
+                break;
+            }
+            rendered.push_str(separator);
+            rendered.push_str(&entry);
+        }
+        if rendered.is_empty() {
             return Ok(None);
         }
+        let rendered = coco_context::BoundedExternalContextFragment::new(
+            coco_context::ContextFragmentKind::NestedMemory,
+            rendered,
+            MAX_NESTED_MEMORY_TOTAL_BYTES,
+        )
+        .render();
         Ok(Some(SystemReminder::new(
             AttachmentType::NestedMemory,
-            parts.join("\n\n"),
+            rendered,
         )))
     }
+}
+
+fn truncate_with_marker(text: &str, budget: usize, marker: &str) -> String {
+    if text.len() <= budget {
+        return text.to_string();
+    }
+    if budget <= marker.len() {
+        return coco_utils_string::take_bytes_at_char_boundary(text, budget).to_string();
+    }
+    let mut output = String::with_capacity(budget);
+    output.push_str(coco_utils_string::take_bytes_at_char_boundary(
+        text,
+        budget - marker.len(),
+    ));
+    output.push_str(marker);
+    output
+}
+
+fn append_complete_marker(output: &mut String, budget: usize, marker: &str) {
+    if budget <= marker.len() {
+        output.clear();
+        output.push_str(coco_utils_string::take_bytes_at_char_boundary(
+            marker, budget,
+        ));
+        return;
+    }
+    let content_budget = budget - marker.len();
+    output.truncate(output.floor_char_boundary(content_budget));
+    output.push_str(marker);
 }
 
 // ---------------------------------------------------------------------------
@@ -141,33 +208,45 @@ impl AttachmentGenerator for RelevantMemoriesGenerator {
         if ctx.relevant_memories.is_empty() {
             return Ok(None);
         }
-        let messages: Vec<ReminderMessage> = ctx
+        let mut messages: Vec<ReminderMessage> = Vec::new();
+        let mut remaining = MAX_RELEVANT_MEMORY_TOTAL_BYTES;
+        for (i, m) in ctx
             .relevant_memories
             .iter()
             .filter(|m| !m.content.is_empty())
             .enumerate()
-            .map(|(i, m)| {
-                let header = m
-                    .header
-                    .clone()
-                    .unwrap_or_else(|| fallback_header(&m.path, m.mtime_ms));
-                // Lead-in on the first entry only: these were retrieved by
-                // similarity, not necessarily relevance, so steer the model to
-                // use them only if they actually apply (CC's `o===0` gate).
-                let lead_in = if i == 0 {
-                    RELEVANT_MEMORIES_LEAD_IN
-                } else {
-                    ""
-                };
-                ReminderMessage {
-                    role: MessageRole::User,
-                    blocks: vec![ContentBlock::Text {
-                        text: format!("{lead_in}{header}\n\n{content}", content = m.content),
-                    }],
-                    is_meta: true,
-                }
-            })
-            .collect();
+        {
+            let header = m
+                .header
+                .clone()
+                .unwrap_or_else(|| fallback_header(&m.path, m.mtime_ms));
+            // Lead-in on the first entry only: these were retrieved by
+            // similarity, not necessarily relevance, so steer the model to
+            // use them only if they actually apply (CC's `o===0` gate).
+            let lead_in = if i == 0 {
+                RELEVANT_MEMORIES_LEAD_IN
+            } else {
+                ""
+            };
+            let text = coco_context::BoundedExternalContextFragment::new(
+                coco_context::ContextFragmentKind::RelevantMemory,
+                format!("{lead_in}{header}\n\n{content}", content = m.content),
+                remaining.min(MAX_RELEVANT_MEMORY_ENTRY_BYTES),
+            )
+            .render();
+            if text.is_empty() {
+                break;
+            }
+            remaining = remaining.saturating_sub(text.len());
+            messages.push(ReminderMessage {
+                role: MessageRole::User,
+                blocks: vec![ContentBlock::Text { text }],
+                is_meta: true,
+            });
+            if remaining == 0 {
+                break;
+            }
+        }
         if messages.is_empty() {
             return Ok(None);
         }

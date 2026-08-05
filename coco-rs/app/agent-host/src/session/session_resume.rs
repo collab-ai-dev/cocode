@@ -13,6 +13,11 @@ pub(crate) struct LoadedResumeSession {
     pub(crate) conversation: coco_session::recovery::ConversationForResume,
 }
 
+pub(crate) struct LeasedResumeSession {
+    pub(crate) loaded: LoadedResumeSession,
+    pub(crate) write_lease: coco_session::SessionWriteLease,
+}
+
 #[derive(Debug)]
 pub(crate) enum LoadResumeSessionError {
     InvalidRequest(String),
@@ -87,5 +92,39 @@ pub(crate) async fn load_resume_session(
         session,
         session_id,
         conversation,
+    })
+}
+
+/// Acquire writable ownership before reading any resume state. The returned
+/// lease must be transferred into the runtime that hydrates `loaded`; dropping
+/// it between those operations would reopen the stale-snapshot race.
+pub(crate) async fn load_resume_session_with_write_lease(
+    manager: Option<Arc<coco_session::SessionManager>>,
+    input: SessionResumeInput,
+) -> Result<LeasedResumeSession, LoadResumeSessionError> {
+    let Some(manager) = manager else {
+        return Err(LoadResumeSessionError::InvalidRequest(
+            "session persistence is not enabled on this server".to_string(),
+        ));
+    };
+    let session_id = input.target.session_id.to_string();
+    // The disk backend's lease namespace is global under memory_base; the
+    // memory backend returns its single shared store for every cwd.
+    let lease_store = manager.store_for(std::path::Path::new("."));
+    let write_lease =
+        tokio::task::spawn_blocking(move || lease_store.require_write_lease(&session_id))
+            .await
+            .map_err(|error| {
+                LoadResumeSessionError::Internal(format!(
+                    "session/resume lease task panicked: {error}"
+                ))
+            })?
+            .map_err(|error| {
+                LoadResumeSessionError::InvalidRequest(format!("session/resume: {error}"))
+            })?;
+    let loaded = load_resume_session(Some(manager), input).await?;
+    Ok(LeasedResumeSession {
+        loaded,
+        write_lease,
     })
 }

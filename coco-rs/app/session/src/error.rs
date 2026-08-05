@@ -19,6 +19,9 @@ pub enum SessionError {
     #[error(transparent)]
     Json(#[from] serde_json::Error),
 
+    #[error(transparent)]
+    Lease(#[from] crate::SessionLeaseError),
+
     /// Error raised by a non-fs backend (DB / HTTP / object store). Carries
     /// the backend's own `StatusCode` so classification survives the
     /// boundary instead of collapsing to `Generic`. `Box<dyn ErrorExt>`
@@ -32,6 +35,9 @@ pub enum SessionError {
 
     #[error("transcript path missing UUID component: {path}")]
     InvalidTranscriptPath { path: PathBuf },
+
+    #[error("session id `{session_id}` is ambiguous across projects ({matches} transcripts)")]
+    AmbiguousSessionId { session_id: String, matches: usize },
 
     #[error("session duration exceeds current time")]
     DurationOverflow,
@@ -63,9 +69,15 @@ impl ErrorExt for SessionError {
         match self {
             Self::Io(_) => StatusCode::IoError,
             Self::Json(_) => StatusCode::InvalidJson,
+            Self::Lease(crate::SessionLeaseError::InUse { .. }) => StatusCode::ResourcesExhausted,
+            Self::Lease(crate::SessionLeaseError::Io { .. }) => StatusCode::IoError,
+            Self::Lease(crate::SessionLeaseError::Unsupported { .. }) => {
+                StatusCode::ServiceUnavailable
+            }
             Self::Backend(e) => e.status_code(),
             Self::TranscriptNotFound { .. } => StatusCode::FileNotFound,
             Self::InvalidTranscriptPath { .. } => StatusCode::InvalidArguments,
+            Self::AmbiguousSessionId { .. } => StatusCode::InvalidArguments,
             Self::DurationOverflow => StatusCode::Internal,
             Self::Generic { .. } => StatusCode::Internal,
         }

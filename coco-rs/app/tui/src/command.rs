@@ -323,14 +323,12 @@ pub enum UserCommand {
     /// `UiState.pending_skills_save_edits` before dispatch and
     /// reads it back when [`coco_types::TuiOnlyEvent::SkillOverridesSaved`]
     /// arrives. The CLI bridge only reports Ok / typed Err.
-    /// The CLI bridge in `tui_runner` owns the
-    /// [`coco_config::SettingsWriter`] handle — keeping the writer
-    /// out of the TUI lib avoids a coco-tui → coco-config write
-    /// dep that other dialogs don't need yet.
+    /// The CLI bridge in `tui_runner` owns the settings persistence
+    /// boundary, keeping the coco-tui crate independent of coco-config.
     WriteSkillOverrides {
         /// Settings JSON patch ready for
-        /// [`coco_config::SettingsWriter::write_local`] (the
-        /// `Value::Null` entries delete keys).
+        /// [`coco_config::write_local_settings`] (the `Value::Null`
+        /// entries delete keys).
         patch: serde_json::Value,
     },
     /// Execute a registered slash command without echoing the raw slash

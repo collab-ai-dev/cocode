@@ -7,10 +7,12 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicI64};
 use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::process::ChildStdin;
@@ -84,27 +86,27 @@ impl From<&LifecycleConfig> for TimeoutConfig {
 impl TimeoutConfig {
     /// Get init timeout as Duration
     pub fn init_timeout(&self) -> Duration {
-        Duration::from_millis(self.init_timeout_ms as u64)
+        Duration::from_millis(u64::try_from(self.init_timeout_ms).unwrap_or(0))
     }
 
     /// Get request timeout as Duration
     pub fn request_timeout(&self) -> Duration {
-        Duration::from_millis(self.request_timeout_ms as u64)
+        Duration::from_millis(u64::try_from(self.request_timeout_ms).unwrap_or(0))
     }
 
     /// Get shutdown timeout as Duration
     pub fn shutdown_timeout(&self) -> Duration {
-        Duration::from_millis(self.shutdown_timeout_ms as u64)
+        Duration::from_millis(u64::try_from(self.shutdown_timeout_ms).unwrap_or(0))
     }
 
     /// Get init timeout in seconds (for legacy API compatibility)
     pub fn init_timeout_secs(&self) -> i32 {
-        (self.init_timeout_ms / 1000) as i32
+        i32::try_from(self.init_timeout_ms.max(0) / 1000).unwrap_or(i32::MAX)
     }
 
     /// Get request timeout in seconds (for legacy API compatibility)
     pub fn request_timeout_secs(&self) -> i32 {
-        (self.request_timeout_ms / 1000) as i32
+        i32::try_from(self.request_timeout_ms.max(0) / 1000).unwrap_or(i32::MAX)
     }
 }
 
@@ -147,6 +149,7 @@ pub struct JsonRpcConnection {
     next_id: AtomicI64,
     stdin: Arc<Mutex<ChildStdin>>,
     pending: Arc<Mutex<HashMap<RequestId, PendingRequest>>>,
+    closed: Arc<AtomicBool>,
     /// Shutdown signal sender
     shutdown_tx: watch::Sender<bool>,
     /// Reader task handle for cleanup
@@ -164,8 +167,12 @@ impl JsonRpcConnection {
         stdout: ChildStdout,
         notification_tx: mpsc::Sender<(String, serde_json::Value)>,
     ) -> Self {
+        let stdin = Arc::new(Mutex::new(stdin));
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let pending_clone = Arc::clone(&pending);
+        let closed = Arc::new(AtomicBool::new(false));
+        let reader_closed = Arc::clone(&closed);
+        let reader_stdin = Arc::clone(&stdin);
 
         // Create shutdown channel
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -182,11 +189,15 @@ impl JsonRpcConnection {
             let _ = ready_tx.send(());
 
             // Enter the read loop
-            if let Err(e) =
-                Self::read_messages(reader, pending_clone, notification_tx, shutdown_rx).await
-            {
-                warn!("LSP read loop ended with error: {}", e);
-            }
+            run_reader_task(
+                reader,
+                Arc::clone(&pending_clone),
+                reader_stdin,
+                notification_tx,
+                shutdown_rx,
+                reader_closed,
+            )
+            .await;
         });
 
         // Wait for reader to be ready (with timeout to prevent hang)
@@ -206,8 +217,9 @@ impl JsonRpcConnection {
 
         Self {
             next_id: AtomicI64::new(1),
-            stdin: Arc::new(Mutex::new(stdin)),
+            stdin,
             pending,
+            closed,
             shutdown_tx,
             reader_handle: Mutex::new(Some(reader_handle)),
         }
@@ -230,6 +242,9 @@ impl JsonRpcConnection {
         params: P,
         timeout_secs: i32,
     ) -> Result<serde_json::Value> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(LspErr::ConnectionClosed);
+        }
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let request = JsonRpcRequest {
             jsonrpc: "2.0",
@@ -238,11 +253,18 @@ impl JsonRpcConnection {
             params,
         };
 
+        // Serialize before registering the request so serialization failure
+        // cannot strand an unreachable pending entry.
+        let body = serde_json::to_string(&request)?;
+        let message = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
         let (tx, rx) = oneshot::channel();
 
         // Register pending request
         {
             let mut pending = self.pending.lock().await;
+            if self.closed.load(Ordering::Acquire) {
+                return Err(LspErr::ConnectionClosed);
+            }
             pending.insert(
                 id,
                 PendingRequest {
@@ -252,22 +274,25 @@ impl JsonRpcConnection {
             );
         }
 
-        // Serialize and send
-        let body = serde_json::to_string(&request)?;
-        let message = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
-
         debug!("LSP request [{}]: {}", id, method);
         trace!("LSP request [{}]: {} {}", id, method, body);
 
-        {
+        let write_result = async {
             let mut stdin = self.stdin.lock().await;
             stdin.write_all(message.as_bytes()).await?;
-            stdin.flush().await?;
+            stdin.flush().await
+        }
+        .await;
+        if let Err(error) = write_result {
+            self.closed.store(true, Ordering::Release);
+            fail_pending_requests(&self.pending).await;
+            return Err(error.into());
         }
 
         // Wait for response with timeout
         let method_clone = method.to_string();
-        match timeout(Duration::from_secs(timeout_secs as u64), rx).await {
+        let timeout_secs = u64::try_from(timeout_secs).unwrap_or(0);
+        match timeout(Duration::from_secs(timeout_secs), rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(LspErr::Internal("request cancelled".to_string())),
             Err(_) => {
@@ -284,7 +309,9 @@ impl JsonRpcConnection {
                     "LSP request [{}] ({}) timed out after {}s - cancel sent",
                     id, method_clone, timeout_secs
                 );
-                Err(LspErr::RequestTimeout { timeout_secs })
+                Err(LspErr::RequestTimeout {
+                    timeout_secs: i32::try_from(timeout_secs).unwrap_or(i32::MAX),
+                })
             }
         }
     }
@@ -382,6 +409,9 @@ impl JsonRpcConnection {
 
     /// Send notification (no response expected)
     pub async fn notify<P: Serialize>(&self, method: &str, params: P) -> Result<()> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(LspErr::ConnectionClosed);
+        }
         let notification = serde_json::json!({
             "jsonrpc": "2.0",
             "method": method,
@@ -394,10 +424,26 @@ impl JsonRpcConnection {
         debug!("LSP notify: {}", method);
         trace!("LSP notify: {} {}", method, body);
 
-        let mut stdin = self.stdin.lock().await;
-        stdin.write_all(message.as_bytes()).await?;
-        stdin.flush().await?;
-        Ok(())
+        let write_result = async {
+            let mut stdin = self.stdin.lock().await;
+            if self.closed.load(Ordering::Acquire) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "LSP connection is closed",
+                ));
+            }
+            stdin.write_all(message.as_bytes()).await?;
+            stdin.flush().await
+        }
+        .await;
+        match write_result {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.closed.store(true, Ordering::Release);
+                fail_pending_requests(&self.pending).await;
+                Err(error.into())
+            }
+        }
     }
 
     /// Read and dispatch incoming LSP messages
@@ -405,21 +451,21 @@ impl JsonRpcConnection {
     /// Reads JSON-RPC messages from the server, dispatches responses to pending
     /// request handlers, and forwards notifications to the notification channel.
     /// Supports graceful shutdown via the shutdown_rx watch channel.
-    async fn read_messages(
-        mut reader: BufReader<ChildStdout>,
+    async fn read_messages<R, W>(
+        mut reader: BufReader<R>,
         pending: Arc<Mutex<HashMap<RequestId, PendingRequest>>>,
+        stdin: Arc<Mutex<W>>,
         notification_tx: mpsc::Sender<(String, serde_json::Value)>,
         mut shutdown_rx: watch::Receiver<bool>,
-    ) -> Result<()> {
+    ) -> Result<()>
+    where
+        R: AsyncRead + Unpin,
+        W: AsyncWrite + Unpin,
+    {
         loop {
             // Check shutdown signal
             if *shutdown_rx.borrow() {
                 debug!("LSP read loop received shutdown signal");
-                // Fail all pending requests
-                let mut pending_guard = pending.lock().await;
-                for (_id, req) in pending_guard.drain() {
-                    let _ = req.tx.send(Err(LspErr::ConnectionClosed));
-                }
                 return Ok(());
             }
 
@@ -434,10 +480,6 @@ impl JsonRpcConnection {
                     result = reader.read_line(&mut header) => result?,
                     _ = shutdown_rx.changed() => {
                         debug!("LSP read loop shutdown during header read");
-                        let mut pending_guard = pending.lock().await;
-                        for (_id, req) in pending_guard.drain() {
-                            let _ = req.tx.send(Err(LspErr::ConnectionClosed));
-                        }
                         return Ok(());
                     }
                 };
@@ -452,11 +494,6 @@ impl JsonRpcConnection {
                         pending_count
                     );
 
-                    // Fail all pending requests so they don't hang
-                    let mut pending_guard = pending.lock().await;
-                    for (_id, req) in pending_guard.drain() {
-                        let _ = req.tx.send(Err(LspErr::ConnectionClosed));
-                    }
                     return Ok(());
                 }
 
@@ -465,28 +502,29 @@ impl JsonRpcConnection {
                     break;
                 }
 
-                if let Some(len_str) = header.strip_prefix("Content-Length:")
-                    && let Ok(len) = len_str.trim().parse::<usize>()
+                if let Some((name, value)) = header.split_once(':')
+                    && name.eq_ignore_ascii_case("Content-Length")
                 {
-                    content_length = Some(len);
+                    content_length = Some(value.trim().parse::<usize>().map_err(|_| {
+                        LspErr::Internal(format!("invalid LSP Content-Length header: {header}"))
+                    })?);
                 }
             }
 
             let content_length = match content_length {
                 Some(len) => len,
                 None => {
-                    warn!("Missing Content-Length header");
-                    continue;
+                    return Err(LspErr::Internal(
+                        "missing LSP Content-Length header".to_string(),
+                    ));
                 }
             };
 
             // Validate Content-Length to prevent memory exhaustion
             if content_length > MAX_CONTENT_LENGTH {
-                warn!(
-                    "Content-Length {} exceeds maximum allowed {} bytes, skipping message",
-                    content_length, MAX_CONTENT_LENGTH
-                );
-                continue;
+                return Err(LspErr::Internal(format!(
+                    "LSP Content-Length {content_length} exceeds maximum {MAX_CONTENT_LENGTH}"
+                )));
             }
 
             // Read body
@@ -511,8 +549,12 @@ impl JsonRpcConnection {
                 }
             };
 
-            // Check if response or notification
-            if value.get("id").is_some() {
+            // A message with both method and id is a server-to-client request,
+            // not a response. Always answer it so the server cannot hang
+            // waiting on a client request we silently discarded.
+            if value.get("id").is_some() && value.get("method").is_some() {
+                respond_to_server_request(&stdin, &value).await?;
+            } else if value.get("id").is_some() {
                 // Response
                 if let Ok(response) = serde_json::from_value::<JsonRpcResponse>(value)
                     && let Some(id) = response.id
@@ -543,13 +585,16 @@ impl JsonRpcConnection {
                 match notification_tx.try_send(notification) {
                     Ok(()) => {}
                     Err(tokio::sync::mpsc::error::TrySendError::Full(notification)) => {
-                        // Channel is full - log warning and block
+                        // Blocking this reader would also block response
+                        // correlation. Fail the connection so pending callers
+                        // are released and the owner can restart the server.
                         warn!(
                             "LSP notification channel full, backpressure detected (method: {})",
                             notification.0
                         );
-                        // Fall back to blocking send
-                        let _ = notification_tx.send(notification).await;
+                        return Err(LspErr::Internal(
+                            "LSP notification consumer is too slow".to_string(),
+                        ));
                     }
                     Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                         // Channel closed, reader is shutting down
@@ -562,8 +607,110 @@ impl JsonRpcConnection {
     }
 }
 
+async fn run_reader_task<R, W>(
+    reader: BufReader<R>,
+    pending: Arc<Mutex<HashMap<RequestId, PendingRequest>>>,
+    stdin: Arc<Mutex<W>>,
+    notification_tx: mpsc::Sender<(String, serde_json::Value)>,
+    shutdown_rx: watch::Receiver<bool>,
+    closed: Arc<AtomicBool>,
+) where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    if let Err(error) = JsonRpcConnection::read_messages(
+        reader,
+        Arc::clone(&pending),
+        stdin,
+        notification_tx,
+        shutdown_rx,
+    )
+    .await
+    {
+        warn!("LSP read loop ended with error: {error}");
+    }
+    closed.store(true, Ordering::Release);
+    fail_pending_requests(&pending).await;
+}
+
+async fn fail_pending_requests(pending: &Mutex<HashMap<RequestId, PendingRequest>>) {
+    let mut pending = pending.lock().await;
+    for (_, request) in pending.drain() {
+        let _ = request.tx.send(Err(LspErr::ConnectionClosed));
+    }
+}
+
+async fn respond_to_server_request<W>(stdin: &Mutex<W>, request: &serde_json::Value) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    let response = server_request_response(request);
+    let body = serde_json::to_vec(&response)?;
+    let header = format!("Content-Length: {}\r\n\r\n", body.len());
+    let mut stdin = stdin.lock().await;
+    stdin.write_all(header.as_bytes()).await?;
+    stdin.write_all(&body).await?;
+    stdin.flush().await?;
+    Ok(())
+}
+
+fn server_request_response(request: &serde_json::Value) -> serde_json::Value {
+    let id = request
+        .get("id")
+        .filter(|id| id.is_i64() || id.is_u64() || id.is_string())
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let method = request
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let result = match method {
+        // The connection does not own user configuration. Preserve the
+        // requested array shape while explicitly returning no overrides.
+        "workspace/configuration" => {
+            let count = request
+                .pointer("/params/items")
+                .and_then(serde_json::Value::as_array)
+                .map_or(0, Vec::len);
+            Some(serde_json::Value::Array(vec![
+                serde_json::Value::Null;
+                count
+            ]))
+        }
+        "workspace/workspaceFolders" => Some(serde_json::Value::Array(Vec::new())),
+        "client/registerCapability"
+        | "client/unregisterCapability"
+        | "window/workDoneProgress/create" => Some(serde_json::Value::Null),
+        // Server-initiated edits bypass the tool permission and file-history
+        // pipeline, so reject them at this transport boundary.
+        "workspace/applyEdit" => Some(serde_json::json!({
+            "applied": false,
+            "failureReason": "server-initiated workspace edits are not supported"
+        })),
+        // No interactive UI callback is wired into this connection.
+        "window/showMessageRequest" => Some(serde_json::Value::Null),
+        _ => None,
+    };
+    match result {
+        Some(result) => serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result,
+        }),
+        None => serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {
+                "code": -32601,
+                "message": format!("client method not supported: {method}"),
+            },
+        }),
+    }
+}
+
 impl Drop for JsonRpcConnection {
     fn drop(&mut self) {
+        self.closed.store(true, Ordering::Release);
         // Signal shutdown to reader task
         let _ = self.shutdown_tx.send(true);
 

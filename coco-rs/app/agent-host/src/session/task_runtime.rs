@@ -38,6 +38,7 @@ mod shell;
 mod stall;
 mod timers;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use coco_tasks::{NoOpNotificationSink, NotificationSinkRef, TaskManager};
@@ -62,6 +63,10 @@ pub struct TaskRuntime {
     /// Watchdog limits for local background agents. Defaults are the
     /// inactivity-only policy; the absolute wall-clock cap is opt-in.
     pub(in crate::session::task_runtime) agent_liveness: coco_config::AgentLivenessConfig,
+    /// Raw, stream-separated terminal data retained for foreground shell
+    /// consumers. Background observability continues to use the merged disk log.
+    pub(in crate::session::task_runtime) terminal_outputs:
+        Arc<tokio::sync::RwLock<HashMap<String, coco_tool_runtime::TerminalOutputs>>>,
 }
 
 impl std::fmt::Debug for TaskRuntime {
@@ -96,6 +101,7 @@ impl TaskRuntime {
             disk: Arc::new(DiskOutputs::new(session_dir)),
             notification_sink: Arc::new(NoOpNotificationSink),
             agent_liveness: coco_config::AgentLivenessConfig::default(),
+            terminal_outputs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
         }
     }
 

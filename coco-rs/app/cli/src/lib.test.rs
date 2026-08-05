@@ -77,7 +77,7 @@ fn top_level_flags_have_documented_consumers() {
         ("log-location", "tracing_init"),
         ("log-stderr", "tracing_init"),
         ("log-timezone", "tracing_init"),
-        ("max-tokens", "AgentHostOptions -> query config"),
+        ("total-token-budget", "AgentHostOptions -> query config"),
         ("max-turns", "AgentHostOptions -> query config / SDK host"),
         ("models.main", "AgentHostOptions -> model resolver"),
         (
@@ -135,6 +135,16 @@ fn event_hub_url_conflicts_with_serve_hub() {
     };
 
     assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+}
+
+#[test]
+fn resume_conflicts_with_continue() {
+    let Err(error) = Cli::try_parse_from(["coco", "--resume", "session", "--continue-session"])
+    else {
+        panic!("resume source selection must be unambiguous");
+    };
+
+    assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
 }
 
 #[test]

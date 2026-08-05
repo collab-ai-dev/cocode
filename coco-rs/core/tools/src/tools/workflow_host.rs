@@ -120,6 +120,10 @@ struct WorkflowRunHost {
     /// engine the SAME state and the child continues the parent's numbering
     /// instead of restarting the lifetime agent cap.
     run_state: Arc<WorkflowRunState>,
+    /// Main-runtime progress writes spawned from the synchronous host API.
+    /// Drained before the terminal transition so no stale progress frame can
+    /// arrive after completion.
+    progress_tasks: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
     /// Weak self-reference so `run_nested_workflow` can re-enter
     /// [`WorkflowEngine::run`] with the SAME `Arc<dyn WorkflowHost>` — that
     /// shared host is exactly what shares the parent's semaphore, token budget,
@@ -129,6 +133,21 @@ struct WorkflowRunHost {
 }
 
 impl WorkflowRunHost {
+    async fn drain_progress_tasks(&self) {
+        let handles = {
+            let mut handles = self
+                .progress_tasks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            std::mem::take(&mut *handles)
+        };
+        for handle in handles {
+            if let Err(error) = handle.await {
+                tracing::debug!(%error, "workflow progress task did not complete cleanly");
+            }
+        }
+    }
+
     fn build_request(
         &self,
         prompt: String,
@@ -427,9 +446,15 @@ impl WorkflowHost for WorkflowRunHost {
         let task_handle = self.task_handle.clone();
         let task_id = self.task_id.clone();
         // Fire-and-forget onto the main runtime so `log()`/`phase()` stay sync.
-        self.main_handle.spawn(async move {
+        let handle = self.main_handle.spawn(async move {
             task_handle.push_workflow_progress(&task_id, event).await;
         });
+        let mut progress_tasks = self
+            .progress_tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        progress_tasks.retain(|task| !task.is_finished());
+        progress_tasks.push(handle);
     }
 
     fn budget_total_tokens(&self) -> Option<i64> {
@@ -628,9 +653,23 @@ pub(crate) fn spawn_workflow_engine(script: String, launch: WorkflowLaunch) {
         run_id,
         journal_path,
     } = launch;
+    let startup_failure_handle = main_handle.clone();
+    let startup_failure_tasks = task_handle.clone();
+    let startup_failure_task_id = task_id.clone();
     let thread = std::thread::Builder::new()
         .name(format!("workflow-{task_id}"))
         .spawn(move || {
+            let runtime = match LocalWorkflowRuntime::new() {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    tracing::error!(target: "coco::workflow", %error, "failed to build workflow runtime");
+                    main_handle.block_on(task_handle.mark_failed(
+                        &task_id,
+                        &format!("failed to build workflow runtime: {error}"),
+                    ));
+                    return;
+                }
+            };
             // `new_cyclic` lets the host hold a `Weak` to itself so
             // `run_nested_workflow` can re-enter the engine with the SAME host
             // Arc — the mechanism that shares all governance with a child run.
@@ -645,23 +684,17 @@ pub(crate) fn spawn_workflow_engine(script: String, launch: WorkflowLaunch) {
                 semaphore: Arc::new(Semaphore::new(workflow_local_concurrency())),
                 journal,
                 run_state: run_state.clone(),
+                progress_tasks: std::sync::Mutex::new(Vec::new()),
                 // `new_cyclic` hands a `Weak<WorkflowRunHost>`; coerce to the
                 // trait-object weak the field stores.
                 me: me.clone() as Weak<dyn WorkflowHost>,
             });
-            let host: Arc<dyn WorkflowHost> = host;
-            let runtime = match LocalWorkflowRuntime::new() {
-                Ok(runtime) => runtime,
-                Err(error) => {
-                    tracing::error!(target: "coco::workflow", %error, "failed to build workflow runtime");
-                    return;
-                }
-            };
+            let workflow_host: Arc<dyn WorkflowHost> = host.clone();
             runtime.block_on(async move {
                 let outcome = WorkflowEngine::run(WorkflowRun {
                     script,
                     args,
-                    host,
+                    host: workflow_host,
                     state: run_state,
                     cancel,
                     sync_eval_budget: WORKFLOW_SYNC_EVAL_BUDGET,
@@ -669,6 +702,7 @@ pub(crate) fn spawn_workflow_engine(script: String, launch: WorkflowLaunch) {
                     child_group: None,
                 })
                 .await;
+                host.drain_progress_tasks().await;
                 let census = agent_census(task_handle.as_ref(), &task_id).await;
                 match outcome {
                     Ok(value) => {
@@ -701,6 +735,14 @@ pub(crate) fn spawn_workflow_engine(script: String, launch: WorkflowLaunch) {
         });
     if let Err(error) = thread {
         tracing::error!(target: "coco::workflow", %error, "failed to spawn workflow engine thread");
+        drop(startup_failure_handle.spawn(async move {
+            startup_failure_tasks
+                .mark_failed(
+                    &startup_failure_task_id,
+                    &format!("failed to spawn workflow engine thread: {error}"),
+                )
+                .await;
+        }));
     }
 }
 

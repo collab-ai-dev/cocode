@@ -18,6 +18,7 @@ use coco_inference::LanguageModelStreamResult;
 use coco_inference::ModelRuntimeRegistry;
 use coco_inference::PrebuiltLanguageModelSlot;
 use coco_inference::ProviderClientFingerprint;
+use coco_inference::QueryParams;
 use coco_inference::RetryConfig;
 use coco_llm_types::AssistantContentPart;
 use coco_llm_types::FinishReason;
@@ -287,9 +288,122 @@ async fn c15_overlimit_history_blocks() {
     }
 }
 
-/// C15 finding: when the previous iteration ran reactive compaction,
-/// the gate must skip — re-blocking after compaction would deadlock
-/// the recovery loop (compact → block → compact → …).
+#[tokio::test]
+async fn final_request_gate_counts_system_prompt_not_present_in_history() {
+    let small = ModelInfo {
+        context_window: PositiveTokens::new(10_000),
+        max_output_tokens: PositiveTokens::new(4_096),
+        ..Default::default()
+    };
+    let client = slot_with_info("anthropic", "claude-3", small);
+    let engine = test_engine(QueryEngineConfig::default(), client.clone());
+    let params = QueryParams {
+        prompt: vec![LlmMessage::system("x".repeat(40_000))],
+        ..Default::default()
+    };
+
+    assert!(matches!(
+        engine.check_final_request_blocking_limit(&params, &slot_snapshot(&client)),
+        BlockingLimitDecision::Block { .. }
+    ));
+}
+
+#[tokio::test]
+async fn final_request_gate_credits_and_consumes_only_the_admitted_server_edit() {
+    let small = ModelInfo {
+        context_window: PositiveTokens::new(10_000),
+        max_output_tokens: PositiveTokens::new(1_024),
+        ..Default::default()
+    };
+    let client = slot_with_info("anthropic", "claude-3", small);
+    let engine = test_engine(QueryEngineConfig::default(), client.clone());
+    let payload = serde_json::json!({
+        "edits": [{"clearAtLeast": {"value": 2_000}}]
+    });
+    let params = QueryParams {
+        prompt: vec![LlmMessage::system("x".repeat(40_000))],
+        context_management: Some(payload.clone()),
+        ..Default::default()
+    };
+    *engine.pending_reactive_context_management.lock().await = Some(payload.clone());
+
+    assert!(matches!(
+        engine.check_final_request_blocking_limit(&params, &slot_snapshot(&client)),
+        BlockingLimitDecision::Proceed
+    ));
+
+    engine
+        .consume_admitted_reactive_context_management(&QueryParams::default())
+        .await;
+    assert_eq!(
+        engine
+            .pending_reactive_context_management
+            .lock()
+            .await
+            .as_ref(),
+        Some(&payload)
+    );
+    engine
+        .consume_admitted_reactive_context_management(&params)
+        .await;
+    assert!(
+        engine
+            .pending_reactive_context_management
+            .lock()
+            .await
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn final_request_gate_does_not_credit_an_unreached_context_management_trigger() {
+    let small = ModelInfo {
+        context_window: PositiveTokens::new(10_000),
+        max_output_tokens: PositiveTokens::new(1_024),
+        ..Default::default()
+    };
+    let client = slot_with_info("anthropic", "claude-3", small);
+    let engine = test_engine(QueryEngineConfig::default(), client.clone());
+    let params = QueryParams {
+        prompt: vec![LlmMessage::system("x".repeat(40_000))],
+        context_management: Some(serde_json::json!({
+            "edits": [{
+                "trigger": {"type": "input_tokens", "value": 20_000},
+                "clearAtLeast": {"type": "input_tokens", "value": 2_000}
+            }]
+        })),
+        ..Default::default()
+    };
+
+    assert!(matches!(
+        engine.check_final_request_blocking_limit(&params, &slot_snapshot(&client)),
+        BlockingLimitDecision::Block { .. }
+    ));
+}
+
+#[tokio::test]
+async fn optional_context_budget_never_displaces_the_base_request() {
+    let small = ModelInfo {
+        context_window: PositiveTokens::new(10_000),
+        max_output_tokens: PositiveTokens::new(4_096),
+        ..Default::default()
+    };
+    let client = slot_with_info("anthropic", "claude-3", small);
+    let engine = test_engine(QueryEngineConfig::default(), client.clone());
+    let params = QueryParams {
+        prompt: vec![LlmMessage::system("x".repeat(40_000))],
+        ..Default::default()
+    };
+
+    assert_eq!(
+        engine.optional_text_context_budget(&params, &slot_snapshot(&client), 32_000),
+        0
+    );
+}
+
+/// A reactive compaction retry is still subject to the hard pre-wire gate.
+/// If compaction made insufficient progress, sending the oversized request is
+/// never safe; the caller's one-shot preflight guard prevents a retry loop.
 #[tokio::test]
 async fn c15_skips_post_compact() {
     let small = ModelInfo {
@@ -308,18 +422,14 @@ async fn c15_skips_post_compact() {
     let mut turn_state = loop_turn_state();
     turn_state.transition = Some(ContinueReason::ReactiveCompactRetry);
 
-    // R10 + R5 cleanup — `SkipPostCompact` collapsed into `Proceed`
-    // (post-compact retry now reads as a `tracing::debug!` field
-    // inside `check_blocking_limit` rather than a typed variant). The
-    // caller's behavior is identical: proceed to `query_stream`.
     match engine.check_blocking_limit(
         history.as_slice(),
         &slot_snapshot(&client),
         &turn_state,
         /*effective_max_tokens*/ None,
     ) {
-        BlockingLimitDecision::Proceed => {}
-        other => panic!("post-compact iteration must Proceed, got {other:?}"),
+        BlockingLimitDecision::Block { .. } => {}
+        other => panic!("oversized post-compact request must Block, got {other:?}"),
     }
 }
 

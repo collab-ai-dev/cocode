@@ -17,6 +17,12 @@ use super::session_connections::attach_local_app_server_session;
 use super::session_loading::load_local_app_server_session_new_only;
 use super::session_operation_error::SessionOperationError;
 
+#[derive(Debug)]
+enum NewSessionLeaseError {
+    Lease(coco_session::SessionLeaseError),
+    Lookup(coco_session::SessionError),
+}
+
 pub(crate) async fn prepare_app_server_session_start(
     input: SessionStartInput,
     state: &AppServerHostState,
@@ -41,6 +47,61 @@ pub(crate) async fn prepare_app_server_session_start(
         "AppServerHost: session/start"
     );
     Ok(prepared)
+}
+
+pub(crate) async fn acquire_new_session_write_lease(
+    runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
+    session_id: &coco_types::SessionId,
+) -> Result<coco_session::SessionWriteLease, SessionOperationError> {
+    let manager = runtime_factory.session_manager();
+    let id = session_id.to_string();
+    let lookup = tokio::task::spawn_blocking(move || {
+        let lease_store = manager.store_for(std::path::Path::new("."));
+        let lease = lease_store
+            .require_write_lease(&id)
+            .map_err(NewSessionLeaseError::Lease)?;
+        match manager.load(&id) {
+            Ok(_) => Ok((lease, true)),
+            Err(coco_session::SessionError::TranscriptNotFound { .. }) => Ok((lease, false)),
+            Err(error) => Err(NewSessionLeaseError::Lookup(error)),
+        }
+    })
+    .await
+    .map_err(|error| {
+        SessionOperationError::internal(
+            format!("session/start durable-id lookup task failed: {error}"),
+            None,
+        )
+    })?;
+    match lookup {
+        Ok((_lease, true)) => Err(SessionOperationError::invalid_request(
+            format!(
+                "session/start requires a globally new session id; {session_id} already exists"
+            ),
+            Some(serde_json::json!({
+                "kind": "session_start_persisted_id_conflict",
+                "session_id": session_id,
+            })),
+        )),
+        Ok((lease, false)) => Ok(lease),
+        Err(NewSessionLeaseError::Lease(coco_session::SessionLeaseError::InUse { .. })) => {
+            Err(SessionOperationError::invalid_request(
+                format!("session/start cannot claim session id {session_id}: it is in use"),
+                Some(serde_json::json!({
+                    "kind": coco_session::lease::SESSION_IN_USE,
+                    "session_id": session_id,
+                })),
+            ))
+        }
+        Err(NewSessionLeaseError::Lease(error)) => Err(SessionOperationError::internal(
+            format!("session/start could not acquire the session lease: {error}"),
+            None,
+        )),
+        Err(NewSessionLeaseError::Lookup(error)) => Err(SessionOperationError::internal(
+            format!("session/start could not verify session id uniqueness: {error}"),
+            None,
+        )),
+    }
 }
 
 fn prepare_session_start_error(
@@ -70,6 +131,11 @@ pub(crate) async fn start_app_server_session_with_runtime_replacement(
 ) -> Result<SessionStartResult, SessionOperationError> {
     let prepared = prepare_app_server_session_start(input, &state, &connection_profile).await?;
     let started_session_id = prepared.session_id.clone();
+    // The same lease protects the durable absence check and the complete
+    // runtime lifetime. There is no check/acquire window in which another
+    // process can create this supposedly fresh identity.
+    let write_lease =
+        acquire_new_session_write_lease(&replacement.runtime_factory, &started_session_id).await?;
 
     let factory = {
         let replacement = replacement.clone();
@@ -81,6 +147,7 @@ pub(crate) async fn start_app_server_session_with_runtime_replacement(
                 replacement,
                 connection_profile,
                 prepared,
+                write_lease,
                 app_server,
             )
             .await

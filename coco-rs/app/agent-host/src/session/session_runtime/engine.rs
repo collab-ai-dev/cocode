@@ -85,6 +85,8 @@ impl SessionRuntime {
     where
         F: FnOnce(&mut QueryEngineConfig),
     {
+        let auto_mode_rules =
+            super::permissions::auto_mode_rules_from_runtime_config(&self.runtime_config());
         let mut engine_config = self.current_engine_config().await;
         configure(&mut engine_config);
         self.prepare_live_permission_overlay(&mut engine_config)
@@ -98,7 +100,12 @@ impl SessionRuntime {
             Some(self.hook_resources.registry()),
         );
         let engine = self
-            .wire_engine(engine, None, EnginePersistenceMode::MainSession)
+            .wire_engine(
+                engine,
+                None,
+                EnginePersistenceMode::MainSession,
+                auto_mode_rules,
+            )
             .await;
         // Inject the in-prompt-shell Bash handle into the LIVE command registry
         // so skill / `ShellExpandingPromptHandler` markers route through the real
@@ -169,7 +176,10 @@ impl SessionRuntime {
         &self,
         request: super::SessionTurnEngineConfigRequest,
     ) -> super::SessionTurnEngineConfig {
-        let runtime_config = self.runtime_config().as_ref();
+        // One owned snapshot is captured at turn admission. Every config-derived
+        // decision below uses it, so a reload cannot tear one turn across two
+        // generations.
+        let runtime_config = self.runtime_config();
         let (allow_rules, deny_rules, ask_rules) =
             crate::permission_rule_loader::typed_permission_rules(&runtime_config.settings);
         let permission_rule_source_roots =
@@ -226,6 +236,7 @@ impl SessionRuntime {
                 }),
             system_prompt: request
                 .system_prompt
+                .map(coco_context::SystemPrompt::from_text)
                 .or_else(|| current_engine_config.system_prompt.clone()),
             streaming_tool_execution: runtime_config.loop_config.enable_streaming_tools,
             empty_response_nudge: runtime_config.loop_config.empty_response_nudge,
@@ -267,6 +278,9 @@ impl SessionRuntime {
 
         super::SessionTurnEngineConfig {
             config,
+            auto_mode_rules: super::permissions::auto_mode_rules_from_runtime_config(
+                &runtime_config,
+            ),
             model_runtime_source,
             model_id,
             turn_cwd,
@@ -282,7 +296,14 @@ impl SessionRuntime {
         let session_id = self.current_typed_session_id().await;
         let has_session_permission_bridge = self.turn_resources.permission_bridge().is_some();
         let engine = self
-            .build_engine_from_config(prepared.config, session_id, cancel, None)
+            .build_engine_from_config_with_persistence(
+                prepared.config,
+                session_id,
+                cancel,
+                None,
+                EnginePersistenceMode::MainSession,
+                prepared.auto_mode_rules,
+            )
             .await
             .with_model_runtime_source(prepared.model_runtime_source);
         super::SessionTurnEngine {
@@ -300,12 +321,15 @@ impl SessionRuntime {
         cancel: CancellationToken,
         app_state_override: Option<Arc<RwLock<ToolAppState>>>,
     ) -> QueryEngine {
+        let auto_mode_rules =
+            super::permissions::auto_mode_rules_from_runtime_config(&self.runtime_config());
         self.build_engine_from_config_with_persistence(
             config,
             session_id,
             cancel,
             app_state_override,
             EnginePersistenceMode::MainSession,
+            auto_mode_rules,
         )
         .await
     }
@@ -320,12 +344,15 @@ impl SessionRuntime {
         cancel: CancellationToken,
         app_state_override: Option<Arc<RwLock<ToolAppState>>>,
     ) -> QueryEngine {
+        let auto_mode_rules =
+            super::permissions::auto_mode_rules_from_runtime_config(&self.runtime_config());
         self.build_engine_from_config_with_persistence(
             config,
             session_id,
             cancel,
             app_state_override,
             EnginePersistenceMode::Fork,
+            auto_mode_rules,
         )
         .await
     }
@@ -337,6 +364,7 @@ impl SessionRuntime {
         cancel: CancellationToken,
         app_state_override: Option<Arc<RwLock<ToolAppState>>>,
         persistence: EnginePersistenceMode,
+        auto_mode_rules: coco_permissions::AutoModeRules,
     ) -> QueryEngine {
         // Top-level AppServer/headless session engines get the same live overlay as
         // the TUI main engine so a mid-cycle approval takes effect this cycle.
@@ -377,7 +405,7 @@ impl SessionRuntime {
         )
         .with_hook_execution_policy(self.execution_profile().hook_policy());
         let mut engine = self
-            .wire_engine(engine, app_state_override, persistence)
+            .wire_engine(engine, app_state_override, persistence, auto_mode_rules)
             .await;
         if isolate_file_read_state {
             let snapshot = self
@@ -403,6 +431,7 @@ impl SessionRuntime {
         mut engine: QueryEngine,
         app_state_override: Option<Arc<RwLock<ToolAppState>>>,
         persistence: EnginePersistenceMode,
+        auto_mode_rules: coco_permissions::AutoModeRules,
     ) -> QueryEngine {
         let app_state =
             app_state_override.unwrap_or_else(|| self.engine_state_resources.app_state().clone());
@@ -445,28 +474,6 @@ impl SessionRuntime {
                 );
             }
         }
-        // Build the classifier rules from settings (`auto_mode` is restricted
-        // to user/policy sources by the per-source validator). Previously this
-        // passed `::default()`, so allow/soft_deny/environment AND the
-        // classifier mode were all silently dropped.
-        let auto_mode_rules = self
-            .runtime_config()
-            .settings
-            .merged
-            .auto_mode
-            .as_ref()
-            .map(|c| coco_permissions::AutoModeRules {
-                allow: c.allow.clone(),
-                soft_deny: c.soft_deny.clone(),
-                environment: c.environment.clone(),
-                classifier_mode: c.classifier_mode,
-                classifier_unavailable_fail_open: c.classifier_unavailable_fail_open,
-                classify_all_shell: self
-                    .runtime_config()
-                    .settings
-                    .auto_mode_classify_all_shell_enabled(),
-            })
-            .unwrap_or_default();
         engine = engine.with_auto_mode(
             self.engine_state_resources.auto_mode_state().clone(),
             self.engine_state_resources.denial_tracker().clone(),

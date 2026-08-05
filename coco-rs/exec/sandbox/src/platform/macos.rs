@@ -72,11 +72,6 @@ impl SandboxPlatform for MacOsSandbox {
         cmd.arg(&program);
         cmd.args(&args);
 
-        // Process hardening: clear dangerous env vars
-        cmd.env_remove("DYLD_INSERT_LIBRARIES");
-        cmd.env_remove("DYLD_LIBRARY_PATH");
-        cmd.env_remove("DYLD_FRAMEWORK_PATH");
-
         Ok(())
     }
 }

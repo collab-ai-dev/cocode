@@ -46,10 +46,6 @@ use crate::engine_helpers::ProgressThrottle;
 use crate::engine_helpers::drain_one_progress;
 use crate::plan_mode_reminder::PlanModeReminder;
 
-#[cfg(test)]
-#[path = "engine_loop_state.test.rs"]
-mod tests;
-
 /// Alias for the iteration-transition signal. The Rust enum carrying these
 /// variants is [`crate::config::ContinueReason`] — defined there so the
 /// public [`crate::QueryResult::last_continue_reason`] field type stays
@@ -76,6 +72,32 @@ pub(crate) struct LoopAccumulator {
     /// doesn't need to scan `history` (which mid-run compaction can
     /// replace, invalidating any captured index).
     pub(crate) run_artifacts: RunArtifacts,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct QueryFailureStats {
+    pub(crate) total_usage: TokenUsage,
+    pub(crate) cost_tracker: CostTracker,
+    pub(crate) total_turns: i32,
+    pub(crate) duration_ms: i64,
+    pub(crate) duration_api_ms: i64,
+    pub(crate) permission_denials: Vec<coco_types::PermissionDenialInfo>,
+}
+
+impl QueryFailureStats {
+    pub(crate) fn capture(
+        &mut self,
+        acc: &LoopAccumulator,
+        turn_state: &LoopTurnState,
+        consts: &LoopConstants,
+    ) {
+        self.total_usage = acc.total_usage;
+        self.cost_tracker = acc.cost_tracker.clone();
+        self.total_turns = turn_state.turn;
+        self.duration_ms = consts.started_at.elapsed().as_millis() as i64;
+        self.duration_api_ms = acc.api_time_ms;
+        self.permission_denials = acc.permission_denials.clone();
+    }
 }
 
 /// Iteration state machine. Mutated at `continue` sites and at turn-start
@@ -657,3 +679,7 @@ impl QueryEngine {
         (acc, turn_state, services, consts)
     }
 }
+
+#[cfg(test)]
+#[path = "engine_loop_state.test.rs"]
+mod tests;

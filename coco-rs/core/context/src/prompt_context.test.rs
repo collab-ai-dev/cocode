@@ -10,7 +10,48 @@ fn literal_prompt_context_preserves_text() {
     assert_eq!(context.system_prompt(), "custom system");
     assert_eq!(context.sources.len(), 1);
     assert_eq!(context.sources[0].kind, PromptContextSourceKind::Literal);
+    assert_eq!(
+        context.sources[0].literal_source,
+        Some(PromptContextLiteralSource::ConfigOverride)
+    );
     assert_eq!(context.epoch.as_str().len(), 64);
+}
+
+#[test]
+fn literal_prompt_context_is_utf8_safely_bounded() {
+    let original = "界".repeat(MAX_LITERAL_SYSTEM_PROMPT_BYTES);
+    let context = PromptContext::build(PromptContextMode::literal(
+        PromptContextLiteralSource::Coordinator,
+        original.as_str(),
+    ));
+
+    assert!(context.system_prompt().len() <= MAX_LITERAL_SYSTEM_PROMPT_BYTES);
+    assert!(context.system_prompt().ends_with(LITERAL_TRUNCATED_MARKER));
+    assert!(context.sources[0].truncated);
+    assert_eq!(
+        context.sources[0].literal_source,
+        Some(PromptContextLiteralSource::Coordinator)
+    );
+    assert!(
+        context.sources[0].rendered_size_bytes
+            <= i64::try_from(MAX_LITERAL_SYSTEM_PROMPT_BYTES).expect("limit fits in i64")
+    );
+}
+
+#[test]
+fn compiled_prompt_context_bounds_without_flattening_cache_layout() {
+    let mut prompt = crate::SystemPrompt::new();
+    prompt.add_text("stable");
+    prompt.add_cache_breakpoint();
+    prompt.add_text("界".repeat(MAX_LITERAL_SYSTEM_PROMPT_BYTES));
+
+    let context = PromptContext::build(PromptContextMode::compiled(&prompt));
+    let parts = context.prompt.parts();
+
+    assert!(context.system_prompt().len() <= MAX_LITERAL_SYSTEM_PROMPT_BYTES);
+    assert_eq!(parts[0].cache_hint, crate::CacheHint::Breakpoint);
+    assert!(context.sources[0].truncated);
+    assert_eq!(context.sources[0].kind, PromptContextSourceKind::Compiled);
 }
 
 #[test]

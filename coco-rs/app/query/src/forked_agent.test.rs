@@ -72,6 +72,9 @@ fn test_for_label_carries_can_use_tool() {
 fn test_build_query_config_inherits_prompt_cache_and_sets_skip_cache_write() {
     let cache = CacheSafeParams {
         rendered_system_prompt: "system".into(),
+        system_prompt_blocks: vec![coco_types::CachedSystemPromptBlock::Text {
+            content: "system".into(),
+        }],
         model_id: "claude-opus-4-7".into(),
         provider: "anthropic".into(),
         active_shell_tool: coco_types::ActiveShellTool::Disabled,
@@ -109,6 +112,34 @@ fn test_build_query_config_inherits_prompt_cache_and_sets_skip_cache_write() {
     ));
 }
 
+#[test]
+fn cached_system_prompt_reconstructs_breakpoints() {
+    let cache = CacheSafeParams {
+        rendered_system_prompt: "stable\ndynamic".into(),
+        system_prompt_blocks: vec![
+            coco_types::CachedSystemPromptBlock::Text {
+                content: "stable".into(),
+            },
+            coco_types::CachedSystemPromptBlock::CacheBreakpoint,
+            coco_types::CachedSystemPromptBlock::Text {
+                content: "dynamic".into(),
+            },
+        ],
+        model_id: "model".into(),
+        provider: "provider".into(),
+        active_shell_tool: coco_types::ActiveShellTool::Disabled,
+        prompt_cache: None,
+        effort: None,
+        fork_context_messages: Vec::new(),
+    };
+
+    let prompt = system_prompt_from_cache(&cache);
+    let parts = prompt.parts();
+    assert_eq!(parts[0].cache_hint, coco_context::CacheHint::Breakpoint);
+    assert_eq!(parts[1].cache_hint, coco_context::CacheHint::Ephemeral);
+    assert_eq!(prompt.full_text(), cache.rendered_system_prompt);
+}
+
 /// Thinking parity: a cache-sharing fork mirrors the parent's captured
 /// effective effort so its wire thinking params match the parent's —
 /// thinking config keys Anthropic's messages-level cache (PR #18143).
@@ -117,6 +148,9 @@ fn test_build_query_config_mirrors_parent_effective_effort() {
     fn cache_with_effort(effort: Option<coco_types::ReasoningEffort>) -> CacheSafeParams {
         CacheSafeParams {
             rendered_system_prompt: "system".into(),
+            system_prompt_blocks: vec![coco_types::CachedSystemPromptBlock::Text {
+                content: "system".into(),
+            }],
             model_id: "claude-opus-4-7".into(),
             provider: "anthropic".into(),
             active_shell_tool: coco_types::ActiveShellTool::Disabled,

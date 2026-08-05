@@ -1250,6 +1250,39 @@ pub fn load_settings_with_roots(
     managed_path: &std::path::Path,
     enabled: &HashSet<SettingSource>,
 ) -> crate::Result<SettingsWithSource> {
+    load_settings_with_roots_inner(roots, flag_settings, user_path, managed_path, enabled, None)
+}
+
+/// Load settings as if `replacement_path` contained `replacement_value`.
+/// Used by the settings writer to validate every affected runtime before the
+/// proposed value is made durable.
+pub(crate) fn load_settings_with_roots_overriding_path(
+    roots: &SettingsRoots,
+    flag_settings: Option<&std::path::Path>,
+    user_path: &std::path::Path,
+    managed_path: &std::path::Path,
+    enabled: &HashSet<SettingSource>,
+    replacement_path: &std::path::Path,
+    replacement_value: &serde_json::Value,
+) -> crate::Result<SettingsWithSource> {
+    load_settings_with_roots_inner(
+        roots,
+        flag_settings,
+        user_path,
+        managed_path,
+        enabled,
+        Some((replacement_path, replacement_value)),
+    )
+}
+
+fn load_settings_with_roots_inner(
+    roots: &SettingsRoots,
+    flag_settings: Option<&std::path::Path>,
+    user_path: &std::path::Path,
+    managed_path: &std::path::Path,
+    enabled: &HashSet<SettingSource>,
+    replacement: Option<(&std::path::Path, &serde_json::Value)>,
+) -> crate::Result<SettingsWithSource> {
     use crate::ResultExt;
     use crate::global_config;
 
@@ -1276,7 +1309,18 @@ pub fn load_settings_with_roots(
         if !enabled.contains(source) {
             continue;
         }
-        if path.exists() {
+        if let Some((replacement_path, replacement_value)) = replacement
+            && replacement_path == path
+        {
+            merge_value(
+                &mut per_source,
+                &mut source_paths,
+                &mut merged,
+                *source,
+                path,
+                replacement_value.clone(),
+            )?;
+        } else if path.exists() {
             load_and_merge(
                 &mut per_source,
                 &mut source_paths,
@@ -1359,8 +1403,20 @@ fn load_and_merge(
     use crate::ResultExt;
     let contents = std::fs::read_to_string(path)
         .with_ctx_lazy(|| format!("failed to read settings file: {}", path.display()))?;
-    let mut value = crate::jsonc::parse_value(&contents)
+    let value = crate::jsonc::parse_value(&contents)
         .with_ctx_lazy(|| format!("failed to parse JSONC in settings file: {}", path.display()))?;
+    merge_value(per_source, source_paths, merged, source, path, value)
+}
+
+fn merge_value(
+    per_source: &mut HashMap<SettingSource, serde_json::Value>,
+    source_paths: &mut HashMap<SettingSource, std::path::PathBuf>,
+    merged: &mut serde_json::Value,
+    source: SettingSource,
+    path: &std::path::Path,
+    mut value: serde_json::Value,
+) -> crate::Result<()> {
+    use crate::ResultExt;
     reject_unsupported_settings_keys(&value)
         .with_ctx_lazy(|| format!("invalid settings file: {}", path.display()))?;
     // Strip malformed permission rules per-source (TS validation.ts) so one bad

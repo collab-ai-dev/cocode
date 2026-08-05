@@ -932,51 +932,52 @@ impl SandboxState {
             .ok()
     }
 
-    /// Apply platform sandbox enforcement to a `tokio::process::Command`.
-    /// One-shot helper that combines `command_snapshot` + platform-wrap so
-    /// callers outside the shell crate (PowerShell tool, future custom
-    /// runners) don't replicate the snapshot logic. Returns `Ok(false)`
-    /// if the command should run unsandboxed (excluded, bypass, sandbox
-    /// inactive, etc.); returns `Ok(true)` after the wrap is applied.
-    /// On platform-wrap failure (e.g., bwrap binary missing at exec
-    /// time), returns the [`crate::SandboxError`] — callers should
-    /// fail-closed and refuse to spawn the command unsandboxed.
-    pub fn try_wrap_command(
+    /// Replace only the program/arguments with the platform sandbox wrapper.
+    /// Callers must apply cwd, stdio, environment and process-group policy
+    /// afterwards, then finish with [`Self::apply_snapshot_env`].
+    pub fn wrap_snapshot_program_with_binds(
         &self,
         command: &str,
-        bypass: SandboxBypass,
-        cmd: &mut tokio::process::Command,
-    ) -> crate::error::Result<bool> {
-        self.try_wrap_command_with_binds(command, bypass, &[], cmd)
-    }
-
-    /// Same as [`Self::try_wrap_command`] but additionally bind-mounts
-    /// per-command writable paths (the sandbox tmpdir) into the
-    /// sandbox. Called by `coco_shell::ShellExecutor` so the
-    /// freshly-allocated `TempDir` is visible inside bwrap / Seatbelt.
-    pub fn try_wrap_command_with_binds(
-        &self,
-        command: &str,
-        bypass: SandboxBypass,
+        snap: &CommandSandboxSnapshot,
         extra_writable_binds: &[std::path::PathBuf],
         cmd: &mut tokio::process::Command,
     ) -> crate::error::Result<bool> {
-        let snap = self.command_snapshot(command, bypass);
-        let Some(config) = snap.config else {
+        let Some(config) = snap.config.as_ref() else {
             return Ok(false);
         };
         if !snap.should_wrap {
             return Ok(false);
         }
         self.platform.wrap_command(
-            &config,
+            config,
             command,
             &self.session_tag,
             extra_writable_binds,
             cmd,
         )?;
-        apply_sandbox_env(cmd, &config.unset_env_vars, &snap.proxy_env);
         Ok(true)
+    }
+
+    /// Apply sandbox-owned environment removals/overrides after the caller's
+    /// normal environment policy, so ordinary spawn configuration cannot
+    /// accidentally reintroduce a forbidden variable.
+    pub fn apply_snapshot_env(
+        &self,
+        snap: &CommandSandboxSnapshot,
+        cmd: &mut tokio::process::Command,
+    ) {
+        let Some(config) = snap.config.as_ref().filter(|_| snap.should_wrap) else {
+            return;
+        };
+        apply_sandbox_env(cmd, &config.unset_env_vars, &snap.proxy_env);
+        #[cfg(target_os = "macos")]
+        for key in [
+            "DYLD_INSERT_LIBRARIES",
+            "DYLD_LIBRARY_PATH",
+            "DYLD_FRAMEWORK_PATH",
+        ] {
+            cmd.env_remove(key);
+        }
     }
 
     /// Hot-reload sandbox configuration.

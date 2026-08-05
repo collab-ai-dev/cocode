@@ -116,6 +116,7 @@ impl ShellExecutor {
         command: &str,
         options: &ExecOptions,
     ) -> anyhow::Result<CommandResult> {
+        use tokio::io::AsyncReadExt;
         let effective_cwd = options
             .cwd_override
             .as_deref()
@@ -129,7 +130,14 @@ impl ShellExecutor {
         // path is passed to the provider (for cwd-file + TMPDIR) AND
         // to the platform wrap (for bwrap `--bind` / Seatbelt
         // file-write subpath).
-        let sandbox_tmp_dir: Option<tempfile::TempDir> = if should_use_sandbox(options, command) {
+        let sandbox_snapshot = options
+            .sandbox
+            .as_ref()
+            .map(|state| state.command_snapshot(command, options.sandbox_bypass));
+        let sandbox_tmp_dir: Option<tempfile::TempDir> = if sandbox_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.should_wrap)
+        {
             coco_sandbox::SandboxState::allocate_command_tmp_dir()
         } else {
             None
@@ -142,7 +150,10 @@ impl ShellExecutor {
         // Linux netns bridge: prepend the inner socat listeners (forwarding the
         // netns-local proxy ports to the bind-mounted host UDS) so the sandboxed
         // command's egress reaches the host proxy. No-op on macOS / no bridge.
-        if let Some(prefix) = sandbox_inner_bridge_prefix(options, command) {
+        if let Some(prefix) = sandbox_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.inner_command_prefix.as_deref())
+        {
             built.command_string = format!("{prefix}{}", built.command_string);
         }
         let merged_env = self
@@ -152,123 +163,147 @@ impl ShellExecutor {
 
         let mut cmd = tokio::process::Command::new(self.provider.shell_path());
         cmd.args(&spawn_args);
-        cmd.current_dir(&effective_cwd);
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
+        apply_sandbox_wrap(
+            &mut cmd,
+            command,
+            options,
+            sandbox_snapshot.as_ref(),
+            sandbox_tmp_path.as_deref(),
+        )?;
+        apply_spawn_policy(
+            &mut cmd,
+            &effective_cwd,
+            merged_env,
+            &options.remove_env,
+            options.sandbox.as_deref(),
+            sandbox_snapshot.as_ref(),
+        );
 
-        for (key, value) in merged_env {
-            cmd.env(key, value);
-        }
-        for key in &options.remove_env {
-            cmd.env_remove(key);
-        }
-
-        apply_sandbox_wrap(&mut cmd, command, options, sandbox_tmp_path.as_deref())?;
-
-        let child = cmd.kill_on_drop(true).spawn()?;
+        let mut child = cmd.kill_on_drop(true).spawn()?;
+        let mut process_group = coco_utils_pty::process_group::ProcessGroupGuard::for_child(&child);
+        let stdout_pipe = child.stdout.take();
+        let stderr_pipe = child.stderr.take();
+        let stdout_handle = tokio::spawn(async move {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = stdout_pipe {
+                let _ = pipe.read_to_end(&mut bytes).await;
+            }
+            bytes
+        });
+        let stderr_handle = tokio::spawn(async move {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = stderr_pipe {
+                let _ = pipe.read_to_end(&mut bytes).await;
+            }
+            bytes
+        });
         let timeout_ms = options.timeout_ms.unwrap_or(120_000);
         let timeout_duration = std::time::Duration::from_millis(timeout_ms as u64);
 
-        let wait_future = child.wait_with_output();
-        tokio::pin!(wait_future);
-
-        let output = if let Some(cancel) = &options.cancel {
+        enum WaitResult {
+            Exited(std::process::ExitStatus),
+            Failed(std::io::Error),
+            TimedOut,
+            Interrupted,
+        }
+        let wait = if let Some(cancel) = &options.cancel {
             tokio::select! {
                 biased;
                 () = cancel.cancelled() => {
-                    scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
-                    cleanup_cwd_file(&built.cwd_file_path);
-                    return Ok(CommandResult {
-                        exit_code: -1,
-                        stdout: String::new(),
-                        stdout_bytes: None,
-                        stderr: "Command interrupted".to_string(),
-                        stderr_bytes: None,
-                        new_cwd: None,
-                        timed_out: false,
-                        interrupted: true,
-                    });
+                    WaitResult::Interrupted
                 }
-                result = tokio::time::timeout(timeout_duration, &mut wait_future) => {
+                result = tokio::time::timeout(timeout_duration, child.wait()) => {
                     match result {
-                        Ok(Ok(output)) => output,
-                        Ok(Err(e)) => {
-                            scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
-                            cleanup_cwd_file(&built.cwd_file_path);
-                            return Err(e.into());
-                        }
-                        Err(_) => {
-                            scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
-                            cleanup_cwd_file(&built.cwd_file_path);
-                            return Ok(CommandResult {
-                                exit_code: -1,
-                                stdout: String::new(),
-                                stdout_bytes: None,
-                                stderr: format!("Command timed out after {timeout_ms}ms"),
-                                stderr_bytes: None,
-                                new_cwd: None,
-                                timed_out: true,
-                                interrupted: false,
-                            });
-                        }
+                        Ok(Ok(status)) => WaitResult::Exited(status),
+                        Ok(Err(error)) => WaitResult::Failed(error),
+                        Err(_) => WaitResult::TimedOut,
                     }
                 }
             }
         } else {
-            match tokio::time::timeout(timeout_duration, wait_future).await {
-                Ok(Ok(output)) => output,
-                Ok(Err(e)) => {
-                    scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
-                    cleanup_cwd_file(&built.cwd_file_path);
-                    return Err(e.into());
-                }
-                Err(_) => {
-                    scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
-                    cleanup_cwd_file(&built.cwd_file_path);
-                    return Ok(CommandResult {
-                        exit_code: -1,
-                        stdout: String::new(),
-                        stdout_bytes: None,
-                        stderr: format!("Command timed out after {timeout_ms}ms"),
-                        stderr_bytes: None,
-                        new_cwd: None,
-                        timed_out: true,
-                        interrupted: false,
-                    });
-                }
+            match tokio::time::timeout(timeout_duration, child.wait()).await {
+                Ok(Ok(status)) => WaitResult::Exited(status),
+                Ok(Err(error)) => WaitResult::Failed(error),
+                Err(_) => WaitResult::TimedOut,
             }
         };
 
-        record_seccomp_violation_if_killed(options, command, &output.status).await;
-
-        let stdout_raw = output.stdout;
-        let stderr_raw = output.stderr;
-        let stdout = String::from_utf8_lossy(&stdout_raw).to_string();
-        let stderr = String::from_utf8_lossy(&stderr_raw).to_string();
-
-        let new_cwd = if options.prevent_cwd_changes {
-            None
-        } else {
-            read_cwd_file(&built.cwd_file_path)
-        };
-        cleanup_cwd_file(&built.cwd_file_path);
-
-        if let Some(ref new) = new_cwd {
-            self.cwd = new.clone();
+        match &wait {
+            WaitResult::Exited(_) => {
+                let _ = process_group.kill();
+                process_group.disarm();
+            }
+            WaitResult::Failed(_) | WaitResult::TimedOut | WaitResult::Interrupted => {
+                terminate_child_tree(&mut child, &mut process_group).await;
+            }
         }
+        let stdout_raw = finish_reader(stdout_handle).await;
+        let stderr_raw = finish_reader(stderr_handle).await;
 
-        scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
+        match wait {
+            WaitResult::Failed(error) => {
+                scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
+                cleanup_tracked_cwd(&built.cwd_file_path);
+                Err(error.into())
+            }
+            WaitResult::TimedOut => {
+                scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
+                cleanup_tracked_cwd(&built.cwd_file_path);
+                Ok(CommandResult {
+                    exit_code: -1,
+                    stdout: String::from_utf8_lossy(&stdout_raw).into_owned(),
+                    stdout_bytes: Some(stdout_raw),
+                    stderr: format!("Command timed out after {timeout_ms}ms"),
+                    stderr_bytes: Some(stderr_raw),
+                    new_cwd: None,
+                    timed_out: true,
+                    interrupted: false,
+                })
+            }
+            WaitResult::Interrupted => {
+                scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
+                cleanup_tracked_cwd(&built.cwd_file_path);
+                Ok(CommandResult {
+                    exit_code: -1,
+                    stdout: String::from_utf8_lossy(&stdout_raw).into_owned(),
+                    stdout_bytes: Some(stdout_raw),
+                    stderr: "Command interrupted".to_string(),
+                    stderr_bytes: Some(stderr_raw),
+                    new_cwd: None,
+                    timed_out: false,
+                    interrupted: true,
+                })
+            }
+            WaitResult::Exited(status) => {
+                record_seccomp_violation_if_killed(options, command, &status).await;
+                let stdout = String::from_utf8_lossy(&stdout_raw).to_string();
+                let stderr = String::from_utf8_lossy(&stderr_raw).to_string();
 
-        Ok(CommandResult {
-            exit_code: output.status.code().unwrap_or(-1),
-            stdout,
-            stdout_bytes: Some(stdout_raw),
-            stderr,
-            stderr_bytes: Some(stderr_raw),
-            new_cwd,
-            timed_out: false,
-            interrupted: false,
-        })
+                let new_cwd = if options.prevent_cwd_changes {
+                    None
+                } else {
+                    read_tracked_cwd(&built.cwd_file_path)
+                };
+                cleanup_tracked_cwd(&built.cwd_file_path);
+
+                if let Some(ref new) = new_cwd {
+                    self.cwd = new.clone();
+                }
+
+                scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
+
+                Ok(CommandResult {
+                    exit_code: status.code().unwrap_or(-1),
+                    stdout,
+                    stdout_bytes: Some(stdout_raw),
+                    stderr,
+                    stderr_bytes: Some(stderr_raw),
+                    new_cwd,
+                    timed_out: false,
+                    interrupted: false,
+                })
+            }
+        }
     }
 
     /// Check command safety before execution.
@@ -307,7 +342,14 @@ impl ShellExecutor {
             .to_path_buf();
         let original_cwd = self.original_cwd.clone();
 
-        let sandbox_tmp_dir: Option<tempfile::TempDir> = if should_use_sandbox(options, command) {
+        let sandbox_snapshot = options
+            .sandbox
+            .as_ref()
+            .map(|state| state.command_snapshot(command, options.sandbox_bypass));
+        let sandbox_tmp_dir: Option<tempfile::TempDir> = if sandbox_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.should_wrap)
+        {
             coco_sandbox::SandboxState::allocate_command_tmp_dir()
         } else {
             None
@@ -320,7 +362,10 @@ impl ShellExecutor {
         // Linux netns bridge: prepend the inner socat listeners (forwarding the
         // netns-local proxy ports to the bind-mounted host UDS) so the sandboxed
         // command's egress reaches the host proxy. No-op on macOS / no bridge.
-        if let Some(prefix) = sandbox_inner_bridge_prefix(options, command) {
+        if let Some(prefix) = sandbox_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.inner_command_prefix.as_deref())
+        {
             built.command_string = format!("{prefix}{}", built.command_string);
         }
         let merged_env = self
@@ -330,20 +375,24 @@ impl ShellExecutor {
 
         let mut cmd = tokio::process::Command::new(self.provider.shell_path());
         cmd.args(&spawn_args);
-        cmd.current_dir(&effective_cwd);
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
-
-        for (key, value) in merged_env {
-            cmd.env(key, value);
-        }
-        for key in &options.remove_env {
-            cmd.env_remove(key);
-        }
-
-        apply_sandbox_wrap(&mut cmd, command, options, sandbox_tmp_path.as_deref())?;
+        apply_sandbox_wrap(
+            &mut cmd,
+            command,
+            options,
+            sandbox_snapshot.as_ref(),
+            sandbox_tmp_path.as_deref(),
+        )?;
+        apply_spawn_policy(
+            &mut cmd,
+            &effective_cwd,
+            merged_env,
+            &options.remove_env,
+            options.sandbox.as_deref(),
+            sandbox_snapshot.as_ref(),
+        );
 
         let mut child = cmd.kill_on_drop(true).spawn()?;
+        let mut process_group = coco_utils_pty::process_group::ProcessGroupGuard::for_child(&child);
 
         let stdout_bytes = Arc::new(AtomicI64::new(0));
         let stderr_bytes = Arc::new(AtomicI64::new(0));
@@ -406,12 +455,12 @@ impl ShellExecutor {
                         std::future::pending::<()>().await
                     }
                 } => {
-                    let _ = child.kill().await;
-                    let stdout_partial_bytes = stdout_handle.await.unwrap_or_default();
+                    terminate_child_tree(&mut child, &mut process_group).await;
+                    let stdout_partial_bytes = finish_reader(stdout_handle).await;
                     let stdout_partial = String::from_utf8_lossy(&stdout_partial_bytes).to_string();
-                    let stderr_partial = stderr_handle.await.unwrap_or_default();
+                    let stderr_partial = finish_reader(stderr_handle).await;
                     scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
-                    cleanup_cwd_file(&built.cwd_file_path);
+                    cleanup_tracked_cwd(&built.cwd_file_path);
                     return Ok(CommandResult {
                         exit_code: -1,
                         stdout: stdout_partial,
@@ -436,9 +485,11 @@ impl ShellExecutor {
                 () = tokio::time::sleep(progress_interval) => {
                     let elapsed = start.elapsed();
                     if elapsed > timeout_duration {
-                        let _ = child.kill().await;
+                        terminate_child_tree(&mut child, &mut process_group).await;
+                        let _ = finish_reader(stdout_handle).await;
+                        let _ = finish_reader(stderr_handle).await;
                         scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
-                        cleanup_cwd_file(&built.cwd_file_path);
+                        cleanup_tracked_cwd(&built.cwd_file_path);
                         return Ok(CommandResult {
                             exit_code: -1,
                             stdout: String::new(),
@@ -460,17 +511,29 @@ impl ShellExecutor {
             }
         };
 
-        let status = wait_result?;
-        let stdout_raw = stdout_handle.await.unwrap_or_default();
+        let status = match wait_result {
+            Ok(status) => status,
+            Err(error) => {
+                terminate_child_tree(&mut child, &mut process_group).await;
+                let _ = finish_reader(stdout_handle).await;
+                let _ = finish_reader(stderr_handle).await;
+                scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
+                cleanup_tracked_cwd(&built.cwd_file_path);
+                return Err(error.into());
+            }
+        };
+        let _ = process_group.kill();
+        process_group.disarm();
+        let stdout_raw = finish_reader(stdout_handle).await;
         let stdout = String::from_utf8_lossy(&stdout_raw).to_string();
-        let stderr = stderr_handle.await.unwrap_or_default();
+        let stderr = finish_reader(stderr_handle).await;
 
         let new_cwd = if options.prevent_cwd_changes {
             None
         } else {
-            read_cwd_file(&built.cwd_file_path)
+            read_tracked_cwd(&built.cwd_file_path)
         };
-        cleanup_cwd_file(&built.cwd_file_path);
+        cleanup_tracked_cwd(&built.cwd_file_path);
 
         if let Some(ref new) = new_cwd {
             self.cwd = new.clone();
@@ -533,15 +596,6 @@ impl ShellExecutor {
     }
 }
 
-fn should_use_sandbox(options: &ExecOptions, command: &str) -> bool {
-    let Some(state) = &options.sandbox else {
-        return false;
-    };
-    state
-        .command_snapshot(command, options.sandbox_bypass)
-        .should_wrap
-}
-
 /// Record a Linux seccomp SIGSYS kill as a sandbox violation so the model sees
 /// it in the `<sandbox_violations>` annotation. No-op off Linux / no sandbox.
 async fn record_seccomp_violation_if_killed(
@@ -564,14 +618,7 @@ async fn record_seccomp_violation_if_killed(
 
 /// Linux netns-bridge shell prefix for a sandboxed command, derived from the
 /// live sandbox snapshot. `None` on macOS / when no bridge is active.
-fn sandbox_inner_bridge_prefix(options: &ExecOptions, command: &str) -> Option<String> {
-    options.sandbox.as_ref().and_then(|s| {
-        s.command_snapshot(command, options.sandbox_bypass)
-            .inner_command_prefix
-    })
-}
-
-fn read_cwd_file(path: &Path) -> Option<PathBuf> {
+pub fn read_tracked_cwd(path: &Path) -> Option<PathBuf> {
     let contents = std::fs::read_to_string(path).ok()?;
     let trimmed = contents.trim();
     if trimmed.is_empty() {
@@ -581,7 +628,7 @@ fn read_cwd_file(path: &Path) -> Option<PathBuf> {
     if buf.is_absolute() { Some(buf) } else { None }
 }
 
-fn cleanup_cwd_file(path: &Path) {
+pub fn cleanup_tracked_cwd(path: &Path) {
     if let Err(err) = std::fs::remove_file(path)
         && err.kind() != std::io::ErrorKind::NotFound
     {
@@ -603,18 +650,63 @@ fn apply_sandbox_wrap(
     cmd: &mut tokio::process::Command,
     command: &str,
     options: &ExecOptions,
+    snapshot: Option<&coco_sandbox::CommandSandboxSnapshot>,
     sandbox_tmp_dir: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
-    let Some(state) = &options.sandbox else {
+    let (Some(state), Some(snapshot)) = (&options.sandbox, snapshot) else {
         return Ok(());
     };
     let binds: Vec<PathBuf> = sandbox_tmp_dir
         .map(|p| vec![p.to_path_buf()])
         .unwrap_or_default();
     state
-        .try_wrap_command_with_binds(command, options.sandbox_bypass, &binds, cmd)
+        .wrap_snapshot_program_with_binds(command, snapshot, &binds, cmd)
         .map_err(|e| anyhow::anyhow!("sandbox wrap failed: {e}"))?;
     Ok(())
+}
+
+fn apply_spawn_policy(
+    cmd: &mut tokio::process::Command,
+    cwd: &Path,
+    env: impl IntoIterator<Item = (String, String)>,
+    remove_env: &[String],
+    sandbox: Option<&coco_sandbox::SandboxState>,
+    snapshot: Option<&coco_sandbox::CommandSandboxSnapshot>,
+) {
+    cmd.current_dir(cwd);
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    #[cfg(unix)]
+    cmd.process_group(0);
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
+    for key in remove_env {
+        cmd.env_remove(key);
+    }
+    if let (Some(sandbox), Some(snapshot)) = (sandbox, snapshot) {
+        sandbox.apply_snapshot_env(snapshot, cmd);
+    }
+}
+
+async fn terminate_child_tree(
+    child: &mut tokio::process::Child,
+    process_group: &mut coco_utils_pty::process_group::ProcessGroupGuard,
+) {
+    let _ = process_group.kill();
+    let _ = child.kill().await;
+    process_group.disarm();
+}
+
+async fn finish_reader<T: Default + Send + 'static>(mut handle: tokio::task::JoinHandle<T>) -> T {
+    match tokio::time::timeout(std::time::Duration::from_secs(1), &mut handle).await {
+        Ok(Ok(value)) => value,
+        Ok(Err(_)) => T::default(),
+        Err(_) => {
+            handle.abort();
+            T::default()
+        }
+    }
 }
 
 /// Best-effort post-command scrub of planted bare-repo files in `cwd` /

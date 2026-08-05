@@ -97,7 +97,7 @@ fn collect_md_recursive(root: &Path, dir: &Path, out: &mut Vec<team_sync::PushEn
 /// official-marketplace auto-install). No-ops when team memory is
 /// disabled or the repo has no `origin` slug.
 pub fn spawn_for_session(session: &SessionHandle, cwd: PathBuf, config_home: PathBuf) {
-    spawn_with_config(session.runtime_config(), cwd, config_home);
+    spawn_with_config(&session.runtime_config(), cwd, config_home);
 }
 
 fn spawn_with_config(runtime_config: &RuntimeConfig, cwd: PathBuf, config_home: PathBuf) {

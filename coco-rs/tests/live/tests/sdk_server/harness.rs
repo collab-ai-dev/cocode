@@ -298,7 +298,7 @@ pub async fn build_live_server_with_options(
     );
     let runner = Arc::new(SessionTurnExecutor::new(
         runtime_factory_cli.max_turns.or(Some(8)),
-        Some(system_prompt),
+        Some(system_prompt.full_text()),
     ));
 
     // Wire the in-memory transport pair.

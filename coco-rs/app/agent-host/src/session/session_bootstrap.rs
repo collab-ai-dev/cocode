@@ -40,7 +40,7 @@ use coco_app_runtime::ProjectServices;
 /// these through into [`crate::session_runtime::SessionRuntimeBuildOpts`].
 pub struct EngineResources {
     pub tools: Arc<ToolRegistry>,
-    pub system_prompt: String,
+    pub system_prompt: coco_context::SystemPrompt,
     pub model_id: String,
     pub provider_api: Option<ProviderApi>,
     pub startup: StartupPermissionState,
@@ -181,7 +181,7 @@ pub async fn install_session_integrations(
         SessionLspIntegration::Enabled => {
             build_lsp_handle_if_enabled(
                 process_runtime,
-                session.runtime_config(),
+                &session.runtime_config(),
                 &global_config::config_home(),
                 session.project_root(),
             )
@@ -301,7 +301,7 @@ pub fn build_engine_resources(
         permission_mode = ?startup.mode,
         bypass_available = startup.bypass_available,
         sandbox_mode = ?runtime_config.sandbox.mode,
-        system_prompt_chars = system_prompt.len(),
+        system_prompt_chars = system_prompt.full_text().len(),
         "engine resources built"
     );
     tracing::debug!(
@@ -679,7 +679,7 @@ pub async fn bootstrap_session_mcp(
         .with_skill_bridge(
             session.skill_manager(),
             skill_cache.clone(),
-            Arc::clone(session.runtime_config()),
+            session.runtime_config(),
         );
     session.attach_mcp_manager(manager.clone()).await;
     session.attach_mcp_handle(Arc::new(adapter)).await;

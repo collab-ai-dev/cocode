@@ -23,6 +23,7 @@ pub use engine::TranscribeParams;
 pub use engine::Transcript;
 pub use engine::VoiceCapabilities;
 pub use engine::VoiceEngine;
+pub use engine::VoiceProgress;
 pub use error::VoiceError;
 pub use factory::create_voice_engine;
 pub use models::find_model;
@@ -40,12 +41,12 @@ use coco_config::VoiceConfig;
 
 /// Download the configured whisper weights (the explicit `/voice-config
 /// download` path — the app runner calls this). Verifies the pinned checksum
-/// for a known model and forwards progress to `events` as
-/// [`VoiceEvent::Download`]. Available without the `local-voice` feature so
+/// for a known model and forwards operation-scoped progress to `events`.
+/// Available without the `local-voice` feature so
 /// weights can be pre-staged. Returns the installed path.
 pub async fn download_whisper_model(
     config: &LocalWhisperConfig,
-    events: Option<tokio::sync::mpsc::Sender<VoiceEvent>>,
+    events: Option<tokio::sync::mpsc::Sender<VoiceProgress>>,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<std::path::PathBuf, VoiceError> {
     download::download_model(config, events, cancel).await

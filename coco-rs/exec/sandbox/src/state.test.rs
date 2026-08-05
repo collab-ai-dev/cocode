@@ -201,6 +201,40 @@ fn test_apply_sandbox_env_unsets_credentials_and_sets_proxy_env() {
     }));
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn test_apply_snapshot_env_removes_dyld_env_vars() {
+    let state = make_active_state();
+    let snapshot = state.command_snapshot("echo test", SandboxBypass::No);
+    let mut cmd = tokio::process::Command::new("/bin/echo");
+    for key in [
+        "DYLD_INSERT_LIBRARIES",
+        "DYLD_LIBRARY_PATH",
+        "DYLD_FRAMEWORK_PATH",
+    ] {
+        cmd.env(key, "unsafe");
+    }
+
+    state.apply_snapshot_env(&snapshot, &mut cmd);
+
+    let envs: HashMap<_, _> = cmd
+        .as_std()
+        .get_envs()
+        .map(|(key, value)| (key.to_os_string(), value.map(std::ffi::OsStr::to_os_string)))
+        .collect();
+    for key in [
+        "DYLD_INSERT_LIBRARIES",
+        "DYLD_LIBRARY_PATH",
+        "DYLD_FRAMEWORK_PATH",
+    ] {
+        assert!(
+            envs.get(&std::ffi::OsString::from(key))
+                .is_some_and(Option::is_none),
+            "{key} should be removed"
+        );
+    }
+}
+
 #[tokio::test]
 async fn test_violation_count() {
     let state = SandboxState::disabled();

@@ -52,6 +52,32 @@ fn system_prompt_context_message_carries_prompt_parts_metadata() {
     assert_eq!(parts[0]["cache_hint"], "ephemeral");
 }
 
+#[test]
+fn compiled_system_prompt_preserves_cache_breakpoints() {
+    let mut prompt = coco_context::SystemPrompt::new();
+    prompt.add_text("stable identity");
+    prompt.add_cache_breakpoint();
+    prompt.add_text("dynamic context");
+    let prompt_context =
+        coco_context::PromptContext::build(coco_context::PromptContextMode::compiled(&prompt));
+
+    let message = system_message_from_prompt_context(&prompt_context);
+    let LlmMessage::System {
+        provider_options: Some(options),
+        ..
+    } = message
+    else {
+        panic!("expected system message with provider options");
+    };
+    let parts = options
+        .get(coco_inference::PROMPT_LAYOUT_NAMESPACE)
+        .and_then(|namespace| namespace.get("system_parts"))
+        .and_then(serde_json::Value::as_array)
+        .expect("system_parts array");
+    assert_eq!(parts[0]["cache_hint"], "breakpoint");
+    assert_eq!(parts[1]["cache_hint"], "ephemeral");
+}
+
 fn make_tool_result(
     tool_use_id: &str,
     body: &str,

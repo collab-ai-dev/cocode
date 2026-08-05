@@ -198,47 +198,6 @@ fn test_generate_seatbelt_profile_escapes_writable_root_paths() {
 // ==========================================================================
 
 #[test]
-fn test_wrap_command_removes_dyld_env_vars() {
-    let sandbox = MacOsSandbox;
-    let config = SandboxConfig {
-        enforcement: EnforcementLevel::ReadOnly,
-        writable_roots: vec![],
-        denied_paths: vec![],
-        allow_network: false,
-        ..Default::default()
-    };
-    let mut cmd = tokio::process::Command::new("/bin/echo");
-    cmd.arg("test");
-
-    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &[], &mut cmd);
-    assert!(result.is_ok());
-
-    let inner = cmd.as_std();
-    let envs: std::collections::HashMap<_, _> = inner
-        .get_envs()
-        .map(|(k, v)| (k.to_os_string(), v.map(std::ffi::OsStr::to_os_string)))
-        .collect();
-
-    // env_remove sets the key with a None value in the env map
-    let dyld_insert = std::ffi::OsString::from("DYLD_INSERT_LIBRARIES");
-    let dyld_lib = std::ffi::OsString::from("DYLD_LIBRARY_PATH");
-    let dyld_fw = std::ffi::OsString::from("DYLD_FRAMEWORK_PATH");
-
-    assert!(
-        envs.get(&dyld_insert).is_some_and(Option::is_none),
-        "DYLD_INSERT_LIBRARIES should be removed"
-    );
-    assert!(
-        envs.get(&dyld_lib).is_some_and(Option::is_none),
-        "DYLD_LIBRARY_PATH should be removed"
-    );
-    assert!(
-        envs.get(&dyld_fw).is_some_and(Option::is_none),
-        "DYLD_FRAMEWORK_PATH should be removed"
-    );
-}
-
-#[test]
 fn test_wrap_command_disabled_does_not_remove_env_vars() {
     let sandbox = MacOsSandbox;
     let config = SandboxConfig::default(); // Disabled

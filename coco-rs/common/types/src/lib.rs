@@ -87,7 +87,8 @@ pub use attachment_kind::{
 // Prompt-cache shared types (consumed by services/inference + app/query;
 // adapter mirrors live in vercel-ai-anthropic — see prompt-cache-design.md §7)
 pub use cache::{
-    AccountKind, BetaCapability, CacheScope, CacheTtl, PromptCacheConfig, PromptCacheMode,
+    AccountKind, BetaCapability, CacheScope, CacheTtl, CachedSystemPromptBlock, PromptCacheConfig,
+    PromptCacheMode,
 };
 
 // Agent types

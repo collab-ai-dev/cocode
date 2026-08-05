@@ -10,24 +10,19 @@ use std::sync::Arc;
 use coco_config::VoiceBackend;
 use coco_config::VoiceConfig;
 use coco_inference::TranscriptionModelV4;
-use tokio::sync::mpsc;
 
 use crate::engine::VoiceEngine;
 use crate::error::VoiceError;
 use crate::remote::RemoteOpenAiEngine;
-use crate::session::VoiceEvent;
 
 /// Build the configured voice engine.
 ///
 /// `remote_handle` is the pre-resolved OpenAI-wire transcription model, injected
 /// by app/cli bootstrap (so provider/auth concerns stay in the provider crate).
-/// It is required for the `Remote` backend and ignored for `Local`. `events` is
-/// the voice event stream the local backend reports download progress on
-/// (ignored by the remote backend).
+/// It is required for the `Remote` backend and ignored for `Local`.
 pub fn create_voice_engine(
     config: &VoiceConfig,
     remote_handle: Option<Arc<dyn TranscriptionModelV4>>,
-    events: Option<mpsc::Sender<VoiceEvent>>,
 ) -> Result<Arc<dyn VoiceEngine>, VoiceError> {
     match config.backend {
         VoiceBackend::Remote => {
@@ -40,27 +35,22 @@ pub fn create_voice_engine(
             })?;
             Ok(Arc::new(RemoteOpenAiEngine::new(handle)))
         }
-        VoiceBackend::Local => create_local_engine(config, events),
+        VoiceBackend::Local => create_local_engine(config),
     }
 }
 
 /// Dispatch the on-device backend on `local.engine`. A closed match, so adding
 /// a new [`coco_config::LocalSttEngine`] variant is a compile error until wired.
-fn create_local_engine(
-    config: &VoiceConfig,
-    events: Option<mpsc::Sender<VoiceEvent>>,
-) -> Result<Arc<dyn VoiceEngine>, VoiceError> {
+fn create_local_engine(config: &VoiceConfig) -> Result<Arc<dyn VoiceEngine>, VoiceError> {
     match config.local.engine {
         coco_config::LocalSttEngine::Whisper => {
             #[cfg(feature = "local-voice")]
             {
-                let engine =
-                    crate::local::LocalWhisperEngine::new(config.local.whisper.clone(), events);
+                let engine = crate::local::LocalWhisperEngine::new(config.local.whisper.clone());
                 Ok(Arc::new(engine))
             }
             #[cfg(not(feature = "local-voice"))]
             {
-                let _ = events;
                 Err(VoiceError::FeatureNotEnabled("local"))
             }
         }

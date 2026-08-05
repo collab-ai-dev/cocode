@@ -89,6 +89,7 @@ pub use config::SessionBootstrap;
 pub use engine::QueryEngine;
 pub use engine_compaction::ManualCompactRequest;
 pub use engine_live_rules::EngineLiveRulesHandle;
+pub use engine_session::QueryFailure;
 pub use helpers::queued_command_to_attachment;
 pub use helpers::queued_command_to_message;
 pub use helpers::wrap_steering_messages_for_api;

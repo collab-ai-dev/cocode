@@ -47,7 +47,7 @@ impl coco_app_runtime::BootstrapSource for IsolatedTestBootstrapSource {
                 runtime_config: Arc::clone(&self.runtime_config),
                 tools: Arc::new(coco_tool_runtime::ToolRegistry::new()),
                 model_id: "claude-opus-4-7".to_string(),
-                system_prompt: "sdk lifecycle conformance test".to_string(),
+                system_prompt: "sdk lifecycle conformance test".into(),
                 permission_mode_availability: coco_types::PermissionModeAvailability::default(),
                 permission_mode: coco_types::PermissionMode::default(),
                 command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(

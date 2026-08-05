@@ -74,8 +74,10 @@ pub async fn fork_resume_plan_for_runtime_session(
     let working_dir = session.original_cwd().clone();
     let memory_base = session.session_manager_handle().memory_base().to_path_buf();
     tokio::task::spawn_blocking(move || {
+        use coco_session::SessionLeaseStore as _;
+
         let store = coco_session::TranscriptStore::new(std::sync::Arc::new(
-            coco_paths::ProjectPaths::new(memory_base, &working_dir),
+            coco_paths::ProjectPaths::new(memory_base.clone(), &working_dir),
         ));
         let source_path = store.transcript_path(source_id.as_str());
         if !coco_session::recovery::can_resume_session(&source_path) {
@@ -84,15 +86,26 @@ pub async fn fork_resume_plan_for_runtime_session(
             );
         }
         let dest_id = coco_types::SessionId::generate();
+        let _fork_lease = store.require_write_lease(dest_id.as_str())?;
+        if coco_session::storage::resolve_session_file_path(&memory_base, dest_id.as_str(), None)?
+            .is_some()
+        {
+            anyhow::bail!("fork destination session id {dest_id} already exists");
+        }
         let dest_path = store.transcript_path(dest_id.as_str());
-        coco_session::recovery::fork_conversation(&source_path, &dest_path, dest_id.as_str())
-            .map_err(|error| {
-                anyhow::anyhow!(
-                    "fork copy {} -> {} failed: {error}",
-                    source_path.display(),
-                    dest_path.display()
-                )
-            })?;
+        coco_session::recovery::fork_conversation(
+            &source_path,
+            &dest_path,
+            dest_id.as_str(),
+            &working_dir,
+        )
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "fork copy {} -> {} failed: {error}",
+                source_path.display(),
+                dest_path.display()
+            )
+        })?;
         let conversation = coco_session::recovery::load_conversation_for_resume(&dest_path)?;
         let prior_messages = conversation.messages.clone();
         Ok(ResumePlan {

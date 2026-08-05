@@ -121,6 +121,7 @@ async fn test_advance_blocks_on_fatal_provider_error() {
         MockPort::new(GoalTurnOutcome::ProviderError {
             kind: ProviderErrorKind::Fatal,
             message: "auth failed".to_string(),
+            usage: coco_goals::UsageDelta::default(),
         }),
         Arc::new(InMemoryEvidenceStore::new()),
     );
@@ -138,6 +139,7 @@ async fn test_advance_waits_on_retryable_provider_error() {
         MockPort::new(GoalTurnOutcome::ProviderError {
             kind: ProviderErrorKind::Retryable,
             message: "429".to_string(),
+            usage: coco_goals::UsageDelta::default(),
         }),
         Arc::new(InMemoryEvidenceStore::new()),
     );

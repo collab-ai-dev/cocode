@@ -116,7 +116,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             max_turns: config.max_turns,
             total_token_budget: None,
             prompt_cache: config.prompt_cache.clone(),
-            system_prompt: Some(config.system_prompt),
+            system_prompt: Some(config.system_prompt.into()),
             append_system_prompt: None,
             model_id: engine_model_id,
             permission_mode,

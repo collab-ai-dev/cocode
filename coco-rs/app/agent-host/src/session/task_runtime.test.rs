@@ -55,6 +55,45 @@ impl coco_sandbox::SandboxPlatform for FailingSandboxPlatform {
     }
 }
 
+#[cfg(not(windows))]
+#[derive(Clone, Default)]
+struct RecordingSandboxPlatform {
+    wrapped: Arc<std::sync::atomic::AtomicBool>,
+    writable_bind_count: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[cfg(not(windows))]
+impl coco_sandbox::SandboxPlatform for RecordingSandboxPlatform {
+    fn available(&self) -> bool {
+        true
+    }
+
+    fn wrap_command(
+        &self,
+        _config: &coco_sandbox::SandboxConfig,
+        _command: &str,
+        _session_tag: &str,
+        extra_writable_binds: &[std::path::PathBuf],
+        cmd: &mut tokio::process::Command,
+    ) -> coco_sandbox::error::Result<()> {
+        self.wrapped
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.writable_bind_count.store(
+            extra_writable_binds.len(),
+            std::sync::atomic::Ordering::Release,
+        );
+        let program = cmd.as_std().get_program().to_os_string();
+        let args = cmd
+            .as_std()
+            .get_args()
+            .map(std::ffi::OsStr::to_os_string)
+            .collect::<Vec<_>>();
+        *cmd = tokio::process::Command::new(program);
+        cmd.args(args);
+        Ok(())
+    }
+}
+
 async fn insert_background_shell(rt: &TaskRuntime, issuing_agent: Option<&str>) -> String {
     insert_background_shell_with_output(rt, issuing_agent, None).await
 }
@@ -1066,8 +1105,9 @@ async fn read_terminal_outputs_returns_disk_content() {
         .read_terminal_outputs(&task_id)
         .await
         .expect("must succeed");
-    assert!(outputs.stdout.contains("line1"));
-    assert!(outputs.stdout.contains("line2"));
+    let stdout = String::from_utf8_lossy(&outputs.stdout);
+    assert!(stdout.contains("line1"));
+    assert!(stdout.contains("line2"));
     assert!(outputs.stderr.is_empty(), "merged into stdout in fg path");
     assert!(
         !outputs.interrupted,
@@ -1107,6 +1147,9 @@ async fn shell_spawn_runs_command_and_marks_completed() {
         .spawn_shell_task(ShellTaskRequest {
             command: "echo hello-bg".into(),
             shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+            cwd: std::env::temp_dir(),
+            original_cwd: std::env::temp_dir(),
+            parent_cancel: tokio_util::sync::CancellationToken::new(),
             start_mode: coco_tool_runtime::ShellTaskStartMode::Background,
             timeout_ms: Some(5_000),
             description: "echo test".into(),
@@ -1147,6 +1190,9 @@ async fn shell_spawn_propagates_nonzero_exit_as_failed() {
         .spawn_shell_task(ShellTaskRequest {
             command: "exit 7".into(),
             shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+            cwd: std::env::temp_dir(),
+            original_cwd: std::env::temp_dir(),
+            parent_cancel: tokio_util::sync::CancellationToken::new(),
             start_mode: coco_tool_runtime::ShellTaskStartMode::Background,
             timeout_ms: Some(5_000),
             description: "fail".into(),
@@ -1201,6 +1247,9 @@ async fn shell_spawn_sandbox_wrap_failure_does_not_run_command() {
         .spawn_shell_task(ShellTaskRequest {
             command,
             shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+            cwd: std::env::temp_dir(),
+            original_cwd: std::env::temp_dir(),
+            parent_cancel: tokio_util::sync::CancellationToken::new(),
             start_mode: coco_tool_runtime::ShellTaskStartMode::Background,
             timeout_ms: Some(5_000),
             description: "sandbox fail".into(),
@@ -1237,6 +1286,82 @@ async fn shell_spawn_sandbox_wrap_failure_does_not_run_command() {
 
 #[cfg(not(windows))]
 #[tokio::test]
+async fn foreground_provider_shell_preserves_sandbox_and_reports_cwd() {
+    let rt = rt();
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let nested = dir.path().join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    let platform = RecordingSandboxPlatform::default();
+    let observation = platform.clone();
+    let sandbox_state = Arc::new(coco_sandbox::SandboxState::new(
+        coco_sandbox::EnforcementLevel::WorkspaceWrite,
+        coco_sandbox::SandboxSettings::enabled(),
+        coco_sandbox::SandboxConfig {
+            enforcement: coco_sandbox::EnforcementLevel::WorkspaceWrite,
+            writable_roots: vec![coco_sandbox::WritableRoot::new(dir.path())],
+            allow_network: true,
+            ..Default::default()
+        },
+        Box::new(platform),
+    ));
+    let shell = coco_shell::get_shell(
+        coco_shell::ShellType::Bash,
+        Some(std::path::Path::new("/bin/bash")),
+    )
+    .expect("bash available");
+    let provider = Arc::new(coco_shell::BashProvider::from_shell(shell));
+
+    let task_id = rt
+        .spawn_shell_task(ShellTaskRequest {
+            command: "cd nested && printf provider-output".into(),
+            shell_kind: coco_tool_runtime::ShellTaskKind::Provider(provider),
+            cwd: dir.path().to_path_buf(),
+            original_cwd: dir.path().to_path_buf(),
+            parent_cancel: CancellationToken::new(),
+            start_mode: coco_tool_runtime::ShellTaskStartMode::Foreground,
+            timeout_ms: Some(5_000),
+            description: "provider sandbox cwd".into(),
+            tool_use_id: None,
+            issuing_agent: None,
+            progress_tx: None,
+            progress_throttle_ms: 1_000,
+            auto_detach_ms: None,
+            kill_on_timeout: true,
+            sandbox_state: Some(sandbox_state),
+            sandbox_bypass: coco_sandbox::SandboxBypass::No,
+        })
+        .await
+        .expect("spawn provider task");
+    let signal = rt
+        .subscribe_terminal(&task_id)
+        .await
+        .expect("terminal signal");
+    tokio::time::timeout(std::time::Duration::from_secs(5), signal.await_terminal())
+        .await
+        .expect("provider task terminates");
+    let outputs = rt.read_terminal_outputs(&task_id).await.unwrap();
+
+    assert_eq!(
+        String::from_utf8(outputs.stdout).unwrap(),
+        "provider-output"
+    );
+    assert_eq!(outputs.exit_code, Some(0));
+    assert_eq!(outputs.new_cwd.as_deref(), Some(nested.as_path()));
+    assert!(
+        observation
+            .wrapped
+            .load(std::sync::atomic::Ordering::Acquire)
+    );
+    assert!(
+        observation
+            .writable_bind_count
+            .load(std::sync::atomic::Ordering::Acquire)
+            > 0
+    );
+}
+
+#[cfg(not(windows))]
+#[tokio::test]
 async fn shell_spawn_threads_tool_use_id_and_agent_id_into_notification() {
     let sink = CapturingSink::default();
     let captured = sink.captured.clone();
@@ -1246,6 +1371,9 @@ async fn shell_spawn_threads_tool_use_id_and_agent_id_into_notification() {
         .spawn_shell_task(ShellTaskRequest {
             command: "true".into(),
             shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+            cwd: std::env::temp_dir(),
+            original_cwd: std::env::temp_dir(),
+            parent_cancel: tokio_util::sync::CancellationToken::new(),
             start_mode: coco_tool_runtime::ShellTaskStartMode::Background,
             timeout_ms: Some(5_000),
             description: "noop".into(),
@@ -1295,6 +1423,9 @@ async fn foreground_shell_completion_is_silent_until_read() {
         .spawn_shell_task(ShellTaskRequest {
             command: "echo hello-fg".into(),
             shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+            cwd: std::env::temp_dir(),
+            original_cwd: std::env::temp_dir(),
+            parent_cancel: tokio_util::sync::CancellationToken::new(),
             start_mode: coco_tool_runtime::ShellTaskStartMode::Foreground,
             timeout_ms: Some(5_000),
             description: "foreground echo".into(),
@@ -1331,7 +1462,7 @@ async fn foreground_shell_completion_is_silent_until_read() {
     );
 
     let outputs = rt.read_terminal_outputs(&task_id).await.unwrap();
-    assert!(outputs.stdout.contains("hello-fg"));
+    assert!(String::from_utf8_lossy(&outputs.stdout).contains("hello-fg"));
     assert_eq!(outputs.exit_code, Some(0));
 
     let after_read = rt.get_task_status(&task_id).await.unwrap();
@@ -1356,6 +1487,9 @@ async fn shell_stop_suppresses_model_notification() {
         .spawn_shell_task(ShellTaskRequest {
             command: "sleep 5".into(),
             shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+            cwd: std::env::temp_dir(),
+            original_cwd: std::env::temp_dir(),
+            parent_cancel: tokio_util::sync::CancellationToken::new(),
             start_mode: coco_tool_runtime::ShellTaskStartMode::Background,
             timeout_ms: Some(10_000),
             description: "sleep".into(),
@@ -1597,6 +1731,9 @@ async fn shell_spawn_persists_exit_code_for_terminal_outputs() {
         .spawn_shell_task(ShellTaskRequest {
             command: "exit 42".into(),
             shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+            cwd: std::env::temp_dir(),
+            original_cwd: std::env::temp_dir(),
+            parent_cancel: tokio_util::sync::CancellationToken::new(),
             start_mode: coco_tool_runtime::ShellTaskStartMode::Foreground,
             timeout_ms: Some(5_000),
             description: "exit-42".into(),
@@ -1629,6 +1766,107 @@ async fn shell_spawn_persists_exit_code_for_terminal_outputs() {
     assert!(!outputs.interrupted, "natural exit is not 'interrupted'");
 }
 
+#[cfg(not(windows))]
+#[tokio::test]
+async fn foreground_shell_preserves_stdout_stderr_and_cwd() {
+    let rt = rt();
+    let cwd = tempfile::tempdir().expect("tempdir");
+    let task_id = rt
+        .spawn_shell_task(ShellTaskRequest {
+            command: "printf stdout-value; printf stderr-value >&2; pwd".into(),
+            shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+            cwd: cwd.path().to_path_buf(),
+            original_cwd: cwd.path().to_path_buf(),
+            parent_cancel: CancellationToken::new(),
+            start_mode: coco_tool_runtime::ShellTaskStartMode::Foreground,
+            timeout_ms: Some(5_000),
+            description: "stream separation".into(),
+            tool_use_id: None,
+            issuing_agent: None,
+            progress_tx: None,
+            progress_throttle_ms: 1_000,
+            auto_detach_ms: None,
+            kill_on_timeout: true,
+            sandbox_state: None,
+            sandbox_bypass: coco_sandbox::SandboxBypass::No,
+        })
+        .await
+        .expect("spawn");
+    let signal = rt.subscribe_terminal(&task_id).await.expect("signal");
+    signal.await_terminal().await;
+    let output = rt.read_terminal_outputs(&task_id).await.expect("outputs");
+
+    assert!(String::from_utf8_lossy(&output.stdout).contains("stdout-value"));
+    let expected_cwd = cwd.path().to_string_lossy();
+    assert!(String::from_utf8_lossy(&output.stdout).contains(expected_cwd.as_ref()));
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "stderr-value");
+}
+
+#[cfg(not(windows))]
+#[tokio::test]
+async fn parent_cancellation_kills_only_foreground_shells() {
+    let rt = rt();
+    let foreground_cancel = CancellationToken::new();
+    let foreground = rt
+        .spawn_shell_task(ShellTaskRequest {
+            command: "sleep 30".into(),
+            shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+            cwd: std::env::temp_dir(),
+            original_cwd: std::env::temp_dir(),
+            parent_cancel: foreground_cancel.clone(),
+            start_mode: coco_tool_runtime::ShellTaskStartMode::Foreground,
+            timeout_ms: Some(60_000),
+            description: "foreground cancellation".into(),
+            tool_use_id: None,
+            issuing_agent: None,
+            progress_tx: None,
+            progress_throttle_ms: 1_000,
+            auto_detach_ms: None,
+            kill_on_timeout: true,
+            sandbox_state: None,
+            sandbox_bypass: coco_sandbox::SandboxBypass::No,
+        })
+        .await
+        .expect("foreground spawn");
+    let foreground_signal = rt.subscribe_terminal(&foreground).await.expect("signal");
+    foreground_cancel.cancel();
+    foreground_signal.await_terminal().await;
+    assert_eq!(
+        rt.get_task_status(&foreground).await.expect("state").status,
+        TaskStatus::Killed
+    );
+
+    let background_cancel = CancellationToken::new();
+    let background = rt
+        .spawn_shell_task(ShellTaskRequest {
+            command: "sleep 0.05".into(),
+            shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+            cwd: std::env::temp_dir(),
+            original_cwd: std::env::temp_dir(),
+            parent_cancel: background_cancel.clone(),
+            start_mode: coco_tool_runtime::ShellTaskStartMode::Background,
+            timeout_ms: Some(5_000),
+            description: "background survives parent".into(),
+            tool_use_id: None,
+            issuing_agent: None,
+            progress_tx: None,
+            progress_throttle_ms: 1_000,
+            auto_detach_ms: None,
+            kill_on_timeout: true,
+            sandbox_state: None,
+            sandbox_bypass: coco_sandbox::SandboxBypass::No,
+        })
+        .await
+        .expect("background spawn");
+    let background_signal = rt.subscribe_terminal(&background).await.expect("signal");
+    background_cancel.cancel();
+    background_signal.await_terminal().await;
+    assert_eq!(
+        rt.get_task_status(&background).await.expect("state").status,
+        TaskStatus::Completed
+    );
+}
+
 /// W3: progress timer emits `bash_progress` events through the
 /// `ProgressSender` while the task runs. The test uses a short
 /// `progress_throttle_ms` and a sleeping command to observe at least
@@ -1647,6 +1885,9 @@ async fn shell_spawn_emits_progress_events_through_progress_tx() {
             // at 100 ms throttle, then exit.
             command: "sleep 0.3 && echo done".into(),
             shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+            cwd: std::env::temp_dir(),
+            original_cwd: std::env::temp_dir(),
+            parent_cancel: tokio_util::sync::CancellationToken::new(),
             start_mode: coco_tool_runtime::ShellTaskStartMode::Foreground,
             timeout_ms: Some(5_000),
             description: "progress-test".into(),
@@ -1687,6 +1928,9 @@ async fn shell_spawn_auto_detach_timer_fires() {
             // Long-running command so auto-detach beats natural exit.
             command: "sleep 5".into(),
             shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+            cwd: std::env::temp_dir(),
+            original_cwd: std::env::temp_dir(),
+            parent_cancel: tokio_util::sync::CancellationToken::new(),
             start_mode: coco_tool_runtime::ShellTaskStartMode::Foreground,
             timeout_ms: Some(10_000),
             description: "auto-detach".into(),

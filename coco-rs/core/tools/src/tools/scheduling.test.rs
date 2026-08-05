@@ -1,14 +1,43 @@
 use super::CronCreateTool;
 use super::CronListTool;
+use super::MonitorInput;
+use super::MonitorTool;
 use super::ScheduleWakeupTool;
 use super::is_valid_cron_expression;
 use coco_tool_runtime::DynTool;
 use coco_tool_runtime::InMemoryScheduleStore;
 use coco_tool_runtime::ScheduleStore;
+use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
 use serde_json::json;
 use std::sync::Arc;
+
+#[tokio::test]
+async fn monitor_honors_bash_specific_deny_rules() {
+    let mut ctx = ToolUseContext::test_default();
+    ctx.permission_context.deny_rules.insert(
+        coco_types::PermissionRuleSource::Session,
+        vec![coco_types::PermissionRule {
+            source: coco_types::PermissionRuleSource::Session,
+            behavior: coco_types::PermissionBehavior::Deny,
+            value: coco_types::PermissionRuleValue {
+                tool_pattern: coco_types::ToolName::Bash.as_str().to_string(),
+                rule_content: Some("git push *".to_string()),
+            },
+        }],
+    );
+    let input = MonitorInput {
+        command: "git push origin main".to_string(),
+        description: "push watcher".to_string(),
+        timeout_ms: None,
+        persistent: Some(true),
+    };
+
+    let result = Tool::check_permissions(&MonitorTool, &input, &ctx).await;
+
+    assert!(matches!(result, coco_types::ToolCheckResult::Deny { .. }));
+}
 
 // ── R7-T22: cron expression validation tests ──
 //

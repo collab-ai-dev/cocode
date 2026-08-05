@@ -382,8 +382,9 @@ pub struct ResolvedSessionFile {
 /// `git worktree list --porcelain` from `cwd_hint`, slug each
 /// sibling worktree, and probe each one.
 /// 3. **Global scan**: when `cwd_hint` is `None`, walk
-/// `<memory_base>/projects/*/` and return the first project that
-/// contains the transcript. Used by SDK callers without a cwd.
+/// `<memory_base>/projects/*/` and require exactly one project to
+/// contain the transcript. Session ids are protocol-global; silently
+/// choosing one duplicate would route writes to an arbitrary project.
 /// Returns `Ok(None)` when no project has the file. I/O errors at
 /// the `read_dir(<projects>)` level propagate; transient stat
 /// failures on individual entries are tolerated.
@@ -430,16 +431,26 @@ pub fn resolve_session_file_path(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.into()),
     };
+    let mut found: Option<PathBuf> = None;
+    let mut matches = 0usize;
     for entry in entries.flatten() {
         let candidate = entry.path().join(&filename);
         if has_nonzero_file(&candidate) {
-            return Ok(Some(ResolvedSessionFile {
-                file_path: candidate,
-                project_path: None,
-            }));
+            matches += 1;
+            found = Some(candidate);
         }
     }
-    Ok(None)
+    match (matches, found) {
+        (0, _) => Ok(None),
+        (1, Some(file_path)) => Ok(Some(ResolvedSessionFile {
+            file_path,
+            project_path: None,
+        })),
+        (matches, _) => Err(crate::SessionError::AmbiguousSessionId {
+            session_id: session_id.to_string(),
+            matches,
+        }),
+    }
 }
 
 /// List every session transcript across **every** project under

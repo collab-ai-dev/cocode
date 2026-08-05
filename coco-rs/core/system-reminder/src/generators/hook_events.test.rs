@@ -71,10 +71,8 @@ async fn blocking_error_formats_per_ts_template() {
         .content()
         .unwrap()
         .to_string();
-    assert_eq!(
-        text,
-        "pre hook blocking error from command: \"rm -rf /\": too scary"
-    );
+    assert!(text.contains("source=\"hook\""));
+    assert!(text.contains("pre hook blocking error from command: \"rm -rf /\": too scary"));
 }
 
 #[tokio::test]
@@ -93,7 +91,8 @@ async fn additional_context_joins_lines_with_newlines() {
         .content()
         .unwrap()
         .to_string();
-    assert_eq!(text, "h hook additional context: line one\nline two");
+    assert!(text.contains("source=\"hook\""));
+    assert!(text.contains("h hook additional context: line one\nline two"));
 }
 
 #[tokio::test]
@@ -114,6 +113,28 @@ async fn additional_context_skips_empty_vec() {
 }
 
 #[tokio::test]
+async fn additional_context_has_one_utf8_safe_aggregate_cap() {
+    let c = cfg();
+    let events = (0..4)
+        .map(|index| HookEvent::AdditionalContext {
+            hook_name: format!("hook-{index}"),
+            content: vec!["界".repeat(20_000)],
+        })
+        .collect();
+    let ctx = GeneratorContext::builder(&c).hook_events(events).build();
+    let reminder = HookAdditionalContextGenerator
+        .generate(&ctx)
+        .await
+        .expect("generate")
+        .expect("reminder");
+    let text = reminder.content().expect("text reminder");
+
+    assert!(text.len() <= MAX_HOOK_REMINDER_BYTES);
+    assert!(text.is_char_boundary(text.len()));
+    assert!(text.contains("hook output truncated"));
+}
+
+#[tokio::test]
 async fn stopped_continuation_uses_message_field() {
     let c = cfg();
     let events = vec![HookEvent::StoppedContinuation {
@@ -129,7 +150,7 @@ async fn stopped_continuation_uses_message_field() {
         .content()
         .unwrap()
         .to_string();
-    assert_eq!(text, "stop hook stopped continuation: halt reason");
+    assert!(text.contains("stop hook stopped continuation: halt reason"));
 }
 
 #[tokio::test]

@@ -1231,16 +1231,21 @@ impl ModelRuntimeRegistry {
         &self,
         source: &ModelRuntimeSource,
     ) -> Option<coco_config::MoaEndpointSpec> {
-        let cfg = rw_read(&self.runtime_config).clone()?;
         match source {
             ModelRuntimeSource::Role(role) => rw_read(&self.role_moa_overrides)
                 .get(role)
                 .cloned()
-                .or_else(|| cfg.model_roles.moa_endpoint(*role).cloned()),
+                .or_else(|| {
+                    rw_read(&self.runtime_config)
+                        .as_ref()
+                        .and_then(|cfg| cfg.model_roles.moa_endpoint(*role).cloned())
+                }),
             ModelRuntimeSource::Explicit(selection)
                 if selection.provider == coco_config::MOA_PROVIDER =>
             {
-                cfg.model_roles.moa_preset(&selection.model_id).cloned()
+                rw_read(&self.runtime_config)
+                    .as_ref()
+                    .and_then(|cfg| cfg.model_roles.moa_preset(&selection.model_id).cloned())
             }
             ModelRuntimeSource::Explicit(_) => None,
         }

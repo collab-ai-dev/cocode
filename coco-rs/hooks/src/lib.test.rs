@@ -486,6 +486,95 @@ async fn test_command_hook_execution() {
     }
 }
 
+#[test]
+fn hook_output_bound_is_visible_and_strict_on_input_capture() {
+    let bounded = bound_hook_output(vec![b'x'; HOOK_OUTPUT_CAP_BYTES + 1]);
+    assert!(bounded.starts_with(&"x".repeat(HOOK_OUTPUT_CAP_BYTES)));
+    assert!(bounded.ends_with("[hook output truncated: exceeded the 64 KB cap]"));
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn command_hook_applies_the_production_output_cap() {
+    let handler = HookHandler::Command {
+        command: format!("yes x | head -c {}", HOOK_OUTPUT_CAP_BYTES + 1_024),
+        timeout_ms: Some(5_000),
+        shell: None,
+    };
+
+    let result = execute_hook(&handler, &HashMap::new(), None).await.unwrap();
+    let HookExecutionResult::CommandOutput { stdout, .. } = result else {
+        panic!("expected command output");
+    };
+    assert!(stdout.starts_with(&"x\n".repeat(HOOK_OUTPUT_CAP_BYTES / 2)));
+    assert!(stdout.ends_with("[hook output truncated: exceeded the 64 KB cap]"));
+    assert!(stdout.len() < HOOK_OUTPUT_CAP_BYTES + 100);
+}
+
+#[tokio::test]
+async fn http_hook_applies_the_production_output_cap() {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_bytes(vec![b'x'; HOOK_OUTPUT_CAP_BYTES + 1_024]),
+        )
+        .mount(&server)
+        .await;
+    let handler = HookHandler::Http {
+        url: server.uri(),
+        headers: None,
+        timeout_ms: Some(5_000),
+        allowed_env_vars: Vec::new(),
+    };
+
+    let result = execute_hook(&handler, &HashMap::new(), Some("{}"))
+        .await
+        .unwrap();
+    let HookExecutionResult::CommandOutput { stdout, .. } = result else {
+        panic!("expected HTTP output");
+    };
+    assert!(stdout.starts_with(&"x".repeat(HOOK_OUTPUT_CAP_BYTES)));
+    assert!(stdout.ends_with("[hook output truncated: exceeded the 64 KB cap]"));
+    assert!(stdout.len() < HOOK_OUTPUT_CAP_BYTES + 100);
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn command_hook_timeout_covers_output_collection() {
+    let handler = HookHandler::Command {
+        command: "printf partial; sleep 30".into(),
+        timeout_ms: Some(10),
+        shell: None,
+    };
+
+    let result = execute_hook(&handler, &HashMap::new(), None).await;
+    assert!(matches!(result, Err(HooksError::HookTimeout { .. })));
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn command_hook_timeout_kills_descendants() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let sentinel = dir.path().join("descendant-survived");
+    let handler = HookHandler::Command {
+        command: "(sleep 0.2; printf leaked > \"$COCO_TEST_HOOK_SENTINEL\") & wait".into(),
+        timeout_ms: Some(20),
+        shell: None,
+    };
+    let env = HashMap::from([(
+        "COCO_TEST_HOOK_SENTINEL".to_string(),
+        sentinel.display().to_string(),
+    )]);
+
+    let result = execute_hook(&handler, &env, None).await;
+    assert!(matches!(result, Err(HooksError::HookTimeout { .. })));
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    assert!(!sentinel.exists(), "hook descendant survived timeout");
+}
+
 #[tokio::test]
 async fn test_execute_hooks_runs_all_matching() {
     let registry = HookRegistry::new();

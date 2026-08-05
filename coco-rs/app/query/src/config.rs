@@ -118,8 +118,9 @@ pub struct QueryEngineConfig {
     /// inherit it from the parent cache slot and may set
     /// `skip_cache_write`.
     pub prompt_cache: Option<PromptCacheConfig>,
-    /// System prompt to prepend.
-    pub system_prompt: Option<String>,
+    /// Compiled system prompt to prepend. Cache breakpoints remain typed from
+    /// host assembly through provider serialization and fork snapshots.
+    pub system_prompt: Option<coco_context::SystemPrompt>,
     /// Append to system prompt (after CLAUDE.md).
     pub append_system_prompt: Option<String>,
     /// Model name for tool context.

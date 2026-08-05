@@ -264,6 +264,29 @@ pub fn build_query_config(
     }
 }
 
+/// Reconstruct the parent's compiled prompt for a cache-sharing fork.
+pub fn system_prompt_from_cache(cache: &CacheSafeParams) -> coco_context::SystemPrompt {
+    if cache.system_prompt_blocks.is_empty() {
+        return coco_context::SystemPrompt::from_text(cache.rendered_system_prompt.clone());
+    }
+    coco_context::SystemPrompt {
+        blocks: cache
+            .system_prompt_blocks
+            .iter()
+            .map(|block| match block {
+                coco_types::CachedSystemPromptBlock::Text { content } => {
+                    coco_context::SystemPromptBlock::Text {
+                        content: content.clone(),
+                    }
+                }
+                coco_types::CachedSystemPromptBlock::CacheBreakpoint => {
+                    coco_context::SystemPromptBlock::CacheBreakpoint
+                }
+            })
+            .collect(),
+    }
+}
+
 /// Result of a [`ForkDispatcher::dispatch`] call.
 ///
 /// Carries the full message list. Callers walk `messages` to find

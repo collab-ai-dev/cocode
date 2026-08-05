@@ -960,11 +960,7 @@ impl ApiRetryConfig {
 #[serde(default)]
 pub struct PartialLoopSettings {
     pub max_turns: Option<i32>,
-    /// Session-level token budget. On-disk wire name kept as
-    /// `max_tokens` for settings.json compatibility; the field reads
-    /// as the total session budget (input + output, accumulated),
-    /// matching the renamed `QueryEngineConfig.total_token_budget`.
-    #[serde(alias = "total_token_budget", rename = "max_tokens")]
+    /// Total session budget (input + output, accumulated).
     pub total_token_budget: Option<i32>,
     pub permission_mode: Option<PermissionMode>,
     pub enable_streaming_tools: Option<bool>,
@@ -1100,7 +1096,6 @@ pub enum EmptyResponsePolicy {
 pub struct LoopConfig {
     pub max_turns: Option<i32>,
     /// Session-level token budget. See [`PartialLoopSettings::total_token_budget`].
-    #[serde(alias = "total_token_budget", rename = "max_tokens")]
     pub total_token_budget: Option<i32>,
     pub permission_mode: PermissionMode,
     pub enable_streaming_tools: bool,

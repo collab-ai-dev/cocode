@@ -25,7 +25,7 @@ pub fn install_for_session(app: App, session: &SessionHandle) -> App {
     if !runtime_config.features.enabled(Feature::Voice) {
         return app;
     }
-    match build_voice_session(runtime_config) {
+    match build_voice_session(&runtime_config) {
         Ok((session, rx)) => app.with_voice(session, rx, true),
         Err(err) => {
             tracing::warn!(error = %err, "voice input unavailable; leaving voice off");
@@ -47,7 +47,7 @@ fn build_voice_session(
     };
     // One event stream feeds both recording lifecycle and download progress.
     let (tx, rx) = tokio::sync::mpsc::channel(32);
-    let engine = coco_voice::create_voice_engine(voice, remote_handle, Some(tx.clone()))
+    let engine = coco_voice::create_voice_engine(voice, remote_handle)
         .map_err(|e| anyhow::anyhow!("voice engine: {e}"))?;
     let capture = coco_utils_audio::default_capture();
     let params = coco_voice::params_from_config(voice);

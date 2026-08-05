@@ -77,7 +77,7 @@ fn default_timeout_ms(config: &coco_config::ToolConfig) -> u64 {
     config.bash.default_timeout_ms.max(1) as u64
 }
 
-fn bash_input_is_read_only_in_cwd(input: &BashInput, cwd: &str) -> bool {
+pub(super) fn bash_input_is_read_only_in_cwd(input: &BashInput, cwd: &str) -> bool {
     if input.command.is_empty() {
         return false;
     }
@@ -1083,10 +1083,26 @@ async fn execute_via_task_runtime(
     } else {
         ctx.progress_tx.clone()
     };
+    let cwd = crate::tools::shell_cwd::resolve_spawn_cwd(ctx).await;
+    let original_cwd = ctx.original_cwd.clone().unwrap_or_else(|| cwd.clone());
+    let shell_provider = ctx.shell_provider.clone().unwrap_or_else(|| {
+        coco_shell::ShellExecutor::new_with_config(&cwd, &ctx.shell_config)
+            .provider()
+            .clone()
+    });
+    let parent_cancel = ctx.cancel_token();
+    let violations_baseline = if let Some(state) = &sandbox_state {
+        Some(state.violations_total_snapshot().await)
+    } else {
+        None
+    };
 
     let req = ShellTaskRequest {
         command: cmd.exec().to_string(),
-        shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+        shell_kind: coco_tool_runtime::ShellTaskKind::Provider(shell_provider),
+        cwd,
+        original_cwd,
+        parent_cancel: parent_cancel.clone(),
         start_mode: if run_in_background {
             ShellTaskStartMode::Background
         } else {
@@ -1104,7 +1120,7 @@ async fn execute_via_task_runtime(
         // for `dangerouslyDisableSandbox` parsing). Both fg and bg
         // paths now apply the same wrap as the legacy ShellExecutor
         // foreground path did.
-        sandbox_state,
+        sandbox_state: sandbox_state.clone(),
         sandbox_bypass,
     };
 
@@ -1154,7 +1170,7 @@ async fn execute_via_task_runtime(
                 source: None,
             })?;
 
-    let kill_arm = ctx.cancel_token();
+    let kill_arm = parent_cancel;
 
     let outcome: BashOutcome = tokio::select! {
         biased;
@@ -1175,11 +1191,7 @@ async fn execute_via_task_runtime(
     };
 
     match outcome {
-        BashOutcome::Cancelled => Err(ToolError::ExecutionFailed {
-            message: "Bash command was interrupted by the user.".into(),
-            display_data: None,
-            source: None,
-        }),
+        BashOutcome::Cancelled => Err(ToolError::Cancelled),
         BashOutcome::Terminal => {
             // Compose fg-shape result from disk + persisted exit_code.
             let outputs = task_handle
@@ -1191,23 +1203,33 @@ async fn execute_via_task_runtime(
                     source: None,
                 })?;
             let max_bytes = max_output_bytes(&ctx.tool_config);
-            // Image detection runs on the raw disk bytes (UTF-8-lossy `String`;
-            // raster magic bytes survive lossy conversion) BEFORE compression, so
-            // the text filter never touches an image.
-            let is_image = is_likely_image_bytes(outputs.stdout.as_bytes());
+            let is_image = is_likely_image_bytes(&outputs.stdout);
+            let stdout_text = String::from_utf8_lossy(&outputs.stdout);
             let (stdout, builtin_fired) = compress_and_cap_stdout(
                 ctx,
                 cmd,
                 outputs.exit_code.unwrap_or(0),
-                &outputs.stdout,
+                &stdout_text,
                 is_image,
                 max_bytes,
             )
             .await;
-            let stderr = decode_capped(
-                coco_utils_string::strip_ansi(&outputs.stderr).as_bytes(),
+            let stderr_text = String::from_utf8_lossy(&outputs.stderr);
+            let mut stderr = decode_capped(
+                coco_utils_string::strip_ansi(&stderr_text).as_bytes(),
                 max_bytes,
             );
+            let reset_message =
+                crate::tools::shell_cwd::finalize_cwd_post_exec(ctx, outputs.new_cwd.clone()).await;
+            crate::tools::shell_cwd::annotate_stderr_with_reset(&mut stderr, reset_message);
+            if let (Some(state), Some(previous)) = (&sandbox_state, violations_baseline)
+                && let Some(annotation) = state.format_violations_since(previous).await
+            {
+                if !stderr.is_empty() {
+                    stderr.push('\n');
+                }
+                stderr.push_str(&annotation);
+            }
             // Strip + record Claude Code hints so the model never sees the tag.
             let stdout = maybe_strip_and_record_hints(stdout, cmd.original());
             let mut result_obj = serde_json::json!({
@@ -1229,7 +1251,7 @@ async fn execute_via_task_runtime(
             }
             if is_image {
                 result_obj["isImage"] = serde_json::Value::Bool(true);
-                result_obj["structuredContent"] = build_image_block(outputs.stdout.as_bytes());
+                result_obj["structuredContent"] = build_image_block(&outputs.stdout);
             }
             Ok(ToolResult {
                 data: result_obj,

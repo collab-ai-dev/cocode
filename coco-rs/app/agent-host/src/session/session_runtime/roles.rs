@@ -180,7 +180,7 @@ impl SessionRuntime {
                 .rebind_role_primary(role, spec, /*effort*/ None)
                 .map_err(anyhow::Error::from)?;
             let model_info =
-                resolve_model_info(self.runtime_config(), &ov.spec.provider, &ov.spec.model_id);
+                resolve_model_info(&self.runtime_config(), &ov.spec.provider, &ov.spec.model_id);
             // Store the override only after the registry accepted the
             // replacement runtime.
             {
@@ -369,7 +369,7 @@ impl SessionRuntime {
         drop(overrides);
         if role == ModelRole::Main {
             let model_info = effective_spec.as_ref().and_then(|spec| {
-                resolve_model_info(self.runtime_config(), &spec.provider, &spec.model_id)
+                resolve_model_info(&self.runtime_config(), &spec.provider, &spec.model_id)
             });
             self.update_engine_config(|cfg| {
                 cfg.thinking_level =

@@ -1,60 +1,35 @@
 //! `config/read` + `config/value/write` handlers.
 //!
-//! Both walk the coco settings layers for the active session's cwd (or the
-//! installed runtime's cwd when no session is active) and read/write JSON
-//! settings files via the blocking thread pool.
+//! Reads expose merged persisted settings from the active runtime snapshot. Writes use the
+//! canonical JSONC-aware atomic settings mutator on the blocking thread pool.
 
 use tracing::info;
 
 use super::{HandlerContext, HandlerResult};
 
-/// `config/read` — return the merged effective configuration plus a
+/// `config/read` — return the merged persisted settings layers plus a
 /// per-source breakdown keyed by source name.
 ///
-/// Delegates to [`coco_config::settings::load_settings_for_roots`] with the
-/// session's resolved project root and cwd (if a session is active) or the
-/// runtime cwd fallback. Returns the JSON-serialized merged view and a
-/// per-source map suitable for clients that want to display or override
-/// specific layers.
+/// Runtime-only CLI/env overrides remain in `RuntimeConfig` and are not
+/// misrepresented as persisted settings values on this wire endpoint.
 pub(crate) async fn handle_config_read(
     params: coco_types::ConfigReadParams,
     ctx: &HandlerContext,
 ) -> HandlerResult {
-    // Project/local roots matter for clients that have multiple repos open.
-    let cwd = match params.target {
-        coco_types::ConfigReadTarget::Process => match ctx.state.process_cwd().await {
-            Ok(cwd) => cwd,
-            Err(err) => return err,
+    let loaded = match params.target {
+        coco_types::ConfigReadTarget::Process => match load_process_settings(ctx).await {
+            Ok(loaded) => loaded,
+            Err(error) => return error,
         },
-        coco_types::ConfigReadTarget::Session(_) => match ctx.workspace_cwd().await {
-            Ok(cwd) => cwd,
-            Err(err) => return err,
-        },
-    };
-
-    // `load_settings` reads up to 6 layered JSON files synchronously; run
-    // it on the blocking pool so frequent `config/read` polls don't stall
-    // the tokio worker.
-    let roots = crate::paths::settings_roots_for_cwd(&cwd);
-    let load_result = tokio::task::spawn_blocking(move || {
-        coco_config::settings::load_settings_for_roots(&roots, None)
-    })
-    .await;
-    let loaded = match load_result {
-        Ok(Ok(s)) => s,
-        Ok(Err(e)) => {
-            return HandlerResult::Err {
-                code: coco_types::error_codes::INTERNAL_ERROR,
-                message: format!("config/read: failed to load settings: {e}"),
-                data: None,
+        coco_types::ConfigReadTarget::Session(_) => {
+            let Some(runtime) = ctx.resolve_runtime().await else {
+                return HandlerResult::Err {
+                    code: coco_types::error_codes::INVALID_REQUEST,
+                    message: "config/read requires a live target session".to_string(),
+                    data: None,
+                };
             };
-        }
-        Err(join_err) => {
-            return HandlerResult::Err {
-                code: coco_types::error_codes::INTERNAL_ERROR,
-                message: format!("config/read task panicked: {join_err}"),
-                data: None,
-            };
+            runtime.runtime_publisher().current().settings.clone()
         }
     };
 
@@ -84,6 +59,55 @@ pub(crate) async fn handle_config_read(
     })
 }
 
+async fn load_process_settings(
+    ctx: &HandlerContext,
+) -> Result<coco_config::settings::SettingsWithSource, HandlerResult> {
+    let cwd = ctx.state.process_cwd().await?;
+    let replacement = ctx.state.runtime_replacement_snapshot().await;
+    let flag = replacement
+        .as_ref()
+        .and_then(|replacement| replacement.runtime_factory.flag_settings_path());
+    let enabled = replacement
+        .as_ref()
+        .map(|replacement| replacement.runtime_factory.enabled_setting_sources())
+        .unwrap_or_else(|| coco_config::parse_enabled_setting_sources(None));
+    tokio::task::spawn_blocking(move || {
+        load_process_settings_from_disk(
+            &cwd,
+            flag.as_deref(),
+            &enabled,
+            &coco_config::CatalogPaths::default(),
+        )
+    })
+    .await
+    .map_err(|error| HandlerResult::Err {
+        code: coco_types::error_codes::INTERNAL_ERROR,
+        message: format!("config/read task panicked: {error}"),
+        data: None,
+    })?
+    .map_err(|error| HandlerResult::Err {
+        code: coco_types::error_codes::INTERNAL_ERROR,
+        message: format!("config/read: {error}"),
+        data: None,
+    })
+}
+
+fn load_process_settings_from_disk(
+    cwd: &std::path::Path,
+    flag: Option<&std::path::Path>,
+    enabled: &std::collections::HashSet<coco_config::settings::SettingSource>,
+    catalogs: &coco_config::CatalogPaths,
+) -> coco_config::Result<coco_config::settings::SettingsWithSource> {
+    let roots = crate::paths::settings_roots_for_cwd(cwd);
+    coco_config::settings::load_settings_with_roots(
+        &roots,
+        flag,
+        &catalogs.user_settings,
+        &catalogs.managed_settings,
+        enabled,
+    )
+}
+
 /// `config/value/write` — persist a single setting to the user,
 /// project, or local settings file.
 ///
@@ -106,26 +130,42 @@ pub(crate) async fn handle_config_write(
             ("user", coco_config::global_config::user_settings_path())
         }
         coco_types::ConfigWriteTarget::Project(_) => {
-            let cwd = match ctx.workspace_cwd().await {
-                Ok(cwd) => cwd,
-                Err(err) => return err,
+            let Some(runtime) = ctx.resolve_runtime().await else {
+                return HandlerResult::Err {
+                    code: coco_types::error_codes::INVALID_REQUEST,
+                    message: "config/value/write requires a live target session".to_string(),
+                    data: None,
+                };
             };
+            let cwd = runtime.original_cwd();
+            let roots = crate::paths::settings_roots_for_cwd(cwd);
             (
                 "project",
-                coco_config::global_config::project_settings_path(&cwd),
+                coco_config::global_config::project_settings_path(roots.project_root()),
             )
         }
         coco_types::ConfigWriteTarget::Local(_) => {
-            let cwd = match ctx.workspace_cwd().await {
-                Ok(cwd) => cwd,
-                Err(err) => return err,
+            let Some(runtime) = ctx.resolve_runtime().await else {
+                return HandlerResult::Err {
+                    code: coco_types::error_codes::INVALID_REQUEST,
+                    message: "config/value/write requires a live target session".to_string(),
+                    data: None,
+                };
             };
+            let cwd = runtime.original_cwd();
+            let roots = crate::paths::settings_roots_for_cwd(cwd);
             (
                 "local",
-                coco_config::global_config::local_settings_path(&cwd),
+                coco_config::global_config::local_settings_path(roots.local_root()),
             )
         }
     };
+    let publish_targets = affected_runtime_publish_targets(ctx, scope, &target_path).await;
+    let flag_settings = ctx
+        .state
+        .runtime_replacement_snapshot()
+        .await
+        .and_then(|replacement| replacement.runtime_factory.flag_settings_path());
 
     // Run the entire read/modify/write sequence on the blocking pool —
     // it's three sequential sync I/O calls on the same file so splitting
@@ -134,35 +174,14 @@ pub(crate) async fn handle_config_write(
     let key = params.key.clone();
     let value = params.value.clone();
     let path = target_path.clone();
-    let write_result = tokio::task::spawn_blocking(move || -> Result<(), ConfigWriteError> {
-        let mut doc: serde_json::Value = if path.exists() {
-            let contents = std::fs::read_to_string(&path).map_err(|e| {
-                ConfigWriteError::Io(format!("failed to read {}: {e}", path.display()))
-            })?;
-            serde_json::from_str(&contents).map_err(|e| {
-                ConfigWriteError::InvalidExisting(format!(
-                    "existing file at {} is not valid JSON: {e}",
-                    path.display()
-                ))
-            })?
-        } else {
-            serde_json::Value::Object(serde_json::Map::new())
-        };
-
-        set_nested_json_key(&mut doc, &key, value).map_err(ConfigWriteError::InvalidKey)?;
-        validate_settings_document(&doc).map_err(ConfigWriteError::InvalidKey)?;
-
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| ConfigWriteError::Io(format!("failed to create parent dir: {e}")))?;
-        }
-
-        let serialized = serde_json::to_string_pretty(&doc)
-            .map_err(|e| ConfigWriteError::Io(format!("failed to serialize: {e}")))?;
-        std::fs::write(&path, serialized).map_err(|e| {
-            ConfigWriteError::Io(format!("failed to write {}: {e}", path.display()))
-        })?;
-        Ok(())
+    let write_result = tokio::task::spawn_blocking(move || {
+        coco_config::settings::writer::mutate_settings_and_republish(
+            &path,
+            move |doc| set_nested_json_key(doc, &key, value),
+            flag_settings.as_deref(),
+            &coco_config::CatalogPaths::default(),
+            publish_targets,
+        )
     })
     .await;
 
@@ -176,18 +195,18 @@ pub(crate) async fn handle_config_write(
             );
             HandlerResult::ok_empty()
         }
-        Ok(Err(ConfigWriteError::InvalidKey(msg))) => HandlerResult::Err {
-            code: coco_types::error_codes::INVALID_PARAMS,
-            message: format!("config/value/write: {msg}"),
-            data: None,
-        },
-        Ok(Err(ConfigWriteError::InvalidExisting(msg) | ConfigWriteError::Io(msg))) => {
+        Ok(Err(coco_config::settings::writer::SettingsWriteError::Mutation { message })) => {
             HandlerResult::Err {
-                code: coco_types::error_codes::INTERNAL_ERROR,
-                message: format!("config/value/write: {msg}"),
+                code: coco_types::error_codes::INVALID_PARAMS,
+                message: format!("config/value/write: {message}"),
                 data: None,
             }
         }
+        Ok(Err(error)) => HandlerResult::Err {
+            code: coco_types::error_codes::INTERNAL_ERROR,
+            message: format!("config/value/write: {error}"),
+            data: None,
+        },
         Err(join_err) => HandlerResult::Err {
             code: coco_types::error_codes::INTERNAL_ERROR,
             message: format!("config/value/write task panicked: {join_err}"),
@@ -196,15 +215,64 @@ pub(crate) async fn handle_config_write(
     }
 }
 
-/// Internal error tag for the `config/value/write` blocking task. Mapped
-/// to JSON-RPC error codes at the await boundary.
-enum ConfigWriteError {
-    /// Bad dotted-path key — caller error.
-    InvalidKey(String),
-    /// Existing settings file is not valid JSON.
-    InvalidExisting(String),
-    /// File I/O failure (read/write/mkdir/serialize).
-    Io(String),
+async fn affected_runtime_publish_targets(
+    ctx: &HandlerContext,
+    scope: &str,
+    target_path: &std::path::Path,
+) -> Vec<coco_config::settings::writer::RuntimePublishTarget> {
+    let mut targets = Vec::new();
+
+    if let Some(runtime) = ctx.resolve_runtime().await {
+        push_publish_target_if_affected(
+            &mut targets,
+            scope,
+            target_path,
+            runtime.original_cwd(),
+            runtime.runtime_publisher(),
+        );
+    }
+
+    if let Some(app_server) = &ctx.app_server {
+        for session_id in app_server.registry().list_live() {
+            let Some(handle) = app_server.registry().get(&session_id) else {
+                continue;
+            };
+            let runtime = handle.into_session();
+            push_publish_target_if_affected(
+                &mut targets,
+                scope,
+                target_path,
+                runtime.original_cwd(),
+                runtime.runtime_publisher(),
+            );
+        }
+    }
+    targets
+}
+
+fn push_publish_target_if_affected(
+    targets: &mut Vec<coco_config::settings::writer::RuntimePublishTarget>,
+    scope: &str,
+    target_path: &std::path::Path,
+    cwd: &std::path::Path,
+    publisher: std::sync::Arc<coco_config::RuntimePublisher>,
+) {
+    if targets
+        .iter()
+        .any(|target| std::sync::Arc::ptr_eq(&target.publisher, &publisher))
+    {
+        return;
+    }
+    let roots = crate::paths::settings_roots_for_cwd(cwd);
+    let runtime_path = match scope {
+        "user" => coco_config::global_config::user_settings_path(),
+        "project" => coco_config::global_config::project_settings_path(roots.project_root()),
+        "local" => coco_config::global_config::local_settings_path(roots.local_root()),
+        _ => return,
+    };
+    if runtime_path == target_path {
+        targets.push(coco_config::settings::writer::RuntimePublishTarget { roots, publisher });
+    }
 }
 
 /// Set a dotted-path key on a JSON object, creating intermediate
@@ -219,7 +287,7 @@ fn set_nested_json_key(
     value: serde_json::Value,
 ) -> Result<(), String> {
     if !doc.is_object() {
-        *doc = serde_json::Value::Object(serde_json::Map::new());
+        return Err("settings document root is not an object".to_string());
     }
     let segments: Vec<&str> = key.split('.').collect();
     if segments.is_empty() || segments.iter().any(|s| s.is_empty()) {
@@ -235,22 +303,19 @@ fn set_nested_json_key(
             obj.insert((*segment).to_string(), value);
             return Ok(());
         }
-        // Descend, creating an empty object if the intermediate is
-        // missing OR not an object.
+        // Descend, creating an empty object only when the segment is missing.
+        // Replacing an existing scalar would silently discard user settings.
         let entry = obj
             .entry((*segment).to_string())
             .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
         if !entry.is_object() {
-            *entry = serde_json::Value::Object(serde_json::Map::new());
+            return Err(format!("path segment {segment:?} is not an object"));
         }
         cursor = entry;
     }
     unreachable!("segments vec is non-empty, loop returns on last iteration")
 }
 
-fn validate_settings_document(doc: &serde_json::Value) -> Result<(), String> {
-    let body = serde_json::to_string(doc).map_err(|e| format!("failed to serialize: {e}"))?;
-    coco_config::settings::parse_settings(&body)
-        .map(|_| ())
-        .map_err(|e| e.to_string())
-}
+#[cfg(test)]
+#[path = "config.test.rs"]
+mod tests;

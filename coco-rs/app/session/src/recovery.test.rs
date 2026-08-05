@@ -18,16 +18,43 @@ fn test_fork_conversation_relabels_session_id() {
         "{\"session_id\":\"src-id\",\"uuid\":\"u1\"}\nnot json\n",
     )
     .unwrap();
-    fork_conversation(&src, &dst, "dest-id").unwrap();
+    fork_conversation(&src, &dst, "dest-id", Path::new("/dest/repo")).unwrap();
     assert!(dst.exists());
     let out = std::fs::read_to_string(&dst).unwrap();
     let first: serde_json::Value = serde_json::from_str(out.lines().next().unwrap()).unwrap();
     assert_eq!(first["session_id"], "dest-id");
+    assert_eq!(first["cwd"], "/dest/repo");
     assert_eq!(first["uuid"], "u1", "non-session fields preserved");
     assert!(
         out.lines().any(|l| l == "not json"),
         "bad line passes through"
     );
+}
+
+#[test]
+fn fork_conversation_never_clobbers_an_existing_destination() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("source.jsonl");
+    let dst = dir.path().join("dest.jsonl");
+    std::fs::write(&src, "{\"session_id\":\"src\"}\n").unwrap();
+    std::fs::write(&dst, "keep-me\n").unwrap();
+
+    let error = fork_conversation(&src, &dst, "dest", dir.path())
+        .expect_err("existing destination rejected");
+
+    assert!(error.to_string().contains("exist"));
+    assert_eq!(std::fs::read_to_string(dst).unwrap(), "keep-me\n");
+}
+
+#[test]
+fn fork_conversation_rejects_source_as_destination() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    std::fs::write(&path, "original\n").unwrap();
+
+    fork_conversation(&path, &path, "dest", dir.path()).expect_err("same path must be rejected");
+
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "original\n");
 }
 
 // ---------------------------------------------------------------------------

@@ -30,7 +30,8 @@ fn client_parts() -> (
 ) {
     let (outbound_tx, outbound_rx) = mpsc::channel(16);
     let (client, incoming, events) = RemoteJsonRpcClient::new(outbound_tx);
-    (client, incoming, outbound_rx, RemoteEventDemux::new(events))
+    let demux = client.event_demux(events);
+    (client, incoming, outbound_rx, demux)
 }
 
 async fn answer_next(
@@ -313,7 +314,9 @@ fn direct_demux_events_are_session_keyed() {
         },
     ))
     .expect("send");
-    let mut demux = RemoteEventDemux::new(rx);
+    let (outbound_tx, _outbound_rx) = mpsc::channel(1);
+    let (client, _incoming, _unused_events) = RemoteJsonRpcClient::new(outbound_tx);
+    let mut demux = client.event_demux(rx);
 
     assert_eq!(
         demux
@@ -327,4 +330,131 @@ fn direct_demux_events_are_session_keyed() {
             .try_next_lifecycle(&session("session-direct"))
             .is_some()
     );
+}
+
+#[test]
+fn demux_session_overflow_is_typed_and_fail_closed() {
+    let (tx, rx) = mpsc::channel(MAX_BUFFERED_SESSION_QUEUE + 1);
+    let buffered = session("session-buffered");
+    for seq in 0..=MAX_BUFFERED_SESSION_QUEUE {
+        tx.try_send(RemoteJsonRpcEvent::SessionDelivery(Box::new(
+            SessionDelivery {
+                envelope: envelope(
+                    buffered.clone(),
+                    i64::try_from(seq).expect("buffer capacity fits in i64"),
+                ),
+            },
+        )))
+        .expect("queue event");
+    }
+    let (outbound_tx, _outbound_rx) = mpsc::channel(1);
+    let (client, _incoming, _unused_events) = RemoteJsonRpcClient::new(outbound_tx);
+    let mut demux = client.event_demux(rx);
+
+    assert!(
+        demux
+            .try_next_session_event(&session("session-not-buffered"))
+            .is_none()
+    );
+    assert_eq!(
+        demux.disconnect_reason(),
+        Some(&RemoteDemuxDisconnectReason::SlowConsumer {
+            queue: "session_events",
+            capacity: MAX_BUFFERED_SESSION_QUEUE,
+        })
+    );
+    assert!(
+        client.invalid.load(Ordering::Acquire),
+        "demux overflow must invalidate the shared RPC connection immediately"
+    );
+}
+
+#[derive(Clone, Copy)]
+enum FatalDemuxQueue {
+    SessionEvents,
+    SessionLifecycle,
+    ServerRequests,
+}
+
+async fn assert_fatal_demux_overflow_releases_pending_rpc(queue: FatalDemuxQueue) {
+    let capacity = match queue {
+        FatalDemuxQueue::SessionEvents | FatalDemuxQueue::SessionLifecycle => {
+            MAX_BUFFERED_SESSION_QUEUE
+        }
+        FatalDemuxQueue::ServerRequests => MAX_BUFFERED_CONNECTION_QUEUE,
+    };
+    let (tx, rx) = mpsc::channel(capacity + 1);
+    let buffered = session("session-overflow-buffered");
+    for index in 0..=capacity {
+        let event = match queue {
+            FatalDemuxQueue::SessionEvents => {
+                RemoteJsonRpcEvent::SessionDelivery(Box::new(SessionDelivery {
+                    envelope: envelope(
+                        buffered.clone(),
+                        i64::try_from(index).expect("capacity fits in i64"),
+                    ),
+                }))
+            }
+            FatalDemuxQueue::SessionLifecycle => {
+                RemoteJsonRpcEvent::SessionLifecycle(SessionLifecycleEffect {
+                    kind: SessionLifecycleEffectKind::SessionEnded {
+                        session_id: buffered.clone(),
+                    },
+                })
+            }
+            FatalDemuxQueue::ServerRequests => {
+                RemoteJsonRpcEvent::ServerRequest(coco_app_server_transport::JsonRpcRequest::new(
+                    JsonRpcId::Number(i64::try_from(index).expect("capacity fits in i64")),
+                    "approval/askForApproval",
+                    None,
+                ))
+            }
+        };
+        tx.try_send(event).expect("queue demux event");
+    }
+
+    let (outbound_tx, mut outbound_rx) = mpsc::channel(4);
+    let (client, _incoming, _unused_events) = RemoteJsonRpcClient::new(outbound_tx);
+    let mut demux = client.event_demux(rx);
+    let pending = tokio::spawn({
+        let client = client.clone();
+        async move { client.keep_alive().await }
+    });
+    let _wire_request = outbound_rx.recv().await.expect("pending RPC registered");
+
+    assert!(
+        demux
+            .try_next_session_event(&session("session-overflow-target"))
+            .is_none()
+    );
+    let queue_name = match queue {
+        FatalDemuxQueue::SessionEvents => "session_events",
+        FatalDemuxQueue::SessionLifecycle => "session_lifecycle",
+        FatalDemuxQueue::ServerRequests => "server_requests",
+    };
+    assert_eq!(
+        demux.disconnect_reason(),
+        Some(&RemoteDemuxDisconnectReason::SlowConsumer {
+            queue: queue_name,
+            capacity,
+        })
+    );
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(1), pending)
+            .await
+            .expect("pending RPC released immediately")
+            .expect("pending task joined"),
+        Err(ClientError::Disconnected)
+    ));
+}
+
+#[tokio::test]
+async fn every_fatal_demux_queue_disconnects_pending_rpcs() {
+    for queue in [
+        FatalDemuxQueue::SessionEvents,
+        FatalDemuxQueue::SessionLifecycle,
+        FatalDemuxQueue::ServerRequests,
+    ] {
+        assert_fatal_demux_overflow_releases_pending_rpc(queue).await;
+    }
 }

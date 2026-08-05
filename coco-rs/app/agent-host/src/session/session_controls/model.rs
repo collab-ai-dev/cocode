@@ -42,12 +42,8 @@ pub fn restricted_model_selection_for_args(
     session: &SessionHandle,
     args: &str,
 ) -> Option<RestrictedModelSelection> {
-    let available_models = session
-        .runtime_config()
-        .settings
-        .merged
-        .available_models
-        .as_deref();
+    let runtime_config = session.runtime_config();
+    let available_models = runtime_config.settings.merged.available_models.as_deref();
     let resolved = coco_commands::handlers::model::resolve_model(args)?;
     if coco_config::is_model_allowed(resolved.provider, &resolved.model_id, available_models) {
         return None;

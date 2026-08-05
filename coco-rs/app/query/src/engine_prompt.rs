@@ -115,10 +115,7 @@ impl QueryEngine {
                 coco_subagent::coordinator_system_prompt(simple_mode),
             )
         } else if let Some(ref sys) = self.config.system_prompt {
-            coco_context::PromptContextMode::literal(
-                coco_context::PromptContextLiteralSource::ConfigOverride,
-                sys.as_str(),
-            )
+            coco_context::PromptContextMode::compiled(sys)
         } else {
             coco_context::PromptContextMode::default_workspace(&cwd)
         };

@@ -67,8 +67,8 @@ pub async fn task_detail(
     match runtime.read_session_task_outputs(&task_id).await {
         Ok(outputs) => Ok(coco_types::TaskDetailResult {
             task_id,
-            stdout: outputs.stdout,
-            stderr: outputs.stderr,
+            stdout: String::from_utf8_lossy(&outputs.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&outputs.stderr).into_owned(),
             exit_code: outputs.exit_code,
             interrupted: outputs.interrupted,
         }),

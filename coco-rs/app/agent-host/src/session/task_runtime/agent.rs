@@ -149,13 +149,12 @@ impl TaskRuntime {
         task_id
     }
 
-    /// Append text to a task's on-disk output file. Returns
-    /// immediately — the actual fs write runs on the per-task drain
-    /// task. Past the 5 GB cap, drops chunks and appends a single
-    /// truncation marker.
+    /// Append text to a task's on-disk output queue. Applies bounded
+    /// backpressure until the per-task drain accepts the chunk. Past the 5 GB
+    /// file cap, drops chunks and appends a single truncation marker.
     pub async fn append_output(&self, task_id: &str, chunk: &str) {
         let dto = self.disk.get_or_create(task_id).await;
-        dto.append(chunk);
+        dto.append(chunk).await;
         trace!(
             target: "coco::task_runtime",
             task_id,
@@ -494,7 +493,8 @@ impl TaskHandle for TaskRuntime {
             "Workflow run {} registered.\nScript: {}\n\n",
             request.run_id,
             script_path.display()
-        ));
+        ))
+        .await;
         let _ = dto.flush().await;
         info!(
             target: "coco::task_runtime",

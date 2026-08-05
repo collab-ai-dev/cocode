@@ -142,9 +142,9 @@ const FLAG_DOCS: &[FlagDoc] = &[
         description: "Port for the embedded Event Hub. Default `8731`. Requires `--serve-hub`.",
     },
     FlagDoc {
-        long: "max-tokens",
+        long: "total-token-budget",
         value: Some("<N>"),
-        description: "Maximum tokens per model response.",
+        description: "Maximum cumulative input plus output tokens for the run.",
     },
     FlagDoc {
         long: "max-turns",
@@ -249,7 +249,7 @@ const FLAG_DOCS: &[FlagDoc] = &[
     FlagDoc {
         long: "fork-session",
         value: None,
-        description: "Copy the history from `--resume <id>` into a fresh session instead of continuing the original.",
+        description: "Copy `--resume <id>`, or the most recent session when no ID is supplied, into a fresh session.",
     },
     FlagDoc {
         long: "session-id",

@@ -53,13 +53,14 @@ impl SessionExecutionResources {
     }
 }
 
-/// Session-owned configuration snapshot and reload publisher.
+/// Session-owned configuration snapshot and publisher.
 ///
-/// Runtime construction picks the config home and per-session folded
-/// `RuntimeConfig`; hot-reload paths subscribe through the paired reloader.
+/// Every runtime has a publisher so synchronous settings writes can update its
+/// effective snapshot. Filesystem watching remains optional through the paired
+/// reloader.
 pub(in crate::session::session_runtime) struct SessionConfigResources {
     pub(in crate::session::session_runtime) config_home: PathBuf,
-    pub(in crate::session::session_runtime) runtime_config: Arc<RuntimeConfig>,
+    pub(in crate::session::session_runtime) runtime_publisher: Arc<coco_config::RuntimePublisher>,
     pub(in crate::session::session_runtime) config_reloader:
         Option<coco_config_reload::RuntimeReloader>,
 }
@@ -70,9 +71,17 @@ impl SessionConfigResources {
         runtime_config: Arc<RuntimeConfig>,
         config_reloader: Option<coco_config_reload::RuntimeReloader>,
     ) -> Self {
+        let runtime_publisher = config_reloader
+            .as_ref()
+            .map(coco_config_reload::RuntimeReloader::publisher)
+            .unwrap_or_else(|| {
+                Arc::new(coco_config::RuntimePublisher::new(Arc::clone(
+                    &runtime_config,
+                )))
+            });
         Self {
             config_home,
-            runtime_config,
+            runtime_publisher,
             config_reloader,
         }
     }
@@ -81,16 +90,14 @@ impl SessionConfigResources {
         &self.config_home
     }
 
-    pub(in crate::session::session_runtime) fn runtime_config(&self) -> &Arc<RuntimeConfig> {
-        &self.runtime_config
+    pub(in crate::session::session_runtime) fn runtime_config(&self) -> Arc<RuntimeConfig> {
+        self.runtime_publisher.current()
     }
 
     pub(in crate::session::session_runtime) fn runtime_publisher(
         &self,
-    ) -> Option<Arc<coco_config::RuntimePublisher>> {
-        self.config_reloader
-            .as_ref()
-            .map(coco_config_reload::RuntimeReloader::publisher)
+    ) -> Arc<coco_config::RuntimePublisher> {
+        Arc::clone(&self.runtime_publisher)
     }
 
     pub(in crate::session::session_runtime) fn subscribe_config_changes(

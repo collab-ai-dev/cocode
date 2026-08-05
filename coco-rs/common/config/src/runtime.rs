@@ -1282,12 +1282,43 @@ fn resolve_model_selection(
 #[derive(Debug, Clone)]
 pub struct RuntimePublisher {
     sender: tokio::sync::watch::Sender<Arc<RuntimeConfig>>,
+    next_revision: Arc<std::sync::atomic::AtomicU64>,
+    published_revision: Arc<std::sync::Mutex<u64>>,
 }
 
 impl RuntimePublisher {
     pub fn new(initial: Arc<RuntimeConfig>) -> Self {
         let (sender, _) = tokio::sync::watch::channel(initial);
-        Self { sender }
+        Self {
+            sender,
+            next_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            published_revision: Arc::new(std::sync::Mutex::new(0)),
+        }
+    }
+
+    /// Reserve an ordering token before rebuilding a snapshot. Publication is
+    /// serialized and rejects a token older than the last successful publish.
+    pub fn reserve_revision(&self) -> u64 {
+        self.next_revision
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1
+    }
+
+    /// Publish a snapshot built for `revision`. Returns false when a newer
+    /// snapshot already won. The mutex covers both revision comparison and
+    /// `send_replace`, preventing an older sender from writing after a newer
+    /// one between those operations.
+    pub fn publish_reserved(&self, revision: u64, runtime: Arc<RuntimeConfig>) -> bool {
+        let mut published = self
+            .published_revision
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if revision <= *published {
+            return false;
+        }
+        self.sender.send_replace(runtime);
+        *published = revision;
+        true
     }
 
     /// Publish a fresh snapshot. Subscribers see the new `Arc`
@@ -1299,7 +1330,8 @@ impl RuntimePublisher {
     /// returning the stale snapshot. `send_replace` always stores the
     /// value and still wakes any subscribers.
     pub fn publish(&self, runtime: Arc<RuntimeConfig>) {
-        self.sender.send_replace(runtime);
+        let revision = self.reserve_revision();
+        let _ = self.publish_reserved(revision, runtime);
     }
 
     /// Subscribe to runtime updates. Each subscriber gets its own

@@ -50,6 +50,7 @@ impl SessionRuntime {
             agent_search_paths,
             builtin_agent_catalog,
             session_id_override,
+            preacquired_write_lease,
             is_non_interactive,
             execution_profile,
         } = opts;
@@ -125,6 +126,26 @@ impl SessionRuntime {
                 }
                 coco_config::SessionBackend::Memory => session_manager.store_for(&cwd),
             };
+        // Acquire before the first recovery/usage read and retain the
+        // capability in the runtime resources through shutdown. Read-only
+        // sidechat children never mutate durable session state.
+        let write_lease = if persist_session {
+            match preacquired_write_lease {
+                Some(lease) if lease.session_id() == session_id => Some(lease),
+                Some(lease) => anyhow::bail!(
+                    "pre-acquired session lease for {} cannot build session {session_id}",
+                    lease.session_id()
+                ),
+                None => Some(
+                    transcript_store
+                        .require_write_lease(&session_id)
+                        .map_err(|error| anyhow::anyhow!(error))?,
+                ),
+            }
+        } else {
+            drop(preacquired_write_lease);
+            None
+        };
         let usage_accounting = coco_query::usage_accounting::UsageAccounting::new(
             typed_session_id.clone(),
             coco_types::UsageAttribution::session(coco_types::UsageSource::Main),
@@ -351,14 +372,14 @@ impl SessionRuntime {
         // Cache-broken upstream by `coco_context::build_system_prompt`
         // when the section is non-empty; we splice the same string in
         // here so the engine's prompt cache prefix sees it.
-        let system_prompt_with_memory = if let Some(runtime) = &memory_runtime
+        let mut system_prompt_with_memory = system_prompt;
+        if let Some(runtime) = &memory_runtime
             && let Some(section) = runtime.render_system_prompt_section().await
             && !section.is_empty()
         {
-            format!("{system_prompt}\n\n{section}")
-        } else {
-            system_prompt
-        };
+            system_prompt_with_memory.add_cache_breakpoint();
+            system_prompt_with_memory.add_text(section);
+        }
 
         // Bootstrap the sandbox runtime state from settings + permission
         // rules. When sandbox isn't enabled or required dependencies are
@@ -510,7 +531,7 @@ impl SessionRuntime {
             // `--max-turns` is `--print`-only.
             max_turns: runtime_config.loop_config.max_turns,
             total_token_budget: cli
-                .max_tokens
+                .total_token_budget
                 .or_else(|| runtime_config.loop_config.total_token_budget.map(i64::from)),
             prompt_cache: model_runtimes
                 .snapshot_for_role(ModelRole::Main)
@@ -711,6 +732,7 @@ impl SessionRuntime {
             project_paths,
             transcript_store,
             persist_session,
+            write_lease,
             goal_runtime,
         );
         let project_resources = SessionProjectResources::new(process_runtime, project_services);

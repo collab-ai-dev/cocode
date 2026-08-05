@@ -41,6 +41,7 @@ fn write_minimal_session(memory_base: &std::path::Path, id: &str) {
             "type": "user",
             "uuid": format!("{id}-u1"),
             "session_id": id,
+            "cwd": TEST_CWD,
             "timestamp": "2025-01-15T10:00:00Z",
             "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]},
         }),
@@ -49,6 +50,7 @@ fn write_minimal_session(memory_base: &std::path::Path, id: &str) {
             "uuid": format!("{id}-a1"),
             "parent_uuid": format!("{id}-u1"),
             "session_id": id,
+            "cwd": TEST_CWD,
             "timestamp": "2025-01-15T10:00:01Z",
             "model": "claude-sonnet-4-6",
             "message": {"role": "assistant", "content": [{"type": "text", "text": "ack"}]},
@@ -194,4 +196,32 @@ fn fork_rejects_unsafe_explicit_session_id() {
         .expect_err("unsafe fork session id should fail");
 
     assert!(err.to_string().contains("invalid session id"));
+}
+
+#[test]
+fn fork_rejects_destination_id_that_exists_in_another_project() {
+    let dir = tempfile::tempdir().unwrap();
+    write_minimal_session(dir.path(), "src");
+    let other_paths = coco_paths::ProjectPaths::new(
+        dir.path().to_path_buf(),
+        std::path::Path::new("/different-project"),
+    );
+    std::fs::create_dir_all(other_paths.project_dir()).unwrap();
+    std::fs::write(
+        other_paths.transcript("forked-global"),
+        "{\"type\":\"user\"}\n",
+    )
+    .unwrap();
+
+    let cli = cli_with(&[
+        "--resume",
+        "src",
+        "--fork-session",
+        "--session-id",
+        "forked-global",
+    ]);
+    let error = resolve(&cli, dir.path(), std::path::Path::new(TEST_CWD))
+        .expect_err("global destination collision must fail");
+
+    assert!(error.to_string().contains("already exists"));
 }

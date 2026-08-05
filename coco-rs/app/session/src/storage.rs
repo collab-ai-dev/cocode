@@ -730,6 +730,14 @@ impl TranscriptStore {
                 }
                 Err(e) => return Err(e.into()),
             };
+            let Some(session_id) = session_dir.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let Some(_cleanup_lease) =
+                crate::acquire_cleanup_lease(self.paths.memory_base(), session_id)?
+            else {
+                continue;
+            };
 
             for tool_entry in tool_entries {
                 let Ok(tool_entry) = tool_entry else { continue };
@@ -1458,6 +1466,7 @@ fn append_entry_to_file(path: &Path, entry: &Entry) -> crate::Result<()> {
         .create(true)
         .append(true)
         .open(path)?;
+    fs2::FileExt::lock_exclusive(&file)?;
     let line = serde_json::to_string(entry)?;
     writeln!(file, "{line}")?;
     Ok(())

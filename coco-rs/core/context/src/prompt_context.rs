@@ -16,12 +16,18 @@ use sha2::Digest;
 const DEFAULT_MAIN_SYSTEM_PROMPT: &str =
     "You are coco, an AI coding assistant. Be concise and helpful.\n\n";
 const MEMORY_TRUNCATED_MARKER: &str = "\n[Memory file truncated]\n";
+const LITERAL_TRUNCATED_MARKER: &str = "\n[System prompt truncated]\n";
 
 /// Hard cap for one memory source rendered into the system prompt.
 pub const MAX_PROMPT_CONTEXT_SOURCE_BYTES: usize = 4_000;
 
 /// Hard aggregate cap for eager memory rendered into one prompt context.
 pub const MAX_PROMPT_CONTEXT_MEMORY_BYTES: usize = 24_000;
+
+/// Hard cap for a pre-composed literal system prompt. This path includes CLI
+/// overrides and the fully assembled host prompt, so it must have the same
+/// explicit resource boundary as workspace memory.
+pub const MAX_LITERAL_SYSTEM_PROMPT_BYTES: usize = 128_000;
 
 /// Stable identifier for one rendered prompt-context snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -48,6 +54,8 @@ pub enum PromptContextMode<'a> {
         source: PromptContextLiteralSource,
         text: Cow<'a, str>,
     },
+    /// Use an already-compiled prompt without discarding its cache boundaries.
+    Compiled { prompt: &'a crate::SystemPrompt },
     /// Render the default main-agent prompt with eager memory files.
     DefaultWorkspace { cwd: &'a Path },
 }
@@ -62,6 +70,10 @@ impl<'a> PromptContextMode<'a> {
 
     pub fn default_workspace(cwd: &'a Path) -> Self {
         Self::DefaultWorkspace { cwd }
+    }
+
+    pub fn compiled(prompt: &'a crate::SystemPrompt) -> Self {
+        Self::Compiled { prompt }
     }
 }
 
@@ -87,6 +99,8 @@ impl PromptContextLiteralSource {
 pub struct PromptContextSource {
     pub kind: PromptContextSourceKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub literal_source: Option<PromptContextLiteralSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
     pub original_size_bytes: i64,
     pub rendered_size_bytes: i64,
@@ -99,6 +113,7 @@ pub struct PromptContextSource {
 #[serde(rename_all = "snake_case")]
 pub enum PromptContextSourceKind {
     Literal,
+    Compiled,
     DefaultIdentity,
     MemoryFile,
 }
@@ -107,6 +122,7 @@ impl PromptContextSourceKind {
     fn as_str(self) -> &'static str {
         match self {
             Self::Literal => "literal",
+            Self::Compiled => "compiled",
             Self::DefaultIdentity => "default_identity",
             Self::MemoryFile => "memory_file",
         }
@@ -126,7 +142,8 @@ impl PromptContext {
     pub fn build(mode: PromptContextMode<'_>) -> Self {
         match mode {
             PromptContextMode::Literal { source, text } => {
-                let system_prompt = text.into_owned();
+                let original = text.into_owned();
+                let system_prompt = truncate_literal_prompt(&original);
                 let source_fingerprint = fingerprint_source(|hasher| {
                     hasher.update(b"literal");
                     hasher.update([0]);
@@ -136,14 +153,47 @@ impl PromptContext {
                 });
                 let sources = vec![PromptContextSource {
                     kind: PromptContextSourceKind::Literal,
+                    literal_source: Some(source),
                     path: None,
-                    original_size_bytes: system_prompt.len() as i64,
+                    original_size_bytes: original.len() as i64,
                     rendered_size_bytes: system_prompt.len() as i64,
-                    truncated: false,
+                    truncated: system_prompt.len() != original.len(),
                     fingerprint: source_fingerprint,
                 }];
                 let mut prompt = crate::SystemPrompt::new();
                 prompt.add_text(system_prompt);
+                Self::from_parts(prompt, sources)
+            }
+            PromptContextMode::Compiled { prompt } => {
+                let original_size_bytes = prompt.full_text().len();
+                let prompt =
+                    prompt.bounded(MAX_LITERAL_SYSTEM_PROMPT_BYTES, LITERAL_TRUNCATED_MARKER);
+                let rendered_size_bytes = prompt.full_text().len();
+                let sources = vec![PromptContextSource {
+                    kind: PromptContextSourceKind::Compiled,
+                    literal_source: None,
+                    path: None,
+                    original_size_bytes: original_size_bytes as i64,
+                    rendered_size_bytes: rendered_size_bytes as i64,
+                    truncated: rendered_size_bytes != original_size_bytes,
+                    fingerprint: fingerprint_source(|hasher| {
+                        hasher.update(b"compiled");
+                        hasher.update([0]);
+                        for block in &prompt.blocks {
+                            match block {
+                                crate::SystemPromptBlock::Text { content } => {
+                                    hasher.update(b"text");
+                                    hasher.update([0]);
+                                    hasher.update(content.as_bytes());
+                                }
+                                crate::SystemPromptBlock::CacheBreakpoint => {
+                                    hasher.update(b"breakpoint");
+                                }
+                            }
+                            hasher.update([0]);
+                        }
+                    }),
+                }];
                 Self::from_parts(prompt, sources)
             }
             PromptContextMode::DefaultWorkspace { cwd } => {
@@ -152,6 +202,7 @@ impl PromptContext {
                 prompt.add_text(DEFAULT_MAIN_SYSTEM_PROMPT);
                 let mut sources = vec![PromptContextSource {
                     kind: PromptContextSourceKind::DefaultIdentity,
+                    literal_source: None,
                     path: None,
                     original_size_bytes: DEFAULT_MAIN_SYSTEM_PROMPT.len() as i64,
                     rendered_size_bytes: DEFAULT_MAIN_SYSTEM_PROMPT.len() as i64,
@@ -171,6 +222,7 @@ impl PromptContext {
                     remaining_memory_bytes = remaining_memory_bytes.saturating_sub(rendered.len());
                     sources.push(PromptContextSource {
                         kind: PromptContextSourceKind::MemoryFile,
+                        literal_source: None,
                         path: Some(file.path.clone()),
                         original_size_bytes: file.content.len() as i64,
                         rendered_size_bytes: rendered.len() as i64,
@@ -223,6 +275,18 @@ impl PromptContext {
             sources,
         }
     }
+}
+
+fn truncate_literal_prompt(text: &str) -> String {
+    if text.len() <= MAX_LITERAL_SYSTEM_PROMPT_BYTES {
+        return text.to_string();
+    }
+    let content_budget = MAX_LITERAL_SYSTEM_PROMPT_BYTES - LITERAL_TRUNCATED_MARKER.len();
+    let prefix = take_utf8_prefix(text, content_budget);
+    let mut rendered = String::with_capacity(MAX_LITERAL_SYSTEM_PROMPT_BYTES);
+    rendered.push_str(prefix);
+    rendered.push_str(LITERAL_TRUNCATED_MARKER);
+    rendered
 }
 
 fn render_bounded_memory_file(

@@ -12,7 +12,7 @@
 //!
 //! # Wire shape
 //!
-//! [`SettingsWriter::write_local`] takes a [`serde_json::Value`] patch
+//! [`write_local_settings`] takes a [`serde_json::Value`] patch
 //! and deep-merges it into the on-disk JSON. `Value::Null` in the
 //! patch is the **delete sentinel**: writing
 //! `{"skill_overrides": {"foo": null}}` drops the `foo` key rather
@@ -26,21 +26,23 @@
 //! to the next turn.
 
 use std::fs;
-use std::io::Write;
+use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::LazyLock;
+use std::sync::Mutex;
 
 use serde_json::Value;
 use thiserror::Error;
 
 use crate::env::EnvSnapshot;
-use crate::overrides::RuntimeOverrides;
 use crate::runtime::CatalogPaths;
+use crate::runtime::RuntimeConfig;
 use crate::runtime::RuntimePublisher;
 use crate::runtime::build_runtime_config_with;
 use crate::settings::SettingsRoots;
-use crate::settings::load_settings_with_roots;
+use crate::settings::load_settings_with_roots_overriding_path;
 
 /// Settings-write side errors. Boundary crate (`coco-config`) uses
 /// `thiserror` per the error policy; main-trunk callers wrap via
@@ -59,11 +61,20 @@ pub enum SettingsWriteError {
         #[source]
         source: serde_json::Error,
     },
+    #[error("invalid settings mutation: {message}")]
+    Mutation { message: String },
     #[error("could not rebuild RuntimeConfig after write: {source}")]
     Rebuild {
         #[source]
         source: Box<crate::error::ConfigError>,
     },
+}
+
+static SETTINGS_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+pub struct RuntimePublishTarget {
+    pub roots: SettingsRoots,
+    pub publisher: Arc<RuntimePublisher>,
 }
 
 /// Deep-merge `patch` into `project config dir/settings.local.json`,
@@ -108,8 +119,16 @@ pub async fn write_local_settings_with_roots(
 ) -> Result<(), SettingsWriteError> {
     let path = crate::global_config::local_settings_path(roots.local_root());
     tokio::task::spawn_blocking(move || {
-        apply_patch(&path, &patch)?;
-        republish_runtime(&roots, flag_settings.as_deref(), &catalogs, &publisher)
+        mutate_settings_and_republish(
+            &path,
+            move |current| {
+                deep_merge_with_deletions(current, &patch);
+                Ok(())
+            },
+            flag_settings.as_deref(),
+            &catalogs,
+            vec![RuntimePublishTarget { roots, publisher }],
+        )
     })
     .await
     .map_err(|e| SettingsWriteError::Io {
@@ -118,62 +137,109 @@ pub async fn write_local_settings_with_roots(
     })?
 }
 
-// Compat shim — kept as a thin wrapper because tests + a few callsite
-// docs reference `LocalSettingsWriter::new(...).write_local(patch)`.
-// New code should prefer the free function above. Will be removed
-// when the few stragglers migrate.
-// Left intentionally; **do not** add new trait methods or new impls.
-// The single-impl trait is YAGNI — kill it once nothing references
-// the type alias.
-
-/// **Deprecated** — call [`write_local_settings`] directly. The
-/// trait + struct were a planned testable abstraction whose mock
-/// never materialized.
-pub struct LocalSettingsWriter {
-    cwd: PathBuf,
-    flag_settings: Option<PathBuf>,
-    catalogs: CatalogPaths,
-    publisher: Arc<RuntimePublisher>,
-}
-
-impl LocalSettingsWriter {
-    pub fn new(
-        cwd: impl Into<PathBuf>,
-        catalogs: CatalogPaths,
-        publisher: Arc<RuntimePublisher>,
-    ) -> Self {
-        Self {
-            cwd: cwd.into(),
-            flag_settings: None,
-            catalogs,
-            publisher,
-        }
-    }
-
-    pub fn with_flag_settings(mut self, flag: Option<PathBuf>) -> Self {
-        self.flag_settings = flag;
-        self
-    }
-
-    /// Forwards to [`write_local_settings`].
-    pub async fn write_local(&self, patch: Value) -> Result<(), SettingsWriteError> {
-        write_local_settings(
-            self.cwd.clone(),
-            self.flag_settings.clone(),
-            self.catalogs.clone(),
-            self.publisher.clone(),
-            patch,
-        )
-        .await
-    }
-}
-
 /// Read + deep-merge + atomic write. `Value::Null` in the overlay
 /// removes the key (TS B6 parity).
+#[cfg(test)]
 fn apply_patch(path: &Path, patch: &Value) -> Result<(), SettingsWriteError> {
+    mutate_settings_file(path, |current| {
+        deep_merge_with_deletions(current, patch);
+        Ok(())
+    })
+}
+
+/// Serialize one read/modify/write transaction against a settings file.
+/// Existing JSONC is accepted. A stable sibling lock coordinates coco
+/// processes, while the process mutex coordinates threads; replacement then
+/// uses the canonical sibling-tempfile writer.
+#[cfg(test)]
+pub(crate) fn mutate_settings_file(
+    path: &Path,
+    mutate: impl FnOnce(&mut Value) -> Result<(), String>,
+) -> Result<(), SettingsWriteError> {
+    let _guard = SETTINGS_WRITE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _file_guard = acquire_settings_write_lock(path)?;
     let mut current = read_or_default(path)?;
-    deep_merge_with_deletions(&mut current, patch);
+    mutate(&mut current).map_err(|message| SettingsWriteError::Mutation { message })?;
+    validate_settings_value(&current)?;
     atomic_write(path, &current)
+}
+
+/// One ordered settings transaction: mutate in memory, validate every affected
+/// runtime, then commit and publish before releasing the process/file guards.
+/// Watcher rebuilds use publisher revisions, so a stale watcher snapshot
+/// cannot overwrite a newer synchronous commit.
+pub fn mutate_settings_and_republish(
+    path: &Path,
+    mutate: impl FnOnce(&mut Value) -> Result<(), String>,
+    flag: Option<&Path>,
+    catalogs: &CatalogPaths,
+    targets: Vec<RuntimePublishTarget>,
+) -> Result<(), SettingsWriteError> {
+    let _guard = SETTINGS_WRITE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _file_guard = acquire_settings_write_lock(path)?;
+    let mut current = read_or_default(path)?;
+    mutate(&mut current).map_err(|message| SettingsWriteError::Mutation { message })?;
+    validate_settings_value(&current)?;
+
+    let mut rebuilt = Vec::with_capacity(targets.len());
+    for target in targets {
+        rebuilt.push(rebuild_runtime_with_proposed_settings(
+            path, &current, &target, flag, catalogs,
+        )?);
+    }
+
+    atomic_write(path, &current)?;
+    for (publisher, config) in rebuilt {
+        let revision = publisher.reserve_revision();
+        let _ = publisher.publish_reserved(revision, config);
+    }
+    Ok(())
+}
+
+fn acquire_settings_write_lock(path: &Path) -> Result<fs::File, SettingsWriteError> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).map_err(|source| SettingsWriteError::Io {
+        path: parent.to_path_buf(),
+        source,
+    })?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("settings.json");
+    let lock_path = parent.join(format!(".{file_name}.write.lock"));
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|source| SettingsWriteError::Io {
+            path: lock_path.clone(),
+            source,
+        })?;
+    fs2::FileExt::lock_exclusive(&file).map_err(|source| SettingsWriteError::Io {
+        path: lock_path,
+        source,
+    })?;
+    Ok(file)
+}
+
+fn validate_settings_value(value: &Value) -> Result<(), SettingsWriteError> {
+    let body = serde_json::to_string(value).map_err(|error| SettingsWriteError::Mutation {
+        message: format!("failed to serialize settings: {error}"),
+    })?;
+    crate::settings::parse_settings(&body)
+        .map(|_| ())
+        .map_err(|error| SettingsWriteError::Mutation {
+            message: error.to_string(),
+        })
 }
 
 fn read_or_default(path: &Path) -> Result<Value, SettingsWriteError> {
@@ -226,62 +292,42 @@ fn deep_merge_with_deletions(base: &mut Value, overlay: &Value) {
     }
 }
 
-/// Write to a sibling tempfile and `rename` into place. The rename is
-/// the atomic step on POSIX (and on Windows for same-volume moves).
+/// Write through the workspace's canonical sibling-tempfile helper. This keeps
+/// replacement semantics and durability handling consistent across platforms.
 fn atomic_write(path: &Path, value: &Value) -> Result<(), SettingsWriteError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| SettingsWriteError::Io {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-    }
     let body = serde_json::to_vec_pretty(value).map_err(|source| SettingsWriteError::Parse {
         path: path.to_path_buf(),
         source,
     })?;
-    let tmp = path.with_extension("local.json.tmp");
-    {
-        let mut file = fs::File::create(&tmp).map_err(|source| SettingsWriteError::Io {
-            path: tmp.clone(),
-            source,
-        })?;
-        file.write_all(&body)
-            .map_err(|source| SettingsWriteError::Io {
-                path: tmp.clone(),
-                source,
-            })?;
-        file.sync_all().map_err(|source| SettingsWriteError::Io {
-            path: tmp.clone(),
-            source,
-        })?;
-    }
-    fs::rename(&tmp, path).map_err(|source| SettingsWriteError::Io {
+    coco_utils_common::fs::write_atomic(path, body).map_err(|source| SettingsWriteError::Io {
         path: path.to_path_buf(),
         source,
     })
 }
 
-/// Rebuild `RuntimeConfig` from the on-disk settings + publish so the
-/// next agent turn reads the fresh tiers. Synchronous so the dialog's
-/// save handler can rely on the new state being visible before its
-/// `AvailableCommandsRefreshed` push fires.
-fn republish_runtime(
-    roots: &SettingsRoots,
+/// Build an affected runtime against the proposed in-memory settings. No disk
+/// or publisher state changes until every target has rebuilt successfully.
+fn rebuild_runtime_with_proposed_settings(
+    path: &Path,
+    proposed: &Value,
+    target: &RuntimePublishTarget,
     flag: Option<&Path>,
     catalogs: &CatalogPaths,
-    publisher: &RuntimePublisher,
-) -> Result<(), SettingsWriteError> {
+) -> Result<(Arc<RuntimePublisher>, Arc<RuntimeConfig>), SettingsWriteError> {
     let env = EnvSnapshot::from_current_process();
     // Preserve the originally-resolved `--setting-sources` set across the
     // rebuild so a settings write doesn't silently re-enable a layer the
     // operator disabled.
-    let enabled = publisher.current().enabled_setting_sources.clone();
-    let settings = load_settings_with_roots(
-        roots,
+    let current = target.publisher.current();
+    let enabled = current.enabled_setting_sources.clone();
+    let settings = load_settings_with_roots_overriding_path(
+        &target.roots,
         flag,
         &catalogs.user_settings,
         &catalogs.managed_settings,
         &enabled,
+        path,
+        proposed,
     )
     .map_err(|e| SettingsWriteError::Rebuild {
         source: Box::new(e),
@@ -289,15 +335,14 @@ fn republish_runtime(
     let rebuilt = build_runtime_config_with(
         settings,
         env,
-        RuntimeOverrides::default(),
+        current.overrides.clone(),
         catalogs.clone(),
         enabled,
     )
     .map_err(|e| SettingsWriteError::Rebuild {
         source: Box::new(e),
     })?;
-    publisher.publish(Arc::new(rebuilt));
-    Ok(())
+    Ok((Arc::clone(&target.publisher), Arc::new(rebuilt)))
 }
 
 #[cfg(test)]

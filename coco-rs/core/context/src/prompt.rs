@@ -87,6 +87,69 @@ impl SystemPrompt {
         self.blocks.push(SystemPromptBlock::CacheBreakpoint);
     }
 
+    /// Build a one-block prompt from literal text.
+    pub fn from_text(text: impl Into<String>) -> Self {
+        let mut prompt = Self::new();
+        prompt.add_text(text);
+        prompt
+    }
+
+    /// Preserve block/cache-boundary structure while enforcing a hard rendered
+    /// byte budget. Truncation shrinks the largest text blocks first so a large
+    /// early section cannot discard smaller, semantically distinct sections.
+    pub fn bounded(&self, max_bytes: usize, marker: &str) -> Self {
+        if self.full_text().len() <= max_bytes {
+            return self.clone();
+        }
+
+        let mut bounded = self.clone();
+        while bounded.full_text().len() > max_bytes {
+            let overage = bounded.full_text().len() - max_bytes;
+            let Some((largest_index, largest_len)) = bounded
+                .blocks
+                .iter()
+                .enumerate()
+                .filter_map(|(index, block)| match block {
+                    SystemPromptBlock::Text { content } if !content.is_empty() => {
+                        Some((index, content.len()))
+                    }
+                    _ => None,
+                })
+                .max_by_key(|(_, len)| *len)
+            else {
+                // Only separators remain. Keeping every empty text block is
+                // impossible under this budget, so discard one.
+                if let Some(index) = bounded
+                    .blocks
+                    .iter()
+                    .position(|block| matches!(block, SystemPromptBlock::Text { .. }))
+                {
+                    bounded.blocks.remove(index);
+                    continue;
+                }
+                break;
+            };
+            let target_len = largest_len.saturating_sub(overage.max(1));
+            let SystemPromptBlock::Text { content } = &mut bounded.blocks[largest_index] else {
+                unreachable!("largest block is text")
+            };
+            let prefix_budget = target_len.saturating_sub(marker.len());
+            let prefix = coco_utils_string::take_bytes_at_char_boundary(content, prefix_budget);
+            let marker = coco_utils_string::take_bytes_at_char_boundary(
+                marker,
+                target_len.saturating_sub(prefix.len()),
+            );
+            content.truncate(prefix.len());
+            content.push_str(marker);
+            if content.len() > target_len {
+                content.truncate(
+                    coco_utils_string::take_bytes_at_char_boundary(content, target_len).len(),
+                );
+            }
+        }
+        bounded
+    }
+
     /// Derive text parts from the block stream.
     ///
     /// A [`SystemPromptBlock::CacheBreakpoint`] marks the previous
@@ -123,6 +186,18 @@ impl SystemPrompt {
     /// Estimated token count (rough: 1 token ≈ 4 chars).
     pub fn estimated_tokens(&self) -> i64 {
         (self.full_text().len() as i64) / 4
+    }
+}
+
+impl From<String> for SystemPrompt {
+    fn from(text: String) -> Self {
+        Self::from_text(text)
+    }
+}
+
+impl From<&str> for SystemPrompt {
+    fn from(text: &str) -> Self {
+        Self::from_text(text)
     }
 }
 

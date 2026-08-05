@@ -194,6 +194,7 @@ pub struct SessionTurnEngineConfigRequest {
 
 pub(crate) struct SessionTurnEngineConfig {
     pub(crate) config: coco_query::QueryEngineConfig,
+    pub(crate) auto_mode_rules: coco_permissions::AutoModeRules,
     pub(crate) model_runtime_source: coco_inference::ModelRuntimeSource,
     pub(crate) model_id: String,
     pub(crate) turn_cwd: PathBuf,
@@ -274,7 +275,7 @@ pub struct SessionRuntimeBuildOpts<'a> {
     pub config_reloader: Option<coco_config_reload::RuntimeReloader>,
     pub cwd: PathBuf,
     pub model_id: String,
-    pub system_prompt: String,
+    pub system_prompt: coco_context::SystemPrompt,
     pub permission_mode_availability: coco_types::PermissionModeAvailability,
     pub permission_mode: PermissionMode,
     pub model_runtimes: Option<Arc<coco_inference::ModelRuntimeRegistry>>,
@@ -317,6 +318,10 @@ pub struct SessionRuntimeBuildOpts<'a> {
     /// (task dirs, task-list id, agent transcripts, usage snapshot)
     /// keys off the SAME id the engine config uses.
     pub session_id_override: Option<SessionId>,
+    /// Writable ownership acquired by a resume admission before it read the
+    /// transcript. When absent, normal fresh/direct construction acquires the
+    /// lease itself. The runtime retains whichever capability is supplied.
+    pub preacquired_write_lease: Option<coco_session::SessionWriteLease>,
     /// True for noninteractive remote / headless (print) sessions. File-history checkpointing
     /// defaults OFF for these and ON for the interactive TUI, unless
     /// overridden by `COCO_FILE_CHECKPOINTING_*`.

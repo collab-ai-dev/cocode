@@ -50,6 +50,32 @@ fn build_isolated(
     Ok(runtime?)
 }
 
+#[test]
+fn runtime_publisher_rejects_out_of_order_snapshot() {
+    let runtime = |language: &str| {
+        let mut settings = settings_with_main("anthropic", "claude-sonnet-4-6");
+        settings.merged.language = Some(language.to_string());
+        Arc::new(
+            build_isolated(
+                settings,
+                EnvSnapshot::default(),
+                RuntimeOverrides::default(),
+            )
+            .expect("runtime config"),
+        )
+    };
+    let publisher = RuntimePublisher::new(runtime("initial"));
+    let older_revision = publisher.reserve_revision();
+    let newer_revision = publisher.reserve_revision();
+
+    assert!(publisher.publish_reserved(newer_revision, runtime("newer")));
+    assert!(!publisher.publish_reserved(older_revision, runtime("older")));
+    assert_eq!(
+        publisher.current().settings.merged.language.as_deref(),
+        Some("newer")
+    );
+}
+
 fn model_spec(provider: &str, api: ProviderApi, model_id: &str) -> ModelSpec {
     ModelSpec {
         provider: provider.to_string(),

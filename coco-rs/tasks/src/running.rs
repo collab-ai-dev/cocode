@@ -148,7 +148,7 @@ pub struct TaskManager {
 const WORKFLOW_PROGRESS_COALESCE_MS: i64 = 16;
 
 /// Per-workflow emit gate.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct WorkflowEmitGate {
     /// When the last frame went out.
     last_emit_ms: i64,
@@ -156,6 +156,24 @@ struct WorkflowEmitGate {
     /// to schedule a second one — the pending flush reads the array fresh and
     /// therefore already carries it.
     flush_pending: bool,
+    /// Cancels an in-flight trailing flush before the terminal transition
+    /// publishes its authoritative final frame.
+    flush_cancel: CancellationToken,
+    /// Serializes every frame emission for this workflow with the terminal
+    /// flush. This closes the race where a trailing task has already won its
+    /// sleep branch just before cancellation.
+    emit_lock: Arc<tokio::sync::Mutex<()>>,
+}
+
+impl Default for WorkflowEmitGate {
+    fn default() -> Self {
+        Self {
+            last_emit_ms: 0,
+            flush_pending: false,
+            flush_cancel: CancellationToken::new(),
+            emit_lock: Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
 }
 
 /// Durable job-ledger binding for this manager's background tasks. When
@@ -1217,21 +1235,44 @@ impl TaskManager {
         // The fold above is unconditional — the row is always current. Only the
         // *publishing* is rate-limited.
         match self.claim_workflow_emit(id) {
-            WorkflowEmitDecision::Now => self.emit_workflow_frame(id).await,
-            WorkflowEmitDecision::After(delay) => {
+            WorkflowEmitDecision::Now { cancel, emit_lock } => {
+                let _emit_guard = emit_lock.lock().await;
+                if !cancel.is_cancelled() {
+                    self.emit_workflow_frame(id).await;
+                }
+            }
+            WorkflowEmitDecision::After {
+                delay,
+                cancel,
+                emit_lock,
+            } => {
                 let rows = self.rows.clone();
                 let event_tx = self.event_tx.clone();
                 let gates = self.workflow_emit.clone();
                 let id = id.to_string();
                 tokio::spawn(async move {
-                    tokio::time::sleep(delay).await;
-                    if let Ok(mut gates) = gates.lock()
-                        && let Some(gate) = gates.get_mut(&id)
-                    {
-                        gate.flush_pending = false;
-                        gate.last_emit_ms = current_time_ms();
+                    tokio::select! {
+                        biased;
+                        () = cancel.cancelled() => {}
+                        () = async {
+                            tokio::time::sleep(delay).await;
+                            let _emit_guard = emit_lock.lock().await;
+                            if cancel.is_cancelled() {
+                                return;
+                            }
+                            {
+                                let mut gates = gates
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                let Some(gate) = gates.get_mut(&id) else {
+                                    return;
+                                };
+                                gate.flush_pending = false;
+                                gate.last_emit_ms = current_time_ms();
+                            }
+                            emit_workflow_frame(&rows, event_tx.as_ref(), &id).await;
+                        } => {}
                     }
-                    emit_workflow_frame(&rows, event_tx.as_ref(), &id).await;
                 });
             }
             WorkflowEmitDecision::Coalesced => {}
@@ -1243,24 +1284,30 @@ impl TaskManager {
     /// concurrent deltas cannot both schedule a flush.
     fn claim_workflow_emit(&self, task_id: &str) -> WorkflowEmitDecision {
         let now = current_time_ms();
-        let Ok(mut gates) = self.workflow_emit.lock() else {
-            // Poisoned by a panicking holder: publish rather than lose the
-            // frame — a stale panel is worse than an extra event.
-            return WorkflowEmitDecision::Now;
-        };
+        let mut gates = self
+            .workflow_emit
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let gate = gates.entry(task_id.to_string()).or_default();
         let elapsed = now.saturating_sub(gate.last_emit_ms);
         if elapsed >= WORKFLOW_PROGRESS_COALESCE_MS {
             gate.last_emit_ms = now;
-            return WorkflowEmitDecision::Now;
+            return WorkflowEmitDecision::Now {
+                cancel: gate.flush_cancel.clone(),
+                emit_lock: Arc::clone(&gate.emit_lock),
+            };
         }
         if gate.flush_pending {
             return WorkflowEmitDecision::Coalesced;
         }
         gate.flush_pending = true;
-        WorkflowEmitDecision::After(std::time::Duration::from_millis(
-            (WORKFLOW_PROGRESS_COALESCE_MS - elapsed).max(0) as u64,
-        ))
+        WorkflowEmitDecision::After {
+            delay: std::time::Duration::from_millis(
+                (WORKFLOW_PROGRESS_COALESCE_MS - elapsed).max(0) as u64,
+            ),
+            cancel: gate.flush_cancel.clone(),
+            emit_lock: Arc::clone(&gate.emit_lock),
+        }
     }
 
     /// Publish the run's current progress array unconditionally.
@@ -1272,9 +1319,18 @@ impl TaskManager {
     /// terminal transition so a coalesced tail delta is never the frame a
     /// consumer is left holding.
     async fn settle_workflow_progress(&self, task_id: &str) {
-        if let Ok(mut gates) = self.workflow_emit.lock() {
-            gates.remove(task_id);
+        let gate = self
+            .workflow_emit
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(task_id);
+        if let Some(gate) = &gate {
+            gate.flush_cancel.cancel();
         }
+        let _emit_guard = match &gate {
+            Some(gate) => Some(gate.emit_lock.lock().await),
+            None => None,
+        };
         self.emit_workflow_frame(task_id).await;
     }
 
@@ -1350,9 +1406,16 @@ pub enum KillTaskError {
 /// What [`TaskManager::claim_workflow_emit`] decided for one delta.
 enum WorkflowEmitDecision {
     /// Publish immediately — the coalescing window has elapsed.
-    Now,
+    Now {
+        cancel: CancellationToken,
+        emit_lock: Arc<tokio::sync::Mutex<()>>,
+    },
     /// Publish after this delay; this delta owns the trailing flush.
-    After(std::time::Duration),
+    After {
+        delay: std::time::Duration,
+        cancel: CancellationToken,
+        emit_lock: Arc<tokio::sync::Mutex<()>>,
+    },
     /// Nothing to do: a trailing flush is already pending and will read the
     /// array fresh, so it carries this delta too.
     Coalesced,

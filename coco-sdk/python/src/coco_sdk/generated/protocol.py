@@ -583,8 +583,8 @@ class SkillOverrideState(str, Enum):
 class SkillOverridesSaveErrorKind(str, Enum):
     io = "io"
     parse = "parse"
+    mutation = "mutation"
     rebuild = "rebuild"
-    no_publisher = "no_publisher"
 
 
 class SkillProvenanceBadge(str, Enum):

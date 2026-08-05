@@ -461,7 +461,31 @@ impl QueryEngine {
         history: &coco_messages::MessageHistory,
     ) -> coco_types::CacheSafeParams {
         coco_types::CacheSafeParams {
-            rendered_system_prompt: config.system_prompt.clone().unwrap_or_default(),
+            rendered_system_prompt: config
+                .system_prompt
+                .as_ref()
+                .map(coco_context::SystemPrompt::full_text)
+                .unwrap_or_default(),
+            system_prompt_blocks: config
+                .system_prompt
+                .as_ref()
+                .map(|prompt| {
+                    prompt
+                        .blocks
+                        .iter()
+                        .map(|block| match block {
+                            coco_context::SystemPromptBlock::Text { content } => {
+                                coco_types::CachedSystemPromptBlock::Text {
+                                    content: content.clone(),
+                                }
+                            }
+                            coco_context::SystemPromptBlock::CacheBreakpoint => {
+                                coco_types::CachedSystemPromptBlock::CacheBreakpoint
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
             model_id: config.model_id.clone(),
             provider,
             active_shell_tool: config.active_shell_tool,

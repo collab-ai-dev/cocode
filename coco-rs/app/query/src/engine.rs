@@ -17,7 +17,6 @@ use coco_messages::MessageHistory;
 use coco_messages::create_plan_implementation_message;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::TurnAbortSignal;
-use coco_types::TokenUsage;
 use coco_types::ToolAppState;
 use coco_types::TurnEndedParams;
 
@@ -481,7 +480,7 @@ impl QueryEngine {
     /// makes (Completed / Interrupted / MaxTurnsReached /
     /// BudgetExhausted). `None` only when the caller didn't pass an
     /// `event_tx` — in that case no wire emit happens.
-    /// Returns `(Result<QueryResult>, TokenUsage, pending_success_terminal)`.
+    /// Returns `(Result<QueryResult>, QueryFailureStats, pending_success_terminal)`.
     /// The second tuple
     /// element is the accumulated token usage at the moment the
     /// loop exited — populated even on `Err` so the caller can
@@ -499,10 +498,10 @@ impl QueryEngine {
         cycle_turn_id: Option<coco_types::TurnId>,
     ) -> (
         Result<QueryResult, coco_error::BoxedError>,
-        TokenUsage,
+        crate::engine_loop_state::QueryFailureStats,
         Option<TurnEndedParams>,
     ) {
-        let mut total_usage = TokenUsage::default();
+        let mut failure_stats = crate::engine_loop_state::QueryFailureStats::default();
         let (result, terminal) = self
             .run_session_loop_inner(
                 turn_messages,
@@ -511,10 +510,10 @@ impl QueryEngine {
                 hook_tx_opt,
                 history,
                 cycle_turn_id,
-                &mut total_usage,
+                &mut failure_stats,
             )
             .await;
-        (result, total_usage, terminal)
+        (result, failure_stats, terminal)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -531,7 +530,7 @@ impl QueryEngine {
         hook_tx_opt: Option<tokio::sync::mpsc::Sender<coco_hooks::HookExecutionEvent>>,
         history: &mut MessageHistory,
         cycle_turn_id: Option<coco_types::TurnId>,
-        total_usage: &mut TokenUsage,
+        failure_stats: &mut crate::engine_loop_state::QueryFailureStats,
     ) -> (
         Result<QueryResult, coco_error::BoxedError>,
         Option<TurnEndedParams>,
@@ -641,14 +640,15 @@ impl QueryEngine {
                         if hit_max_turns {
                             coco_types::TurnEndedParams::max_turns_reached(
                                 id.clone(),
-                                Some(*total_usage),
+                                Some(acc.total_usage),
                                 self.config.max_turns.unwrap_or(0),
                             )
                         } else {
                             coco_types::TurnEndedParams::budget_exhausted(
                                 id.clone(),
-                                Some(*total_usage),
-                                total_usage.input_tokens.total + total_usage.output_tokens.total,
+                                Some(acc.total_usage),
+                                acc.total_usage.input_tokens.total
+                                    + acc.total_usage.output_tokens.total,
                                 self.config.total_token_budget,
                             )
                         }
@@ -716,7 +716,7 @@ impl QueryEngine {
                 )
                 .await;
             let crate::engine_turn_request::PreparedTurnRequest {
-                params,
+                mut params,
                 active_snapshot,
                 prompt_context,
                 messages_snapshot,
@@ -733,12 +733,26 @@ impl QueryEngine {
             let mut streaming_handle = streaming_handle;
             let mut streaming_model_index = streaming_model_index;
 
-            match self.check_blocking_limit(
-                messages_snapshot.as_ref(),
+            let event_turn_id = cycle_turn_id
+                .clone()
+                .unwrap_or_else(|| coco_types::TurnId::from(turn_id.as_str()));
+            let moa_guidance_budget = self.optional_text_context_budget(
+                &params,
                 &active_snapshot,
-                &turn_state,
-                params.max_tokens,
-            ) {
+                crate::moa::REFERENCE_GUIDANCE_TOTAL_BUDGET,
+            );
+            params = crate::moa::maybe_attach_moa_guidance(
+                self,
+                &self.model_runtimes,
+                &services.runtime_source,
+                &params,
+                &event_tx,
+                &event_turn_id,
+                moa_guidance_budget,
+            )
+            .await;
+
+            match self.check_final_request_blocking_limit(&params, &active_snapshot) {
                 crate::engine_recovery::BlockingLimitDecision::Block {
                     estimated_tokens,
                     context_window,
@@ -809,10 +823,11 @@ impl QueryEngine {
                 return (Ok(result), None);
             }
 
+            // All local admission gates passed. The one-shot reactive edit is
+            // consumed only now, immediately before the request is attempted.
+            self.consume_admitted_reactive_context_management(&params)
+                .await;
             let api_start = std::time::Instant::now();
-            let event_turn_id = cycle_turn_id
-                .clone()
-                .unwrap_or_else(|| coco_types::TurnId::from(turn_id.as_str()));
             let opened_stream = match self
                 .open_turn_stream(
                     &active_snapshot,
@@ -829,6 +844,7 @@ impl QueryEngine {
                 Ok(opened) => opened,
                 Err(crate::engine_recovery::StreamErrorOutcome::Continue) => continue,
                 Err(crate::engine_recovery::StreamErrorOutcome::Bail(err)) => {
+                    failure_stats.capture(&acc, &turn_state, &consts);
                     return (Err(err), None);
                 }
             };
@@ -926,6 +942,7 @@ impl QueryEngine {
                     {
                         crate::engine_recovery::StreamErrorOutcome::Continue => continue,
                         crate::engine_recovery::StreamErrorOutcome::Bail(err) => {
+                            failure_stats.capture(&acc, &turn_state, &consts);
                             return (Err(err), None);
                         }
                     }
@@ -966,6 +983,7 @@ impl QueryEngine {
                     {
                         crate::engine_recovery::StreamErrorOutcome::Continue => continue,
                         crate::engine_recovery::StreamErrorOutcome::Bail(err) => {
+                            failure_stats.capture(&acc, &turn_state, &consts);
                             return (Err(err), None);
                         }
                     }
@@ -988,7 +1006,6 @@ impl QueryEngine {
             }
 
             acc.total_usage += usage;
-            *total_usage = acc.total_usage;
             turn_state.budget.record_usage(&usage);
             let provider = opened_runtime_snapshot.provider.clone();
             let model_id = opened_runtime_snapshot.model_id.clone();

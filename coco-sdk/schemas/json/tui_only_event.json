@@ -5690,19 +5690,19 @@
           "const": "parse"
         },
         {
+          "description": "The requested patch would produce an invalid settings document.",
+          "type": "string",
+          "const": "mutation"
+        },
+        {
           "description": "`RuntimeConfig` rebuild failed after the write.",
           "type": "string",
           "const": "rebuild"
-        },
-        {
-          "description": "Hot-reload publisher is absent (one-shot build path).",
-          "type": "string",
-          "const": "no_publisher"
         }
       ]
     },
     "SkillOverridesSaveResult": {
-      "description": "Outcome of a `/skills` dialog save dispatch. CLI bridge populates\nthis after `SettingsWriter::write_local`.\n\nCarries **no display data** — TUI owns toast text generation and\nstashes the pre-write `total_edits` count on its own state\nbefore dispatching. CLI only reports success vs typed failure.",
+      "description": "Outcome of a `/skills` dialog save dispatch. CLI bridge populates\nthis after the settings writer persists and republishes the patch.\n\nCarries **no display data** — TUI owns toast text generation and\nstashes the pre-write `total_edits` count on its own state\nbefore dispatching. CLI only reports success vs typed failure.",
       "oneOf": [
         {
           "description": "Write succeeded.",
