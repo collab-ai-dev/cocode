@@ -171,6 +171,24 @@ fn system_prompt_parts_mark_previous_text_at_cache_breakpoint() {
     assert_eq!(parts[1].cache_hint, CacheHint::Ephemeral);
 }
 
+#[test]
+fn bounded_prompt_truncates_largest_block_without_dropping_later_sections() {
+    let mut prompt = SystemPrompt::new();
+    prompt.add_text("界".repeat(80));
+    prompt.add_cache_breakpoint();
+    prompt.add_text("<env>keep-me</env>");
+    prompt.add_text("custom-append");
+
+    let bounded = prompt.bounded(80, "...[truncated]...");
+    let text = bounded.full_text();
+
+    assert!(text.len() <= 80);
+    assert!(text.contains("...[truncated]..."));
+    assert!(text.contains("<env>keep-me</env>"));
+    assert!(text.contains("custom-append"));
+    assert!(bounded.blocks.contains(&SystemPromptBlock::CacheBreakpoint));
+}
+
 /// G6 regression: AGENT_NOTES (passed via `notes_after_env`) must render
 /// BEFORE the memory section (`enhanceSystemPromptWithEnvDetails` bundles
 /// `notes` with the env block, not after memory).

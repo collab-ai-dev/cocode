@@ -19,6 +19,43 @@ use std::io;
 
 use tokio::process::Child;
 
+/// RAII cleanup for a child placed in its own process group. Keep this guard
+/// next to a `kill_on_drop` child: dropping an in-flight future then kills both
+/// the direct child and any descendants that inherited its group.
+#[must_use]
+pub struct ProcessGroupGuard {
+    process_group_id: Option<u32>,
+}
+
+impl ProcessGroupGuard {
+    pub fn for_child(child: &Child) -> Self {
+        Self {
+            process_group_id: child.id(),
+        }
+    }
+
+    pub fn disarm(&mut self) {
+        self.process_group_id = None;
+    }
+
+    pub fn kill(&mut self) -> io::Result<()> {
+        let Some(process_group_id) = self.process_group_id else {
+            return Ok(());
+        };
+        let result = kill_process_group(process_group_id);
+        if result.is_ok() {
+            self.disarm();
+        }
+        result
+    }
+}
+
+impl Drop for ProcessGroupGuard {
+    fn drop(&mut self) {
+        let _ = self.kill();
+    }
+}
+
 #[cfg(target_os = "linux")]
 /// Ensure the child receives SIGTERM when the original parent dies.
 ///

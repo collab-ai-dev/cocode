@@ -9,6 +9,7 @@ use coco_tasks::{
 use coco_tool_runtime::ShellTaskKind;
 use coco_tool_runtime::ShellTaskRequest;
 use coco_types::{TaskStatus, TaskType};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, instrument, warn};
@@ -78,6 +79,7 @@ impl TaskRuntime {
         );
 
         let manager = self.manager.clone();
+        let terminal_outputs = Arc::clone(&self.terminal_outputs);
         let sink = self.notification_sink.clone();
         let driver_task_id = task_id.clone();
         let driver_description = request.description.clone();
@@ -141,8 +143,16 @@ impl TaskRuntime {
                 timeout_ms,
                 cancel_for_driver,
                 dto_for_driver,
+                manager.clone(),
+                driver_task_id.clone(),
             )
             .await;
+            if let Some(outputs) = outcome.terminal_outputs.clone() {
+                terminal_outputs
+                    .write()
+                    .await
+                    .insert(driver_task_id.clone(), outputs);
+            }
             drain_done_for_driver.cancel();
             apply_shell_terminal_state(
                 &manager,
@@ -155,6 +165,16 @@ impl TaskRuntime {
                 outcome,
             )
             .await;
+            if manager
+                .get(&driver_task_id)
+                .await
+                .is_some_and(|state| state.is_backgrounded() || state.notified)
+            {
+                // Detached tasks use disk output. A killed foreground task is
+                // marked notified by the terminal transition and likewise has
+                // no output reader. Release both bounded raw buffers promptly.
+                terminal_outputs.write().await.remove(&driver_task_id);
+            }
         });
 
         Ok(task_id)
@@ -164,6 +184,7 @@ impl TaskRuntime {
 /// Result of one shell-task execution. Carries enough information
 /// for `apply_shell_terminal_state` to compose the summary string
 /// and status.
+#[derive(Clone, Copy)]
 enum WaitOutcome {
     Exited { code: i32 },
     TimedOut { budget_ms: i64 },
@@ -176,6 +197,14 @@ enum WaitOutcome {
 /// without polluting the lifecycle enum.
 struct ShellOutcome {
     wait: WaitOutcome,
+    terminal_outputs: Option<coco_tool_runtime::TerminalOutputs>,
+}
+
+struct ShellSpawnSpec {
+    program: std::path::PathBuf,
+    args: Vec<String>,
+    env_overrides: Vec<(String, String)>,
+    cwd_file_path: Option<std::path::PathBuf>,
 }
 
 /// Spawn the child process directly (bypassing `coco_shell::ShellExecutor`
@@ -198,77 +227,88 @@ async fn run_shell_task(
     timeout_ms: i64,
     cancel: CancellationToken,
     dto: DiskTaskOutput,
+    manager: Arc<TaskManager>,
+    task_id: String,
 ) -> ShellOutcome {
     use tokio::io::AsyncReadExt;
     use tokio::process::Command;
 
     let command = request.command.as_str();
-    let sandbox_tmp_dir = match &request.sandbox_state {
-        Some(state)
-            if state
-                .command_snapshot(command, request.sandbox_bypass)
-                .should_wrap =>
-        {
-            coco_sandbox::SandboxState::allocate_command_tmp_dir()
-        }
-        _ => None,
-    };
+    let sandbox_snapshot = request
+        .sandbox_state
+        .as_ref()
+        .map(|state| state.command_snapshot(command, request.sandbox_bypass));
+    let sandbox_tmp_dir = sandbox_snapshot
+        .as_ref()
+        .filter(|snapshot| snapshot.should_wrap)
+        .and_then(|_| coco_sandbox::SandboxState::allocate_command_tmp_dir());
     let sandbox_tmp_path = sandbox_tmp_dir.as_ref().map(|dir| dir.path().to_path_buf());
 
-    let (program, args, env_overrides): (std::path::PathBuf, Vec<String>, Vec<(String, String)>) =
-        match request.shell_kind.clone() {
-            ShellTaskKind::DefaultPlatformShell => {
-                #[cfg(windows)]
-                {
-                    (
-                        std::path::PathBuf::from("cmd.exe"),
-                        vec!["/C".to_string(), command.to_string()],
-                        Vec::new(),
-                    )
-                }
-                #[cfg(not(windows))]
-                {
-                    (
-                        std::path::PathBuf::from("/bin/bash"),
-                        vec!["-c".to_string(), command.to_string()],
-                        Vec::new(),
-                    )
+    let ShellSpawnSpec {
+        program,
+        args,
+        env_overrides,
+        cwd_file_path,
+    } = match request.shell_kind.clone() {
+        ShellTaskKind::DefaultPlatformShell => {
+            #[cfg(windows)]
+            {
+                ShellSpawnSpec {
+                    program: std::path::PathBuf::from("cmd.exe"),
+                    args: vec!["/C".to_string(), command.to_string()],
+                    env_overrides: Vec::new(),
+                    cwd_file_path: None,
                 }
             }
-            ShellTaskKind::Provider(provider) => {
-                let use_sandbox = sandbox_tmp_path.is_some();
-                let opts = coco_shell::BuildExecOpts {
-                    id: BACKGROUND_SHELL_COMMAND_ID.fetch_add(1, Ordering::Relaxed),
-                    sandbox_tmp_dir: sandbox_tmp_path.clone(),
-                    use_sandbox,
-                };
-                let built = provider.build_exec_command(command, &opts).await;
-                let args = provider.spawn_args(&built.command_string);
-                let env_overrides = provider
-                    .env_overrides(command, &opts)
-                    .await
-                    .into_iter()
-                    .collect();
-                (provider.shell_path().to_path_buf(), args, env_overrides)
+            #[cfg(not(windows))]
+            {
+                ShellSpawnSpec {
+                    program: std::path::PathBuf::from("/bin/bash"),
+                    args: vec!["-c".to_string(), command.to_string()],
+                    env_overrides: Vec::new(),
+                    cwd_file_path: None,
+                }
             }
-        };
+        }
+        ShellTaskKind::Provider(provider) => {
+            let use_sandbox = sandbox_tmp_path.is_some();
+            let opts = coco_shell::BuildExecOpts {
+                id: BACKGROUND_SHELL_COMMAND_ID.fetch_add(1, Ordering::Relaxed),
+                sandbox_tmp_dir: sandbox_tmp_path.clone(),
+                use_sandbox,
+            };
+            let mut built = provider.build_exec_command(command, &opts).await;
+            if let Some(prefix) = sandbox_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.inner_command_prefix.as_deref())
+            {
+                built.command_string = format!("{prefix}{}", built.command_string);
+            }
+            let args = provider.spawn_args(&built.command_string);
+            let env_overrides = provider
+                .env_overrides(command, &opts)
+                .await
+                .into_iter()
+                .collect();
+            ShellSpawnSpec {
+                program: provider.shell_path().to_path_buf(),
+                args,
+                env_overrides,
+                cwd_file_path: Some(built.cwd_file_path),
+            }
+        }
+    };
 
     let mut cmd = Command::new(program);
     cmd.args(&args);
-    for (key, value) in env_overrides {
-        cmd.env(key, value);
-    }
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::piped());
-    // W6: sandbox wrap. `try_wrap_command_with_binds` mutates `cmd`
-    // in place to swap the program/args with the platform-specific
-    // wrapper (bwrap on Linux, Seatbelt sandbox-exec on macOS).
+    // Sandbox wrapping owns only program/args. Spawn policy is applied once,
+    // below, to the final command.
     // No-op when sandbox is None / inactive / command excluded. When a command
     // should be wrapped, wrap failure is terminal; never spawn it unsandboxed.
-    if let Some(state) = &request.sandbox_state
-        && let Err(e) = state.try_wrap_command_with_binds(
+    if let (Some(state), Some(snapshot)) = (&request.sandbox_state, sandbox_snapshot.as_ref())
+        && let Err(e) = state.wrap_snapshot_program_with_binds(
             command,
-            request.sandbox_bypass,
+            snapshot,
             &sandbox_tmp_path.iter().cloned().collect::<Vec<_>>(),
             &mut cmd,
         )
@@ -279,11 +319,31 @@ async fn run_shell_task(
             "sandbox wrap failed; refusing to spawn unsandboxed"
         );
         let msg = format!("\n[sandbox wrap failed: {e}]\n");
-        dto.append(&msg);
+        dto.append(&msg).await;
         let _ = dto.flush().await;
+        cleanup_tracked_cwd(cwd_file_path.as_deref());
         return ShellOutcome {
             wait: WaitOutcome::SpawnFailed,
+            terminal_outputs: foreground_outputs(
+                &request,
+                Vec::new(),
+                msg.into_bytes(),
+                None,
+                None,
+                false,
+            ),
         };
+    }
+    cmd.current_dir(&request.cwd);
+    for (key, value) in env_overrides {
+        cmd.env(key, value);
+    }
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    #[cfg(unix)]
+    cmd.process_group(0);
+    if let (Some(state), Some(snapshot)) = (&request.sandbox_state, sandbox_snapshot.as_ref()) {
+        state.apply_snapshot_env(snapshot, &mut cmd);
     }
     let mut child = match cmd.kill_on_drop(true).spawn() {
         Ok(c) => c,
@@ -294,68 +354,94 @@ async fn run_shell_task(
                 "failed to spawn child process"
             );
             let msg = format!("\n[failed to spawn shell child: {e}]\n");
-            dto.append(&msg);
+            dto.append(&msg).await;
             let _ = dto.flush().await;
+            cleanup_tracked_cwd(cwd_file_path.as_deref());
             return ShellOutcome {
                 wait: WaitOutcome::SpawnFailed,
+                terminal_outputs: foreground_outputs(
+                    &request,
+                    Vec::new(),
+                    msg.into_bytes(),
+                    None,
+                    None,
+                    false,
+                ),
             };
         }
     };
+    let mut process_group = coco_utils_pty::process_group::ProcessGroupGuard::for_child(&child);
 
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
 
     let dto_stdout = dto.clone();
+    let retain_raw = !request.start_mode.is_backgrounded();
     let stdout_handle = tokio::spawn(async move {
+        let mut collected = Vec::new();
         if let Some(mut pipe) = stdout_pipe {
             let mut buf = vec![0u8; 8192];
             loop {
                 match pipe.read(&mut buf).await {
                     Ok(0) => break,
                     Ok(n) => {
-                        let chunk = String::from_utf8_lossy(&buf[..n]);
-                        dto_stdout.append(&chunk);
-                    }
-                    Err(_) => break,
-                }
-            }
-        }
-    });
-
-    let dto_stderr = dto.clone();
-    let stderr_handle = tokio::spawn(async move {
-        let mut tail = String::new();
-        if let Some(mut pipe) = stderr_pipe {
-            let mut buf = vec![0u8; 8192];
-            loop {
-                match pipe.read(&mut buf).await {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let chunk = String::from_utf8_lossy(&buf[..n]).into_owned();
-                        dto_stderr.append(&chunk);
-                        tail.push_str(&chunk);
-                        if tail.len() > 4096 {
-                            let cut = tail.len() - 4096;
-                            tail.drain(..cut);
+                        dto_stdout.append_bytes(&buf[..n]).await;
+                        if retain_raw {
+                            append_capped(&mut collected, &buf[..n]);
                         }
                     }
                     Err(_) => break,
                 }
             }
         }
-        tail
+        collected
+    });
+
+    let dto_stderr = dto.clone();
+    let stderr_handle = tokio::spawn(async move {
+        let mut collected = Vec::new();
+        if let Some(mut pipe) = stderr_pipe {
+            let mut buf = vec![0u8; 8192];
+            loop {
+                match pipe.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        dto_stderr.append_bytes(&buf[..n]).await;
+                        if retain_raw {
+                            append_capped(&mut collected, &buf[..n]);
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+        collected
     });
 
     let timeout_duration = Duration::from_millis(timeout_ms.max(0) as u64);
     let outcome = tokio::select! {
         biased;
         () = cancel.cancelled() => {
-            let _ = child.kill().await;
+            terminate_shell_child(&mut child, &mut process_group).await;
+            WaitOutcome::Cancelled
+        }
+        () = parent_cancel_while_foreground(&request.parent_cancel, &manager, &task_id) => {
+            terminate_shell_child(&mut child, &mut process_group).await;
             WaitOutcome::Cancelled
         }
         result = child.wait() => match result {
-            Ok(status) => WaitOutcome::Exited { code: status.code().unwrap_or(-1) },
+            Ok(status) => {
+                // A direct shell exit is terminal for this task. Kill any
+                // descendants that inherited the command's pipes before
+                // draining them; otherwise they can keep the task alive past
+                // both timeout and cancellation.
+                let _ = process_group.kill();
+                process_group.disarm();
+                record_seccomp_violation(&request, command, &status).await;
+                WaitOutcome::Exited { code: status.code().unwrap_or(-1) }
+            },
             Err(e) => {
+                terminate_shell_child(&mut child, &mut process_group).await;
                 warn!(target: "coco::task_runtime::shell", error = %e, "child wait failed");
                 WaitOutcome::SpawnFailed
             }
@@ -366,19 +452,117 @@ async fn run_shell_task(
         // at the same `timeout_ms`), and the child runs to natural exit in the
         // background — `shouldAutoBackground` parity.
         () = tokio::time::sleep(timeout_duration), if request.kill_on_timeout => {
-            let _ = child.kill().await;
+            terminate_shell_child(&mut child, &mut process_group).await;
             WaitOutcome::TimedOut { budget_ms: timeout_ms }
         }
     };
 
-    let _ = stdout_handle.await;
-    // stderr tail is already on disk; the join result is intentionally
-    // dropped — the terminal-apply step reads task state from
-    // TaskManager, not from in-memory tails.
-    let _ = stderr_handle.await;
+    let stdout = finish_pipe_reader(stdout_handle).await;
+    let stderr = finish_pipe_reader(stderr_handle).await;
     let _ = dto.flush().await;
+    let new_cwd = cwd_file_path
+        .as_deref()
+        .and_then(coco_shell::read_tracked_cwd);
+    cleanup_tracked_cwd(cwd_file_path.as_deref());
+    if request.sandbox_state.is_some() {
+        let scrub_paths = coco_sandbox::bare_repo_scrub_paths(&request.cwd, &request.original_cwd);
+        coco_sandbox::scrub_bare_repo_files(&scrub_paths);
+    }
+    let exit_code = match outcome {
+        WaitOutcome::Exited { code } => Some(code),
+        _ => None,
+    };
+    let interrupted = matches!(outcome, WaitOutcome::Cancelled);
+    let terminal_outputs =
+        foreground_outputs(&request, stdout, stderr, exit_code, new_cwd, interrupted);
 
-    ShellOutcome { wait: outcome }
+    ShellOutcome {
+        wait: outcome,
+        terminal_outputs,
+    }
+}
+
+async fn finish_pipe_reader(mut handle: tokio::task::JoinHandle<Vec<u8>>) -> Vec<u8> {
+    const DRAIN_GRACE: Duration = Duration::from_secs(1);
+    match tokio::time::timeout(DRAIN_GRACE, &mut handle).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(_)) => Vec::new(),
+        Err(_) => {
+            handle.abort();
+            Vec::new()
+        }
+    }
+}
+
+async fn parent_cancel_while_foreground(
+    parent_cancel: &CancellationToken,
+    manager: &TaskManager,
+    task_id: &str,
+) {
+    parent_cancel.cancelled().await;
+    // Explicit and auto-detached background tasks outlive the invoking turn.
+    // A pending future permanently disables this select arm after detachment.
+    if manager
+        .get(task_id)
+        .await
+        .is_some_and(|state| state.is_backgrounded())
+    {
+        std::future::pending::<()>().await;
+    }
+}
+
+fn foreground_outputs(
+    request: &ShellTaskRequest,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    exit_code: Option<i32>,
+    new_cwd: Option<std::path::PathBuf>,
+    interrupted: bool,
+) -> Option<coco_tool_runtime::TerminalOutputs> {
+    (!request.start_mode.is_backgrounded()).then_some(coco_tool_runtime::TerminalOutputs {
+        stdout,
+        stderr,
+        exit_code,
+        interrupted,
+        new_cwd,
+    })
+}
+
+fn append_capped(target: &mut Vec<u8>, chunk: &[u8]) {
+    let remaining = crate::disk_task_output::DEFAULT_MAX_READ_BYTES.saturating_sub(target.len());
+    target.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+}
+
+fn cleanup_tracked_cwd(path: Option<&std::path::Path>) {
+    if let Some(path) = path {
+        coco_shell::cleanup_tracked_cwd(path);
+    }
+}
+
+async fn terminate_shell_child(
+    child: &mut tokio::process::Child,
+    process_group: &mut coco_utils_pty::process_group::ProcessGroupGuard,
+) {
+    let _ = process_group.kill();
+    let _ = child.kill().await;
+}
+
+async fn record_seccomp_violation(
+    request: &ShellTaskRequest,
+    command: &str,
+    status: &std::process::ExitStatus,
+) {
+    #[cfg(target_os = "linux")]
+    if let Some(state) = &request.sandbox_state
+        && coco_sandbox::is_seccomp_violation(status)
+    {
+        let tag = coco_sandbox::generate_command_tag(command, state.session_tag());
+        state
+            .record_violation(coco_sandbox::seccomp_violation(Some(tag)))
+            .await;
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (request, command, status);
 }
 
 /// Final lifecycle update for a shell task: flip status, broadcast on the

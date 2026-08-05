@@ -3066,7 +3066,7 @@ pub enum JourneyMutationKind {
 }
 
 /// Outcome of a `/skills` dialog save dispatch. CLI bridge populates
-/// this after `SettingsWriter::write_local`.
+/// this after the settings writer persists and republishes the patch.
 ///
 /// Carries **no display data** — TUI owns toast text generation and
 /// stashes the pre-write `total_edits` count on its own state
@@ -3098,10 +3098,10 @@ pub enum SkillOverridesSaveErrorKind {
     Io,
     /// Settings JSON parse / serialize failed.
     Parse,
+    /// The requested patch would produce an invalid settings document.
+    Mutation,
     /// `RuntimeConfig` rebuild failed after the write.
     Rebuild,
-    /// Hot-reload publisher is absent (one-shot build path).
-    NoPublisher,
 }
 
 /// One row in the `/memory` file-picker overlay. Built by the slash

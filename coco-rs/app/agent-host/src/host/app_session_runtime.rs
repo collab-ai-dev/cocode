@@ -38,12 +38,14 @@ pub(crate) async fn build_app_session_runtime_for_start(
     binding: &AppSessionRuntimeBinding,
     profile: &AppSessionRuntimeProfile,
     prepared: &crate::session_start::PreparedStartSession,
+    write_lease: coco_session::SessionWriteLease,
 ) -> Result<SessionHandle> {
     let session = binding
         .runtime_factory
-        .build_with_session_id_and_cwd(
+        .build_with_session_id_cwd_and_lease(
             prepared.session_id.clone(),
             session_build_cwd_from_str(&binding.cwd, &prepared.cwd),
+            write_lease,
         )
         .await?;
     apply_app_session_runtime_profile(profile, &session).await;
@@ -55,10 +57,15 @@ pub(crate) async fn build_app_session_runtime_for_resume(
     profile: &AppSessionRuntimeProfile,
     session_id: SessionId,
     cwd: PathBuf,
+    write_lease: coco_session::SessionWriteLease,
 ) -> Result<SessionHandle> {
     let session = binding
         .runtime_factory
-        .build_with_session_id_and_cwd(session_id, session_build_cwd(&binding.cwd, &cwd))
+        .build_with_session_id_cwd_and_lease(
+            session_id,
+            session_build_cwd(&binding.cwd, &cwd),
+            write_lease,
+        )
         .await?;
     apply_app_session_runtime_profile(profile, &session).await;
     Ok(session)

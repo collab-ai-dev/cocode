@@ -290,6 +290,54 @@ async fn resize_burst_routes_to_one_settled_frame_at_the_latest_size() {
 }
 
 #[tokio::test]
+async fn queued_stale_voice_events_cannot_mutate_a_newer_generation() {
+    let (mut app, _event_tx) = test_app(false);
+    app.state.ui.voice.generation = 3;
+    app.state.ui.voice.status = crate::state::ui::VoiceStatusKind::Recording;
+    app.state.ui.input.textarea_mut().insert_str("draft ");
+    app.state.ui.input.set_inline_hint("current recording");
+    let initial_toasts = app.state.ui.toasts.len();
+
+    for event in [
+        coco_voice::VoiceEvent::RecordingStarted { generation: 2 },
+        coco_voice::VoiceEvent::Transcribing {
+            generation: 2,
+            engine: "stale-engine".to_string(),
+        },
+        coco_voice::VoiceEvent::Final {
+            generation: 2,
+            text: "stale transcript".to_string(),
+            language: None,
+        },
+        coco_voice::VoiceEvent::Error {
+            generation: 2,
+            message: "stale error".to_string(),
+        },
+    ] {
+        assert!(!app.handle_voice_event(event));
+    }
+
+    assert_eq!(app.state.ui.voice.generation, 3);
+    assert!(matches!(
+        app.state.ui.voice.status,
+        crate::state::ui::VoiceStatusKind::Recording
+    ));
+    assert_eq!(app.state.ui.input.text(), "draft ");
+    assert_eq!(
+        app.state.ui.input.inline_hint.as_deref(),
+        Some("current recording")
+    );
+    assert_eq!(app.state.ui.toasts.len(), initial_toasts);
+
+    assert!(app.handle_voice_event(coco_voice::VoiceEvent::Final {
+        generation: 3,
+        text: "current transcript".to_string(),
+        language: None,
+    }));
+    assert_eq!(app.state.ui.input.text(), "draft current transcript");
+}
+
+#[tokio::test]
 async fn focus_gain_routes_cursor_reassertion_and_gated_viewport_heal() {
     let (mut plain, _event_tx) = test_app(false);
     assert!(

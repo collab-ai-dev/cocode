@@ -2751,7 +2751,7 @@
       "description": "Aggregate response to `ClientRequest::ConfigRead`.",
       "properties": {
         "config": {
-          "description": "Merged effective config as a JSON object."
+          "description": "Merged persisted settings layers as a JSON object. CLI, environment,\nand other runtime-only overrides are intentionally represented only in\nthe runtime snapshot, not rewritten into settings-shaped JSON."
         },
         "sources": {
           "additionalProperties": true,
@@ -11636,19 +11636,19 @@
           "type": "string"
         },
         {
-          "const": "rebuild",
-          "description": "`RuntimeConfig` rebuild failed after the write.",
+          "const": "mutation",
+          "description": "The requested patch would produce an invalid settings document.",
           "type": "string"
         },
         {
-          "const": "no_publisher",
-          "description": "Hot-reload publisher is absent (one-shot build path).",
+          "const": "rebuild",
+          "description": "`RuntimeConfig` rebuild failed after the write.",
           "type": "string"
         }
       ]
     },
     "SkillOverridesSaveResult": {
-      "description": "Outcome of a `/skills` dialog save dispatch. CLI bridge populates\nthis after `SettingsWriter::write_local`.\n\nCarries **no display data** \u2014 TUI owns toast text generation and\nstashes the pre-write `total_edits` count on its own state\nbefore dispatching. CLI only reports success vs typed failure.",
+      "description": "Outcome of a `/skills` dialog save dispatch. CLI bridge populates\nthis after the settings writer persists and republishes the patch.\n\nCarries **no display data** \u2014 TUI owns toast text generation and\nstashes the pre-write `total_edits` count on its own state\nbefore dispatching. CLI only reports success vs typed failure.",
       "oneOf": [
         {
           "description": "Write succeeded.",

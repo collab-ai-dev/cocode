@@ -57,7 +57,8 @@ Voice input (speech-to-text dictation). Standalone crate (peer to `retrieval` /
 (name → file, pinned **SHA-256**, size — the authoritative HuggingFace git-LFS
 values) plus URL/path/request resolution. `download.rs` (ungated) orchestrates a
 fetch via `coco-utils-download` (streamed, atomic `*.part`+rename, checksum-
-verified, cancellable) and bridges progress onto `VoiceEvent::Download`.
+verified, cancellable) and emits operation-scoped `VoiceProgress`; `VoiceSession`
+generation-checks and maps first-use progress onto `VoiceEvent::Download`.
 
 - **Auto-download on first use**: `local::ensure_ctx` fetches missing weights
   when `models::may_auto_download` holds — a *known, checksum-pinned* model,

@@ -9,6 +9,16 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeSet;
 
+/// Provider-neutral serialized form of a compiled system-prompt block.
+/// Fork cache snapshots carry this alongside the flattened wire text so a
+/// child request can reproduce the parent's exact cache-breakpoint layout.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CachedSystemPromptBlock {
+    Text { content: String },
+    CacheBreakpoint,
+}
+
 /// User intent for prompt caching on a request.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

@@ -18,6 +18,7 @@ coco-config.workspace = true
 coco-error.workspace = true
 coco-types.workspace = true
 coco-utils-common.workspace = true
+coco-utils-pty.workspace = true
 coco-messages.workspace = true
 coco-shell-discovery.workspace = true
 coco-system-reminder.workspace = true
@@ -37,7 +38,9 @@ uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 anyhow.workspace = true
+tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
+wiremock.workspace = true
 
 # Gate the schema-export example on the `schema` feature so plain
 # `cargo build`/`nextest` runs (which include `--examples` /

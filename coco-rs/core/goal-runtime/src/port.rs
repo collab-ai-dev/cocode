@@ -77,6 +77,7 @@ pub enum GoalTurnOutcome {
     ProviderError {
         kind: ProviderErrorKind,
         message: String,
+        usage: UsageDelta,
     },
     /// The account/provider usage limit was hit.
     UsageLimited { message: String },

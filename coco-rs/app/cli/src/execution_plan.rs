@@ -50,6 +50,9 @@ pub struct ExecutionPlan {
 pub enum ExecutionPlanError {
     NoSessionPersistenceRequiresHeadless,
     PlanModeInstructionsRequiresHeadless,
+    MaxTurnsRequiresHeadless,
+    SessionIdRequiresHeadless,
+    SessionIdRequiresFreshOrFork,
 }
 
 impl std::fmt::Display for ExecutionPlanError {
@@ -61,6 +64,15 @@ impl std::fmt::Display for ExecutionPlanError {
             Self::PlanModeInstructionsRequiresHeadless => {
                 f.write_str("--plan-mode-instructions can only be used in print mode (-p / --print)")
             }
+            Self::MaxTurnsRequiresHeadless => {
+                f.write_str("--max-turns can only be used in print mode (-p / --print) or SDK mode")
+            }
+            Self::SessionIdRequiresHeadless => f.write_str(
+                "--session-id can only start a fresh session in print mode (-p / --print) or SDK mode",
+            ),
+            Self::SessionIdRequiresFreshOrFork => f.write_str(
+                "--session-id selects a fresh session; use --fork-session to pair it with --resume or --continue",
+            ),
         }
     }
 }
@@ -135,6 +147,18 @@ fn validate_execution_plan(cli: &Cli, plan: ExecutionPlan) -> Result<(), Executi
     }
     if cli.plan_mode_instructions.is_some() && !matches!(plan.mode, ExecutionMode::Headless) {
         return Err(ExecutionPlanError::PlanModeInstructionsRequiresHeadless);
+    }
+    if cli.max_turns.is_some() && !plan.is_headless_like() {
+        return Err(ExecutionPlanError::MaxTurnsRequiresHeadless);
+    }
+    if cli.session_id.is_some()
+        && !cli.fork_session
+        && (cli.resume.is_some() || cli.continue_session)
+    {
+        return Err(ExecutionPlanError::SessionIdRequiresFreshOrFork);
+    }
+    if cli.session_id.is_some() && !cli.fork_session && !plan.is_headless_like() {
+        return Err(ExecutionPlanError::SessionIdRequiresHeadless);
     }
     Ok(())
 }

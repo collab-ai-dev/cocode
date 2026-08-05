@@ -177,8 +177,8 @@ impl QueryEngine {
         let tool_defs: Vec<_> = tool_definitions.into_iter().map(|d| d.tool).collect();
 
         let context_management = if active_snapshot.supports_server_side_context_edits {
-            let mut pending = self.pending_reactive_context_management.lock().await;
-            if let Some(v) = pending.take() {
+            let pending = self.pending_reactive_context_management.lock().await;
+            if let Some(v) = pending.clone() {
                 Some(v)
             } else {
                 drop(pending);

@@ -4,6 +4,7 @@
 
 pub mod attachment;
 pub mod changed_files;
+mod context_fragment;
 pub mod contextual_user_fragment;
 pub mod environment;
 mod error;
@@ -52,6 +53,7 @@ pub use changed_files::attachments_from_changed_file_observations;
 pub use changed_files::changed_file_candidates;
 pub use changed_files::changed_file_observation_from_loaded;
 pub use changed_files::deleted_changed_file_observation;
+pub use context_fragment::{BoundedExternalContextFragment, ContextFragmentKind};
 pub use contextual_user_fragment::ContextualUserFragment;
 pub use contextual_user_fragment::TerminalRecoveryNudgeFragment;
 pub use environment::EnvironmentInfo;

@@ -15,6 +15,7 @@ workspace = true
 coco-commands.workspace = true
 coco-config.workspace = true
 coco-config-reload.workspace = true
+coco-context.workspace = true
 coco-error.workspace = true
 coco-git.workspace = true
 coco-hooks.workspace = true

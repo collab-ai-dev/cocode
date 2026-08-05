@@ -100,6 +100,7 @@ impl TaskRuntime {
                 coco_error::StatusCode::FileNotFound,
             ));
         };
+        let raw_outputs = self.terminal_outputs.write().await.remove(task_id);
         let stdout = if let Some(path) = output_path(&state) {
             self.disk
                 .read_tail_at_path(task_id, &path, DEFAULT_MAX_READ_BYTES)
@@ -125,12 +126,13 @@ impl TaskRuntime {
                 "marked foreground shell task as silently consumed"
             );
         }
-        Ok(TerminalOutputs {
-            stdout,
-            stderr: String::new(),
+        Ok(raw_outputs.unwrap_or_else(|| TerminalOutputs {
+            stdout: stdout.into_bytes(),
+            stderr: Vec::new(),
             exit_code,
             interrupted,
-        })
+            new_cwd: None,
+        }))
     }
 }
 

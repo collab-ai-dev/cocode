@@ -31,6 +31,16 @@ use std::path::{Path, PathBuf};
 
 use crate::slug::ProjectSlug;
 
+/// `<memory_base>/.session-locks/` — global write-lease namespace.
+pub fn session_locks_dir(memory_base: &Path) -> PathBuf {
+    memory_base.join(".session-locks")
+}
+
+/// Stable global lock path for one protocol-level session id.
+pub fn session_lock_path(memory_base: &Path, session_id: &str) -> PathBuf {
+    session_locks_dir(memory_base).join(format!("{session_id}.lock"))
+}
+
 /// Per-project filesystem paths. Created once per (memory_base,
 /// canonical_project_root) pair and reused for every subsequent
 /// query.
@@ -94,17 +104,17 @@ impl ProjectPaths {
         self.project_dir().join(session_id)
     }
 
-    /// `<project_dir>/.session-locks/` — home of per-session write-lease lock
-    /// files. Kept separate from the session artifact dir so the lock file
-    /// survives ordinary session deletion (avoiding inode-replacement races).
+    /// `<memory_base>/.session-locks/` — home of globally unique per-session
+    /// write-lease lock files. Session ids are protocol-global, so the lock
+    /// namespace must not be scoped by project.
     pub fn session_locks_dir(&self) -> PathBuf {
-        self.project_dir().join(".session-locks")
+        session_locks_dir(&self.memory_base)
     }
 
-    /// `<project_dir>/.session-locks/<session_id>.lock` — the OS advisory lock
-    /// file guarding writable materialization of one session.
+    /// `<memory_base>/.session-locks/<session_id>.lock` — the OS advisory lock
+    /// guarding writable materialization of one globally addressed session.
     pub fn session_lock_path(&self, session_id: &str) -> PathBuf {
-        self.session_locks_dir().join(format!("{session_id}.lock"))
+        session_lock_path(&self.memory_base, session_id)
     }
 
     pub fn subagents_dir(&self, session_id: &str) -> PathBuf {

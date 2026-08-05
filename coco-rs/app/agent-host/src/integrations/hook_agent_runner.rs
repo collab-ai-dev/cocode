@@ -136,7 +136,7 @@ fn configure_hook_agent(
     config.is_non_interactive = true;
     config.avoid_permission_prompts = true;
     // Verifier framing replaces the inherited main-session prompt.
-    config.system_prompt = Some(HOOK_AGENT_SYSTEM_PROMPT.to_string());
+    config.system_prompt = Some(HOOK_AGENT_SYSTEM_PROMPT.into());
     // Disable thinking for the verifier; otherwise the child inherits
     // the user's extended-thinking budget from the cloned session config.
     config.thinking_level = None;

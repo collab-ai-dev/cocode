@@ -112,7 +112,7 @@ pub async fn build_agent_team_wiring(
         runner.clone(),
         team_manager,
         cwd.clone(),
-        Arc::clone(session.runtime_config()),
+        session.runtime_config(),
         task_registry,
         agent_liveness,
     );
@@ -215,6 +215,7 @@ pub async fn build_agent_team_wiring(
         Arc::new(move |mut engine_config, role, cancel| {
             let session = session_for_factory.clone();
             Box::pin(async move {
+                let runtime_config = session.runtime_config();
                 // ── Gap A fix — inherit parent's resolved RuntimeConfig ──
                 //
                 // Before this fix, `agent_adapter::execute_query` populated
@@ -228,23 +229,18 @@ pub async fn build_agent_team_wiring(
                 // Overwrite those fields here from the live RuntimeConfig
                 // so subagent engines compact at the user's tuned
                 // thresholds, honour the user's sandbox mode, etc.
-                engine_config.compact = session.runtime_config().compact.clone();
-                engine_config.system_reminder = session
-                    .runtime_config()
-                    .settings
-                    .merged
-                    .system_reminder
-                    .clone();
-                engine_config.tool_config = session.runtime_config().tool.clone();
-                engine_config.sandbox_config = session.runtime_config().sandbox.clone();
+                engine_config.compact = runtime_config.compact.clone();
+                engine_config.system_reminder =
+                    runtime_config.settings.merged.system_reminder.clone();
+                engine_config.tool_config = runtime_config.tool.clone();
+                engine_config.sandbox_config = runtime_config.sandbox.clone();
                 engine_config.sandbox_state = session.sandbox_state();
-                engine_config.memory_config = session.runtime_config().memory.clone();
-                engine_config.shell_config = session.runtime_config().shell.clone();
-                engine_config.web_fetch_config = session.runtime_config().web_fetch.clone();
-                engine_config.web_search_config = session.runtime_config().web_search.clone();
-                engine_config.lsp_config = session.runtime_config().lsp.clone();
-                engine_config.plan_mode_settings =
-                    session.runtime_config().settings.merged.plan_mode.clone();
+                engine_config.memory_config = runtime_config.memory.clone();
+                engine_config.shell_config = runtime_config.shell.clone();
+                engine_config.web_fetch_config = runtime_config.web_fetch.clone();
+                engine_config.web_search_config = runtime_config.web_search.clone();
+                engine_config.lsp_config = runtime_config.lsp.clone();
+                engine_config.plan_mode_settings = runtime_config.settings.merged.plan_mode.clone();
                 let parent_engine_config = session.current_engine_config().await;
                 engine_config.shell_provider = parent_engine_config.shell_provider.clone();
                 engine_config.output_rewriter = parent_engine_config.output_rewriter.clone();
@@ -354,7 +350,9 @@ pub async fn build_agent_team_wiring(
     // teammates inherit the same CLAUDE.md + env-context + memory
     // blocks the leader uses.
     if let Some(base_prompt) = session.current_engine_config().await.system_prompt.clone() {
-        handle.set_teammate_base_system_prompt(base_prompt).await;
+        handle
+            .set_teammate_base_system_prompt(base_prompt.full_text())
+            .await;
     }
 
     // Wire the hook registry so SubagentStart / SubagentStop hooks fire

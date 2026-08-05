@@ -155,7 +155,6 @@ impl HostBuilder {
 
         let resources =
             build_engine_resources(&process_runtime, &agent_host_options, &runtime_config, &cwd)?;
-        let system_prompt = Some(resources.system_prompt.clone());
 
         let session_manager = Arc::new(SessionManager::with_backend(
             runtime_config.settings.merged.session.backend,
@@ -189,7 +188,10 @@ impl HostBuilder {
             },
         );
         let requires_structured_output = agent_host_options.json_schema.is_some();
-        let runner = Arc::new(SessionTurnExecutor::new(options.max_turns, system_prompt));
+        // The admitted session runtime already owns the compiled prompt. Do
+        // not flatten and re-apply it as a per-turn override, which would
+        // discard its provider cache boundaries.
+        let runner = Arc::new(SessionTurnExecutor::new(options.max_turns, None));
         let state = Arc::new(AppServerHostState::new(HostInputs {
             startup_cwd: Some(cwd.clone()),
             initialize_bootstrap: Some(bootstrap),

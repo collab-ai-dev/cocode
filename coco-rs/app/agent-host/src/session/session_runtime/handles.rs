@@ -12,8 +12,8 @@ use super::SessionRuntime;
 use super::SessionTaskError;
 
 impl SessionRuntime {
-    /// Publisher for this session's config snapshot when hot-reload is active.
-    pub fn runtime_publisher(&self) -> Option<Arc<coco_config::RuntimePublisher>> {
+    /// Publisher for this session's current effective config snapshot.
+    pub fn runtime_publisher(&self) -> Arc<coco_config::RuntimePublisher> {
         self.config_resources.runtime_publisher()
     }
 
@@ -215,7 +215,9 @@ impl SessionRuntime {
             cancel,
             hooks,
         );
-        self.wire_engine(engine, None, EnginePersistenceMode::Fork)
+        let auto_mode_rules =
+            super::permissions::auto_mode_rules_from_runtime_config(&self.runtime_config());
+        self.wire_engine(engine, None, EnginePersistenceMode::Fork, auto_mode_rules)
             .await
     }
 

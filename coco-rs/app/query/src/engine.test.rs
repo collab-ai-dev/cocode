@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
@@ -264,6 +265,112 @@ struct BudgetUnsafeTool {
     started: Arc<AtomicI32>,
 }
 
+struct OversizedDefinitionTool;
+
+struct PreflightProviderMock {
+    calls: AtomicI32,
+    saw_oversized_tool: AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl LanguageModel for PreflightProviderMock {
+    fn provider(&self) -> &str {
+        "mock"
+    }
+
+    fn model_id(&self) -> &str {
+        "mock-preflight"
+    }
+
+    async fn do_generate(
+        &self,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if serde_json::to_string(&options.tools)
+            .expect("serialize provider tools")
+            .contains("oversized_definition")
+        {
+            self.saw_oversized_tool.store(true, Ordering::SeqCst);
+        }
+        Ok(LanguageModelGenerateResult {
+            content: vec![AssistantContentPart::Text(TextPart {
+                text: "compact summary".into(),
+                provider_metadata: None,
+            })],
+            usage: Usage::new(10, 5),
+            finish_reason: FinishReason::new(StopReason::EndTurn),
+            warnings: vec![],
+            provider_metadata: None,
+            request: None,
+            response: None,
+        })
+    }
+
+    async fn do_stream(
+        &self,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
+        let result = self.do_generate(options, None).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
+    }
+}
+
+#[async_trait::async_trait]
+impl coco_tool_runtime::Tool for OversizedDefinitionTool {
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
+    async fn prompt(&self, _: &coco_tool_runtime::PromptOptions) -> String {
+        "large model-facing tool description ".repeat(2_000)
+    }
+
+    fn id(&self) -> coco_types::ToolId {
+        coco_types::ToolId::Custom("oversized_definition".into())
+    }
+
+    fn name(&self) -> &str {
+        "oversized_definition"
+    }
+
+    fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+        static SCHEMA: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
+            std::sync::OnceLock::new();
+        SCHEMA.get_or_init(|| {
+            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({"type": "object"}))
+                .expect("schema")
+        })
+    }
+
+    fn description(
+        &self,
+        _input: &serde_json::Value,
+        _options: &coco_tool_runtime::DescriptionOptions,
+    ) -> String {
+        "oversized definition test tool".into()
+    }
+
+    fn is_concurrency_safe(&self, _input: &serde_json::Value) -> bool {
+        true
+    }
+
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+        _ctx: &coco_tool_runtime::ToolUseContext,
+    ) -> Result<coco_messages::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
+        Ok(coco_messages::ToolResult::data(serde_json::json!({
+            "unexpected": true
+        })))
+    }
+}
+
 #[async_trait::async_trait]
 impl coco_tool_runtime::Tool for BudgetUnsafeTool {
     type Input = serde_json::Value;
@@ -483,6 +590,62 @@ impl LanguageModel for TextThenErrorMock {
 
 struct ToolCallThenTextMock {
     call_count: AtomicI32,
+}
+
+struct ToolCallThenErrorMock {
+    call_count: AtomicI32,
+}
+
+#[async_trait::async_trait]
+impl LanguageModel for ToolCallThenErrorMock {
+    fn provider(&self) -> &str {
+        "mock"
+    }
+
+    fn model_id(&self) -> &str {
+        "mock-toolcall-then-error"
+    }
+
+    async fn do_generate(
+        &self,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
+        if self.call_count.fetch_add(1, Ordering::SeqCst) == 0 {
+            Ok(LanguageModelGenerateResult {
+                content: vec![AssistantContentPart::ToolCall(ToolCallPart {
+                    tool_call_id: "usage_then_error".into(),
+                    tool_name: "Read".into(),
+                    input: serde_json::json!({"file_path": "/tmp/nonexistent.txt"}),
+                    provider_executed: None,
+                    provider_metadata: None,
+                    invalid: false,
+                    invalid_reason: None,
+                })],
+                usage: Usage::new(20, 15),
+                finish_reason: FinishReason::new(StopReason::ToolUse),
+                warnings: vec![],
+                provider_metadata: None,
+                request: None,
+                response: None,
+            })
+        } else {
+            Err(AISdkError::new("synthetic second-turn failure"))
+        }
+    }
+
+    async fn do_stream(
+        &self,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
+        let result = self.do_generate(options, None).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
+    }
 }
 
 #[async_trait::async_trait]
@@ -1065,6 +1228,82 @@ async fn test_multi_turn_tool_call_then_text() {
 }
 
 #[tokio::test]
+async fn assembled_tool_schema_with_moa_is_blocked_before_provider() {
+    let model = Arc::new(PreflightProviderMock {
+        calls: AtomicI32::new(0),
+        saw_oversized_tool: AtomicBool::new(false),
+    });
+    let model_info = coco_config::ModelInfo {
+        context_window: coco_config::PositiveTokens::new(10_000),
+        max_output_tokens: coco_config::PositiveTokens::new(1_024),
+        ..Default::default()
+    };
+    let slot = coco_inference::PrebuiltLanguageModelSlot::new(
+        model.clone(),
+        coco_inference::RetryConfig::default(),
+    )
+    .with_model_info(model_info);
+    let runtimes = Arc::new(
+        coco_inference::ModelRuntimeRegistry::from_prebuilt_language_model(
+            coco_types::ModelRole::Main,
+            slot,
+        ),
+    );
+    runtimes.set_role_moa_endpoint_override(
+        coco_types::ModelRole::Main,
+        Some(coco_config::MoaEndpointSpec {
+            preset_name: "test".into(),
+            aggregator: coco_types::ModelSpec {
+                provider: "mock".into(),
+                api: coco_types::ProviderApi::OpenaiCompat,
+                model_id: "mock-preflight".into(),
+                display_name: "mock-preflight".into(),
+            },
+            reference_models: Vec::new(),
+            fanout: coco_config::MoaFanout::PerIteration,
+            reference_timeout_secs: None,
+        }),
+    );
+    assert!(
+        runtimes
+            .moa_endpoint_for_source(&coco_inference::ModelRuntimeSource::Role(
+                coco_types::ModelRole::Main,
+            ))
+            .is_some(),
+        "the test must exercise the MoA-enabled engine path"
+    );
+
+    let registry = ToolRegistry::new();
+    registry.register(Arc::new(OversizedDefinitionTool));
+    let engine = QueryEngine::new(
+        QueryEngineConfig {
+            system_prompt: Some("test system prompt".into()),
+            ..Default::default()
+        },
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        runtimes,
+        Arc::new(registry),
+        CancellationToken::new(),
+        None,
+    );
+
+    let result = engine
+        .run("small user request")
+        .await
+        .expect("capacity rejection is a terminal result");
+
+    assert_eq!(result.stop_reason.as_deref(), Some("blocking_limit"));
+    assert!(
+        model.calls.load(Ordering::SeqCst) <= 1,
+        "only the one-shot preflight compaction may call the provider"
+    );
+    assert!(
+        !model.saw_oversized_tool.load(Ordering::SeqCst),
+        "the fully materialized oversized request must not reach the provider"
+    );
+}
+
+#[tokio::test]
 async fn test_subagent_command_queue_drain_keeps_main_commands_queued() {
     let model = Arc::new(ToolCallThenTextMock {
         call_count: AtomicI32::new(0),
@@ -1232,7 +1471,7 @@ async fn build_prompt_returns_prompt_context_metadata() {
     assert_eq!(built.prompt_context.sources.len(), 1);
     assert_eq!(
         built.prompt_context.sources[0].kind,
-        coco_context::PromptContextSourceKind::Literal
+        coco_context::PromptContextSourceKind::Compiled
     );
 }
 
@@ -5877,6 +6116,54 @@ async fn stream_error_emits_turn_failed_for_sdk_iterator() {
     assert_turn_result_matches_session_result(&events, |outcome| {
         matches!(outcome, coco_types::TurnOutcome::Failed(_))
     });
+}
+
+#[tokio::test]
+async fn failure_preserves_prior_turn_usage_and_history() {
+    let model: Arc<dyn LanguageModel> = Arc::new(ToolCallThenErrorMock {
+        call_count: AtomicI32::new(0),
+    });
+    let client = crate::test_support::model_runtime_registry(model);
+    let registry = ToolRegistry::new();
+    registry.register(Arc::new(ReadTool));
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("failure-usage-session").unwrap(),
+        client,
+        Arc::new(registry),
+        CancellationToken::new(),
+        None,
+    );
+    let (tx, mut rx) = tokio::sync::mpsc::channel(128);
+    let failure = engine
+        .run_with_messages(
+            vec![Arc::new(coco_messages::create_user_message("read"))],
+            tx,
+            coco_types::TurnId::generate(),
+        )
+        .await
+        .expect_err("second model turn must fail");
+
+    assert_eq!(failure.total_usage.input_tokens.total, 20);
+    assert_eq!(failure.total_usage.output_tokens.total, 15);
+    assert!(failure.final_history.len() >= 3);
+    assert_eq!(failure.session_result.usage, failure.total_usage);
+
+    let mut session_result = None;
+    while let Some(event) = rx.recv().await {
+        if let CoreEvent::Protocol(ServerNotification::SessionResult(params)) = event {
+            session_result = Some(params);
+        }
+    }
+    let session_result = session_result.expect("failure SessionResult");
+    assert_eq!(session_result.usage, failure.total_usage);
+    assert!(session_result.is_error);
+    assert_eq!(session_result.total_turns, 2);
+    assert!(session_result.duration_ms >= session_result.duration_api_ms);
+    assert_eq!(session_result.num_api_calls, Some(1));
+    assert!(session_result.total_cost_usd.is_finite());
+    assert!(!session_result.model_usage.is_empty());
+    assert!(session_result.permission_denials.is_empty());
 }
 
 #[test]

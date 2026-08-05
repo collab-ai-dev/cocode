@@ -22,7 +22,9 @@ use super::session_operation_error::SessionOperationError;
 use super::session_operation_input::{SessionReplaceDestination, SessionReplaceInput};
 use super::session_registry::restore_session_seq_from_watermark;
 use super::session_resume_operation::load_app_server_resume_session;
-use super::session_start_operation::prepare_app_server_session_start;
+use super::session_start_operation::{
+    acquire_new_session_write_lease, prepare_app_server_session_start,
+};
 
 pub(crate) async fn replace_app_server_session_with_runtime(
     app_server: Arc<AppServer<AppSessionHandle>>,
@@ -45,6 +47,9 @@ pub(crate) async fn replace_app_server_session_with_runtime(
             let prepared =
                 prepare_app_server_session_start(*start_input, &state, &connection_profile).await?;
             let destination_id = prepared.session_id.clone();
+            let write_lease =
+                acquire_new_session_write_lease(&replacement.runtime_factory, &destination_id)
+                    .await?;
             let factory = {
                 let replacement = replacement.clone();
                 let profile = Arc::clone(&connection_profile);
@@ -54,6 +59,7 @@ pub(crate) async fn replace_app_server_session_with_runtime(
                         replacement,
                         Arc::clone(&profile),
                         prepared,
+                        write_lease,
                         Arc::clone(&app_server),
                     )
                     .await
@@ -115,27 +121,51 @@ pub(crate) async fn replace_app_server_session_with_runtime(
             if let Some(handle) = app_server.registry().get(&destination_id) {
                 (destination_id, handle, true, None)
             } else {
-                let cwd = loaded.session.working_dir.clone();
-                let prior_messages = loaded.conversation.messages.clone();
-                let persisted_mcp_tool_exposure = loaded.conversation.mcp_tool_exposure;
                 let factory = {
                     let replacement = replacement.clone();
                     let profile = Arc::clone(&connection_profile);
                     let session_id = destination_id.clone();
-                    let cwd = cwd.clone();
-                    let prior_messages = prior_messages.clone();
                     let app_server = Arc::clone(&app_server);
+                    let state = Arc::clone(&state);
+                    let target = target.clone();
                     async move {
+                        let leased = crate::session_resume::load_resume_session_with_write_lease(
+                            state.session_manager_snapshot().await,
+                            SessionResumeInput {
+                                target,
+                                plan_mode_instructions: None,
+                            },
+                        )
+                        .await
+                        .map_err(|error| {
+                            coco_app_server::RegistryError::load_failed(error.message().to_string())
+                        })?;
+                        let authoritative = leased.loaded;
+                        if authoritative.session_id != session_id {
+                            return Err(coco_app_server::RegistryError::load_failed(format!(
+                                "resume target changed from {session_id} to {} during admission",
+                                authoritative.session_id
+                            )));
+                        }
+                        if let Some(watermark) = authoritative.session.session_seq_watermark {
+                            restore_session_seq_from_watermark(
+                                &app_server,
+                                &state,
+                                session_id.clone(),
+                                watermark,
+                            );
+                        }
                         let runtime = build_connection_runtime_for_resume(
                             replacement,
                             Arc::clone(&profile),
                             session_id.clone(),
-                            cwd,
-                            prior_messages,
+                            authoritative.session.working_dir,
+                            authoritative.conversation.messages,
                             // Replace-to-resume carries only a target; plan-mode
                             // policy is re-supplied via `session/resume`.
                             None,
-                            persisted_mcp_tool_exposure,
+                            authoritative.conversation.mcp_tool_exposure,
+                            leased.write_lease,
                             Arc::clone(&app_server),
                         )
                         .await

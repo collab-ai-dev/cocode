@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
+use coco_session::SessionLeaseStore;
 use coco_session::TranscriptStore;
 use coco_session::recovery::ConversationForResume;
 use coco_session::recovery::can_resume_session;
@@ -70,7 +71,7 @@ pub struct ResumePlan {
 ///   the argument as a path when it ends in `.jsonl`.
 /// - `--continue` / `--continue-session`: load the most recent
 ///   non-sidechain session in `sessions_dir`.
-/// - `--fork-session`: requires `--resume <id>`; copies the source
+/// - `--fork-session`: copies `--resume <id>` or the most-recent session
 ///   JSONL into `<dest_session_id>.jsonl` (where `dest` is
 ///   `--session-id` if provided, else a fresh uuid).
 pub fn resolve(
@@ -90,7 +91,7 @@ pub fn resolve(
 
     let (source_session_id, source_path): (coco_types::SessionId, PathBuf) =
         if let Some(arg) = cli.resume.as_deref() {
-            let (id, path) = resolve_source_arg(memory_base, cwd, &dest_store, arg)?;
+            let (id, path) = resolve_source_arg(memory_base, &dest_store, arg)?;
             (
                 coco_types::SessionId::try_new(id.clone())
                     .map_err(|e| anyhow::anyhow!("invalid session id '{id}': {e}"))?,
@@ -127,6 +128,19 @@ pub fn resolve(
             return Ok(None);
         };
 
+    // A fork reads and rewrites the complete source JSONL. Require quiescent
+    // ownership for that snapshot so an active writer cannot leave the fork
+    // missing (or carrying a partial) trailing entry.
+    let _fork_source_lease = if cli.fork_session {
+        Some(
+            dest_store
+                .require_write_lease(source_session_id.as_str())
+                .map_err(|error| anyhow::anyhow!(error))?,
+        )
+    } else {
+        None
+    };
+
     if !can_resume_session(&source_path) {
         anyhow::bail!(
             "transcript at {} is empty or unreadable; nothing to resume",
@@ -135,6 +149,19 @@ pub fn resolve(
     }
     let conversation = load_conversation_for_resume(&source_path)
         .map_err(|e| anyhow::anyhow!("failed to load transcript {}: {e}", source_path.display()))?;
+    let source_cwd = coco_session::storage::read_transcript_metadata_at(
+        &source_path,
+        source_session_id.as_str(),
+    )?
+    .cwd
+    .filter(|cwd| !cwd.trim().is_empty())
+    .map(PathBuf::from)
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "transcript {} has no working-directory metadata; refusing to resume in an unrelated cwd",
+            source_path.display()
+        )
+    })?;
 
     let prior_messages = conversation.messages.clone();
 
@@ -144,8 +171,22 @@ pub fn resolve(
                 .map_err(|e| anyhow::anyhow!("invalid session id '{raw}': {e}"))?,
             None => coco_types::SessionId::generate(),
         };
+        if dest_id == source_session_id {
+            anyhow::bail!("fork destination session id must differ from the source");
+        }
+        // Session ids are protocol-global. Hold the global lease across the
+        // existence check and no-clobber copy so concurrent forks cannot both
+        // create the same id in different project directories.
+        let _fork_lease = dest_store
+            .require_write_lease(dest_id.as_str())
+            .map_err(|error| anyhow::anyhow!(error))?;
+        if coco_session::storage::resolve_session_file_path(memory_base, dest_id.as_str(), None)?
+            .is_some()
+        {
+            anyhow::bail!("fork destination session id {dest_id} already exists");
+        }
         let dest_path = dest_store.transcript_path(dest_id.as_str());
-        fork_conversation(&source_path, &dest_path, dest_id.as_str()).map_err(|e| {
+        fork_conversation(&source_path, &dest_path, dest_id.as_str(), cwd).map_err(|e| {
             anyhow::anyhow!(
                 "fork copy {} → {} failed: {e}",
                 source_path.display(),
@@ -169,7 +210,7 @@ pub fn resolve(
         source_session_id,
         source_path: source_path.clone(),
         destination_path: source_path,
-        cwd: cwd.to_path_buf(),
+        cwd: source_cwd,
         prior_messages,
         conversation,
         is_fork: false,
@@ -179,14 +220,10 @@ pub fn resolve(
 /// Resolve `--resume <arg>` — accepts either a bare session id or a
 /// `.jsonl` path. Returns `(session_id, transcript_path)`.
 ///
-/// For bare session ids we walk every project under
-/// `<memory_base>/projects/*/`, preferring the cwd-scoped project when
-/// present so
-/// `--resume <id>` from inside a repo lands on that repo's session
-/// even if the id exists in multiple projects.
+/// Bare session ids are resolved globally and must be unique. An explicit
+/// `.jsonl` path is the only path-scoped form.
 fn resolve_source_arg(
     memory_base: &Path,
-    cwd: &Path,
     dest_store: &TranscriptStore,
     arg: &str,
 ) -> Result<(String, PathBuf)> {
@@ -207,13 +244,10 @@ fn resolve_source_arg(
         return Ok((id, abs));
     }
 
-    // Bare id: look only under the current project (with sibling-
-    // worktree fallback). When `dir` is set and the direct + worktree
-    // probes both miss, do NOT cross over into other projects. A global
-    // scan here would silently open someone else's session and write
-    // follow-up turns into the wrong project dir.
+    // A bare id is a protocol-global address. Reject legacy duplicates rather
+    // than routing a writable resume based on the caller's current directory.
     if let Some(resolved) =
-        coco_session::storage::resolve_session_file_path(memory_base, arg, Some(cwd))?
+        coco_session::storage::resolve_session_file_path(memory_base, arg, None)?
     {
         return Ok((arg.to_string(), resolved.file_path));
     }

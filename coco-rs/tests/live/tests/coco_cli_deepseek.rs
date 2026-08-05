@@ -302,14 +302,14 @@ async fn test_coco_cli_fallback_chain_parses_deepseek() -> Result<()> {
     Ok(())
 }
 
-// ─── max-tokens flag plumbing ────────────────────────────────────────
+// ─── total-token-budget flag plumbing ───────────────────────────────
 
 #[tokio::test]
-async fn test_coco_cli_max_tokens_deepseek_openai() -> Result<()> {
+async fn test_coco_cli_total_token_budget_deepseek_openai() -> Result<()> {
     let _t = require_live!("deepseek-openai", model_id(), "text");
-    // `--max-tokens 256` — large enough for a one-line answer but small
-    // enough that the cap is exercised. Asserts the flag plumbed
-    // through `cli.max_tokens` → `QueryEngineConfig.max_tokens` without
+    // `--total-token-budget 4096` — large enough for the prompt and a
+    // one-line answer while still exercising the cumulative session cap.
+    // Asserts the flag is plumbed into QueryEngineConfig without
     // panicking, and the model produced *some* output. Tighter
     // bounds (e.g. asserting output_tokens <= cap) are flaky because
     // some providers count thinking against the cap differently.
@@ -318,10 +318,10 @@ async fn test_coco_cli_max_tokens_deepseek_openai() -> Result<()> {
         model_id(),
         "Reply with the single word: ok",
         None,
-        &["--max-tokens", "256"],
+        &["--total-token-budget", "4096"],
     );
     let outcome = run_chat(&cli, cli.prompt.as_deref()).await?;
-    record_outcome("coco_cli.max_tokens", &outcome);
+    record_outcome("coco_cli.total_token_budget", &outcome);
     assert!(
         outcome.total_usage.output_tokens.total > 0,
         "expected non-zero output tokens"
@@ -988,47 +988,41 @@ async fn test_coco_cli_max_turns_zero_errors() -> Result<()> {
     Ok(())
 }
 
-/// **Bug-finding test.** Original symptom: `--max-tokens=-1` was
-/// silently accepted; the budget tracker treated `Some(-1)` as
-/// "already exhausted" and short-circuited every LLM call to an
-/// empty response — without any error or warning visible to the user.
-///
-/// Fix landed in `cli_runtime_overrides`: non-positive `--max-tokens`
-/// now errors at runtime-config build, before any provider call. This
-/// test pins the new behavior.
+/// A non-positive cumulative budget is rejected during runtime-config
+/// construction, before any provider call.
 #[tokio::test]
-async fn test_coco_cli_max_tokens_negative_errors() -> Result<()> {
+async fn test_coco_cli_total_token_budget_negative_errors() -> Result<()> {
     let cli = cli_for(
         "deepseek-openai",
         model_id(),
         "noop",
         None,
-        &["--max-tokens=-1"],
+        &["--total-token-budget=-1"],
     );
     let result = run_chat(&cli, cli.prompt.as_deref()).await;
-    let err = result.expect_err("--max-tokens=-1 should error");
+    let err = result.expect_err("--total-token-budget=-1 should error");
     assert!(
-        err.to_string().contains("--max-tokens"),
+        err.to_string().contains("--total-token-budget"),
         "error should mention the flag; got: {err}"
     );
     Ok(())
 }
 
-/// Boundary: `--max-tokens=0` — same class as the negative case;
+/// Boundary: `--total-token-budget=0` — same class as the negative case;
 /// budget tracker would short-circuit. Should also error.
 #[tokio::test]
-async fn test_coco_cli_max_tokens_zero_errors() -> Result<()> {
+async fn test_coco_cli_total_token_budget_zero_errors() -> Result<()> {
     let cli = cli_for(
         "deepseek-openai",
         model_id(),
         "noop",
         None,
-        &["--max-tokens", "0"],
+        &["--total-token-budget", "0"],
     );
     let result = run_chat(&cli, cli.prompt.as_deref()).await;
-    let err = result.expect_err("--max-tokens 0 should error");
+    let err = result.expect_err("--total-token-budget 0 should error");
     assert!(
-        err.to_string().contains("--max-tokens"),
+        err.to_string().contains("--total-token-budget"),
         "error should mention the flag; got: {err}"
     );
     Ok(())

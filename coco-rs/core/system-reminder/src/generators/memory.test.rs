@@ -58,8 +58,8 @@ async fn nested_memory_emits_ts_template_for_single_entry() {
         .unwrap()
         .expect("emits");
     let text = r.content().unwrap();
-    // Expected format: "Contents of {path}:\n\n{content}"
-    assert_eq!(text, "Contents of /repo/CLAUDE.md:\n\ncoding rules here");
+    assert!(text.contains("source=\"nested_memory\""));
+    assert!(text.contains("Contents of /repo/CLAUDE.md:\n\ncoding rules here"));
 }
 
 #[tokio::test]
@@ -88,6 +88,32 @@ async fn nested_memory_joins_multiple_entries_with_blank_line() {
     assert!(text.contains("Contents of /repo/CLAUDE.md:\n\nroot rules"));
     assert!(text.contains("Contents of /repo/src/CLAUDE.md:\n\nsrc rules"));
     assert!(text.contains("root rules\n\nContents of /repo/src/CLAUDE.md"));
+}
+
+#[tokio::test]
+async fn nested_memory_has_utf8_safe_entry_and_aggregate_caps() {
+    let c = cfg();
+    let ctx = GeneratorContext::builder(&c)
+        .nested_memories(
+            (0..4)
+                .map(|index| NestedMemoryInfo {
+                    path: format!("/repo/{index}/CLAUDE.md"),
+                    content: "界".repeat(20_000),
+                })
+                .collect(),
+        )
+        .build();
+
+    let reminder = NestedMemoryGenerator
+        .generate(&ctx)
+        .await
+        .expect("generate")
+        .expect("reminder");
+    let text = reminder.content().expect("text reminder");
+
+    assert!(text.len() <= MAX_NESTED_MEMORY_TOTAL_BYTES);
+    assert!(text.is_char_boundary(text.len()));
+    assert!(text.contains("additional nested memories truncated"));
 }
 
 #[tokio::test]
@@ -146,7 +172,8 @@ async fn relevant_memories_emits_one_message_per_entry() {
                 _ => panic!("expected text block"),
             };
             // First entry carries the "retrieved for possible relevance" lead-in.
-            assert!(m0.starts_with(RELEVANT_MEMORIES_LEAD_IN));
+            assert!(m0.contains("source=\"relevant_memory\""));
+            assert!(m0.contains(RELEVANT_MEMORIES_LEAD_IN));
             assert!(m0.contains("Memory: a.md (1 hour ago)"));
             assert!(m0.contains("a content"));
             // Subsequent entries do not repeat the lead-in.
@@ -182,7 +209,7 @@ async fn relevant_memories_falls_back_to_path_header_when_none() {
     let crate::types::ContentBlock::Text { text } = &msgs[0].blocks[0] else {
         panic!("expected text");
     };
-    assert!(text.starts_with(RELEVANT_MEMORIES_LEAD_IN));
+    assert!(text.contains(RELEVANT_MEMORIES_LEAD_IN));
     assert!(text.contains("Memory: /m/x.md"));
     assert!(text.contains("content x"));
 }

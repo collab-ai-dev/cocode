@@ -53,7 +53,7 @@ impl SessionHandle {
             Arc::new(self.current_command_registry().await.side_chat_projection());
         Ok(super::SideChatSeed {
             context,
-            runtime_config: Arc::clone(self.runtime_config()),
+            runtime_config: self.runtime_config(),
             engine_config,
             permissions,
             model_runtimes: self.model_runtimes(),

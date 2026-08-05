@@ -5,6 +5,7 @@
 //! identity (mirrors retrieval's `Reranker` / `RerankerCapabilities`).
 
 use async_trait::async_trait;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::VoiceError;
@@ -37,6 +38,18 @@ pub struct Transcript {
     pub language: Option<String>,
 }
 
+/// Non-terminal progress produced by one transcription operation. The sink is
+/// supplied per request so progress cannot escape into a replacement session
+/// generation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VoiceProgress {
+    Download {
+        model: String,
+        received: u64,
+        total: Option<u64>,
+    },
+}
+
 /// One speech-to-text backend.
 #[async_trait]
 pub trait VoiceEngine: Send + Sync {
@@ -53,5 +66,6 @@ pub trait VoiceEngine: Send + Sync {
         audio: Vec<u8>,
         params: &TranscribeParams,
         cancel: CancellationToken,
+        progress: Option<mpsc::Sender<VoiceProgress>>,
     ) -> Result<Transcript, VoiceError>;
 }

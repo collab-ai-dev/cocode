@@ -4,6 +4,7 @@ use coco_llm_types::LlmMessage;
 use coco_llm_types::ToolContentPart;
 use coco_llm_types::ToolResultContent;
 use coco_llm_types::ToolResultPart;
+use coco_llm_types::UserContentPart;
 use coco_types::ModelSpec;
 use coco_types::ProviderApi;
 
@@ -88,6 +89,7 @@ fn guidance_appends_to_api_prompt_clone_only() {
             failed: None,
             usage: None,
         }],
+        REFERENCE_GUIDANCE_TOTAL_BUDGET,
     );
 
     assert_eq!(params.prompt.len(), 1);
@@ -98,7 +100,65 @@ fn guidance_appends_to_api_prompt_clone_only() {
 }
 
 #[test]
-fn user_turn_cache_key_is_turn_scoped_and_ignores_synthetic_context() {
+fn guidance_has_one_aggregate_utf8_safe_budget() {
+    let params = QueryParams::default();
+    let endpoint = MoaEndpointSpec {
+        preset_name: "default".to_string(),
+        aggregator: spec("anthropic", "claude-sonnet-4-6"),
+        reference_models: Vec::new(),
+        fanout: coco_config::MoaFanout::PerIteration,
+        reference_timeout_secs: None,
+    };
+    let references: Vec<_> = (0..4)
+        .map(|index| ReferenceOutput {
+            index,
+            count: 4,
+            provider: "provider".to_string(),
+            model_id: "model".to_string(),
+            text: "界".repeat(20_000),
+            failed: None,
+            usage: None,
+        })
+        .collect();
+
+    let next = attach_reference_guidance(
+        &params,
+        &endpoint,
+        &references,
+        REFERENCE_GUIDANCE_TOTAL_BUDGET,
+    );
+    let Some(LlmMessage::User { content, .. }) = next.prompt.last() else {
+        panic!("guidance must be a user message");
+    };
+    let Some(UserContentPart::Text(text)) = content.first() else {
+        panic!("guidance must be text");
+    };
+    assert!(text.text.len() <= REFERENCE_GUIDANCE_TOTAL_BUDGET);
+    assert!(text.text.is_char_boundary(text.text.len()));
+    assert!(text.text.contains("additional references truncated"));
+}
+
+#[test]
+fn guidance_is_omitted_when_only_a_partial_header_would_fit() {
+    let params = QueryParams {
+        prompt: vec![LlmMessage::user_text("original")],
+        ..Default::default()
+    };
+    let endpoint = MoaEndpointSpec {
+        preset_name: "default".to_string(),
+        aggregator: spec("anthropic", "claude-sonnet-4-6"),
+        reference_models: Vec::new(),
+        fanout: coco_config::MoaFanout::PerIteration,
+        reference_timeout_secs: None,
+    };
+
+    let next = attach_reference_guidance(&params, &endpoint, &[], 1);
+
+    assert_eq!(next.prompt, params.prompt);
+}
+
+#[test]
+fn user_turn_cache_key_is_session_and_turn_scoped() {
     let endpoint = MoaEndpointSpec {
         preset_name: "default".to_string(),
         aggregator: spec("anthropic", "claude-sonnet-4-6"),
@@ -106,35 +166,23 @@ fn user_turn_cache_key_is_turn_scoped_and_ignores_synthetic_context() {
         fanout: coco_config::MoaFanout::UserTurn,
         reference_timeout_secs: None,
     };
-    let base_prompt = vec![
-        LlmMessage::system(REFERENCE_SYSTEM_PROMPT),
-        LlmMessage::user_text("user question"),
-    ];
-    let later_iteration_prompt = vec![
-        LlmMessage::system(REFERENCE_SYSTEM_PROMPT),
-        LlmMessage::user_text("user question"),
-        LlmMessage::assistant_text("tool loop context that should not alter user_turn key"),
-        LlmMessage::user_text(ADVISORY_INSTRUCTION),
-    ];
-    let no_system_prompt = vec![LlmMessage::user_text("user question")];
     let turn_1 = coco_types::TurnId::from("turn-1");
     let turn_2 = coco_types::TurnId::from("turn-2");
 
-    let key = user_turn_cache_key(&endpoint, &base_prompt, &turn_1).expect("cache key");
+    let key = user_turn_cache_key(&endpoint, &turn_1, "session-a").expect("cache key");
     assert_eq!(
         key,
-        user_turn_cache_key(&endpoint, &later_iteration_prompt, &turn_1).expect("cache key"),
-        "user_turn fanout should reuse references within the same user turn",
-    );
-    assert_eq!(
-        key,
-        user_turn_cache_key(&endpoint, &no_system_prompt, &turn_1).expect("cache key"),
-        "synthetic reference system prompt must not participate in the cache signature",
+        user_turn_cache_key(&endpoint, &turn_1, "session-a").expect("cache key"),
     );
     assert_ne!(
         key,
-        user_turn_cache_key(&endpoint, &base_prompt, &turn_2).expect("cache key"),
+        user_turn_cache_key(&endpoint, &turn_2, "session-a").expect("cache key"),
         "reference outputs must not be reused across turns",
+    );
+    assert_ne!(
+        key,
+        user_turn_cache_key(&endpoint, &turn_1, "session-b").expect("cache key"),
+        "reference outputs must not be reused across sessions",
     );
 }
 
@@ -147,10 +195,9 @@ fn per_iteration_cache_key_is_disabled() {
         fanout: coco_config::MoaFanout::PerIteration,
         reference_timeout_secs: None,
     };
-    let prompt = vec![LlmMessage::user_text("prompt")];
     let turn_id = coco_types::TurnId::from("turn-1");
 
-    assert!(user_turn_cache_key(&endpoint, &prompt, &turn_id).is_none());
+    assert!(user_turn_cache_key(&endpoint, &turn_id, "session-a").is_none());
 }
 
 #[tokio::test]

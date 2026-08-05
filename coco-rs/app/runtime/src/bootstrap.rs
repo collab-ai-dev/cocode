@@ -37,7 +37,7 @@ pub struct SessionRuntimeBootstrap {
     /// mutate another session's tool set mid-turn.
     pub tools: Arc<ToolRegistry>,
     pub model_id: String,
-    pub system_prompt: String,
+    pub system_prompt: coco_context::SystemPrompt,
     pub permission_mode_availability: PermissionModeAvailability,
     pub permission_mode: PermissionMode,
     pub command_registry: Arc<RwLock<Arc<CommandRegistry>>>,

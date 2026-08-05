@@ -41,7 +41,7 @@ pub(crate) async fn run_chat(
     }
     let opts = match plan {
         Some(p) => coco_agent_host::headless::RunChatOptions {
-            cwd: Some(cwd.clone()),
+            cwd: Some(p.cwd.clone()),
             prior_messages: p
                 .prior_messages
                 .into_iter()

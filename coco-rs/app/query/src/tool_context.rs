@@ -500,7 +500,11 @@ impl ToolContextFactory {
             avoid_permission_prompts: self.config.avoid_permission_prompts,
             max_budget_usd: self.config.max_budget_usd,
             total_token_budget: self.config.total_token_budget,
-            custom_system_prompt: self.config.system_prompt.clone(),
+            custom_system_prompt: self
+                .config
+                .system_prompt
+                .as_ref()
+                .map(coco_context::SystemPrompt::full_text),
             append_system_prompt: self.config.append_system_prompt.clone(),
             debug: self.config.debug,
             verbose: self.config.verbose,

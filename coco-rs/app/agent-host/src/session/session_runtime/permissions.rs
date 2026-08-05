@@ -6,6 +6,27 @@ use coco_query::QueryEngineConfig;
 
 use super::SessionRuntime;
 
+pub(super) fn auto_mode_rules_from_runtime_config(
+    runtime_config: &coco_config::RuntimeConfig,
+) -> coco_permissions::AutoModeRules {
+    runtime_config
+        .settings
+        .merged
+        .auto_mode
+        .as_ref()
+        .map(|config| coco_permissions::AutoModeRules {
+            allow: config.allow.clone(),
+            soft_deny: config.soft_deny.clone(),
+            environment: config.environment.clone(),
+            classifier_mode: config.classifier_mode,
+            classifier_unavailable_fail_open: config.classifier_unavailable_fail_open,
+            classify_all_shell: runtime_config
+                .settings
+                .auto_mode_classify_all_shell_enabled(),
+        })
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PermissionModeChange {
     pub previous: coco_types::PermissionMode,

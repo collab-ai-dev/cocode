@@ -4,7 +4,7 @@ impl SessionHandle {
     // Focused capability forwarding. Keeping these as explicit inherent
     // methods preserves the opaque runtime boundary while allowing callers to
     // request only the session service they need.
-    pub fn runtime_config(&self) -> &Arc<coco_config::RuntimeConfig> {
+    pub fn runtime_config(&self) -> Arc<coco_config::RuntimeConfig> {
         self.runtime.runtime_config()
     }
 
@@ -174,7 +174,7 @@ impl SessionHandle {
         self.runtime.persist_session()
     }
 
-    pub fn runtime_publisher(&self) -> Option<Arc<coco_config::RuntimePublisher>> {
+    pub fn runtime_publisher(&self) -> Arc<coco_config::RuntimePublisher> {
         self.runtime.runtime_publisher()
     }
 
@@ -382,7 +382,7 @@ impl SessionHandle {
         let cwd = engine_config.workspace_cwd();
         let plugin_style_sources = self.project_services().output_style_sources();
         let output_style_manager = crate::headless::build_output_style_manager(
-            self.runtime_config(),
+            &self.runtime_config(),
             &cwd,
             &plugin_style_sources,
         );

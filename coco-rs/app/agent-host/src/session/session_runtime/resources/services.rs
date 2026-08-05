@@ -50,6 +50,11 @@ pub(in crate::session::session_runtime) struct SessionPersistenceResources {
     pub(in crate::session::session_runtime) project_paths: Arc<coco_paths::ProjectPaths>,
     pub(in crate::session::session_runtime) transcript_store: Arc<dyn coco_session::SessionStore>,
     pub(in crate::session::session_runtime) persist_session: bool,
+    /// Exclusive capability retained until the runtime's explicit close
+    /// boundary. A tombstoned runtime may still have diagnostic/read-only
+    /// handles, so lease release cannot depend on the final `Arc` dropping.
+    pub(in crate::session::session_runtime) write_lease:
+        Arc<std::sync::Mutex<Option<coco_session::SessionWriteLease>>>,
     /// First-class goal aggregate for this session (§10.2). The sole writer of
     /// the live goal projection; tools/TUI/context read snapshots from it.
     pub(in crate::session::session_runtime) goal_runtime: Arc<coco_goal_runtime::GoalRuntimeHandle>,
@@ -70,6 +75,7 @@ impl SessionPersistenceResources {
         project_paths: Arc<coco_paths::ProjectPaths>,
         transcript_store: Arc<dyn coco_session::SessionStore>,
         persist_session: bool,
+        write_lease: Option<coco_session::SessionWriteLease>,
         goal_runtime: Arc<coco_goal_runtime::GoalRuntimeHandle>,
     ) -> Self {
         Self {
@@ -77,6 +83,7 @@ impl SessionPersistenceResources {
             project_paths,
             transcript_store,
             persist_session,
+            write_lease: Arc::new(std::sync::Mutex::new(write_lease)),
             goal_runtime,
             goal_evidence: Arc::new(coco_goal_runtime::InMemoryEvidenceStore::new()),
             goal_driver_edge: Arc::new(tokio::sync::Notify::new()),
@@ -103,6 +110,13 @@ impl SessionPersistenceResources {
 
     pub(in crate::session::session_runtime) fn session_manager(&self) -> &Arc<SessionManager> {
         &self.session_manager
+    }
+
+    pub(in crate::session::session_runtime) fn release_write_lease(&self) {
+        self.write_lease
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
     }
 
     pub(in crate::session::session_runtime) fn project_paths(

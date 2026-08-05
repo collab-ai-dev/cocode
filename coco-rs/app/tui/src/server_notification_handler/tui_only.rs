@@ -743,7 +743,7 @@ pub(super) fn handle(
             true
         }
         // `/skills` dialog Enter result — CLI bridge has finished
-        // (or failed) the SettingsWriter round-trip + RuntimeConfig
+        // (or failed) the settings write + RuntimeConfig
         // republish + CommandRegistry rebuild. Toast generation
         // lives here (not in the CLI handler) so the `t!` macro can
         // pull the localized strings — the i18n catalog is anchored

@@ -191,7 +191,9 @@ pub async fn run_session(
         ),
         max_turns: session_cfg.max_turns,
         total_token_budget: session_cfg.total_token_budget,
-        system_prompt: session_cfg.system_prompt,
+        system_prompt: session_cfg
+            .system_prompt
+            .map(coco_context::SystemPrompt::from_text),
         is_non_interactive: true,
         project_dir: Some(workdir_path.clone()),
         cwd_override: Some(workdir_path.clone()),
@@ -316,7 +318,9 @@ pub async fn run_session_with_steering(
         ),
         max_turns: session_cfg.max_turns,
         total_token_budget: session_cfg.total_token_budget,
-        system_prompt: session_cfg.system_prompt,
+        system_prompt: session_cfg
+            .system_prompt
+            .map(coco_context::SystemPrompt::from_text),
         is_non_interactive: true,
         project_dir: Some(workdir_path.clone()),
         cwd_override: Some(workdir_path.clone()),

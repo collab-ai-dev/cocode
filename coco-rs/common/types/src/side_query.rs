@@ -344,6 +344,10 @@ pub struct CacheSafeParams {
     /// last request verbatim. Mirrors the same threading used by
     /// `SpawnMode::Fork`'s `rendered_system_prompt`.
     pub rendered_system_prompt: String,
+    /// Structured layout for `rendered_system_prompt`. This is authoritative
+    /// for in-process forks; retaining only flattened bytes would silently
+    /// discard provider cache breakpoints.
+    pub system_prompt_blocks: Vec<crate::CachedSystemPromptBlock>,
     /// Resolved model id at the time of the parent turn. Cache keys
     /// are scoped per `(provider, model)` — a fork that targets a
     /// different model will simply miss the cache.

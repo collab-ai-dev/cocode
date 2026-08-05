@@ -32,6 +32,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 /// Outcome of a [`TaskHandle::signal_detach`] call. Self-documents at
 /// the callsite vs an opaque `bool`.
@@ -85,6 +86,13 @@ impl ShellTaskStartMode {
 pub struct ShellTaskRequest {
     pub command: String,
     pub shell_kind: ShellTaskKind,
+    /// Effective working directory resolved by the tool boundary.
+    pub cwd: PathBuf,
+    /// Stable session root used by the bare-repository scrub.
+    pub original_cwd: PathBuf,
+    /// Parent tool/turn cancellation. Task-local stop remains independently
+    /// available through the manager token.
+    pub parent_cancel: CancellationToken,
     pub start_mode: ShellTaskStartMode,
     pub description: String,
     pub timeout_ms: Option<i64>,
@@ -172,10 +180,11 @@ pub struct TaskOutputDelta {
 /// raced the task's terminal signal.
 #[derive(Debug, Clone)]
 pub struct TerminalOutputs {
-    pub stdout: String,
-    pub stderr: String,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
     pub exit_code: Option<i32>,
     pub interrupted: bool,
+    pub new_cwd: Option<PathBuf>,
 }
 
 /// One-shot terminal signal. Backed by `tokio::sync::watch::Receiver`.

@@ -16,7 +16,7 @@
 //! | Per-task file | `{taskId}.output` |
 //! | Open flags (Unix) | `OpenOptions().create(true).append(true)` + `custom_flags(O_NOFOLLOW)` |
 //! | Disk cap | `MAX_TASK_OUTPUT_BYTES = 5 GB`; `[output truncated: exceeded 5GB disk cap]` marker |
-//! | Write queue | `tokio::sync::mpsc::UnboundedSender` + single drain task |
+//! | Write queue | bounded `tokio::sync::mpsc::Sender` + single drain task |
 //! | flush | `flush()` returns `oneshot::Receiver<()>` resolved when the drain catches up |
 //! | cancel | `cancel()` aborts the drain task |
 //! | incremental read | `read_delta(from_offset, max_bytes)` via `tokio::fs::File::read_at` |
@@ -49,10 +49,11 @@ pub const DEFAULT_MAX_READ_BYTES: usize = 8 * 1024 * 1024;
 
 /// Truncation marker appended once when a task crosses the disk cap.
 const TRUNCATION_MARKER: &str = "\n[output truncated: exceeded 5GB disk cap]\n";
+const WRITE_QUEUE_CAPACITY: usize = 256;
 
 /// Operations the drain loop processes.
 enum DiskOp {
-    Append(String),
+    Append(Vec<u8>),
     Flush(oneshot::Sender<()>),
     Shutdown,
 }
@@ -67,7 +68,7 @@ pub struct DiskTaskOutput {
 
 struct DiskTaskOutputInner {
     path: PathBuf,
-    tx: mpsc::UnboundedSender<DiskOp>,
+    tx: mpsc::Sender<DiskOp>,
     /// Bytes appended (pre-truncation accounting). Read for the cap
     /// check inside `append`. Atomic so callers can `flush_size_hint`
     /// without taking a lock.
@@ -86,7 +87,7 @@ impl DiskTaskOutput {
     /// Construct and spawn the drain task. The file is created lazily
     /// on first append.
     pub fn new(path: PathBuf) -> Self {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(WRITE_QUEUE_CAPACITY);
         let pending_ops = Arc::new(AtomicI64::new(0));
         let inner = Arc::new(DiskTaskOutputInner {
             path: path.clone(),
@@ -107,10 +108,16 @@ impl DiskTaskOutput {
         &self.inner.path
     }
 
-    /// Append a chunk. Returns immediately — the actual fs write
-    /// runs on the drain task. Past the 5 GB cap, drops the chunk
-    /// and (once) enqueues the truncation marker.
-    pub fn append(&self, chunk: &str) {
+    /// Append a chunk with bounded backpressure. Past the 5 GB cap, drops the
+    /// chunk and (once) enqueues the truncation marker.
+    pub async fn append(&self, chunk: &str) {
+        self.append_bytes(chunk.as_bytes()).await;
+    }
+
+    /// Append raw output bytes. Shell readers use this path so a UTF-8 scalar
+    /// split across OS reads is decoded only after the complete byte stream is
+    /// read back, rather than being permanently replaced per chunk.
+    pub async fn append_bytes(&self, chunk: &[u8]) {
         if self.inner.capped.load(Ordering::Acquire) {
             return;
         }
@@ -122,15 +129,28 @@ impl DiskTaskOutput {
             // others just drop silently.
             if !self.inner.capped.swap(true, Ordering::AcqRel) {
                 self.inner.pending_ops.fetch_add(1, Ordering::AcqRel);
-                let _ = self
+                if self
                     .inner
                     .tx
-                    .send(DiskOp::Append(TRUNCATION_MARKER.to_string()));
+                    .send(DiskOp::Append(TRUNCATION_MARKER.as_bytes().to_vec()))
+                    .await
+                    .is_err()
+                {
+                    self.inner.pending_ops.fetch_sub(1, Ordering::AcqRel);
+                }
             }
             return;
         }
         self.inner.pending_ops.fetch_add(1, Ordering::AcqRel);
-        let _ = self.inner.tx.send(DiskOp::Append(chunk.to_string()));
+        if self
+            .inner
+            .tx
+            .send(DiskOp::Append(chunk.to_vec()))
+            .await
+            .is_err()
+        {
+            self.inner.pending_ops.fetch_sub(1, Ordering::AcqRel);
+        }
     }
 
     /// Wait for the drain task to process every queued chunk up to
@@ -139,7 +159,8 @@ impl DiskTaskOutput {
     pub async fn flush(&self) -> Result<(), &'static str> {
         let (tx, rx) = oneshot::channel();
         self.inner.pending_ops.fetch_add(1, Ordering::AcqRel);
-        if self.inner.tx.send(DiskOp::Flush(tx)).is_err() {
+        if self.inner.tx.send(DiskOp::Flush(tx)).await.is_err() {
+            self.inner.pending_ops.fetch_sub(1, Ordering::AcqRel);
             return Err("drain task closed");
         }
         rx.await.map_err(|_| "flush sender dropped")
@@ -174,8 +195,8 @@ impl DiskTaskOutput {
 
     /// Cancel the drain task. Pending writes are dropped. The file
     /// itself is left intact — call `cleanup` to unlink.
-    pub fn cancel(&self) {
-        let _ = self.inner.tx.send(DiskOp::Shutdown);
+    pub async fn cancel(&self) {
+        let _ = self.inner.tx.send(DiskOp::Shutdown).await;
     }
 
     /// Unlink the output file. Best-effort; missing file is OK.
@@ -252,11 +273,7 @@ async fn read_tail_from_path(path: &Path, max_bytes: usize) -> std::io::Result<S
     }
 }
 
-async fn drain_loop(
-    path: PathBuf,
-    mut rx: mpsc::UnboundedReceiver<DiskOp>,
-    pending_ops: Arc<AtomicI64>,
-) {
+async fn drain_loop(path: PathBuf, mut rx: mpsc::Receiver<DiskOp>, pending_ops: Arc<AtomicI64>) {
     // Lazily open on first append. Closing on shutdown lets the
     // OS reclaim the fd; reopening on the next append is fine.
     let mut file: Option<File> = None;
@@ -266,7 +283,7 @@ async fn drain_loop(
                 if let Err(e) = ensure_open(&path, &mut file).await {
                     tracing::debug!(?path, error = %e, "DiskTaskOutput: open failed; dropping chunk");
                 } else if let Some(fh) = file.as_mut()
-                    && let Err(e) = fh.write_all(chunk.as_bytes()).await
+                    && let Err(e) = fh.write_all(&chunk).await
                 {
                     tracing::debug!(?path, error = %e, "DiskTaskOutput: write failed; dropping chunk");
                 }
@@ -401,7 +418,7 @@ impl DiskOutputs {
         if let Some(dto) = dto {
             // Best-effort flush before dropping the drain.
             let _ = dto.flush().await;
-            dto.cancel();
+            dto.cancel().await;
         }
     }
 
@@ -409,7 +426,7 @@ impl DiskOutputs {
     pub async fn cleanup(&self, task_id: &str) -> std::io::Result<()> {
         let dto = self.outputs.write().await.remove(task_id);
         if let Some(dto) = dto {
-            dto.cancel();
+            dto.cancel().await;
             return dto.cleanup().await;
         }
         Ok(())

@@ -504,7 +504,7 @@ pub(super) async fn handle_write_skill_overrides(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     patch: serde_json::Value,
-    runtime_publisher: Option<&Arc<coco_config::RuntimePublisher>>,
+    runtime_publisher: &Arc<coco_config::RuntimePublisher>,
     cwd: &std::path::Path,
     flag_settings: Option<&std::path::Path>,
 ) {

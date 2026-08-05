@@ -34,6 +34,58 @@ use crate::helpers::extract_last_assistant_text;
 use crate::helpers::hook_outcome_to_status;
 use crate::session_state::SessionStateTracker;
 
+/// Failed query outcome with the same authoritative state payload as a
+/// successful result. Runtime owners must commit `final_history` before they
+/// publish the terminal failure event.
+pub struct QueryFailure {
+    source: coco_error::BoxedError,
+    pub final_history: MessageHistory,
+    pub total_usage: TokenUsage,
+    pub session_result: coco_types::SessionResultParams,
+}
+
+impl QueryFailure {
+    fn without_history(engine: &QueryEngine, source: coco_error::BoxedError) -> Self {
+        let session_result = engine.build_session_error_params(
+            source.to_string(),
+            &crate::engine_loop_state::QueryFailureStats::default(),
+        );
+        Self {
+            source,
+            final_history: MessageHistory::new(),
+            total_usage: TokenUsage::default(),
+            session_result,
+        }
+    }
+
+    pub fn into_source(self) -> coco_error::BoxedError {
+        self.source
+    }
+}
+
+impl std::fmt::Debug for QueryFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("QueryFailure")
+            .field("source", &self.source)
+            .field("history_len", &self.final_history.len())
+            .field("total_usage", &self.total_usage)
+            .finish()
+    }
+}
+
+impl std::fmt::Display for QueryFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.source, formatter)
+    }
+}
+
+impl std::error::Error for QueryFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
 impl QueryEngine {
     /// Run the agent loop with event streaming from a text prompt.
     /// **I-1 protocol**: because this entry point CREATES the user
@@ -74,6 +126,7 @@ impl QueryEngine {
         .await;
         self.run_internal_with_messages(vec![user_msg], Some(event_tx), Some(cycle_turn_id))
             .await
+            .map_err(QueryFailure::into_source)
     }
 
     /// Run the agent loop with pre-built messages (user + attachment messages).
@@ -82,12 +135,15 @@ impl QueryEngine {
         messages: Vec<std::sync::Arc<Message>>,
         event_tx: tokio::sync::mpsc::Sender<CoreEvent>,
         cycle_turn_id: TurnId,
-    ) -> Result<QueryResult, coco_error::BoxedError> {
+    ) -> Result<QueryResult, QueryFailure> {
         if messages.is_empty() {
-            return Err(Box::new(coco_error::PlainError::new(
-                "No messages to process",
-                coco_error::StatusCode::InvalidArguments,
-            )));
+            return Err(QueryFailure::without_history(
+                self,
+                Box::new(coco_error::PlainError::new(
+                    "No messages to process",
+                    coco_error::StatusCode::InvalidArguments,
+                )),
+            ));
         }
         self.run_internal_with_messages(messages, Some(event_tx), Some(cycle_turn_id))
             .await
@@ -104,7 +160,9 @@ impl QueryEngine {
                 coco_error::StatusCode::InvalidArguments,
             )));
         }
-        self.run_internal_with_messages(messages, None, None).await
+        self.run_internal_with_messages(messages, None, None)
+            .await
+            .map_err(QueryFailure::into_source)
     }
 
     /// Run the agent loop with an initial user prompt (no event streaming).
@@ -112,6 +170,7 @@ impl QueryEngine {
         let user_msg = std::sync::Arc::new(create_user_message(user_prompt));
         self.run_internal_with_messages(vec![user_msg], None, None)
             .await
+            .map_err(QueryFailure::into_source)
     }
 
     /// Emit `GoalSnapshotChanged` with the full bounded snapshot view (or `None`)
@@ -160,7 +219,7 @@ impl QueryEngine {
         turn_messages: Vec<std::sync::Arc<Message>>,
         event_tx: Option<tokio::sync::mpsc::Sender<CoreEvent>>,
         cycle_turn_id: Option<TurnId>,
-    ) -> Result<QueryResult, coco_error::BoxedError> {
+    ) -> Result<QueryResult, QueryFailure> {
         info!(
             turn_message_count = turn_messages.len(),
             streaming_tools = self.config.streaming_tool_execution,
@@ -245,7 +304,7 @@ impl QueryEngine {
         // Stamp F9 envelope so every emit from this engine invocation
         // carries the active session + agent identity.
         history.set_envelope(self.session_id.clone(), self.config.agent_id_string());
-        let (result, accumulated_usage, pending_loop_terminal) = self
+        let (result, failure_stats, pending_success_terminal) = self
             .run_session_loop(
                 turn_messages,
                 event_tx.clone(),
@@ -255,6 +314,7 @@ impl QueryEngine {
                 cycle_turn_id.clone(),
             )
             .await;
+        let accumulated_usage = failure_stats.total_usage;
 
         // Drain the hook forwarder before emitting Idle/SessionResult so any
         // in-flight hook events land on the wire before the session
@@ -332,10 +392,16 @@ impl QueryEngine {
             // TurnEnded payload in parallel.
             pending_failure_terminal = Some(coco_types::TurnEndedParams::failed(
                 id.clone(),
-                Some(accumulated_usage),
+                Some(qr.total_usage),
                 error.clone(),
             ));
         }
+
+        // One final persistence seam covers every exit, including failures
+        // that return before the normal finalize path. UUID dedup makes this
+        // a no-op for already-recorded messages while ensuring a synthetic
+        // api_error and the last partial assistant output are durable.
+        self.record_transcript_tail(&history).await;
 
         // StopFailure — fire-and-forget hooks when the turn ended in an
         // API / runtime error rather than a clean stop. Output and exit
@@ -374,9 +440,9 @@ impl QueryEngine {
         // immediately before it, with the same final params embedded.
         let params = match &result {
             Ok(qr) => self.build_session_result_params(qr, /*error_messages*/ Vec::new()),
-            Err(e) => self.build_session_error_params(e.to_string()),
+            Err(e) => self.build_session_error_params(e.to_string(), &failure_stats),
         };
-        if let Some(terminal) = pending_failure_terminal.or(pending_loop_terminal) {
+        if let Some(terminal) = pending_failure_terminal.or(pending_success_terminal) {
             let _delivered = emit_protocol(
                 &event_tx,
                 ServerNotification::TurnEnded(terminal.with_session_result(params.clone())),
@@ -409,11 +475,19 @@ impl QueryEngine {
         }
         let _delivered = emit_protocol(
             &event_tx,
-            ServerNotification::SessionResult(Box::new(params)),
+            ServerNotification::SessionResult(Box::new(params.clone())),
         )
         .await;
 
-        result
+        match result {
+            Ok(result) => Ok(result),
+            Err(source) => Err(QueryFailure {
+                source,
+                final_history: history,
+                total_usage: accumulated_usage,
+                session_result: params,
+            }),
+        }
     }
 
     /// Emit the `SessionStarted` protocol event from attached bootstrap data.
@@ -488,23 +562,43 @@ impl QueryEngine {
     pub(crate) fn build_session_error_params(
         &self,
         error_msg: String,
+        stats: &crate::engine_loop_state::QueryFailureStats,
     ) -> coco_types::SessionResultParams {
+        let model_usage = stats
+            .cost_tracker
+            .model_entries()
+            .map(|(key, usage)| {
+                (
+                    key.display(),
+                    coco_types::SessionModelUsage {
+                        input_tokens: usage.input_tokens,
+                        output_tokens: usage.output_tokens,
+                        cache_read_input_tokens: usage.cache_read_input_tokens,
+                        cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                        web_search_requests: usage.web_search_requests,
+                        cost_usd: usage.total_cost_usd,
+                        context_window: self.resolved_context_window(),
+                        max_output_tokens: self.resolved_max_output_tokens(),
+                    },
+                )
+            })
+            .collect();
         coco_types::SessionResultParams {
             session_id: self.session_id.clone(),
-            total_turns: 0,
-            duration_ms: 0,
-            duration_api_ms: 0,
+            total_turns: stats.total_turns,
+            duration_ms: stats.duration_ms,
+            duration_api_ms: stats.duration_api_ms,
             is_error: true,
             stop_reason: "error_during_execution".into(),
-            total_cost_usd: 0.0,
-            usage: TokenUsage::default(),
-            model_usage: Default::default(),
-            permission_denials: Vec::new(),
+            total_cost_usd: stats.cost_tracker.total_cost_usd(),
+            usage: stats.total_usage,
+            model_usage,
+            permission_denials: stats.permission_denials.clone(),
             result: None,
             errors: vec![error_msg],
             structured_output: None,
             fast_mode_state: None,
-            num_api_calls: None,
+            num_api_calls: Some(stats.cost_tracker.total_api_calls as i32),
         }
     }
 

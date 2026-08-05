@@ -44,6 +44,7 @@ pub(crate) async fn build_connection_runtime_for_start(
     replacement: RuntimeReplacementContext,
     connection_profile: Arc<coco_types::ConnectionProfile>,
     prepared: crate::session_start::PreparedStartSession,
+    write_lease: coco_session::SessionWriteLease,
     app_server: Arc<AppServer<AppSessionHandle>>,
 ) -> anyhow::Result<crate::session_runtime::SessionHandle> {
     let binding = runtime_binding_from_replacement(&replacement);
@@ -52,7 +53,8 @@ pub(crate) async fn build_connection_runtime_for_start(
         replacement.requires_structured_output,
         prepared.plan_mode_custom_instructions.clone(),
     );
-    let session = build_app_session_runtime_for_start(&binding, &profile, &prepared).await?;
+    let session =
+        build_app_session_runtime_for_start(&binding, &profile, &prepared, write_lease).await?;
     install_runtime_callbacks(&connection_profile, &session, app_server);
     install_app_session_integrations(&binding, session.clone()).await?;
     hydrate_app_session_history(&session, &prepared.session_id, &prepared.initial_messages).await;
@@ -83,6 +85,7 @@ pub(crate) async fn build_connection_runtime_for_resume(
     prior_messages: Vec<coco_messages::Message>,
     plan_mode_instructions: Option<String>,
     persisted_mcp_tool_exposure: Option<McpToolExposure>,
+    write_lease: coco_session::SessionWriteLease,
     app_server: Arc<AppServer<AppSessionHandle>>,
 ) -> anyhow::Result<crate::session_runtime::SessionHandle> {
     let binding = runtime_binding_from_replacement(&replacement);
@@ -91,8 +94,14 @@ pub(crate) async fn build_connection_runtime_for_resume(
         replacement.requires_structured_output,
         plan_mode_instructions,
     );
-    let session =
-        build_app_session_runtime_for_resume(&binding, &profile, session_id.clone(), cwd).await?;
+    let session = build_app_session_runtime_for_resume(
+        &binding,
+        &profile,
+        session_id.clone(),
+        cwd,
+        write_lease,
+    )
+    .await?;
     restrict_session_mcp_tool_exposure(&session, persisted_mcp_tool_exposure).await;
     install_runtime_callbacks(&connection_profile, &session, app_server);
     install_app_session_integrations(&binding, session.clone()).await?;

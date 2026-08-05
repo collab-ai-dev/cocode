@@ -8,7 +8,7 @@ pub struct AgentHostOptions {
     pub models_main: Option<String>,
     pub settings: Option<String>,
     pub event_hub_url: Option<String>,
-    pub max_tokens: Option<i64>,
+    pub total_token_budget: Option<i64>,
     pub max_turns: Option<i32>,
     pub permission_mode: Option<String>,
     pub cwd: Option<String>,

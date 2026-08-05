@@ -318,7 +318,7 @@ pub(crate) fn build_abnormal_stop_api_error_message(
             match effective_max_tokens {
                 Some(n) if n > 0 => format!(
                     "{PREFIX}: Model response exceeded the {n} output token maximum. \
-                     To increase, set `max_output_tokens` in settings.json or via `--max-tokens`."
+                     To increase it, set `max_output_tokens` in settings.json."
                 ),
                 _ => format!(
                     "{PREFIX}: Model response exceeded the configured output token maximum."

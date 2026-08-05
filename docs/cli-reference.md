@@ -35,7 +35,7 @@ These flags apply to the top-level `coco` invocation. They are accepted before a
 | `--event-hub-url` | `<WS_URL>` | Send this session's events to an external Event Hub. Must be `ws://` or `wss://`. Conflicts with `--serve-hub`. |
 | `--serve-hub` |  | Start an embedded local Event Hub and point this process at it. Requires a binary built with the `serve-hub` cargo feature. |
 | `--hub-port` | `<PORT>` | Port for the embedded Event Hub. Default `8731`. Requires `--serve-hub`. |
-| `--max-tokens` | `<N>` | Maximum tokens per model response. |
+| `--total-token-budget` | `<N>` | Maximum cumulative input plus output tokens for the run. |
 | `--max-turns` | `<N>` | Maximum agent turns before the run stops. |
 | `--permission-mode` | `<MODE>` | Starting permission mode: `default`, `plan`, `acceptEdits`, `bypassPermissions`, `dontAsk`, or `auto`. |
 | `-C`, `--cwd` | `<DIR>` | Working directory for the session. Defaults to the process working directory. |
@@ -56,7 +56,7 @@ These flags apply to the top-level `coco` invocation. They are accepted before a
 | `--include-hook-events` |  | Emit hook lifecycle events (`HookStarted`, `HookProgress`, `HookResponse`) in the stream-json output. |
 | `--append-system-prompt-file` | `<PATH>` | Read a file and append its contents to the system prompt. Fails if the file is missing. |
 | `--setting-sources` | `<CSV>` | Comma-separated settings layers to load: `user`, `project`, `local`. See [configuration](configuration.md). |
-| `--fork-session` |  | Copy the history from `--resume <id>` into a fresh session instead of continuing the original. |
+| `--fork-session` |  | Copy `--resume <id>`, or the most recent session when no ID is supplied, into a fresh session. |
 | `--session-id` | `<ID>` | Use an explicit session ID for this run. For deterministic IDs in automation. |
 | `--log-level` | `<DIRECTIVE>` | Tracing filter. A bare level (`debug`) expands to `coco=debug,debug`; a full `EnvFilter` directive is passed through. Highest-priority log override. |
 | `--log-format` | `<FORMAT>` | `pretty`, `compact`, or `json`. Defaults by mode: `json` for SDK, `compact` for TUI and headless. |

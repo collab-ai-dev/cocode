@@ -179,17 +179,14 @@ fn midstream_capacity_backoff(retry_after_ms: Option<i64>, attempt: i32) -> std:
 /// rescuing from context-overflow), and the implementation routes
 /// to the same `build_abnormal_stop_api_error_message` synthesis.
 ///
-/// Two-variant by design: the previous `SkipPostCompact` variant was
-/// behaviorally identical to `Proceed` (caller did nothing in either
-/// arm) and only existed as a tag for the post-compact iteration; that
-/// info now lives in a `tracing::debug!` field inside
-/// [`QueryEngine::check_blocking_limit`] (Finding **R10**).
+/// Two-variant by design: every recoverable compaction attempt happens before
+/// this terminal decision, so the caller only needs proceed/block semantics.
 #[derive(Debug)]
 pub(crate) enum BlockingLimitDecision {
-    /// Estimated history fits within the model's context window minus
+    /// Estimated final request fits within the model's context window minus
     /// the reserved output budget — OR the gate was intentionally
-    /// skipped (post-compact retry, forked compact/session-memory
-    /// agent). Caller proceeds to `query_stream`.
+    /// skipped for a forked compact/session-memory agent. Caller proceeds to
+    /// `query_stream`.
     Proceed,
     /// Hard over-limit — pushing more history at the API would 4xx.
     /// Caller pushes the synthetic api_error and returns early with
@@ -372,31 +369,17 @@ impl QueryEngine {
     ///
     /// Returns [`BlockingLimitDecision::Proceed`] when the request fits
     /// or the gate is intentionally skipped:
-    /// * Previous iteration triggered a reactive-compact retry —
-    ///   re-blocking would deadlock the recovery (compact → block →
-    ///   compact → …).
     /// * Query source is a forked compact/session-memory agent — those
     ///   forks exist to shrink the oversized history and must reach
     ///   the provider with their original input (Finding **R5**).
+    #[cfg(test)]
     pub(crate) fn check_blocking_limit(
         &self,
         messages_for_api: &[std::sync::Arc<coco_messages::Message>],
         active_snapshot: &ModelRuntimeSnapshot,
-        turn_state: &LoopTurnState,
+        _turn_state: &LoopTurnState,
         effective_max_tokens: Option<i64>,
     ) -> BlockingLimitDecision {
-        // Skip the gate when the previous iteration triggered a
-        // reactive-compact retry — the just-compacted history is
-        // what we want to send, and re-blocking would deadlock the
-        // recovery (compact → block → compact → …).
-        if matches!(
-            turn_state.transition,
-            Some(ContinueReason::ReactiveCompactRetry)
-        ) {
-            tracing::debug!("C15 gate skipped: post-compact retry iteration");
-            return BlockingLimitDecision::Proceed;
-        }
-
         // Finding **R5** — forked agents whose entire purpose is to
         // shrink oversized history must reach the provider with their
         // input intact. `forked_agent::ForkLabel::as_str()` and the
@@ -423,6 +406,98 @@ impl QueryEngine {
 
         let estimated_tokens = coco_messages::estimate_tokens_for_messages(messages_for_api);
 
+        self.blocking_limit_decision(
+            estimated_tokens,
+            context_window,
+            model_info,
+            effective_max_tokens,
+        )
+    }
+
+    /// Final pre-wire capacity gate over the fully assembled request.
+    ///
+    /// This runs after system/reminder/tool materialization and MoA guidance
+    /// attachment. Tool schemas are charged separately because they are not
+    /// part of [`coco_inference::QueryParams::prompt`] but consume the same
+    /// provider context window.
+    pub(crate) fn check_final_request_blocking_limit(
+        &self,
+        params: &coco_inference::QueryParams,
+        active_snapshot: &ModelRuntimeSnapshot,
+    ) -> BlockingLimitDecision {
+        let qs = self.query_source_label();
+        if is_forked_compact_or_session_memory_source(qs) {
+            tracing::debug!(
+                query_source = qs,
+                "final request gate skipped: forked compact / session-memory agent",
+            );
+            return BlockingLimitDecision::Proceed;
+        }
+
+        let model_info = active_snapshot.model_info.as_ref().unwrap_or_else(|| {
+            panic!(
+                "model runtime must provide ModelInfo before recovery sizing: provider={} model={}",
+                active_snapshot.provider, active_snapshot.model_id
+            )
+        });
+        let estimated_tokens = estimate_query_input_tokens(params);
+        let estimated_tokens = estimated_tokens.saturating_sub(
+            context_management_minimum_clearance(params, estimated_tokens),
+        );
+
+        self.blocking_limit_decision(
+            estimated_tokens,
+            i64::from(model_info.context_window),
+            model_info,
+            params.max_tokens,
+        )
+    }
+
+    pub(crate) async fn consume_admitted_reactive_context_management(
+        &self,
+        params: &coco_inference::QueryParams,
+    ) {
+        let mut pending = self.pending_reactive_context_management.lock().await;
+        if pending.as_ref() == params.context_management.as_ref() {
+            pending.take();
+        }
+    }
+
+    /// Byte allowance for optional plain-text context added after the base
+    /// request is assembled. Main prompt and output reserve always win; a zero
+    /// result tells the optional producer to omit itself.
+    pub(crate) fn optional_text_context_budget(
+        &self,
+        params: &coco_inference::QueryParams,
+        active_snapshot: &ModelRuntimeSnapshot,
+        hard_cap_bytes: usize,
+    ) -> usize {
+        let Some(model_info) = active_snapshot.model_info.as_ref() else {
+            return 0;
+        };
+        let reserved_output = params
+            .max_tokens
+            .filter(|value| *value > 0)
+            .unwrap_or_else(|| i64::from(model_info.max_output_tokens));
+        let remaining_tokens = i64::from(model_info.context_window)
+            .saturating_sub(reserved_output)
+            .saturating_sub(estimate_query_input_tokens(params))
+            // Role/envelope allowance for the optional user message.
+            .saturating_sub(4)
+            .max(0);
+        usize::try_from(remaining_tokens)
+            .unwrap_or(usize::MAX)
+            .saturating_mul(4)
+            .min(hard_cap_bytes)
+    }
+
+    fn blocking_limit_decision(
+        &self,
+        estimated_tokens: i64,
+        context_window: i64,
+        model_info: &coco_config::ModelInfo,
+        effective_max_tokens: Option<i64>,
+    ) -> BlockingLimitDecision {
         // Finding **R8** — reserved budget tracks what the provider will
         // actually enforce as `prompt + max_tokens ≤ window`. Two tiers,
         // most-specific first:
@@ -732,21 +807,12 @@ impl QueryEngine {
         turn_id: &str,
         event_turn_id: &coco_types::TurnId,
     ) -> Result<OpenedTurnStream, StreamErrorOutcome> {
-        let params = crate::moa::maybe_attach_moa_guidance(
-            self,
-            &self.model_runtimes,
-            &services.runtime_source,
-            params,
-            event_tx,
-            event_turn_id,
-        )
-        .await;
         match self
             .model_runtimes
             .open_stream_for_runtime(
                 services.runtime.clone(),
                 services.runtime_source.clone(),
-                &params,
+                params,
             )
             .await
         {
@@ -1163,4 +1229,49 @@ impl QueryEngine {
             coco_error::StatusCode::ProviderError,
         )))
     }
+}
+
+fn context_management_minimum_clearance(
+    params: &coco_inference::QueryParams,
+    estimated_tokens: i64,
+) -> i64 {
+    params
+        .context_management
+        .as_ref()
+        .and_then(|value| value.get("edits"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|edit| {
+            edit.get("trigger").is_none_or(|trigger| {
+                trigger
+                    .get("value")
+                    .and_then(serde_json::Value::as_i64)
+                    .is_some_and(|trigger| trigger <= estimated_tokens)
+            })
+        })
+        .filter_map(|edit| {
+            edit.get("clearAtLeast")
+                .and_then(|value| value.get("value"))
+                .and_then(serde_json::Value::as_i64)
+        })
+        .max()
+        .unwrap_or(0)
+        .max(0)
+}
+
+fn estimate_query_input_tokens(params: &coco_inference::QueryParams) -> i64 {
+    let prompt_tokens = coco_messages::estimate_tokens_for_prompt(&params.prompt);
+    let tool_tokens = params
+        .tools
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(|tool| {
+            serde_json::to_string(tool)
+                .map(|json| coco_messages::estimate_json_tokens(&json).saturating_add(8))
+                .unwrap_or(i64::MAX)
+        })
+        .fold(0_i64, i64::saturating_add);
+    prompt_tokens.saturating_add(tool_tokens)
 }

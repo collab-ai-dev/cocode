@@ -3317,11 +3317,11 @@ export type SkillOverrideState = "on" | "name-only" | "user-invocable-only" | "o
  * for "settings hot-reload was disabled at session start so we
  * can't republish".
  */
-export type SkillOverridesSaveErrorKind = "io" | "parse" | "rebuild" | "no_publisher";
+export type SkillOverridesSaveErrorKind = "io" | "parse" | "mutation" | "rebuild";
 
 /**
  * Outcome of a `/skills` dialog save dispatch. CLI bridge populates
- * this after `SettingsWriter::write_local`.
+ * this after the settings writer persists and republishes the patch.
  *
  * Carries **no display data** — TUI owns toast text generation and
  * stashes the pre-write `total_edits` count on its own state

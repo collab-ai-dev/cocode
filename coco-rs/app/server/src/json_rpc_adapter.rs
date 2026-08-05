@@ -15,7 +15,7 @@ use coco_app_server_transport::{
     JsonRpcRequest, JsonRpcSuccess, NdjsonDuplexConnection, NdjsonFrameWriter, TransportFrameError,
 };
 use coco_types::{
-    ClientRequest, CoreEvent, RequestId, RequestScope, SESSION_EVENT_METHOD,
+    ClientRequest, ClientRequestMethod, CoreEvent, RequestId, RequestScope, SESSION_EVENT_METHOD,
     SESSION_LIFECYCLE_METHOD, ServerRequest, ServerRequestDelivery, SessionDelivery, SessionId,
     SessionLifecycleEffect, SessionLifecycleEffectKind, error_codes, request_scope,
 };
@@ -825,6 +825,8 @@ pub enum JsonRpcAdapterError {
     EncodeServerRequest { source: serde_json::Error },
     #[snafu(display("failed to decode client request: {source}"))]
     DecodeClientRequest { source: serde_json::Error },
+    #[snafu(display("unknown client request method: {method}"))]
+    UnknownClientRequestMethod { method: String },
     #[snafu(display("failed to decode server request reply: {source}"))]
     DecodeServerRequestReply { source: serde_json::Error },
     #[snafu(display("failed to resolve server request: {source}"))]
@@ -931,6 +933,9 @@ impl JsonRpcDispatchError {
 impl JsonRpcAdapterError {
     fn into_dispatch_error(self) -> JsonRpcDispatchError {
         match self {
+            Self::UnknownClientRequestMethod { method } => {
+                JsonRpcDispatchError::method_not_found(method)
+            }
             Self::DecodeClientRequest { source } => {
                 JsonRpcDispatchError::invalid_params(source.to_string())
             }
@@ -975,6 +980,17 @@ fn client_request_from_method_and_params(
     method: String,
     params: Option<serde_json::Value>,
 ) -> Result<ClientRequest, JsonRpcAdapterError> {
+    let known_method =
+        serde_json::from_value::<ClientRequestMethod>(serde_json::Value::String(method.clone()))
+            .map_err(|_| JsonRpcAdapterError::UnknownClientRequestMethod {
+                method: method.clone(),
+            })?;
+    let unit_method_with_empty_params = matches!(
+        known_method,
+        ClientRequestMethod::SessionList | ClientRequestMethod::KeepAlive
+    ) && params.as_ref().is_some_and(|params| {
+        params.is_null() || params.as_object().is_some_and(serde_json::Map::is_empty)
+    });
     let mut object = serde_json::Map::new();
     object.insert(
         "method".to_string(),
@@ -986,12 +1002,11 @@ fn client_request_from_method_and_params(
     let with_params = serde_json::Value::Object(object);
     match serde_json::from_value(with_params) {
         Ok(request) => Ok(request),
-        Err(source) => {
+        Err(_) if unit_method_with_empty_params => {
             let without_params = serde_json::json!({ "method": method });
-            serde_json::from_value(without_params)
-                .map_err(|_| source)
-                .context(DecodeClientRequestSnafu)
+            serde_json::from_value(without_params).context(DecodeClientRequestSnafu)
         }
+        Err(source) => Err(JsonRpcAdapterError::DecodeClientRequest { source }),
     }
 }
 

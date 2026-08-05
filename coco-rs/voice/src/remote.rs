@@ -11,12 +11,14 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use coco_inference::transcribe_audio;
 use coco_inference::TranscriptionModelV4;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::TranscribeParams;
 use crate::engine::Transcript;
 use crate::engine::VoiceCapabilities;
 use crate::engine::VoiceEngine;
+use crate::engine::VoiceProgress;
 use crate::error::VoiceError;
 
 /// Batch transcription over an injected OpenAI-wire transcription model.
@@ -49,6 +51,7 @@ impl VoiceEngine for RemoteOpenAiEngine {
         audio: Vec<u8>,
         params: &TranscribeParams,
         cancel: CancellationToken,
+        _progress: Option<mpsc::Sender<VoiceProgress>>,
     ) -> Result<Transcript, VoiceError> {
         let output = transcribe_audio(self.handle.clone(), audio, params.language.clone(), cancel)
             .await

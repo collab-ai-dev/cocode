@@ -459,6 +459,8 @@ async fn execute_background(
         })?;
 
     let provider = resolve_powershell_provider(ctx)?;
+    let cwd = crate::tools::shell_cwd::resolve_spawn_cwd(ctx).await;
+    let original_cwd = ctx.original_cwd.clone().unwrap_or_else(|| cwd.clone());
     let description = input
         .description
         .as_deref()
@@ -469,6 +471,9 @@ async fn execute_background(
         .spawn_shell_task(coco_tool_runtime::ShellTaskRequest {
             command: input.command.clone(),
             shell_kind: coco_tool_runtime::ShellTaskKind::Provider(provider),
+            cwd,
+            original_cwd,
+            parent_cancel: ctx.cancel_token(),
             start_mode: coco_tool_runtime::ShellTaskStartMode::Background,
             timeout_ms: input.timeout.map(|t| t as i64),
             description,

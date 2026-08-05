@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 use coco_config::MoaEndpointSpec;
 use coco_config::MoaFanout;
+use coco_context::ContextualUserFragment;
 use coco_inference::ModelRuntimeQueryOutcome;
 use coco_inference::ModelRuntimeRegistry;
 use coco_inference::ModelRuntimeSource;
@@ -46,6 +47,8 @@ const MAX_REFERENCE_QUERY_ATTEMPTS: usize = 3;
 const DEFAULT_REFERENCE_TIMEOUT_SECS: u64 = 120;
 const TOOL_RESULT_TEXT_BUDGET: usize = 4_000;
 const REFERENCE_GUIDANCE_TEXT_BUDGET: usize = 24_000;
+pub(crate) const REFERENCE_GUIDANCE_TOTAL_BUDGET: usize = 32_000;
+const REFERENCE_GUIDANCE_TOTAL_TRUNCATED: &str = "\n...[additional references truncated]...\n";
 const REFERENCE_SYSTEM_PROMPT: &str = "\
 You are a reference advisor in a Mixture of Agents process. You are not the \
 acting agent and you do not execute tools, browse, run commands, or access \
@@ -68,10 +71,14 @@ pub(crate) async fn maybe_attach_moa_guidance(
     params: &QueryParams,
     event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
     turn_id: &TurnId,
+    guidance_budget_bytes: usize,
 ) -> QueryParams {
     let Some(endpoint) = model_runtimes.moa_endpoint_for_source(source) else {
         return params.clone();
     };
+    if guidance_budget_bytes < minimum_guidance_bytes(&endpoint) {
+        return params.clone();
+    }
     let role = role_for_source(source);
     let references = run_references(
         MoaReferenceUsageRecorder::Engine(engine),
@@ -82,9 +89,10 @@ pub(crate) async fn maybe_attach_moa_guidance(
         turn_id,
         role,
         Some(&engine.cancel),
+        engine.session_id.as_str(),
     )
     .await;
-    attach_reference_guidance(params, &endpoint, &references)
+    attach_reference_guidance(params, &endpoint, &references, guidance_budget_bytes)
 }
 
 #[derive(Clone, Copy)]
@@ -105,6 +113,9 @@ pub(crate) async fn maybe_attach_moa_guidance_for_query_once(
     let Some(endpoint) = model_runtimes.moa_endpoint_for_source(source) else {
         return params.clone();
     };
+    if REFERENCE_GUIDANCE_TOTAL_BUDGET < minimum_guidance_bytes(&endpoint) {
+        return params.clone();
+    }
     let role = role_for_source(source);
     let references = run_references(
         usage_recorder,
@@ -115,9 +126,15 @@ pub(crate) async fn maybe_attach_moa_guidance_for_query_once(
         turn_id,
         role,
         /*cancel*/ None,
+        "query_once",
     )
     .await;
-    attach_reference_guidance(params, &endpoint, &references)
+    attach_reference_guidance(
+        params,
+        &endpoint,
+        &references,
+        REFERENCE_GUIDANCE_TOTAL_BUDGET,
+    )
 }
 
 pub async fn prepare_moa_query_once_params_no_usage(
@@ -170,10 +187,11 @@ async fn run_references(
     turn_id: &TurnId,
     role: ModelRole,
     cancel: Option<&tokio_util::sync::CancellationToken>,
+    cache_scope: &str,
 ) -> Vec<ReferenceOutput> {
     let count = endpoint.reference_models.len();
     let prompt = reference_prompt(&params.prompt);
-    let cache_key = user_turn_cache_key(endpoint, &prompt, turn_id);
+    let cache_key = user_turn_cache_key(endpoint, turn_id, cache_scope);
     if let Some(key) = cache_key.as_ref()
         && let Some(cached) = load_reference_cache(key)
     {
@@ -523,30 +541,12 @@ fn store_reference_cache(key: String, outputs: &[ReferenceOutput]) {
 
 fn user_turn_cache_key(
     endpoint: &MoaEndpointSpec,
-    prompt: &LlmPrompt,
     turn_id: &TurnId,
+    cache_scope: &str,
 ) -> Option<String> {
     if endpoint.fanout != MoaFanout::UserTurn {
         return None;
     }
-    let mut last_real_user = None;
-    for (idx, message) in prompt.iter().enumerate().rev() {
-        if let LlmMessage::User { content, .. } = message
-            && user_text(content) != ADVISORY_INSTRUCTION
-        {
-            last_real_user = Some(idx);
-            break;
-        }
-    }
-    let signature_prompt = last_real_user
-        .map(|idx| &prompt[..=idx])
-        .unwrap_or(prompt.as_slice());
-    let signature_messages = signature_prompt
-        .iter()
-        .filter(|message| !is_reference_system_message(message))
-        .collect::<Vec<_>>();
-    let signature = serde_json::to_string(&signature_messages).ok()?;
-    let signature_hash = cache_signature_hash(&signature);
     // Effort participates in the label: two presets differing only in an
     // advisor's effort produce different guidance and must not share an entry.
     let labels = endpoint
@@ -564,24 +564,12 @@ fn user_turn_cache_key(
         .collect::<Vec<_>>()
         .join(",");
     Some(format!(
-        "{}\u{0}{}\u{0}{}\u{0}{signature_hash:x}",
+        "{}\u{0}{}\u{0}{}\u{0}{}",
+        cache_scope,
         turn_id.as_str(),
         endpoint.preset_name,
         labels
     ))
-}
-
-fn is_reference_system_message(message: &LlmMessage) -> bool {
-    matches!(message, LlmMessage::System { content, .. } if user_text(content) == REFERENCE_SYSTEM_PROMPT)
-}
-
-fn cache_signature_hash(input: &str) -> u64 {
-    use std::hash::Hash;
-    use std::hash::Hasher;
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    input.hash(&mut hasher);
-    hasher.finish()
 }
 
 fn reference_prompt(prompt: &LlmPrompt) -> LlmPrompt {
@@ -640,39 +628,88 @@ fn attach_reference_guidance(
     params: &QueryParams,
     endpoint: &MoaEndpointSpec,
     references: &[ReferenceOutput],
+    total_budget: usize,
 ) -> QueryParams {
     // The aggregator IS the acting model, so it keeps the parent turn's
     // temperature and thinking verbatim — a preset-level override here would
     // silently defeat the user's live effort/thinking controls.
-    let mut next = params.clone();
-    let mut guidance = format!(
-        "[Mixture of Agents reference context]\nPreset: {}\nAggregator/acting model: {}/{}\n\nUse these independent model notes as private advisory context only. You are the acting model: answer the user directly or call tools as needed.\n",
-        endpoint.preset_name, endpoint.aggregator.provider, endpoint.aggregator.model_id
+    let header = guidance_header(endpoint);
+    let fragment_overhead = coco_context::BoundedExternalContextFragment::minimum_rendered_bytes(
+        coco_context::ContextFragmentKind::MoaReference,
     );
+    // MoA is advisory. If the acting request has no room for a complete,
+    // attributable header, preserve the main request instead of appending an
+    // opaque fragment that will make the provider reject it.
+    if total_budget < header.len().saturating_add(fragment_overhead) {
+        return params.clone();
+    }
+    let content_budget = total_budget - fragment_overhead;
+    let mut next = params.clone();
+    let mut guidance = String::with_capacity(content_budget);
+    let _ = push_bounded(&mut guidance, &header, content_budget);
     for reference in references {
-        guidance.push_str(&format!(
+        if guidance.len() >= content_budget {
+            break;
+        }
+        let reference_header = format!(
             "\n[reference {}/{}: {}/{}]\n",
             reference.index + 1,
             reference.count,
             reference.provider,
             reference.model_id
-        ));
-        if let Some(error) = &reference.failed {
-            guidance.push_str("[failed: ");
-            guidance.push_str(&truncate_head_tail(error, TOOL_RESULT_TEXT_BUDGET));
-            guidance.push_str("]\n");
-        } else if reference.text.trim().is_empty() {
-            guidance.push_str("[empty]\n");
-        } else {
-            guidance.push_str(&truncate_head_tail(
-                reference.text.trim(),
-                REFERENCE_GUIDANCE_TEXT_BUDGET,
-            ));
-            guidance.push('\n');
+        );
+        if push_bounded(&mut guidance, &reference_header, content_budget) {
+            break;
         }
+        if let Some(error) = &reference.failed {
+            if push_bounded(&mut guidance, "[failed: ", content_budget)
+                || push_bounded(
+                    &mut guidance,
+                    &truncate_head_tail(error, TOOL_RESULT_TEXT_BUDGET),
+                    content_budget,
+                )
+                || push_bounded(&mut guidance, "]\n", content_budget)
+            {
+                break;
+            }
+        } else if reference.text.trim().is_empty() {
+            if push_bounded(&mut guidance, "[empty]\n", content_budget) {
+                break;
+            }
+        } else if push_bounded(
+            &mut guidance,
+            &truncate_head_tail(reference.text.trim(), REFERENCE_GUIDANCE_TEXT_BUDGET),
+            content_budget,
+        ) || push_bounded(&mut guidance, "\n", content_budget)
+        {
+            break;
+        }
+    }
+    let guidance = coco_context::BoundedExternalContextFragment::new(
+        coco_context::ContextFragmentKind::MoaReference,
+        guidance,
+        total_budget,
+    )
+    .render();
+    if guidance.is_empty() {
+        return params.clone();
     }
     next.prompt.push(LlmMessage::user_text(guidance));
     next
+}
+
+fn guidance_header(endpoint: &MoaEndpointSpec) -> String {
+    format!(
+        "[Mixture of Agents reference context]\nPreset: {}\nAggregator/acting model: {}/{}\n\nUse these independent model notes as private advisory context only. You are the acting model: answer the user directly or call tools as needed.\n",
+        endpoint.preset_name, endpoint.aggregator.provider, endpoint.aggregator.model_id
+    )
+}
+
+fn minimum_guidance_bytes(endpoint: &MoaEndpointSpec) -> usize {
+    coco_context::BoundedExternalContextFragment::minimum_rendered_bytes(
+        coco_context::ContextFragmentKind::MoaReference,
+    )
+    .saturating_add(guidance_header(endpoint).len())
 }
 
 fn push_tool_result_message(out: &mut LlmPrompt, text: String) {
@@ -871,10 +908,48 @@ fn truncate_head_tail(text: &str, budget: usize) -> String {
     if text.len() <= budget {
         return text.to_string();
     }
-    let half = budget / 2;
+    const MARKER: &str = "\n...[truncated]...\n";
+    if budget <= MARKER.len() {
+        return coco_utils_string::take_bytes_at_char_boundary(text, budget).to_string();
+    }
+    let content_budget = budget - MARKER.len();
+    let half = content_budget / 2;
     let head = coco_utils_string::take_bytes_at_char_boundary(text, half);
-    let tail = coco_utils_string::take_last_bytes_at_char_boundary(text, budget - half);
-    format!("{head}\n...[truncated]...\n{tail}")
+    let tail = coco_utils_string::take_last_bytes_at_char_boundary(text, content_budget - half);
+    format!("{head}{MARKER}{tail}")
+}
+
+/// Append text within the aggregate guidance budget. Returns `true` when the
+/// append was truncated and installs a visible marker, allowing the caller to
+/// stop before it emits a partial next reference.
+fn push_bounded(out: &mut String, text: &str, total_budget: usize) -> bool {
+    let remaining = total_budget.saturating_sub(out.len());
+    if text.len() <= remaining {
+        out.push_str(text);
+        return false;
+    }
+    if total_budget <= REFERENCE_GUIDANCE_TOTAL_TRUNCATED.len() {
+        out.clear();
+        out.push_str(coco_utils_string::take_bytes_at_char_boundary(
+            REFERENCE_GUIDANCE_TOTAL_TRUNCATED,
+            total_budget,
+        ));
+        return true;
+    }
+    // Reserve room for the complete marker even when earlier sections have
+    // consumed nearly the entire aggregate allowance. A partial marker is not
+    // actionable provenance for the acting model.
+    let content_limit = total_budget - REFERENCE_GUIDANCE_TOTAL_TRUNCATED.len();
+    if out.len() > content_limit {
+        out.truncate(out.floor_char_boundary(content_limit));
+    }
+    let content_budget = content_limit - out.len();
+    out.push_str(coco_utils_string::take_bytes_at_char_boundary(
+        text,
+        content_budget,
+    ));
+    out.push_str(REFERENCE_GUIDANCE_TOTAL_TRUNCATED);
+    true
 }
 
 fn push_section(out: &mut String, text: &str) {

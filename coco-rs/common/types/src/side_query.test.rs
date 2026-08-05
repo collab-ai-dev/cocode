@@ -44,6 +44,9 @@ fn test_cache_safe_params_serde_roundtrip() {
     // + per-entry shape.
     let params = CacheSafeParams {
         rendered_system_prompt: "You are a helpful agent.".into(),
+        system_prompt_blocks: vec![crate::CachedSystemPromptBlock::Text {
+            content: "You are a helpful agent.".into(),
+        }],
         model_id: "claude-opus-4-7".into(),
         provider: "anthropic".into(),
         active_shell_tool: crate::ActiveShellTool::PowerShell,
@@ -69,11 +72,10 @@ fn test_cache_safe_params_serde_roundtrip() {
 }
 
 #[test]
-fn test_cache_safe_params_default_skips_empty_fork_messages() {
-    // `fork_context_messages` and `provider` both default — old
-    // session formats can omit them without breaking deserialize.
+fn test_cache_safe_params_defaults_non_prompt_runtime_fields() {
     let json = r#"{
         "rendered_system_prompt": "sys",
+        "system_prompt_blocks": [{"type":"text","content":"sys"}],
         "model_id": "m"
     }"#;
     let parsed: CacheSafeParams = serde_json::from_str(json).unwrap();
@@ -91,6 +93,9 @@ fn test_cache_safe_params_eq_distinguishes_model() {
     // test rationale).
     let a = CacheSafeParams {
         rendered_system_prompt: "sys".into(),
+        system_prompt_blocks: vec![crate::CachedSystemPromptBlock::Text {
+            content: "sys".into(),
+        }],
         model_id: "claude-opus-4-7".into(),
         provider: "anthropic".into(),
         active_shell_tool: crate::ActiveShellTool::Bash,
@@ -110,6 +115,9 @@ fn test_cache_safe_params_eq_distinguishes_model() {
 fn test_cache_safe_params_eq_distinguishes_provider() {
     let a = CacheSafeParams {
         rendered_system_prompt: "sys".into(),
+        system_prompt_blocks: vec![crate::CachedSystemPromptBlock::Text {
+            content: "sys".into(),
+        }],
         model_id: "claude-opus-4-7".into(),
         provider: "anthropic".into(),
         active_shell_tool: crate::ActiveShellTool::Bash,

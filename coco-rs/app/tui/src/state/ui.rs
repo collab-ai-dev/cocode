@@ -244,6 +244,9 @@ pub struct VoiceUiState {
     pub status: VoiceStatusKind,
     /// Backend label for status text (e.g. `"openai"`, `"local"`).
     pub engine_label: Option<String>,
+    /// Latest recording/transcription generation accepted by the UI. Terminal
+    /// events from older generations are ignored even if already queued.
+    pub(crate) generation: u64,
 }
 
 /// Voice recording lifecycle for display.

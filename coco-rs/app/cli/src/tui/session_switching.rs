@@ -1,15 +1,9 @@
-pub(super) async fn emit_resume_plan_ui_state(
-    plan: &ResumePlan,
+pub(super) async fn emit_resume_ui_state(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
+    prior_messages: Vec<std::sync::Arc<Message>>,
     restored_v1_todos: Option<Vec<coco_types::TodoRecord>>,
 ) {
-    let prior_messages = plan
-        .prior_messages
-        .iter()
-        .cloned()
-        .map(std::sync::Arc::new)
-        .collect::<Vec<_>>();
     // Goal state is recovered by the first-class goal runtime (restored from the
     // durable `GoalSnapshot` during session build); read its current snapshot view.
     let goal = goal_command::read_goal_snapshot_view(session).await;
@@ -21,7 +15,7 @@ pub(super) async fn emit_resume_plan_ui_state(
         .send(CoreEvent::Protocol(
             coco_types::ServerNotification::SessionResetForResume {
                 identity: coco_types::ServerNotificationIdentity::new(
-                    Some(plan.session_id.clone()),
+                    Some(session.session_id().clone()),
                     None,
                 ),
             },
@@ -32,7 +26,7 @@ pub(super) async fn emit_resume_plan_ui_state(
             coco_types::ServerNotification::HistoryReplaced {
                 messages: prior_messages.clone(),
                 identity: coco_types::ServerNotificationIdentity::new(
-                    Some(plan.session_id.clone()),
+                    Some(session.session_id().clone()),
                     None,
                 ),
                 reason: coco_types::HistoryReplaceReason::Hydrate,
@@ -42,7 +36,7 @@ pub(super) async fn emit_resume_plan_ui_state(
     if let Some(todos) = restored_v1_todos {
         let mut todos_by_agent = HashMap::new();
         if !todos.is_empty() {
-            todos_by_agent.insert(plan.session_id.to_string(), todos);
+            todos_by_agent.insert(session.session_id().to_string(), todos);
         }
         let _ = event_tx
             .send(CoreEvent::Protocol(
@@ -74,23 +68,29 @@ pub(super) async fn emit_resume_plan_ui_state(
         .await;
 }
 
-pub(super) async fn emit_resume_plan_ui_state_for_runtime(
-    plan: &ResumePlan,
+pub(super) async fn emit_resume_ui_state_for_runtime(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) {
+    // AppServer admission reloads history while holding the durable lease.
+    // Never hydrate a surface from the earlier, advisory ResumePlan snapshot.
+    let prior_messages = session.history_messages().await;
     let restored_v1_todos =
         if coco_agent_host::session_controls::should_restore_v1_todos_on_resume(session) {
-            latest_todo_write_todos(&plan.prior_messages)
+            let owned = prior_messages
+                .iter()
+                .map(|message| (**message).clone())
+                .collect::<Vec<_>>();
+            latest_todo_write_todos(&owned)
         } else {
             None
         };
     if let Some(todos) = restored_v1_todos.clone() {
         session
-            .seed_todo_list_snapshot(plan.session_id.to_string(), todos)
+            .seed_todo_list_snapshot(session.session_id().to_string(), todos)
             .await;
     }
-    emit_resume_plan_ui_state(plan, session, event_tx, restored_v1_todos).await;
+    emit_resume_ui_state(session, event_tx, prior_messages, restored_v1_todos).await;
 }
 
 #[derive(serde::Deserialize)]
@@ -282,7 +282,7 @@ pub(super) async fn apply_resume_plan_through_app_server(
         .await
         .install_for_session(&new_session)
         .await;
-    emit_resume_plan_ui_state_for_runtime(plan, &new_session, event_tx).await;
+    emit_resume_ui_state_for_runtime(&new_session, event_tx).await;
     Ok(())
 }
 

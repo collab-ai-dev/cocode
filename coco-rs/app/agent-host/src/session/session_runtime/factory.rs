@@ -176,6 +176,20 @@ impl SessionRuntimeFactory {
         })
     }
 
+    pub(crate) fn flag_settings_path(&self) -> Option<PathBuf> {
+        self.opts.cli.settings.as_ref().map(PathBuf::from)
+    }
+
+    pub(crate) fn enabled_setting_sources(
+        &self,
+    ) -> std::collections::HashSet<coco_config::settings::SettingSource> {
+        coco_config::parse_enabled_setting_sources(self.opts.cli.setting_sources.as_deref())
+    }
+
+    pub(crate) fn session_manager(&self) -> Arc<SessionManager> {
+        Arc::clone(&self.opts.session_manager)
+    }
+
     pub async fn build_fresh(&self) -> Result<SessionHandle> {
         self.build(None).await
     }
@@ -197,6 +211,21 @@ impl SessionRuntimeFactory {
         self.build_for_cwd(Some(session_id), cwd).await
     }
 
+    pub(crate) async fn build_with_session_id_cwd_and_lease(
+        &self,
+        session_id: SessionId,
+        cwd: PathBuf,
+        write_lease: coco_session::SessionWriteLease,
+    ) -> Result<SessionHandle> {
+        self.build_with_profile(
+            Some(session_id),
+            cwd,
+            super::SessionExecutionProfile::Primary,
+            Some(write_lease),
+        )
+        .await
+    }
+
     pub async fn build_for_cwd(
         &self,
         session_id_override: Option<SessionId>,
@@ -206,6 +235,7 @@ impl SessionRuntimeFactory {
             session_id_override,
             cwd,
             super::SessionExecutionProfile::Primary,
+            None,
         )
         .await
     }
@@ -264,6 +294,7 @@ impl SessionRuntimeFactory {
             agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::noninteractive(),
             session_id_override,
+            preacquired_write_lease: None,
             is_non_interactive: opts.is_non_interactive,
             execution_profile: super::SessionExecutionProfile::SideChatReadOnly,
         })
@@ -291,6 +322,7 @@ impl SessionRuntimeFactory {
         session_id_override: Option<SessionId>,
         cwd: PathBuf,
         execution_profile: super::SessionExecutionProfile,
+        preacquired_write_lease: Option<coco_session::SessionWriteLease>,
     ) -> Result<SessionHandle> {
         let opts = self.opts.as_ref();
         // Run the disk-heavy per-session fold (settings reads + plugin scan)
@@ -329,6 +361,7 @@ impl SessionRuntimeFactory {
             agent_search_paths: bootstrap.agent_search_paths.clone(),
             builtin_agent_catalog: opts.builtin_agent_catalog,
             session_id_override,
+            preacquired_write_lease,
             is_non_interactive: opts.is_non_interactive,
             execution_profile,
         })

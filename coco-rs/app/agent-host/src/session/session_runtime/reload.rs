@@ -104,22 +104,16 @@ impl SessionRuntime {
     /// constructed each call; resolution order matches bootstrap.
     /// Plugin-contributed agent search paths are refreshed from the same
     /// project snapshot before callers rebuild the agent catalog.
-    /// Uses the frozen [`Self::runtime_config`] snapshot — fine for
-    /// the user-initiated `/reload-plugins` path where settings
-    /// haven't been mutated. Callers that just wrote to
-    /// `settings.local.json` must use [`Self::reload_plugins_with`]
-    /// to pass the freshly-republished `RuntimeConfig` (otherwise
-    /// the registry rebuild reads stale `skill_overrides` tiers).
+    /// Captures the current published runtime snapshot for the complete reload.
     /// Returns the count of registered commands in the new registry
     /// so the caller can show the user a confirmation.
     pub async fn reload_plugins(&self, cwd: &std::path::Path) -> usize {
-        self.reload_plugins_with(cwd, self.runtime_config()).await
+        self.reload_plugins_with(cwd, &self.runtime_config()).await
     }
 
     /// Variant of [`Self::reload_plugins`] that takes an explicit
     /// `RuntimeConfig`. Use this when the caller has just mutated
-    /// settings (e.g. `/skills` dialog save) and the publisher's
-    /// `current()` snapshot is fresher than [`Self::runtime_config`].
+    /// settings and already holds the snapshot that should govern the reload.
     pub async fn reload_plugins_with(
         &self,
         cwd: &std::path::Path,
@@ -245,13 +239,10 @@ impl SessionRuntime {
     /// different hook sets.
     /// Returns the count of hooks now registered.
     pub async fn reload_hooks(&self) -> Result<usize> {
+        let runtime_config = self.runtime_config();
         let policy = coco_hooks::LoaderPolicy {
-            disable_all_hooks: self.runtime_config().settings.merged.disable_all_hooks,
-            allow_managed_hooks_only: self
-                .runtime_config()
-                .settings
-                .merged
-                .allow_managed_hooks_only,
+            disable_all_hooks: runtime_config.settings.merged.disable_all_hooks,
+            allow_managed_hooks_only: runtime_config.settings.merged.allow_managed_hooks_only,
         };
 
         // Build (scope, value) pairs for every active settings source.
@@ -265,7 +256,7 @@ impl SessionRuntime {
             coco_config::SettingSource::Flag,
             coco_config::SettingSource::Policy,
         ] {
-            let Some(value) = self.runtime_config().settings.per_source.get(&source) else {
+            let Some(value) = runtime_config.settings.per_source.get(&source) else {
                 continue;
             };
             let Some(hooks_value) = value.get("hooks") else {

@@ -10,7 +10,8 @@ mod remote_demux;
 mod remote_transport;
 
 pub use remote_demux::{
-    RemoteEventDemux, RemoteJsonRpcEvent, RemoteOwnedSessionStream, RemoteSessionStream,
+    RemoteDemuxDisconnectReason, RemoteEventDemux, RemoteJsonRpcEvent, RemoteOwnedSessionStream,
+    RemoteSessionStream,
 };
 #[cfg(windows)]
 pub use remote_transport::RemoteNdjsonNamedPipeConnection;
@@ -63,7 +64,8 @@ const DEFAULT_REMOTE_OUTBOUND_CHANNEL_CAPACITY: usize = 128;
 const DEFAULT_REMOTE_WRITE_TIMEOUT: Option<Duration> = Some(Duration::from_secs(30));
 /// Cap on the demux's connection-scoped (non-session-keyed) buffers so a peer
 /// that floods notifications / server requests without a reader cannot grow the
-/// client unboundedly. Drop-oldest with a warning once full.
+/// client unboundedly. Notifications drop oldest; server requests fail closed
+/// because dropping a request would strand its peer-side response waiter.
 const MAX_BUFFERED_CONNECTION_QUEUE: usize = 1024;
 /// Cap on a single session's buffered events/lifecycle. Unlike the connection
 /// queues this does NOT drop-oldest: an event stream is ordered (dropping loses
@@ -96,6 +98,21 @@ impl Default for RemoteConnectOptions {
 }
 
 type PendingMap = Arc<Mutex<HashMap<JsonRpcId, PendingRemoteRequest>>>;
+
+#[derive(Clone)]
+pub(crate) struct RemoteConnectionInvalidator {
+    pending: PendingMap,
+    invalid: Arc<AtomicBool>,
+}
+
+impl RemoteConnectionInvalidator {
+    fn invalidate(&self) {
+        if self.invalid.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        drain_pending_disconnected(&self.pending);
+    }
+}
 
 #[derive(Clone)]
 pub struct RemoteJsonRpcClient {
@@ -140,6 +157,19 @@ fn lock_pending(pending: &Mutex<HashMap<JsonRpcId, PendingRemoteRequest>>) -> Pe
 type PendingGuard<'a> = MutexGuard<'a, HashMap<JsonRpcId, PendingRemoteRequest>>;
 
 impl RemoteJsonRpcClient {
+    /// Bind the event receiver to the same connection invalidation state as
+    /// this client. A demux slow-consumer failure then terminates pending RPCs
+    /// immediately instead of waiting for another transport frame.
+    pub fn event_demux(&self, events: mpsc::Receiver<RemoteJsonRpcEvent>) -> RemoteEventDemux {
+        RemoteEventDemux::new(
+            events,
+            RemoteConnectionInvalidator {
+                pending: Arc::clone(&self.pending),
+                invalid: Arc::clone(&self.invalid),
+            },
+        )
+    }
+
     pub fn new(
         outbound: mpsc::Sender<JsonRpcFrame>,
     ) -> (
@@ -1307,16 +1337,7 @@ impl RemoteJsonRpcIncoming {
     /// Resolve every in-flight RPC with `Disconnected`. Callers must have already
     /// won the `invalid` flag so this runs exactly once per connection.
     fn drain_pending_disconnected(&self) {
-        let pending = {
-            let mut pending = lock_pending(&self.pending);
-            pending
-                .drain()
-                .map(|(_, pending)| pending)
-                .collect::<Vec<_>>()
-        };
-        for pending in pending {
-            let _ = pending.reply.send(Err(ClientError::Disconnected));
-        }
+        drain_pending_disconnected(&self.pending);
     }
 
     /// Tolerate-with-warn: an unknown / late / duplicate / null response id is
@@ -1343,6 +1364,19 @@ impl RemoteJsonRpcIncoming {
         let _ = pending
             .reply
             .send(Err(ClientError::from_json_rpc_error(code, message, data)));
+    }
+}
+
+fn drain_pending_disconnected(pending: &PendingMap) {
+    let pending = {
+        let mut pending = lock_pending(pending);
+        pending
+            .drain()
+            .map(|(_, pending)| pending)
+            .collect::<Vec<_>>()
+    };
+    for pending in pending {
+        let _ = pending.reply.send(Err(ClientError::Disconnected));
     }
 }
 
@@ -1380,6 +1414,8 @@ pub enum RemoteTransportError {
     DecodeWebSocketFrame { source: serde_json::Error },
     #[error("outbound write timed out (slow consumer)")]
     SlowConsumer,
+    #[error("remote transport reached EOF without a close handshake")]
+    UnexpectedEof,
     #[error("{source}")]
     Client { source: ClientError },
 }

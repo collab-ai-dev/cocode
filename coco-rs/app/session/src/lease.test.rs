@@ -74,6 +74,54 @@ fn test_file_lease_same_session_conflicts_and_releases_on_drop() {
 }
 
 #[test]
+fn concurrent_file_lease_acquisition_has_exactly_one_winner() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(disk_store(dir.path()));
+    let start = Arc::new(std::sync::Barrier::new(2));
+    let acquired = Arc::new(std::sync::Barrier::new(2));
+    let spawn_competitor = || {
+        let store = Arc::clone(&store);
+        let start = Arc::clone(&start);
+        let acquired = Arc::clone(&acquired);
+        std::thread::spawn(move || {
+            start.wait();
+            let lease = store.require_write_lease("sess-concurrent");
+            acquired.wait();
+            lease.is_ok()
+        })
+    };
+    let threads = [spawn_competitor(), spawn_competitor()];
+
+    let winners = threads
+        .into_iter()
+        .map(|thread| thread.join().unwrap())
+        .filter(|won| *won)
+        .count();
+
+    assert_eq!(winners, 1);
+}
+
+#[test]
+fn file_lease_namespace_is_global_across_projects() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = TranscriptStore::new(Arc::new(ProjectPaths::new(
+        dir.path().to_path_buf(),
+        &dir.path().join("project-a"),
+    )));
+    let second = TranscriptStore::new(Arc::new(ProjectPaths::new(
+        dir.path().to_path_buf(),
+        &dir.path().join("project-b"),
+    )));
+    let _lease = first.require_write_lease("global-id").expect("first lease");
+
+    let error = second
+        .require_write_lease("global-id")
+        .expect_err("same global id must conflict across projects");
+
+    assert!(matches!(error, SessionLeaseError::InUse { .. }));
+}
+
+#[test]
 fn test_os_lock_contention_reports_in_use() {
     use fs2::FileExt;
     let dir = tempfile::tempdir().unwrap();

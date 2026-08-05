@@ -282,9 +282,9 @@ option or your own spawn if you need others. See the
 | `--no-session-persistence` | Do not write the session to disk. Valid **only** in print mode or SDK mode — the TUI rejects it. |
 | `--include-hook-events` | Emit `HookStarted` / `HookProgress` / `HookResponse` in the stream so you can observe hook lifecycle. |
 | `--session-id <ID>` | Use an explicit session ID. Makes IDs deterministic in automation. |
-| `--fork-session` | With `--resume <id>`, copy that history into a fresh session instead of continuing the original. |
+| `--fork-session` | Copy `--resume <id>`, or the most recent session, into a fresh session. |
 | `--max-turns <N>` | Cap agent turns so a run cannot loop indefinitely. |
-| `--max-tokens <N>` | Cap tokens per model response. |
+| `--total-token-budget <N>` | Cap cumulative input plus output tokens for the run. |
 | `--json-schema <JSON>` | Structured output, as above. |
 
 One ordering gotcha if you spawn `coco` yourself: clap parses top-level flags

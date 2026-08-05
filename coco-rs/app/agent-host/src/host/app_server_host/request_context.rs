@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -51,17 +51,6 @@ impl HandlerContext {
     /// Resolve only the runtime selected and validated by AppServer routing.
     pub(crate) async fn resolve_runtime(&self) -> Option<crate::session_runtime::SessionHandle> {
         self.session.as_ref().map(|session| session.runtime.clone())
-    }
-
-    pub(crate) async fn workspace_cwd(&self) -> Result<PathBuf, HandlerResult> {
-        if let Some(session) = &self.session {
-            return Ok(session.runtime.original_cwd().clone());
-        }
-        Err(HandlerResult::Err {
-            code: coco_types::error_codes::INVALID_REQUEST,
-            message: "request requires an explicitly targeted session workspace".to_string(),
-            data: None,
-        })
     }
 }
 

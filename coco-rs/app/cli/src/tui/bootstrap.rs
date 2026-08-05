@@ -68,42 +68,6 @@ pub async fn run_tui(
         runtime_config.settings.merged.session.backend,
         coco_config::global_config::config_home(),
     ));
-    {
-        // Background housekeeping: prune session files older than the
-        // default retention period (30 days). Fire-and-forget.
-        let mgr = session_manager.clone();
-        let transcript_store =
-            coco_session::TranscriptStore::new(coco_agent_host::paths::project_paths(&cwd));
-        tokio::spawn(async move {
-            let period = coco_session::default_cleanup_period();
-            match tokio::task::spawn_blocking(move || -> coco_session::Result<(i32, i32)> {
-                let removed_sessions = mgr.cleanup_older_than(period)?;
-                let removed_tool_results =
-                    transcript_store.cleanup_tool_results_older_than(period)?;
-                Ok((removed_sessions, removed_tool_results))
-            })
-            .await
-            {
-                Ok(Ok((removed_sessions, removed_tool_results)))
-                    if removed_sessions > 0 || removed_tool_results > 0 =>
-                {
-                    tracing::info!(
-                        target: "coco::session::cleanup",
-                        removed_sessions,
-                        removed_tool_results,
-                        "pruned old session artifacts"
-                    );
-                }
-                Ok(Err(e)) => tracing::warn!(
-                    target: "coco::session::cleanup",
-                    error = %e,
-                    "session cleanup failed"
-                ),
-                _ => {}
-            }
-        });
-    }
-
     // Fast-role ModelSpec for auto-title generation (F5). Prefer the
     // JSON-first runtime config; keep the Anthropic Haiku fallback for
     // users who only configured an API key.
@@ -246,6 +210,43 @@ pub async fn run_tui(
             .map_err(|err| anyhow::anyhow!("startup session/start failed: {err}"))?,
     };
     let session_handle = startup_binding.session;
+    {
+        // Start retention only after the runtime has acquired its session
+        // write lease. Cleanup probes those leases and therefore cannot race
+        // startup resume/fork hydration or delete the active transcript.
+        let mgr = session_manager.clone();
+        let transcript_store = coco_session::TranscriptStore::new(
+            coco_agent_host::paths::project_paths(session_handle.original_cwd()),
+        );
+        tokio::spawn(async move {
+            let period = coco_session::default_cleanup_period();
+            match tokio::task::spawn_blocking(move || -> coco_session::Result<(i32, i32)> {
+                let removed_sessions = mgr.cleanup_older_than(period)?;
+                let removed_tool_results =
+                    transcript_store.cleanup_tool_results_older_than(period)?;
+                Ok((removed_sessions, removed_tool_results))
+            })
+            .await
+            {
+                Ok(Ok((removed_sessions, removed_tool_results)))
+                    if removed_sessions > 0 || removed_tool_results > 0 =>
+                {
+                    tracing::info!(
+                        target: "coco::session::cleanup",
+                        removed_sessions,
+                        removed_tool_results,
+                        "pruned old session artifacts"
+                    );
+                }
+                Ok(Err(e)) => tracing::warn!(
+                    target: "coco::session::cleanup",
+                    error = %e,
+                    "session cleanup failed"
+                ),
+                _ => {}
+            }
+        });
+    }
     let runtime = &session_handle;
     let current_session = Arc::new(RwLock::new(session_handle.clone()));
     let (mut runtime_reload_subscriptions, display_settings_rx, config_reload_errors_rx) =
@@ -324,7 +325,7 @@ pub async fn run_tui(
     );
 
     if let Some(plan) = &resume_plan {
-        emit_resume_plan_ui_state_for_runtime(plan, &session_handle, &notification_tx).await;
+        emit_resume_ui_state_for_runtime(&session_handle, &notification_tx).await;
         // Reconcile coordinator mode to the resumed session. This flips
         // `COCO_COORDINATOR_MODE` *before*
         // the coordinator badge (below) and the first per-turn system
@@ -378,7 +379,7 @@ pub async fn run_tui(
     app.state_mut()
         .ui
         .apply_display_settings(coco_tui::DisplaySettings::from_runtime_config(
-            runtime.runtime_config(),
+            &runtime.runtime_config(),
         ));
     let initial_ui_flags =
         coco_agent_host::session_dialogs::build_initial_session_ui_flags_payload(runtime);
@@ -907,16 +908,15 @@ impl TuiRuntimeReloadSubscriptions {
             ));
         }
 
-        if let Some(publisher) = runtime.runtime_publisher() {
-            self.handles.push(spawn_display_settings_reload_to(
-                publisher.subscribe(),
-                self.display_settings_tx.clone(),
-            ));
-            self.handles.push(spawn_model_runtime_reload(
-                runtime.model_runtimes(),
-                &publisher,
-            ));
-        }
+        let publisher = runtime.runtime_publisher();
+        self.handles.push(spawn_display_settings_reload_to(
+            publisher.subscribe(),
+            self.display_settings_tx.clone(),
+        ));
+        self.handles.push(spawn_model_runtime_reload(
+            runtime.model_runtimes(),
+            &publisher,
+        ));
 
         if let Some(state) = runtime.sandbox_state() {
             let approval_bridge: coco_sandbox::SandboxApprovalBridgeRef = std::sync::Arc::new(

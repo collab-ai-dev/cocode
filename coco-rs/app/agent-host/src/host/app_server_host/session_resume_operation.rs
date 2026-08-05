@@ -49,11 +49,9 @@ pub(crate) async fn resume_app_server_session_with_runtime_replacement(
     turn_drain_timeout: Duration,
 ) -> Result<SessionResumeResult, SessionOperationError> {
     let plan_mode_instructions = input.plan_mode_instructions.clone();
+    let resume_target = input.target.clone();
     let loaded = load_app_server_resume_session(input, &state).await?;
     let resumed_session_id = loaded.session_id.clone();
-    let resumed_cwd = loaded.session.working_dir.clone();
-    let prior_messages = loaded.conversation.messages.clone();
-    let persisted_mcp_tool_exposure = loaded.conversation.mcp_tool_exposure;
     if let Some(watermark) = loaded.session.session_seq_watermark {
         restore_session_seq_from_watermark(
             &app_server,
@@ -85,26 +83,53 @@ pub(crate) async fn resume_app_server_session_with_runtime_replacement(
             connection,
         )
         .await;
-        return build_session_resume_result(&loaded.session);
+        return build_runtime_session_resume_result(&runtime).await;
     }
 
     let make_factory = || {
         let replacement = replacement.clone();
         let session_id = resumed_session_id.clone();
-        let cwd = resumed_cwd.clone();
-        let prior_messages = prior_messages.clone();
         let connection_profile = Arc::clone(&connection_profile);
         let app_server = Arc::clone(&app_server);
+        let state = Arc::clone(&state);
+        let resume_target = resume_target.clone();
         let plan_mode_instructions = plan_mode_instructions.clone();
         async move {
+            let leased = crate::session_resume::load_resume_session_with_write_lease(
+                state.session_manager_snapshot().await,
+                SessionResumeInput {
+                    target: resume_target,
+                    plan_mode_instructions: plan_mode_instructions.clone(),
+                },
+            )
+            .await
+            .map_err(|error| {
+                coco_app_server::RegistryError::load_failed(error.message().to_string())
+            })?;
+            let authoritative = leased.loaded;
+            if authoritative.session_id != session_id {
+                return Err(coco_app_server::RegistryError::load_failed(format!(
+                    "resume target changed from {session_id} to {} during admission",
+                    authoritative.session_id
+                )));
+            }
+            if let Some(watermark) = authoritative.session.session_seq_watermark {
+                restore_session_seq_from_watermark(
+                    &app_server,
+                    &state,
+                    session_id.clone(),
+                    watermark,
+                );
+            }
             let runtime = build_connection_runtime_for_resume(
                 replacement,
                 connection_profile,
                 session_id.clone(),
-                cwd,
-                prior_messages,
+                authoritative.session.working_dir,
+                authoritative.conversation.messages,
                 plan_mode_instructions,
-                persisted_mcp_tool_exposure,
+                authoritative.conversation.mcp_tool_exposure,
+                leased.write_lease,
                 app_server,
             )
             .await
@@ -150,7 +175,29 @@ pub(crate) async fn resume_app_server_session_with_runtime_replacement(
         connection,
     )
     .await;
-    build_session_resume_result(&loaded.session)
+    build_runtime_session_resume_result(&runtime).await
+}
+
+async fn build_runtime_session_resume_result(
+    runtime: &crate::session_runtime::SessionHandle,
+) -> Result<SessionResumeResult, SessionOperationError> {
+    let manager = runtime.session_manager_handle();
+    let session_id = runtime.session_id().to_string();
+    let session = tokio::task::spawn_blocking(move || manager.resume(&session_id))
+        .await
+        .map_err(|error| {
+            SessionOperationError::internal(
+                format!("session/resume summary task failed: {error}"),
+                None,
+            )
+        })?
+        .map_err(|error| {
+            SessionOperationError::internal(
+                format!("session/resume could not read admitted session summary: {error}"),
+                None,
+            )
+        })?;
+    build_session_resume_result(&session)
 }
 
 pub(crate) fn build_session_resume_result(

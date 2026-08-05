@@ -197,7 +197,6 @@ pub use settings::policy::load_policy_settings;
 pub use settings::source::SettingSource;
 pub use settings::watcher::SettingsWatcher;
 pub use settings::watcher::WatchedKind;
-pub use settings::writer::LocalSettingsWriter;
 pub use settings::writer::SettingsWriteError;
 pub use settings::writer::write_local_settings;
 pub use settings::writer::write_local_settings_with_roots;

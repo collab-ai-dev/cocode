@@ -51,6 +51,7 @@ use tokio_util::sync::CancellationToken;
 fn empty_cache(provider: &str) -> CacheSafeParams {
     CacheSafeParams {
         rendered_system_prompt: String::new(),
+        system_prompt_blocks: Vec::new(),
         model_id: "claude-opus-4-7".into(),
         provider: provider.into(),
         active_shell_tool: coco_types::ActiveShellTool::Bash,

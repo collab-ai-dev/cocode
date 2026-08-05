@@ -321,7 +321,6 @@ fn run_turn_with_session(
         // Clone the event channel so we can still emit on the
         // error path (the engine takes ownership of the original).
         let event_tx_for_error = event_tx.clone();
-        let session_id_for_error = session_id.clone();
         let (core_event_tx, mut core_event_rx) = mpsc::channel::<CoreEvent>(256);
         let event_tx_forward = event_tx.clone();
         let session_for_forward = session.clone();
@@ -398,7 +397,7 @@ fn run_turn_with_session(
                             coco_types::ServerNotification::TurnEnded(
                                 coco_types::TurnEndedParams::interrupted(
                                     cycle_turn_id.clone(),
-                                    /*usage*/ None,
+                                    Some(result.total_usage),
                                     reason,
                                 ),
                             ),
@@ -431,6 +430,12 @@ fn run_turn_with_session(
                 Ok(())
             }
             Err(e) => {
+                // Failure carries the engine-owned final history just like
+                // success. Commit it before releasing the held terminal so a
+                // next turn cannot observe stale in-memory state.
+                session
+                    .commit_engine_turn_history(e.final_history.snapshot())
+                    .await;
                 warn!(
                     error = %e,
                     "SessionTurnExecutor: engine returned error; \
@@ -448,7 +453,7 @@ fn run_turn_with_session(
                             coco_types::ServerNotification::TurnEnded(
                                 coco_types::TurnEndedParams::interrupted(
                                     cycle_turn_id.clone(),
-                                    /*usage*/ None,
+                                    Some(e.total_usage),
                                     coco_types::TurnAbortReason::UserCancel,
                                 ),
                             ),
@@ -469,7 +474,7 @@ fn run_turn_with_session(
                             coco_types::ServerNotification::TurnEnded(
                                 coco_types::TurnEndedParams::failed(
                                     cycle_turn_id.clone(),
-                                    /*usage*/ None,
+                                    Some(e.total_usage),
                                     coco_types::ErrorPayload {
                                         message: e.to_string(),
                                         code: coco_types::ErrorCode::Unknown,
@@ -480,44 +485,6 @@ fn run_turn_with_session(
                         .await;
                 }
 
-                // Emit a synthetic `SessionResult` with `is_error=true`
-                // so the forwarder's `accumulate_session_result` folds
-                // the failure into the AppServer session stats accumulator. Without
-                // this, true engine-bail paths (compaction failure,
-                // transport crash, etc.) don't surface in the final
-                // aggregated `SessionResult` emitted by `session/close`.
-                //
-                // Fields are minimal — we don't have usage/cost
-                // because the engine didn't reach `make_result`. The
-                // forwarder handles missing fields gracefully (default
-                // usage is zero; cost is 0.0; errors list is the one
-                // message we provide).
-                let error_params = coco_types::SessionResultParams {
-                    session_id: session_id_for_error.clone(),
-                    total_turns: 1,
-                    duration_ms: 0,
-                    duration_api_ms: 0,
-                    is_error: true,
-                    stop_reason: if cancel_for_terminal.is_cancelled() {
-                        "interrupted".into()
-                    } else {
-                        "engine_error".into()
-                    },
-                    total_cost_usd: 0.0,
-                    usage: coco_types::TokenUsage::default(),
-                    model_usage: std::collections::HashMap::new(),
-                    permission_denials: Vec::new(),
-                    result: None,
-                    errors: vec![e.to_string()],
-                    structured_output: None,
-                    fast_mode_state: None,
-                    num_api_calls: None,
-                };
-                let _ = event_tx_for_error
-                    .send(CoreEvent::Protocol(
-                        coco_types::ServerNotification::SessionResult(Box::new(error_params)),
-                    ))
-                    .await;
                 Err(anyhow::anyhow!("{e}"))
             }
         }

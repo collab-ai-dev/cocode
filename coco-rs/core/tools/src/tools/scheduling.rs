@@ -944,6 +944,67 @@ Use `persistent: true` only for monitors that should run until TaskStop. Otherwi
         ValidationResult::Valid
     }
 
+    async fn check_permissions(
+        &self,
+        input: &MonitorInput,
+        ctx: &ToolUseContext,
+    ) -> coco_types::ToolCheckResult {
+        let bash_input = super::bash::BashInput {
+            command: input.command.clone(),
+            ..Default::default()
+        };
+        let bash_opinion =
+            coco_tool_runtime::Tool::check_permissions(&super::bash::BashTool, &bash_input, ctx)
+                .await;
+        let mut bash_policy = ctx.permission_context.clone();
+        // Evaluate the Bash rule surface, but make its mode fallthrough allow:
+        // only Bash-specific deny/ask rules and the Bash tool's security
+        // opinion should constrain Monitor. A successful Bash precheck then
+        // falls through to Monitor's own rules/mode under the Monitor identity.
+        bash_policy.mode = coco_types::PermissionMode::BypassPermissions;
+        let bash_value = serde_json::json!({ "command": input.command.clone() });
+        let cwd = ctx
+            .effective_shell_cwd()
+            .await
+            .to_string_lossy()
+            .into_owned();
+        let check =
+            move |_: &coco_types::ToolId,
+                  _: &serde_json::Value,
+                  _: &coco_types::ToolPermissionContext| { bash_opinion.clone() };
+        let decision = coco_permissions::PermissionEvaluator::evaluate_with_tool_check_and_options(
+            &coco_types::ToolId::Builtin(coco_types::ToolName::Bash),
+            &bash_value,
+            &bash_policy,
+            Some(&check),
+            coco_permissions::PermissionEvaluationOptions {
+                dynamic_read_only: super::bash::bash_input_is_read_only_in_cwd(&bash_input, &cwd),
+                shell_cwd: Some(cwd),
+                ..Default::default()
+            },
+        );
+        match decision {
+            coco_types::PermissionDecision::Ask {
+                message,
+                suggestions,
+                choices,
+                detail,
+            } => coco_types::ToolCheckResult::Ask {
+                message,
+                suggestions,
+                choices,
+                detail,
+            },
+            coco_types::PermissionDecision::Deny { message, .. }
+            | coco_types::PermissionDecision::Abort { message, .. } => {
+                coco_types::ToolCheckResult::Deny { message }
+            }
+            coco_types::PermissionDecision::Allow { .. } => {
+                coco_types::ToolCheckResult::Passthrough
+            }
+        }
+    }
+
     fn render_for_model(&self, out: &MonitorOutput) -> Vec<ToolResultContentPart> {
         let timing = if out.persistent {
             "persistent until TaskStop cancels it".to_string()
@@ -980,9 +1041,19 @@ Use `persistent: true` only for monitors that should run until TaskStop. Otherwi
         } else {
             Some(input.timeout_ms.unwrap_or(MONITOR_DEFAULT_TIMEOUT_MS))
         };
+        let cwd = crate::tools::shell_cwd::resolve_spawn_cwd(ctx).await;
+        let original_cwd = ctx.original_cwd.clone().unwrap_or_else(|| cwd.clone());
+        let shell_provider = ctx.shell_provider.clone().unwrap_or_else(|| {
+            coco_shell::ShellExecutor::new_with_config(&cwd, &ctx.shell_config)
+                .provider()
+                .clone()
+        });
         let req = ShellTaskRequest {
             command: input.command,
-            shell_kind: ShellTaskKind::DefaultPlatformShell,
+            shell_kind: ShellTaskKind::Provider(shell_provider),
+            cwd,
+            original_cwd,
+            parent_cancel: ctx.cancel_token(),
             start_mode: coco_tool_runtime::ShellTaskStartMode::Background,
             description: format!("Monitor: {}", input.description.trim()),
             timeout_ms: timeout_ms.map(|ms| ms as i64),

@@ -33,11 +33,11 @@ pub fn cli_runtime_overrides(cli: &AgentHostOptions) -> Result<coco_config::Runt
         })
         .collect::<Result<Vec<_>>>()?;
     overrides.event_hub_url_override = cli.event_hub_url.clone();
-    if let Some(max_tokens) = cli.max_tokens
-        && max_tokens <= 0
+    if let Some(total_token_budget) = cli.total_token_budget
+        && total_token_budget <= 0
     {
         anyhow::bail!(
-            "--max-tokens must be > 0 (got {max_tokens}); a non-positive value short-circuits \
+            "--total-token-budget must be > 0 (got {total_token_budget}); a non-positive value short-circuits \
              the budget tracker and produces empty responses"
         );
     }

@@ -1,3 +1,4 @@
+use crate::SessionLeaseStore;
 use crate::SessionManager;
 use crate::storage::TranscriptEntry;
 use crate::storage::TranscriptStore;
@@ -634,4 +635,42 @@ fn cleanup_older_than_unlinks_stale_jsonl() {
     let removed = mgr.cleanup_older_than(std::time::Duration::ZERO).unwrap();
     assert_eq!(removed, 1);
     assert!(!paths.transcript("old").exists());
+}
+
+#[test]
+fn cleanup_older_than_skips_a_session_with_an_active_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    let mgr = SessionManager::new(dir.path().to_path_buf());
+    let paths = seed_transcript(dir.path(), "active-old");
+    let store = TranscriptStore::new(paths.clone());
+    let _lease = store
+        .require_write_lease("active-old")
+        .expect("active session lease");
+
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let removed = mgr.cleanup_older_than(std::time::Duration::ZERO).unwrap();
+
+    assert_eq!(removed, 0);
+    assert!(paths.transcript("active-old").exists());
+}
+
+#[test]
+fn delete_rejects_a_session_with_an_active_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    let mgr = SessionManager::new(dir.path().to_path_buf());
+    let paths = seed_transcript(dir.path(), "active-delete");
+    let store = TranscriptStore::new(paths.clone());
+    let _lease = store
+        .require_write_lease("active-delete")
+        .expect("active session lease");
+
+    let error = mgr
+        .delete("active-delete")
+        .expect_err("active session must not be deleted");
+
+    assert!(matches!(
+        error,
+        crate::SessionError::Lease(crate::SessionLeaseError::InUse { .. })
+    ));
+    assert!(paths.transcript("active-delete").exists());
 }

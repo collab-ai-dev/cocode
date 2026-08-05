@@ -115,6 +115,7 @@ fn host() -> WorkflowRunHost {
         )),
         journal: Arc::new(super::WorkflowJournal::new(None)),
         run_state: Arc::new(coco_workflow_runtime::WorkflowRunState::default()),
+        progress_tasks: std::sync::Mutex::new(Vec::new()),
         // Tests construct the host directly (not via `Arc::new_cyclic`), and none
         // exercise nested `workflow()`, so a dangling weak self-ref is fine.
         me: std::sync::Weak::<super::WorkflowRunHost>::new(),
@@ -574,6 +575,7 @@ fn cyclic_host_with_cwd(cwd: std::path::PathBuf) -> Arc<WorkflowRunHost> {
         )),
         journal: Arc::new(super::WorkflowJournal::new(None)),
         run_state: Arc::new(coco_workflow_runtime::WorkflowRunState::default()),
+        progress_tasks: std::sync::Mutex::new(Vec::new()),
         me: me.clone() as std::sync::Weak<dyn coco_workflow_runtime::WorkflowHost>,
     })
 }

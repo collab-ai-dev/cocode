@@ -368,8 +368,8 @@ pub fn skill_override_glyph_and_label(state: SkillOverrideState) -> (char, &'sta
 }
 
 /// Diff produced by [`SkillsDialogState::compute_save_diff`] —
-/// directly serializable as the `skill_overrides` JSON patch the
-/// SettingsWriter expects.
+/// directly serializable as the `skill_overrides` JSON patch expected by the
+/// settings persistence boundary.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SaveDiff {
     /// Keys to update in `localSettings.skill_overrides`. `Some` ⇒
@@ -389,8 +389,8 @@ impl SaveDiff {
     }
 
     /// Render the diff as a `serde_json::Value` patch ready for
-    /// [`coco_config::SettingsWriter::write_local`]. Each `None`
-    /// becomes JSON `null` (the writer's delete sentinel).
+    /// [`coco_config::write_local_settings`]. Each `None` becomes JSON `null`
+    /// (the writer's delete sentinel).
     pub fn to_settings_patch(&self) -> serde_json::Value {
         let mut overrides = serde_json::Map::new();
         for (name, value) in &self.diff {

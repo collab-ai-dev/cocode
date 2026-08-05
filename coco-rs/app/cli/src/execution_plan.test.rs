@@ -110,6 +110,52 @@ fn plan_mode_instructions_rejected_for_tui() {
 }
 
 #[test]
+fn max_turns_rejected_for_tui_instead_of_being_ignored() {
+    let cli = parse(&["--max-turns", "2"]);
+    let err = build_execution_plan(&cli, io(true, true)).expect_err("TUI should reject flag");
+
+    assert_eq!(err, ExecutionPlanError::MaxTurnsRequiresHeadless);
+}
+
+#[test]
+fn fresh_session_id_rejected_for_tui_instead_of_being_ignored() {
+    let cli = parse(&["--session-id", "named-session"]);
+    let err = build_execution_plan(&cli, io(true, true)).expect_err("TUI should reject flag");
+
+    assert_eq!(err, ExecutionPlanError::SessionIdRequiresHeadless);
+}
+
+#[test]
+fn fork_destination_session_id_is_allowed_in_tui() {
+    let cli = parse(&[
+        "--resume",
+        "source-session",
+        "--fork-session",
+        "--session-id",
+        "fork-session",
+    ]);
+    let plan = build_execution_plan(&cli, io(true, true)).expect("fork id is consumed by TUI");
+
+    assert_eq!(plan.mode, ExecutionMode::Tui);
+}
+
+#[test]
+fn session_id_with_plain_resume_is_rejected_instead_of_ignored() {
+    let cli = parse(&[
+        "--prompt",
+        "continue",
+        "--resume",
+        "source-session",
+        "--session-id",
+        "ignored-destination",
+    ]);
+    let error = build_execution_plan(&cli, io(true, true))
+        .expect_err("plain resume cannot consume a destination id");
+
+    assert_eq!(error, ExecutionPlanError::SessionIdRequiresFreshOrFork);
+}
+
+#[test]
 fn default_invocation_mode_matrix_is_explicit() {
     for (args, stdin_tty, stdout_tty, expected_mode, expected_reason) in [
         (

@@ -106,7 +106,7 @@ impl SessionRuntime {
     pub fn config_home(&self) -> &std::path::PathBuf {
         self.config_resources.config_home()
     }
-    pub fn runtime_config(&self) -> &Arc<coco_config::RuntimeConfig> {
+    pub fn runtime_config(&self) -> Arc<coco_config::RuntimeConfig> {
         self.config_resources.runtime_config()
     }
     pub fn process_runtime(&self) -> &Arc<coco_app_runtime::ProcessRuntime> {

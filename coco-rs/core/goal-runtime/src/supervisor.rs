@@ -202,7 +202,11 @@ impl GoalSupervisor {
                     .await?;
                 return Ok(AdvanceOutcome::Advanced);
             }
-            GoalTurnOutcome::ProviderError { kind, message } => {
+            GoalTurnOutcome::ProviderError {
+                kind,
+                message,
+                usage,
+            } => {
                 let outcome = match kind {
                     ProviderErrorKind::Retryable => TurnFinishOutcome::Wait {
                         wake_id: mint_wake(),
@@ -217,7 +221,10 @@ impl GoalSupervisor {
                         },
                     },
                 };
-                Finalization::system(outcome)
+                Finalization {
+                    usage,
+                    ..Finalization::system(outcome)
+                }
             }
             GoalTurnOutcome::UsageLimited { message } => {
                 Finalization::system(TurnFinishOutcome::UsageLimited {

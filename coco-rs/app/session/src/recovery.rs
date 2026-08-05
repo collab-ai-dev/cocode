@@ -22,6 +22,8 @@ use coco_messages::TurnInterruptionState;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::BufRead;
+use std::io::Read;
+use std::io::Write;
 use std::path::Path;
 
 /// Conversation loaded from transcript for session resume.
@@ -635,19 +637,32 @@ pub fn can_resume_session(transcript_path: &Path) -> bool {
 
 /// Fork a conversation — copy the transcript into a new session file,
 /// relabeling every entry's `session_id` to `dest_session_id` so the fork's
-/// entries claim the new session (, which rewrites each
-/// entry's `sessionId`). Message/parent UUIDs are kept verbatim — the chain is
+/// entries claim the new session. Message/parent UUIDs are kept verbatim — the chain is
 /// self-consistent within the copied file, and UUIDs are scoped per session.
 /// A line that fails to parse as JSON is copied through unchanged.
 pub fn fork_conversation(
     source_path: &Path,
     dest_path: &Path,
     dest_session_id: &str,
+    dest_cwd: &Path,
 ) -> crate::Result<()> {
+    if source_path == dest_path {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "fork destination must differ from source transcript",
+        )
+        .into());
+    }
     if let Some(parent) = dest_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let source = std::fs::read_to_string(source_path)?;
+    // Transcript appends take an exclusive lock on this file. A shared lock
+    // gives the fork one complete point-in-time snapshot without attempting to
+    // reacquire the runtime's session-ownership lease.
+    let mut source_file = std::fs::File::open(source_path)?;
+    fs2::FileExt::lock_shared(&source_file)?;
+    let mut source = String::new();
+    source_file.read_to_string(&mut source)?;
     let mut out = String::with_capacity(source.len());
     for line in source.lines() {
         if line.trim().is_empty() {
@@ -655,12 +670,16 @@ pub fn fork_conversation(
         }
         match serde_json::from_str::<serde_json::Value>(line) {
             Ok(mut value) => {
-                if let Some(obj) = value.as_object_mut()
-                    && obj.contains_key("session_id")
-                {
+                if let Some(obj) = value.as_object_mut() {
+                    if obj.contains_key("session_id") {
+                        obj.insert(
+                            "session_id".to_string(),
+                            serde_json::Value::String(dest_session_id.to_string()),
+                        );
+                    }
                     obj.insert(
-                        "session_id".to_string(),
-                        serde_json::Value::String(dest_session_id.to_string()),
+                        "cwd".to_string(),
+                        serde_json::Value::String(dest_cwd.display().to_string()),
                     );
                 }
                 out.push_str(&serde_json::to_string(&value).unwrap_or_else(|_| line.to_string()));
@@ -669,7 +688,12 @@ pub fn fork_conversation(
         }
         out.push('\n');
     }
-    std::fs::write(dest_path, out)?;
+    let parent = dest_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+    temp.write_all(out.as_bytes())?;
+    temp.as_file().sync_all()?;
+    temp.persist_noclobber(dest_path)
+        .map_err(|error| error.error)?;
     Ok(())
 }
 

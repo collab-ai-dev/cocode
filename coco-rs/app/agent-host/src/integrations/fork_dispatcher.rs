@@ -68,14 +68,17 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
         let session_id = self.session.current_typed_session_id().await;
         let mut agent_config =
             coco_query::forked_agent::build_query_config(cache, options, &session_id);
-        if let Some(system) = system_prompt_override {
-            agent_config.system_prompt = system;
-        }
+        let compiled_system_prompt = if let Some(system) = system_prompt_override {
+            agent_config.system_prompt = system.clone();
+            coco_context::SystemPrompt::from_text(system)
+        } else {
+            coco_query::forked_agent::system_prompt_from_cache(cache)
+        };
 
         // Resolve the parent runtime config. The fork inherits the
         // parent's tool/sandbox/web_*/feature/role configuration so
         // the child engine sees the same world the parent does.
-        let runtime_config = self.session.runtime_config().as_ref();
+        let runtime_config = self.session.runtime_config();
         let parent_engine_config = self.session.current_engine_config().await;
 
         // Forks inherit the parent's settings-driven permission rules via the
@@ -101,7 +104,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             max_turns: Some(agent_config.max_turns.unwrap_or(1)),
             total_token_budget: None,
             prompt_cache: agent_config.prompt_cache.clone(),
-            system_prompt: Some(agent_config.system_prompt.clone()),
+            system_prompt: Some(compiled_system_prompt),
             streaming_tool_execution: false,
             tool_config: runtime_config.tool.clone(),
             sandbox_config: runtime_config.sandbox.clone(),

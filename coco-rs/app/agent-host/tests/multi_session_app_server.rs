@@ -635,7 +635,7 @@ impl coco_app_runtime::BootstrapSource for IsolatedTestBootstrapSource {
                 runtime_config: Arc::new(runtime_config),
                 tools: Arc::new(coco_tool_runtime::ToolRegistry::new()),
                 model_id: "claude-opus-4-7".to_string(),
-                system_prompt: "multi-session integration test".to_string(),
+                system_prompt: "multi-session integration test".into(),
                 permission_mode_availability: coco_types::PermissionModeAvailability::default(),
                 permission_mode: coco_types::PermissionMode::default(),
                 command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(
@@ -973,15 +973,6 @@ async fn fixture_with_turn_gate_and_timeout(
     let settings = coco_config::SettingsWithSource {
         merged: coco_config::Settings {
             file_checkpointing_enabled: true,
-            models: coco_config::ModelSelectionSettings {
-                main: Some(coco_config::RoleSlots::new(
-                    coco_types::ProviderModelSelection {
-                        provider: "anthropic".to_string(),
-                        model_id: "claude-opus-4-7".to_string(),
-                    },
-                )),
-                ..Default::default()
-            },
             ..Default::default()
         },
         per_source: std::collections::HashMap::new(),
@@ -990,7 +981,13 @@ async fn fixture_with_turn_gate_and_timeout(
     let runtime_config = coco_config::build_runtime_config_with(
         settings,
         coco_config::EnvSnapshot::default(),
-        coco_config::RuntimeOverrides::default(),
+        coco_config::RuntimeOverrides {
+            model_override: Some(coco_types::ProviderModelSelection {
+                provider: "anthropic".to_string(),
+                model_id: "claude-opus-4-7".to_string(),
+            }),
+            ..Default::default()
+        },
         coco_config::CatalogPaths::empty_in(home.path()),
         coco_config::parse_enabled_setting_sources(None),
     )
@@ -1257,11 +1254,11 @@ async fn session_start_rejects_existing_live_id_without_mutation() {
     };
     assert_eq!(
         data.as_ref().and_then(|data| data.get("kind")),
-        Some(&serde_json::json!("session_start_slot_conflict"))
+        Some(&serde_json::json!(coco_session::lease::SESSION_IN_USE))
     );
     assert_eq!(
-        data.as_ref().and_then(|data| data.get("state")),
-        Some(&serde_json::json!("live"))
+        data.as_ref().and_then(|data| data.get("session_id")),
+        Some(&serde_json::json!(chosen))
     );
 
     // The original session is untouched: exactly one live session with its
@@ -2170,6 +2167,80 @@ async fn read_only_connection_cannot_mutate_a_session() {
 #[tokio::test]
 async fn targeted_project_and_local_config_writes_cannot_modify_the_sibling_project() {
     targeted_config_write_scenario().await;
+}
+
+#[tokio::test]
+async fn config_write_immediately_publishes_to_every_affected_live_session() {
+    let fixture = fixture().await;
+    let owner = LocalServerClient::connect_local(&fixture.adapter);
+    let cwd = fixture._home.path().join("shared-config-project");
+    std::fs::create_dir_all(&cwd).expect("create shared project");
+    let start = || SessionStartParams {
+        cwd: Some(cwd.to_string_lossy().into_owned()),
+        ..Default::default()
+    };
+    let first = owner
+        .session_start(&fixture.handler, start())
+        .await
+        .expect("start first session");
+    let second = owner
+        .session_start(&fixture.handler, start())
+        .await
+        .expect("start second session");
+
+    owner
+        .config_write(
+            &fixture.handler,
+            ConfigWriteParams {
+                target: ConfigWriteTarget::Project(SessionTarget {
+                    session_id: first.session_id.clone(),
+                }),
+                key: "fast_mode".to_string(),
+                value: serde_json::json!(true),
+            },
+        )
+        .await
+        .expect("write shared project config");
+
+    for session_id in [&first.session_id, &second.session_id] {
+        let runtime = fixture
+            .server
+            .registry()
+            .get(session_id)
+            .expect("live runtime")
+            .into_session();
+        assert_eq!(
+            runtime.runtime_config().settings.merged.fast_mode,
+            Some(true)
+        );
+    }
+
+    owner
+        .config_write(
+            &fixture.handler,
+            ConfigWriteParams {
+                target: ConfigWriteTarget::Local(SessionTarget {
+                    session_id: second.session_id.clone(),
+                }),
+                key: "fast_mode".to_string(),
+                value: serde_json::json!(false),
+            },
+        )
+        .await
+        .expect("write shared local config");
+
+    for session_id in [&first.session_id, &second.session_id] {
+        let runtime = fixture
+            .server
+            .registry()
+            .get(session_id)
+            .expect("live runtime")
+            .into_session();
+        assert_eq!(
+            runtime.runtime_config().settings.merged.fast_mode,
+            Some(false)
+        );
+    }
 }
 
 async fn targeted_config_write_scenario() {
@@ -3202,6 +3273,68 @@ async fn concurrent_full_resume_keeps_callback_owner_scenario() {
         Some(owner.connection_key()),
         "adding a full peer must not transfer connection-owned callbacks"
     );
+}
+
+#[tokio::test]
+async fn concurrent_cold_resumes_share_one_leased_runtime() {
+    let fixture = fixture().await;
+    let owner = LocalServerClient::connect_local(&fixture.adapter);
+    let started = owner
+        .session_start(&fixture.handler, SessionStartParams::default())
+        .await
+        .expect("start resumable session");
+    append_durable_transcript_seed(&fixture, &started.session_id, "concurrent resume seed");
+    owner
+        .session_close(
+            &fixture.handler,
+            SessionCloseParams {
+                target: SessionTarget {
+                    session_id: started.session_id.clone(),
+                },
+            },
+        )
+        .await
+        .expect("close before cold resume");
+
+    let first = LocalServerClient::connect_local(&fixture.adapter);
+    let second = LocalServerClient::connect_local(&fixture.adapter);
+    let first_handler = fixture
+        .handler
+        .open(coco_app_server::ConnectionKey::generate());
+    let second_handler = fixture
+        .handler
+        .open(coco_app_server::ConnectionKey::generate());
+    first
+        .initialize(first_handler.as_ref(), InitializeParams::default())
+        .await
+        .expect("initialize first");
+    second
+        .initialize(second_handler.as_ref(), InitializeParams::default())
+        .await
+        .expect("initialize second");
+    let params = SessionResumeParams {
+        target: SessionTarget {
+            session_id: started.session_id.clone(),
+        },
+        plan_mode_instructions: None,
+    };
+
+    let (first_result, second_result) = tokio::join!(
+        first.session_resume(first_handler.as_ref(), params.clone()),
+        second.session_resume(second_handler.as_ref(), params),
+    );
+
+    assert_eq!(
+        first_result.expect("first resume").session.session_id,
+        started.session_id
+    );
+    assert_eq!(
+        second_result.expect("second resume").session.session_id,
+        started.session_id
+    );
+    let live = fixture.server.list_live_sessions();
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].connection_counts.full, 2);
 }
 
 #[tokio::test]

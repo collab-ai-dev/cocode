@@ -57,6 +57,7 @@ pub use bash_permissions::strip_output_redirections;
 pub use bash_permissions::strip_safe_wrappers;
 pub use executor::ShellExecutor;
 pub use executor::ShellProgress;
+pub use executor::{cleanup_tracked_cwd, read_tracked_cwd};
 pub use heredoc::HeredocContent;
 pub use heredoc::extract_heredocs;
 pub use mode_validation::is_auto_allowed_in_accept_edits;

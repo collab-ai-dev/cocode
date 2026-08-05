@@ -10,6 +10,50 @@ use coco_types::{
 use super::*;
 use crate::AppServer;
 
+#[test]
+fn unknown_client_method_is_method_not_found() {
+    let error = client_request_from_method_and_params("unknown/method".to_string(), None)
+        .expect_err("unknown method must fail")
+        .into_dispatch_error();
+
+    assert_eq!(error.code, coco_types::error_codes::METHOD_NOT_FOUND);
+}
+
+#[test]
+fn malformed_known_client_method_is_invalid_params() {
+    let error = client_request_from_method_and_params(
+        "session/read".to_string(),
+        Some(serde_json::json!({ "unexpected": true })),
+    )
+    .expect_err("known method with malformed params must fail")
+    .into_dispatch_error();
+
+    assert_eq!(error.code, coco_types::error_codes::INVALID_PARAMS);
+}
+
+#[test]
+fn malformed_params_for_unit_method_are_not_silently_discarded() {
+    let error = client_request_from_method_and_params(
+        "session/list".to_string(),
+        Some(serde_json::json!({ "unexpected": true })),
+    )
+    .expect_err("non-empty params for a unit request must fail")
+    .into_dispatch_error();
+
+    assert_eq!(error.code, coco_types::error_codes::INVALID_PARAMS);
+}
+
+#[test]
+fn empty_object_params_are_accepted_for_unit_method() {
+    let request = client_request_from_method_and_params(
+        "session/list".to_string(),
+        Some(serde_json::json!({})),
+    )
+    .expect("JSON-RPC clients commonly encode no params as an empty object");
+
+    assert!(matches!(request, ClientRequest::SessionList));
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TestHandle;
 

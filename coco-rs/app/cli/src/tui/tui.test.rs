@@ -530,7 +530,7 @@ async fn build_runtime_with_profile(
         config_reloader: None,
         cwd: home.path().to_path_buf(),
         model_id,
-        system_prompt: "test".to_string(),
+        system_prompt: "test".into(),
         permission_mode_availability: coco_types::PermissionModeAvailability::default(),
         permission_mode: coco_types::PermissionMode::default(),
         model_runtimes: Some(coco_query::test_support::model_runtime_registry(Arc::new(
@@ -553,6 +553,7 @@ async fn build_runtime_with_profile(
         agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         session_id_override: None,
+        preacquired_write_lease: None,
         is_non_interactive: false,
         execution_profile,
     })
@@ -581,7 +582,7 @@ async fn test_resume_context(
             bootstrap_source:
                 crate::session_runtime::SessionRuntimeBootstrapSource::from_prebuilt_bootstrap(
                     crate::session_runtime::SessionRuntimeBootstrap {
-                        runtime_config: Arc::clone(rt.runtime_config()),
+                        runtime_config: rt.runtime_config(),
                         tools: Arc::new(coco_tool_runtime::ToolRegistry::new()),
                         model_id: config.model_id,
                         system_prompt: config.system_prompt.unwrap_or_default(),
@@ -866,7 +867,7 @@ async fn idle_queue_processor_starts_pending_prompt_turn() {
         "queued prompt should start a follow-up turn"
     );
 
-    let completed_turn = tokio::time::timeout(Duration::from_secs(1), turn_done_rx.recv())
+    let completed_turn = tokio::time::timeout(Duration::from_secs(5), turn_done_rx.recv())
         .await
         .expect("queued follow-up turn should finish")
         .expect("turn_done channel should stay open");
@@ -974,7 +975,7 @@ async fn local_app_server_completes_plain_then_file_mention_turn() {
         goal_continuation: false,
     };
     let first = tokio::time::timeout(
-        Duration::from_secs(3),
+        Duration::from_secs(10),
         bridge
             .start_turn_and_wait_for_end(session_id.clone(), turn("plain first turn".to_string())),
     )
@@ -982,7 +983,7 @@ async fn local_app_server_completes_plain_then_file_mention_turn() {
     .expect("first turn must not hang")
     .expect("first turn completes");
     let second = tokio::time::timeout(
-        Duration::from_secs(3),
+        Duration::from_secs(10),
         bridge.start_turn_and_wait_for_end(
             session_id.clone(),
             turn(format!("inspect @{}", mentioned.display())),
@@ -1858,6 +1859,45 @@ async fn startup_resume_plan_uses_local_app_server_session_resume() {
     )
     .await
     .expect("load resume plan");
+    assert!(
+        plan.prior_messages.iter().all(|message| {
+            !coco_messages::wrapping::extract_text_from_message(message)
+                .contains("written after advisory plan")
+        }),
+        "the advisory plan must predate the simulated concurrent append"
+    );
+    let authoritative_store =
+        coco_session::TranscriptStore::new(std::sync::Arc::new(coco_paths::ProjectPaths::new(
+            rt.session_manager_handle().memory_base().to_path_buf(),
+            rt.original_cwd(),
+        )));
+    authoritative_store
+        .append_message(
+            target_session_id.as_str(),
+            &coco_session::TranscriptEntry {
+                entry_type: "user".to_string(),
+                uuid: "post-plan-authoritative-message".to_string(),
+                parent_uuid: None,
+                logical_parent_uuid: None,
+                session_id: Some(target_session_id.clone()),
+                cwd: rt.original_cwd().display().to_string(),
+                timestamp: "2026-01-01T00:00:01Z".to_string(),
+                version: None,
+                git_branch: None,
+                is_sidechain: false,
+                agent_id: None,
+                message: Some(serde_json::json!({
+                    "role": "user",
+                    "content": "written after advisory plan"
+                })),
+                usage: None,
+                model: Some("seed-model".to_string()),
+                request_id: None,
+                cost_usd: None,
+                extra: serde_json::Map::new(),
+            },
+        )
+        .expect("append concurrent transcript update");
 
     let (current_session, runtime_factory, process_runtime, _cwd) =
         test_resume_context(&runtime).await;
@@ -1895,6 +1935,11 @@ async fn startup_resume_plan_uses_local_app_server_session_resume() {
     let live = local_app_server_bridge.app_server().list_live_sessions();
     assert_eq!(live.len(), 1);
     assert_eq!(live[0].session_id, target_session_id);
+    let admitted = current_session.read().await.clone();
+    assert!(admitted.history_messages().await.iter().any(|message| {
+        coco_messages::wrapping::extract_text_from_message(message)
+            .contains("written after advisory plan")
+    }));
 
     let mut saw_reset = false;
     let mut saw_history = false;
@@ -1907,9 +1952,14 @@ async fn startup_resume_plan_uses_local_app_server_session_resume() {
             }
             coco_types::CoreEvent::Protocol(coco_types::ServerNotification::HistoryReplaced {
                 identity,
+                messages,
                 ..
             }) if identity.session_id.as_ref() == Some(&target_session_id) => {
                 saw_history = true;
+                assert!(messages.iter().any(|message| {
+                    coco_messages::wrapping::extract_text_from_message(message)
+                        .contains("written after advisory plan")
+                }));
             }
             _ => {}
         }

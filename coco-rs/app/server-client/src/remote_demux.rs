@@ -1,10 +1,12 @@
 pub struct RemoteEventDemux {
     events: mpsc::Receiver<RemoteJsonRpcEvent>,
+    invalidator: crate::RemoteConnectionInvalidator,
     event_buffers: HashMap<SessionId, VecDeque<SessionEnvelope>>,
     lifecycle_buffers: HashMap<SessionId, VecDeque<SessionLifecycleEffect>>,
     server_requests: VecDeque<JsonRpcRequest>,
     notifications: VecDeque<JsonRpcNotification>,
     disconnected: bool,
+    disconnect_reason: Option<RemoteDemuxDisconnectReason>,
 }
 
 pub struct RemoteSessionStream<'a> {
@@ -25,15 +27,30 @@ pub enum RemoteJsonRpcEvent {
     ServerRequest(JsonRpcRequest),
     Disconnected,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteDemuxDisconnectReason {
+    TransportClosed,
+    EventChannelClosed,
+    SlowConsumer {
+        queue: &'static str,
+        capacity: usize,
+    },
+}
 impl RemoteEventDemux {
-    pub fn new(events: mpsc::Receiver<RemoteJsonRpcEvent>) -> Self {
+    pub(crate) fn new(
+        events: mpsc::Receiver<RemoteJsonRpcEvent>,
+        invalidator: crate::RemoteConnectionInvalidator,
+    ) -> Self {
         Self {
             events,
+            invalidator,
             event_buffers: HashMap::new(),
             lifecycle_buffers: HashMap::new(),
             server_requests: VecDeque::new(),
             notifications: VecDeque::new(),
             disconnected: false,
+            disconnect_reason: None,
         }
     }
 
@@ -257,6 +274,10 @@ impl RemoteEventDemux {
         self.disconnected
     }
 
+    pub fn disconnect_reason(&self) -> Option<&RemoteDemuxDisconnectReason> {
+        self.disconnect_reason.as_ref()
+    }
+
     /// Drop every buffered per-session queue for `session_id` (events +
     /// lifecycle). Call after the session is closed/detached/replaced so stale
     /// deliveries do not linger. The connection-scoped `server_requests` /
@@ -266,15 +287,17 @@ impl RemoteEventDemux {
         self.lifecycle_buffers.remove(session_id);
     }
 
-    /// Buffer a server request, dropping the oldest with a warning if the
-    /// connection-scoped queue is at its cap.
+    /// Server requests require a response, so overflow is fatal rather than a
+    /// drop-oldest queue. Silently dropping one would leave the peer waiting
+    /// forever and desynchronize request cancellation.
     fn push_server_request(&mut self, request: JsonRpcRequest) {
         if self.server_requests.len() >= MAX_BUFFERED_CONNECTION_QUEUE {
-            self.server_requests.pop_front();
             tracing::warn!(
                 cap = MAX_BUFFERED_CONNECTION_QUEUE,
-                "remote demux server-request buffer full; dropping oldest"
+                "remote demux server-request buffer full; disconnecting slow consumer"
             );
+            self.disconnect_slow_consumer("server_requests", MAX_BUFFERED_CONNECTION_QUEUE);
+            return;
         }
         self.server_requests.push_back(request);
     }
@@ -284,37 +307,46 @@ impl RemoteEventDemux {
     /// consumer), so the demux disconnects rather than silently dropping an
     /// ordered event or growing unbounded.
     fn push_session_event(&mut self, session_id: SessionId, envelope: SessionEnvelope) {
-        let queue = self.event_buffers.entry(session_id.clone()).or_default();
-        if queue.len() >= MAX_BUFFERED_SESSION_QUEUE {
+        if self
+            .event_buffers
+            .get(&session_id)
+            .is_some_and(|queue| queue.len() >= MAX_BUFFERED_SESSION_QUEUE)
+        {
             tracing::warn!(
                 %session_id,
                 cap = MAX_BUFFERED_SESSION_QUEUE,
                 "remote demux per-session event buffer full; disconnecting slow consumer"
             );
-            self.disconnected = true;
+            self.disconnect_slow_consumer("session_events", MAX_BUFFERED_SESSION_QUEUE);
             return;
         }
-        queue.push_back(envelope);
+        self.event_buffers
+            .entry(session_id)
+            .or_default()
+            .push_back(envelope);
     }
 
     /// Buffer a lifecycle effect for a sibling session. Same slow-consumer
     /// disconnect policy as [`push_session_event`]; lifecycle is never dropped
     /// (a dropped `SessionEnded`/`SessionStarted` would desync session state).
     fn push_session_lifecycle(&mut self, session_id: SessionId, effect: SessionLifecycleEffect) {
-        let queue = self
+        if self
             .lifecycle_buffers
-            .entry(session_id.clone())
-            .or_default();
-        if queue.len() >= MAX_BUFFERED_SESSION_QUEUE {
+            .get(&session_id)
+            .is_some_and(|queue| queue.len() >= MAX_BUFFERED_SESSION_QUEUE)
+        {
             tracing::warn!(
                 %session_id,
                 cap = MAX_BUFFERED_SESSION_QUEUE,
                 "remote demux per-session lifecycle buffer full; disconnecting slow consumer"
             );
-            self.disconnected = true;
+            self.disconnect_slow_consumer("session_lifecycle", MAX_BUFFERED_SESSION_QUEUE);
             return;
         }
-        queue.push_back(effect);
+        self.lifecycle_buffers
+            .entry(session_id)
+            .or_default()
+            .push_back(effect);
     }
 
     /// Buffer a raw notification, dropping the oldest with a warning if the
@@ -365,29 +397,35 @@ impl RemoteEventDemux {
     }
 
     fn next_remote_event(&mut self) -> Option<RemoteJsonRpcEvent> {
+        if self.disconnected {
+            return None;
+        }
         match self.events.try_recv() {
             Ok(RemoteJsonRpcEvent::Disconnected) => {
-                self.disconnected = true;
+                self.mark_disconnected(RemoteDemuxDisconnectReason::TransportClosed);
                 None
             }
             Ok(event) => Some(event),
             Err(mpsc::error::TryRecvError::Empty) => None,
             Err(mpsc::error::TryRecvError::Disconnected) => {
-                self.disconnected = true;
+                self.mark_disconnected(RemoteDemuxDisconnectReason::EventChannelClosed);
                 None
             }
         }
     }
 
     async fn recv_remote_event(&mut self) -> Option<RemoteJsonRpcEvent> {
+        if self.disconnected {
+            return None;
+        }
         match self.events.recv().await {
             Some(RemoteJsonRpcEvent::Disconnected) => {
-                self.disconnected = true;
+                self.mark_disconnected(RemoteDemuxDisconnectReason::TransportClosed);
                 None
             }
             Some(event) => Some(event),
             None => {
-                self.disconnected = true;
+                self.mark_disconnected(RemoteDemuxDisconnectReason::EventChannelClosed);
                 None
             }
         }
@@ -453,7 +491,7 @@ impl RemoteEventDemux {
                 self.push_server_request(request);
             }
             RemoteJsonRpcEvent::Disconnected => {
-                self.disconnected = true;
+                self.mark_disconnected(RemoteDemuxDisconnectReason::TransportClosed);
             }
             RemoteJsonRpcEvent::Notification(_) => {}
         }
@@ -468,10 +506,25 @@ impl RemoteEventDemux {
                 self.push_notification(notification);
             }
             RemoteJsonRpcEvent::Disconnected => {
-                self.disconnected = true;
+                self.mark_disconnected(RemoteDemuxDisconnectReason::TransportClosed);
             }
             RemoteJsonRpcEvent::SessionDelivery(_) | RemoteJsonRpcEvent::SessionLifecycle(_) => {}
         }
+    }
+
+    fn disconnect_slow_consumer(&mut self, queue: &'static str, capacity: usize) {
+        self.events.close();
+        self.invalidator.invalidate();
+        self.mark_disconnected(RemoteDemuxDisconnectReason::SlowConsumer { queue, capacity });
+    }
+
+    fn mark_disconnected(&mut self, reason: RemoteDemuxDisconnectReason) {
+        self.disconnected = true;
+        self.disconnect_reason.get_or_insert(reason);
+        self.event_buffers.clear();
+        self.lifecycle_buffers.clear();
+        self.server_requests.clear();
+        self.notifications.clear();
     }
 }
 

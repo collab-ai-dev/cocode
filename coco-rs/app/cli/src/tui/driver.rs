@@ -1683,7 +1683,7 @@ pub(super) async fn run_agent_driver(
                     &session,
                     &event_tx,
                     patch,
-                    runtime_publisher.as_ref(),
+                    &runtime_publisher,
                     &cwd,
                     flag_settings.as_deref(),
                 )

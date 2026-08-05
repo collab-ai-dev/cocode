@@ -55,10 +55,11 @@ pub(super) async fn headless_local_goal_text_outcome(
     cli: &AgentHostOptions,
     cwd: &Path,
     session_id: &coco_types::SessionId,
+    _write_lease: Option<coco_session::SessionWriteLease>,
     args: &str,
     response_text: String,
     prior_messages: Vec<std::sync::Arc<coco_messages::Message>>,
-) -> RunChatOutcome {
+) -> anyhow::Result<RunChatOutcome> {
     let mut local_messages = Vec::new();
     append_headless_slash_text(&mut local_messages, "goal", args, &response_text);
     persist_headless_local_transcript_messages(
@@ -68,10 +69,10 @@ pub(super) async fn headless_local_goal_text_outcome(
         &prior_messages,
         &local_messages,
     )
-    .await;
+    .await?;
     let mut final_messages = prior_messages;
     final_messages.extend(local_messages);
-    headless_text_outcome(
+    Ok(headless_text_outcome(
         cli,
         cwd,
         response_text,
@@ -82,7 +83,59 @@ pub(super) async fn headless_local_goal_text_outcome(
         false,
         None,
         0,
-    )
+    ))
+}
+
+/// Establish the same global-id and exclusive-writer invariants as
+/// `session/start` before a headless control command reads durable state. The
+/// returned capability must stay alive through the command's final append.
+pub(super) fn acquire_headless_local_session_lease(
+    cli: &AgentHostOptions,
+    cwd: &Path,
+    session_id: &coco_types::SessionId,
+    is_resume: bool,
+) -> anyhow::Result<Option<coco_session::SessionWriteLease>> {
+    use coco_session::SessionLeaseStore as _;
+
+    let store = coco_session::TranscriptStore::new(crate::paths::project_paths(cwd));
+    let lease = if cli.no_session_persistence {
+        None
+    } else {
+        Some(store.require_write_lease(session_id.as_str())?)
+    };
+    if !is_resume
+        && coco_session::storage::resolve_session_file_path(
+            store.project_paths().memory_base(),
+            session_id.as_str(),
+            None,
+        )?
+        .is_some()
+    {
+        anyhow::bail!("cannot start headless session {session_id}: the session id already exists");
+    }
+    Ok(lease)
+}
+
+/// Load the conversation while the caller holds the session write lease.
+/// CLI resume planning is advisory; this is the authoritative snapshot used
+/// by pre-runtime control-plane commands.
+pub(super) fn load_headless_prior_messages(
+    cwd: &Path,
+    session_id: &coco_types::SessionId,
+) -> anyhow::Result<Vec<std::sync::Arc<coco_messages::Message>>> {
+    let paths = crate::paths::project_paths(cwd);
+    let resolved = coco_session::storage::resolve_session_file_path(
+        paths.memory_base(),
+        session_id.as_str(),
+        Some(cwd),
+    )?
+    .ok_or_else(|| anyhow::anyhow!("transcript for session {session_id} was not found"))?;
+    let conversation = coco_session::recovery::load_conversation_for_resume(&resolved.file_path)?;
+    Ok(conversation
+        .messages
+        .into_iter()
+        .map(std::sync::Arc::new)
+        .collect())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -129,9 +182,9 @@ pub(super) async fn persist_headless_local_transcript_messages(
     session_id: &coco_types::SessionId,
     prior_messages: &[std::sync::Arc<coco_messages::Message>],
     local_messages: &[std::sync::Arc<coco_messages::Message>],
-) {
+) -> anyhow::Result<()> {
     if cli.no_session_persistence || local_messages.is_empty() {
-        return;
+        return Ok(());
     }
     let paths = crate::paths::project_paths(cwd);
     let store = coco_session::TranscriptStore::new(paths);
@@ -157,11 +210,8 @@ pub(super) async fn persist_headless_local_transcript_messages(
     };
     let message_refs: Vec<&coco_messages::Message> =
         local_messages.iter().map(AsRef::as_ref).collect();
-    if let Err(e) =
-        store.append_message_chain(session_id.as_str(), message_refs, &mut seen, options)
-    {
-        tracing::warn!(error = %e, session_id = %session_id, "failed to persist headless local transcript messages");
-    }
+    store.append_message_chain(session_id.as_str(), message_refs, &mut seen, options)?;
+    Ok(())
 }
 
 /// Translate `--allowed-tools` / `--disallowed-tools` into a

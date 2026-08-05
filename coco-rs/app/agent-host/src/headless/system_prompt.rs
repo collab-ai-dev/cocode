@@ -58,7 +58,7 @@ pub fn build_system_prompt(
     output_style: Option<&coco_output_styles::OutputStyleConfig>,
     additional_working_directories: &[String],
     include_git_status: bool,
-) -> String {
+) -> coco_context::SystemPrompt {
     let claude_files = coco_context::discover_memory_files(cwd);
     let env_info = coco_context::get_environment_info(cwd, model_id, include_git_status);
     let default_identity;
@@ -79,7 +79,6 @@ pub fn build_system_prompt(
         section,
         additional_working_directories,
     )
-    .full_text()
 }
 
 /// Resolve model-specific instructions from runtime config, then build
@@ -91,7 +90,7 @@ pub fn build_system_prompt_for_model(
     model_id: &str,
     output_style: Option<&coco_output_styles::OutputStyleConfig>,
     additional_working_directories: &[String],
-) -> String {
+) -> coco_context::SystemPrompt {
     let resolved = runtime_config.model_registry.resolve(provider, model_id);
     let base_instructions = resolved
         .as_ref()
@@ -144,12 +143,12 @@ pub(crate) fn compose_system_prompt(
     provider: &str,
     model_id: &str,
     output_style: Option<&coco_output_styles::OutputStyleConfig>,
-) -> Result<String> {
+) -> Result<coco_context::SystemPrompt> {
     // 1. Base layer: `--system-prompt` wholly replaces the default
     // identity + CLAUDE.md discovery. Otherwise build the default.
     let additional_dirs = resolve_additional_dirs_display(cli, cwd);
     let mut prompt = if let Some(custom) = cli.system_prompt.as_deref() {
-        custom.to_string()
+        coco_context::SystemPrompt::from_text(custom)
     } else {
         build_system_prompt_for_model(
             cwd,
@@ -162,20 +161,14 @@ pub(crate) fn compose_system_prompt(
     };
     // 2. Append from `--append-system-prompt` (verbatim).
     if let Some(append) = cli.append_system_prompt.as_deref() {
-        if !prompt.ends_with('\n') {
-            prompt.push('\n');
-        }
-        prompt.push_str(append);
+        prompt.add_text(append);
     }
     // 3. Append from `--append-system-prompt-file` (read once, fail
     // fast if the file's missing rather than silently dropping).
     if let Some(path) = cli.append_system_prompt_file.as_deref() {
         let body = std::fs::read_to_string(path)
             .map_err(|e| anyhow::anyhow!("--append-system-prompt-file {path:?}: {e}"))?;
-        if !prompt.ends_with('\n') {
-            prompt.push('\n');
-        }
-        prompt.push_str(&body);
+        prompt.add_text(body);
     }
     Ok(prompt)
 }

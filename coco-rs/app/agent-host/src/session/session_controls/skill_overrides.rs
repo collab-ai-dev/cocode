@@ -10,21 +10,10 @@ pub struct SkillOverridesUpdate {
 pub async fn write_skill_overrides(
     session: &SessionHandle,
     patch: serde_json::Value,
-    runtime_publisher: Option<&Arc<coco_config::RuntimePublisher>>,
+    publisher: &Arc<coco_config::RuntimePublisher>,
     cwd: &std::path::Path,
     flag_settings: Option<&std::path::Path>,
 ) -> SkillOverridesUpdate {
-    let Some(publisher) = runtime_publisher else {
-        return SkillOverridesUpdate {
-            result: coco_types::SkillOverridesSaveResult::Err {
-                kind: coco_types::SkillOverridesSaveErrorKind::NoPublisher,
-                message: "settings hot-reload disabled; restart the process to pick up changes"
-                    .to_string(),
-            },
-            commands: None,
-        };
-    };
-
     let catalogs = coco_config::CatalogPaths::default();
     let roots = coco_config::SettingsRoots::new(session.project_root().clone(), cwd.to_path_buf());
     let write_result = coco_config::write_local_settings_with_roots(
@@ -69,6 +58,7 @@ fn skill_override_save_error_kind(
     match error {
         Error::Io { .. } => Kind::Io,
         Error::Parse { .. } => Kind::Parse,
+        Error::Mutation { .. } => Kind::Mutation,
         Error::Rebuild { .. } => Kind::Rebuild,
     }
 }

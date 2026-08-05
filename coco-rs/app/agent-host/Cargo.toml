@@ -61,6 +61,7 @@ coco-otel.workspace = true
 coco-model-card.workspace = true
 coco-file-watch.workspace = true
 coco-utils-common.workspace = true
+coco-utils-pty.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 base64.workspace = true
 libc.workspace = true
@@ -87,10 +88,10 @@ coco-utils-common.workspace = true
 [dev-dependencies]
 coco-frontmatter.workspace = true
 coco-utils-cargo-bin.workspace = true
-coco-utils-pty.workspace = true
 http.workspace = true
 pretty_assertions.workspace = true
 serial_test.workspace = true
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite.workspace = true
 wiremock.workspace = true

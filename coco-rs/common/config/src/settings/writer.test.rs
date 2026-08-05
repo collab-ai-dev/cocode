@@ -1,4 +1,4 @@
-//! Tests for [`LocalSettingsWriter`] and [`deep_merge_with_deletions`].
+//! Tests for the settings writer and [`deep_merge_with_deletions`].
 
 use super::*;
 use pretty_assertions::assert_eq;
@@ -88,6 +88,159 @@ fn apply_patch_round_trip_with_deletion() {
     assert_eq!(body, json!({ "skill_overrides": { "beta": "name-only" } }));
 }
 
+#[test]
+fn mutate_settings_file_accepts_jsonc() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("settings.json");
+    fs::write(
+        &path,
+        "{ // retained semantically\n \"show_thinking\": false,\n}\n",
+    )
+    .unwrap();
+
+    mutate_settings_file(&path, |value| {
+        value["show_thinking"] = json!(true);
+        Ok(())
+    })
+    .unwrap();
+
+    let body: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(body["show_thinking"], true);
+}
+
+#[test]
+fn invalid_settings_mutation_does_not_replace_existing_file() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("settings.json");
+    let original = r#"{ "show_thinking": false }"#;
+    fs::write(&path, original).unwrap();
+
+    let error = mutate_settings_file(&path, |value| {
+        value["show_thinking"] = json!("not-a-boolean");
+        Ok(())
+    })
+    .expect_err("invalid settings type must fail before persistence");
+
+    assert!(matches!(error, SettingsWriteError::Mutation { .. }));
+    assert_eq!(fs::read_to_string(path).unwrap(), original);
+}
+
+#[test]
+fn concurrent_settings_mutations_do_not_lose_updates() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("settings.json");
+    let mut threads = Vec::new();
+    for key in ["show_thinking", "fast_mode"] {
+        let path = path.clone();
+        threads.push(std::thread::spawn(move || {
+            mutate_settings_file(&path, |value| {
+                value[key] = json!(true);
+                Ok(())
+            })
+        }));
+    }
+    for thread in threads {
+        thread.join().unwrap().unwrap();
+    }
+
+    let body: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(body, json!({ "fast_mode": true, "show_thinking": true }));
+}
+
+#[test]
+#[ignore = "subprocess helper"]
+fn subprocess_settings_mutation_helper() {
+    let Ok(path) = std::env::var("COCO_TEST_SETTINGS_PATH") else {
+        return;
+    };
+    let key = std::env::var("COCO_TEST_SETTINGS_KEY").unwrap();
+    mutate_settings_file(Path::new(&path), |value| {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        value[key] = json!(true);
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn subprocess_settings_mutations_do_not_lose_updates() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("settings.json");
+    let executable = std::env::current_exe().unwrap();
+    let test_name = "settings::writer::tests::subprocess_settings_mutation_helper";
+
+    let mut children = ["show_thinking", "fast_mode"].map(|key| {
+        std::process::Command::new(&executable)
+            .args([test_name, "--exact", "--ignored"])
+            .env("COCO_TEST_SETTINGS_PATH", &path)
+            .env("COCO_TEST_SETTINGS_KEY", key)
+            .spawn()
+            .unwrap()
+    });
+    for child in &mut children {
+        assert!(child.wait().unwrap().success());
+    }
+
+    let body: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(body, json!({ "fast_mode": true, "show_thinking": true }));
+}
+
+#[test]
+fn failed_runtime_rebuild_changes_neither_disk_nor_publishers() {
+    let dir = TempDir::new().unwrap();
+    let project_root = dir.path().join("project");
+    let local_root = project_root.join("nested");
+    fs::create_dir_all(&local_root).unwrap();
+    let path = crate::global_config::local_settings_path(&local_root);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = r#"{
+        "event_hub_url": "ws://good.example",
+        "models": { "main": "anthropic/claude-sonnet-4-6" }
+    }"#;
+    fs::write(&path, original).unwrap();
+    let catalogs = CatalogPaths::empty_in(dir.path().join("home"));
+    let initial = crate::RuntimeConfigBuilder::new(&local_root, EnvSnapshot::default())
+        .with_settings_roots(&project_root, &local_root)
+        .with_catalog_paths(catalogs.clone())
+        .build()
+        .unwrap();
+    let first = Arc::new(RuntimePublisher::new(Arc::new(initial.clone())));
+    let second = Arc::new(RuntimePublisher::new(Arc::new(initial)));
+    let roots = SettingsRoots::new(&project_root, &local_root);
+
+    let error = mutate_settings_and_republish(
+        &path,
+        |value| {
+            value["event_hub_url"] = json!("http://not-websocket.example");
+            Ok(())
+        },
+        None,
+        &catalogs,
+        vec![
+            RuntimePublishTarget {
+                roots: roots.clone(),
+                publisher: Arc::clone(&first),
+            },
+            RuntimePublishTarget {
+                roots,
+                publisher: Arc::clone(&second),
+            },
+        ],
+    )
+    .expect_err("semantic rebuild failure must abort the transaction");
+
+    assert!(matches!(error, SettingsWriteError::Rebuild { .. }));
+    assert_eq!(fs::read_to_string(path).unwrap(), original);
+    assert_eq!(
+        first.current().event_hub.url.as_deref(),
+        Some("ws://good.example")
+    );
+    assert_eq!(
+        second.current().event_hub.url.as_deref(),
+        Some("ws://good.example")
+    );
+}
+
 #[tokio::test]
 async fn explicit_roots_write_local_and_republish_project_settings() {
     let dir = TempDir::new().unwrap();
@@ -106,6 +259,10 @@ async fn explicit_roots_write_local_and_republish_project_settings() {
     let initial = crate::RuntimeConfigBuilder::new(&local_root, EnvSnapshot::default())
         .with_settings_roots(&project_root, &local_root)
         .with_catalog_paths(catalogs.clone())
+        .with_overrides(crate::RuntimeOverrides {
+            event_hub_url_override: Some("ws://override.example".to_string()),
+            ..Default::default()
+        })
         .build()
         .unwrap();
     let publisher = Arc::new(RuntimePublisher::new(Arc::new(initial)));
@@ -126,4 +283,8 @@ async fn explicit_roots_write_local_and_republish_project_settings() {
     let current = publisher.current();
     assert_eq!(current.settings.merged.language.as_deref(), Some("zh"));
     assert!(current.settings.merged.show_thinking);
+    assert_eq!(
+        current.overrides.event_hub_url_override.as_deref(),
+        Some("ws://override.example")
+    );
 }

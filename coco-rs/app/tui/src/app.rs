@@ -373,6 +373,7 @@ where
             // flight — pressing the key again aborts it rather than starting a
             // new recording.
             session.cancel_transcription();
+            self.state.ui.voice.generation = session.generation();
             self.state.ui.voice.status = crate::state::ui::VoiceStatusKind::Idle;
             self.state.ui.input.clear_inline_hint();
             self.state.ui.add_toast(crate::state::ui::Toast::warning(
@@ -395,6 +396,7 @@ where
         } else {
             match session.start() {
                 Ok(()) => {
+                    self.state.ui.voice.generation = session.generation();
                     self.state.ui.voice.status = crate::state::ui::VoiceStatusKind::Recording;
                     let chord = self
                         .state
@@ -411,6 +413,7 @@ where
                         .set_inline_hint(format!("🎙 recording… ({chord} to stop)"));
                 }
                 Err(err) => {
+                    self.state.ui.voice.generation = session.generation();
                     self.state.ui.voice.status = crate::state::ui::VoiceStatusKind::Idle;
                     self.state
                         .ui
@@ -426,10 +429,17 @@ where
     fn handle_voice_event(&mut self, event: coco_voice::VoiceEvent) -> bool {
         use crate::state::ui::VoiceStatusKind;
         match event {
-            coco_voice::VoiceEvent::RecordingStarted => {
+            coco_voice::VoiceEvent::RecordingStarted { generation } => {
+                if generation < self.state.ui.voice.generation {
+                    return false;
+                }
+                self.state.ui.voice.generation = generation;
                 self.state.ui.voice.status = VoiceStatusKind::Recording;
             }
-            coco_voice::VoiceEvent::Transcribing { engine } => {
+            coco_voice::VoiceEvent::Transcribing { generation, engine } => {
+                if generation != self.state.ui.voice.generation {
+                    return false;
+                }
                 self.state.ui.voice.status = VoiceStatusKind::Transcribing;
                 self.state
                     .ui
@@ -437,10 +447,14 @@ where
                     .set_inline_hint(format!("transcribing via {engine}…"));
             }
             coco_voice::VoiceEvent::Download {
+                generation,
                 model,
                 received,
                 total,
             } => {
+                if generation != self.state.ui.voice.generation {
+                    return false;
+                }
                 // First-use weight download (runs inside transcription); reuse
                 // the inline hint to show progress, cleared by Final/Error.
                 let hint = match total {
@@ -452,7 +466,12 @@ where
                 };
                 self.state.ui.input.set_inline_hint(hint);
             }
-            coco_voice::VoiceEvent::Final { text, .. } => {
+            coco_voice::VoiceEvent::Final {
+                generation, text, ..
+            } => {
+                if generation != self.state.ui.voice.generation {
+                    return false;
+                }
                 self.state.ui.voice.status = VoiceStatusKind::Idle;
                 self.state.ui.input.clear_inline_hint();
                 let trimmed = text.trim();
@@ -462,7 +481,13 @@ where
                     self.state.ui.input.textarea_mut().insert_str(trimmed);
                 }
             }
-            coco_voice::VoiceEvent::Error(message) => {
+            coco_voice::VoiceEvent::Error {
+                generation,
+                message,
+            } => {
+                if generation != self.state.ui.voice.generation {
+                    return false;
+                }
                 self.state.ui.voice.status = VoiceStatusKind::Idle;
                 self.state.ui.input.clear_inline_hint();
                 self.state

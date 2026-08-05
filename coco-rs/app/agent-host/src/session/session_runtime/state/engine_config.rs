@@ -17,7 +17,7 @@ impl SessionRuntime {
     /// model ids first bind to the current Main provider, then to the
     /// deterministic provider catalog order.
     pub fn resolve_model_selection(&self, raw_model: &str) -> Option<ProviderModelSelection> {
-        resolve_model_selection_from_runtime_config(self.runtime_config(), raw_model)
+        resolve_model_selection_from_runtime_config(&self.runtime_config(), raw_model)
     }
     /// Snapshot the current `QueryEngineConfig` (clones the inner struct).
     /// Per-turn engine builds use this so mid-session mutations like
@@ -102,8 +102,9 @@ impl SessionRuntime {
             if max_budget_usd.is_some() {
                 engine_config.max_budget_usd = max_budget_usd;
             }
-            if system_prompt.is_some() {
-                engine_config.system_prompt = system_prompt;
+            if let Some(system_prompt) = system_prompt {
+                engine_config.system_prompt =
+                    Some(coco_context::SystemPrompt::from_text(system_prompt));
             }
             if append_system_prompt.is_some() {
                 engine_config.append_system_prompt = append_system_prompt;

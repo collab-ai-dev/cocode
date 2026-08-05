@@ -7,7 +7,7 @@ use super::*;
 use crate::app_server_host::AppServerHostState;
 
 #[tokio::test]
-async fn unscoped_handler_context_cannot_resolve_session_workspace() {
+async fn unscoped_handler_context_cannot_resolve_runtime() {
     let (notif_tx, _notif_rx) = mpsc::channel(1);
     let context = HandlerContext {
         notif_tx,
@@ -21,5 +21,4 @@ async fn unscoped_handler_context_cannot_resolve_session_workspace() {
         session: None,
     };
     assert!(context.resolve_runtime().await.is_none());
-    assert!(context.workspace_cwd().await.is_err());
 }

@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use coco_context::ContextualUserFragment;
 use coco_hooks::HookExecutionEvent;
 use coco_hooks::HookRegistry;
 use coco_hooks::orchestration::OrchestrationContext;
@@ -636,17 +637,46 @@ fn render_hook_context_messages(
     if additional_contexts.is_empty() {
         return Vec::new();
     }
-    let reminders = additional_contexts
-        .iter()
-        .map(|ctx| SystemReminder::new(kind, format!("{hook_name} hook additional context: {ctx}")))
-        .collect();
+    let mut remaining = 32_000usize;
+    let mut reminders = Vec::new();
+    for ctx in additional_contexts {
+        let budget = remaining.min(16_000);
+        let reminder = {
+            let content = coco_context::BoundedExternalContextFragment::new(
+                coco_context::ContextFragmentKind::Hook,
+                format!("{hook_name} hook additional context: {ctx}"),
+                budget,
+            )
+            .render();
+            (!content.is_empty()).then(|| {
+                remaining = remaining.saturating_sub(content.len());
+                SystemReminder::new(kind, content)
+            })
+        };
+        let Some(reminder) = reminder else {
+            break;
+        };
+        reminders.push(reminder);
+        if remaining == 0 {
+            break;
+        }
+    }
     inject_reminders(reminders).model_visible
 }
 
 fn render_hook_stopped_continuation_message(hook_name: &str, reason: &str) -> Option<Message> {
+    let content = coco_context::BoundedExternalContextFragment::new(
+        coco_context::ContextFragmentKind::Hook,
+        format!("{hook_name} hook stopped continuation: {reason}"),
+        32_000,
+    )
+    .render();
+    if content.is_empty() {
+        return None;
+    }
     let reminders = vec![SystemReminder::new(
         ReminderAttachmentType::HookStoppedContinuation,
-        format!("{hook_name} hook stopped continuation: {reason}"),
+        content,
     )];
     inject_reminders(reminders).model_visible.into_iter().next()
 }

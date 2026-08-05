@@ -137,7 +137,7 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         config_reloader: None,
         cwd: home.path().to_path_buf(),
         model_id: "mock-model".into(),
-        system_prompt: "test".to_string(),
+        system_prompt: "test".into(),
         permission_mode_availability: coco_types::PermissionModeAvailability::default(),
         permission_mode: coco_types::PermissionMode::default(),
         model_runtimes: Some(model_runtimes),
@@ -159,6 +159,7 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         session_id_override: None,
+        preacquired_write_lease: None,
         is_non_interactive: false,
         execution_profile: crate::session_runtime::SessionExecutionProfile::Primary,
     })
@@ -180,6 +181,9 @@ async fn dispatch_with_parent_history_uses_no_event_message_path() {
     let dispatcher = SessionRuntimeForkDispatcher::new(SessionHandle::new(Arc::clone(&runtime)));
     let cache = CacheSafeParams {
         rendered_system_prompt: "test".into(),
+        system_prompt_blocks: vec![coco_types::CachedSystemPromptBlock::Text {
+            content: "test".into(),
+        }],
         model_id: "mock-model".into(),
         provider: "mock".into(),
         active_shell_tool: coco_types::ActiveShellTool::Bash,
@@ -227,6 +231,9 @@ async fn compact_sidechain_transcript_writes_agent_store_only() {
     let dispatcher = SessionRuntimeForkDispatcher::new(SessionHandle::new(runtime));
     let cache = CacheSafeParams {
         rendered_system_prompt: "test".into(),
+        system_prompt_blocks: vec![coco_types::CachedSystemPromptBlock::Text {
+            content: "test".into(),
+        }],
         model_id: "mock-model".into(),
         provider: "mock".into(),
         active_shell_tool: coco_types::ActiveShellTool::Bash,

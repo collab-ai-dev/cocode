@@ -602,6 +602,11 @@ impl SessionManager {
     /// session subdirectory (`<project>/<id>/`) is left intact;
     /// the retention sweep handles its eventual collection.
     pub fn delete(&self, id: &str) -> crate::Result<()> {
+        // Registry ownership is process-local. The durable lease is the only
+        // authority that prevents another process from unlinking a live
+        // transcript, so hold it through the catalog delete.
+        let lease_store = self.store_for(Path::new("."));
+        let _delete_lease = lease_store.require_write_lease(id)?;
         self.catalog.delete(id, None)
     }
 
@@ -657,6 +662,24 @@ impl SessionManager {
                 if mtime >= cutoff {
                     continue;
                 }
+                let Some(session_id) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                    continue;
+                };
+                // Retention must never unlink a transcript while any process
+                // owns its writable materialization. Hold the same global
+                // lease across the final stat/delete window; a busy session is
+                // simply reconsidered by the next cleanup pass.
+                let Some(_cleanup_lease) = acquire_cleanup_lease(&self.memory_base, session_id)?
+                else {
+                    continue;
+                };
+                let Ok(meta) = std::fs::metadata(&path) else {
+                    continue;
+                };
+                let Ok(mtime) = meta.modified() else { continue };
+                if mtime >= cutoff {
+                    continue;
+                }
                 match std::fs::remove_file(&path) {
                     Ok(()) => removed += 1,
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -665,6 +688,23 @@ impl SessionManager {
             }
         }
         Ok(removed)
+    }
+}
+
+fn acquire_cleanup_lease(
+    memory_base: &Path,
+    session_id: &str,
+) -> crate::Result<Option<SessionWriteLease>> {
+    match lease::acquire_file_lease(
+        &coco_paths::session_lock_path(memory_base, session_id),
+        session_id,
+    ) {
+        Ok(lease) => Ok(Some(lease)),
+        Err(SessionLeaseError::InUse { .. }) => Ok(None),
+        Err(SessionLeaseError::Io { source }) => Err(source.into()),
+        Err(error @ SessionLeaseError::Unsupported { .. }) => {
+            Err(SessionError::generic(error.to_string()))
+        }
     }
 }
 

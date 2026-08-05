@@ -31,7 +31,7 @@ pub mod slug;
 
 pub use djb2::{djb2, simple_hash};
 pub use nfc::normalize_nfc;
-pub use project_paths::ProjectPaths;
+pub use project_paths::{ProjectPaths, session_lock_path, session_locks_dir};
 pub use projects_root::{find_project_dir, project_dir, projects_root};
 pub use relative::{normalize_lexical, path_to_posix, relative_posix_path};
 pub use runtime_paths::RuntimePaths;

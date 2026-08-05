@@ -51,6 +51,16 @@ async fn delete_durable_session(
             info!(session_id = %session_id, "AppServerHost: session/delete");
             HandlerResult::ok_empty()
         }
+        Ok(Err(coco_session::SessionError::Lease(
+            error @ coco_session::SessionLeaseError::InUse { .. },
+        ))) => HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: format!("session {session_id} is still live: {error}"),
+            data: Some(serde_json::json!({
+                "kind": coco_session::lease::SESSION_IN_USE,
+                "session_id": session_id,
+            })),
+        },
         Ok(Err(error)) => HandlerResult::Err {
             code: coco_types::error_codes::INTERNAL_ERROR,
             message: format!("failed to delete session {session_id}: {error}"),

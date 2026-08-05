@@ -1,4 +1,5 @@
 use super::*;
+use crate::SessionLeaseStore as _;
 use serde_json::json;
 use std::path::Path as StdPath;
 use std::process::Command;
@@ -139,6 +140,29 @@ fn resolve_session_prefers_exact_worktree_slug_over_canonical_repo() {
         worktree_paths.project_dir().join(format!("{sid}.jsonl"))
     );
     assert_eq!(resolved.project_path.as_deref(), Some(worktree.as_path()));
+}
+
+#[test]
+fn global_session_lookup_rejects_duplicate_ids() {
+    let memory = tempfile::tempdir().unwrap();
+    let sid = "duplicate-global-id";
+    for project in ["project-a", "project-b"] {
+        let paths = ProjectPaths::new(memory.path().to_path_buf(), &memory.path().join(project));
+        std::fs::create_dir_all(paths.project_dir()).unwrap();
+        std::fs::write(
+            paths.transcript(sid),
+            format!("{{\"type\":\"user\",\"session_id\":\"{sid}\"}}\n"),
+        )
+        .unwrap();
+    }
+
+    let error = resolve_session_file_path(memory.path(), sid, None)
+        .expect_err("ambiguous global id must not choose an arbitrary project");
+
+    assert!(matches!(
+        error,
+        crate::SessionError::AmbiguousSessionId { matches: 2, .. }
+    ));
 }
 
 #[test]
@@ -625,6 +649,26 @@ fn test_cleanup_tool_results_older_than_keeps_recent_files() {
     assert_eq!(removed, 0);
     assert!(output.exists());
     assert!(tool_results.exists());
+}
+
+#[test]
+fn test_cleanup_tool_results_skips_active_session() {
+    let (_dir, store, _project_dir) = test_store();
+    let tool_results = store.tool_results_session_dir("session-active");
+    std::fs::create_dir_all(&tool_results).unwrap();
+    let output = tool_results.join("call-1.txt");
+    std::fs::write(&output, "large output").unwrap();
+    let _lease = store
+        .require_write_lease("session-active")
+        .expect("active session lease");
+
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let removed = store
+        .cleanup_tool_results_older_than(std::time::Duration::ZERO)
+        .unwrap();
+
+    assert_eq!(removed, 0);
+    assert!(output.exists());
 }
 
 #[test]

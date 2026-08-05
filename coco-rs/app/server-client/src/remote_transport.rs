@@ -68,7 +68,7 @@ where
                                 break Err(RemoteTransportError::Client { source });
                             }
                         }
-                        Ok(None) => break Ok(()),
+                        Ok(None) => break Err(RemoteTransportError::UnexpectedEof),
                         Err(source) => break Err(RemoteTransportError::Transport { source }),
                     }
                 }
@@ -121,7 +121,7 @@ where
             tokio::select! {
                 message = websocket.next() => {
                     let Some(message) = message else {
-                        break Ok(());
+                        break Err(RemoteTransportError::UnexpectedEof);
                     };
                     let message = match message {
                         Ok(message) => message,

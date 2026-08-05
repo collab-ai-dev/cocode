@@ -96,16 +96,15 @@ async fn keep_alive_returns_empty_ok_response() {
 // implemented, no live dispatch path returns
 // `HandlerResult::NotImplemented`, so the test was asserting against
 // dead code. Unknown methods (those that don't deserialize into any
-// ClientRequest variant at all) are still covered by
-// `unknown_method_returns_invalid_params_error`.
+// ClientRequest variant at all) are still covered below.
 
 #[tokio::test]
-async fn unknown_method_returns_invalid_params_error() {
+async fn unknown_method_returns_method_not_found_error() {
     let (server_task, client) = spawn_server().await;
     initialize_connection(&client).await;
 
-    // "nonexistent/method" is not in the ClientRequest enum, so the
-    // dispatcher's serde parse will fail → INVALID_PARAMS.
+    // The method is not in the protocol registry, so JSON-RPC requires
+    // METHOD_NOT_FOUND rather than INVALID_PARAMS.
     client
         .send(req(99, "nonexistent/method", serde_json::json!({})))
         .await
@@ -115,7 +114,7 @@ async fn unknown_method_returns_invalid_params_error() {
     match reply {
         JsonRpcMessage::Error(e) => {
             assert_eq!(e.request_id, RequestId::Integer(99));
-            assert_eq!(e.error.code, error_codes::INVALID_PARAMS);
+            assert_eq!(e.error.code, error_codes::METHOD_NOT_FOUND);
         }
         other => panic!("expected Error, got {other:?}"),
     }
