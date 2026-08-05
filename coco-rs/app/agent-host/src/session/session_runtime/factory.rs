@@ -190,6 +190,10 @@ impl SessionRuntimeFactory {
         Arc::clone(&self.opts.session_manager)
     }
 
+    pub(crate) fn persists_primary_session(&self) -> bool {
+        !self.opts.cli.no_session_persistence
+    }
+
     pub async fn build_fresh(&self) -> Result<SessionHandle> {
         self.build(None).await
     }
@@ -215,13 +219,13 @@ impl SessionRuntimeFactory {
         &self,
         session_id: SessionId,
         cwd: PathBuf,
-        write_lease: coco_session::SessionWriteLease,
+        write_lease: Option<coco_session::SessionWriteLease>,
     ) -> Result<SessionHandle> {
         self.build_with_profile(
             Some(session_id),
             cwd,
             super::SessionExecutionProfile::Primary,
-            Some(write_lease),
+            write_lease,
         )
         .await
     }

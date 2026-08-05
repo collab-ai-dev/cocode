@@ -34,7 +34,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use tokio::fs::{File, OpenOptions, create_dir_all, remove_file};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
@@ -69,18 +69,19 @@ pub struct DiskTaskOutput {
 struct DiskTaskOutputInner {
     path: PathBuf,
     tx: mpsc::Sender<DiskOp>,
-    /// Bytes appended (pre-truncation accounting). Read for the cap
-    /// check inside `append`. Atomic so callers can `flush_size_hint`
-    /// without taking a lock.
-    bytes_written: AtomicI64,
-    /// One-shot latch flipped when the cap is hit so the truncation
-    /// marker appends exactly once.
-    capped: AtomicBool,
+    /// Cap state and queue admission share one lock so an admitted chunk can
+    /// never be enqueued after the truncation marker.
+    admission: Mutex<DiskAdmission>,
     /// Counter of in-flight async ops (`Append` queue depth +
     /// pending flushes). Incremented on send, decremented when the
     /// drain processes the op. Used by `wait_quiescent` for tests
     /// + clean shutdown.
     pending_ops: Arc<AtomicI64>,
+}
+
+struct DiskAdmission {
+    bytes_written: i64,
+    capped: bool,
 }
 
 impl DiskTaskOutput {
@@ -92,8 +93,10 @@ impl DiskTaskOutput {
         let inner = Arc::new(DiskTaskOutputInner {
             path: path.clone(),
             tx,
-            bytes_written: AtomicI64::new(0),
-            capped: AtomicBool::new(false),
+            admission: Mutex::new(DiskAdmission {
+                bytes_written: 0,
+                capped: false,
+            }),
             pending_ops: pending_ops.clone(),
         });
         let drain_path = path;
@@ -118,26 +121,24 @@ impl DiskTaskOutput {
     /// split across OS reads is decoded only after the complete byte stream is
     /// read back, rather than being permanently replaced per chunk.
     pub async fn append_bytes(&self, chunk: &[u8]) {
-        if self.inner.capped.load(Ordering::Acquire) {
+        let mut admission = self.inner.admission.lock().await;
+        if admission.capped {
             return;
         }
         // Count in bytes (not UTF-16 code units) for the cap check.
-        let added = chunk.len() as i64;
-        let total = self.inner.bytes_written.fetch_add(added, Ordering::AcqRel) + added;
-        if total > MAX_TASK_OUTPUT_BYTES {
-            // First over-cap caller wins the marker; concurrent
-            // others just drop silently.
-            if !self.inner.capped.swap(true, Ordering::AcqRel) {
-                self.inner.pending_ops.fetch_add(1, Ordering::AcqRel);
-                if self
-                    .inner
-                    .tx
-                    .send(DiskOp::Append(TRUNCATION_MARKER.as_bytes().to_vec()))
-                    .await
-                    .is_err()
-                {
-                    self.inner.pending_ops.fetch_sub(1, Ordering::AcqRel);
-                }
+        let added = i64::try_from(chunk.len()).unwrap_or(i64::MAX);
+        admission.bytes_written = admission.bytes_written.saturating_add(added);
+        if admission.bytes_written > MAX_TASK_OUTPUT_BYTES {
+            admission.capped = true;
+            self.inner.pending_ops.fetch_add(1, Ordering::AcqRel);
+            if self
+                .inner
+                .tx
+                .send(DiskOp::Append(TRUNCATION_MARKER.as_bytes().to_vec()))
+                .await
+                .is_err()
+            {
+                self.inner.pending_ops.fetch_sub(1, Ordering::AcqRel);
             }
             return;
         }

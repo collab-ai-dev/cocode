@@ -21,6 +21,11 @@ pub(crate) struct LeasedResumeSession {
 #[derive(Debug)]
 pub(crate) enum LoadResumeSessionError {
     InvalidRequest(String),
+    Lease {
+        message: String,
+        code: &'static str,
+        session_id: String,
+    },
     Internal(String),
 }
 
@@ -28,6 +33,7 @@ impl LoadResumeSessionError {
     pub(crate) fn message(&self) -> &str {
         match self {
             Self::InvalidRequest(message) | Self::Internal(message) => message,
+            Self::Lease { message, .. } => message,
         }
     }
 }
@@ -111,16 +117,19 @@ pub(crate) async fn load_resume_session_with_write_lease(
     // The disk backend's lease namespace is global under memory_base; the
     // memory backend returns its single shared store for every cwd.
     let lease_store = manager.store_for(std::path::Path::new("."));
+    let lease_session_id = session_id.clone();
     let write_lease =
-        tokio::task::spawn_blocking(move || lease_store.require_write_lease(&session_id))
+        tokio::task::spawn_blocking(move || lease_store.require_write_lease(&lease_session_id))
             .await
             .map_err(|error| {
                 LoadResumeSessionError::Internal(format!(
                     "session/resume lease task panicked: {error}"
                 ))
             })?
-            .map_err(|error| {
-                LoadResumeSessionError::InvalidRequest(format!("session/resume: {error}"))
+            .map_err(|error| LoadResumeSessionError::Lease {
+                message: format!("session/resume: {error}"),
+                code: error.code(),
+                session_id,
             })?;
     let loaded = load_resume_session(Some(manager), input).await?;
     Ok(LeasedResumeSession {

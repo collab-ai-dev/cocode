@@ -22,6 +22,7 @@ use super::session_operation_error::SessionOperationError;
 use super::session_operation_input::{SessionReplaceDestination, SessionReplaceInput};
 use super::session_registry::restore_session_seq_from_watermark;
 use super::session_resume_operation::load_app_server_resume_session;
+use super::session_resume_operation::load_resume_session_for_runtime_admission;
 use super::session_start_operation::{
     acquire_new_session_write_lease, prepare_app_server_session_start,
 };
@@ -47,14 +48,17 @@ pub(crate) async fn replace_app_server_session_with_runtime(
             let prepared =
                 prepare_app_server_session_start(*start_input, &state, &connection_profile).await?;
             let destination_id = prepared.session_id.clone();
-            let write_lease =
-                acquire_new_session_write_lease(&replacement.runtime_factory, &destination_id)
-                    .await?;
             let factory = {
                 let replacement = replacement.clone();
                 let profile = Arc::clone(&connection_profile);
                 let app_server = Arc::clone(&app_server);
                 async move {
+                    let write_lease = acquire_new_session_write_lease(
+                        &replacement.runtime_factory,
+                        &prepared.session_id,
+                    )
+                    .await
+                    .map_err(SessionOperationError::into_registry_error)?;
                     let runtime = build_connection_runtime_for_start(
                         replacement,
                         Arc::clone(&profile),
@@ -129,18 +133,16 @@ pub(crate) async fn replace_app_server_session_with_runtime(
                     let state = Arc::clone(&state);
                     let target = target.clone();
                     async move {
-                        let leased = crate::session_resume::load_resume_session_with_write_lease(
-                            state.session_manager_snapshot().await,
-                            SessionResumeInput {
-                                target,
-                                plan_mode_instructions: None,
-                            },
-                        )
-                        .await
-                        .map_err(|error| {
-                            coco_app_server::RegistryError::load_failed(error.message().to_string())
-                        })?;
-                        let authoritative = leased.loaded;
+                        let (authoritative, write_lease) =
+                            load_resume_session_for_runtime_admission(
+                                &replacement.runtime_factory,
+                                state.session_manager_snapshot().await,
+                                SessionResumeInput {
+                                    target,
+                                    plan_mode_instructions: None,
+                                },
+                            )
+                            .await?;
                         if authoritative.session_id != session_id {
                             return Err(coco_app_server::RegistryError::load_failed(format!(
                                 "resume target changed from {session_id} to {} during admission",
@@ -165,7 +167,7 @@ pub(crate) async fn replace_app_server_session_with_runtime(
                             // policy is re-supplied via `session/resume`.
                             None,
                             authoritative.conversation.mcp_tool_exposure,
-                            leased.write_lease,
+                            write_lease,
                             Arc::clone(&app_server),
                         )
                         .await

@@ -38,7 +38,7 @@ pub(crate) async fn build_app_session_runtime_for_start(
     binding: &AppSessionRuntimeBinding,
     profile: &AppSessionRuntimeProfile,
     prepared: &crate::session_start::PreparedStartSession,
-    write_lease: coco_session::SessionWriteLease,
+    write_lease: Option<coco_session::SessionWriteLease>,
 ) -> Result<SessionHandle> {
     let session = binding
         .runtime_factory
@@ -57,7 +57,7 @@ pub(crate) async fn build_app_session_runtime_for_resume(
     profile: &AppSessionRuntimeProfile,
     session_id: SessionId,
     cwd: PathBuf,
-    write_lease: coco_session::SessionWriteLease,
+    write_lease: Option<coco_session::SessionWriteLease>,
 ) -> Result<SessionHandle> {
     let session = binding
         .runtime_factory

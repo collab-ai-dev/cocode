@@ -5,6 +5,7 @@ pub struct RemoteEventDemux {
     lifecycle_buffers: HashMap<SessionId, VecDeque<SessionLifecycleEffect>>,
     server_requests: VecDeque<JsonRpcRequest>,
     notifications: VecDeque<JsonRpcNotification>,
+    session_lags: HashMap<SessionId, RemoteSessionLag>,
     disconnected: bool,
     disconnect_reason: Option<RemoteDemuxDisconnectReason>,
 }
@@ -37,6 +38,19 @@ pub enum RemoteDemuxDisconnectReason {
         capacity: usize,
     },
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "remote session {session_id} lagged on {queue} (capacity {capacity}); purge and resubscribe it"
+)]
+pub struct RemoteSessionLag {
+    pub session_id: SessionId,
+    pub queue: &'static str,
+    pub capacity: usize,
+}
+
+type SessionPoll<T> = Result<Option<T>, RemoteSessionLag>;
+
 impl RemoteEventDemux {
     pub(crate) fn new(
         events: mpsc::Receiver<RemoteJsonRpcEvent>,
@@ -49,21 +63,29 @@ impl RemoteEventDemux {
             lifecycle_buffers: HashMap::new(),
             server_requests: VecDeque::new(),
             notifications: VecDeque::new(),
+            session_lags: HashMap::new(),
             disconnected: false,
             disconnect_reason: None,
         }
     }
 
-    pub fn try_next_session_event(&mut self, session_id: &SessionId) -> Option<SessionEnvelope> {
+    pub fn try_next_session_event(
+        &mut self,
+        session_id: &SessionId,
+    ) -> SessionPoll<SessionEnvelope> {
+        self.ensure_session_current(session_id)?;
         if let Some(envelope) = self.pop_buffered_event(session_id) {
-            return Some(envelope);
+            return Ok(Some(envelope));
         }
 
         loop {
-            match self.next_remote_event()? {
+            let Some(event) = self.next_remote_event() else {
+                return Ok(None);
+            };
+            match event {
                 RemoteJsonRpcEvent::SessionDelivery(delivery) => {
                     if &delivery.envelope.session_id == session_id {
-                        return Some(delivery.envelope);
+                        return Ok(Some(delivery.envelope));
                     }
                     self.push_session_event(
                         delivery.envelope.session_id.clone(),
@@ -72,19 +94,27 @@ impl RemoteEventDemux {
                 }
                 event => self.buffer_non_session_event(event),
             }
+            self.ensure_session_current(session_id)?;
         }
     }
 
-    pub async fn next_session_event(&mut self, session_id: &SessionId) -> Option<SessionEnvelope> {
+    pub async fn next_session_event(
+        &mut self,
+        session_id: &SessionId,
+    ) -> SessionPoll<SessionEnvelope> {
+        self.ensure_session_current(session_id)?;
         if let Some(envelope) = self.pop_buffered_event(session_id) {
-            return Some(envelope);
+            return Ok(Some(envelope));
         }
 
         loop {
-            match self.recv_remote_event().await? {
+            let Some(event) = self.recv_remote_event().await else {
+                return Ok(None);
+            };
+            match event {
                 RemoteJsonRpcEvent::SessionDelivery(delivery) => {
                     if &delivery.envelope.session_id == session_id {
-                        return Some(delivery.envelope);
+                        return Ok(Some(delivery.envelope));
                     }
                     self.push_session_event(
                         delivery.envelope.session_id.clone(),
@@ -93,49 +123,63 @@ impl RemoteEventDemux {
                 }
                 event => self.buffer_non_session_event(event),
             }
+            self.ensure_session_current(session_id)?;
         }
     }
 
-    pub fn try_next_lifecycle(&mut self, session_id: &SessionId) -> Option<SessionLifecycleEffect> {
+    pub fn try_next_lifecycle(
+        &mut self,
+        session_id: &SessionId,
+    ) -> SessionPoll<SessionLifecycleEffect> {
+        self.ensure_session_current(session_id)?;
         if let Some(delivery) = self.pop_buffered_lifecycle(session_id) {
             self.purge_on_session_ended(&delivery);
-            return Some(delivery);
+            return Ok(Some(delivery));
         }
 
         loop {
-            match self.next_remote_event()? {
+            let Some(event) = self.next_remote_event() else {
+                return Ok(None);
+            };
+            match event {
                 RemoteJsonRpcEvent::SessionLifecycle(delivery) => {
                     if lifecycle_session_id(&delivery) == session_id {
                         self.purge_on_session_ended(&delivery);
-                        return Some(delivery);
+                        return Ok(Some(delivery));
                     }
                     self.push_session_lifecycle(lifecycle_session_id(&delivery).clone(), delivery);
                 }
                 event => self.buffer_non_lifecycle_event(event),
             }
+            self.ensure_session_current(session_id)?;
         }
     }
 
     pub async fn next_lifecycle(
         &mut self,
         session_id: &SessionId,
-    ) -> Option<SessionLifecycleEffect> {
+    ) -> SessionPoll<SessionLifecycleEffect> {
+        self.ensure_session_current(session_id)?;
         if let Some(delivery) = self.pop_buffered_lifecycle(session_id) {
             self.purge_on_session_ended(&delivery);
-            return Some(delivery);
+            return Ok(Some(delivery));
         }
 
         loop {
-            match self.recv_remote_event().await? {
+            let Some(event) = self.recv_remote_event().await else {
+                return Ok(None);
+            };
+            match event {
                 RemoteJsonRpcEvent::SessionLifecycle(delivery) => {
                     if lifecycle_session_id(&delivery) == session_id {
                         self.purge_on_session_ended(&delivery);
-                        return Some(delivery);
+                        return Ok(Some(delivery));
                     }
                     self.push_session_lifecycle(lifecycle_session_id(&delivery).clone(), delivery);
                 }
                 event => self.buffer_non_lifecycle_event(event),
             }
+            self.ensure_session_current(session_id)?;
         }
     }
 
@@ -150,40 +194,50 @@ impl RemoteEventDemux {
     pub fn try_next_session_activation(
         &mut self,
         session_id: &SessionId,
-    ) -> Option<SessionLifecycleEffect> {
+    ) -> SessionPoll<SessionLifecycleEffect> {
+        self.ensure_session_current(session_id)?;
         if let Some(delivery) = self.take_buffered_activation(session_id) {
-            return Some(delivery);
+            return Ok(Some(delivery));
         }
         loop {
-            match self.next_remote_event()? {
+            let Some(event) = self.next_remote_event() else {
+                return Ok(None);
+            };
+            match event {
                 RemoteJsonRpcEvent::SessionLifecycle(delivery) => {
                     if lifecycle_activates_session(&delivery, session_id) {
-                        return Some(delivery);
+                        return Ok(Some(delivery));
                     }
                     self.push_session_lifecycle(lifecycle_session_id(&delivery).clone(), delivery);
                 }
                 event => self.buffer_non_lifecycle_event(event),
             }
+            self.ensure_session_current(session_id)?;
         }
     }
 
     pub async fn next_session_activation(
         &mut self,
         session_id: &SessionId,
-    ) -> Option<SessionLifecycleEffect> {
+    ) -> SessionPoll<SessionLifecycleEffect> {
+        self.ensure_session_current(session_id)?;
         if let Some(delivery) = self.take_buffered_activation(session_id) {
-            return Some(delivery);
+            return Ok(Some(delivery));
         }
         loop {
-            match self.recv_remote_event().await? {
+            let Some(event) = self.recv_remote_event().await else {
+                return Ok(None);
+            };
+            match event {
                 RemoteJsonRpcEvent::SessionLifecycle(delivery) => {
                     if lifecycle_activates_session(&delivery, session_id) {
-                        return Some(delivery);
+                        return Ok(Some(delivery));
                     }
                     self.push_session_lifecycle(lifecycle_session_id(&delivery).clone(), delivery);
                 }
                 event => self.buffer_non_lifecycle_event(event),
             }
+            self.ensure_session_current(session_id)?;
         }
     }
 
@@ -279,12 +333,14 @@ impl RemoteEventDemux {
     }
 
     /// Drop every buffered per-session queue for `session_id` (events +
-    /// lifecycle). Call after the session is closed/detached/replaced so stale
-    /// deliveries do not linger. The connection-scoped `server_requests` /
-    /// `notifications` queues are not session-keyed and are bounded separately.
+    /// lifecycle) plus its lag marker. Call before resubscribing a lagged
+    /// session, or after it is closed/detached/replaced, so stale deliveries do
+    /// not linger. The connection-scoped `server_requests` / `notifications`
+    /// queues are not session-keyed and are bounded separately.
     pub fn purge_session(&mut self, session_id: &SessionId) {
         self.event_buffers.remove(session_id);
         self.lifecycle_buffers.remove(session_id);
+        self.session_lags.remove(session_id);
     }
 
     /// Server requests require a response, so overflow is fatal rather than a
@@ -302,11 +358,13 @@ impl RemoteEventDemux {
         self.server_requests.push_back(request);
     }
 
-    /// Buffer an event for a sibling session. If that session's queue is at its
-    /// cap the caller is not draining a session it subscribed to (a slow
-    /// consumer), so the demux disconnects rather than silently dropping an
-    /// ordered event or growing unbounded.
+    /// Buffer an event for a sibling session. Overflow invalidates only that
+    /// session stream; the caller can replay it without disrupting unrelated
+    /// sessions or pending connection-level RPCs.
     fn push_session_event(&mut self, session_id: SessionId, envelope: SessionEnvelope) {
+        if self.session_lags.contains_key(&session_id) {
+            return;
+        }
         if self
             .event_buffers
             .get(&session_id)
@@ -315,9 +373,9 @@ impl RemoteEventDemux {
             tracing::warn!(
                 %session_id,
                 cap = MAX_BUFFERED_SESSION_QUEUE,
-                "remote demux per-session event buffer full; disconnecting slow consumer"
+                "remote demux per-session event buffer full; session must resubscribe"
             );
-            self.disconnect_slow_consumer("session_events", MAX_BUFFERED_SESSION_QUEUE);
+            self.mark_session_lag(session_id, "session_events", MAX_BUFFERED_SESSION_QUEUE);
             return;
         }
         self.event_buffers
@@ -326,10 +384,23 @@ impl RemoteEventDemux {
             .push_back(envelope);
     }
 
-    /// Buffer a lifecycle effect for a sibling session. Same slow-consumer
-    /// disconnect policy as [`push_session_event`]; lifecycle is never dropped
-    /// (a dropped `SessionEnded`/`SessionStarted` would desync session state).
+    /// Buffer a lifecycle effect for a sibling session. As with events, an
+    /// overflow requires that session to replay without invalidating the
+    /// connection shared by healthy sessions.
     fn push_session_lifecycle(&mut self, session_id: SessionId, effect: SessionLifecycleEffect) {
+        let activated_session_id = lifecycle_activated_session_id(&effect)
+            .filter(|activated| *activated != &session_id)
+            .cloned();
+        if self.session_lags.contains_key(&session_id) {
+            if let Some(activated_session_id) = activated_session_id {
+                self.mark_session_lag(
+                    activated_session_id,
+                    "session_lifecycle",
+                    MAX_BUFFERED_SESSION_QUEUE,
+                );
+            }
+            return;
+        }
         if self
             .lifecycle_buffers
             .get(&session_id)
@@ -338,9 +409,16 @@ impl RemoteEventDemux {
             tracing::warn!(
                 %session_id,
                 cap = MAX_BUFFERED_SESSION_QUEUE,
-                "remote demux per-session lifecycle buffer full; disconnecting slow consumer"
+                "remote demux per-session lifecycle buffer full; session must resubscribe"
             );
-            self.disconnect_slow_consumer("session_lifecycle", MAX_BUFFERED_SESSION_QUEUE);
+            self.mark_session_lag(session_id, "session_lifecycle", MAX_BUFFERED_SESSION_QUEUE);
+            if let Some(activated_session_id) = activated_session_id {
+                self.mark_session_lag(
+                    activated_session_id,
+                    "session_lifecycle",
+                    MAX_BUFFERED_SESSION_QUEUE,
+                );
+            }
             return;
         }
         self.lifecycle_buffers
@@ -516,15 +594,38 @@ impl RemoteEventDemux {
         self.events.close();
         self.invalidator.invalidate();
         self.mark_disconnected(RemoteDemuxDisconnectReason::SlowConsumer { queue, capacity });
+        self.event_buffers.clear();
+        self.lifecycle_buffers.clear();
+        self.session_lags.clear();
     }
 
     fn mark_disconnected(&mut self, reason: RemoteDemuxDisconnectReason) {
         self.disconnected = true;
         self.disconnect_reason.get_or_insert(reason);
-        self.event_buffers.clear();
-        self.lifecycle_buffers.clear();
+        // Connection-scoped work cannot be completed after EOF. Per-session
+        // deliveries remain drainable because they are already self-contained.
         self.server_requests.clear();
         self.notifications.clear();
+    }
+
+    fn ensure_session_current(&self, session_id: &SessionId) -> Result<(), RemoteSessionLag> {
+        self.session_lags
+            .get(session_id)
+            .cloned()
+            .map_or(Ok(()), Err)
+    }
+
+    fn mark_session_lag(&mut self, session_id: SessionId, queue: &'static str, capacity: usize) {
+        self.event_buffers.remove(&session_id);
+        self.lifecycle_buffers.remove(&session_id);
+        self.session_lags.insert(
+            session_id.clone(),
+            RemoteSessionLag {
+                session_id,
+                queue,
+                capacity,
+            },
+        );
     }
 }
 
@@ -533,19 +634,19 @@ impl RemoteSessionStream<'_> {
         &self.session_id
     }
 
-    pub fn try_next_event(&mut self) -> Option<SessionEnvelope> {
+    pub fn try_next_event(&mut self) -> SessionPoll<SessionEnvelope> {
         self.demux.try_next_session_event(&self.session_id)
     }
 
-    pub async fn next_event(&mut self) -> Option<SessionEnvelope> {
+    pub async fn next_event(&mut self) -> SessionPoll<SessionEnvelope> {
         self.demux.next_session_event(&self.session_id).await
     }
 
-    pub fn try_next_lifecycle(&mut self) -> Option<SessionLifecycleEffect> {
+    pub fn try_next_lifecycle(&mut self) -> SessionPoll<SessionLifecycleEffect> {
         self.demux.try_next_lifecycle(&self.session_id)
     }
 
-    pub async fn next_lifecycle(&mut self) -> Option<SessionLifecycleEffect> {
+    pub async fn next_lifecycle(&mut self) -> SessionPoll<SessionLifecycleEffect> {
         self.demux.next_lifecycle(&self.session_id).await
     }
 }
@@ -567,19 +668,19 @@ impl RemoteOwnedSessionStream {
         self.demux
     }
 
-    pub fn try_next_event(&mut self) -> Option<SessionEnvelope> {
+    pub fn try_next_event(&mut self) -> SessionPoll<SessionEnvelope> {
         self.demux.try_next_session_event(&self.session_id)
     }
 
-    pub async fn next_event(&mut self) -> Option<SessionEnvelope> {
+    pub async fn next_event(&mut self) -> SessionPoll<SessionEnvelope> {
         self.demux.next_session_event(&self.session_id).await
     }
 
-    pub fn try_next_lifecycle(&mut self) -> Option<SessionLifecycleEffect> {
+    pub fn try_next_lifecycle(&mut self) -> SessionPoll<SessionLifecycleEffect> {
         self.demux.try_next_lifecycle(&self.session_id)
     }
 
-    pub async fn next_lifecycle(&mut self) -> Option<SessionLifecycleEffect> {
+    pub async fn next_lifecycle(&mut self) -> SessionPoll<SessionLifecycleEffect> {
         self.demux.next_lifecycle(&self.session_id).await
     }
 }
@@ -677,6 +778,14 @@ fn lifecycle_activates_session(delivery: &SessionLifecycleEffect, session_id: &S
             new_session_id == session_id
         }
         SessionLifecycleEffectKind::SessionEnded { .. } => false,
+    }
+}
+
+fn lifecycle_activated_session_id(delivery: &SessionLifecycleEffect) -> Option<&SessionId> {
+    match &delivery.kind {
+        SessionLifecycleEffectKind::SessionStarted { session_id } => Some(session_id),
+        SessionLifecycleEffectKind::SessionReplaced { new_session_id, .. } => Some(new_session_id),
+        SessionLifecycleEffectKind::SessionEnded { .. } => None,
     }
 }
 pub(super) fn decode_session_subscribe_envelope(

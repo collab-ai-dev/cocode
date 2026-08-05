@@ -44,7 +44,7 @@ pub(crate) async fn build_connection_runtime_for_start(
     replacement: RuntimeReplacementContext,
     connection_profile: Arc<coco_types::ConnectionProfile>,
     prepared: crate::session_start::PreparedStartSession,
-    write_lease: coco_session::SessionWriteLease,
+    write_lease: Option<coco_session::SessionWriteLease>,
     app_server: Arc<AppServer<AppSessionHandle>>,
 ) -> anyhow::Result<crate::session_runtime::SessionHandle> {
     let binding = runtime_binding_from_replacement(&replacement);
@@ -85,7 +85,7 @@ pub(crate) async fn build_connection_runtime_for_resume(
     prior_messages: Vec<coco_messages::Message>,
     plan_mode_instructions: Option<String>,
     persisted_mcp_tool_exposure: Option<McpToolExposure>,
-    write_lease: coco_session::SessionWriteLease,
+    write_lease: Option<coco_session::SessionWriteLease>,
     app_server: Arc<AppServer<AppSessionHandle>>,
 ) -> anyhow::Result<crate::session_runtime::SessionHandle> {
     let binding = runtime_binding_from_replacement(&replacement);

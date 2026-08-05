@@ -7,7 +7,9 @@ use crate::app_session::AppSessionHandle;
 
 use super::AppServerHostState;
 use super::session_close::runtime_load_teardown;
-use super::session_errors::{LifecycleError, local_lifecycle_error_parts};
+use super::session_errors::{
+    LifecycleError, app_server_lifecycle_error_parts, registry_lifecycle_error_parts,
+};
 
 /// New-only load owner for `session/start`.
 ///
@@ -33,7 +35,7 @@ where
             factory,
             runtime_load_teardown(state, turn_drain_timeout),
         )
-        .map_err(|error| local_lifecycle_error_parts("start session", error))?
+        .map_err(|error| app_server_lifecycle_error_parts("start session", error))?
     {
         AppLoadStart::Started { completion } => completion,
         AppLoadStart::Loading(_) => return Err(start_slot_conflict(&session_id, "loading")),
@@ -43,7 +45,7 @@ where
     completion
         .wait()
         .await
-        .map_err(|error| local_lifecycle_error_parts("start session", error))
+        .map_err(|error| registry_lifecycle_error_parts("start session", error))
 }
 
 fn start_slot_conflict(session_id: &SessionId, state: &str) -> LifecycleError {
@@ -77,13 +79,13 @@ where
                 make_factory(),
                 runtime_load_teardown(Arc::clone(&state), close_wait_timeout),
             )
-            .map_err(|error| local_lifecycle_error_parts("load session", error))?
+            .map_err(|error| app_server_lifecycle_error_parts("load session", error))?
         {
             AppLoadStart::Started { mut completion } | AppLoadStart::Loading(mut completion) => {
                 return completion
                     .wait()
                     .await
-                    .map_err(|error| local_lifecycle_error_parts("load session", error));
+                    .map_err(|error| registry_lifecycle_error_parts("load session", error));
             }
             AppLoadStart::Live(handle) => return Ok(handle),
             AppLoadStart::Closing(mut completion) => {
@@ -99,7 +101,7 @@ where
                         })),
                     })?
                     .map_err(|error| {
-                        local_lifecycle_error_parts("wait for closing session", error)
+                        registry_lifecycle_error_parts("wait for closing session", error)
                     })?;
             }
         }

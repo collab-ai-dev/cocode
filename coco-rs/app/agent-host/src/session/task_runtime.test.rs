@@ -1116,6 +1116,25 @@ async fn read_terminal_outputs_returns_disk_content() {
 }
 
 #[tokio::test]
+async fn task_status_collection_prunes_orphaned_terminal_outputs() {
+    let rt = rt();
+    rt.terminal_outputs.write().await.insert(
+        "removed-shell".to_string(),
+        coco_tool_runtime::TerminalOutputs {
+            stdout: vec![b'x'],
+            stderr: Vec::new(),
+            exit_code: Some(0),
+            interrupted: false,
+            new_cwd: None,
+        },
+    );
+
+    let _ = rt.collect(None, false).await;
+
+    assert!(rt.terminal_outputs.read().await.is_empty());
+}
+
+#[tokio::test]
 async fn mark_completed_cancels_per_task_token() {
     let rt = rt();
     let cancel = CancellationToken::new();
@@ -1966,6 +1985,50 @@ async fn shell_spawn_auto_detach_timer_fires() {
     );
     // Cleanup so the test doesn't leak a sleeping subprocess.
     rt.kill_task(&task_id).await.unwrap();
+}
+
+#[cfg(not(windows))]
+#[tokio::test]
+async fn auto_detached_shell_keeps_structured_terminal_output() {
+    let rt = rt();
+    let task_id = rt
+        .spawn_shell_task(ShellTaskRequest {
+            command: "sleep 0.15; printf stdout-value; printf stderr-value >&2".into(),
+            shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+            cwd: std::env::temp_dir(),
+            original_cwd: std::env::temp_dir(),
+            parent_cancel: CancellationToken::new(),
+            start_mode: coco_tool_runtime::ShellTaskStartMode::Foreground,
+            timeout_ms: Some(5_000),
+            description: "auto-detach-output".into(),
+            tool_use_id: None,
+            issuing_agent: None,
+            progress_tx: None,
+            progress_throttle_ms: 1_000,
+            auto_detach_ms: Some(50),
+            kill_on_timeout: false,
+            sandbox_state: None,
+            sandbox_bypass: coco_sandbox::SandboxBypass::No,
+        })
+        .await
+        .expect("spawn shell");
+    let detached = rt.detach_handle(&task_id).await.expect("detach handle");
+    let terminal = rt
+        .subscribe_terminal(&task_id)
+        .await
+        .expect("terminal signal");
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), detached.notified())
+        .await
+        .expect("auto detach");
+    tokio::time::timeout(std::time::Duration::from_secs(2), terminal.await_terminal())
+        .await
+        .expect("shell completion");
+    let outputs = rt.read_terminal_outputs(&task_id).await.expect("outputs");
+
+    assert_eq!(String::from_utf8(outputs.stdout).unwrap(), "stdout-value");
+    assert_eq!(String::from_utf8(outputs.stderr).unwrap(), "stderr-value");
+    assert_eq!(outputs.exit_code, Some(0));
 }
 
 #[tokio::test]

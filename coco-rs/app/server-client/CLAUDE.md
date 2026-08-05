@@ -87,8 +87,9 @@ tasks and dialing. In-process client composition lives in
   spawning and supervising the owner.
 - `RemoteEventDemux` wraps the mixed event receiver: sync/async per-session
   event/lifecycle demux plus buffered server-request and raw-notification
-  access. `purge_session` drops a session's buffered events/lifecycle after
-  close/replace or a consumed `SessionEnded`.
+  access. A per-session overflow returns `RemoteSessionLag` for that session
+  without invalidating the shared connection. `purge_session` drops buffered
+  state and clears the lag marker before resubscription, or after close/replace.
 - `control/cancelRequest` removes the matching buffered server request before
   any future consumer can answer it. The notification remains available so an
   active SDK dispatcher can abort an already-running handler.
@@ -99,11 +100,11 @@ tasks and dialing. In-process client composition lives in
 `MAX_BUFFERED_SESSION_QUEUE`. Unlike the connection-scoped
 `server_requests` / `notifications` queues (bounded, drop-oldest + warn), it
 does **NOT** drop-oldest — an event stream is ordered and lifecycle drops
-desync session state — so overflow means the caller is not draining a
-subscribed session, and the demux disconnects (`disconnected = true`); the
-caller reconnects and re-snapshots. `RemoteJsonRpcIncoming::handle_frame`
-applies the same policy at the connection events channel: `try_send`, and on
-a full channel `ClientError::SlowConsumer` routes through the
+desync session state. Overflow clears only that session's buffers and makes
+its accessors return `RemoteSessionLag`; the caller purges, re-snapshots, and
+resubscribes it. Unrelated session streams and pending RPCs continue on the
+same connection. The connection-level events channel still uses `try_send`;
+when that channel is full, `ClientError::SlowConsumer` routes through the
 guaranteed-disconnect path so pending RPCs resolve instead of hanging.
 
 ## Pending

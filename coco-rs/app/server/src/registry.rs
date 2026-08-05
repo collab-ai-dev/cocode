@@ -956,6 +956,13 @@ pub enum RegistryError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("session load rejected: {message}"))]
+    LoadRejected {
+        message: String,
+        data: Option<serde_json::Value>,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("session close failed: {message}"))]
     CloseFailed {
         message: String,
@@ -990,6 +997,14 @@ impl RegistryError {
         .build()
     }
 
+    pub fn load_rejected(message: impl Into<String>, data: Option<serde_json::Value>) -> Self {
+        LoadRejectedSnafu {
+            message: message.into(),
+            data,
+        }
+        .build()
+    }
+
     pub fn close_failed(message: impl Into<String>) -> Self {
         CloseFailedSnafu {
             message: message.into(),
@@ -1020,6 +1035,7 @@ impl ErrorExt for RegistryError {
             Self::ChildExists { .. } => StatusCode::InvalidArguments,
             Self::SlotConflict { .. } => StatusCode::InvalidArguments,
             Self::LoadFailed { .. } => StatusCode::Internal,
+            Self::LoadRejected { .. } => StatusCode::InvalidArguments,
             Self::CloseFailed { .. } => StatusCode::Internal,
             Self::SignalDropped { .. } => StatusCode::Internal,
             Self::CloseAborted { .. } => StatusCode::Cancelled,

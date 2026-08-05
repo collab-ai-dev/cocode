@@ -309,7 +309,7 @@ async fn final_request_gate_counts_system_prompt_not_present_in_history() {
 }
 
 #[tokio::test]
-async fn final_request_gate_credits_and_consumes_only_the_admitted_server_edit() {
+async fn final_request_gate_does_not_credit_edit_without_clearable_results() {
     let small = ModelInfo {
         context_window: PositiveTokens::new(10_000),
         max_output_tokens: PositiveTokens::new(1_024),
@@ -318,7 +318,10 @@ async fn final_request_gate_credits_and_consumes_only_the_admitted_server_edit()
     let client = slot_with_info("anthropic", "claude-3", small);
     let engine = test_engine(QueryEngineConfig::default(), client.clone());
     let payload = serde_json::json!({
-        "edits": [{"clearAtLeast": {"value": 2_000}}]
+        "edits": [{
+            "type": "clear_tool_uses_20250919",
+            "clearAtLeast": {"value": 2_000}
+        }]
     });
     let params = QueryParams {
         prompt: vec![LlmMessage::system("x".repeat(40_000))],
@@ -329,7 +332,7 @@ async fn final_request_gate_credits_and_consumes_only_the_admitted_server_edit()
 
     assert!(matches!(
         engine.check_final_request_blocking_limit(&params, &slot_snapshot(&client)),
-        BlockingLimitDecision::Proceed
+        BlockingLimitDecision::Block { .. }
     ));
 
     engine
@@ -353,6 +356,48 @@ async fn final_request_gate_credits_and_consumes_only_the_admitted_server_edit()
             .await
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn final_request_gate_credits_realisable_tool_result_clearance() {
+    let small = ModelInfo {
+        context_window: PositiveTokens::new(10_000),
+        max_output_tokens: PositiveTokens::new(1_024),
+        ..Default::default()
+    };
+    let client = slot_with_info("anthropic", "claude-3", small);
+    let engine = test_engine(QueryEngineConfig::default(), client.clone());
+    let params = QueryParams {
+        prompt: vec![
+            LlmMessage::system("x".repeat(32_000)),
+            LlmMessage::Tool {
+                content: vec![coco_messages::ToolContent::ToolResult(
+                    coco_messages::ToolResultContent {
+                        tool_call_id: "call".to_string(),
+                        tool_name: "Bash".to_string(),
+                        output: coco_messages::ToolResultOutput::text("y".repeat(8_000)),
+                        is_error: false,
+                        provider_metadata: None,
+                    },
+                )],
+                provider_options: None,
+            },
+        ],
+        context_management: Some(serde_json::json!({
+            "edits": [{
+                "type": "clear_tool_uses_20250919",
+                "trigger": {"type": "input_tokens", "value": 1},
+                "keep": {"type": "tool_uses", "value": 0},
+                "clearAtLeast": {"type": "input_tokens", "value": 2_000}
+            }]
+        })),
+        ..Default::default()
+    };
+
+    assert!(matches!(
+        engine.check_final_request_blocking_limit(&params, &slot_snapshot(&client)),
+        BlockingLimitDecision::Proceed
+    ));
 }
 
 #[tokio::test]

@@ -165,16 +165,6 @@ impl TaskRuntime {
                 outcome,
             )
             .await;
-            if manager
-                .get(&driver_task_id)
-                .await
-                .is_some_and(|state| state.is_backgrounded() || state.notified)
-            {
-                // Detached tasks use disk output. A killed foreground task is
-                // marked notified by the terminal transition and likewise has
-                // no output reader. Release both bounded raw buffers promptly.
-                terminal_outputs.write().await.remove(&driver_task_id);
-            }
         });
 
         Ok(task_id)

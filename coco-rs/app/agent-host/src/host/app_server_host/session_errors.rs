@@ -234,6 +234,11 @@ pub(crate) fn registry_lifecycle_error_parts(
             LifecycleErrorKind::Internal,
             serde_json::json!({ "kind": "session_operation_internal" }),
         ),
+        RegistryError::LoadRejected { data, .. } => (
+            LifecycleErrorKind::InvalidRequest,
+            data.clone()
+                .unwrap_or_else(|| serde_json::json!({ "kind": "session_load_rejected" })),
+        ),
         RegistryError::CloseFailed { data, .. } => (
             LifecycleErrorKind::Internal,
             data.clone()
