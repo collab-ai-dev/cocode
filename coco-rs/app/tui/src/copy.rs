@@ -346,6 +346,15 @@ pub(crate) fn confirm_picker_selection(
     if !persist_always {
         return Some(result);
     }
+    if let Some(message) = crate::modal_pane::settings::setting_override_message(
+        state,
+        crate::settings_registry::SettingId::CopyFullResponse,
+    ) {
+        state.ui.add_toast(Toast::warning(message.clone()));
+        result.push('\n');
+        result.push_str(&message);
+        return Some(result);
+    }
     match coco_config::global_config::write_user_setting(
         coco_config::settings::COPY_FULL_RESPONSE_KEY,
         serde_json::json!(true),

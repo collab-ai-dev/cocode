@@ -32,8 +32,8 @@ pub(crate) fn map_key(key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::Right => Some(TuiCommand::QuestionSwitchQuestion(1)),
         // Tab/Shift+Tab cycle between questions and the footer actions
         // ("Chat about this" / "Skip interview"), via question_cycle_focus.
-        KeyCode::Tab => Some(TuiCommand::SettingsNextTab),
-        KeyCode::BackTab => Some(TuiCommand::SettingsPrevTab),
+        KeyCode::Tab => Some(TuiCommand::TabsNext),
+        KeyCode::BackTab => Some(TuiCommand::TabsPrevious),
         KeyCode::Backspace => Some(TuiCommand::SurfaceFilterBackspace),
         // Every printable char (Space included) routes through the filter
         // path: Space toggles a multi-select option, other chars type into

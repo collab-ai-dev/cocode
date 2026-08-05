@@ -40,6 +40,7 @@ mod presentation;
 mod reflow_cap;
 mod resize_debounce;
 pub mod server_notification_handler;
+mod settings_registry;
 pub mod state;
 pub(crate) mod status_bar;
 pub(crate) mod surface;

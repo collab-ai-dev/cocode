@@ -255,10 +255,9 @@ fn test_apply_display_settings_updates_show_thinking_default() {
     let mut state = AppState::new();
     assert!(!state.ui.show_thinking);
 
-    state.ui.apply_display_settings(crate::DisplaySettings {
-        show_thinking: true,
-        ..crate::DisplaySettings::default()
-    });
+    let mut settings = crate::DisplaySettings::default();
+    settings.show_thinking = true;
+    state.ui.apply_display_settings(settings);
 
     assert!(state.ui.show_thinking);
 }
@@ -266,16 +265,11 @@ fn test_apply_display_settings_updates_show_thinking_default() {
 #[test]
 fn test_apply_display_settings_keeps_runtime_show_thinking_toggle_when_default_unchanged() {
     let mut state = AppState::new();
-    state.ui.apply_display_settings(crate::DisplaySettings {
-        show_thinking: false,
-        ..crate::DisplaySettings::default()
-    });
+    let settings = crate::DisplaySettings::default();
+    state.ui.apply_display_settings(settings.clone());
 
     state.ui.show_thinking = true;
-    state.ui.apply_display_settings(crate::DisplaySettings {
-        show_thinking: false,
-        ..crate::DisplaySettings::default()
-    });
+    state.ui.apply_display_settings(settings);
 
     assert!(state.ui.show_thinking);
 }

@@ -9,7 +9,6 @@ use tokio::sync::mpsc;
 use super::handle_command;
 use crate::command::ShutdownReason;
 use crate::command::UserCommand;
-use crate::display_settings::DisplaySettingEditability;
 use crate::display_settings::DisplaySettings;
 use crate::events::TuiCommand;
 use crate::state::ActiveSuggestions;
@@ -1452,16 +1451,18 @@ async fn up_on_empty_input_requests_edit_for_queued_commands() {
 #[test]
 fn toggle_syntax_highlighting_does_not_mutate_when_higher_priority_setting_wins() {
     let mut state = AppState::new();
-    state.ui.display_settings = DisplaySettings {
-        syntax_highlighting: SyntaxHighlighting::Full,
-        syntax_highlighting_editability: DisplaySettingEditability::OverriddenBy(
+    let settings = coco_config::SettingsWithSource {
+        merged: coco_config::Settings {
+            syntax_highlighting: coco_config::settings::SyntaxHighlightingLevel::Full,
+            ..coco_config::Settings::default()
+        },
+        per_source: std::collections::HashMap::from([(
             coco_config::SettingSource::Project,
-        ),
-        show_thinking: false,
-        copy_full_response: false,
-        native_replay_cache: crate::transcript::render::HistoryReplayCachePolicy::default(),
-        ..DisplaySettings::default()
+            serde_json::json!({ "syntax_highlighting": "full" }),
+        )]),
+        source_paths: std::collections::HashMap::new(),
     };
+    state.ui.display_settings = DisplaySettings::from_settings_with_sources(&settings);
 
     crate::modal_pane::settings::toggle_syntax_highlighting(&mut state);
 
@@ -2393,20 +2394,19 @@ async fn esc_on_memory_dialog_records_transcript_result() {
 
 #[tokio::test]
 async fn esc_on_theme_picker_emits_dismiss_slash_result() {
-    // Esc on the theme picker emits "Theme picker dismissed".
-    // The theme picker reuses the Settings keybinding context, whose Esc maps to
-    // `Deny` (not `Cancel`) — the dismiss feedback must fire on that route too.
+    // A standalone `/theme` picker reports dismissal through the ordinary
+    // Cancel route. Nested Settings pickers return silently to their parent.
     let mut state = app_state_with_session();
     state
         .ui
         .show_modal(ModalState::ThemePicker(crate::state::ThemePickerState {
-            choices: state.ui.theme_state.choices.clone(),
             selected: 0,
             original_setting: crate::theme::ThemeSetting::default(),
+            origin: crate::state::ThemePickerOrigin::Standalone,
         }));
     let (tx, mut rx) = drained_channel();
 
-    handle_command(&mut state, TuiCommand::Deny, &tx).await;
+    handle_command(&mut state, TuiCommand::Cancel, &tx).await;
 
     assert!(!state.ui.has_active_surface(), "theme picker dismissed");
     match rx.try_recv() {

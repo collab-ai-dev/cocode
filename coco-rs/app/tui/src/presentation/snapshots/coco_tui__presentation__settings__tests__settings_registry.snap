@@ -1,0 +1,22 @@
+---
+source: app/tui/src/presentation/settings.test.rs
+expression: body
+---
+Type to filter settings
+
+❯ Appearance · Theme  terminal
+  Appearance · Syntax highlighting  Lite (diff & shell)
+  Appearance · Show thinking  Disabled
+  Appearance · Copy full response  Disabled
+  Terminal · Animations  Enabled
+  Terminal · Terminal title  Disabled
+  Terminal · Usage tips  Disabled
+  Terminal · Resize reflow rows  9000 rows
+  Terminal · Command status line  Disabled
+  Performance · Native replay cache  Enabled
+  Performance · Frame telemetry  Disabled
+  Performance · Memory telemetry  Disabled
+
+Open the theme picker; changes preview live and persist on Enter.  ·  choice  ·  theme
+
+Type to filter  Backspace Edit filter  ↑/↓ Navigate  Enter Select  Esc Close

@@ -1181,6 +1181,9 @@ where
                 {
                     // consumed by the `/permissions` add-rule form; same modal
                     // bypass as `/add-dir` above.
+                } else if crate::modal_pane::settings::route_paste(&mut self.state, &text) {
+                    // consumed by the searchable settings filter, including
+                    // CJK text committed by an IME as bracketed paste.
                 } else if let Some((bytes, mime)) = crate::update::sniff_image_path_paste(&text) {
                     // Drag-and-drop of an image file onto the terminal pastes
                     // its path — attach the image (with bytes; a bytes-less

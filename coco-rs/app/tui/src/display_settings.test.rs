@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use coco_config::SettingSource;
 use coco_config::Settings;
 use coco_config::SettingsWithSource;
+use coco_config::settings::SYNTAX_HIGHLIGHTING_KEY;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -46,8 +47,8 @@ fn from_settings_with_sources_allows_user_owned_syntax_highlighting() {
     assert_eq!(display.syntax_highlighting, SyntaxHighlighting::Off);
     assert!(!display.show_thinking);
     assert_eq!(
-        display.syntax_highlighting_editability,
-        DisplaySettingEditability::Editable
+        display.overriding_source(SettingId::SyntaxHighlighting),
+        None
     );
 }
 
@@ -159,9 +160,73 @@ fn from_settings_with_sources_marks_higher_priority_syntax_highlighting_as_overr
     // Merged is `Settings::default()`, whose tier default is `Lite`.
     assert_eq!(display.syntax_highlighting, SyntaxHighlighting::Lite);
     assert_eq!(
-        display.syntax_highlighting_editability,
-        DisplaySettingEditability::OverriddenBy(SettingSource::Local)
+        display.overriding_source(SettingId::SyntaxHighlighting),
+        Some(SettingSource::Local)
     );
+}
+
+#[test]
+fn from_settings_with_sources_tracks_representative_higher_priority_owners() {
+    let project = serde_json::json!({
+        "copy_full_response": true,
+        "status_line": { "type": "command", "command": "printf ready" },
+        "tui": {
+            "animations": false,
+            "performance": { "memory_enabled": true }
+        }
+    });
+    let mut per_source = HashMap::new();
+    per_source.insert(SettingSource::Project, project);
+
+    let display = DisplaySettings::from_settings_with_sources(&settings_with_source(
+        Settings::default(),
+        per_source,
+    ));
+
+    for id in [
+        SettingId::CopyFullResponse,
+        SettingId::StatusLine,
+        SettingId::Animations,
+        SettingId::MemoryTelemetry,
+    ] {
+        assert_eq!(
+            display.overriding_source(id),
+            Some(SettingSource::Project),
+            "missing provenance for {id:?}"
+        );
+    }
+    assert_eq!(
+        display.overriding_source(SettingId::SyntaxHighlighting),
+        None
+    );
+}
+
+fn raw_dotted_key(key: &str) -> serde_json::Value {
+    key.rsplit('.').fold(json!(true), |value, part| {
+        serde_json::Value::Object(serde_json::Map::from_iter([(part.to_string(), value)]))
+    })
+}
+
+#[test]
+fn every_registered_source_key_detects_higher_priority_ownership() {
+    for id in SettingId::ALL {
+        if id.source_keys().is_empty() {
+            assert_eq!(id, SettingId::Theme);
+            continue;
+        }
+        for key in id.source_keys() {
+            let settings = settings_with_source(
+                Settings::default(),
+                HashMap::from([(SettingSource::Project, raw_dotted_key(key))]),
+            );
+
+            assert_eq!(
+                DisplaySettings::from_settings_with_sources(&settings).overriding_source(id),
+                Some(SettingSource::Project),
+                "source key {key} did not register ownership for {id:?}"
+            );
+        }
+    }
 }
 
 #[test]

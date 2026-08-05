@@ -179,8 +179,8 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         PermissionToggleDebug => return None,
 
         // ── Tabs ────────────────────────────────────────────────────
-        TabsNext => TuiCommand::SettingsNextTab,
-        TabsPrevious => TuiCommand::SettingsPrevTab,
+        TabsNext => TuiCommand::TabsNext,
+        TabsPrevious => TuiCommand::TabsPrevious,
 
         // ── Transcript ──────────────────────────────────────────────
         TranscriptExit => TuiCommand::Cancel,
@@ -247,14 +247,6 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         // Plugin context actions — no Plugin state yet; silently no-op
         // until the state lands.
         PluginToggle | PluginInstall => return None,
-
-        // ── Settings ────────────────────────────────────────────────
-        SettingsClose => TuiCommand::SurfaceConfirm,
-        // SettingsSearch / SettingsRetry are inside-state state-machine
-        // actions (not application-level TuiCommands). The Settings state
-        // reads them directly from the resolver when it owns key dispatch
-        // — they intentionally route to None here.
-        SettingsSearch | SettingsRetry => return None,
 
         // ── Voice ───────────────────────────────────────────────────
         // Push-to-talk toggle. The `VoiceSession` lives on `App`, so the

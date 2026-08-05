@@ -16,8 +16,16 @@ and are anchors, not contracts — re-locate by symbol name if lines drift.
 Source trees referenced:
 
 - coco: `coco-rs/` (paths below are workspace-relative)
-- grok: `agents/grok-build/crates/codegen/` (read-only reference; never
+- grok: `~/codespace/3rd/grok-build/crates/codegen/` (read-only reference; never
   vendored — all ports are re-implementations adapted to coco conventions)
+
+Pinned revisions:
+
+- original grok analysis: `c68e39f60462f28d9be5e683d9cbe2c57b1a5027`
+  (2026-07-16)
+- refreshed grok analysis: `dd04f397b1d02f2272b092555669dfba1f01bc85`
+  (2026-07-30)
+- coco comparison point: `e90fce49ba111061993c5d7c58f4a586b4babb8b`
 
 Effort legend: **S** < 1 day, **M** = 1–3 days, **L** = 1–2 weeks,
 **XL** > 2 weeks — including companion `.test.rs` files and insta snapshots
@@ -38,6 +46,26 @@ source (all confirmed).
 
 Outcome: **57 confirmed work items, 5 rejected candidates.** This document
 turns the confirmed items into implementation designs.
+
+### 1.1 2026-08-01 upstream refresh
+
+The grok reference was fast-forwarded from `c68e39f` to `dd04f39` before a
+second TUI-focused comparison. The upstream interval is large (1,360 files
+under `crates/codegen`), so the review followed changed TUI modules and then
+checked each candidate against coco's current architecture instead of treating
+new code as automatically portable.
+
+| Upstream addition | coco decision |
+| --- | --- |
+| Settings registry and modal split into state/input/render | **Adopt the design, not the implementation.** G2 phase 1 now uses a closed typed registry, searchable flat list, live values, and action dispatch through coco's existing modal/update seams. Keep kind-specific persistence as later phases. |
+| `wrap_filter` / `wrap_restore` for the `grok wrap` process | **Do not port.** coco does not ship an equivalent wrapper process; its direct TUI already has the mode ledger, crash restoration, and suspend/resume coverage from A4–A6. |
+| DA2, XTVERSION, tmux, and terminal-version probes | **Defer exact-version probes.** coco already builds one typed capability snapshot at startup. Extra terminal I/O and tmux subprocess probes should be added only when a concrete behavior consumes their result; a diagnostics command remains a possible follow-up. |
+| Generic textarea `Editor` and `input/line_editor` | **Do not port.** coco's `TextArea` plus TEA command routing already has one input owner; another editor facade would duplicate state and event semantics. |
+| Workflow overlay and workflow transcript blocks | **Already covered at the product seam.** coco has workflow picker/detail surfaces; grok's owned-scrollback block is incompatible with native scrollback. |
+| Tutorial, privacy banner, and welcome toasts | **Keep under F4.** These are useful onboarding references but require coco-specific product copy and policy decisions, not a mechanical TUI port. |
+| Expanded PTY scenarios and resize benchmark | **Carry into A7.** The test patterns are useful; their alt-screen assertions must be rewritten around coco's native-scrollback engine. |
+| Headless message reducer | **Out of this TUI port.** coco's app-server boundary already owns transport separation; copying a second reducer into `app/tui` would blur ownership. |
+| Empty-Enter plan prompt regression tests | **Already present.** `confirm_with_empty_no_feedback_keeps_exit_plan_prompt_open` pins the same behavior in coco. |
 
 ---
 
@@ -1374,6 +1402,17 @@ exists anywhere.
 Phase: registry + read-only browse/search first (M) — it is immediately
 useful as documentation — then editors per kind.
 
+**Implementation status (2026-08-01): phase 1 complete.** The first slice is
+deliberately smaller than the original XL design: one typed registry in
+`app/tui`, searchable localized presentation, current runtime values, and
+closed `SettingAction` dispatch. Theme, syntax highlighting, and copy behavior
+reuse existing update paths; every registered key carries source provenance so
+user writes are blocked when project/local/flag/policy settings win. Theme
+editing is a transactional child flow that preserves the Settings filter and
+selection, rolls runtime state back on persistence failure, and survives modal
+preemption. Other rows are explicitly read-only and point to their canonical
+config keys. Persistence and generic editors are not smuggled into this slice.
+
 ### G3. Terminal brand/capability model (slim) — ROI medium, M
 
 **Problem (verified, overstated by the original candidate).** Detection is
@@ -1519,7 +1558,8 @@ phase 1, complete) → B5 (memory trace, complete) → E4 (expand ring, complete
 (title/progress) → F7 (tips) → F3 (project picker).
 
 **Phase 4 — strategic (design review before code):**
-G2 (settings registry/modal) → G1 (effects-as-data, rolling) → A7 (PTY
+G2 phase 1 (settings registry/search, complete; editors remain) → G1
+(effects-as-data, rolling) → A7 (PTY
 harness, grows throughout) → E5 (subagent views) → F4
 (welcome) → F5 (crash reports) → G7 (fleet dashboard) → G8 (hunk tracking).
 

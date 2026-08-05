@@ -11,8 +11,46 @@ use crate::state::PermissionDetail;
 use crate::state::PermissionPromptState;
 use crate::state::PermissionsEditorState;
 use crate::state::SlashCommandName;
+use crate::state::ThemePickerOrigin;
+use crate::state::ThemePickerState;
+use crate::theme::ThemeConfig;
+use crate::theme::ThemeDefinition;
+use crate::theme::ThemeRuntimeState;
+use crate::theme::ThemeSetting;
 use coco_types::PermissionsEditorPayload;
 use pretty_assertions::assert_eq;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+fn custom_theme_runtime(id: &str) -> ThemeRuntimeState {
+    ThemeRuntimeState::from_config(
+        PathBuf::from("theme.json"),
+        ThemeConfig {
+            active: ThemeSetting::Named(id.to_string()),
+            themes: BTreeMap::from([(
+                id.to_string(),
+                ThemeDefinition {
+                    extends: Some("dark".to_string()),
+                    ..ThemeDefinition::default()
+                },
+            )]),
+            ..ThemeConfig::default()
+        },
+    )
+    .expect("custom theme runtime")
+}
+
+fn picker_for(runtime: &ThemeRuntimeState) -> ThemePickerState {
+    ThemePickerState {
+        selected: runtime
+            .choices
+            .iter()
+            .position(|choice| choice.setting == runtime.setting)
+            .expect("active theme is a choice") as i32,
+        original_setting: runtime.setting.clone(),
+        origin: ThemePickerOrigin::Standalone,
+    }
+}
 
 #[test]
 fn prompt_mode_from_empty_is_normal() {
@@ -258,6 +296,63 @@ fn finish_taken_modal_clears_modal_state() {
     assert!(ui.modal.is_none());
     assert!(ui.interaction.active_prompt.is_none());
     assert!(!ui.has_blocking_interaction());
+}
+
+#[test]
+fn theme_reload_rebases_active_picker_to_the_live_registry() {
+    let old_runtime = custom_theme_runtime("ocean");
+    let picker = picker_for(&old_runtime);
+    let mut ui = UiState::new();
+    ui.apply_theme_runtime(old_runtime);
+    ui.show_modal(ModalState::ThemePicker(picker));
+    let next_runtime = ThemeRuntimeState::default();
+
+    ui.apply_theme_reload(next_runtime.clone());
+
+    assert_eq!(ui.theme_state.setting, next_runtime.setting);
+    assert!(
+        !ui.theme_state
+            .choices
+            .iter()
+            .any(|choice| choice.id == "ocean")
+    );
+    let Some(ModalState::ThemePicker(picker)) = ui.modal.as_ref() else {
+        panic!("theme picker should remain active")
+    };
+    assert_eq!(picker.original_setting, next_runtime.setting);
+    assert_eq!(
+        ui.theme_state
+            .choices
+            .get(picker.selected as usize)
+            .map(|choice| &choice.setting),
+        Some(&next_runtime.setting)
+    );
+}
+
+#[test]
+fn theme_reload_rebases_preempted_picker_in_the_modal_queue() {
+    let old_runtime = custom_theme_runtime("ocean");
+    let picker = picker_for(&old_runtime);
+    let mut ui = UiState::new();
+    ui.apply_theme_runtime(old_runtime);
+    ui.show_modal(ModalState::ThemePicker(picker));
+    ui.show_modal(ModalState::Error("interruption".to_string()));
+    let next_runtime = ThemeRuntimeState::default();
+
+    ui.apply_theme_reload(next_runtime.clone());
+    ui.dismiss_modal();
+
+    let Some(ModalState::ThemePicker(picker)) = ui.modal.as_ref() else {
+        panic!("queued theme picker should be restored")
+    };
+    assert_eq!(picker.original_setting, next_runtime.setting);
+    assert_eq!(
+        ui.theme_state
+            .choices
+            .get(picker.selected as usize)
+            .map(|choice| &choice.setting),
+        Some(&next_runtime.setting)
+    );
 }
 
 #[test]

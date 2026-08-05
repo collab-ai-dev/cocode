@@ -1,6 +1,7 @@
 use ratatui::text::Line;
 
 use super::theme_picker_lines;
+use crate::state::ThemePickerOrigin;
 use crate::state::ThemePickerState;
 use crate::theme::ThemeChoice;
 use crate::theme::ThemeSetting;
@@ -12,7 +13,7 @@ fn line_text(line: &Line<'_>) -> String {
     line.spans.iter().map(|s| s.content.as_ref()).collect()
 }
 
-fn fixture() -> ThemePickerState {
+fn fixture() -> (ThemePickerState, Vec<ThemeChoice>) {
     let choices = vec![
         ThemeChoice {
             setting: ThemeSetting::Auto,
@@ -25,19 +26,22 @@ fn fixture() -> ThemePickerState {
             label: "Dark mode".to_string(),
         },
     ];
-    ThemePickerState {
+    (
+        ThemePickerState {
+            selected: 1,
+            original_setting: ThemeSetting::Named("dark".to_string()),
+            origin: ThemePickerOrigin::Standalone,
+        },
         choices,
-        selected: 1,
-        original_setting: ThemeSetting::Named("dark".to_string()),
-    }
+    )
 }
 
 #[test]
 fn renders_numbered_list_cursor_diff_and_footer() {
-    let picker = fixture();
+    let (picker, choices) = fixture();
     let theme = Theme::default();
     let styles = UiStyles::new(&theme);
-    let lines = theme_picker_lines(&picker, SyntaxHighlighting::Full, styles, 60, 12);
+    let lines = theme_picker_lines(&picker, &choices, SyntaxHighlighting::Full, styles, 60, 12);
     let joined: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
     // Friendly labels + numbering from the reusable list.
@@ -65,10 +69,10 @@ fn renders_numbered_list_cursor_diff_and_footer() {
 
 #[test]
 fn unsaved_themes_have_no_active_marker() {
-    let picker = fixture();
+    let (picker, choices) = fixture();
     let theme = Theme::default();
     let styles = UiStyles::new(&theme);
-    let lines = theme_picker_lines(&picker, SyntaxHighlighting::Off, styles, 60, 12);
+    let lines = theme_picker_lines(&picker, &choices, SyntaxHighlighting::Off, styles, 60, 12);
     let auto_row = lines
         .iter()
         .map(line_text)

@@ -180,11 +180,6 @@ pub enum KeybindingAction {
     // ── Permission dialog ────────────────────────────────────────────
     PermissionToggleDebug,
 
-    // ── Settings ─────────────────────────────────────────────────────
-    SettingsSearch,
-    SettingsRetry,
-    SettingsClose,
-
     // ── Voice (feature-gated `VOICE_MODE`) ───────────────────────────
     VoicePushToTalk,
 
@@ -338,10 +333,6 @@ impl KeybindingAction {
             Self::PluginInstall => Cow::Borrowed("plugin:install"),
 
             Self::PermissionToggleDebug => Cow::Borrowed("permission:toggleDebug"),
-
-            Self::SettingsSearch => Cow::Borrowed("settings:search"),
-            Self::SettingsRetry => Cow::Borrowed("settings:retry"),
-            Self::SettingsClose => Cow::Borrowed("settings:close"),
 
             Self::VoicePushToTalk => Cow::Borrowed("voice:pushToTalk"),
 
@@ -554,10 +545,6 @@ impl FromStr for KeybindingAction {
             "plugin:install" => Self::PluginInstall,
 
             "permission:toggleDebug" => Self::PermissionToggleDebug,
-
-            "settings:search" => Self::SettingsSearch,
-            "settings:retry" => Self::SettingsRetry,
-            "settings:close" => Self::SettingsClose,
 
             "voice:pushToTalk" => Self::VoicePushToTalk,
 

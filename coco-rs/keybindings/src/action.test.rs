@@ -25,7 +25,6 @@ fn parse_known_actions_round_trip() {
         "select:accept",
         "plugin:toggle",
         "permission:toggleDebug",
-        "settings:close",
         "voice:pushToTalk",
         "scroll:pageUp",
         "selection:copy",

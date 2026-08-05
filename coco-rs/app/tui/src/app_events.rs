@@ -123,7 +123,7 @@ pub(super) fn apply_theme_reload(
         state.ui.add_toast(crate::state::ui::Toast::warning(error));
         return true;
     }
-    state.ui.apply_theme_runtime(result.state);
+    state.ui.apply_theme_reload(result.state);
     true
 }
 

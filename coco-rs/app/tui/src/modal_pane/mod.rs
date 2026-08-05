@@ -10,6 +10,7 @@ pub(crate) mod model_picker;
 pub(crate) mod permissions_editor;
 pub(crate) mod settings;
 pub(crate) mod team_roster;
+pub(crate) mod theme_picker;
 
 use coco_types::PermissionMode;
 use crossterm::event::KeyCode;
@@ -252,8 +253,8 @@ fn picker_dismiss(modal: &ModalState) -> Option<PickerDismiss> {
             message: "Workflow picker dismissed",
         },
         M::Settings(_) => Slash {
-            name: "status",
-            message: "Status dialog dismissed",
+            name: "config",
+            message: "Settings dialog dismissed",
         },
         M::DiffView(_) => Slash {
             name: "diff",
@@ -305,17 +306,22 @@ fn picker_dismiss(modal: &ModalState) -> Option<PickerDismiss> {
     })
 }
 
-/// Close the active modal and surface its dismiss feedback. Shared by both Esc
-/// routes: `TuiCommand::Cancel` and `TuiCommand::Deny` — the theme picker and
-/// settings reuse the Settings keybinding context, whose Esc resolves to `Deny`
-/// (`interaction::deny`), so the close logic must live in one place reachable
-/// from both. Restores the theme picker's live preview before closing.
+/// Close the active modal and surface its dismiss feedback. Restores the theme
+/// picker's live preview before closing; a picker opened from Settings returns
+/// to its parent without emitting a synthetic `/theme` transcript entry.
 pub(crate) async fn close_modal_with_feedback(
     state: &mut AppState,
     command_tx: &mpsc::Sender<UserCommand>,
 ) {
     // Theme picker: Esc cancels the live preview by restoring the theme that was
     // active when the picker opened. Read `original_setting` before the take.
+    let settings_parent = match state.ui.modal.as_ref() {
+        Some(ModalState::ThemePicker(p)) => match &p.origin {
+            crate::state::ThemePickerOrigin::Standalone => None,
+            crate::state::ThemePickerOrigin::Settings(settings) => Some((**settings).clone()),
+        },
+        _ => None,
+    };
     if let Some(ModalState::ThemePicker(p)) = state.ui.modal.as_ref() {
         let original = p.original_setting.clone();
         if let Err(err) = state.ui.apply_theme_setting(original) {
@@ -323,6 +329,10 @@ pub(crate) async fn close_modal_with_feedback(
                 error = %err,
                 "theme picker: failed to restore original theme on cancel"
             );
+            state.ui.add_toast(Toast::error(
+                t!("toast.theme_restore_failed", error = err.to_string()).to_string(),
+            ));
+            return;
         }
     }
     // Plugin-hint Esc dismissal is treated as "no": record show-once
@@ -331,7 +341,15 @@ pub(crate) async fn close_modal_with_feedback(
         coco_plugins::mark_hint_plugin_shown(&ph.plugin_id);
     }
     // Capture the dismiss feedback before the modal is taken, emit after close.
-    let dismiss = state.ui.modal.as_ref().and_then(picker_dismiss);
+    let dismiss = settings_parent
+        .is_none()
+        .then(|| state.ui.modal.as_ref().and_then(picker_dismiss))
+        .flatten();
+    if let Some(settings) = settings_parent {
+        state.ui.take_modal();
+        state.ui.show_modal(ModalState::Settings(settings));
+        return;
+    }
     state.ui.dismiss_modal();
     match dismiss {
         Some(PickerDismiss::Slash { name, message }) => {
@@ -388,6 +406,7 @@ pub(crate) fn filter(state: &mut AppState, c: char) {
             w.filter.push(c);
             w.selected = 0;
         }
+        Some(ModalState::Settings(settings)) => settings.insert_filter(c),
         _ => {}
     }
 }
@@ -418,20 +437,21 @@ pub(crate) fn filter_backspace(state: &mut AppState) {
             w.filter.pop();
             w.selected = 0;
         }
+        Some(ModalState::Settings(settings)) => settings.filter_backspace(),
         _ => {}
     }
 }
 
 pub(crate) fn nav(state: &mut AppState, delta: i32) {
     let mut theme_preview: Option<crate::theme::ThemeSetting> = None;
+    let theme_choices = &state.ui.theme_state.choices;
     match state.ui.modal.as_mut() {
         Some(ModalState::ThemePicker(p)) => {
-            let count = p.choices.len() as i32;
+            let count = theme_choices.len() as i32;
             let prev = p.selected;
             p.selected = (p.selected + delta).clamp(0, (count - 1).max(0));
             if p.selected != prev {
-                theme_preview = p
-                    .choices
+                theme_preview = theme_choices
                     .get(p.selected as usize)
                     .map(|c| c.setting.clone());
             }
@@ -614,37 +634,7 @@ pub(crate) async fn route_confirm(
             }
             state.ui.finish_taken_modal();
         }
-        ModalState::ThemePicker(p) => {
-            if let Some(choice) = p.choices.get(p.selected.max(0) as usize).cloned() {
-                match state.ui.apply_theme_setting(choice.setting.clone()) {
-                    Ok(()) => match crate::theme::save_theme_setting(&choice.setting) {
-                        Ok(_path) => {
-                            let entry = SlashTranscriptEntry::Result {
-                                name: "theme".to_string(),
-                                args: String::new(),
-                                text: format!("Theme set to {}", choice.label),
-                                is_error: false,
-                            };
-                            if let Some(session_id) = state.active_session_id() {
-                                let _ = command_tx
-                                    .send(crate::command::UserCommand::PushSlashResult {
-                                        session_id,
-                                        entry,
-                                    })
-                                    .await;
-                            }
-                        }
-                        Err(err) => state.ui.add_toast(crate::state::ui::Toast::error(format!(
-                            "Failed to save theme: {err}"
-                        ))),
-                    },
-                    Err(err) => state.ui.add_toast(crate::state::ui::Toast::error(format!(
-                        "Failed to apply theme: {err}"
-                    ))),
-                }
-            }
-            state.ui.finish_taken_modal();
-        }
+        ModalState::ThemePicker(p) => theme_picker::confirm(state, p, command_tx).await,
         ModalState::Settings(s) => {
             settings::confirm(state, s);
         }

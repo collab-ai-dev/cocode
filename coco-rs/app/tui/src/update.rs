@@ -546,9 +546,7 @@ pub async fn handle_command(
                 return true; // phase-back; keep state
             }
             // Every picker reports its own dismissal to the transcript on
-            // close. The theme picker / settings route Esc through `Deny`
-            // instead, so the shared helper also runs there
-            // (`interaction::deny`).
+            // close. Nested editors may instead return to their parent modal.
             if state.ui.modal.is_some() {
                 crate::modal_pane::close_modal_with_feedback(state, command_tx).await;
             } else if state.has_active_surface() {
@@ -1028,14 +1026,9 @@ pub async fn handle_command(
             crate::modal_pane::settings::toggle_syntax_highlighting(state);
             true
         }
-        TuiCommand::SettingsNextTab => {
-            // Tab cycles between contexts depending on the active state.
-            // Settings state → next tab. Question state → cycle focus
-            // (questions → footer items). ModelPicker → cycle the
-            // role pill. Other surfaces ignore Tab.
-            if let Some(ModalState::Settings(s)) = state.ui.modal.as_mut() {
-                s.next_tab();
-            } else if matches!(
+        TuiCommand::TabsNext => {
+            // Tab cycles question/footer focus or the model picker's role pill.
+            if matches!(
                 state.ui.interaction.active_prompt,
                 Some(PanePromptState::Question(_))
             ) {
@@ -1045,10 +1038,8 @@ pub async fn handle_command(
             }
             true
         }
-        TuiCommand::SettingsPrevTab => {
-            if let Some(ModalState::Settings(s)) = state.ui.modal.as_mut() {
-                s.prev_tab();
-            } else if matches!(
+        TuiCommand::TabsPrevious => {
+            if matches!(
                 state.ui.interaction.active_prompt,
                 Some(PanePromptState::Question(_))
             ) {

@@ -91,6 +91,26 @@ fn classifier_prompt(request_id: &str) -> PermissionPromptState {
     }
 }
 
+#[tokio::test]
+async fn settings_paste_updates_filter_without_touching_composer() {
+    let (mut app, _event_tx) = test_app(false);
+    app.state.ui.input.set_text("draft");
+    app.state.ui.show_modal(crate::state::ModalState::Settings(
+        crate::widgets::settings_panel::SettingsPanelState::default(),
+    ));
+
+    assert!(
+        app.handle_event(TuiEvent::Paste("语法\n高亮".to_string()))
+            .await
+    );
+
+    assert_eq!(app.state.ui.input.text(), "draft");
+    let Some(crate::state::ModalState::Settings(settings)) = app.state.ui.modal.as_ref() else {
+        panic!("settings modal should remain active")
+    };
+    assert_eq!(settings.filter, "语法高亮");
+}
+
 #[test]
 fn classifier_denied_toast_includes_reason_and_permissions_hint() {
     let mut state = AppState::new();

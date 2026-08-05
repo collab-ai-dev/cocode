@@ -1,12 +1,47 @@
 //! `/keybindings-help` — customize keyboard shortcuts.
-//! Reference tables are static snapshots of the keybindings crate; a live generator is deferred.
+
+use std::collections::BTreeMap;
 
 pub fn prompt() -> String {
     let keybindings_path = format!(
         "~/{}/keybindings.json",
         coco_utils_common::COCO_CONFIG_DIR_NAME
     );
-    TEMPLATE.replace("__KEYBINDINGS_PATH__", &keybindings_path)
+    TEMPLATE
+        .replace("__KEYBINDINGS_PATH__", &keybindings_path)
+        .replace("__AVAILABLE_CONTEXTS__", &available_contexts_table())
+        .replace("__DEFAULT_BINDINGS__", &default_bindings_table())
+}
+
+fn available_contexts_table() -> String {
+    coco_keybindings::KeybindingContext::ALL_USER
+        .iter()
+        .map(|context| format!("| `{context}` | {} |", context.description()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn default_bindings_table() -> String {
+    let mut rows = Vec::new();
+    for block in coco_keybindings::defaults::default_blocks()
+        .into_iter()
+        .filter(|block| block.context.is_user_rebindable())
+    {
+        let mut chords_by_action: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (chord, action) in block.bindings {
+            let Some(action) = action else {
+                continue;
+            };
+            chords_by_action
+                .entry(action.to_string())
+                .or_default()
+                .push(format!("`{chord}`"));
+        }
+        rows.extend(chords_by_action.into_iter().map(|(action, chords)| {
+            format!("| `{action}` | {} | {} |", chords.join(", "), block.context)
+        }));
+    }
+    rows.join("\n")
 }
 
 const TEMPLATE: &str = r#"# Keybindings Skill
@@ -139,24 +174,7 @@ After editing `__KEYBINDINGS_PATH__`, re-read the file and confirm:
 
 | Context | Description |
 | --- | --- |
-| `Global` | Active everywhere, regardless of focus |
-| `Chat` | When the chat input is focused |
-| `Autocomplete` | When autocomplete menu is visible |
-| `Confirmation` | When a confirmation/permission dialog is shown |
-| `Help` | When the help overlay is open |
-| `Transcript` | When viewing the transcript |
-| `HistorySearch` | When searching command history (ctrl+r) |
-| `Task` | When a task/agent is running in the foreground |
-| `ThemePicker` | When the theme picker is open |
-| `Settings` | When the settings menu is open |
-| `Tabs` | When tab navigation is active |
-| `Attachments` | When navigating image attachments in a select dialog |
-| `Footer` | When footer indicators are focused |
-| `MessageSelector` | When the message selector (rewind) is open |
-| `DiffDialog` | When the diff dialog is open |
-| `ModelPicker` | When the model picker is open |
-| `Select` | When a select/list component is focused |
-| `Plugin` | When the plugin dialog is open |
+__AVAILABLE_CONTEXTS__
 
 (The internal `Scroll` and `MessageActions` contexts are not user-rebindable and are omitted.)
 
@@ -166,96 +184,9 @@ The table below lists the actions that ship with a default binding, along with t
 
 | Action | Default Key(s) | Context |
 | --- | --- | --- |
-| `app:interrupt` | `ctrl+c` | Global |
-| `app:exit` | `ctrl+d` | Global |
-| `app:redraw` | `ctrl+l` | Global |
-| `app:toggleTodos` | `ctrl+t` | Global |
-| `app:toggleTranscript` | `ctrl+o` | Global |
-| `app:toggleTeammatePreview` | `ctrl+shift+o` | Global |
-| `app:toggleTeamRoster` | `ctrl+shift+t` | Global |
-| `history:search` | `ctrl+r` | Global |
-| `app:globalSearch` | `ctrl+shift+f` | Global |
-| `app:quickOpen` | `ctrl+shift+p` | Global |
-| `app:forceQuit` | `ctrl+q` | Global |
-| `app:help` | `f1` | Global |
-| `chat:cancel` | `escape` | Chat |
-| `chat:killAgents` | `ctrl+x ctrl+k`, `ctrl+f` | Chat |
-| `chat:cycleMode` | `shift+tab` | Chat |
-| `chat:modelPicker` | `meta+p`, `ctrl+m` | Chat |
-| `chat:fastMode` | `meta+o` | Chat |
-| `chat:thinkingToggle` | `f2` | Chat |
-| `chat:cycleThinking` | `ctrl+y` | Chat |
-| `chat:submit` | `enter` | Chat |
-| `history:previous` | `up` | Chat |
-| `history:next` | `down` | Chat |
-| `chat:undo` | `ctrl+_`, `ctrl+shift+-` | Chat |
-| `chat:externalEditor` | `ctrl+x ctrl+e`, `ctrl+g` | Chat |
-| `chat:stash` | `ctrl+s` | Chat |
-| `chat:imagePaste` | `ctrl+v`, `alt+v` | Chat |
-| `app:commandPalette` | `ctrl+p` | Chat |
-| `app:settings` | `ctrl+,` | Chat |
-| `app:sessionBrowser` | `ctrl+s` | Chat |
-| `app:planEditor` | `ctrl+g` | Chat |
-| `chat:toggleSystemReminders` | `ctrl+shift+r` | Chat |
-| `chat:togglePlanMode` | `tab` | Chat |
-| `autocomplete:accept` | `tab` | Autocomplete |
-| `autocomplete:dismiss` | `escape` | Autocomplete |
-| `autocomplete:previous` | `up` | Autocomplete |
-| `autocomplete:next` | `down` | Autocomplete |
-| `confirm:no` | `escape`, `n` | Settings, Confirmation |
-| `select:previous` | `up`, `k`, `ctrl+p` | Settings, Select |
-| `select:next` | `down`, `j`, `ctrl+n` | Settings, Select |
-| `select:accept` | `space`, `enter` | Settings, Select |
-| `settings:close` | `enter` | Settings |
-| `settings:search` | `/` | Settings |
-| `settings:retry` | `r` | Settings |
-| `confirm:yes` | `y` | Confirmation |
-| `confirm:toggle` | `enter`, `space` | Confirmation |
-| `confirm:previous` | `up` | Confirmation |
-| `confirm:next` | `down` | Confirmation |
-| `confirm:nextField` | `tab` | Confirmation |
-| `confirm:cycleMode` | `shift+tab` | Confirmation |
-| `confirm:toggleExplanation` | `ctrl+e` | Confirmation |
-| `permission:toggleDebug` | `ctrl+d` | Confirmation |
-| `tabs:next` | `tab`, `right` | Tabs |
-| `tabs:previous` | `shift+tab`, `left` | Tabs |
-| `transcript:exit` | `ctrl+c`, `escape`, `q` | Transcript |
-| `historySearch:next` | `ctrl+r` | HistorySearch |
-| `historySearch:accept` | `escape`, `tab` | HistorySearch |
-| `historySearch:cancel` | `ctrl+c` | HistorySearch |
-| `historySearch:execute` | `enter` | HistorySearch |
-| `task:background` | `ctrl+b` | Task |
-| `theme:toggleSyntaxHighlighting` | `ctrl+t` | ThemePicker |
-| `scroll:pageUp` | `pageup` | Scroll |
-| `scroll:pageDown` | `pagedown` | Scroll |
-| `scroll:top` | `ctrl+home` | Scroll |
-| `scroll:bottom` | `ctrl+end` | Scroll |
-| `selection:copy` | `ctrl+shift+c`, `cmd+c` | Scroll |
-| `help:dismiss` | `escape` | Help |
-| `attachments:next` | `right` | Attachments |
-| `attachments:previous` | `left` | Attachments |
-| `attachments:remove` | `backspace`, `delete` | Attachments |
-| `attachments:exit` | `down`, `escape` | Attachments |
-| `footer:up` | `up`, `ctrl+p` | Footer |
-| `footer:down` | `down`, `ctrl+n` | Footer |
-| `footer:next` | `right` | Footer |
-| `footer:previous` | `left` | Footer |
-| `footer:openSelected` | `enter` | Footer |
-| `footer:clearSelection` | `escape` | Footer |
-| `messageSelector:up` | `up`, `k`, `ctrl+p` | MessageSelector |
-| `messageSelector:down` | `down`, `j`, `ctrl+n` | MessageSelector |
-| `messageSelector:top` | `ctrl+up`, `shift+up`, `meta+up`, `shift+k` | MessageSelector |
-| `messageSelector:bottom` | `ctrl+down`, `shift+down`, `meta+down`, `shift+j` | MessageSelector |
-| `messageSelector:select` | `enter` | MessageSelector |
-| `diff:dismiss` | `escape` | DiffDialog |
-| `diff:previousSource` | `left` | DiffDialog |
-| `diff:nextSource` | `right` | DiffDialog |
-| `diff:previousFile` | `up` | DiffDialog |
-| `diff:nextFile` | `down` | DiffDialog |
-| `diff:viewDetails` | `enter` | DiffDialog |
-| `modelPicker:decreaseEffort` | `left` | ModelPicker |
-| `modelPicker:increaseEffort` | `right` | ModelPicker |
-| `select:cancel` | `escape` | Select |
-| `plugin:toggle` | `space` | Plugin |
-| `plugin:install` | `i` | Plugin |
+__DEFAULT_BINDINGS__
 "#;
+
+#[cfg(test)]
+#[path = "keybindings.test.rs"]
+mod tests;
