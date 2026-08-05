@@ -442,7 +442,7 @@ impl QueryEngine {
         });
         let estimated_tokens = estimate_query_input_tokens(params);
         let estimated_tokens = estimated_tokens.saturating_sub(
-            context_management_minimum_clearance(params, estimated_tokens),
+            context_management_guaranteed_clearance(params, estimated_tokens),
         );
 
         self.blocking_limit_decision(
@@ -472,23 +472,7 @@ impl QueryEngine {
         active_snapshot: &ModelRuntimeSnapshot,
         hard_cap_bytes: usize,
     ) -> usize {
-        let Some(model_info) = active_snapshot.model_info.as_ref() else {
-            return 0;
-        };
-        let reserved_output = params
-            .max_tokens
-            .filter(|value| *value > 0)
-            .unwrap_or_else(|| i64::from(model_info.max_output_tokens));
-        let remaining_tokens = i64::from(model_info.context_window)
-            .saturating_sub(reserved_output)
-            .saturating_sub(estimate_query_input_tokens(params))
-            // Role/envelope allowance for the optional user message.
-            .saturating_sub(4)
-            .max(0);
-        usize::try_from(remaining_tokens)
-            .unwrap_or(usize::MAX)
-            .saturating_mul(4)
-            .min(hard_cap_bytes)
+        optional_text_context_budget_for_snapshot(params, active_snapshot, hard_cap_bytes)
     }
 
     fn blocking_limit_decision(
@@ -1231,7 +1215,31 @@ impl QueryEngine {
     }
 }
 
-fn context_management_minimum_clearance(
+pub(crate) fn optional_text_context_budget_for_snapshot(
+    params: &coco_inference::QueryParams,
+    active_snapshot: &ModelRuntimeSnapshot,
+    hard_cap_bytes: usize,
+) -> usize {
+    let Some(model_info) = active_snapshot.model_info.as_ref() else {
+        return 0;
+    };
+    let reserved_output = params
+        .max_tokens
+        .filter(|value| *value > 0)
+        .unwrap_or_else(|| i64::from(model_info.max_output_tokens));
+    let remaining_tokens = i64::from(model_info.context_window)
+        .saturating_sub(reserved_output)
+        .saturating_sub(estimate_query_input_tokens(params))
+        // Role/envelope allowance for the optional user message.
+        .saturating_sub(4)
+        .max(0);
+    usize::try_from(remaining_tokens)
+        .unwrap_or(usize::MAX)
+        .saturating_mul(4)
+        .min(hard_cap_bytes)
+}
+
+fn context_management_guaranteed_clearance(
     params: &coco_inference::QueryParams,
     estimated_tokens: i64,
 ) -> i64 {
@@ -1251,13 +1259,62 @@ fn context_management_minimum_clearance(
             })
         })
         .filter_map(|edit| {
-            edit.get("clearAtLeast")
+            if edit.get("type").and_then(serde_json::Value::as_str)
+                != Some("clear_tool_uses_20250919")
+            {
+                return None;
+            }
+            let declared = edit
+                .get("clearAtLeast")
                 .and_then(|value| value.get("value"))
-                .and_then(serde_json::Value::as_i64)
+                .and_then(serde_json::Value::as_i64)?
+                .max(0);
+            let eligible = eligible_tool_result_tokens(&params.prompt, edit);
+            (eligible >= declared).then_some(declared)
         })
         .max()
         .unwrap_or(0)
         .max(0)
+}
+
+fn eligible_tool_result_tokens(
+    prompt: &[coco_messages::LlmMessage],
+    edit: &serde_json::Value,
+) -> i64 {
+    let keep = edit
+        .get("keep")
+        .and_then(|value| value.get("value"))
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(3)
+        .max(0);
+    let keep = usize::try_from(keep).unwrap_or(usize::MAX);
+    let excluded: std::collections::HashSet<&str> = edit
+        .get("excludeTools")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    let mut results = prompt
+        .iter()
+        .filter_map(|message| match message {
+            coco_messages::LlmMessage::Tool { content, .. } => Some(content),
+            _ => None,
+        })
+        .flat_map(|content| content.iter())
+        .filter_map(|part| match part {
+            coco_messages::ToolContent::ToolResult(result)
+                if !excluded.contains(result.tool_name.as_str()) =>
+            {
+                Some(coco_messages::estimate_tool_result_output_tokens(
+                    &result.output,
+                ))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let clearable = results.len().saturating_sub(keep);
+    results.drain(..clearable).fold(0_i64, i64::saturating_add)
 }
 
 fn estimate_query_input_tokens(params: &coco_inference::QueryParams) -> i64 {

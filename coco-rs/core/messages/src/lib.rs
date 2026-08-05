@@ -99,4 +99,5 @@ pub use token_estimation::estimate_tokens_for_messages;
 pub use token_estimation::estimate_tokens_for_messages_conservative;
 pub use token_estimation::estimate_tokens_for_prompt;
 pub use token_estimation::estimate_tool_result_message_tokens;
+pub use token_estimation::estimate_tool_result_output_tokens;
 pub use token_estimation::is_over_threshold;

@@ -1360,7 +1360,7 @@ async fn execute_command_hook(
         return Ok(empty_command_output());
     };
     if let Some(process_group) = process_group.as_mut() {
-        process_group.disarm();
+        let _ = process_group.kill();
     }
     let exit_code = status.code().unwrap_or(-1);
     if !status.success() {

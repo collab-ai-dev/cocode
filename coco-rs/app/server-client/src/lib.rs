@@ -11,7 +11,7 @@ mod remote_transport;
 
 pub use remote_demux::{
     RemoteDemuxDisconnectReason, RemoteEventDemux, RemoteJsonRpcEvent, RemoteOwnedSessionStream,
-    RemoteSessionStream,
+    RemoteSessionLag, RemoteSessionStream,
 };
 #[cfg(windows)]
 pub use remote_transport::RemoteNdjsonNamedPipeConnection;
@@ -70,8 +70,9 @@ const MAX_BUFFERED_CONNECTION_QUEUE: usize = 1024;
 /// Cap on a single session's buffered events/lifecycle. Unlike the connection
 /// queues this does NOT drop-oldest: an event stream is ordered (dropping loses
 /// continuity) and lifecycle drops desync session state, so overflow means the
-/// caller is not draining a session it subscribed to — a slow consumer — and the
-/// demux disconnects (the caller reconnects and re-snapshots).
+/// caller is not draining a session it subscribed to. Only that session is
+/// marked lagged; it must resubscribe and re-snapshot while the shared
+/// connection and unrelated sessions remain usable.
 const MAX_BUFFERED_SESSION_QUEUE: usize = 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -934,25 +935,31 @@ impl RemoteSessionClient {
         demux.into_session_stream(self.session_id.clone())
     }
 
-    pub fn try_next_event(&self, demux: &mut RemoteEventDemux) -> Option<SessionEnvelope> {
+    pub fn try_next_event(
+        &self,
+        demux: &mut RemoteEventDemux,
+    ) -> Result<Option<SessionEnvelope>, RemoteSessionLag> {
         demux.try_next_session_event(&self.session_id)
     }
 
-    pub async fn next_event(&self, demux: &mut RemoteEventDemux) -> Option<SessionEnvelope> {
+    pub async fn next_event(
+        &self,
+        demux: &mut RemoteEventDemux,
+    ) -> Result<Option<SessionEnvelope>, RemoteSessionLag> {
         demux.next_session_event(&self.session_id).await
     }
 
     pub fn try_next_lifecycle(
         &self,
         demux: &mut RemoteEventDemux,
-    ) -> Option<SessionLifecycleEffect> {
+    ) -> Result<Option<SessionLifecycleEffect>, RemoteSessionLag> {
         demux.try_next_lifecycle(&self.session_id)
     }
 
     pub async fn next_lifecycle(
         &self,
         demux: &mut RemoteEventDemux,
-    ) -> Option<SessionLifecycleEffect> {
+    ) -> Result<Option<SessionLifecycleEffect>, RemoteSessionLag> {
         demux.next_lifecycle(&self.session_id).await
     }
 
@@ -1228,25 +1235,31 @@ impl RemoteReadOnlySessionClient {
         demux.into_session_stream(self.session_id.clone())
     }
 
-    pub fn try_next_event(&self, demux: &mut RemoteEventDemux) -> Option<SessionEnvelope> {
+    pub fn try_next_event(
+        &self,
+        demux: &mut RemoteEventDemux,
+    ) -> Result<Option<SessionEnvelope>, RemoteSessionLag> {
         demux.try_next_session_event(&self.session_id)
     }
 
-    pub async fn next_event(&self, demux: &mut RemoteEventDemux) -> Option<SessionEnvelope> {
+    pub async fn next_event(
+        &self,
+        demux: &mut RemoteEventDemux,
+    ) -> Result<Option<SessionEnvelope>, RemoteSessionLag> {
         demux.next_session_event(&self.session_id).await
     }
 
     pub fn try_next_lifecycle(
         &self,
         demux: &mut RemoteEventDemux,
-    ) -> Option<SessionLifecycleEffect> {
+    ) -> Result<Option<SessionLifecycleEffect>, RemoteSessionLag> {
         demux.try_next_lifecycle(&self.session_id)
     }
 
     pub async fn next_lifecycle(
         &self,
         demux: &mut RemoteEventDemux,
-    ) -> Option<SessionLifecycleEffect> {
+    ) -> Result<Option<SessionLifecycleEffect>, RemoteSessionLag> {
         demux.next_lifecycle(&self.session_id).await
     }
 

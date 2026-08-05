@@ -576,6 +576,29 @@ async fn command_hook_timeout_kills_descendants() {
 }
 
 #[tokio::test]
+#[cfg(unix)]
+async fn successful_command_hook_kills_detached_descendants() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let sentinel = dir.path().join("descendant-survived-success");
+    let handler = HookHandler::Command {
+        command: "(sleep 0.2; printf leaked > \"$COCO_TEST_HOOK_SENTINEL\") >/dev/null 2>&1 &"
+            .into(),
+        timeout_ms: Some(5_000),
+        shell: None,
+    };
+    let env = HashMap::from([(
+        "COCO_TEST_HOOK_SENTINEL".to_string(),
+        sentinel.display().to_string(),
+    )]);
+
+    execute_hook(&handler, &env, None)
+        .await
+        .expect("hook parent exits successfully");
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    assert!(!sentinel.exists(), "hook descendant survived parent exit");
+}
+
+#[tokio::test]
 async fn test_execute_hooks_runs_all_matching() {
     let registry = HookRegistry::new();
     registry.register(HookDefinition {

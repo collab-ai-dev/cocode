@@ -33,8 +33,59 @@ fn load_resume_session_error(
         crate::session_resume::LoadResumeSessionError::InvalidRequest(_) => {
             SessionOperationError::invalid_request(error.message(), None)
         }
+        crate::session_resume::LoadResumeSessionError::Lease {
+            code, session_id, ..
+        } => SessionOperationError::invalid_request(
+            error.message(),
+            Some(serde_json::json!({ "kind": code, "session_id": session_id })),
+        ),
         crate::session_resume::LoadResumeSessionError::Internal(_) => {
             SessionOperationError::internal(error.message(), None)
+        }
+    }
+}
+
+pub(super) async fn load_resume_session_for_runtime_admission(
+    runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
+    manager: Option<Arc<coco_session::SessionManager>>,
+    input: SessionResumeInput,
+) -> Result<
+    (
+        crate::session_resume::LoadedResumeSession,
+        Option<coco_session::SessionWriteLease>,
+    ),
+    coco_app_server::RegistryError,
+> {
+    if runtime_factory.persists_primary_session() {
+        let leased = crate::session_resume::load_resume_session_with_write_lease(manager, input)
+            .await
+            .map_err(registry_resume_error)?;
+        Ok((leased.loaded, Some(leased.write_lease)))
+    } else {
+        let loaded = crate::session_resume::load_resume_session(manager, input)
+            .await
+            .map_err(registry_resume_error)?;
+        Ok((loaded, None))
+    }
+}
+
+fn registry_resume_error(
+    error: crate::session_resume::LoadResumeSessionError,
+) -> coco_app_server::RegistryError {
+    match error {
+        crate::session_resume::LoadResumeSessionError::InvalidRequest(message) => {
+            coco_app_server::RegistryError::load_rejected(message, None)
+        }
+        crate::session_resume::LoadResumeSessionError::Lease {
+            message,
+            code,
+            session_id,
+        } => coco_app_server::RegistryError::load_rejected(
+            message,
+            Some(serde_json::json!({ "kind": code, "session_id": session_id })),
+        ),
+        crate::session_resume::LoadResumeSessionError::Internal(message) => {
+            coco_app_server::RegistryError::load_failed(message)
         }
     }
 }
@@ -95,18 +146,15 @@ pub(crate) async fn resume_app_server_session_with_runtime_replacement(
         let resume_target = resume_target.clone();
         let plan_mode_instructions = plan_mode_instructions.clone();
         async move {
-            let leased = crate::session_resume::load_resume_session_with_write_lease(
+            let (authoritative, write_lease) = load_resume_session_for_runtime_admission(
+                &replacement.runtime_factory,
                 state.session_manager_snapshot().await,
                 SessionResumeInput {
                     target: resume_target,
                     plan_mode_instructions: plan_mode_instructions.clone(),
                 },
             )
-            .await
-            .map_err(|error| {
-                coco_app_server::RegistryError::load_failed(error.message().to_string())
-            })?;
-            let authoritative = leased.loaded;
+            .await?;
             if authoritative.session_id != session_id {
                 return Err(coco_app_server::RegistryError::load_failed(format!(
                     "resume target changed from {session_id} to {} during admission",
@@ -129,7 +177,7 @@ pub(crate) async fn resume_app_server_session_with_runtime_replacement(
                 authoritative.conversation.messages,
                 plan_mode_instructions,
                 authoritative.conversation.mcp_tool_exposure,
-                leased.write_lease,
+                write_lease,
                 app_server,
             )
             .await

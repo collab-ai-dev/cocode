@@ -113,7 +113,18 @@ pub(crate) async fn maybe_attach_moa_guidance_for_query_once(
     let Some(endpoint) = model_runtimes.moa_endpoint_for_source(source) else {
         return params.clone();
     };
-    if REFERENCE_GUIDANCE_TOTAL_BUDGET < minimum_guidance_bytes(&endpoint) {
+    let guidance_budget_bytes = model_runtimes
+        .snapshot_for_source(source.clone())
+        .ok()
+        .map(|snapshot| {
+            crate::engine_recovery::optional_text_context_budget_for_snapshot(
+                params,
+                &snapshot,
+                REFERENCE_GUIDANCE_TOTAL_BUDGET,
+            )
+        })
+        .unwrap_or(0);
+    if guidance_budget_bytes < minimum_guidance_bytes(&endpoint) {
         return params.clone();
     }
     let role = role_for_source(source);
@@ -129,12 +140,7 @@ pub(crate) async fn maybe_attach_moa_guidance_for_query_once(
         "query_once",
     )
     .await;
-    attach_reference_guidance(
-        params,
-        &endpoint,
-        &references,
-        REFERENCE_GUIDANCE_TOTAL_BUDGET,
-    )
+    attach_reference_guidance(params, &endpoint, &references, guidance_budget_bytes)
 }
 
 pub async fn prepare_moa_query_once_params_no_usage(

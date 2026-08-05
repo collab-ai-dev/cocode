@@ -15,9 +15,9 @@
 //!
 //! ## Densities
 //!
-//! - [`ContentKind::Text`] → `chars / 4` — natural-language prose, code,
+//! - [`ContentKind::Text`] → `ceil(chars / 4)` — natural-language prose, code,
 //!   reasoning text. Claude/GPT empirically average ~3.5-4 chars/token.
-//! - [`ContentKind::Json`] → `chars / 2` — `serde_json::Value::to_string()`
+//! - [`ContentKind::Json`] → `ceil(chars / 2)` — `serde_json::Value::to_string()`
 //!   output, JSON-shaped tool inputs/results, `.json/.jsonl/.jsonc`
 //!   attachments. Structured data is denser; short keys + braces yield
 //!   ~2 chars/token in practice.
@@ -41,9 +41,9 @@ pub const IMAGE_MAX_TOKEN_SIZE: i64 = 2_000;
 /// What density to charge a content part at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContentKind {
-    /// `chars / 4`. Prose, code, reasoning, plain tool-result text.
+    /// `ceil(chars / 4)`. Prose, code, reasoning, plain tool-result text.
     Text,
-    /// `chars / 2`. Structured JSON: tool-call inputs, JSON tool
+    /// `ceil(chars / 2)`. Structured JSON: tool-call inputs, JSON tool
     /// results, `.json/.jsonl/.jsonc` attachments.
     Json,
     /// [`IMAGE_MAX_TOKEN_SIZE`] flat. Image / document / unknown binary
@@ -59,8 +59,8 @@ pub enum ContentKind {
 /// `serde_json::Value`).
 pub fn estimate_part(kind: ContentKind, chars: i64) -> i64 {
     match kind {
-        ContentKind::Text => chars / 4,
-        ContentKind::Json => chars / 2,
+        ContentKind::Text => chars.max(0).saturating_add(3) / 4,
+        ContentKind::Json => chars.max(0).saturating_add(1) / 2,
         ContentKind::Image => IMAGE_MAX_TOKEN_SIZE,
     }
 }

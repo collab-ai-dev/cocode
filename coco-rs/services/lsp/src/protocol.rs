@@ -586,15 +586,12 @@ impl JsonRpcConnection {
                     Ok(()) => {}
                     Err(tokio::sync::mpsc::error::TrySendError::Full(notification)) => {
                         // Blocking this reader would also block response
-                        // correlation. Fail the connection so pending callers
-                        // are released and the owner can restart the server.
+                        // correlation. Notifications are best-effort; keep the
+                        // response transport alive and drop only this update.
                         warn!(
-                            "LSP notification channel full, backpressure detected (method: {})",
+                            "LSP notification channel full, dropping notification (method: {})",
                             notification.0
                         );
-                        return Err(LspErr::Internal(
-                            "LSP notification consumer is too slow".to_string(),
-                        ));
                     }
                     Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                         // Channel closed, reader is shutting down

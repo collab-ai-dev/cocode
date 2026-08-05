@@ -146,6 +146,7 @@ async fn incoming_session_events_demux_by_session_id() {
         demux
             .next_session_event(&first)
             .await
+            .expect("session current")
             .expect("first")
             .session_seq,
         Some(1)
@@ -154,6 +155,7 @@ async fn incoming_session_events_demux_by_session_id() {
         demux
             .next_session_event(&second)
             .await
+            .expect("session current")
             .expect("second")
             .session_seq,
         Some(2)
@@ -182,6 +184,7 @@ async fn lifecycle_activation_is_keyed_by_the_new_session() {
     let effect = demux
         .next_session_activation(&session("session-new"))
         .await
+        .expect("session current")
         .expect("activation");
     assert!(matches!(
         effect.kind,
@@ -251,6 +254,7 @@ async fn server_request_and_session_event_coexist_on_one_incoming_channel() {
         demux
             .next_session_event(&session("session-with-request"))
             .await
+            .expect("session current")
             .is_some()
     );
 }
@@ -321,6 +325,7 @@ fn direct_demux_events_are_session_keyed() {
     assert_eq!(
         demux
             .try_next_session_event(&session("session-direct"))
+            .expect("session current")
             .expect("event")
             .session_seq,
         Some(7)
@@ -328,12 +333,13 @@ fn direct_demux_events_are_session_keyed() {
     assert!(
         demux
             .try_next_lifecycle(&session("session-direct"))
+            .expect("session current")
             .is_some()
     );
 }
 
 #[test]
-fn demux_session_overflow_is_typed_and_fail_closed() {
+fn demux_session_overflow_is_typed_and_connection_stays_usable() {
     let (tx, rx) = mpsc::channel(MAX_BUFFERED_SESSION_QUEUE + 1);
     let buffered = session("session-buffered");
     for seq in 0..=MAX_BUFFERED_SESSION_QUEUE {
@@ -354,62 +360,112 @@ fn demux_session_overflow_is_typed_and_fail_closed() {
     assert!(
         demux
             .try_next_session_event(&session("session-not-buffered"))
+            .expect("unrelated session remains current")
+            .is_none()
+    );
+    assert!(matches!(
+        demux.try_next_session_event(&buffered),
+        Err(RemoteSessionLag {
+            session_id,
+            queue: "session_events",
+            capacity: MAX_BUFFERED_SESSION_QUEUE,
+        }) if session_id == buffered
+    ));
+    assert_eq!(demux.disconnect_reason(), None);
+    assert!(!client.invalid.load(Ordering::Acquire));
+}
+
+#[test]
+fn replacement_activation_reports_lag_when_its_lifecycle_queue_overflows() {
+    let (tx, rx) = mpsc::channel(MAX_BUFFERED_SESSION_QUEUE + 1);
+    let old = session("session-old-overflow");
+    let new = session("session-new-activation");
+    for _ in 0..MAX_BUFFERED_SESSION_QUEUE {
+        tx.try_send(RemoteJsonRpcEvent::SessionLifecycle(
+            SessionLifecycleEffect {
+                kind: SessionLifecycleEffectKind::SessionEnded {
+                    session_id: old.clone(),
+                },
+            },
+        ))
+        .expect("queue lifecycle");
+    }
+    tx.try_send(RemoteJsonRpcEvent::SessionLifecycle(
+        SessionLifecycleEffect {
+            kind: SessionLifecycleEffectKind::SessionReplaced {
+                old_session_id: old,
+                new_session_id: new.clone(),
+            },
+        },
+    ))
+    .expect("queue replacement");
+    let (outbound_tx, _outbound_rx) = mpsc::channel(1);
+    let (client, _incoming, _unused_events) = RemoteJsonRpcClient::new(outbound_tx);
+    let mut demux = client.event_demux(rx);
+
+    assert!(
+        demux
+            .try_next_session_event(&session("session-unrelated"))
+            .expect("unrelated session remains current")
+            .is_none()
+    );
+    assert!(matches!(
+        demux.try_next_session_activation(&new),
+        Err(RemoteSessionLag {
+            session_id,
+            queue: "session_lifecycle",
+            capacity: MAX_BUFFERED_SESSION_QUEUE,
+        }) if session_id == new
+    ));
+}
+
+#[tokio::test]
+async fn disconnect_retains_already_buffered_session_delivery() {
+    let (tx, rx) = mpsc::channel(2);
+    let buffered = session("session-buffered-before-disconnect");
+    tx.send(RemoteJsonRpcEvent::SessionDelivery(Box::new(
+        SessionDelivery {
+            envelope: envelope(buffered.clone(), 9),
+        },
+    )))
+    .await
+    .expect("queue delivery");
+    tx.send(RemoteJsonRpcEvent::Disconnected)
+        .await
+        .expect("queue disconnect");
+    let (outbound_tx, _outbound_rx) = mpsc::channel(1);
+    let (client, _incoming, _unused_events) = RemoteJsonRpcClient::new(outbound_tx);
+    let mut demux = client.event_demux(rx);
+
+    assert!(
+        demux
+            .next_session_event(&session("session-other"))
+            .await
+            .expect("other session current")
             .is_none()
     );
     assert_eq!(
-        demux.disconnect_reason(),
-        Some(&RemoteDemuxDisconnectReason::SlowConsumer {
-            queue: "session_events",
-            capacity: MAX_BUFFERED_SESSION_QUEUE,
-        })
-    );
-    assert!(
-        client.invalid.load(Ordering::Acquire),
-        "demux overflow must invalidate the shared RPC connection immediately"
+        demux
+            .next_session_event(&buffered)
+            .await
+            .expect("buffered session current")
+            .expect("buffered delivery")
+            .session_seq,
+        Some(9)
     );
 }
 
-#[derive(Clone, Copy)]
-enum FatalDemuxQueue {
-    SessionEvents,
-    SessionLifecycle,
-    ServerRequests,
-}
-
-async fn assert_fatal_demux_overflow_releases_pending_rpc(queue: FatalDemuxQueue) {
-    let capacity = match queue {
-        FatalDemuxQueue::SessionEvents | FatalDemuxQueue::SessionLifecycle => {
-            MAX_BUFFERED_SESSION_QUEUE
-        }
-        FatalDemuxQueue::ServerRequests => MAX_BUFFERED_CONNECTION_QUEUE,
-    };
+#[tokio::test]
+async fn server_request_overflow_releases_pending_rpc() {
+    let capacity = MAX_BUFFERED_CONNECTION_QUEUE;
     let (tx, rx) = mpsc::channel(capacity + 1);
-    let buffered = session("session-overflow-buffered");
     for index in 0..=capacity {
-        let event = match queue {
-            FatalDemuxQueue::SessionEvents => {
-                RemoteJsonRpcEvent::SessionDelivery(Box::new(SessionDelivery {
-                    envelope: envelope(
-                        buffered.clone(),
-                        i64::try_from(index).expect("capacity fits in i64"),
-                    ),
-                }))
-            }
-            FatalDemuxQueue::SessionLifecycle => {
-                RemoteJsonRpcEvent::SessionLifecycle(SessionLifecycleEffect {
-                    kind: SessionLifecycleEffectKind::SessionEnded {
-                        session_id: buffered.clone(),
-                    },
-                })
-            }
-            FatalDemuxQueue::ServerRequests => {
-                RemoteJsonRpcEvent::ServerRequest(coco_app_server_transport::JsonRpcRequest::new(
-                    JsonRpcId::Number(i64::try_from(index).expect("capacity fits in i64")),
-                    "approval/askForApproval",
-                    None,
-                ))
-            }
-        };
+        let event =
+            RemoteJsonRpcEvent::ServerRequest(coco_app_server_transport::JsonRpcRequest::new(
+                JsonRpcId::Number(i64::try_from(index).expect("capacity fits in i64")),
+                "approval/askForApproval",
+                None,
+            ));
         tx.try_send(event).expect("queue demux event");
     }
 
@@ -425,17 +481,13 @@ async fn assert_fatal_demux_overflow_releases_pending_rpc(queue: FatalDemuxQueue
     assert!(
         demux
             .try_next_session_event(&session("session-overflow-target"))
+            .expect("session queue did not lag")
             .is_none()
     );
-    let queue_name = match queue {
-        FatalDemuxQueue::SessionEvents => "session_events",
-        FatalDemuxQueue::SessionLifecycle => "session_lifecycle",
-        FatalDemuxQueue::ServerRequests => "server_requests",
-    };
     assert_eq!(
         demux.disconnect_reason(),
         Some(&RemoteDemuxDisconnectReason::SlowConsumer {
-            queue: queue_name,
+            queue: "server_requests",
             capacity,
         })
     );
@@ -446,15 +498,4 @@ async fn assert_fatal_demux_overflow_releases_pending_rpc(queue: FatalDemuxQueue
             .expect("pending task joined"),
         Err(ClientError::Disconnected)
     ));
-}
-
-#[tokio::test]
-async fn every_fatal_demux_queue_disconnects_pending_rpcs() {
-    for queue in [
-        FatalDemuxQueue::SessionEvents,
-        FatalDemuxQueue::SessionLifecycle,
-        FatalDemuxQueue::ServerRequests,
-    ] {
-        assert_fatal_demux_overflow_releases_pending_rpc(queue).await;
-    }
 }

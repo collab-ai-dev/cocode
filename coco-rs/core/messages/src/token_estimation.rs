@@ -88,6 +88,16 @@ pub fn estimate_tool_result_message_tokens(tr: &crate::ToolResultMessage) -> i64
     llm_message_tokens(&tr.message)
 }
 
+/// Estimate one provider tool-result output without constructing a transcript
+/// wrapper. Context-edit admission uses this to bound how many tokens an edit
+/// can actually remove from an assembled prompt.
+pub fn estimate_tool_result_output_tokens(output: &crate::ToolResultOutput) -> i64 {
+    classify_tool_result(output)
+        .into_iter()
+        .map(|(kind, chars)| estimate_part(kind, chars))
+        .sum()
+}
+
 /// Estimate tokens for a single message via the per-content-kind walker.
 ///
 /// Walks message content parts only — no per-message role/formatting
@@ -155,10 +165,7 @@ fn sum_tool_parts(parts: &[ToolContent]) -> i64 {
     parts
         .iter()
         .map(|p| match p {
-            ToolContent::ToolResult(tr) => classify_tool_result(&tr.output)
-                .into_iter()
-                .map(|(kind, chars)| estimate_part(kind, chars))
-                .sum::<i64>(),
+            ToolContent::ToolResult(tr) => estimate_tool_result_output_tokens(&tr.output),
             _ => 5, // small overhead for non-result tool content variants
         })
         .sum()

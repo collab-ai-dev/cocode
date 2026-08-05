@@ -10,8 +10,8 @@ use serde_json::json;
 fn text_density_is_quarter_chars() {
     assert_eq!(estimate_part(ContentKind::Text, 400), 100);
     assert_eq!(estimate_part(ContentKind::Text, 0), 0);
-    // Integer truncation: 7/4 = 1
-    assert_eq!(estimate_part(ContentKind::Text, 7), 1);
+    assert_eq!(estimate_part(ContentKind::Text, 1), 1);
+    assert_eq!(estimate_part(ContentKind::Text, 7), 2);
 }
 
 #[test]
@@ -19,6 +19,7 @@ fn json_density_is_half_chars() {
     assert_eq!(estimate_part(ContentKind::Json, 400), 200);
     assert_eq!(estimate_part(ContentKind::Json, 100), 50);
     assert_eq!(estimate_part(ContentKind::Json, 0), 0);
+    assert_eq!(estimate_part(ContentKind::Json, 1), 1);
 }
 
 #[test]

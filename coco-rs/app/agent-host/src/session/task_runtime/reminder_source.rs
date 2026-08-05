@@ -16,6 +16,16 @@ impl TaskStatusSource for TaskRuntime {
         just_compacted: bool,
     ) -> Vec<TaskStatusSnapshot> {
         let states = self.manager.list().await;
+        {
+            let live_task_ids = states
+                .iter()
+                .map(|state| state.id.as_str())
+                .collect::<std::collections::HashSet<_>>();
+            self.terminal_outputs
+                .write()
+                .await
+                .retain(|task_id, _| live_task_ids.contains(task_id.as_str()));
+        }
         let mut snapshots = Vec::new();
         let mut skipped_remote = 0usize;
         let mut skipped_pending = 0usize;

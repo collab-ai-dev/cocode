@@ -32,6 +32,7 @@ use tokio::sync::mpsc;
 
 struct Fixture {
     _home: tempfile::TempDir,
+    session_manager: Arc<coco_session::SessionManager>,
     state: Arc<AppServerHostState>,
     server: Arc<AppServer<AppSessionHandle>>,
     adapter: LocalClientAdapter<AppSessionHandle>,
@@ -969,6 +970,22 @@ async fn fixture_with_turn_gate_and_timeout(
     turn_gate: Option<Arc<TurnGate>>,
     turn_drain_timeout: std::time::Duration,
 ) -> Fixture {
+    fixture_with_runtime_options(
+        turn_gate,
+        turn_drain_timeout,
+        AgentHostOptions::default(),
+        8,
+    )
+    .await
+}
+
+#[allow(clippy::expect_used)]
+async fn fixture_with_runtime_options(
+    turn_gate: Option<Arc<TurnGate>>,
+    turn_drain_timeout: std::time::Duration,
+    cli: AgentHostOptions,
+    max_sessions: usize,
+) -> Fixture {
     let home = tempfile::TempDir::new().expect("fixture home");
     let settings = coco_config::SettingsWithSource {
         merged: coco_config::Settings {
@@ -998,8 +1015,11 @@ async fn fixture_with_turn_gate_and_timeout(
         home.path(),
     ));
     let runtime_config = Arc::new(runtime_config);
+    let session_manager = Arc::new(coco_session::SessionManager::new(
+        home.path().join("sessions"),
+    ));
     let runtime_factory = SessionRuntimeFactory::new(SessionRuntimeFactoryOpts {
-        cli: Arc::new(AgentHostOptions::default()),
+        cli: Arc::new(cli),
         bootstrap_source: SessionRuntimeBootstrapSource::from_source(Arc::new(
             IsolatedTestBootstrapSource {
                 runtime_config,
@@ -1008,9 +1028,7 @@ async fn fixture_with_turn_gate_and_timeout(
         )),
         cwd: home.path().to_path_buf(),
         model_runtimes: None,
-        session_manager: Arc::new(coco_session::SessionManager::new(
-            home.path().join("sessions"),
-        )),
+        session_manager: Arc::clone(&session_manager),
         fast_model_spec: None,
         permission_bridge: None,
         process_runtime: Arc::clone(&process_runtime),
@@ -1029,7 +1047,7 @@ async fn fixture_with_turn_gate_and_timeout(
         }),
         ..Default::default()
     }));
-    let server = Arc::new(AppServer::new(8, 16));
+    let server = Arc::new(AppServer::new(max_sessions, 16));
     let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 16);
     let (notif_tx, notif_rx) = mpsc::channel(16);
     let observed_outbound = Arc::new(tokio::sync::Mutex::new(Vec::new()));
@@ -1049,6 +1067,7 @@ async fn fixture_with_turn_gate_and_timeout(
         .await;
     Fixture {
         _home: home,
+        session_manager,
         state,
         server,
         adapter,
@@ -1254,7 +1273,7 @@ async fn session_start_rejects_existing_live_id_without_mutation() {
     };
     assert_eq!(
         data.as_ref().and_then(|data| data.get("kind")),
-        Some(&serde_json::json!(coco_session::lease::SESSION_IN_USE))
+        Some(&serde_json::json!("session_start_slot_conflict"))
     );
     assert_eq!(
         data.as_ref().and_then(|data| data.get("session_id")),
@@ -1271,6 +1290,129 @@ async fn session_start_rejects_existing_live_id_without_mutation() {
         live[0].connection_counts.total(),
         1,
         "duplicate start must not attach a second connection"
+    );
+}
+
+#[tokio::test]
+async fn ephemeral_session_start_does_not_create_a_write_lease() {
+    let fixture = fixture_with_runtime_options(
+        None,
+        coco_agent_host::app_server_host::APP_SERVER_TURN_DRAIN_TIMEOUT,
+        AgentHostOptions {
+            no_session_persistence: true,
+            ..Default::default()
+        },
+        8,
+    )
+    .await;
+    let client = LocalServerClient::connect_local(&fixture.adapter);
+    let session_id = coco_types::SessionId::generate();
+
+    client
+        .session_start(
+            &fixture.handler,
+            SessionStartParams {
+                session_id: Some(session_id.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("start ephemeral session");
+
+    assert!(
+        !coco_paths::session_lock_path(fixture.session_manager.memory_base(), session_id.as_str())
+            .exists(),
+        "an ephemeral runtime must not touch the durable lease namespace"
+    );
+}
+
+#[tokio::test]
+async fn session_capacity_rejection_happens_before_write_lease_io() {
+    let fixture = fixture_with_runtime_options(
+        None,
+        coco_agent_host::app_server_host::APP_SERVER_TURN_DRAIN_TIMEOUT,
+        AgentHostOptions::default(),
+        1,
+    )
+    .await;
+    let client = LocalServerClient::connect_local(&fixture.adapter);
+    client
+        .session_start(&fixture.handler, SessionStartParams::default())
+        .await
+        .expect("fill the only session slot");
+    let rejected_id = coco_types::SessionId::generate();
+
+    let error = client
+        .session_start(
+            &fixture.handler,
+            SessionStartParams {
+                session_id: Some(rejected_id.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("second session exceeds capacity");
+    let ClientError::Server { data, .. } = error else {
+        panic!("expected a typed server rejection");
+    };
+    assert_eq!(
+        data.as_ref().and_then(|data| data.get("kind")),
+        Some(&serde_json::json!("session_capacity_exhausted"))
+    );
+    assert!(
+        !coco_paths::session_lock_path(fixture.session_manager.memory_base(), rejected_id.as_str())
+            .exists(),
+        "capacity rejection must not create a durable lock file"
+    );
+}
+
+#[tokio::test]
+async fn cold_resume_preserves_session_in_use_error_kind() {
+    let fixture = fixture().await;
+    let client = LocalServerClient::connect_local(&fixture.adapter);
+    let started = client
+        .session_start(&fixture.handler, SessionStartParams::default())
+        .await
+        .expect("start durable session");
+    append_durable_transcript_seed(&fixture, &started.session_id, "resume lease seed");
+    client
+        .session_close(
+            &fixture.handler,
+            SessionCloseParams {
+                target: SessionTarget {
+                    session_id: started.session_id.clone(),
+                },
+            },
+        )
+        .await
+        .expect("close before cold resume");
+    let lease_store = fixture.session_manager.store_for(std::path::Path::new("."));
+    let _competing_lease = lease_store
+        .require_write_lease(started.session_id.as_str())
+        .expect("hold competing write lease");
+
+    let error = client
+        .session_resume(
+            &fixture.handler,
+            SessionResumeParams {
+                target: SessionTarget {
+                    session_id: started.session_id.clone(),
+                },
+                plan_mode_instructions: None,
+            },
+        )
+        .await
+        .expect_err("cold resume must reject a competing writer");
+    let ClientError::Server { data, .. } = error else {
+        panic!("expected a typed server rejection");
+    };
+    assert_eq!(
+        data.as_ref().and_then(|data| data.get("kind")),
+        Some(&serde_json::json!(coco_session::lease::SESSION_IN_USE))
+    );
+    assert_eq!(
+        data.as_ref().and_then(|data| data.get("session_id")),
+        Some(&serde_json::json!(started.session_id))
     );
 }
 

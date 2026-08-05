@@ -125,3 +125,17 @@ async fn get_or_create_is_idempotent() {
     let (content, _) = b.read_delta(0, 1024).await.unwrap();
     assert_eq!(content, "first", "both handles point at the same file");
 }
+
+#[tokio::test]
+async fn truncation_marker_follows_the_last_admitted_chunk() {
+    let outputs = DiskOutputs::new(temp_session_dir());
+    let dto = outputs.get_or_create("cap-order").await;
+    dto.inner.admission.lock().await.bytes_written = MAX_TASK_OUTPUT_BYTES - 3;
+
+    dto.append("abc").await;
+    dto.append("overflow").await;
+    dto.flush().await.unwrap();
+
+    let (content, _) = dto.read_delta(0, 1024).await.unwrap();
+    assert_eq!(content, format!("abc{TRUNCATION_MARKER}"));
+}

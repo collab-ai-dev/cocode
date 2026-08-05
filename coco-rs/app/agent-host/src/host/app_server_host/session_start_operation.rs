@@ -52,7 +52,10 @@ pub(crate) async fn prepare_app_server_session_start(
 pub(crate) async fn acquire_new_session_write_lease(
     runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
     session_id: &coco_types::SessionId,
-) -> Result<coco_session::SessionWriteLease, SessionOperationError> {
+) -> Result<Option<coco_session::SessionWriteLease>, SessionOperationError> {
+    if !runtime_factory.persists_primary_session() {
+        return Ok(None);
+    }
     let manager = runtime_factory.session_manager();
     let id = session_id.to_string();
     let lookup = tokio::task::spawn_blocking(move || {
@@ -83,7 +86,7 @@ pub(crate) async fn acquire_new_session_write_lease(
                 "session_id": session_id,
             })),
         )),
-        Ok((lease, false)) => Ok(lease),
+        Ok((lease, false)) => Ok(Some(lease)),
         Err(NewSessionLeaseError::Lease(coco_session::SessionLeaseError::InUse { .. })) => {
             Err(SessionOperationError::invalid_request(
                 format!("session/start cannot claim session id {session_id}: it is in use"),
@@ -131,18 +134,18 @@ pub(crate) async fn start_app_server_session_with_runtime_replacement(
 ) -> Result<SessionStartResult, SessionOperationError> {
     let prepared = prepare_app_server_session_start(input, &state, &connection_profile).await?;
     let started_session_id = prepared.session_id.clone();
-    // The same lease protects the durable absence check and the complete
-    // runtime lifetime. There is no check/acquire window in which another
-    // process can create this supposedly fresh identity.
-    let write_lease =
-        acquire_new_session_write_lease(&replacement.runtime_factory, &started_session_id).await?;
-
     let factory = {
         let replacement = replacement.clone();
         let prepared = prepared.clone();
         let connection_profile = Arc::clone(&connection_profile);
         let app_server = Arc::clone(&app_server);
         async move {
+            // AppServer reserves the slot and capacity before this lazy
+            // factory performs any durable admission I/O.
+            let write_lease =
+                acquire_new_session_write_lease(&replacement.runtime_factory, &prepared.session_id)
+                    .await
+                    .map_err(SessionOperationError::into_registry_error)?;
             let runtime = build_connection_runtime_for_start(
                 replacement,
                 connection_profile,

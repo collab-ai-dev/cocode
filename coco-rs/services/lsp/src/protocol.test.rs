@@ -208,7 +208,7 @@ async fn malformed_and_oversized_frames_release_pending_requests() {
 }
 
 #[tokio::test]
-async fn notification_overflow_closes_connection_and_releases_pending_requests() {
+async fn notification_overflow_does_not_block_pending_responses() {
     let (mut server_writer, client_reader) = tokio::io::duplex(4096);
     let (client_writer, _server_reader) = tokio::io::duplex(1024);
     let (pending, rx) = pending_request();
@@ -236,7 +236,23 @@ async fn notification_overflow_closes_connection_and_releases_pending_requests()
         })))
         .await
         .unwrap();
-    assert_pending_released(rx, &closed).await;
+    server_writer
+        .write_all(&framed(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 42,
+            "result": {"ok": true}
+        })))
+        .await
+        .unwrap();
+    let result = timeout(Duration::from_secs(1), rx)
+        .await
+        .expect("pending response correlated")
+        .expect("reader sent response")
+        .expect("response succeeded");
+    assert_eq!(result, serde_json::json!({"ok": true}));
+    assert!(!closed.load(Ordering::Acquire));
+
+    drop(server_writer);
     task.await.unwrap();
     assert_eq!(notification_rx.recv().await.unwrap().0, "prefilled");
 }

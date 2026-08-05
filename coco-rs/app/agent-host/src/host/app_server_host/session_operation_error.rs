@@ -74,6 +74,26 @@ impl SessionOperationError {
             Self::Lifecycle(error) => SessionOperationErrorParts::Lifecycle(error),
         }
     }
+
+    pub(crate) fn into_registry_error(self) -> coco_app_server::RegistryError {
+        match self.into_parts() {
+            SessionOperationErrorParts::InvalidRequest { message, data }
+            | SessionOperationErrorParts::InvalidParams { message, data } => {
+                coco_app_server::RegistryError::load_rejected(message, data)
+            }
+            SessionOperationErrorParts::Internal { message, .. } => {
+                coco_app_server::RegistryError::load_failed(message)
+            }
+            SessionOperationErrorParts::Lifecycle(error) => {
+                let dispatch = error.into_dispatch_error();
+                if dispatch.code == coco_types::error_codes::INTERNAL_ERROR {
+                    coco_app_server::RegistryError::load_failed(dispatch.message)
+                } else {
+                    coco_app_server::RegistryError::load_rejected(dispatch.message, dispatch.data)
+                }
+            }
+        }
+    }
 }
 
 impl From<LifecycleError> for SessionOperationError {
