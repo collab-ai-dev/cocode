@@ -395,6 +395,18 @@ impl UiState {
         self.install_theme_runtime(theme_state, /*log*/ true);
     }
 
+    pub fn apply_theme_reload(&mut self, theme_state: ThemeRuntimeState) {
+        if let Some(ModalState::ThemePicker(picker)) = self.modal.as_mut() {
+            picker.rebase(&theme_state);
+        }
+        for modal in self.modal_queue.iter_mut() {
+            if let ModalState::ThemePicker(picker) = modal {
+                picker.rebase(&theme_state);
+            }
+        }
+        self.apply_theme_runtime(theme_state);
+    }
+
     pub fn apply_theme_setting(&mut self, setting: ThemeSetting) -> anyhow::Result<()> {
         let theme_state = self.theme_state.with_setting(setting)?;
         self.apply_theme_runtime(theme_state);
@@ -416,9 +428,6 @@ impl UiState {
         self.display_settings = display_settings;
         if show_thinking_changed {
             self.show_thinking = show_thinking;
-        }
-        if let Some(ModalState::Settings(settings)) = self.modal.as_mut() {
-            settings.set_display_settings(self.display_settings.clone());
         }
     }
 

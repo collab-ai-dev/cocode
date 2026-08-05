@@ -37,9 +37,9 @@ pub enum KeybindingContext {
     Transcript,
     /// Autocomplete suggestions visible.
     Autocomplete,
-    /// Tabbed settings state — Tab/Shift+Tab cycle tabs, Up/Down nav.
+    /// Searchable settings browser — plain characters edit the filter.
     Settings,
-    /// Theme tab inside Settings — includes theme-picker-specific actions.
+    /// Standalone theme picker — includes theme-picker-specific actions.
     ThemePicker,
     /// `/permissions` rule-editor overlay. Dedicated context (like
     /// [`Self::Question`]) so the add-form text input is reachable and
@@ -84,8 +84,8 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
             ModalState::ModelPicker(_) => KeybindingContext::ModelPicker,
             ModalState::TeamRoster(_) => KeybindingContext::TeamRoster,
 
-            // Standalone theme picker — reuses the ThemePicker context so the
-            // `theme:toggleSyntaxHighlighting` (ctrl+t) binding is active.
+            // Theme picker — its dedicated context keeps the
+            // `theme:toggleSyntaxHighlighting` (ctrl+t) binding active.
             ModalState::ThemePicker(_) => KeybindingContext::ThemePicker,
 
             // Filterable list modals
@@ -110,14 +110,8 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
             | ModalState::GoalStatus(_) => KeybindingContext::Scrollable,
             ModalState::Transcript(_) => KeybindingContext::Transcript,
 
-            // Tabbed settings state. The Display tab gets the ThemePicker
-            // context so `theme:toggleSyntaxHighlighting` (ctrl+t) toggles
-            // the syntax-highlighting row.
-            ModalState::Settings(s)
-                if s.active_tab == crate::widgets::settings_panel::SettingsTab::Display =>
-            {
-                KeybindingContext::ThemePicker
-            }
+            // Search/filter input and selection are owned by the settings
+            // modal; its context intentionally has no bare-character binds.
             ModalState::Settings(_) => KeybindingContext::Settings,
 
             // `/permissions` editor — dedicated context for text input +
@@ -403,9 +397,8 @@ fn resolve_key(
         KeybindingContext::Autocomplete => map_autocomplete_key(key)
             .or_else(|| map_global_key(state, key))
             .or_else(|| map_input_key(state, key)),
-        KeybindingContext::Settings | KeybindingContext::ThemePicker => {
-            crate::modal_pane::settings::map_key(key)
-        }
+        KeybindingContext::Settings => crate::modal_pane::settings::map_key(key),
+        KeybindingContext::ThemePicker => crate::modal_pane::theme_picker::map_key(key),
         KeybindingContext::PermissionsEditor => crate::modal_pane::permissions_editor::map_key(key),
         KeybindingContext::Journey => crate::modal_pane::journey::map_key(key),
         KeybindingContext::AddDirectory => crate::modal_pane::add_directory::map_key(key),

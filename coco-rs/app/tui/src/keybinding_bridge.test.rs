@@ -503,22 +503,63 @@ fn test_model_picker_context() {
 }
 
 #[test]
-fn test_settings_theme_tab_uses_theme_picker_context() {
+fn test_settings_uses_searchable_settings_context() {
     let mut state = AppState::new();
     state.ui.show_modal(crate::state::ModalState::Settings(
-        crate::widgets::settings_panel::SettingsPanelState::new(state.ui.display_settings.clone()),
+        crate::widgets::settings_panel::SettingsPanelState::default(),
     ));
-    assert_eq!(active_context(&state), KeybindingContext::ThemePicker);
+    assert_eq!(active_context(&state), KeybindingContext::Settings);
+    for ch in ['j', 'k', 'r', '/', ' '] {
+        assert!(matches!(
+            map_key(&state, press(KeyCode::Char(ch))),
+            Some(TuiCommand::SurfaceFilter(actual)) if actual == ch
+        ));
+    }
 }
 
 #[test]
-fn test_theme_picker_ctrl_t_toggles_syntax_highlighting() {
+fn test_settings_ctrl_t_toggles_syntax_highlighting() {
     let mut state = AppState::new();
     state.ui.show_modal(crate::state::ModalState::Settings(
-        crate::widgets::settings_panel::SettingsPanelState::new(state.ui.display_settings.clone()),
+        crate::widgets::settings_panel::SettingsPanelState::default(),
     ));
     let cmd = map_key(&state, ctrl(KeyCode::Char('t')));
     assert!(matches!(cmd, Some(TuiCommand::ToggleSyntaxHighlighting)));
+}
+
+#[test]
+fn test_theme_picker_uses_its_own_context_and_navigation_bindings() {
+    let mut state = AppState::new();
+    let original_setting = state.ui.theme_state.setting.clone();
+    state.ui.show_modal(crate::state::ModalState::ThemePicker(
+        crate::state::ThemePickerState {
+            selected: 0,
+            original_setting,
+            origin: crate::state::ThemePickerOrigin::Standalone,
+        },
+    ));
+
+    assert_eq!(active_context(&state), KeybindingContext::ThemePicker);
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Home)),
+        Some(TuiCommand::SurfaceJumpStart)
+    ));
+    assert!(matches!(
+        map_key(&state, press(KeyCode::End)),
+        Some(TuiCommand::SurfaceJumpEnd)
+    ));
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Enter)),
+        Some(TuiCommand::SurfaceConfirm)
+    ));
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Esc)),
+        Some(TuiCommand::Cancel)
+    ));
+    assert!(matches!(
+        map_key(&state, ctrl(KeyCode::Char('t'))),
+        Some(TuiCommand::ToggleSyntaxHighlighting)
+    ));
 }
 
 #[test]
@@ -534,7 +575,7 @@ fn test_model_picker_left_right_cycle_effort() {
 fn test_model_picker_tab_cycles_role() {
     let state = model_picker_state();
     let cmd = map_key(&state, press(KeyCode::Tab));
-    assert!(matches!(cmd, Some(TuiCommand::SettingsNextTab)));
+    assert!(matches!(cmd, Some(TuiCommand::TabsNext)));
 }
 
 #[test]

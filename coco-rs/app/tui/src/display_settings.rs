@@ -4,44 +4,24 @@ use coco_config::SettingSource;
 use coco_config::SettingsWithSource;
 use coco_config::settings::NativeReplayCacheSettings;
 use coco_config::settings::ReflowMaxRows;
-use coco_config::settings::SYNTAX_HIGHLIGHTING_KEY;
 use coco_config::settings::SyntaxHighlightingLevel;
 use coco_config::settings::TerminalTitleItem;
 use coco_config::settings::TuiPerformanceSettings;
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::motion::MotionMode;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use crate::reflow_cap::MaxReflowRows;
 use crate::reflow_cap::resolve_max_reflow_rows;
+use crate::settings_registry::SettingId;
+use crate::settings_registry::settings as registered_settings;
 use crate::transcript::render::HistoryReplayCachePolicy;
-
-/// Whether a display preference can be edited from the TUI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum DisplaySettingEditability {
-    #[default]
-    Editable,
-    OverriddenBy(SettingSource),
-}
-
-impl DisplaySettingEditability {
-    pub fn is_editable(self) -> bool {
-        matches!(self, Self::Editable)
-    }
-
-    pub fn overriding_source(self) -> Option<SettingSource> {
-        match self {
-            Self::Editable => None,
-            Self::OverriddenBy(source) => Some(source),
-        }
-    }
-}
 
 /// Display-only preferences consumed by TUI renderers.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DisplaySettings {
     pub syntax_highlighting: SyntaxHighlighting,
-    pub syntax_highlighting_editability: DisplaySettingEditability,
     pub show_thinking: bool,
     pub copy_full_response: bool,
     pub status_line: Option<coco_config::StatusLineSettings>,
@@ -55,6 +35,7 @@ pub struct DisplaySettings {
     /// Whether the startup header shows a rotating usage tip.
     pub tips: bool,
     pub performance: TuiPerformanceConfig,
+    overriding_sources: BTreeMap<SettingId, SettingSource>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,7 +60,6 @@ impl DisplaySettings {
     pub fn from_settings(settings: &coco_config::Settings) -> Self {
         Self {
             syntax_highlighting: syntax_highlighting_from_level(settings.syntax_highlighting),
-            syntax_highlighting_editability: DisplaySettingEditability::Editable,
             show_thinking: settings.show_thinking,
             copy_full_response: settings.copy_full_response,
             status_line: settings.status_line.clone(),
@@ -89,6 +69,7 @@ impl DisplaySettings {
             terminal_title: settings.tui.terminal_title.clone(),
             tips: settings.tui.tips,
             performance: performance_config(settings.tui.performance),
+            overriding_sources: BTreeMap::new(),
         }
     }
 
@@ -97,7 +78,6 @@ impl DisplaySettings {
             syntax_highlighting: syntax_highlighting_from_level(
                 settings.merged.syntax_highlighting,
             ),
-            syntax_highlighting_editability: syntax_highlighting_editability(settings),
             show_thinking: settings.merged.show_thinking,
             copy_full_response: settings.merged.copy_full_response,
             status_line: settings.merged.status_line.clone(),
@@ -107,6 +87,7 @@ impl DisplaySettings {
             terminal_title: settings.merged.tui.terminal_title.clone(),
             tips: settings.merged.tui.tips,
             performance: performance_config(settings.merged.tui.performance),
+            overriding_sources: overriding_sources(settings),
         }
     }
 
@@ -126,6 +107,10 @@ impl DisplaySettings {
             copy_full_response,
             ..self
         }
+    }
+
+    pub(crate) fn overriding_source(&self, id: SettingId) -> Option<SettingSource> {
+        self.overriding_sources.get(&id).copied()
     }
 }
 
@@ -187,22 +172,26 @@ pub(crate) fn syntax_highlighting_to_level(syntax: SyntaxHighlighting) -> Syntax
     }
 }
 
-fn syntax_highlighting_editability(settings: &SettingsWithSource) -> DisplaySettingEditability {
-    settings
-        .per_source
+fn overriding_sources(settings: &SettingsWithSource) -> BTreeMap<SettingId, SettingSource> {
+    registered_settings()
         .iter()
-        .filter_map(|(source, value)| {
-            if *source > SettingSource::User
-                && value_contains_dotted_key(value, SYNTAX_HIGHLIGHTING_KEY)
-            {
-                Some(*source)
-            } else {
-                None
-            }
+        .map(|meta| meta.id)
+        .filter_map(|id| {
+            settings
+                .per_source
+                .iter()
+                .filter_map(|(source, value)| {
+                    (*source > SettingSource::User
+                        && id
+                            .source_keys()
+                            .iter()
+                            .any(|key| value_contains_dotted_key(value, key)))
+                    .then_some(*source)
+                })
+                .max()
+                .map(|source| (id, source))
         })
-        .max()
-        .map(DisplaySettingEditability::OverriddenBy)
-        .unwrap_or_default()
+        .collect()
 }
 
 fn value_contains_dotted_key(value: &serde_json::Value, key: &str) -> bool {

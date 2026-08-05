@@ -11,6 +11,7 @@ use ratatui::style::Modifier;
 
 use crate::i18n::t;
 use crate::state::ThemePickerState;
+use crate::theme::ThemeChoice;
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::style::UiStyles;
 use coco_tui_ui::widgets::SelectItem;
@@ -29,6 +30,7 @@ const DEMO_DIFF: &str = " function greet() {\n\
 /// show at once so the box always fits the terminal (footer included).
 pub(crate) fn theme_picker_lines(
     picker: &ThemePickerState,
+    choices: &[ThemeChoice],
     syntax: SyntaxHighlighting,
     styles: UiStyles<'_>,
     width: u16,
@@ -56,8 +58,7 @@ pub(crate) fn theme_picker_lines(
 
     // The reusable select list. The `✔` marks the saved theme
     // (`original_setting`); focus follows navigation independently.
-    let items: Vec<SelectItem> = picker
-        .choices
+    let items: Vec<SelectItem> = choices
         .iter()
         .map(|c| SelectItem::new(c.label.clone()).with_active(c.setting == picker.original_setting))
         .collect();

@@ -8,6 +8,7 @@ use crate::state::MemoryDialogRowKind;
 use crate::state::MemoryDialogScope;
 use crate::state::MemoryDialogState;
 use crate::state::ModalState;
+use crate::state::ThemePickerOrigin;
 use crate::state::ThemePickerState;
 use crate::state::WorkflowPickerEntry;
 use crate::state::WorkflowPickerState;
@@ -35,9 +36,9 @@ async fn theme_picker_confirm_advances_queued_modal() {
     queue_help_after_active(
         &mut state,
         ModalState::ThemePicker(ThemePickerState {
-            choices: Vec::new(),
-            selected: 0,
+            selected: i32::MAX,
             original_setting: crate::theme::ThemeSetting::default(),
+            origin: ThemePickerOrigin::Standalone,
         }),
     );
     let (tx, _rx) = channel();

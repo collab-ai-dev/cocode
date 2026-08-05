@@ -255,16 +255,14 @@ pub enum TuiCommand {
     ShowRewindFor { target_uuid: uuid::Uuid },
     /// Show doctor/diagnostics.
     ShowDoctor,
-    /// Show the tabbed settings panel.
+    /// Show the searchable settings browser.
     ShowSettings,
     /// Toggle language-level syntax highlighting for markdown code blocks.
     ToggleSyntaxHighlighting,
-    /// Tab: cycle Settings tab forward (Settings state) OR cycle
-    /// question/footer focus (Question state). Handler in update.rs
-    /// dispatches per-state.
-    SettingsNextTab,
-    /// Shift+Tab variant of [`SettingsNextTab`].
-    SettingsPrevTab,
+    /// Cycle the active surface's tab/focus group forward.
+    TabsNext,
+    /// Cycle the active surface's tab/focus group backward.
+    TabsPrevious,
 
     // ── Surface navigation ──
     /// Filter text in active filterable state.

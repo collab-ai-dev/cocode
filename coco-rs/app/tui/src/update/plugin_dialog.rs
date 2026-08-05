@@ -35,11 +35,11 @@ pub(super) async fn intercept(
         }
         TuiCommand::CursorUp => Handled::Yes(handle_arrow_up(state)),
         TuiCommand::CursorDown => Handled::Yes(handle_arrow_down(state)),
-        TuiCommand::SettingsNextTab => {
+        TuiCommand::TabsNext => {
             dialog_mut(state).cycle_tab_next();
             Handled::Yes(true)
         }
-        TuiCommand::SettingsPrevTab => {
+        TuiCommand::TabsPrevious => {
             dialog_mut(state).cycle_tab_prev();
             Handled::Yes(true)
         }

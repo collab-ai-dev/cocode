@@ -1,5 +1,9 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use coco_config::SettingSource;
+use coco_config::Settings;
+use coco_config::SettingsWithSource;
 use coco_messages::ApiError;
 use coco_messages::AssistantContent;
 use coco_messages::AssistantMessage;
@@ -16,6 +20,10 @@ use super::MAX_LOOKBACK;
 use super::collect_recent_assistant_texts;
 use super::extract_code_blocks;
 use super::file_extension;
+use crate::state::AppState;
+use crate::state::CopyPickerSelection;
+use crate::state::CopyPickerState;
+use crate::state::ToastSeverity;
 use crate::state::transcript_view::TranscriptView;
 
 fn assistant_with_parts(parts: Vec<AssistantContent>) -> Message {
@@ -80,6 +88,41 @@ fn transcript_from(messages: Vec<Message>) -> TranscriptView {
         view.on_message_appended(Arc::new(msg));
     }
     view
+}
+
+#[test]
+fn always_copy_respects_higher_priority_setting_ownership() {
+    let mut state = AppState::new();
+    let settings = SettingsWithSource {
+        merged: Settings {
+            copy_full_response: false,
+            ..Settings::default()
+        },
+        per_source: HashMap::from([(
+            SettingSource::Project,
+            serde_json::json!({ "copy_full_response": false }),
+        )]),
+        source_paths: HashMap::new(),
+    };
+    state.ui.display_settings =
+        crate::display_settings::DisplaySettings::from_settings_with_sources(&settings);
+
+    let result = super::confirm_picker_selection(
+        &mut state,
+        CopyPickerState {
+            full_text: String::new(),
+            code_blocks: Vec::new(),
+            message_age: 0,
+            selected: CopyPickerSelection::Always,
+        },
+    )
+    .expect("always is a valid picker selection");
+
+    assert!(!state.ui.display_settings.copy_full_response);
+    assert!(result.contains("project"));
+    assert!(state.ui.toasts.iter().any(|toast| {
+        toast.severity == ToastSeverity::Warning && toast.message.contains("project")
+    }));
 }
 
 #[test]

@@ -82,7 +82,7 @@ fn render_snapshot(width: u16, height: u16, state: &ModelPickerState) -> String 
     terminal
         .draw(|frame| {
             let area = frame.area();
-            let box_width = area.width.clamp(40, 96);
+            let box_width = area.width.min(96);
             let inner_width = box_width.saturating_sub(4).max(1);
             // Mirror the adaptive budget in `surface/modal.rs`.
             const MIN_LIST_ROWS: u16 = 6;

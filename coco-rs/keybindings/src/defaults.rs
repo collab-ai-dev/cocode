@@ -170,17 +170,13 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
         make_block(
             KeybindingContext::Settings,
             [
-                ("escape", KeybindingAction::ConfirmNo),
+                ("escape", KeybindingAction::SelectCancel),
                 ("up", KeybindingAction::SelectPrevious),
                 ("down", KeybindingAction::SelectNext),
-                ("k", KeybindingAction::SelectPrevious),
-                ("j", KeybindingAction::SelectNext),
                 ("ctrl+p", KeybindingAction::SelectPrevious),
                 ("ctrl+n", KeybindingAction::SelectNext),
-                ("space", KeybindingAction::SelectAccept),
-                ("enter", KeybindingAction::SettingsClose),
-                ("/", KeybindingAction::SettingsSearch),
-                ("r", KeybindingAction::SettingsRetry),
+                ("enter", KeybindingAction::SelectAccept),
+                ("ctrl+t", KeybindingAction::ThemeToggleSyntaxHighlighting),
             ],
         ),
         // ── Confirmation ──────────────────────────────────────────────

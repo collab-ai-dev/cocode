@@ -141,6 +141,10 @@ impl ModalQueue {
         self.inner.is_empty()
     }
 
+    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut ModalState> {
+        self.inner.iter_mut()
+    }
+
     #[cfg(test)]
     pub fn len(&self) -> usize {
         self.inner.len()

@@ -151,19 +151,34 @@ pub(crate) fn team_roster(state: &mut AppState) {
 /// currently-saved setting come from the live `ThemeRuntimeState`; the
 /// cursor starts on the saved theme so Enter-without-moving is a no-op.
 pub(crate) fn open_theme_picker(state: &mut AppState) {
-    let choices = state.ui.theme_state.choices.clone();
+    show_theme_picker(state, crate::state::ThemePickerOrigin::Standalone);
+}
+
+pub(crate) fn open_theme_picker_from_settings(
+    state: &mut AppState,
+    settings: crate::widgets::settings_panel::SettingsPanelState,
+) {
+    show_theme_picker(
+        state,
+        crate::state::ThemePickerOrigin::Settings(Box::new(settings)),
+    );
+}
+
+fn show_theme_picker(state: &mut AppState, origin: crate::state::ThemePickerOrigin) {
     let original_setting = state.ui.theme_state.setting.clone();
-    let selected = choices
+    let selected = state
+        .ui
+        .theme_state
+        .choices
         .iter()
         .position(|c| c.setting == original_setting)
         .unwrap_or(0) as i32;
-    state
-        .ui
-        .show_modal(ModalState::ThemePicker(crate::state::ThemePickerState {
-            choices,
-            selected,
-            original_setting,
-        }));
+    let picker = ModalState::ThemePicker(crate::state::ThemePickerState {
+        selected,
+        original_setting,
+        origin,
+    });
+    state.ui.show_modal(picker);
 }
 
 /// Build the picker entries for `role` from the session-frozen
@@ -433,13 +448,13 @@ pub(super) fn doctor(state: &mut AppState) {
         }));
 }
 
-/// Open the tabbed settings state (display, output style, permissions, about).
-/// Theme selection lives in the standalone `/theme` picker. `pub(crate)` so the
-/// `OpenSettings` TuiOnlyEvent handler (from the `/config` slash command) can
-/// reuse it, mirroring `cycle_model` for `OpenModelPicker`.
+/// Open the searchable settings registry. Values remain owned by `UiState` and
+/// are projected live while the modal is rendered.
+/// `pub(crate)` so the `OpenSettings` TuiOnlyEvent handler (from `/config`) can
+/// reuse it.
 pub(crate) fn settings(state: &mut AppState) {
     state.ui.show_modal(ModalState::Settings(
-        crate::widgets::settings_panel::SettingsPanelState::new(state.ui.display_settings.clone()),
+        crate::widgets::settings_panel::SettingsPanelState::default(),
     ));
 }
 

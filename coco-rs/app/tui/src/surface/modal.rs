@@ -242,7 +242,7 @@ pub(crate) fn render_modal_surface(
         if placement_area.height == 0 || placement_area.width == 0 {
             return;
         }
-        let box_width = placement_area.width.clamp(40, 80);
+        let box_width = placement_area.width.min(80);
         // Inner content width = box_width − 2 border − 2 horizontal padding.
         let inner_width = box_width.saturating_sub(4).max(1);
         // Reserve rows for the fixed chrome (title/subtitle/blanks/diff box +
@@ -252,6 +252,7 @@ pub(crate) fn render_modal_surface(
         let list_visible = placement_area.height.saturating_sub(CHROME_ROWS).max(3) as usize;
         let lines = crate::presentation::theme_picker::theme_picker_lines(
             picker,
+            &state.ui.theme_state.choices,
             state.ui.display_settings.syntax_highlighting,
             styles,
             inner_width,
@@ -279,7 +280,7 @@ pub(crate) fn render_modal_surface(
         }
         // Clamp the box to a stable width so the top border (and its title) do
         // not breathe as the active role / filter changes.
-        let box_width = placement_area.width.clamp(40, 96);
+        let box_width = placement_area.width.min(96);
         // Inner content width = box_width − 2 border − 2 horizontal padding.
         let inner_width = box_width.saturating_sub(4).max(1);
         // Adaptive list budget: give the list whichever is SMALLER of the rows
@@ -325,7 +326,7 @@ pub(crate) fn render_modal_surface(
         if placement_area.height == 0 || placement_area.width == 0 {
             return;
         }
-        let box_width = placement_area.width.clamp(40, 80);
+        let box_width = placement_area.width.min(80);
         let inner_width = box_width.saturating_sub(4).max(1);
         // Reserve chrome (prompt + blank + optional error + blank + hint) + borders.
         let list_visible = placement_area.height.saturating_sub(8).max(3) as usize;
@@ -382,7 +383,7 @@ pub(crate) fn render_modal_surface(
         crate::surface_content::surface_content(text_surface, state, styles);
     let policy = modal_box_policy(modal);
     let placement_area = modal_placement_area(area, input_area, modal);
-    if placement_area.height == 0 {
+    if placement_area.width == 0 || placement_area.height == 0 {
         return;
     }
     let (width, height) = modal_box_size(placement_area, &body, policy);
@@ -410,14 +411,10 @@ fn render_styled_modal_box(
     lines: Vec<Line<'static>>,
     border: Color,
 ) {
-    if placement_area.height == 0 || placement_area.width == 0 {
+    let (box_width, box_height) = styled_modal_box_size(placement_area, title, &lines);
+    if box_width == 0 || box_height == 0 {
         return;
     }
-    let content_w = lines.iter().map(Line::width).max().unwrap_or(0) as u16;
-    let title_w = text_width(title) as u16;
-    // +4 = 2 border + 2 horizontal padding.
-    let box_width = (content_w.max(title_w) + 4).clamp(40, placement_area.width.min(100));
-    let box_height = (lines.len() as u16 + 2).min(placement_area.height);
     let modal_area = layout::centered_fixed_area(placement_area, box_width, box_height);
 
     frame.render_widget(Clear, modal_area);
@@ -436,6 +433,31 @@ fn render_styled_modal_box(
             .block(block),
         modal_area,
     );
+}
+
+fn styled_modal_box_size(placement_area: Rect, title: &str, lines: &[Line<'static>]) -> (u16, u16) {
+    if placement_area.width == 0 || placement_area.height == 0 {
+        return (0, 0);
+    }
+
+    let natural_width = lines
+        .iter()
+        .map(Line::width)
+        .max()
+        .unwrap_or(0)
+        .max(text_width(title))
+        .saturating_add(4);
+    let max_width = usize::from(placement_area.width.min(DEFAULT_OVERLAY_MAX_WIDTH));
+    let min_width = usize::from(placement_area.width.min(DEFAULT_OVERLAY_MIN_WIDTH));
+    let box_width = natural_width.clamp(min_width, max_width) as u16;
+    let inner_width = box_width.saturating_sub(4).max(1);
+    let wrapped_rows = Paragraph::new(lines.to_vec())
+        .wrap(Wrap { trim: false })
+        .line_count(inner_width);
+    let box_height = wrapped_rows
+        .saturating_add(2)
+        .min(usize::from(placement_area.height)) as u16;
+    (box_width, box_height)
 }
 
 /// Absolute terminal caret position for a content-relative `(col, row)` inside

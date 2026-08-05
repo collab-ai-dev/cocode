@@ -243,7 +243,9 @@ pub fn context_stack(ctx: TuiContext) -> Vec<KbContext> {
             KbContext::Select,
             KbContext::Global,
         ],
-        Settings => vec![KbContext::Settings, KbContext::Select, KbContext::Global],
+        // No generic Select context: its bare j/k bindings would steal text
+        // from the settings filter. Settings owns arrows/Enter/Esc directly.
+        Settings => vec![KbContext::Settings, KbContext::Global],
         // Global-only: the editor's nav + text input come entirely from
         // `modal_pane::permissions_editor::map_key`. Deliberately NO
         // Select/Confirmation — those would resolve arrows to `Surface*`

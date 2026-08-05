@@ -10,7 +10,6 @@ mod help;
 mod permission;
 mod pickers;
 mod rewind;
-mod settings;
 
 use ratatui::prelude::*;
 
@@ -43,7 +42,6 @@ pub(crate) enum TextSurfaceContent<'a> {
     PluginHint(&'a crate::state::PluginHintState),
     McpServerSelect(&'a crate::state::McpServerSelectState),
     Rewind(&'a crate::state::RewindState),
-    Settings(&'a crate::widgets::settings_panel::SettingsPanelState),
     PlanApproval(&'a crate::state::PlanApprovalPromptState),
     SkillsDialog(&'a crate::state::SkillsDialogState),
     PluginDialog(&'a crate::state::PluginDialogState),
@@ -86,7 +84,8 @@ pub(crate) fn modal_text_surface(modal: &ModalState) -> Option<TextSurfaceConten
         ModalState::Export(_) => return None,
         ModalState::DiffView(d) => TextSurfaceContent::DiffView(d),
         ModalState::Rewind(r) => TextSurfaceContent::Rewind(r),
-        ModalState::Settings(s) => TextSurfaceContent::Settings(s),
+        // Rendered by the styled searchable settings branch.
+        ModalState::Settings(_) => return None,
         ModalState::MemoryDialog(_) => return None,
         ModalState::WorkflowPicker(_) => return None,
         ModalState::SkillsDialog(s) => TextSurfaceContent::SkillsDialog(s),
@@ -147,6 +146,13 @@ pub(crate) fn modal_styled_surface(
         ModalState::Journey(j) => {
             crate::presentation::journey::journey_lines(j, styles, list_budget)
         }
+        ModalState::Settings(settings) => crate::presentation::settings::settings_lines(
+            settings,
+            &state.ui.display_settings,
+            &state.ui.theme_state.active_id,
+            styles,
+            list_budget,
+        ),
         _ => return None,
     })
 }
@@ -187,7 +193,6 @@ pub(crate) fn surface_content(
         TextSurfaceContent::PluginHint(ph) => confirm::plugin_hint_content(ph, styles),
         TextSurfaceContent::McpServerSelect(ms) => pickers::mcp_server_select_content(ms, styles),
         TextSurfaceContent::Rewind(r) => rewind::rewind_surface_content(r, styles),
-        TextSurfaceContent::Settings(s) => settings::settings_surface_content(s, styles),
         TextSurfaceContent::PlanApproval(p) => confirm::plan_approval_content(p, styles),
         TextSurfaceContent::SkillsDialog(s) => pickers::skills_dialog_content(s, styles),
         TextSurfaceContent::PluginDialog(p) => pickers::plugin_dialog_content(p, styles),

@@ -1,13 +1,20 @@
 use super::*;
 use crate::state::AppState;
 use crate::state::ModalState;
+use crate::state::ModelPickerState;
 use crate::state::PanePromptState;
+use crate::state::ProviderTemplate;
+use crate::state::ProviderWizardState;
+use crate::state::ThemePickerOrigin;
+use crate::state::ThemePickerState;
 use crate::state::surface_payloads::PermissionDetail;
 use crate::state::surface_payloads::PermissionPromptState;
 use crate::state::transcript::TranscriptState;
 use crate::surface_content::TextSurfaceContent;
 use crate::theme::Theme;
 use coco_tui_ui::engine::compatibility::TerminalCompatibility;
+use coco_tui_ui::engine::terminal::SurfaceTerminal;
+use ratatui::backend::TestBackend;
 
 fn permission_prompt() -> PermissionPromptState {
     permission_prompt_with_id("p1")
@@ -38,6 +45,54 @@ fn permission_prompt_with_id(request_id: &str) -> PermissionPromptState {
         mcp_allow_scope: Default::default(),
         deny_reason_input: None,
     }
+}
+
+fn assert_narrow_modal_renders(modal: ModalState) {
+    let width = 24;
+    let height = 8;
+    let backend = TestBackend::new(width, height);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    let state = AppState::new();
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let mut transcript_layout = crate::widgets::TranscriptLayoutIndex::default();
+    let mut layout = crate::FrameLayout::default();
+
+    terminal
+        .draw_viewport(|frame| {
+            render_modal_surface(
+                frame,
+                Rect::new(0, 0, width, height),
+                None,
+                &modal,
+                &state,
+                &mut transcript_layout,
+                styles,
+                &mut layout,
+            );
+        })
+        .expect("narrow modal draw");
+}
+
+#[test]
+fn specialized_modals_render_on_narrow_short_terminals() {
+    let state = AppState::new();
+    assert_narrow_modal_renders(ModalState::ThemePicker(ThemePickerState {
+        selected: 0,
+        original_setting: state.ui.theme_state.setting,
+        origin: ThemePickerOrigin::Standalone,
+    }));
+    assert_narrow_modal_renders(ModalState::ModelPicker(ModelPickerState {
+        role: coco_types::ModelRole::Main,
+        entries: Vec::new(),
+        filter: String::new(),
+        selected: 0,
+        effort: None,
+    }));
+    assert_narrow_modal_renders(ModalState::ProviderWizard(ProviderWizardState::new(vec![
+        ProviderTemplate::custom(),
+    ])));
 }
 
 #[test]
@@ -107,6 +162,25 @@ fn modal_placement_area_uses_full_area() {
     let placement = modal_placement_area(area, Some(input_area), &modal);
 
     assert_eq!(placement, area);
+}
+
+#[test]
+fn styled_modal_box_fits_terminals_narrower_than_default_minimum() {
+    let area = Rect::new(0, 0, 24, 8);
+    let lines = vec![Line::from("content")];
+
+    assert_eq!(styled_modal_box_size(area, "Title", &lines), (24, 3));
+}
+
+#[test]
+fn styled_modal_box_height_accounts_for_wrapped_rows() {
+    let area = Rect::new(0, 0, 40, 20);
+    let lines = vec![Line::from("x".repeat(80))];
+
+    let (width, height) = styled_modal_box_size(area, "", &lines);
+
+    assert_eq!(width, 40);
+    assert_eq!(height, 5);
 }
 
 #[test]

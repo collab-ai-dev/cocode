@@ -159,8 +159,6 @@ fn feature_gated_actions_silently_no_op() {
         KeybindingAction::AttachmentsRemove,
         KeybindingAction::PluginToggle,
         KeybindingAction::PluginInstall,
-        KeybindingAction::SettingsSearch,
-        KeybindingAction::SettingsRetry,
         KeybindingAction::MessageActionsPrev,
         KeybindingAction::MessageActionsNext,
         KeybindingAction::MessageActionsEnter,

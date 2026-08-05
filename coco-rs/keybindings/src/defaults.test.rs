@@ -96,6 +96,20 @@ fn confirmation_enter_selects_focused_action() {
 }
 
 #[test]
+fn settings_escape_uses_cancel_semantics() {
+    let blocks = default_blocks();
+    let settings = blocks
+        .iter()
+        .find(|block| block.context == KeybindingContext::Settings)
+        .expect("Settings block present");
+
+    assert_eq!(
+        settings.bindings.get("escape").and_then(Option::as_ref),
+        Some(&KeybindingAction::SelectCancel),
+    );
+}
+
+#[test]
 fn image_paste_key_is_platform_appropriate() {
     let blocks = default_blocks();
     let chat = blocks

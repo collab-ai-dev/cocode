@@ -1,4 +1,4 @@
-//! Tabbed Settings modal behavior.
+//! Searchable settings-browser behavior.
 
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -6,54 +6,77 @@ use crossterm::event::KeyModifiers;
 
 use crate::events::TuiCommand;
 use crate::i18n::t;
+use crate::settings_registry::SettingAction;
+use crate::settings_registry::SettingId;
 use crate::state::AppState;
 use crate::state::ModalState;
 use crate::state::ui::Toast;
 use crate::widgets::settings_panel::SettingsPanelState;
-use crate::widgets::settings_panel::SettingsTab;
 
 pub(crate) fn map_key(key: KeyEvent) -> Option<TuiCommand> {
     match key.code {
-        KeyCode::Tab => Some(TuiCommand::SettingsNextTab),
-        KeyCode::BackTab => Some(TuiCommand::SettingsPrevTab),
         KeyCode::Up => Some(TuiCommand::SurfacePrev),
         KeyCode::Down => Some(TuiCommand::SurfaceNext),
+        KeyCode::Home => Some(TuiCommand::SurfaceJumpStart),
+        KeyCode::End => Some(TuiCommand::SurfaceJumpEnd),
         KeyCode::Enter => Some(TuiCommand::SurfaceConfirm),
+        KeyCode::Backspace => Some(TuiCommand::SurfaceFilterBackspace),
         KeyCode::Esc => Some(TuiCommand::Cancel),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(TuiCommand::Cancel)
+        }
+        KeyCode::Char(c) if matches!(key.modifiers, KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+            Some(TuiCommand::SurfaceFilter(c))
         }
         _ => None,
     }
 }
 
-pub(super) fn confirm(state: &mut AppState, mut s: SettingsPanelState) {
-    if let SettingsTab::Display = s.active_tab {
-        if s.is_syntax_highlighting_selected() {
+/// Route bracketed paste and IME commits into the active settings filter.
+/// Paste bypasses the keybinding path, so it must be consumed here to avoid
+/// leaking text into the composer hidden behind the modal.
+pub(crate) fn route_paste(state: &mut AppState, text: &str) -> bool {
+    let Some(ModalState::Settings(settings)) = state.ui.modal.as_mut() else {
+        return false;
+    };
+    for c in text.chars().filter(|c| !c.is_control()) {
+        settings.insert_filter(c);
+    }
+    true
+}
+
+pub(super) fn confirm(state: &mut AppState, s: SettingsPanelState) {
+    let Some(meta) = s.selected_setting().copied() else {
+        state.ui.restore_modal(ModalState::Settings(s));
+        return;
+    };
+
+    match meta.action {
+        SettingAction::OpenThemePicker => {
+            crate::update::show::open_theme_picker_from_settings(state, s);
+            return;
+        }
+        SettingAction::CycleSyntaxHighlighting => {
             toggle_syntax_highlighting(state);
-            s.set_display_settings(state.ui.display_settings.clone());
-        } else if s.is_copy_full_response_selected() {
+        }
+        SettingAction::ToggleCopyFullResponse => {
             toggle_copy_full_response(state);
-            s.set_display_settings(state.ui.display_settings.clone());
+        }
+        SettingAction::ReadOnly => {
+            if let Some(message) = setting_override_message(state, meta.id) {
+                state.ui.add_toast(Toast::warning(message));
+            } else {
+                let message = t!("toast.settings_edit_in_file", key = meta.id.key()).to_string();
+                state.ui.add_toast(Toast::info(message));
+            }
         }
     }
     state.ui.restore_modal(ModalState::Settings(s));
 }
 
 pub(crate) fn toggle_syntax_highlighting(state: &mut AppState) {
-    if let Some(source) = state
-        .ui
-        .display_settings
-        .syntax_highlighting_editability
-        .overriding_source()
-    {
-        state.ui.add_toast(Toast::warning(
-            t!(
-                "toast.syntax_highlighting_overridden",
-                source = source.as_str()
-            )
-            .to_string(),
-        ));
+    if let Some(message) = setting_override_message(state, SettingId::SyntaxHighlighting) {
+        state.ui.add_toast(Toast::warning(message));
         return;
     }
 
@@ -69,9 +92,8 @@ pub(crate) fn toggle_syntax_highlighting(state: &mut AppState) {
         serde_json::json!(level),
     ) {
         Ok(path) => {
-            let status = crate::widgets::settings_panel::syntax_highlighting_status(
-                next.syntax_highlighting,
-            );
+            let status =
+                crate::presentation::settings::syntax_highlighting_status(next.syntax_highlighting);
             state.ui.apply_display_settings(next);
             let path_text = path.display().to_string();
             state.ui.add_toast(Toast::success(
@@ -94,6 +116,10 @@ pub(crate) fn toggle_syntax_highlighting(state: &mut AppState) {
 }
 
 fn toggle_copy_full_response(state: &mut AppState) {
+    if let Some(message) = setting_override_message(state, SettingId::CopyFullResponse) {
+        state.ui.add_toast(Toast::warning(message));
+        return;
+    }
     let enabled = !state.ui.display_settings.copy_full_response;
     let next = state
         .ui
@@ -132,11 +158,25 @@ fn toggle_copy_full_response(state: &mut AppState) {
     }
 }
 
-pub(super) fn item_count(s: &SettingsPanelState) -> usize {
-    match s.active_tab {
-        SettingsTab::Display => s.display_item_count(),
-        SettingsTab::OutputStyle => s.output_styles.len(),
-        SettingsTab::Permissions => s.permission_rules.len(),
-        SettingsTab::About => 0,
-    }
+pub(crate) fn setting_override_message(state: &AppState, id: SettingId) -> Option<String> {
+    state
+        .ui
+        .display_settings
+        .overriding_source(id)
+        .map(|source| {
+            t!(
+                "toast.settings_overridden",
+                key = id.key(),
+                source = source.as_str()
+            )
+            .to_string()
+        })
 }
+
+pub(super) fn item_count(s: &SettingsPanelState) -> usize {
+    s.filtered_settings().len()
+}
+
+#[cfg(test)]
+#[path = "settings.test.rs"]
+mod tests;

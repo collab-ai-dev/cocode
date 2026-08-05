@@ -919,17 +919,37 @@ impl WorkflowPickerState {
     }
 }
 
-/// Standalone theme picker. Opened by `/theme`; navigating live-previews
-/// the focused theme via an in-memory `apply_theme_setting`, Enter persists,
-/// Esc restores `original_setting` so the preview never sticks.
+/// Where the theme picker returns after confirm or cancel.
+#[derive(Debug, Clone, Default)]
+pub enum ThemePickerOrigin {
+    #[default]
+    Standalone,
+    Settings(Box<crate::widgets::settings_panel::SettingsPanelState>),
+}
+
+/// Theme picker opened standalone by `/theme` or as a Settings child editor.
+/// Navigation live-previews the focused theme; Enter persists and Esc restores
+/// `original_setting` so the preview never sticks.
 #[derive(Debug, Clone)]
 pub struct ThemePickerState {
-    /// Auto + every built-in / custom theme, in display order.
-    pub choices: Vec<crate::theme::ThemeChoice>,
-    /// Index into `choices` (clamped to range by the renderer / nav).
+    /// Index into the live [`crate::theme::ThemeRuntimeState::choices`].
     pub selected: i32,
-    /// Theme setting active when the picker opened, restored on cancel.
+    /// Persisted setting when the picker opened, or at the latest successful
+    /// external reload. Restored on cancel.
     pub original_setting: crate::theme::ThemeSetting,
+    /// Owns any parent state needed to resume the invoking flow exactly.
+    pub origin: ThemePickerOrigin,
+}
+
+impl ThemePickerState {
+    pub(crate) fn rebase(&mut self, theme_state: &crate::theme::ThemeRuntimeState) {
+        self.original_setting = theme_state.setting.clone();
+        self.selected = theme_state
+            .choices
+            .iter()
+            .position(|choice| choice.setting == theme_state.setting)
+            .unwrap_or_default() as i32;
+    }
 }
 
 /// Interactive `/add-dir` (no-argument) overlay — a single-line directory-path

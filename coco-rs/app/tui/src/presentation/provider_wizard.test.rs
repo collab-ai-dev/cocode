@@ -46,7 +46,7 @@ fn render_snapshot(state: &ProviderWizardState) -> String {
     terminal
         .draw(|frame| {
             let area = frame.area();
-            let box_width = area.width.clamp(40, 80);
+            let box_width = area.width.min(80);
             let inner_width = box_width.saturating_sub(4).max(1);
             let list_visible = area.height.saturating_sub(8).max(3) as usize;
             let lines = provider_wizard_lines(state, styles, inner_width as usize, list_visible);

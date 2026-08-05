@@ -2575,6 +2575,7 @@ dependencies = [
  "coco-file-ignore",
  "coco-file-watch",
  "coco-frontmatter",
+ "coco-keybindings",
  "coco-system-reminder",
  "coco-types",
  "coco-utils-common",
