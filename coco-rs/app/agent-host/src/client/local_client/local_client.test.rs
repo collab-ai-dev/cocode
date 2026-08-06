@@ -4,9 +4,8 @@ use coco_app_server::{
     AppServer, AttachSessionOptions, LocalClientAdapter, LocalClientDispatchError,
     LocalClientRequestContext, LocalClientRequestFuture, LocalClientRequestHandler,
 };
-use coco_types::{
-    ClientRequest, CoreEvent, ServerNotification, SessionEnvelope, SessionId, SessionState,
-};
+use coco_event_types::{CoreEvent, ServerNotification, SessionEnvelope};
+use coco_types::{ClientRequest, SessionId, SessionState};
 
 use super::*;
 
@@ -280,8 +279,8 @@ fn lifecycle_overflow_drops_oldest_without_closing_the_client() {
     for _ in 0..3 {
         state
             .push(coco_app_server::LocalClientInbound::Lifecycle(
-                coco_types::SessionLifecycleEffect {
-                    kind: coco_types::SessionLifecycleEffectKind::SessionEnded {
+                coco_event_types::SessionLifecycleEffect {
+                    kind: coco_event_types::SessionLifecycleEffectKind::SessionEnded {
                         session_id: session("session-lifecycle-overflow"),
                     },
                 },
@@ -297,7 +296,7 @@ fn lifecycle_overflow_drops_oldest_without_closing_the_client() {
 fn server_request_overflow_still_fails_the_ingress() {
     let mut state = LocalInboundState::new(1);
     let delivery = || {
-        Box::new(coco_types::ServerRequestDelivery {
+        Box::new(coco_event_types::ServerRequestDelivery {
             session_id: session("session-request-overflow"),
             request_id: coco_types::RequestId::String("server-request-test".to_string()),
             request: coco_types::ServerRequest::RequestUserInput(

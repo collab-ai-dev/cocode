@@ -266,22 +266,22 @@ pub(crate) async fn record_file_read(
     ctx: &coco_tool_runtime::ToolUseContext,
     path: &Path,
     content: String,
-    range: coco_context::FileReadRange,
+    range: coco_types::FileReadRange,
     input_offset: Option<i32>,
     input_limit: Option<i32>,
 ) {
     if let Some(frs) = &ctx.file_read_state
         && let Ok(abs_path) = tokio::fs::canonicalize(path).await
-        && let Ok(mtime) = coco_context::file_mtime_ms(&abs_path).await
+        && let Ok(mtime) = coco_utils_common::file_mtime_ms(&abs_path).await
     {
         let mut frs = frs.write().await;
         frs.set_from_read(
             abs_path,
-            coco_context::FileReadEntry {
+            coco_types::FileReadEntry {
                 content,
                 mtime_ms: mtime,
                 range,
-                evidence: coco_context::ReadEvidence::RealFileView,
+                evidence: coco_types::ReadEvidence::RealFileView,
             },
             input_offset,
             input_limit,
@@ -297,7 +297,7 @@ pub(crate) async fn record_file_edit(
 ) {
     if let Some(frs) = &ctx.file_read_state
         && let Ok(abs_path) = tokio::fs::canonicalize(path).await
-        && let Ok(mtime) = coco_context::file_mtime_ms(&abs_path).await
+        && let Ok(mtime) = coco_utils_common::file_mtime_ms(&abs_path).await
     {
         let mut frs = frs.write().await;
         frs.update_after_edit(&abs_path, new_content, mtime);
@@ -563,14 +563,11 @@ pub(crate) async fn track_file_edit(ctx: &coco_tool_runtime::ToolUseContext, pat
         }
     };
 
-    if let (Some(fh), Some(config_home)) = (&ctx.file_history, &ctx.config_home) {
-        // Use user_message_id (the originating user message UUID), NOT tool_use_id.
-        if let Some(msg_id) = &ctx.user_message_id {
-            let mut fh = fh.write().await;
-            if let Err(e) = fh.track_edit(path, msg_id, config_home, sid.as_str()).await {
-                tracing::warn!("file history track_edit failed: {e}");
-            }
-        }
+    // Use user_message_id (the originating user message UUID), NOT tool_use_id.
+    if let (Some(fh), Some(msg_id)) = (&ctx.file_history, &ctx.user_message_id)
+        && let Err(e) = fh.track_edit(path, msg_id, sid.as_str()).await
+    {
+        tracing::warn!("file history track_edit failed: {e}");
     }
 }
 

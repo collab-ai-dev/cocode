@@ -24,7 +24,7 @@ pub(crate) enum NoToolCallsTerminal {
     ContinueLoop,
     Return {
         result: Box<QueryResult>,
-        terminal: Option<coco_types::TurnEndedParams>,
+        terminal: Option<coco_event_types::TurnEndedParams>,
     },
 }
 
@@ -151,9 +151,9 @@ impl QueryEngine {
 
         turn_state.recovery_context.clear();
         warn!(turn = turn_state.turn, ?anomaly, %failure_message);
-        let error = coco_types::ErrorPayload {
+        let error = coco_event_types::ErrorPayload {
             message: failure_message.to_string(),
-            code: coco_types::ErrorCode::Provider,
+            code: coco_event_types::ErrorCode::Provider,
         };
         NoToolCallsTerminal::Return {
             result: Box::new(mark_query_failed(
@@ -183,7 +183,7 @@ impl QueryEngine {
         estimated_tokens: i64,
         context_window: i64,
         history: &mut MessageHistory,
-        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
     ) -> QueryResult {
         warn!(
             estimated_tokens,
@@ -201,14 +201,14 @@ impl QueryEngine {
             event_tx,
         )
         .await;
-        let error = coco_types::ErrorPayload {
+        let error = coco_event_types::ErrorPayload {
             message: format!(
                 "blocking_limit: estimated {estimated_tokens} tokens \
                  exceeds active model context window {context_window} \
                  (provider={}, model={})",
                 active_snapshot.provider, active_snapshot.model_id,
             ),
-            code: coco_types::ErrorCode::Provider,
+            code: coco_event_types::ErrorCode::Provider,
         };
         mark_query_failed(
             make_query_result(
@@ -238,7 +238,7 @@ impl QueryEngine {
         turn_state: &LoopTurnState,
         err: &coco_messages::ImageSizeError,
         history: &mut MessageHistory,
-        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
     ) -> QueryResult {
         let message = err.message();
         warn!(
@@ -252,9 +252,9 @@ impl QueryEngine {
             event_tx,
         )
         .await;
-        let error = coco_types::ErrorPayload {
+        let error = coco_event_types::ErrorPayload {
             message: message.clone(),
-            code: coco_types::ErrorCode::Input,
+            code: coco_event_types::ErrorCode::Input,
         };
         mark_query_failed(
             make_query_result(
@@ -279,17 +279,17 @@ impl QueryEngine {
         turn_state: &LoopTurnState,
         response_text: String,
         history: &mut MessageHistory,
-        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
         tool_calls: &[ToolCallPart],
         total_cost_usd: f64,
         max_budget_usd: f64,
     ) -> QueryResult {
         append_budget_skipped_tool_results(history, event_tx, tool_calls, &self.tools).await;
-        let error = coco_types::ErrorPayload {
+        let error = coco_event_types::ErrorPayload {
             message: format!(
                 "maximum USD budget reached (${total_cost_usd:.4} / ${max_budget_usd:.4})"
             ),
-            code: coco_types::ErrorCode::Resource,
+            code: coco_event_types::ErrorCode::Resource,
         };
         mark_query_failed(
             make_query_result(
@@ -307,11 +307,11 @@ impl QueryEngine {
         )
     }
 
-    pub(crate) fn structured_output_retry_cap_error(&self) -> coco_types::ErrorPayload {
+    pub(crate) fn structured_output_retry_cap_error(&self) -> coco_event_types::ErrorPayload {
         let cap = self.config.max_structured_output_retries;
-        coco_types::ErrorPayload {
+        coco_event_types::ErrorPayload {
             message: format!("Failed to provide valid structured output after {cap} attempts"),
-            code: coco_types::ErrorCode::Provider,
+            code: coco_event_types::ErrorCode::Provider,
         }
     }
 
@@ -322,7 +322,7 @@ impl QueryEngine {
         turn_state: &mut LoopTurnState,
         response_text: String,
         history: &mut MessageHistory,
-        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
         hook_tx_opt: Option<&tokio::sync::mpsc::Sender<coco_hooks::HookExecutionEvent>>,
         cycle_turn_id: Option<coco_types::TurnId>,
         usage: TokenUsage,
@@ -466,9 +466,9 @@ impl QueryEngine {
                     stop_reason = %stop_reason,
                     "ending turn with typed failure — last message is api_error (C3 guard)"
                 );
-                let error = coco_types::ErrorPayload {
+                let error = coco_event_types::ErrorPayload {
                     message: payload.message,
-                    code: coco_types::ErrorCode::Provider,
+                    code: coco_event_types::ErrorCode::Provider,
                 };
                 NoToolCallsTerminal::Return {
                     result: Box::new(mark_query_failed(
@@ -552,7 +552,7 @@ impl QueryEngine {
 
 async fn append_budget_skipped_tool_results(
     history: &mut MessageHistory,
-    event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    event_tx: &Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
     tool_calls: &[ToolCallPart],
     tools: &coco_tool_runtime::ToolRegistry,
 ) {

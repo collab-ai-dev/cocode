@@ -18,8 +18,8 @@ mod common;
 mod sdk_server;
 
 use anyhow::Result;
+use coco_event_types::NotificationMethod;
 use coco_types::ClientRequestMethod;
-use coco_types::NotificationMethod;
 
 use crate::sdk_server::harness::build_live_server;
 use crate::sdk_server::harness::is_turn_terminal_method;

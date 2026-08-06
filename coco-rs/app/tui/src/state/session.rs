@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use coco_types::IdeDiagnosticsUpdatedParams;
-use coco_types::IdeSelectionChangedParams;
+use coco_event_types::IdeDiagnosticsUpdatedParams;
+use coco_event_types::IdeSelectionChangedParams;
 use coco_types::ModelRole;
 use coco_types::PermissionMode;
 use coco_types::ReasoningEffort;
@@ -65,7 +65,7 @@ pub struct ModelCatalogEntry {
 
 /// UI-facing projection of a slash command. Re-exported from
 /// `coco-types` so the same type can travel both on the
-/// [`coco_types::TuiOnlyEvent::AvailableCommandsRefreshed`] wire and
+/// [`coco_event_types::TuiOnlyEvent::AvailableCommandsRefreshed`] wire and
 /// inside [`SessionState`] without a conversion layer.
 pub use coco_types::SlashCommandInfo;
 
@@ -101,7 +101,7 @@ pub struct QueuedCommandDisplay {
 }
 
 /// TUI-side label for the active compaction sub-phase. Built from
-/// `coco_types::CompactionPhaseParams` so the renderer can pick a
+/// `coco_event_types::CompactionPhaseParams` so the renderer can pick a
 /// localized spinner string without re-deriving it each frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompactionPhaseLabel {
@@ -678,7 +678,7 @@ impl SessionState {
     /// cumulative over that task's own life and may arrive out of
     /// order, so the fold adds only the positive delta against the
     /// task's high-water mark. Stale (lower) snapshots are no-ops.
-    pub fn fold_subagent_usage(&mut self, task_id: &str, usage: &coco_types::TaskUsage) {
+    pub fn fold_subagent_usage(&mut self, task_id: &str, usage: &coco_event_types::TaskUsage) {
         let mark = self
             .subagent_usage_marks
             .entry(task_id.to_string())

@@ -199,7 +199,7 @@ impl AppServerHostHandler {
                 && let Err(error) = app_server.validate_session_grant(
                     connection,
                     target,
-                    coco_types::SessionAccess::ReadOnly,
+                    coco_event_types::SessionAccess::ReadOnly,
                 )
             {
                 return Box::pin(async move {
@@ -221,7 +221,7 @@ impl AppServerHostHandler {
             && let Err(error) = app_server.validate_session_grant(
                 connection,
                 &params.target,
-                coco_types::SessionAccess::Full,
+                coco_event_types::SessionAccess::Full,
             )
         {
             return Box::pin(async move {

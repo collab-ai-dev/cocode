@@ -6,13 +6,13 @@
 use pretty_assertions::assert_eq;
 
 use base64::Engine;
+use coco_event_types::TuiOnlyEvent;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_messages::UserContent;
 use coco_messages::UserMessage;
 use coco_types::SessionSummary;
 use coco_types::SlashCommandInfo;
-use coco_types::TuiOnlyEvent;
 use uuid::Uuid;
 
 use super::handle;
@@ -611,8 +611,8 @@ fn open_workflow_picker_opens_modal_with_entries() {
     let consumed = handle(
         &mut state,
         TuiOnlyEvent::OpenWorkflowPicker {
-            payload: coco_types::WorkflowDialogPayload {
-                entries: vec![coco_types::WorkflowDialogEntry {
+            payload: coco_event_types::WorkflowDialogPayload {
+                entries: vec![coco_event_types::WorkflowDialogEntry {
                     name: "release".to_string(),
                     description: "Ship the build".to_string(),
                     source_path: Some(".coco/workflows/release.ts".to_string()),
@@ -734,8 +734,8 @@ fn diff_payload(
     insertions: i64,
     deletions: i64,
     file_paths: Vec<&str>,
-) -> coco_types::RewindDiffStatsPayload {
-    coco_types::RewindDiffStatsPayload {
+) -> coco_event_types::RewindDiffStatsPayload {
+    coco_event_types::RewindDiffStatsPayload {
         insertions,
         deletions,
         file_paths: file_paths.iter().map(ToString::to_string).collect(),
@@ -825,7 +825,7 @@ fn row_metadata_ready_marks_no_code_restore_when_snapshot_missing() {
     let consumed = handle(
         &mut state,
         TuiOnlyEvent::RewindRowMetadataReady {
-            rows: vec![coco_types::RewindRowMetadata {
+            rows: vec![coco_event_types::RewindRowMetadata {
                 message_id: target.to_string(),
                 metadata: None,
             }],
@@ -858,7 +858,7 @@ fn row_metadata_ready_populates_per_row_stats() {
     let consumed = handle(
         &mut state,
         TuiOnlyEvent::RewindRowMetadataReady {
-            rows: vec![coco_types::RewindRowMetadata {
+            rows: vec![coco_event_types::RewindRowMetadata {
                 message_id: target.to_string(),
                 metadata: Some(diff_payload(3, 1, vec!["src/local.rs"])),
             }],

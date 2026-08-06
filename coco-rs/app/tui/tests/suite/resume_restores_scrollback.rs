@@ -17,6 +17,9 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
+use coco_event_types::ServerNotificationIdentity;
 use coco_messages::Message;
 use coco_messages::SystemMessage;
 use coco_messages::create_user_interruption_system_message;
@@ -26,9 +29,6 @@ use coco_tui::handle_event_for_test as handle_core_event;
 use coco_tui::state::StreamingState;
 use coco_tui::state::ToolExecution;
 use coco_tui::state::ToolStatus;
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
-use coco_types::ServerNotificationIdentity;
 
 fn test_session_id(value: &str) -> coco_types::SessionId {
     match coco_types::SessionId::try_new(value) {

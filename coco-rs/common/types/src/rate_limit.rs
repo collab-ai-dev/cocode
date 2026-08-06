@@ -17,7 +17,6 @@
 //! map stays bounded by the number of configured providers.
 
 use crate::ProviderApi;
-use crate::event::RateLimitStatus;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -41,3 +40,12 @@ pub struct RateLimitEntry {
 #[cfg(test)]
 #[path = "rate_limit.test.rs"]
 mod tests;
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RateLimitStatus {
+    Allowed,
+    AllowedWarning,
+    Rejected,
+}

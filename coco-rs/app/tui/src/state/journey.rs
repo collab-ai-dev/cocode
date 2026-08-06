@@ -6,7 +6,7 @@
 //! confirm sub-mode. The payload is host-assembled (`coco-journey`); this state
 //! only tracks selection + mode.
 
-use coco_types::{
+use coco_event_types::{
     JourneyDialogPayload, JourneyNodeBodyWire, JourneyNodeWire, JourneyStatsWire,
     TimelineBucketWire,
 };

@@ -299,7 +299,7 @@ impl Tool for NotebookEditTool {
                     });
                 }
 
-                if let Ok(disk_mtime) = coco_context::file_mtime_ms(&abs_path).await
+                if let Ok(disk_mtime) = coco_utils_common::file_mtime_ms(&abs_path).await
                     && disk_mtime > entry.mtime_ms
                 {
                     return Err(ToolError::ExecutionFailed {

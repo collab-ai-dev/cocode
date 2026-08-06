@@ -16,7 +16,7 @@ pub fn fork_skill_result_body(name: &str, result: Result<String, String>) -> Str
 
 pub async fn invoke_fork_skill_and_append_result(
     session: &SessionHandle,
-    event_tx: tokio::sync::mpsc::Sender<coco_types::CoreEvent>,
+    event_tx: tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>,
     name: &str,
     args: &str,
 ) -> Vec<Arc<coco_messages::Message>> {

@@ -734,50 +734,50 @@ pub(super) async fn dispatch_slash_command(
                     // Convert from coco_commands::MemoryFileEntry to the
                     // wire-payload struct in coco-types so the TUI can
                     // consume the event without depending on coco-commands.
-                    let wire_entries: Vec<coco_types::MemoryDialogEntry> = entries
+                    let wire_entries: Vec<coco_event_types::MemoryDialogEntry> = entries
                         .into_iter()
                         .map(|e| {
                             let row_kind = if e.is_folder {
-                                coco_types::MemoryDialogRowKind::Folder { enabled: true }
+                                coco_event_types::MemoryDialogRowKind::Folder { enabled: true }
                             } else {
-                                coco_types::MemoryDialogRowKind::File {
+                                coco_event_types::MemoryDialogRowKind::File {
                                     exists: !e.is_new,
                                     read_only: false,
                                 }
                             };
-                            coco_types::MemoryDialogEntry {
+                            coco_event_types::MemoryDialogEntry {
                                 path: e.path.display().to_string(),
                                 label: e.label,
                                 scope: match e.scope {
                                     coco_commands::MemoryScope::Managed => {
-                                        coco_types::MemoryDialogScope::Managed
+                                        coco_event_types::MemoryDialogScope::Managed
                                     }
                                     coco_commands::MemoryScope::User => {
-                                        coco_types::MemoryDialogScope::User
+                                        coco_event_types::MemoryDialogScope::User
                                     }
                                     coco_commands::MemoryScope::Project => {
-                                        coco_types::MemoryDialogScope::Project
+                                        coco_event_types::MemoryDialogScope::Project
                                     }
                                     coco_commands::MemoryScope::ProjectLocal => {
-                                        coco_types::MemoryDialogScope::ProjectLocal
+                                        coco_event_types::MemoryDialogScope::ProjectLocal
                                     }
                                     coco_commands::MemoryScope::ProjectConfig => {
-                                        coco_types::MemoryDialogScope::ProjectConfig
+                                        coco_event_types::MemoryDialogScope::ProjectConfig
                                     }
                                     coco_commands::MemoryScope::Subdir => {
-                                        coco_types::MemoryDialogScope::Subdir
+                                        coco_event_types::MemoryDialogScope::Subdir
                                     }
                                     coco_commands::MemoryScope::Imported => {
-                                        coco_types::MemoryDialogScope::Imported
+                                        coco_event_types::MemoryDialogScope::Imported
                                     }
                                     coco_commands::MemoryScope::AutoMemFolder => {
-                                        coco_types::MemoryDialogScope::AutoMemFolder
+                                        coco_event_types::MemoryDialogScope::AutoMemFolder
                                     }
                                     coco_commands::MemoryScope::TeamMemFolder => {
-                                        coco_types::MemoryDialogScope::TeamMemFolder
+                                        coco_event_types::MemoryDialogScope::TeamMemFolder
                                     }
                                     coco_commands::MemoryScope::AgentMemFolder => {
-                                        coco_types::MemoryDialogScope::AgentMemFolder
+                                        coco_event_types::MemoryDialogScope::AgentMemFolder
                                     }
                                 },
                                 row_kind,

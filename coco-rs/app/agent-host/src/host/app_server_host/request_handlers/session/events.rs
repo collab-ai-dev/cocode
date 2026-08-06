@@ -1,4 +1,4 @@
-use coco_types::CoreEvent;
+use coco_event_types::CoreEvent;
 use tokio::sync::mpsc;
 
 use crate::app_server_host::outbound::{OutboundMessage, send_session_event};
@@ -30,12 +30,12 @@ pub(in crate::host::app_server_host::request_handlers) async fn forward_turn_eve
         std::sync::Arc<coco_app_server::AppServer<crate::app_session::AppSessionHandle>>,
     >,
 ) {
-    use coco_types::ServerNotification;
+    use coco_event_types::ServerNotification;
     // Clear the active-turn slot on the FIRST terminal `TurnEnded` only, so a
     // stray second terminal event can never wipe a fast next turn's slot.
     let mut turn_slot_cleared = false;
-    let mut pending_terminal: Option<coco_types::TurnEndedParams> = None;
-    let mut last_session_result: Option<coco_types::SessionResultParams> = None;
+    let mut pending_terminal: Option<coco_event_types::TurnEndedParams> = None;
+    let mut last_session_result: Option<coco_event_types::SessionResultParams> = None;
     let mut session_result_accounted = false;
     while let Some(event) = rx.recv().await {
         match event {
@@ -155,12 +155,12 @@ pub(in crate::host::app_server_host::request_handlers) async fn forward_turn_eve
         let _ = forward_terminal_event(
             &tx,
             &owner_session_id,
-            coco_types::TurnEndedParams::failed(
+            coco_event_types::TurnEndedParams::failed(
                 turn_id.clone(),
                 /*usage*/ None,
-                coco_types::ErrorPayload {
+                coco_event_types::ErrorPayload {
                     message: "turn runner exited without a terminal".to_string(),
-                    code: coco_types::ErrorCode::Unknown,
+                    code: coco_event_types::ErrorCode::Unknown,
                 },
             ),
             &session,
@@ -180,7 +180,7 @@ pub(in crate::host::app_server_host::request_handlers) async fn forward_turn_eve
 async fn forward_terminal_event(
     tx: &mpsc::Sender<OutboundMessage>,
     owner_session_id: &coco_types::SessionId,
-    ended: coco_types::TurnEndedParams,
+    ended: coco_event_types::TurnEndedParams,
     session: &crate::session_runtime::SessionHandle,
     turn_slot_cleared: &mut bool,
 ) -> bool {
@@ -213,7 +213,7 @@ async fn forward_terminal_event(
     send_session_event(
         tx,
         owner_session_id.clone(),
-        CoreEvent::Protocol(coco_types::ServerNotification::TurnEnded(ended)),
+        CoreEvent::Protocol(coco_event_types::ServerNotification::TurnEnded(ended)),
     )
     .await
     .is_ok()

@@ -506,3 +506,36 @@ pub struct ModelCatalogInfo {
 #[cfg(test)]
 #[path = "provider.test.rs"]
 mod tests;
+
+/// Payload for [`crate::ServerNotification::ModelRoleChanged`]. Carries
+/// the resolved binding (model + provider + thinking effort) that the
+/// TUI applies to `state.session.model_by_role[role]` and, when
+/// `role == Main`, also to `state.session.{model, provider,
+/// thinking_effort}` for the status bar.
+///
+/// Emitted by `tui_runner` after applying an in-memory override via
+/// `SessionRuntime::apply_role_override` / `apply_role_effort`. No
+/// persistence to settings.json — that's the user's job.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelRoleChangedParams {
+    pub role: crate::ModelRole,
+    pub model_id: String,
+    pub provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<i64>,
+    /// `None` ⇒ engine falls back to the model's
+    /// `default_thinking_level`. `Some(_)` ⇒ explicit user choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<crate::ReasoningEffort>,
+}
+
+/// Matches TS `FastModeStateSchema` (coreSchemas.ts:1883-1889).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FastModeState {
+    Off,
+    Cooldown,
+    On,
+}

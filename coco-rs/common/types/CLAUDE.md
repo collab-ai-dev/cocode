@@ -16,7 +16,11 @@ Provider / Model: `ProviderApi`, `ModelRole`, `ModelSpec`, `Capability`, `Capabi
 
 Thinking / Token / ID / Sandbox: `ThinkingLevel { effort, budget_tokens, options }`, `ReasoningEffort`, `TokenUsage`, `ModelUsage`, `SessionId`, `AgentId`, `TaskId`, `SandboxMode`.
 
-Event envelope (owned here — see `event-system-design.md`): `CoreEvent` (3-layer), `ServerNotification` (see `src/event.rs`; Turn lifecycle is `TurnStarted` + `TurnEnded(TurnEndedParams)` with discriminated `TurnOutcome`) + `NotificationMethod` (typed wire-method enum), `AgentStreamEvent`, `TuiOnlyEvent`, `ThreadItem`, plus per-event param structs.
+Event envelope: **not here** — `CoreEvent`, `ServerNotification`, `AgentStreamEvent`, `TuiOnlyEvent`, `ThreadItem`, `StreamAccumulator` and the per-event param structs live in `coco-event-types`, which depends on this crate. The split keeps the workspace's highest-churn API off its widest dependency; see `common/event-types/src/lib.rs`.
+
+Shell seam (contracts only; impls in `coco-shell`): `ShellProvider`, `BashOutputRewriter`, `ShellType`, `BuildExecOpts`, `BuiltCommand`, `RewriteSite`, `RewriteOutcome`, `PassthroughReason` — here so `coco-tool-runtime` can carry them without linking `exec/shell`.
+
+File-read cache: `FileReadState` / `FileReadEntry` / `ReadEvidence` (re-exported by `coco-context`, which owns the usage domain).
 
 Wire protocol: `ClientRequest` + `ClientRequestMethod` (see `src/client_request.rs`), `ServerRequest` + `ServerRequestMethod` (see `src/server_request.rs`), `JsonRpcMessage` family, `RequestId`, `error_codes`.
 `TurnStartParams` — shared SDK/TUI local-AppServer turn DTO: prompt + optional paste images, slash metadata attachment text, and turn-scoped model / permission-mode / thinking overrides.

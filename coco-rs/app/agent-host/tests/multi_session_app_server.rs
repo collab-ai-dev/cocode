@@ -22,11 +22,12 @@ use coco_app_server::{
 };
 use coco_app_server_client::ClientError;
 use coco_app_server_transport::{JsonRpcFrame, JsonRpcId, JsonRpcNotification, JsonRpcRequest};
+use coco_event_types::{CoreEvent, ServerNotification, SessionEnvelope};
 use coco_types::{
-    ClientRequestMethod, ConfigWriteParams, ConfigWriteTarget, CoreEvent, HookCallbackMatcher,
-    HookEventType, InitializeParams, ServerNotification, SessionCloseParams, SessionDeleteParams,
-    SessionEnvelope, SessionReadParams, SessionReadResult, SessionResumeParams,
-    SessionResumeResult, SessionStartParams, SessionStartResult, SessionState, SessionTarget,
+    ClientRequestMethod, ConfigWriteParams, ConfigWriteTarget, HookCallbackMatcher, HookEventType,
+    InitializeParams, SessionCloseParams, SessionDeleteParams, SessionReadParams,
+    SessionReadResult, SessionResumeParams, SessionResumeResult, SessionStartParams,
+    SessionStartResult, SessionState, SessionTarget,
 };
 use tokio::sync::mpsc;
 
@@ -720,7 +721,7 @@ impl TurnRunner for RecordingTurnRunner {
         Box::pin(async move {
             event_tx
                 .send(CoreEvent::Protocol(ServerNotification::TurnStarted(
-                    coco_types::TurnStartedParams {
+                    coco_event_types::TurnStartedParams {
                         turn_id: turn_id.clone(),
                     },
                 )))
@@ -763,7 +764,7 @@ impl TurnRunner for RecordingTurnRunner {
                 })
                 .map_err(|_| anyhow::anyhow!("turn observation receiver dropped"))?;
             let turn_result = (result_emission != TurnResultEmission::None).then(|| {
-                coco_types::SessionResultParams {
+                coco_event_types::SessionResultParams {
                     session_id: session.session_id().clone(),
                     total_turns: 1,
                     duration_ms: 77,
@@ -805,13 +806,13 @@ impl TurnRunner for RecordingTurnRunner {
                     .await?;
             }
             let mut ended = if cancelled {
-                coco_types::TurnEndedParams::interrupted(
+                coco_event_types::TurnEndedParams::interrupted(
                     turn_id,
                     None,
                     coco_types::TurnAbortReason::UserCancel,
                 )
             } else {
-                coco_types::TurnEndedParams::completed(
+                coco_event_types::TurnEndedParams::completed(
                     turn_id,
                     Some(coco_types::TokenUsage::default()),
                     Some(coco_messages::StopReason::EndTurn),

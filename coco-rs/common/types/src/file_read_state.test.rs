@@ -95,45 +95,6 @@ fn test_iter_entries() {
     assert_eq!(state.iter_entries().count(), 2);
 }
 
-#[tokio::test]
-async fn test_is_unchanged_missing_file() {
-    let state = FileReadState::new();
-    // File not in cache → false
-    assert!(
-        !state
-            .is_unchanged(std::path::Path::new("/nonexistent"))
-            .await
-    );
-}
-
-#[tokio::test]
-async fn test_is_unchanged_with_tempfile() {
-    use std::io::Write;
-    let mut state = FileReadState::new();
-    let dir = tempfile::tempdir().unwrap();
-    let file_path = dir.path().join("test.txt");
-    {
-        let mut f = std::fs::File::create(&file_path).unwrap();
-        f.write_all(b"hello").unwrap();
-    }
-    let mtime = file_mtime_ms(&file_path).await.unwrap();
-    state.set(
-        file_path.clone(),
-        FileReadEntry::full_real("hello".to_string(), mtime),
-    );
-    // Should be unchanged (mtime matches)
-    assert!(state.is_unchanged(&file_path).await);
-
-    // Modify the file
-    std::thread::sleep(std::time::Duration::from_millis(50));
-    {
-        let mut f = std::fs::File::create(&file_path).unwrap();
-        f.write_all(b"modified").unwrap();
-    }
-    // Now should be changed
-    assert!(!state.is_unchanged(&file_path).await);
-}
-
 #[test]
 fn test_snapshot_by_recency_ordering() {
     let mut state = FileReadState::new();

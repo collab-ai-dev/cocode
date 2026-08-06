@@ -15,6 +15,7 @@ pub mod disk_backed_schedule_store;
 pub mod error;
 pub mod executor;
 pub mod executor_streaming;
+pub mod file_history_handle;
 pub mod goal_handle;
 pub mod hook_handle;
 pub mod live_transcript;
@@ -102,6 +103,9 @@ pub use error::format_tool_error;
 pub use executor::PendingToolCall;
 pub use executor::ToolExecutor;
 pub use executor_streaming::StreamingHandle;
+pub use file_history_handle::FileHistoryHandle;
+pub use file_history_handle::FileHistoryHandleRef;
+pub use file_history_handle::NoOpFileHistoryHandle;
 pub use goal_handle::{
     GoalContinuation, GoalCreateRequest, GoalHandle, GoalHandleRef, GoalTurnFinalization,
     NoOpGoalHandle, ToolEvidenceObservation,

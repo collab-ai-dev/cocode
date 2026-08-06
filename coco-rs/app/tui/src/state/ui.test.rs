@@ -17,7 +17,7 @@ use crate::theme::ThemeConfig;
 use crate::theme::ThemeDefinition;
 use crate::theme::ThemeRuntimeState;
 use crate::theme::ThemeSetting;
-use coco_types::PermissionsEditorPayload;
+use coco_event_types::PermissionsEditorPayload;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::path::PathBuf;

@@ -13,7 +13,7 @@
 //! Two execution paths:
 //!   - **Interactive (`/agents` with no args)** — returns
 //!     [`crate::CommandResult::OpenDialog`] carrying an
-//!     [`coco_types::AgentsDialogPayload`] so the TUI mounts the 2-tab
+//!     [`coco_event_types::AgentsDialogPayload`] so the TUI mounts the 2-tab
 //!     overlay. The CLI bridge (`tui_runner.rs`) enriches the payload
 //!     with running counts at the moment the overlay opens.
 //!   - **Sub-commands** (`list` / `show <name>` / `paths` / `validate`
@@ -24,11 +24,11 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use coco_event_types::AgentsDialogEntry;
+use coco_event_types::AgentsDialogPayload;
 use coco_subagent::AgentDefinitionStore;
 use coco_subagent::BuiltinAgentCatalog;
 use coco_subagent::definition_store::AgentSearchPaths;
-use coco_types::AgentsDialogEntry;
-use coco_types::AgentsDialogPayload;
 
 use crate::CommandHandler;
 use crate::CommandResult;

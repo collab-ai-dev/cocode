@@ -97,9 +97,9 @@ async fn emit_appended_messages(
     for message in messages {
         let _ = event_tx
             .send(CoreEvent::Protocol(
-                coco_types::ServerNotification::MessageAppended {
+                coco_event_types::ServerNotification::MessageAppended {
                     message,
-                    identity: coco_types::ServerNotificationIdentity::default(),
+                    identity: coco_event_types::ServerNotificationIdentity::default(),
                 },
             ))
             .await;
@@ -122,8 +122,8 @@ pub(super) fn workspace_trust_rejected_from_env(value: Option<&str>) -> bool {
 /// `AddDirectories` update through local AppServer so the next batch's
 /// permission context sees the wider scope. Source is `Session` — never
 use coco_agent_host::goal_command;
+use coco_event_types::TuiOnlyEvent;
 use coco_query::CoreEvent;
-use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;
 
 use super::SlashFollowup;

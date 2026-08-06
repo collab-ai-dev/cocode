@@ -578,8 +578,8 @@ fn spawn_task_event_drain(
     liveness: coco_tool_runtime::AgentLivenessReporterRef,
     task_id: String,
     agent_type: String,
-    mut event_rx: tokio::sync::mpsc::Receiver<coco_types::CoreEvent>,
-    panel_event_tx: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    mut event_rx: tokio::sync::mpsc::Receiver<coco_event_types::CoreEvent>,
+    panel_event_tx: Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
 ) {
     tokio::spawn(async move {
         // ProgressTracker increments on every ToolUseStarted,
@@ -602,8 +602,8 @@ fn spawn_task_event_drain(
         let mut provisional_output: Option<(i32, String)> = None;
         while let Some(event) = event_rx.recv().await {
             match event {
-                coco_types::CoreEvent::Stream(
-                    coco_types::AgentStreamEvent::ResponseAttemptStarted { attempt, .. },
+                coco_event_types::CoreEvent::Stream(
+                    coco_event_types::AgentStreamEvent::ResponseAttemptStarted { attempt, .. },
                 ) => {
                     debug_assert!(
                         provisional_output.is_none(),
@@ -614,8 +614,10 @@ fn spawn_task_event_drain(
                         .record_agent_activity(&task_id, activity_phase(&active_tool_calls))
                         .await;
                 }
-                coco_types::CoreEvent::Stream(
-                    coco_types::AgentStreamEvent::ResponseAttemptCommitted { attempt, .. },
+                coco_event_types::CoreEvent::Stream(
+                    coco_event_types::AgentStreamEvent::ResponseAttemptCommitted {
+                        attempt, ..
+                    },
                 ) => {
                     if provisional_output
                         .as_ref()
@@ -629,8 +631,10 @@ fn spawn_task_event_drain(
                         .record_agent_activity(&task_id, activity_phase(&active_tool_calls))
                         .await;
                 }
-                coco_types::CoreEvent::Stream(
-                    coco_types::AgentStreamEvent::ResponseAttemptDiscarded { attempt, .. },
+                coco_event_types::CoreEvent::Stream(
+                    coco_event_types::AgentStreamEvent::ResponseAttemptDiscarded {
+                        attempt, ..
+                    },
                 ) => {
                     if provisional_output
                         .as_ref()
@@ -642,10 +646,9 @@ fn spawn_task_event_drain(
                         .record_agent_activity(&task_id, activity_phase(&active_tool_calls))
                         .await;
                 }
-                coco_types::CoreEvent::Stream(coco_types::AgentStreamEvent::TextDelta {
-                    delta,
-                    ..
-                }) => {
+                coco_event_types::CoreEvent::Stream(
+                    coco_event_types::AgentStreamEvent::TextDelta { delta, .. },
+                ) => {
                     liveness
                         .record_agent_activity(&task_id, activity_phase(&active_tool_calls))
                         .await;
@@ -655,18 +658,20 @@ fn spawn_task_event_drain(
                         registry.append_output(&task_id, &delta).await;
                     }
                 }
-                coco_types::CoreEvent::Stream(coco_types::AgentStreamEvent::ThinkingDelta {
-                    ..
-                }) => {
+                coco_event_types::CoreEvent::Stream(
+                    coco_event_types::AgentStreamEvent::ThinkingDelta { .. },
+                ) => {
                     liveness
                         .record_agent_activity(&task_id, activity_phase(&active_tool_calls))
                         .await;
                 }
-                coco_types::CoreEvent::Stream(coco_types::AgentStreamEvent::ToolUseQueued {
-                    call_id,
-                    name,
-                    input,
-                }) => {
+                coco_event_types::CoreEvent::Stream(
+                    coco_event_types::AgentStreamEvent::ToolUseQueued {
+                        call_id,
+                        name,
+                        input,
+                    },
+                ) => {
                     liveness
                         .record_agent_activity(&task_id, activity_phase(&active_tool_calls))
                         .await;
@@ -675,11 +680,9 @@ fn spawn_task_event_drain(
                         pending_summaries.insert(call_id, summary);
                     }
                 }
-                coco_types::CoreEvent::Stream(coco_types::AgentStreamEvent::ToolUseStarted {
-                    call_id,
-                    name,
-                    ..
-                }) => {
+                coco_event_types::CoreEvent::Stream(
+                    coco_event_types::AgentStreamEvent::ToolUseStarted { call_id, name, .. },
+                ) => {
                     active_tool_calls.insert(ActiveToolCall::Builtin(call_id.clone()));
                     liveness
                         .record_agent_activity(&task_id, AgentExecutionPhase::RunningTool)
@@ -705,36 +708,33 @@ fn spawn_task_event_drain(
                     );
                     registry.set_progress(&task_id, tracker.clone()).await;
                 }
-                coco_types::CoreEvent::Stream(coco_types::AgentStreamEvent::ToolUseCompleted {
-                    call_id,
-                    ..
-                }) => {
+                coco_event_types::CoreEvent::Stream(
+                    coco_event_types::AgentStreamEvent::ToolUseCompleted { call_id, .. },
+                ) => {
                     active_tool_calls.remove(&ActiveToolCall::Builtin(call_id));
                     liveness
                         .record_agent_activity(&task_id, activity_phase(&active_tool_calls))
                         .await;
                 }
-                coco_types::CoreEvent::Stream(coco_types::AgentStreamEvent::McpToolCallBegin {
-                    call_id,
-                    ..
-                }) => {
+                coco_event_types::CoreEvent::Stream(
+                    coco_event_types::AgentStreamEvent::McpToolCallBegin { call_id, .. },
+                ) => {
                     active_tool_calls.insert(ActiveToolCall::Mcp(call_id));
                     liveness
                         .record_agent_activity(&task_id, AgentExecutionPhase::RunningTool)
                         .await;
                 }
-                coco_types::CoreEvent::Stream(coco_types::AgentStreamEvent::McpToolCallEnd {
-                    call_id,
-                    ..
-                }) => {
+                coco_event_types::CoreEvent::Stream(
+                    coco_event_types::AgentStreamEvent::McpToolCallEnd { call_id, .. },
+                ) => {
                     active_tool_calls.remove(&ActiveToolCall::Mcp(call_id));
                     liveness
                         .record_agent_activity(&task_id, activity_phase(&active_tool_calls))
                         .await;
                 }
-                coco_types::CoreEvent::Protocol(coco_types::ServerNotification::ToolProgress(
-                    _progress,
-                )) => {
+                coco_event_types::CoreEvent::Protocol(
+                    coco_event_types::ServerNotification::ToolProgress(_progress),
+                ) => {
                     // Progress is a heartbeat for a known active call. Do not
                     // invent RunningTool after its completion raced ahead.
                     let phase = activity_phase(&active_tool_calls);
@@ -747,8 +747,8 @@ fn spawn_task_event_drain(
                 // `TurnEnded` the snapshot carries engine-authoritative cost,
                 // so this is the only pre-completion cost signal. Counters are
                 // monotonic so an out-of-order snapshot can't roll them back.
-                coco_types::CoreEvent::Protocol(
-                    coco_types::ServerNotification::SessionUsageUpdated(snap),
+                coco_event_types::CoreEvent::Protocol(
+                    coco_event_types::ServerNotification::SessionUsageUpdated(snap),
                 ) => {
                     liveness
                         .record_agent_activity(&task_id, activity_phase(&active_tool_calls))
@@ -761,7 +761,9 @@ fn spawn_task_event_drain(
                 // the final token total (no cost). Kept so token counts land
                 // even if a usage snapshot was missed; cost arrives via the
                 // completion payload.
-                coco_types::CoreEvent::Protocol(coco_types::ServerNotification::TurnEnded(p)) => {
+                coco_event_types::CoreEvent::Protocol(
+                    coco_event_types::ServerNotification::TurnEnded(p),
+                ) => {
                     active_tool_calls.clear();
                     provisional_output = None;
                     liveness
@@ -789,8 +791,8 @@ fn spawn_task_event_drain(
                 // next main-agent patch. Only this variant is bridged;
                 // everything else stays isolated per the event-system
                 // design ("don't bridge the full taxonomy").
-                event @ coco_types::CoreEvent::Protocol(
-                    coco_types::ServerNotification::TaskPanelChanged(_),
+                event @ coco_event_types::CoreEvent::Protocol(
+                    coco_event_types::ServerNotification::TaskPanelChanged(_),
                 ) => {
                     if let Some(tx) = panel_event_tx.as_ref() {
                         let _ = tx.send(event).await;
@@ -1861,7 +1863,8 @@ impl SwarmAgentHandle {
             };
 
         if let Some((tid, task_cancel)) = sync_task.as_ref() {
-            let (event_tx, event_rx) = tokio::sync::mpsc::channel::<coco_types::CoreEvent>(64);
+            let (event_tx, event_rx) =
+                tokio::sync::mpsc::channel::<coco_event_types::CoreEvent>(64);
             query_config.event_tx = Some(event_tx);
             query_config.agent_task_id = Some(tid.clone());
             spawn_task_event_drain(
@@ -2325,7 +2328,7 @@ impl SwarmAgentHandle {
 
         // Drain `Stream::TextDelta` events from the engine into the task's
         // output buffer so `TaskOutput` returns mid-flight text.
-        let (event_tx, event_rx) = tokio::sync::mpsc::channel::<coco_types::CoreEvent>(64);
+        let (event_tx, event_rx) = tokio::sync::mpsc::channel::<coco_event_types::CoreEvent>(64);
         let mut query_config = query_config;
         query_config.event_tx = Some(event_tx);
         query_config.agent_task_id = Some(task_id.clone());

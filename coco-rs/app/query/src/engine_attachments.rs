@@ -22,7 +22,7 @@
 //! 1. [`QueryEngine::loaded_nested_memory_paths`] — a non-evicting set
 //! that dedups within a user-prompt cycle. The engine (and this set)
 //! are rebuilt per cycle, so it does not survive across prompts.
-//! 2. The session-persistent [`coco_context::FileReadState`] — survives
+//! 2. The session-persistent [`coco_types::FileReadState`] — survives
 //! the per-cycle rebuild, so a CLAUDE.md already injected (or already
 //! Read by a tool) on an earlier prompt is not re-injected when a
 //! later prompt re-reads the same subtree. This is the gate the TS
@@ -47,7 +47,7 @@ impl QueryEngine {
         &self,
         ctx: &ToolUseContext,
         history: &mut coco_messages::MessageHistory,
-        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
     ) {
         let Some(frs_arc) = self.file_read_state.as_ref() else {
             return;
@@ -211,7 +211,7 @@ impl QueryEngine {
             let mut to_set: Vec<(PathBuf, String, bool, i64)> =
                 Vec::with_capacity(frs_records.len());
             for (path, raw_content, content_differs_from_disk) in frs_records {
-                let mtime_ms = coco_context::file_mtime_ms(&path).await.unwrap_or(0);
+                let mtime_ms = coco_utils_common::file_mtime_ms(&path).await.unwrap_or(0);
                 to_set.push((path, raw_content, content_differs_from_disk, mtime_ms));
             }
             let mut frs = frs_arc.write().await;
@@ -220,13 +220,13 @@ impl QueryEngine {
                     continue;
                 }
                 let entry = if content_differs_from_disk {
-                    coco_context::FileReadEntry::injected_partial(
+                    coco_types::FileReadEntry::injected_partial(
                         raw_content,
                         mtime_ms,
-                        coco_context::FileReadRange::Full,
+                        coco_types::FileReadRange::Full,
                     )
                 } else {
-                    coco_context::FileReadEntry::full_real(raw_content, mtime_ms)
+                    coco_types::FileReadEntry::full_real(raw_content, mtime_ms)
                 };
                 frs.set(path, entry);
             }
@@ -301,7 +301,7 @@ impl QueryEngine {
         &self,
         ctx: &ToolUseContext,
         history: &mut coco_messages::MessageHistory,
-        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
     ) {
         // Check source FIRST. Without it we can't dispatch — draining
         // the trigger sets unconditionally would lose paths (HashSets

@@ -18,11 +18,11 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use coco_context::Attachment;
-use coco_context::FileReadState;
 use coco_context::MentionResolveOptions;
 use coco_llm_types::FilePart;
 use coco_llm_types::UserContentPart;
 use coco_messages::Message;
+use coco_types::FileReadState;
 
 /// Output of the per-turn user-input resolution pipeline.
 /// Field order is the injection order: the user message first

@@ -18,15 +18,15 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
+use coco_event_types::ServerNotificationIdentity;
 use coco_messages::create_user_message;
 use coco_tui::AppState;
 use coco_tui::handle_event_for_test as handle_core_event;
 use coco_tui::state::StreamingState;
 use coco_tui::state::ToolExecution;
 use coco_tui::state::ToolStatus;
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
-use coco_types::ServerNotificationIdentity;
 use tokio::sync::mpsc;
 
 fn protocol_evt(notif: ServerNotification) -> CoreEvent {

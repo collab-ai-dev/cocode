@@ -57,7 +57,7 @@ fn read_text_selection_formats_full_text_and_caches_raw_content() {
 
     assert_eq!(selection.output, "1\talpha\n2\tbeta\n");
     assert_eq!(selection.cached_content, "alpha\nbeta\n");
-    assert_eq!(selection.range, coco_context::FileReadRange::Full);
+    assert_eq!(selection.range, coco_types::FileReadRange::Full);
     assert!(selection.should_record);
 }
 

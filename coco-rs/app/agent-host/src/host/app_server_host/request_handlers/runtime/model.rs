@@ -67,9 +67,9 @@ pub(crate) async fn handle_set_model_role(
     let _ = send_session_event(
         &ctx.notif_tx,
         result.session_id,
-        coco_types::CoreEvent::Protocol(coco_types::ServerNotification::ModelRoleChanged(
-            result.changed.clone(),
-        )),
+        coco_event_types::CoreEvent::Protocol(
+            coco_event_types::ServerNotification::ModelRoleChanged(result.changed.clone()),
+        ),
     )
     .await;
     HandlerResult::ok(coco_types::SetModelRoleResult {
@@ -106,9 +106,9 @@ pub(crate) async fn handle_set_thinking(
         let _ = send_session_event(
             &ctx.notif_tx,
             result.session_id,
-            coco_types::CoreEvent::Protocol(coco_types::ServerNotification::ModelRoleChanged(
-                changed,
-            )),
+            coco_event_types::CoreEvent::Protocol(
+                coco_event_types::ServerNotification::ModelRoleChanged(changed),
+            ),
         )
         .await;
     }

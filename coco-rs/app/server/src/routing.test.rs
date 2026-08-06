@@ -1,6 +1,5 @@
-use coco_types::{
-    CoreEvent, ServerNotification, ServerRequest, ServerRequestUserInputParams, SessionState,
-};
+use coco_event_types::{CoreEvent, ServerNotification};
+use coco_types::{ServerRequest, ServerRequestUserInputParams, SessionState};
 
 use super::*;
 

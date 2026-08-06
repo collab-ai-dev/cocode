@@ -536,11 +536,11 @@ fn user_text(message: &coco_messages::Message) -> Option<&str> {
 }
 
 fn drain_protocol_events(
-    rx: &mut tokio::sync::mpsc::Receiver<coco_types::CoreEvent>,
-) -> Vec<coco_types::ServerNotification> {
+    rx: &mut tokio::sync::mpsc::Receiver<coco_event_types::CoreEvent>,
+) -> Vec<coco_event_types::ServerNotification> {
     let mut events = Vec::new();
     while let Ok(event) = rx.try_recv() {
-        if let coco_types::CoreEvent::Protocol(notification) = event {
+        if let coco_event_types::CoreEvent::Protocol(notification) = event {
             events.push(notification);
         }
     }
@@ -593,15 +593,14 @@ async fn manual_compact_empty_history_emits_notice_without_failure() {
 
     assert_eq!(outcome, coco_compact::CompactOutcome::Skipped);
     let events = drain_protocol_events(&mut rx);
-    assert!(
-        !events
-            .iter()
-            .any(|event| matches!(event, coco_types::ServerNotification::CompactionFailed(_)))
-    );
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        coco_event_types::ServerNotification::CompactionFailed(_)
+    )));
     assert!(events.iter().any(|event| matches!(
         event,
-        coco_types::ServerNotification::CompactionPhase(p)
-            if p.phase == coco_types::CompactionPhase::Done
+        coco_event_types::ServerNotification::CompactionPhase(p)
+            if p.phase == coco_event_types::CompactionPhase::Done
     )));
     let rendered = format!("{:?}", history.as_slice());
     assert!(rendered.contains("<command-name>/compact</command-name>"));
@@ -638,15 +637,14 @@ async fn manual_compact_single_round_enters_llm_compact_when_summary_is_returned
         "single-round manual compact should reach the LLM summarizer"
     );
     let events = drain_protocol_events(&mut rx);
-    assert!(
-        !events
-            .iter()
-            .any(|event| matches!(event, coco_types::ServerNotification::CompactionFailed(_)))
-    );
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        coco_event_types::ServerNotification::CompactionFailed(_)
+    )));
     assert!(events.iter().any(|event| matches!(
         event,
-        coco_types::ServerNotification::CompactionPhase(p)
-            if p.phase == coco_types::CompactionPhase::Done
+        coco_event_types::ServerNotification::CompactionPhase(p)
+            if p.phase == coco_event_types::CompactionPhase::Done
     )));
     let rendered = format!("{:?}", history.as_slice());
     assert!(rendered.contains("<command-name>/compact</command-name>"));
@@ -673,13 +671,13 @@ async fn manual_compact_summarizer_error_emits_compaction_failed() {
     let events = drain_protocol_events(&mut rx);
     assert!(events.iter().any(|event| matches!(
         event,
-        coco_types::ServerNotification::CompactionFailed(p)
+        coco_event_types::ServerNotification::CompactionFailed(p)
             if p.error.starts_with("Error during compaction:")
     )));
     assert!(events.iter().any(|event| matches!(
         event,
-        coco_types::ServerNotification::CompactionPhase(p)
-            if p.phase == coco_types::CompactionPhase::Done
+        coco_event_types::ServerNotification::CompactionPhase(p)
+            if p.phase == coco_event_types::CompactionPhase::Done
     )));
 }
 

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use coco_event_types::CoreEvent;
 use coco_llm_types::ToolCallPart;
 use coco_messages::MessageHistory;
 use coco_tool_runtime::DynTool;
@@ -9,7 +10,6 @@ use coco_tool_runtime::ToolMaterialization;
 use coco_tool_runtime::ToolPlacement;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
-use coco_types::CoreEvent;
 use coco_types::ToolId;
 use coco_types::ToolName;
 use coco_types::WireToolName;

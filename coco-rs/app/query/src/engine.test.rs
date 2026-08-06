@@ -1521,7 +1521,7 @@ async fn test_max_turns_limit() {
     assert_eq!(p.stop_reason, "max_turns");
     assert_eq!(p.errors, ["Reached maximum number of turns (1)"]);
     assert_turn_result_matches_session_result(&events, |outcome| {
-        matches!(outcome, coco_types::TurnOutcome::MaxTurnsReached(_))
+        matches!(outcome, coco_event_types::TurnOutcome::MaxTurnsReached(_))
     });
 }
 
@@ -5115,7 +5115,7 @@ async fn stop_hook_prevent_continuation_matches_ts_terminal_reason() {
         events.iter().any(|event| matches!(
             event,
             CoreEvent::Protocol(ServerNotification::TurnEnded(p))
-                if matches!(p.outcome, coco_types::TurnOutcome::Completed(_))
+                if matches!(p.outcome, coco_event_types::TurnOutcome::Completed(_))
         )),
         "stop-hook prevent should still close the protocol turn"
     );
@@ -5583,7 +5583,7 @@ async fn test_drain_one_progress_emits_both_tui_and_protocol_when_qualifying() {
     // Event 1: TUI-only ToolProgress (raw data passthrough).
     let tui_evt = rx.recv().await.expect("first event");
     match tui_evt {
-        CoreEvent::Tui(coco_types::TuiOnlyEvent::ToolProgress { tool_use_id, .. }) => {
+        CoreEvent::Tui(coco_event_types::TuiOnlyEvent::ToolProgress { tool_use_id, .. }) => {
             assert_eq!(tool_use_id, "tu-1");
         }
         other => panic!("expected Tui ToolProgress, got {other:?}"),
@@ -5591,7 +5591,7 @@ async fn test_drain_one_progress_emits_both_tui_and_protocol_when_qualifying() {
     // Event 2: protocol ToolProgress.
     let proto_evt = rx.recv().await.expect("second event");
     match proto_evt {
-        CoreEvent::Protocol(coco_types::ServerNotification::ToolProgress(p)) => {
+        CoreEvent::Protocol(coco_event_types::ServerNotification::ToolProgress(p)) => {
             assert_eq!(p.tool_use_id, "tu-1");
             assert_eq!(p.tool_name, "Bash");
             assert_eq!(p.parent_tool_use_id.as_deref(), Some("parent-1"));
@@ -5621,7 +5621,7 @@ async fn test_drain_one_progress_suppresses_protocol_for_non_bash_payload() {
     let evt = rx.recv().await.expect("TUI event");
     assert!(matches!(
         evt,
-        CoreEvent::Tui(coco_types::TuiOnlyEvent::ToolProgress { .. })
+        CoreEvent::Tui(coco_event_types::TuiOnlyEvent::ToolProgress { .. })
     ));
     let res = tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv()).await;
     assert!(
@@ -5653,8 +5653,10 @@ async fn test_drain_one_progress_throttles_bursts() {
         tokio::time::timeout(std::time::Duration::from_millis(20), rx.recv()).await
     {
         match evt {
-            CoreEvent::Tui(coco_types::TuiOnlyEvent::ToolProgress { .. }) => tui += 1,
-            CoreEvent::Protocol(coco_types::ServerNotification::ToolProgress(_)) => proto += 1,
+            CoreEvent::Tui(coco_event_types::TuiOnlyEvent::ToolProgress { .. }) => tui += 1,
+            CoreEvent::Protocol(coco_event_types::ServerNotification::ToolProgress(_)) => {
+                proto += 1
+            }
             other => panic!("unexpected event {other:?}"),
         }
     }
@@ -5801,7 +5803,7 @@ fn count_protocol<F: Fn(&ServerNotification) -> bool>(events: &[CoreEvent], pred
 
 fn assert_turn_result_matches_session_result<F>(events: &[CoreEvent], outcome_matches: F)
 where
-    F: Fn(&coco_types::TurnOutcome) -> bool,
+    F: Fn(&coco_event_types::TurnOutcome) -> bool,
 {
     let turn_result = events
         .iter()
@@ -5896,7 +5898,7 @@ async fn turn_completed_fires_once_per_user_prompt_cycle() {
         matches!(
             n,
             ServerNotification::TurnEnded(p)
-                if matches!(p.outcome, coco_types::TurnOutcome::Completed(_))
+                if matches!(p.outcome, coco_event_types::TurnOutcome::Completed(_))
         )
     });
     assert_eq!(
@@ -5908,7 +5910,7 @@ async fn turn_completed_fires_once_per_user_prompt_cycle() {
         matches!(
             n,
             ServerNotification::TurnEnded(p)
-                if !matches!(p.outcome, coco_types::TurnOutcome::Completed(_))
+                if !matches!(p.outcome, coco_event_types::TurnOutcome::Completed(_))
         )
     });
     assert_eq!(other_terminals, 0, "no non-success terminals expected");
@@ -6047,8 +6049,8 @@ async fn turn_budget_stop_emits_completed_or_max_turns_reached() {
             CoreEvent::Protocol(ServerNotification::TurnEnded(p))
                 if matches!(
                     p.outcome,
-                    coco_types::TurnOutcome::Completed(_)
-                        | coco_types::TurnOutcome::MaxTurnsReached(_)
+                    coco_event_types::TurnOutcome::Completed(_)
+                        | coco_event_types::TurnOutcome::MaxTurnsReached(_)
                 )
         )
     });
@@ -6106,7 +6108,7 @@ async fn stream_error_emits_turn_failed_for_sdk_iterator() {
         matches!(
             n,
             ServerNotification::TurnEnded(p)
-                if matches!(p.outcome, coco_types::TurnOutcome::Failed(_))
+                if matches!(p.outcome, coco_event_types::TurnOutcome::Failed(_))
         )
     });
     assert_eq!(
@@ -6114,7 +6116,7 @@ async fn stream_error_emits_turn_failed_for_sdk_iterator() {
         "stream error must emit exactly one TurnEnded(Failed) before propagating"
     );
     assert_turn_result_matches_session_result(&events, |outcome| {
-        matches!(outcome, coco_types::TurnOutcome::Failed(_))
+        matches!(outcome, coco_event_types::TurnOutcome::Failed(_))
     });
 }
 

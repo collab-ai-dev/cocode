@@ -34,9 +34,11 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
+use coco_types::{ToolId, ToolName, TurnId};
+
 use crate::{
     AgentStreamEvent, ContentDeltaParams, FileChangeInfo, FileChangeKind, ItemStatus,
-    ServerNotification, ThreadItem, ThreadItemDetails, ToolId, ToolName, TurnId,
+    ServerNotification, ThreadItem, ThreadItemDetails,
 };
 
 /// Stateful accumulator that converts `AgentStreamEvent` into

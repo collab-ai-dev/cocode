@@ -10,9 +10,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
 use coco_plugins::watcher::PluginChangeDetector;
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
 use tokio::sync::mpsc;
 
 /// Default plugin scopes watched in every session:

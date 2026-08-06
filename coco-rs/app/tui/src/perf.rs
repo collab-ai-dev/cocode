@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use coco_types::AgentStreamEvent;
-use coco_types::CoreEvent;
+use coco_event_types::AgentStreamEvent;
+use coco_event_types::CoreEvent;
 use coco_utils_jemalloc::JemallocStats;
 use serde::Serialize;
 
@@ -679,19 +679,21 @@ pub(crate) fn memory_phase_for_core_event(event: &CoreEvent) -> Option<MemoryPha
         return None;
     };
     match notification {
-        coco_types::ServerNotification::TurnStarted(_) => Some(MemoryPhase::TurnStarted),
-        coco_types::ServerNotification::StreamRequestEnd { .. } => {
+        coco_event_types::ServerNotification::TurnStarted(_) => Some(MemoryPhase::TurnStarted),
+        coco_event_types::ServerNotification::StreamRequestEnd { .. } => {
             Some(MemoryPhase::EngineReturned)
         }
-        coco_types::ServerNotification::TurnEnded(_) => Some(MemoryPhase::TurnEnded),
-        coco_types::ServerNotification::HistoryReplaced { .. } => {
+        coco_event_types::ServerNotification::TurnEnded(_) => Some(MemoryPhase::TurnEnded),
+        coco_event_types::ServerNotification::HistoryReplaced { .. } => {
             Some(MemoryPhase::HistoryReplaced)
         }
-        coco_types::ServerNotification::ContextCleared(_) => Some(MemoryPhase::ContextCleared),
-        coco_types::ServerNotification::MessageTruncated { .. } => {
+        coco_event_types::ServerNotification::ContextCleared(_) => {
+            Some(MemoryPhase::ContextCleared)
+        }
+        coco_event_types::ServerNotification::MessageTruncated { .. } => {
             Some(MemoryPhase::MessageTruncated)
         }
-        coco_types::ServerNotification::SessionResetForResume { .. } => {
+        coco_event_types::ServerNotification::SessionResetForResume { .. } => {
             Some(MemoryPhase::SessionReset)
         }
         _ => None,

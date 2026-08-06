@@ -135,7 +135,7 @@ pub struct WorkflowTaskRequest {
 #[derive(Clone)]
 pub enum ShellTaskKind {
     DefaultPlatformShell,
-    Provider(Arc<dyn coco_shell::ShellProvider>),
+    Provider(Arc<dyn coco_types::ShellProvider>),
 }
 
 impl std::fmt::Debug for ShellTaskKind {

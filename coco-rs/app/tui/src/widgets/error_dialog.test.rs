@@ -1,4 +1,4 @@
-use coco_types::ErrorParams;
+use coco_event_types::ErrorParams;
 
 use super::error_body;
 use super::format_error_body;

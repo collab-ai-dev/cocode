@@ -121,12 +121,12 @@ async fn drain_changed_files_injects_edited_text_file_message_once() {
     let root = tempdir().unwrap();
     let file = root.path().join("watched.rs");
     fs::write(&file, "fn main() {}\n").unwrap();
-    let mtime = coco_context::file_mtime_ms(&file).await.unwrap();
+    let mtime = coco_utils_common::file_mtime_ms(&file).await.unwrap();
 
-    let frs = Arc::new(RwLock::new(coco_context::FileReadState::new()));
+    let frs = Arc::new(RwLock::new(coco_types::FileReadState::new()));
     frs.write().await.set(
         file.clone(),
-        coco_context::FileReadEntry::full_real("fn main() {}\n".to_string(), mtime),
+        coco_types::FileReadEntry::full_real("fn main() {}\n".to_string(), mtime),
     );
 
     std::thread::sleep(std::time::Duration::from_millis(50));
@@ -151,7 +151,7 @@ async fn drain_changed_files_injects_edited_text_file_message_once() {
     {
         let guard = engine.file_read_state.as_ref().unwrap().read().await;
         let entry = guard.peek(&file).unwrap();
-        assert_eq!(entry.evidence, coco_context::ReadEvidence::ObservedForDiff);
+        assert_eq!(entry.evidence, coco_types::ReadEvidence::ObservedForDiff);
         assert!(
             !entry.can_satisfy_edit_or_write(),
             "changed-file snippet must not satisfy edit/write evidence"
@@ -179,12 +179,12 @@ async fn drain_changed_files_respects_read_ignore_patterns() {
     let root = tempdir().unwrap();
     let file = root.path().join("blocked.env");
     fs::write(&file, "TOKEN=old\n").unwrap();
-    let mtime = coco_context::file_mtime_ms(&file).await.unwrap();
+    let mtime = coco_utils_common::file_mtime_ms(&file).await.unwrap();
 
-    let frs = Arc::new(RwLock::new(coco_context::FileReadState::new()));
+    let frs = Arc::new(RwLock::new(coco_types::FileReadState::new()));
     frs.write().await.set(
         file.clone(),
-        coco_context::FileReadEntry::full_real("TOKEN=old\n".to_string(), mtime),
+        coco_types::FileReadEntry::full_real("TOKEN=old\n".to_string(), mtime),
     );
 
     std::thread::sleep(std::time::Duration::from_millis(50));
@@ -219,12 +219,12 @@ async fn drain_changed_files_respects_sandbox_preflight() {
     let root = tempdir().unwrap();
     let file = root.path().join("blocked.txt");
     fs::write(&file, "old\n").unwrap();
-    let mtime = coco_context::file_mtime_ms(&file).await.unwrap();
+    let mtime = coco_utils_common::file_mtime_ms(&file).await.unwrap();
 
-    let frs = Arc::new(RwLock::new(coco_context::FileReadState::new()));
+    let frs = Arc::new(RwLock::new(coco_types::FileReadState::new()));
     frs.write().await.set(
         file.clone(),
-        coco_context::FileReadEntry::full_real("old\n".to_string(), mtime),
+        coco_types::FileReadEntry::full_real("old\n".to_string(), mtime),
     );
 
     std::thread::sleep(std::time::Duration::from_millis(50));
@@ -258,12 +258,12 @@ async fn drain_changed_image_queues_generator_input_without_history_message() {
     let root = tempdir().unwrap();
     let file = root.path().join("screen.png");
     fs::write(&file, b"old").unwrap();
-    let mtime = coco_context::file_mtime_ms(&file).await.unwrap();
+    let mtime = coco_utils_common::file_mtime_ms(&file).await.unwrap();
 
-    let frs = Arc::new(RwLock::new(coco_context::FileReadState::new()));
+    let frs = Arc::new(RwLock::new(coco_types::FileReadState::new()));
     frs.write().await.set(
         file.clone(),
-        coco_context::FileReadEntry::full_real(String::new(), mtime),
+        coco_types::FileReadEntry::full_real(String::new(), mtime),
     );
 
     std::thread::sleep(std::time::Duration::from_millis(50));
@@ -338,7 +338,7 @@ async fn drain_records_transformed_memory_as_injected_raw_content() {
     let trigger = sub.join("handler.rs");
     fs::write(&trigger, "").unwrap();
 
-    let frs = Arc::new(RwLock::new(coco_context::FileReadState::new()));
+    let frs = Arc::new(RwLock::new(coco_types::FileReadState::new()));
     let engine = make_test_engine().with_file_read_state(frs.clone());
     let ctx = make_test_ctx_with_cwd(proj.clone());
     ctx.nested_memory_attachment_triggers
@@ -357,10 +357,10 @@ async fn drain_records_transformed_memory_as_injected_raw_content() {
         .peek(&memory.canonicalize().unwrap())
         .expect("memory file should be recorded");
     assert_eq!(entry.content, "visible\n<!-- hidden -->\n");
-    assert_eq!(entry.range, coco_context::FileReadRange::Full);
+    assert_eq!(entry.range, coco_types::FileReadRange::Full);
     assert_eq!(
         entry.evidence,
-        coco_context::ReadEvidence::InjectedPartialView
+        coco_types::ReadEvidence::InjectedPartialView
     );
 }
 
@@ -375,7 +375,7 @@ async fn drain_records_untransformed_memory_as_real_full_read() {
     let trigger = sub.join("handler.rs");
     fs::write(&trigger, "").unwrap();
 
-    let frs = Arc::new(RwLock::new(coco_context::FileReadState::new()));
+    let frs = Arc::new(RwLock::new(coco_types::FileReadState::new()));
     let engine = make_test_engine().with_file_read_state(frs.clone());
     let ctx = make_test_ctx_with_cwd(proj.clone());
     ctx.nested_memory_attachment_triggers
@@ -394,8 +394,8 @@ async fn drain_records_untransformed_memory_as_real_full_read() {
         .peek(&memory.canonicalize().unwrap())
         .expect("memory file should be recorded");
     assert_eq!(entry.content, "visible\n");
-    assert_eq!(entry.range, coco_context::FileReadRange::Full);
-    assert_eq!(entry.evidence, coco_context::ReadEvidence::RealFileView);
+    assert_eq!(entry.range, coco_types::FileReadRange::Full);
+    assert_eq!(entry.evidence, coco_types::ReadEvidence::RealFileView);
 }
 
 #[tokio::test]
@@ -494,10 +494,10 @@ async fn drain_dedupes_via_file_read_state() {
     };
 
     // Gate: same trigger, but FileReadState already holds the CLAUDE.md.
-    let frs = Arc::new(RwLock::new(coco_context::FileReadState::new()));
+    let frs = Arc::new(RwLock::new(coco_types::FileReadState::new()));
     frs.write().await.set(
         std::path::PathBuf::from(&injected_path),
-        coco_context::FileReadEntry::full_real("# sub".into(), 0),
+        coco_types::FileReadEntry::full_real("# sub".into(), 0),
     );
     let engine = make_test_engine().with_file_read_state(frs);
     let ctx = make_test_ctx_with_cwd(proj.clone());

@@ -237,10 +237,10 @@ async fn moa_events_surface_reference_lifecycle_and_thinking_block() {
     let started = rx.recv().await.expect("started");
     assert!(matches!(
         started,
-        CoreEvent::Protocol(coco_types::ServerNotification::MoaReferenceStarted(_))
+        CoreEvent::Protocol(coco_event_types::ServerNotification::MoaReferenceStarted(_))
     ));
     let completed = rx.recv().await.expect("completed");
-    let CoreEvent::Protocol(coco_types::ServerNotification::MoaReferenceCompleted(params)) =
+    let CoreEvent::Protocol(coco_event_types::ServerNotification::MoaReferenceCompleted(params)) =
         completed
     else {
         panic!("expected MoaReferenceCompleted");
@@ -250,10 +250,11 @@ async fn moa_events_surface_reference_lifecycle_and_thinking_block() {
     let aggregating = rx.recv().await.expect("aggregating");
     assert!(matches!(
         aggregating,
-        CoreEvent::Protocol(coco_types::ServerNotification::MoaAggregating(_))
+        CoreEvent::Protocol(coco_event_types::ServerNotification::MoaAggregating(_))
     ));
     let thinking = rx.recv().await.expect("thinking");
-    let CoreEvent::Stream(coco_types::AgentStreamEvent::ThinkingDelta { delta, .. }) = thinking
+    let CoreEvent::Stream(coco_event_types::AgentStreamEvent::ThinkingDelta { delta, .. }) =
+        thinking
     else {
         panic!("expected thinking delta");
     };

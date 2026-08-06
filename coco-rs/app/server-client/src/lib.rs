@@ -36,6 +36,8 @@ use coco_app_server_transport::{
     JsonRpcErrorObject, JsonRpcErrorResponse, JsonRpcFrame, JsonRpcId, JsonRpcRequest,
     JsonRpcSuccess, NdjsonDuplexConnection, TransportFrameError,
 };
+use coco_event_types::SessionEnvelope;
+use coco_event_types::SessionLifecycleEffect;
 use coco_types::{
     AgentInterruptCurrentWorkParams, ApplyPermissionUpdateParams, ApprovalResolveParams,
     BackgroundAllTasksResult, CancelRequestParams, ClientRequest, ConfigApplyFlagsParams,
@@ -43,16 +45,15 @@ use coco_types::{
     ElicitationResolveParams, HookReloadResult, InitializeParams, InitializeResult,
     McpReconnectParams, McpSetServersParams, McpSetServersResult, McpStatusResult, McpToggleParams,
     PluginReloadResult, ResetSessionPermissionRulesResult, RewindFilesParams, RewindFilesResult,
-    SessionCloseParams, SessionCostResult, SessionDeleteParams, SessionEnvelope, SessionId,
-    SessionLifecycleEffect, SessionListResult, SessionReadParams, SessionReadResult,
-    SessionRenameParams, SessionRenameResult, SessionReplaceParams, SessionReplaceResult,
-    SessionReplacement, SessionResumeParams, SessionResumeResult, SessionStartParams,
-    SessionStartResult, SessionStatusResult, SessionSubscribeParams, SessionSubscribeResult,
-    SessionTarget, SessionToggleTagParams, SessionToggleTagResult, SessionTurnsListParams,
-    SessionTurnsListResult, SetAgentColorParams, SetModelParams, SetModelRoleParams,
-    SetModelRoleResult, SetPermissionModeParams, SetThinkingParams, StopTaskParams,
-    TaskDetailParams, TaskDetailResult, TaskListResult, TurnStartParams, TurnStartResult,
-    UpdateEnvParams, UserInputResolveParams,
+    SessionCloseParams, SessionCostResult, SessionDeleteParams, SessionId, SessionListResult,
+    SessionReadParams, SessionReadResult, SessionRenameParams, SessionRenameResult,
+    SessionReplaceParams, SessionReplaceResult, SessionReplacement, SessionResumeParams,
+    SessionResumeResult, SessionStartParams, SessionStartResult, SessionStatusResult,
+    SessionSubscribeParams, SessionSubscribeResult, SessionTarget, SessionToggleTagParams,
+    SessionToggleTagResult, SessionTurnsListParams, SessionTurnsListResult, SetAgentColorParams,
+    SetModelParams, SetModelRoleParams, SetModelRoleResult, SetPermissionModeParams,
+    SetThinkingParams, StopTaskParams, TaskDetailParams, TaskDetailResult, TaskListResult,
+    TurnStartParams, TurnStartResult, UpdateEnvParams, UserInputResolveParams,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::connect_async;

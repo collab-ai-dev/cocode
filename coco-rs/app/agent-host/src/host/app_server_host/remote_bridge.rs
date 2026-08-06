@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use coco_app_server::{AppServer, JsonRpcAdapter};
-use coco_types::CoreEvent;
+use coco_event_types::CoreEvent;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 

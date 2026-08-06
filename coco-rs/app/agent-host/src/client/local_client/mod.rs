@@ -8,6 +8,7 @@ use coco_app_server::{
     LocalClientDispatchError, LocalClientHandle, LocalClientRequestHandler,
     LocalClientSubscribeOutcome,
 };
+use coco_event_types::SessionEnvelope;
 use coco_types::{
     AgentInterruptCurrentWorkParams, ApplyPermissionUpdateParams, ApprovalResolveParams,
     BackgroundAllTasksResult, CancelRequestParams, ClientRequest, ConfigApplyFlagsParams,
@@ -15,15 +16,14 @@ use coco_types::{
     ElicitationResolveParams, HookReloadResult, InitializeParams, InitializeResult,
     McpReconnectParams, McpSetServersParams, McpSetServersResult, McpStatusResult, McpToggleParams,
     PluginReloadResult, ResetSessionPermissionRulesResult, RewindFilesParams, RewindFilesResult,
-    SessionCloseParams, SessionCostResult, SessionDeleteParams, SessionEnvelope, SessionId,
-    SessionListResult, SessionReadParams, SessionReadResult, SessionRenameParams,
-    SessionRenameResult, SessionResumeParams, SessionResumeResult, SessionStartParams,
-    SessionStartResult, SessionStatusResult, SessionSubscribeParams, SessionSubscribeResult,
-    SessionTarget, SessionToggleTagParams, SessionToggleTagResult, SessionTurnsListParams,
-    SessionTurnsListResult, SetAgentColorParams, SetModelParams, SetModelRoleParams,
-    SetModelRoleResult, SetPermissionModeParams, SetThinkingParams, StopTaskParams,
-    TaskDetailParams, TaskDetailResult, TaskListResult, TurnStartParams, TurnStartResult,
-    UpdateEnvParams, UserInputResolveParams,
+    SessionCloseParams, SessionCostResult, SessionDeleteParams, SessionId, SessionListResult,
+    SessionReadParams, SessionReadResult, SessionRenameParams, SessionRenameResult,
+    SessionResumeParams, SessionResumeResult, SessionStartParams, SessionStartResult,
+    SessionStatusResult, SessionSubscribeParams, SessionSubscribeResult, SessionTarget,
+    SessionToggleTagParams, SessionToggleTagResult, SessionTurnsListParams, SessionTurnsListResult,
+    SetAgentColorParams, SetModelParams, SetModelRoleParams, SetModelRoleResult,
+    SetPermissionModeParams, SetThinkingParams, StopTaskParams, TaskDetailParams, TaskDetailResult,
+    TaskListResult, TurnStartParams, TurnStartResult, UpdateEnvParams, UserInputResolveParams,
 };
 
 use coco_app_server_client::ClientError;
@@ -59,9 +59,9 @@ struct LocalInboundOwner {
 
 struct LocalInboundState {
     capacity: usize,
-    requests: HashMap<SessionId, VecDeque<coco_types::ServerRequestDelivery>>,
+    requests: HashMap<SessionId, VecDeque<coco_event_types::ServerRequestDelivery>>,
     request_count: usize,
-    lifecycle: VecDeque<coco_types::SessionLifecycleEffect>,
+    lifecycle: VecDeque<coco_event_types::SessionLifecycleEffect>,
     dropped_lifecycle: u64,
     closed: bool,
 }

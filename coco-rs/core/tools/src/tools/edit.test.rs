@@ -244,8 +244,8 @@ async fn test_edit_matches_curly_single_quotes() {
 // B2.4: content-fallback race detection
 // ---------------------------------------------------------------------------
 
-use coco_context::FileReadEntry;
-use coco_context::FileReadState;
+use coco_types::FileReadEntry;
+use coco_types::FileReadState;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -419,7 +419,7 @@ async fn test_edit_detects_content_drift_in_race() {
     let file = dir.path().join("race.txt");
     std::fs::write(&file, "current on disk").unwrap();
     let abs = std::fs::canonicalize(&file).unwrap();
-    let mtime = coco_context::file_mtime_ms(&abs).await.unwrap();
+    let mtime = coco_utils_common::file_mtime_ms(&abs).await.unwrap();
 
     let mut ctx = ToolUseContext::test_default();
     ctx.file_read_state = Some(Arc::new(RwLock::new(FileReadState::new())));
@@ -563,7 +563,7 @@ async fn test_edit_allows_line_range_read() {
     let file = dir.path().join("partial.txt");
     std::fs::write(&file, "line one\nline two\n").unwrap();
     let abs = std::fs::canonicalize(&file).unwrap();
-    let mtime = coco_context::file_mtime_ms(&abs).await.unwrap();
+    let mtime = coco_utils_common::file_mtime_ms(&abs).await.unwrap();
 
     let mut ctx = ToolUseContext::test_default();
     ctx.file_read_state = Some(Arc::new(RwLock::new(FileReadState::new())));
@@ -602,7 +602,7 @@ async fn test_edit_rejects_injected_partial_view() {
     let file = dir.path().join("partial.txt");
     std::fs::write(&file, "line one\nline two\n").unwrap();
     let abs = std::fs::canonicalize(&file).unwrap();
-    let mtime = coco_context::file_mtime_ms(&abs).await.unwrap();
+    let mtime = coco_utils_common::file_mtime_ms(&abs).await.unwrap();
 
     let mut ctx = ToolUseContext::test_default();
     ctx.file_read_state = Some(Arc::new(RwLock::new(FileReadState::new())));
@@ -613,7 +613,7 @@ async fn test_edit_rejects_injected_partial_view() {
             FileReadEntry::injected_partial(
                 "line one\n".into(),
                 mtime,
-                coco_context::FileReadRange::Lines {
+                coco_types::FileReadRange::Lines {
                     offset: None,
                     limit: 1,
                 },

@@ -48,12 +48,12 @@ use std::sync::{Arc, Weak};
 
 use async_trait::async_trait;
 use coco_config::SettingSource;
+use coco_event_types::TuiOnlyEvent;
 use coco_query::CoreEvent;
 use coco_tool_runtime::{
     ToolPermissionBridge, ToolPermissionDecision, ToolPermissionRequest, ToolPermissionResolution,
 };
 use coco_types::PendingPermissionGuard;
-use coco_types::TuiOnlyEvent;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tracing::warn;
 

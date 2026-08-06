@@ -108,12 +108,12 @@ pub(super) async fn emit_slash_status(
         .await;
 }
 
+use coco_event_types::SlashCommandStatusKind;
+use coco_event_types::TuiOnlyEvent;
 /// One-shot, fire-and-forget title generation. Returns immediately
 /// without spawning if any precondition (auto-title disabled, already
 /// attempted for this session id, no Fast spec, plan not exited,
 use coco_query::CoreEvent;
-use coco_types::SlashCommandStatusKind;
-use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;
 
 use super::SlashOutcome;

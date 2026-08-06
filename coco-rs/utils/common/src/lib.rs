@@ -20,6 +20,7 @@ pub use coco_home::find_coco_home;
 pub use elapsed::format_duration;
 pub use elapsed::format_elapsed;
 pub use format_env_display::format_env_display;
+pub use fs::file_mtime_ms;
 pub use fs::write_atomic;
 pub use fuzzy_match::fuzzy_indices;
 pub use fuzzy_match::fuzzy_match;

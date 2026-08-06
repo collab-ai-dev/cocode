@@ -562,8 +562,8 @@ pub struct SessionBootstrap {
     pub slash_commands: Vec<String>,
     pub agents: Vec<String>,
     pub skills: Vec<String>,
-    pub mcp_servers: Vec<coco_types::McpServerInit>,
-    pub plugins: Vec<coco_types::PluginInit>,
+    pub mcp_servers: Vec<coco_event_types::McpServerInit>,
+    pub plugins: Vec<coco_event_types::PluginInit>,
     pub api_key_source: Option<String>,
     pub betas: Vec<String>,
     pub output_style: Option<String>,
@@ -600,7 +600,7 @@ pub struct QueryResult {
     /// Permission denials accumulated during the session. Populated on each
     /// `PermissionDecision::Deny` branch in the tool execution loop and
     /// flushed into `SessionResultParams` at session end.
-    pub permission_denials: Vec<coco_types::PermissionDenialInfo>,
+    pub permission_denials: Vec<coco_event_types::PermissionDenialInfo>,
     /// Final message history at the end of the turn, including the
     /// user prompt, any tool calls + results, and the final assistant
     /// reply. Used by multi-turn SDK sessions to thread context
@@ -626,12 +626,12 @@ pub enum QueryOutcome {
     /// non-error stop such as cancellation.
     Completed,
     /// The engine exhausted recovery or hit a terminal runtime constraint.
-    Failed(coco_types::ErrorPayload),
+    Failed(coco_event_types::ErrorPayload),
 }
 
 impl QueryResult {
     /// Return the terminal error when this invocation failed.
-    pub fn failure(&self) -> Option<&coco_types::ErrorPayload> {
+    pub fn failure(&self) -> Option<&coco_event_types::ErrorPayload> {
         match &self.outcome {
             QueryOutcome::Completed => None,
             QueryOutcome::Failed(error) => Some(error),

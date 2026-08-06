@@ -45,7 +45,7 @@ pub(crate) fn make_query_result(
 
 pub(crate) fn mark_query_failed(
     mut result: QueryResult,
-    error: coco_types::ErrorPayload,
+    error: coco_event_types::ErrorPayload,
 ) -> QueryResult {
     result.outcome = crate::QueryOutcome::Failed(error);
     result

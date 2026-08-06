@@ -1,4 +1,6 @@
-use crate::{RequestId, ServerRequest, SessionEnvelope, SessionId};
+use coco_types::{RequestId, ServerRequest, SessionId};
+
+use crate::SessionEnvelope;
 
 /// Access granted to one connection for a session.
 ///

@@ -205,6 +205,8 @@ impl Tool for EditTool {
                 })?;
             }
             crate::track_file_edit(ctx, path).await;
+            // Synchronous for cancellation atomicity — see the note on the
+            // main edit path's write below.
             std::fs::write(file_path, new_string).map_err(|e| ToolError::ExecutionFailed {
                 message: format!("failed to write {file_path}: {e}"),
                 display_data: None,
@@ -278,14 +280,11 @@ impl Tool for EditTool {
                 });
             }
 
-            if let Ok(disk_mtime) = coco_context::file_mtime_ms(&abs_path).await
+            if let Ok(disk_mtime) = coco_utils_common::file_mtime_ms(&abs_path).await
                 && disk_mtime > entry.mtime_ms
             {
                 match (entry.range, entry.evidence) {
-                    (
-                        coco_context::FileReadRange::Full,
-                        coco_context::ReadEvidence::RealFileView,
-                    ) => {
+                    (coco_types::FileReadRange::Full, coco_types::ReadEvidence::RealFileView) => {
                         let raw = tokio::fs::read(&abs_path).await.map_err(|e| {
                             ToolError::ExecutionFailed {
                                 message: format!(
@@ -314,7 +313,7 @@ impl Tool for EditTool {
                             });
                         }
                     }
-                    (coco_context::FileReadRange::Lines { .. }, _) => {
+                    (coco_types::FileReadRange::Lines { .. }, _) => {
                         return Err(ToolError::ExecutionFailed {
                             message: format!(
                                 "{file_path} has been modified since it was last read \
@@ -325,12 +324,12 @@ impl Tool for EditTool {
                         });
                     }
                     (
-                        coco_context::FileReadRange::Full,
-                        coco_context::ReadEvidence::InjectedPartialView,
+                        coco_types::FileReadRange::Full,
+                        coco_types::ReadEvidence::InjectedPartialView,
                     )
                     | (
-                        coco_context::FileReadRange::Full,
-                        coco_context::ReadEvidence::ObservedForDiff,
+                        coco_types::FileReadRange::Full,
+                        coco_types::ReadEvidence::ObservedForDiff,
                     ) => {
                         return Err(ToolError::ExecutionFailed {
                             message: format!(
@@ -376,83 +375,19 @@ impl Tool for EditTool {
         // Track file edit for checkpoint/rewind before modifying.
         crate::track_file_edit(ctx, path).await;
 
-        let content =
-            std::fs::read_to_string(file_path).map_err(|e| ToolError::ExecutionFailed {
-                message: format!("failed to read {file_path}: {e}"),
+        let (new_content, count) = {
+            let path_owned = file_path.to_string();
+            let old_owned = old_string.to_string();
+            let new_owned = new_string.to_string();
+            tokio::task::spawn_blocking(move || {
+                read_and_apply_edit(&path_owned, &old_owned, &new_owned, replace_all)
+            })
+            .await
+            .map_err(|e| ToolError::ExecutionFailed {
+                message: format!("edit task failed: {e}"),
                 display_data: None,
                 source: None,
-            })?;
-
-        // T2: Input normalization BEFORE matching.
-        //
-        // Two transformations on (old_string, new_string) before the
-        // matching logic sees them:
-        //
-        //   1. Strip trailing whitespace from new_string (unless the
-        //      file is Markdown, which uses trailing spaces as hard
-        //      line breaks).
-        //   2. Desanitize over-escaped / over-sanitized model output
-        //      (e.g. `<fnr>` → `<function_results>`) — see
-        //      `desanitization_map` in edit_utils.rs.
-        //
-        // Without these, edits from models that over-escape JSON would
-        // fail literal matching.
-        let (normalized_old, normalized_new) = crate::tools::edit_utils::normalize_file_edit_input(
-            file_path, &content, old_string, new_string,
-        );
-        let old_string = normalized_old.as_str();
-        let new_string = normalized_new.as_str();
-
-        let count = content.matches(old_string).count();
-
-        let new_content = if replace_all {
-            if count == 0 {
-                return Err(ToolError::InvalidInput {
-                    message: not_found_message_with_hint(file_path, old_string, &content),
-                    error_code: Some("1".into()),
-                });
-            }
-            crate::tools::edit_utils::apply_edit_to_file(&content, old_string, new_string, true)
-        } else if count == 0 {
-            // Matching fallback order (local extension):
-            //   1. Quote-normalized match — handles the common case
-            //      where the file uses curly quotes (""'') but the model
-            //      emitted straight quotes ("'). When the match hits via
-            //      quote normalization, `preserve_quote_style` re-applies
-            //      the file's curly style to `new_string` so the round-trip
-            //      doesn't silently downgrade.
-            //   2. Whitespace-normalized match — local extension. Not in
-            //      upstream but useful for Python/YAML where
-            //      the model may emit slightly different indentation.
-            //      Preserved because it's backwards-compatible with
-            //      existing tests.
-            if let Some(actual) = crate::tools::edit_utils::find_actual_string(&content, old_string)
-            {
-                let preserved_new =
-                    crate::tools::edit_utils::preserve_quote_style(old_string, actual, new_string);
-                crate::tools::edit_utils::apply_edit_to_file(
-                    &content,
-                    actual,
-                    &preserved_new,
-                    false,
-                )
-            } else if let Some(actual) = find_fuzzy_match(&content, old_string) {
-                crate::tools::edit_utils::apply_edit_to_file(&content, &actual, new_string, false)
-            } else {
-                return Err(ToolError::InvalidInput {
-                    message: not_found_message_with_hint(file_path, old_string, &content),
-                    error_code: Some("1".into()),
-                });
-            }
-        } else if count > 1 {
-            return Err(ToolError::InvalidInput {
-                message: format!(
-                    "old_string found {count} times in {file_path}. Use replace_all or provide more context to make it unique."
-                ),
-                error_code: Some("3".into()),
-            });
-        } else {
-            crate::tools::edit_utils::apply_edit_to_file(&content, old_string, new_string, false)
+            })??
         };
 
         // Sandboxed write fence (memory-extraction / auto-dream
@@ -477,6 +412,17 @@ impl Tool for EditTool {
             });
         }
 
+        // Deliberately synchronous. `tool_call_runner`'s `tokio::select!`
+        // cancels a tool by DROPPING its `execute` future, and a
+        // `spawn_blocking` closure cannot be cancelled once running — so an
+        // awaited write would still land on disk while the model is told the
+        // call was cancelled, and the post-write bookkeeping
+        // (`record_file_edit` / `track_skill_triggers` / `lsp.notify_save`)
+        // would be skipped, desynchronising `FileReadState` from the file.
+        // Keeping the write inside one poll makes it atomic with respect to
+        // cancellation. The expensive part (read + full-content scans) is
+        // already off the runtime; a write of pre-computed bytes is not worth
+        // trading that invariant for.
         std::fs::write(file_path, &new_content).map_err(|e| ToolError::ExecutionFailed {
             message: format!("failed to write {file_path}: {e}"),
             display_data: None,
@@ -600,6 +546,98 @@ fn find_original_at_normalized_pos(
     let start = start_orig?;
     // Include trailing whitespace from original
     Some(original[start..orig_idx].to_string())
+}
+
+/// Read the file and compute its post-edit content.
+///
+/// Runs on the blocking pool. A full-file read plus up to four
+/// whole-content passes (literal `matches().count()`, quote-normalized
+/// match, fuzzy match, and the replace itself) is far past the point
+/// where holding a runtime worker is acceptable, and the cost scales
+/// with file size rather than being bounded.
+/// Returns the post-edit content plus the literal-match count that
+/// `EditOutput.replacement_count` reports. The count is deliberately the
+/// pre-fallback literal count: a quote-normalized or fuzzy match resolves
+/// exactly one occurrence and reports 0, which is the established shape.
+fn read_and_apply_edit(
+    file_path: &str,
+    old_string: &str,
+    new_string: &str,
+    replace_all: bool,
+) -> Result<(String, usize), ToolError> {
+    let content = std::fs::read_to_string(file_path).map_err(|e| ToolError::ExecutionFailed {
+        message: format!("failed to read {file_path}: {e}"),
+        display_data: None,
+        source: None,
+    })?;
+
+    // T2: Input normalization BEFORE matching.
+    //
+    // Two transformations on (old_string, new_string) before the
+    // matching logic sees them:
+    //
+    //   1. Strip trailing whitespace from new_string (unless the
+    //      file is Markdown, which uses trailing spaces as hard
+    //      line breaks).
+    //   2. Desanitize over-escaped / over-sanitized model output
+    //      (e.g. `<fnr>` → `<function_results>`) — see
+    //      `desanitization_map` in edit_utils.rs.
+    //
+    // Without these, edits from models that over-escape JSON would
+    // fail literal matching.
+    let (normalized_old, normalized_new) = crate::tools::edit_utils::normalize_file_edit_input(
+        file_path, &content, old_string, new_string,
+    );
+    let old_string = normalized_old.as_str();
+    let new_string = normalized_new.as_str();
+
+    let count = content.matches(old_string).count();
+
+    let new_content = if replace_all {
+        if count == 0 {
+            return Err(ToolError::InvalidInput {
+                message: not_found_message_with_hint(file_path, old_string, &content),
+                error_code: Some("1".into()),
+            });
+        }
+        crate::tools::edit_utils::apply_edit_to_file(&content, old_string, new_string, true)
+    } else if count == 0 {
+        // Matching fallback order (local extension):
+        //   1. Quote-normalized match — handles the common case
+        //      where the file uses curly quotes (""'') but the model
+        //      emitted straight quotes ("'). When the match hits via
+        //      quote normalization, `preserve_quote_style` re-applies
+        //      the file's curly style to `new_string` so the round-trip
+        //      doesn't silently downgrade.
+        //   2. Whitespace-normalized match — local extension. Not in
+        //      upstream but useful for Python/YAML where
+        //      the model may emit slightly different indentation.
+        //      Preserved because it's backwards-compatible with
+        //      existing tests.
+        if let Some(actual) = crate::tools::edit_utils::find_actual_string(&content, old_string) {
+            let preserved_new =
+                crate::tools::edit_utils::preserve_quote_style(old_string, actual, new_string);
+            crate::tools::edit_utils::apply_edit_to_file(&content, actual, &preserved_new, false)
+        } else if let Some(actual) = find_fuzzy_match(&content, old_string) {
+            crate::tools::edit_utils::apply_edit_to_file(&content, &actual, new_string, false)
+        } else {
+            return Err(ToolError::InvalidInput {
+                message: not_found_message_with_hint(file_path, old_string, &content),
+                error_code: Some("1".into()),
+            });
+        }
+    } else if count > 1 {
+        return Err(ToolError::InvalidInput {
+            message: format!(
+                "old_string found {count} times in {file_path}. Use replace_all or provide more context to make it unique."
+            ),
+            error_code: Some("3".into()),
+        });
+    } else {
+        crate::tools::edit_utils::apply_edit_to_file(&content, old_string, new_string, false)
+    };
+
+    Ok((new_content, count))
 }
 
 #[cfg(test)]

@@ -71,7 +71,7 @@ pub enum ReadFileKind {
 pub(crate) struct TextReadSelection {
     pub output: String,
     pub cached_content: String,
-    pub range: coco_context::FileReadRange,
+    pub range: coco_types::FileReadRange,
     pub num_lines: usize,
     pub start_line: usize,
     pub total_lines: usize,
@@ -163,6 +163,28 @@ pub(crate) fn read_text_selection(
     read_text_selection_from_content(file_path, input, content)
 }
 
+/// Async wrapper for [`read_text_selection`].
+///
+/// `ReadTool` is `is_concurrency_safe`, so a batch of parallel reads is
+/// spawned onto the runtime's worker pool. The selection body is a stat
+/// plus a whole-file read plus encoding detection plus a line split —
+/// all blocking, all scaling with file size — so running it inline would
+/// stall one worker per concurrent read.
+pub(crate) async fn read_text_selection_async(
+    file_path: &str,
+    input: &ReadInput,
+) -> Result<TextReadSelection, ToolError> {
+    let path = file_path.to_string();
+    let input = input.clone();
+    tokio::task::spawn_blocking(move || read_text_selection(&path, &input))
+        .await
+        .map_err(|e| ToolError::ExecutionFailed {
+            message: format!("read task failed: {e}"),
+            display_data: None,
+            source: None,
+        })?
+}
+
 pub fn read_full_text_for_changed_file(file_path: &Path) -> Result<String, ToolError> {
     let raw_bytes = std::fs::read(file_path).map_err(|e| ToolError::ExecutionFailed {
         message: format!("failed to read {}: {e}", file_path.display()),
@@ -195,7 +217,7 @@ fn read_text_selection_from_content(
         return Ok(TextReadSelection {
             output: String::new(),
             cached_content: String::new(),
-            range: coco_context::FileReadRange::Full,
+            range: coco_types::FileReadRange::Full,
             num_lines: 0,
             start_line: offset,
             total_lines: 1,
@@ -211,7 +233,7 @@ fn read_text_selection_from_content(
         return Ok(TextReadSelection {
             output: String::new(),
             cached_content: String::new(),
-            range: coco_context::FileReadRange::Lines {
+            range: coco_types::FileReadRange::Lines {
                 offset: if offset > 1 {
                     Some(offset as i32)
                 } else {
@@ -247,7 +269,7 @@ fn read_text_selection_from_content(
 
     let requested_line_range = input.limit.is_some() || input.offset.is_some_and(|n| n > 1);
     let range = if requested_line_range {
-        coco_context::FileReadRange::Lines {
+        coco_types::FileReadRange::Lines {
             offset: if offset > 1 {
                 Some(offset as i32)
             } else {
@@ -256,9 +278,9 @@ fn read_text_selection_from_content(
             limit: (line_end - start) as i32,
         }
     } else {
-        coco_context::FileReadRange::Full
+        coco_types::FileReadRange::Full
     };
-    let cached_content = if range == coco_context::FileReadRange::Full {
+    let cached_content = if range == coco_types::FileReadRange::Full {
         content
     } else {
         lines[start..line_end].join("\n")
@@ -328,7 +350,7 @@ fn read_text_selection_streaming(
         return Ok(TextReadSelection {
             output: String::new(),
             cached_content: String::new(),
-            range: coco_context::FileReadRange::Lines {
+            range: coco_types::FileReadRange::Lines {
                 offset: if offset > 1 {
                     Some(offset as i32)
                 } else {
@@ -362,7 +384,7 @@ fn read_text_selection_streaming(
     Ok(TextReadSelection {
         output,
         cached_content: selected_lines.join("\n"),
-        range: coco_context::FileReadRange::Lines {
+        range: coco_types::FileReadRange::Lines {
             offset: if offset > 1 {
                 Some(offset as i32)
             } else {

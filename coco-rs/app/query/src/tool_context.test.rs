@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use coco_event_types::ToolAbortReasonPayload;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::TurnAbortController;
 use coco_tool_runtime::mcp_handle::McpResourceContent;
@@ -7,7 +8,6 @@ use coco_tool_runtime::mcp_handle::McpResourceInfo;
 use coco_tool_runtime::mcp_handle::McpToolCallResult;
 use coco_types::PermissionMode;
 use coco_types::ThinkingLevel;
-use coco_types::ToolAbortReasonPayload;
 use coco_types::ToolAppState;
 use coco_types::TurnAbortReason;
 use pretty_assertions::assert_eq;

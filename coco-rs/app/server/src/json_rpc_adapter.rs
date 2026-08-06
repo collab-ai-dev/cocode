@@ -14,10 +14,13 @@ use coco_app_server_transport::{
     JsonRpcErrorObject, JsonRpcErrorResponse, JsonRpcFrame, JsonRpcId, JsonRpcNotification,
     JsonRpcRequest, JsonRpcSuccess, NdjsonDuplexConnection, NdjsonFrameWriter, TransportFrameError,
 };
+use coco_event_types::{CoreEvent, SESSION_EVENT_METHOD, SESSION_LIFECYCLE_METHOD};
+use coco_event_types::{
+    ServerRequestDelivery, SessionDelivery, SessionLifecycleEffect, SessionLifecycleEffectKind,
+};
 use coco_types::{
-    ClientRequest, ClientRequestMethod, CoreEvent, RequestId, RequestScope, SESSION_EVENT_METHOD,
-    SESSION_LIFECYCLE_METHOD, ServerRequest, ServerRequestDelivery, SessionDelivery, SessionId,
-    SessionLifecycleEffect, SessionLifecycleEffectKind, error_codes, request_scope,
+    ClientRequest, ClientRequestMethod, RequestId, RequestScope, ServerRequest, SessionId,
+    error_codes, request_scope,
 };
 use futures::{SinkExt, StreamExt};
 use snafu::{ResultExt, Snafu};

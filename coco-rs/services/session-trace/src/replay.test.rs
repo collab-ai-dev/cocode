@@ -64,12 +64,14 @@ fn test_record_core_drops_non_durable_events() {
     let dir = tempfile::tempdir().unwrap();
     let mut writer = TraceWriter::create(dir.path(), test_session_id("s"), 0).unwrap();
 
-    let durable =
-        coco_types::CoreEvent::Protocol(coco_types::ServerNotification::CompactionStarted);
-    let noise = coco_types::CoreEvent::Stream(coco_types::AgentStreamEvent::TextDelta {
-        turn_id: coco_types::TurnId::from("t"),
-        delta: "x".to_string(),
-    });
+    let durable = coco_event_types::CoreEvent::Protocol(
+        coco_event_types::ServerNotification::CompactionStarted,
+    );
+    let noise =
+        coco_event_types::CoreEvent::Stream(coco_event_types::AgentStreamEvent::TextDelta {
+            turn_id: coco_types::TurnId::from("t"),
+            delta: "x".to_string(),
+        });
 
     assert!(writer.record_core(&durable).unwrap());
     assert!(!writer.record_core(&noise).unwrap());

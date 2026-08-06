@@ -1,5 +1,5 @@
 use super::*;
-use crate::event::RateLimitStatus;
+use crate::RateLimitStatus;
 use pretty_assertions::assert_eq;
 
 #[test]

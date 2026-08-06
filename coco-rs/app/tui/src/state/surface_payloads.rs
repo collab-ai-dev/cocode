@@ -797,7 +797,7 @@ pub struct MemoryDialogState {
 }
 
 /// A single row in the memory picker — TUI-side mirror of
-/// `coco_types::MemoryDialogEntry` so the state struct stays free of
+/// `coco_event_types::MemoryDialogEntry` so the state struct stays free of
 /// the coco-types dependency at the field level.
 #[derive(Debug, Clone)]
 pub struct MemoryDialogEntry {
@@ -808,7 +808,7 @@ pub struct MemoryDialogEntry {
 }
 
 /// Scope tag for a memory file picker entry. Mirrors
-/// `coco_types::MemoryDialogScope`.
+/// `coco_event_types::MemoryDialogScope`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryDialogScope {
     Managed,
@@ -825,18 +825,18 @@ pub enum MemoryDialogScope {
 
 impl MemoryDialogScope {
     /// Build from the wire payload variant.
-    pub fn from_wire(s: coco_types::MemoryDialogScope) -> Self {
+    pub fn from_wire(s: coco_event_types::MemoryDialogScope) -> Self {
         match s {
-            coco_types::MemoryDialogScope::Managed => Self::Managed,
-            coco_types::MemoryDialogScope::User => Self::User,
-            coco_types::MemoryDialogScope::Project => Self::Project,
-            coco_types::MemoryDialogScope::ProjectLocal => Self::ProjectLocal,
-            coco_types::MemoryDialogScope::ProjectConfig => Self::ProjectConfig,
-            coco_types::MemoryDialogScope::Subdir => Self::Subdir,
-            coco_types::MemoryDialogScope::Imported => Self::Imported,
-            coco_types::MemoryDialogScope::AutoMemFolder => Self::AutoMemFolder,
-            coco_types::MemoryDialogScope::TeamMemFolder => Self::TeamMemFolder,
-            coco_types::MemoryDialogScope::AgentMemFolder => Self::AgentMemFolder,
+            coco_event_types::MemoryDialogScope::Managed => Self::Managed,
+            coco_event_types::MemoryDialogScope::User => Self::User,
+            coco_event_types::MemoryDialogScope::Project => Self::Project,
+            coco_event_types::MemoryDialogScope::ProjectLocal => Self::ProjectLocal,
+            coco_event_types::MemoryDialogScope::ProjectConfig => Self::ProjectConfig,
+            coco_event_types::MemoryDialogScope::Subdir => Self::Subdir,
+            coco_event_types::MemoryDialogScope::Imported => Self::Imported,
+            coco_event_types::MemoryDialogScope::AutoMemFolder => Self::AutoMemFolder,
+            coco_event_types::MemoryDialogScope::TeamMemFolder => Self::TeamMemFolder,
+            coco_event_types::MemoryDialogScope::AgentMemFolder => Self::AgentMemFolder,
         }
     }
 }
@@ -850,13 +850,13 @@ pub enum MemoryDialogRowKind {
 }
 
 impl MemoryDialogRowKind {
-    pub fn from_wire(kind: coco_types::MemoryDialogRowKind) -> Self {
+    pub fn from_wire(kind: coco_event_types::MemoryDialogRowKind) -> Self {
         match kind {
-            coco_types::MemoryDialogRowKind::File { exists, read_only } => {
+            coco_event_types::MemoryDialogRowKind::File { exists, read_only } => {
                 Self::File { exists, read_only }
             }
-            coco_types::MemoryDialogRowKind::Folder { enabled } => Self::Folder { enabled },
-            coco_types::MemoryDialogRowKind::Toggle { enabled } => Self::Toggle { enabled },
+            coco_event_types::MemoryDialogRowKind::Folder { enabled } => Self::Folder { enabled },
+            coco_event_types::MemoryDialogRowKind::Toggle { enabled } => Self::Toggle { enabled },
         }
     }
 
@@ -867,7 +867,7 @@ impl MemoryDialogRowKind {
 
 impl MemoryDialogState {
     /// Build from the wire payload (`TuiOnlyEvent::OpenMemoryDialog`).
-    pub fn from_wire(entries: Vec<coco_types::MemoryDialogEntry>) -> Self {
+    pub fn from_wire(entries: Vec<coco_event_types::MemoryDialogEntry>) -> Self {
         Self {
             entries: entries
                 .into_iter()
@@ -902,7 +902,7 @@ pub struct WorkflowPickerEntry {
 }
 
 impl WorkflowPickerState {
-    pub fn from_wire(payload: coco_types::WorkflowDialogPayload) -> Self {
+    pub fn from_wire(payload: coco_event_types::WorkflowDialogPayload) -> Self {
         Self {
             entries: payload
                 .entries

@@ -42,8 +42,8 @@ pub async fn run(provider: &str, model: &str) -> Result<()> {
         let remaining = deadline - tokio::time::Instant::now();
         match tokio::time::timeout(remaining, harness.event_rx.recv()).await {
             Ok(Some(evt)) => {
-                use coco_types::AgentStreamEvent;
-                use coco_types::CoreEvent;
+                use coco_event_types::AgentStreamEvent;
+                use coco_event_types::CoreEvent;
                 let started_bash = matches!(
                     &evt,
                     CoreEvent::Stream(AgentStreamEvent::ToolUseStarted { name, .. })

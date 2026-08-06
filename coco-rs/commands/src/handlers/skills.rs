@@ -3,7 +3,7 @@
 //!
 //! coco mirrors that no-arg dialog: the invocation returns a
 //! [`crate::CommandResult::OpenDialog`] carrying a fully-built
-//! [`coco_types::SkillsDialogPayload`] with every row pre-populated:
+//! [`coco_event_types::SkillsDialogPayload`] with every row pre-populated:
 //! `description`, `frontmatter_bytes`, `current_local`, `baseline`,
 //! and `lock` — the TUI consumer renders without recomputing.
 //!
@@ -17,6 +17,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use coco_config::SkillOverrideTiers;
+use coco_event_types::SkillsDialogEntry;
+use coco_event_types::SkillsDialogPayload;
+use coco_event_types::SkillsDialogSource;
 use coco_skills::SkillDefinition;
 use coco_skills::SkillManager;
 use coco_skills::SkillSource;
@@ -25,9 +28,6 @@ use coco_skills::get_managed_skills_path;
 use coco_skills::resolve_skill_baseline;
 use coco_skills::resolve_skill_override_lock;
 use coco_types::SkillOverrideState;
-use coco_types::SkillsDialogEntry;
-use coco_types::SkillsDialogPayload;
-use coco_types::SkillsDialogSource;
 
 use crate::CommandHandler;
 use crate::CommandResult;
@@ -128,13 +128,15 @@ pub fn build_dialog_payload(
             // `enrich_payload_with_tiers` (same reason `tiers` arrives empty).
             // The default comes from the config type rather than a local const,
             // so the two cannot drift apart.
-            let quarantine = s.is_quarantined().then(|| coco_types::SkillQuarantineWire {
-                invocations: telemetry
-                    .get(&s.name)
-                    .map(coco_skills::telemetry::SkillTelemetryStats::total_invocations)
-                    .unwrap_or(0),
-                required: coco_config::SkillLearnConfig::default().promote_min_invocations,
-            });
+            let quarantine = s
+                .is_quarantined()
+                .then(|| coco_event_types::SkillQuarantineWire {
+                    invocations: telemetry
+                        .get(&s.name)
+                        .map(coco_skills::telemetry::SkillTelemetryStats::total_invocations)
+                        .unwrap_or(0),
+                    required: coco_config::SkillLearnConfig::default().promote_min_invocations,
+                });
             SkillsDialogEntry {
                 name: s.name.clone(),
                 source,

@@ -5,13 +5,13 @@ use pretty_assertions::assert_eq;
 use tokio::sync::RwLock;
 
 use super::*;
-use coco_context::FileReadState;
 use coco_context::attachment::Attachment;
 use coco_context::attachment::DirectoryAttachment;
 use coco_context::attachment::FileAttachment;
 use coco_context::attachment::ImageAttachment;
 use coco_messages::Message;
 use coco_messages::wrapping::extract_text_from_message;
+use coco_types::FileReadState;
 
 fn read_tool_name() -> &'static str {
     coco_types::ToolName::Read.as_str()

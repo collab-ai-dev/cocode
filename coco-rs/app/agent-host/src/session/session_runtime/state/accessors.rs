@@ -89,7 +89,7 @@ impl SessionRuntime {
     pub fn current_cwd(&self) -> &Arc<RwLock<std::path::PathBuf>> {
         self.workspace_resources.current_cwd()
     }
-    pub fn file_read_state(&self) -> &Arc<RwLock<coco_context::FileReadState>> {
+    pub fn file_read_state(&self) -> &Arc<RwLock<coco_types::FileReadState>> {
         self.engine_state_resources.file_read_state()
     }
     pub fn file_history(&self) -> Option<&Arc<RwLock<coco_context::FileHistoryState>>> {

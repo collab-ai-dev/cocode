@@ -2,13 +2,13 @@ use super::journey_lines;
 use crate::i18n::locale_test_guard;
 use crate::state::JourneyMode;
 use crate::state::JourneyState;
+use coco_event_types::{
+    AgentSkillLifecycleWire, JourneyBusiestDayWire, JourneyDialogPayload, JourneyNodeBodyWire,
+    JourneyNodeWire, JourneyStatsWire, SkillTelemetryWire, TimelineBucketWire,
+};
 use coco_tui_ui::style::UiStyles;
 use coco_tui_ui::theme::Theme;
-use coco_types::{
-    AgentSkillLifecycleWire, JourneyBusiestDayWire, JourneyDialogPayload, JourneyEvent,
-    JourneyNodeBodyWire, JourneyNodeWire, JourneyRecord, JourneyStatsWire, SkillTelemetryWire,
-    TimelineBucketWire,
-};
+use coco_types::{JourneyEvent, JourneyRecord};
 use ratatui::text::Line;
 
 fn line_text(line: &Line<'_>) -> String {
@@ -69,7 +69,7 @@ fn sample_state() -> JourneyState {
             agent_skill(
                 "fix-nextest-filter",
                 AgentSkillLifecycleWire::Learning {
-                    progress: coco_types::SkillQuarantineWire {
+                    progress: coco_event_types::SkillQuarantineWire {
                         invocations: 2,
                         required: 5,
                     },

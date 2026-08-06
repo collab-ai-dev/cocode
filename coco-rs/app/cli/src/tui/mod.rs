@@ -20,9 +20,9 @@ use tokio::sync::{Mutex, RwLock, mpsc};
 use tracing::{debug, info, warn};
 
 use coco_config::{EnvKey, env};
+use coco_event_types::{SlashCommandStatusKind, TuiOnlyEvent};
 use coco_query::{CoreEvent, QueuedImage, ServerNotification};
 use coco_tui::{App, UserCommand, app::create_channels};
-use coco_types::{SlashCommandStatusKind, TuiOnlyEvent};
 use tokio_util::sync::CancellationToken;
 
 use coco_agent_host::{resume_resolver::ResumePlan, session_bootstrap::build_engine_resources};
@@ -97,20 +97,20 @@ fn session_target_for(
 /// localized slash-result writeback) into the same exact-session envelope used
 /// by the session event pump.
 fn session_scoped_event_sender(
-    event_tx: &mpsc::Sender<coco_types::CoreEvent>,
+    event_tx: &mpsc::Sender<coco_event_types::CoreEvent>,
     session_id: coco_types::SessionId,
-) -> mpsc::Sender<coco_types::CoreEvent> {
+) -> mpsc::Sender<coco_event_types::CoreEvent> {
     let (scoped_tx, mut scoped_rx) = mpsc::channel(16);
     let event_tx = event_tx.clone();
     tokio::spawn(async move {
         while let Some(event) = scoped_rx.recv().await {
-            let Ok(event) = coco_types::SessionScopedEvent::try_from(event) else {
+            let Ok(event) = coco_event_types::SessionScopedEvent::try_from(event) else {
                 tracing::warn!(%session_id, "dropping non-scopeable local session event");
                 continue;
             };
             if event_tx
-                .send(coco_types::CoreEvent::Tui(
-                    coco_types::TuiOnlyEvent::SessionScoped {
+                .send(coco_event_types::CoreEvent::Tui(
+                    coco_event_types::TuiOnlyEvent::SessionScoped {
                         session_id: session_id.clone(),
                         event: Box::new(event),
                     },

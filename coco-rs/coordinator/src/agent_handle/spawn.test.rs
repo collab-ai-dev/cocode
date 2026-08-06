@@ -146,7 +146,7 @@ async fn test_spawn_task_event_drain_bridges_task_panel_changed_only() {
         Some(panel_tx),
     );
 
-    let params = coco_types::TaskPanelChangedParams {
+    let params = coco_event_types::TaskPanelChangedParams {
         plan_tasks: Vec::new(),
         todos_by_agent: std::collections::HashMap::new(),
         expanded_view: coco_types::ExpandedView::Tasks,
@@ -154,15 +154,15 @@ async fn test_spawn_task_event_drain_bridges_task_panel_changed_only() {
         generation: 1,
     };
     event_tx
-        .send(coco_types::CoreEvent::Protocol(
-            coco_types::ServerNotification::TaskPanelChanged(params),
+        .send(coco_event_types::CoreEvent::Protocol(
+            coco_event_types::ServerNotification::TaskPanelChanged(params),
         ))
         .await
         .expect("drain must be alive");
     // A non-panel event must NOT be bridged.
     event_tx
-        .send(coco_types::CoreEvent::Stream(
-            coco_types::AgentStreamEvent::TextDelta {
+        .send(coco_event_types::CoreEvent::Stream(
+            coco_event_types::AgentStreamEvent::TextDelta {
                 turn_id: "turn-1".into(),
                 delta: "chunk".into(),
             },
@@ -173,7 +173,9 @@ async fn test_spawn_task_event_drain_bridges_task_panel_changed_only() {
 
     let forwarded = panel_rx.recv().await.expect("panel snapshot bridged");
     match forwarded {
-        coco_types::CoreEvent::Protocol(coco_types::ServerNotification::TaskPanelChanged(p)) => {
+        coco_event_types::CoreEvent::Protocol(
+            coco_event_types::ServerNotification::TaskPanelChanged(p),
+        ) => {
             assert!(matches!(p.expanded_view, coco_types::ExpandedView::Tasks));
             assert!(p.verification_nudge_pending);
         }
@@ -220,8 +222,8 @@ async fn event_drain_stays_in_running_tool_until_parallel_batch_finishes() {
 
     for call_id in ["first", "second"] {
         event_tx
-            .send(coco_types::CoreEvent::Stream(
-                coco_types::AgentStreamEvent::ToolUseStarted {
+            .send(coco_event_types::CoreEvent::Stream(
+                coco_event_types::AgentStreamEvent::ToolUseStarted {
                     call_id: call_id.into(),
                     name: "Read".into(),
                     batch_id: Some("batch".into()),
@@ -231,8 +233,8 @@ async fn event_drain_stays_in_running_tool_until_parallel_batch_finishes() {
             .expect("drain alive");
     }
     event_tx
-        .send(coco_types::CoreEvent::Stream(
-            coco_types::AgentStreamEvent::ToolUseCompleted {
+        .send(coco_event_types::CoreEvent::Stream(
+            coco_event_types::AgentStreamEvent::ToolUseCompleted {
                 call_id: "first".into(),
                 name: "Read".into(),
                 output: String::new(),
@@ -242,8 +244,8 @@ async fn event_drain_stays_in_running_tool_until_parallel_batch_finishes() {
         .await
         .expect("drain alive");
     event_tx
-        .send(coco_types::CoreEvent::Stream(
-            coco_types::AgentStreamEvent::ToolUseCompleted {
+        .send(coco_event_types::CoreEvent::Stream(
+            coco_event_types::AgentStreamEvent::ToolUseCompleted {
                 call_id: "second".into(),
                 name: "Read".into(),
                 output: String::new(),

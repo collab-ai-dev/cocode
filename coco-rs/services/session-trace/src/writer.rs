@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
-use coco_types::CoreEvent;
+use coco_event_types::CoreEvent;
 use coco_types::SessionId;
 use serde::Deserialize;
 use serde::Serialize;

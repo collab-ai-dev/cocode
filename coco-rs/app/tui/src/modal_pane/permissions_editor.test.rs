@@ -4,13 +4,13 @@ use crate::state::DeleteTarget;
 use crate::state::ModalState;
 use crate::state::PermEditorError;
 use crate::state::PermissionsEditorTab;
+use coco_event_types::PermissionsEditorDir;
+use coco_event_types::PermissionsEditorPayload;
+use coco_event_types::PermissionsEditorRule;
 use coco_types::PermissionBehavior;
 use coco_types::PermissionRuleSource;
 use coco_types::PermissionUpdate;
 use coco_types::PermissionUpdateDestination;
-use coco_types::PermissionsEditorDir;
-use coco_types::PermissionsEditorPayload;
-use coco_types::PermissionsEditorRule;
 use pretty_assertions::assert_eq;
 use tokio::sync::mpsc;
 

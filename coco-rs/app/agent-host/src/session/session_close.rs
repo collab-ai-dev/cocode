@@ -3,10 +3,10 @@ use crate::session_runtime::SessionHandle;
 pub(crate) fn build_session_result(
     session: &SessionHandle,
     default_stop_reason: &str,
-) -> coco_types::SessionResultParams {
+) -> coco_event_types::SessionResultParams {
     let crate::session_runtime::SessionAccounting { started_at, stats } =
         session.session_accounting_snapshot();
-    coco_types::SessionResultParams {
+    coco_event_types::SessionResultParams {
         session_id: session.session_id().clone(),
         total_turns: stats.total_turns,
         duration_ms: started_at.elapsed().as_millis() as i64,

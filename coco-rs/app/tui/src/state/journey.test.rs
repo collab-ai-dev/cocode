@@ -1,5 +1,5 @@
 use super::*;
-use coco_types::{
+use coco_event_types::{
     AgentSkillLifecycleWire, JourneyNodeBodyWire, JourneyNodeWire, JourneyStatsWire,
     SkillTelemetryWire,
 };
@@ -15,7 +15,7 @@ fn skill_node(title: &str, path: &str) -> JourneyNodeWire {
         body: JourneyNodeBodyWire::AgentSkill {
             path: path.into(),
             lifecycle: AgentSkillLifecycleWire::Learning {
-                progress: coco_types::SkillQuarantineWire {
+                progress: coco_event_types::SkillQuarantineWire {
                     invocations: 0,
                     required: 5,
                 },

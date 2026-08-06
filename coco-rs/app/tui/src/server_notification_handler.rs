@@ -28,7 +28,7 @@
 //! - `tui_only.rs` — `TuiOnlyEvent` arms + diff-stats, rewind, elicitation
 //!   helpers
 
-use coco_types::CoreEvent;
+use coco_event_types::CoreEvent;
 use tokio::sync::mpsc::Sender;
 
 use crate::command::UserCommand;
@@ -58,7 +58,7 @@ pub fn handle_core_event(
     command_tx: &Sender<UserCommand>,
 ) -> bool {
     let event = match event {
-        CoreEvent::Tui(coco_types::TuiOnlyEvent::SessionScoped { session_id, event }) => {
+        CoreEvent::Tui(coco_event_types::TuiOnlyEvent::SessionScoped { session_id, event }) => {
             return state
                 .with_session_projection(&session_id, |state| {
                     handle_core_event(state, (*event).into(), command_tx)
@@ -66,16 +66,16 @@ pub fn handle_core_event(
                 .unwrap_or(false);
         }
         CoreEvent::Tui(
-            event @ (coco_types::TuiOnlyEvent::SlashCommandResult { .. }
-            | coco_types::TuiOnlyEvent::OpenGoalStatus { .. }
-            | coco_types::TuiOnlyEvent::OpenContextUsage { .. }
-            | coco_types::TuiOnlyEvent::SlashCommandStatus { .. }),
+            event @ (coco_event_types::TuiOnlyEvent::SlashCommandResult { .. }
+            | coco_event_types::TuiOnlyEvent::OpenGoalStatus { .. }
+            | coco_event_types::TuiOnlyEvent::OpenContextUsage { .. }
+            | coco_event_types::TuiOnlyEvent::SlashCommandStatus { .. }),
         ) => {
             let session_id = match &event {
-                coco_types::TuiOnlyEvent::SlashCommandResult { session_id, .. }
-                | coco_types::TuiOnlyEvent::OpenGoalStatus { session_id, .. }
-                | coco_types::TuiOnlyEvent::OpenContextUsage { session_id, .. }
-                | coco_types::TuiOnlyEvent::SlashCommandStatus { session_id, .. } => {
+                coco_event_types::TuiOnlyEvent::SlashCommandResult { session_id, .. }
+                | coco_event_types::TuiOnlyEvent::OpenGoalStatus { session_id, .. }
+                | coco_event_types::TuiOnlyEvent::OpenContextUsage { session_id, .. }
+                | coco_event_types::TuiOnlyEvent::SlashCommandStatus { session_id, .. } => {
                     session_id.clone()
                 }
                 _ => unreachable!(),
@@ -94,8 +94,8 @@ pub fn handle_core_event(
     // (TextDelta / ThinkingDelta) fire per-chunk so they get `trace!`;
     // everything else is debug.
     match &event {
-        CoreEvent::Stream(coco_types::AgentStreamEvent::TextDelta { .. })
-        | CoreEvent::Stream(coco_types::AgentStreamEvent::ThinkingDelta { .. }) => {
+        CoreEvent::Stream(coco_event_types::AgentStreamEvent::TextDelta { .. })
+        | CoreEvent::Stream(coco_event_types::AgentStreamEvent::ThinkingDelta { .. }) => {
             tracing::trace!(target: "coco_tui::core_event", layer = "stream", "stream delta");
         }
         CoreEvent::Protocol(notif) => tracing::debug!(
@@ -126,8 +126,8 @@ pub fn handle_core_event(
 
 /// Cheap variant-name extraction for logging. Avoids paying the `Debug`
 /// price for the full payload on the per-event hot path.
-fn core_event_variant(notif: &coco_types::ServerNotification) -> &'static str {
-    use coco_types::ServerNotification as N;
+fn core_event_variant(notif: &coco_event_types::ServerNotification) -> &'static str {
+    use coco_event_types::ServerNotification as N;
     match notif {
         N::SessionStarted(_) => "SessionStarted",
         N::SessionResult(_) => "SessionResult",
@@ -166,8 +166,8 @@ fn core_event_variant(notif: &coco_types::ServerNotification) -> &'static str {
     }
 }
 
-fn stream_event_variant(s: &coco_types::AgentStreamEvent) -> &'static str {
-    use coco_types::AgentStreamEvent as E;
+fn stream_event_variant(s: &coco_event_types::AgentStreamEvent) -> &'static str {
+    use coco_event_types::AgentStreamEvent as E;
     match s {
         E::ResponseAttemptStarted { .. } => "ResponseAttemptStarted",
         E::ResponseAttemptCommitted { .. } => "ResponseAttemptCommitted",
@@ -182,8 +182,8 @@ fn stream_event_variant(s: &coco_types::AgentStreamEvent) -> &'static str {
     }
 }
 
-fn tui_event_variant(t: &coco_types::TuiOnlyEvent) -> &'static str {
-    use coco_types::TuiOnlyEvent as E;
+fn tui_event_variant(t: &coco_event_types::TuiOnlyEvent) -> &'static str {
+    use coco_event_types::TuiOnlyEvent as E;
     match t {
         E::ApprovalRequired { .. } => "ApprovalRequired",
         E::RewindRowMetadataReady { .. } => "RewindRowMetadataReady",

@@ -85,19 +85,19 @@ pub(super) fn clear_session_boundary_state(state: &mut AppState) {
 /// (see `on_turn_interrupted_outcome`). Pairs 1:1 with `TurnStarted`.
 pub(super) fn on_turn_ended(
     state: &mut AppState,
-    p: coco_types::TurnEndedParams,
+    p: coco_event_types::TurnEndedParams,
     command_tx: &tokio::sync::mpsc::Sender<crate::command::UserCommand>,
 ) -> bool {
     match &p.outcome {
-        coco_types::TurnOutcome::Completed(_) => on_turn_completed_outcome(state, &p),
-        coco_types::TurnOutcome::Failed(data) => on_turn_failed_outcome(state, &data.error),
-        coco_types::TurnOutcome::Interrupted(data) => {
+        coco_event_types::TurnOutcome::Completed(_) => on_turn_completed_outcome(state, &p),
+        coco_event_types::TurnOutcome::Failed(data) => on_turn_failed_outcome(state, &data.error),
+        coco_event_types::TurnOutcome::Interrupted(data) => {
             on_turn_interrupted_outcome(state, data.abort_reason, command_tx)
         }
-        coco_types::TurnOutcome::MaxTurnsReached(data) => {
+        coco_event_types::TurnOutcome::MaxTurnsReached(data) => {
             on_max_turns_reached_outcome(state, Some(data.max_turns))
         }
-        coco_types::TurnOutcome::BudgetExhausted(data) => {
+        coco_event_types::TurnOutcome::BudgetExhausted(data) => {
             on_budget_exhausted_outcome(state, data.used_tokens, data.budget_tokens)
         }
     }
@@ -109,7 +109,7 @@ pub(super) fn on_turn_ended(
 /// Does NOT handle auto-restore — that lives in
 /// [`on_turn_interrupted_outcome`]. `Completed` fires only on natural
 /// turn end; cancel paths take the `Interrupted` branch.
-fn on_turn_completed_outcome(state: &mut AppState, p: &coco_types::TurnEndedParams) -> bool {
+fn on_turn_completed_outcome(state: &mut AppState, p: &coco_event_types::TurnEndedParams) -> bool {
     state.session.set_busy(false);
     // `updateLastInteractionTime(true)` fires here so the idle window
     // starts ticking from "user has had a chance to read the response",
@@ -355,7 +355,7 @@ fn apply_auto_restore(
 /// inline in the transcript — the engine appends a `SystemMessage::ApiError`
 /// row (`⚠ <error>`) before emitting this event (`SystemAPIErrorMessage`
 /// parity), so this handler raises neither a toast nor a blocking modal.
-fn on_turn_failed_outcome(state: &mut AppState, error: &coco_types::ErrorPayload) -> bool {
+fn on_turn_failed_outcome(state: &mut AppState, error: &coco_event_types::ErrorPayload) -> bool {
     state.session.set_busy(false);
     state.ui.ephemeral.end_turn();
     state.ui.streaming = None;

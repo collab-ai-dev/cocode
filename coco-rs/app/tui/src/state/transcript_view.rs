@@ -24,8 +24,8 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use coco_event_types::HistoryReplaceReason;
 use coco_messages::Message;
-use coco_types::HistoryReplaceReason;
 use uuid::Uuid;
 
 use crate::transcript::cells::CellKind;

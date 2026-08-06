@@ -16,12 +16,12 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use anyhow::Result;
+use coco_event_types::CoreEvent;
 use coco_inference::LanguageModel;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
 use coco_query::QueryResult;
 use coco_tool_runtime::ToolRegistry;
-use coco_types::CoreEvent;
 use coco_types::Features;
 use coco_types::PermissionMode;
 use coco_types::ToolOverrides;

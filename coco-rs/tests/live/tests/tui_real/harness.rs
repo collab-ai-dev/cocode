@@ -39,6 +39,10 @@ use coco_agent_host::tui_permission_bridge::TuiPermissionBridge;
 use coco_agent_host::tui_permission_bridge::new_pending_map;
 use coco_agent_host::tui_permission_bridge::resolve_pending;
 use coco_cli::Cli;
+use coco_event_types::AgentStreamEvent;
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
+use coco_event_types::TuiOnlyEvent;
 use coco_session::SessionManager;
 use coco_tool_runtime::ToolPermissionBridgeRef;
 use coco_tui::AppState;
@@ -47,10 +51,6 @@ use coco_tui::UserCommand;
 use coco_tui::command::ShutdownReason;
 use coco_tui::server_notification_handler::handle_core_event;
 use coco_tui::update::handle_command;
-use coco_types::AgentStreamEvent;
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
-use coco_types::TuiOnlyEvent;
 use tempfile::TempDir;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -810,7 +810,7 @@ impl Drop for RealTuiHarness {
                     matches!(
                         e,
                         CoreEvent::Protocol(ServerNotification::TurnEnded(p))
-                            if matches!(p.outcome, coco_types::TurnOutcome::Completed(_))
+                            if matches!(p.outcome, coco_event_types::TurnOutcome::Completed(_))
                     )
                 })
                 .count() as u64;
@@ -967,7 +967,7 @@ async fn run_real_agent_driver(
                 }
                 let _ = event_tx
                     .send(CoreEvent::Protocol(ServerNotification::SessionEnded(
-                        coco_types::SessionEndedParams {
+                        coco_event_types::SessionEndedParams {
                             reason: "Test shutdown".into(),
                         },
                     )))

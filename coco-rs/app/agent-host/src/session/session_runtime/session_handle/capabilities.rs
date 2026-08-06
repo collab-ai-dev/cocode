@@ -95,7 +95,7 @@ impl SessionHandle {
         self.runtime.process_runtime()
     }
 
-    pub(crate) fn file_read_state(&self) -> &Arc<tokio::sync::RwLock<coco_context::FileReadState>> {
+    pub(crate) fn file_read_state(&self) -> &Arc<tokio::sync::RwLock<coco_types::FileReadState>> {
         self.runtime.file_read_state()
     }
 

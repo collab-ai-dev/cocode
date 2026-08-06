@@ -40,6 +40,7 @@
 /// - `pub enum Foo { Start(StartParams), Stop, Update { data: String } }` with
 ///   `#[serde(tag = "method", content = "params")]`
 /// - `impl Foo { pub const fn method(&self) -> FooMethod { ... } }`
+#[macro_export]
 macro_rules! wire_tagged_enum {
     (
         method_enum = $method_enum:ident,
@@ -129,4 +130,4 @@ macro_rules! wire_tagged_enum {
     (@pat $v:ident) => { Self::$v };
 }
 
-pub(crate) use wire_tagged_enum;
+pub use crate::wire_tagged_enum;

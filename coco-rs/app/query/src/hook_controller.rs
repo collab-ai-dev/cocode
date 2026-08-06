@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use coco_event_types::CoreEvent;
 use coco_hooks::HookExecutionEvent;
 use coco_hooks::HookRegistry;
 use coco_hooks::orchestration;
@@ -7,7 +8,6 @@ use coco_hooks::orchestration::AggregatedHookResult;
 use coco_hooks::orchestration::OrchestrationContext;
 use coco_llm_types::ToolCallPart;
 use coco_messages::MessageHistory;
-use coco_types::CoreEvent;
 use coco_types::PermissionBehavior;
 use coco_types::ToolId;
 use serde_json::Value;

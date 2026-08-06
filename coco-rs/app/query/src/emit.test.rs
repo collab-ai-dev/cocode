@@ -8,11 +8,11 @@
 //!    site — a typo could route a Stream event through Protocol without
 //!    any test catching it.
 
-use coco_types::AgentStreamEvent;
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
-use coco_types::TuiOnlyEvent;
-use coco_types::TurnStartedParams;
+use coco_event_types::AgentStreamEvent;
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
+use coco_event_types::TuiOnlyEvent;
+use coco_event_types::TurnStartedParams;
 use pretty_assertions::assert_eq;
 use tokio::sync::mpsc;
 

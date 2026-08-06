@@ -52,10 +52,10 @@ use app_events::*;
 use coco_tui_ui::constants;
 use coco_tui_ui::engine::terminal::SurfaceBackend;
 
-use coco_types::AgentStreamEvent;
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
-use coco_types::TuiOnlyEvent;
+use coco_event_types::AgentStreamEvent;
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
+use coco_event_types::TuiOnlyEvent;
 
 use crate::server_notification_handler;
 

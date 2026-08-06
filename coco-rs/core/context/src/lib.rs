@@ -10,7 +10,6 @@ pub mod environment;
 mod error;
 pub mod file_cache;
 pub mod file_history;
-pub mod file_read_state;
 pub mod git_operations;
 pub mod git_utils;
 
@@ -72,11 +71,15 @@ pub use file_history::FileUpdateSink;
 pub use file_history::RenderedDiff;
 pub use file_history::backup_dir;
 pub use file_history::copy_file_history_for_resume;
-pub use file_read_state::FileReadEntry;
-pub use file_read_state::FileReadRange;
-pub use file_read_state::FileReadState;
-pub use file_read_state::ReadEvidence;
-pub use file_read_state::file_mtime_ms;
+// The read-state cache is a plain `std`-only data structure carried across
+// the tool boundary, so it lives in `coco-types` — that keeps
+// `coco-tool-runtime` (which only transports it) off this crate's
+// dependency tree. Re-exported here because this crate owns the usage
+// domain: @mention dedup, changed-file detection, edit-safety checks.
+pub use coco_types::FileReadEntry;
+pub use coco_types::FileReadRange;
+pub use coco_types::FileReadState;
+pub use coco_types::ReadEvidence;
 pub use memory::MemoryFileInfo;
 pub use memory::MemoryType;
 pub use memory_discovery::MemoryFile;

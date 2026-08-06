@@ -19,7 +19,7 @@ impl SessionHandle {
     pub async fn run_manual_compact(
         &self,
         request: coco_query::ManualCompactRequest,
-        event_tx: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+        event_tx: Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
         cancel: tokio_util::sync::CancellationToken,
     ) -> coco_compact::CompactOutcome {
         self.runtime

@@ -69,10 +69,10 @@ pub struct SkillRow {
     pub lock: Option<SkillLock>,
     /// Present only for quarantined agent skills — renders the
     /// `learning n/5 · try it` hint that makes the invocation gate visible.
-    pub quarantine: Option<coco_types::SkillQuarantineWire>,
+    pub quarantine: Option<coco_event_types::SkillQuarantineWire>,
 }
 
-/// TUI-side mirror of `coco_types::SkillsDialogSource`. Pinned to
+/// TUI-side mirror of `coco_event_types::SkillsDialogSource`. Pinned to
 /// the state crate so [`crate::state::ModalState`] doesn't import
 /// `coco-types` directly for this field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -86,14 +86,14 @@ pub enum SkillsDialogSource {
 }
 
 impl SkillsDialogSource {
-    pub fn from_wire(s: coco_types::SkillsDialogSource) -> Self {
+    pub fn from_wire(s: coco_event_types::SkillsDialogSource) -> Self {
         match s {
-            coco_types::SkillsDialogSource::BuiltIn => Self::BuiltIn,
-            coco_types::SkillsDialogSource::Project => Self::Project,
-            coco_types::SkillsDialogSource::User => Self::User,
-            coco_types::SkillsDialogSource::Policy => Self::Policy,
-            coco_types::SkillsDialogSource::Plugin => Self::Plugin,
-            coco_types::SkillsDialogSource::Mcp => Self::Mcp,
+            coco_event_types::SkillsDialogSource::BuiltIn => Self::BuiltIn,
+            coco_event_types::SkillsDialogSource::Project => Self::Project,
+            coco_event_types::SkillsDialogSource::User => Self::User,
+            coco_event_types::SkillsDialogSource::Policy => Self::Policy,
+            coco_event_types::SkillsDialogSource::Plugin => Self::Plugin,
+            coco_event_types::SkillsDialogSource::Mcp => Self::Mcp,
         }
     }
 
@@ -122,7 +122,7 @@ impl SkillsDialogState {
     /// Build from the wire payload. The renderer applies the
     /// sort (source-string lex + name; or token desc when
     /// `sort_by_tokens` is on) each frame, so we don't pre-sort.
-    pub fn from_wire(payload: coco_types::SkillsDialogPayload) -> Self {
+    pub fn from_wire(payload: coco_event_types::SkillsDialogPayload) -> Self {
         let rows = payload
             .entries
             .into_iter()

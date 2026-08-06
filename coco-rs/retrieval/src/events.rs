@@ -6,7 +6,7 @@
 //! # Event isolation contract
 //!
 //! `RetrievalEvent` is **intentionally isolated** from the main agent
-//! `CoreEvent` stream (`coco_types::CoreEvent`). This was confirmed by a
+//! `CoreEvent` stream (`coco_event_types::CoreEvent`). This was confirmed by a
 //! deep review in April 2026 (event-system-design.md §1.7, plan WS-7):
 //!
 //! - `coco-retrieval` is a largely independent crate with its own binary,

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use coco_context::file_read_state::FileReadEntry;
+use coco_types::FileReadEntry;
 use pretty_assertions::assert_eq;
 use uuid::Uuid;
 

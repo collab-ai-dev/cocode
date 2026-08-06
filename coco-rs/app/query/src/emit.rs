@@ -53,12 +53,12 @@
 //!
 //! These helpers do NOT change ordering semantics — they're thin wrappers
 //! over `Sender::send`. The per-task FIFO ordering contract documented in
-//! `coco_types::CoreEvent` still applies.
+//! `coco_event_types::CoreEvent` still applies.
 
-use coco_types::AgentStreamEvent;
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
-use coco_types::TuiOnlyEvent;
+use coco_event_types::AgentStreamEvent;
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
+use coco_event_types::TuiOnlyEvent;
 use tokio::sync::mpsc::Sender;
 
 const LAYER_PROTOCOL: &str = "protocol";

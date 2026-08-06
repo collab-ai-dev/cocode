@@ -7,7 +7,7 @@ use crate::session_runtime::SessionHandle;
 
 pub async fn build_plugin_dialog_payload(
     session: &SessionHandle,
-) -> coco_types::PluginDialogPayload {
+) -> coco_event_types::PluginDialogPayload {
     let cfg = session.current_engine_config().await;
     let project_dir = cfg.workspace_cwd();
     let config_home = session.config_home().clone();
@@ -42,7 +42,7 @@ pub async fn build_plugin_dialog_payload(
                 .map(|config| {
                     let mut rows = config
                         .iter()
-                        .map(|(key, option)| coco_types::PluginDialogOptionRow {
+                        .map(|(key, option)| coco_event_types::PluginDialogOptionRow {
                             key: key.clone(),
                             title: option.title.clone(),
                             description: option.description.clone(),
@@ -63,13 +63,13 @@ pub async fn build_plugin_dialog_payload(
                         .strip_prefix("plugin:")
                         .unwrap_or(&server.name)
                         .to_string();
-                    coco_types::PluginDialogMcpServerRow {
+                    coco_event_types::PluginDialogMcpServerRow {
                         name: server.name,
                         display_name,
                         enabled: true,
                         needs_config: false,
                         tools: Vec::new(),
-                        actions: vec![coco_types::PluginDialogAction {
+                        actions: vec![coco_event_types::PluginDialogAction {
                             label: "Show plugin info".to_string(),
                             plugin_args: format!("info {}", plugin.id.name),
                         }],
@@ -78,21 +78,21 @@ pub async fn build_plugin_dialog_payload(
                 .collect();
             let mut actions = Vec::new();
             if plugin.enabled {
-                actions.push(coco_types::PluginDialogAction {
+                actions.push(coco_event_types::PluginDialogAction {
                     label: "Disable plugin".to_string(),
                     plugin_args: format!("disable {id}"),
                 });
             } else {
-                actions.push(coco_types::PluginDialogAction {
+                actions.push(coco_event_types::PluginDialogAction {
                     label: "Enable plugin".to_string(),
                     plugin_args: format!("enable {id}"),
                 });
             }
-            actions.push(coco_types::PluginDialogAction {
+            actions.push(coco_event_types::PluginDialogAction {
                 label: "Uninstall plugin".to_string(),
                 plugin_args: format!("uninstall {id}"),
             });
-            coco_types::PluginDialogInstalledRow {
+            coco_event_types::PluginDialogInstalledRow {
                 id,
                 name: plugin.manifest.name.clone(),
                 version: plugin.manifest.version.clone(),
@@ -125,12 +125,12 @@ pub async fn build_plugin_dialog_payload(
             .cached_marketplace(&name)
             .map(|marketplace| i64::try_from(marketplace.plugins.len()).unwrap_or(i64::MAX))
             .unwrap_or(0);
-        marketplaces.push(coco_types::PluginDialogMarketplaceRow {
+        marketplaces.push(coco_event_types::PluginDialogMarketplaceRow {
             official: coco_plugins::marketplace::is_official_marketplace_name(&name),
             source: Some(format!("{:?}", known_marketplace.source)),
             name: name.clone(),
             plugin_count,
-            actions: vec![coco_types::PluginDialogAction {
+            actions: vec![coco_event_types::PluginDialogAction {
                 label: "Update marketplace".to_string(),
                 plugin_args: format!("marketplace update {name}"),
             }],
@@ -138,7 +138,7 @@ pub async fn build_plugin_dialog_payload(
     }
     marketplaces.sort_by(|a, b| a.name.cmp(&b.name));
 
-    coco_types::PluginDialogPayload {
+    coco_event_types::PluginDialogPayload {
         installed,
         skills,
         marketplaces,
@@ -151,7 +151,7 @@ fn build_plugin_dialog_skill_rows(
     tiers: &coco_config::SkillOverrideTiers,
     config_home: &Path,
     bytes_per_token: i64,
-) -> Vec<coco_types::PluginDialogSkillRow> {
+) -> Vec<coco_event_types::PluginDialogSkillRow> {
     let usage = coco_skills::usage::load_all(config_home);
     let now_ms = system_time_ms();
     let bytes_per_token = bytes_per_token.max(1);
@@ -172,7 +172,7 @@ fn build_plugin_dialog_skill_rows(
                 .unwrap_or_else(|| coco_skills::effective_skill_state(&skill, tiers));
             let usage = usage.get(&skill.name).map(|stats| {
                 let elapsed = now_ms.saturating_sub(stats.last_used_at_ms);
-                coco_types::PluginDialogSkillUsage {
+                coco_event_types::PluginDialogSkillUsage {
                     count: stats.usage_count,
                     days_since_use: elapsed / 86_400_000,
                 }
@@ -181,7 +181,7 @@ fn build_plugin_dialog_skill_rows(
                 i64::try_from(coco_skills::estimate_skill_frontmatter_bytes(&skill))
                     .unwrap_or(i64::MAX)
                     / bytes_per_token;
-            coco_types::PluginDialogSkillRow {
+            coco_event_types::PluginDialogSkillRow {
                 id: format!("skill:{}", skill.name),
                 name: skill.name.clone(),
                 description: skill.description.clone(),
@@ -201,25 +201,29 @@ fn build_plugin_dialog_skill_rows(
     rows
 }
 
-fn plugin_dialog_skill_source(source: &coco_skills::SkillSource) -> coco_types::SkillsDialogSource {
+fn plugin_dialog_skill_source(
+    source: &coco_skills::SkillSource,
+) -> coco_event_types::SkillsDialogSource {
     match source {
-        coco_skills::SkillSource::Bundled => coco_types::SkillsDialogSource::BuiltIn,
-        coco_skills::SkillSource::Project { .. } => coco_types::SkillsDialogSource::Project,
-        coco_skills::SkillSource::User { .. } => coco_types::SkillsDialogSource::User,
-        coco_skills::SkillSource::Managed { .. } => coco_types::SkillsDialogSource::Policy,
-        coco_skills::SkillSource::Plugin { .. } => coco_types::SkillsDialogSource::Plugin,
-        coco_skills::SkillSource::Mcp { .. } => coco_types::SkillsDialogSource::Mcp,
+        coco_skills::SkillSource::Bundled => coco_event_types::SkillsDialogSource::BuiltIn,
+        coco_skills::SkillSource::Project { .. } => coco_event_types::SkillsDialogSource::Project,
+        coco_skills::SkillSource::User { .. } => coco_event_types::SkillsDialogSource::User,
+        coco_skills::SkillSource::Managed { .. } => coco_event_types::SkillsDialogSource::Policy,
+        coco_skills::SkillSource::Plugin { .. } => coco_event_types::SkillsDialogSource::Plugin,
+        coco_skills::SkillSource::Mcp { .. } => coco_event_types::SkillsDialogSource::Mcp,
     }
 }
 
-fn plugin_dialog_skill_source_sort_key(source: coco_types::SkillsDialogSource) -> &'static str {
+fn plugin_dialog_skill_source_sort_key(
+    source: coco_event_types::SkillsDialogSource,
+) -> &'static str {
     match source {
-        coco_types::SkillsDialogSource::BuiltIn => "built-in",
-        coco_types::SkillsDialogSource::Project => "project",
-        coco_types::SkillsDialogSource::User => "user",
-        coco_types::SkillsDialogSource::Policy => "policy",
-        coco_types::SkillsDialogSource::Plugin => "plugin",
-        coco_types::SkillsDialogSource::Mcp => "mcp",
+        coco_event_types::SkillsDialogSource::BuiltIn => "built-in",
+        coco_event_types::SkillsDialogSource::Project => "project",
+        coco_event_types::SkillsDialogSource::User => "user",
+        coco_event_types::SkillsDialogSource::Policy => "policy",
+        coco_event_types::SkillsDialogSource::Plugin => "plugin",
+        coco_event_types::SkillsDialogSource::Mcp => "mcp",
     }
 }
 

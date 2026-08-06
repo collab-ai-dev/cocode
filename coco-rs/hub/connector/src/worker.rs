@@ -7,12 +7,12 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use chrono::Utc;
+use coco_event_types::SessionEnvelope;
 use coco_hub_protocol::AnnounceFrame;
 use coco_hub_protocol::BatchAckFrame;
 use coco_hub_protocol::BatchFrame;
 use coco_hub_protocol::EventEnvelope;
 use coco_hub_protocol::EventPayload;
-use coco_types::SessionEnvelope;
 use coco_types::SessionId;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;

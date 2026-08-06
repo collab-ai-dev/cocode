@@ -2,12 +2,12 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 use super::*;
-use crate::TokenUsage;
-use crate::WorkflowAgentState;
-use crate::WorkflowProgressEvent;
+use coco_types::TokenUsage;
+use coco_types::WorkflowAgentState;
+use coco_types::WorkflowProgressEvent;
 
-fn test_session_id(value: &str) -> crate::SessionId {
-    match crate::SessionId::try_new(value) {
+fn test_session_id(value: &str) -> coco_types::SessionId {
+    match coco_types::SessionId::try_new(value) {
         Ok(id) => id,
         Err(_) => unreachable!("test session id should be valid"),
     }
@@ -50,9 +50,9 @@ fn agent_stream_event_deserializes_turn_id_as_newtype() {
 
 #[test]
 fn session_envelope_durable_carries_session_seq() {
-    let turn_id = crate::TurnId::from("turn-1");
+    let turn_id = coco_types::TurnId::from("turn-1");
     let envelope = SessionEnvelope::durable(
-        crate::SessionId::try_new("session-1").unwrap(),
+        coco_types::SessionId::try_new("session-1").unwrap(),
         None,
         Some(turn_id.clone()),
         42,
@@ -69,10 +69,10 @@ fn session_envelope_durable_carries_session_seq() {
 
 #[test]
 fn session_envelope_ephemeral_has_no_session_seq() {
-    let turn_id = crate::TurnId::from("turn-live");
+    let turn_id = coco_types::TurnId::from("turn-live");
     let envelope = SessionEnvelope::ephemeral(
-        crate::SessionId::try_new("session-1").unwrap(),
-        Some(crate::AgentId::try_new("agent-1").unwrap()),
+        coco_types::SessionId::try_new("session-1").unwrap(),
+        Some(coco_types::AgentId::try_new("agent-1").unwrap()),
         Some(turn_id.clone()),
         CoreEvent::Stream(AgentStreamEvent::TextDelta {
             turn_id: turn_id.clone(),
@@ -81,7 +81,7 @@ fn session_envelope_ephemeral_has_no_session_seq() {
     );
 
     assert_eq!(
-        envelope.agent_id.as_ref().map(crate::AgentId::as_str),
+        envelope.agent_id.as_ref().map(coco_types::AgentId::as_str),
         Some("agent-1")
     );
     assert_eq!(envelope.turn_id.as_ref(), Some(&turn_id));
@@ -91,9 +91,9 @@ fn session_envelope_ephemeral_has_no_session_seq() {
 
 #[test]
 fn session_envelope_stamp_assigns_seq_to_durable_event() {
-    let turn_id = crate::TurnId::from("turn-stamp");
+    let turn_id = coco_types::TurnId::from("turn-stamp");
     let envelope = SessionEnvelope::stamp(
-        crate::SessionId::try_new("session-1").unwrap(),
+        coco_types::SessionId::try_new("session-1").unwrap(),
         None,
         CoreEvent::Protocol(ServerNotification::TurnStarted(TurnStartedParams {
             turn_id: turn_id.clone(),
@@ -108,9 +108,9 @@ fn session_envelope_stamp_assigns_seq_to_durable_event() {
 
 #[test]
 fn session_envelope_stamp_does_not_allocate_seq_for_ephemeral_event() {
-    let turn_id = crate::TurnId::from("turn-live");
+    let turn_id = coco_types::TurnId::from("turn-live");
     let envelope = SessionEnvelope::stamp(
-        crate::SessionId::try_new("session-1").unwrap(),
+        coco_types::SessionId::try_new("session-1").unwrap(),
         None,
         CoreEvent::Stream(AgentStreamEvent::TextDelta {
             turn_id: turn_id.clone(),
@@ -126,7 +126,7 @@ fn session_envelope_stamp_does_not_allocate_seq_for_ephemeral_event() {
 
 #[test]
 fn core_event_replay_policy_matches_app_server_taxonomy() {
-    let turn_id = crate::TurnId::from("turn-policy");
+    let turn_id = coco_types::TurnId::from("turn-policy");
     let protocol = CoreEvent::Protocol(ServerNotification::TurnStarted(TurnStartedParams {
         turn_id: turn_id.clone(),
     }));
@@ -146,7 +146,7 @@ fn core_event_replay_policy_matches_app_server_taxonomy() {
 
 #[test]
 fn agent_stream_event_turn_id_only_for_delta_events() {
-    let turn_id = crate::TurnId::from("turn-stream");
+    let turn_id = coco_types::TurnId::from("turn-stream");
     let delta = AgentStreamEvent::TextDelta {
         turn_id: turn_id.clone(),
         delta: "hello".to_string(),
@@ -163,7 +163,7 @@ fn agent_stream_event_turn_id_only_for_delta_events() {
 
 #[test]
 fn server_notification_turn_id_reads_protocol_payloads() {
-    let turn_id = crate::TurnId::from("turn-protocol");
+    let turn_id = coco_types::TurnId::from("turn-protocol");
     let item = ThreadItem {
         item_id: "item-1".to_string(),
         turn_id: turn_id.clone(),
@@ -183,7 +183,7 @@ fn server_notification_turn_id_reads_protocol_payloads() {
     });
     let moa = ServerNotification::MoaAggregating(MoaAggregatingParams {
         turn_id: turn_id.clone(),
-        role: crate::ModelRole::Main,
+        role: coco_types::ModelRole::Main,
         preset: "default".to_string(),
         count: 2,
     });
@@ -200,8 +200,8 @@ fn server_notification_turn_id_reads_protocol_payloads() {
 
 #[test]
 fn core_event_turn_id_uses_protocol_and_stream_layers() {
-    let protocol_turn_id = crate::TurnId::from("turn-protocol");
-    let stream_turn_id = crate::TurnId::from("turn-stream");
+    let protocol_turn_id = coco_types::TurnId::from("turn-protocol");
+    let stream_turn_id = coco_types::TurnId::from("turn-stream");
     let protocol = CoreEvent::Protocol(ServerNotification::TurnEnded(
         TurnEndedParams::interrupted(protocol_turn_id.clone(), None, TurnAbortReason::UserCancel),
     ));
@@ -309,7 +309,7 @@ fn item_status_serializes_snake_case() {
 #[test]
 fn server_notification_turn_started_wire_method() {
     let notif = ServerNotification::TurnStarted(TurnStartedParams {
-        turn_id: crate::TurnId::from("t1"),
+        turn_id: coco_types::TurnId::from("t1"),
     });
     let json = serde_json::to_value(&notif).unwrap();
     assert_eq!(json["method"], "turn/started");
@@ -355,9 +355,9 @@ fn history_reset_session_id_accepts_missing_or_empty_as_none() {
 #[test]
 fn server_notification_turn_ended_completed_wire_method() {
     let notif = ServerNotification::TurnEnded(TurnEndedParams::completed(
-        crate::TurnId::from("t-1"),
+        coco_types::TurnId::from("t-1"),
         Some(TokenUsage::default()),
-        Some(crate::StopReason::EndTurn),
+        Some(coco_types::StopReason::EndTurn),
     ));
     let json = serde_json::to_value(&notif).unwrap();
     assert_eq!(json["method"], "turn/ended");
@@ -372,7 +372,7 @@ fn server_notification_turn_ended_completed_omits_optional_fields() {
     // the wire stays compact. Consumers must treat absent fields as
     // "unknown" (not "zero" / "EndTurn") — see TurnOutcome doc.
     let notif = ServerNotification::TurnEnded(TurnEndedParams::completed(
-        crate::TurnId::from("t-noop"),
+        coco_types::TurnId::from("t-noop"),
         None,
         None,
     ));
@@ -390,7 +390,7 @@ fn server_notification_turn_ended_completed_omits_optional_fields() {
 #[test]
 fn server_notification_turn_ended_failed_wire_method() {
     let notif = ServerNotification::TurnEnded(TurnEndedParams::failed(
-        crate::TurnId::from("t-2"),
+        coco_types::TurnId::from("t-2"),
         Some(TokenUsage::default()),
         ErrorPayload {
             message: "provider 500".into(),
@@ -413,7 +413,7 @@ fn server_notification_turn_ended_failed_wire_method() {
 #[test]
 fn server_notification_turn_ended_interrupted_wire_method() {
     let notif = ServerNotification::TurnEnded(TurnEndedParams::interrupted(
-        crate::TurnId::from("t-3"),
+        coco_types::TurnId::from("t-3"),
         Some(TokenUsage::default()),
         TurnAbortReason::UserCancel,
     ));
@@ -429,7 +429,7 @@ fn server_notification_turn_ended_interrupted_wire_method() {
 #[test]
 fn server_notification_turn_ended_max_turns_reached_wire_method() {
     let notif = ServerNotification::TurnEnded(TurnEndedParams::max_turns_reached(
-        crate::TurnId::from("t-4"),
+        coco_types::TurnId::from("t-4"),
         Some(TokenUsage::default()),
         12,
     ));
@@ -442,7 +442,7 @@ fn server_notification_turn_ended_max_turns_reached_wire_method() {
 #[test]
 fn server_notification_turn_ended_budget_exhausted_wire_method() {
     let notif = ServerNotification::TurnEnded(TurnEndedParams::budget_exhausted(
-        crate::TurnId::from("t-5"),
+        coco_types::TurnId::from("t-5"),
         Some(TokenUsage::default()),
         180_000,
         Some(200_000),
@@ -460,7 +460,7 @@ fn server_notification_turn_ended_budget_exhausted_no_ceiling() {
     // the 90%-of-window heuristic still drove the stop. Wire elides
     // the field rather than fabricating zero.
     let notif = ServerNotification::TurnEnded(TurnEndedParams::budget_exhausted(
-        crate::TurnId::from("t-5b"),
+        coco_types::TurnId::from("t-5b"),
         Some(TokenUsage::default()),
         180_000,
         None,
@@ -478,9 +478,9 @@ fn server_notification_turn_ended_budget_exhausted_no_ceiling() {
 #[test]
 fn turn_ended_roundtrips_through_serde() {
     let original = ServerNotification::TurnEnded(TurnEndedParams::completed(
-        crate::TurnId::from("t-rt"),
+        coco_types::TurnId::from("t-rt"),
         Some(TokenUsage::default()),
-        Some(crate::StopReason::StopSequence),
+        Some(coco_types::StopReason::StopSequence),
     ));
     let json = serde_json::to_string(&original).unwrap();
     let back: ServerNotification = serde_json::from_str(&json).unwrap();
@@ -489,7 +489,7 @@ fn turn_ended_roundtrips_through_serde() {
             assert_eq!(p.turn_id.as_str(), "t-rt");
             match p.outcome {
                 TurnOutcome::Completed(data) => {
-                    assert_eq!(data.stop_reason, Some(crate::StopReason::StopSequence));
+                    assert_eq!(data.stop_reason, Some(coco_types::StopReason::StopSequence));
                 }
                 other => panic!("expected Completed, got {other:?}"),
             }
@@ -518,7 +518,7 @@ fn notification_method_matches_server_notification_wire_tag() {
     let cases: &[(ServerNotification, NotificationMethod)] = &[
         (
             ServerNotification::TurnStarted(TurnStartedParams {
-                turn_id: crate::TurnId::from("t-method"),
+                turn_id: coco_types::TurnId::from("t-method"),
             }),
             NotificationMethod::TurnStarted,
         ),
@@ -607,11 +607,11 @@ fn server_notification_item_started_embeds_thread_item() {
 fn server_notification_stream_request_end_carries_usage() {
     let notif = ServerNotification::StreamRequestEnd {
         usage: TokenUsage {
-            input_tokens: crate::InputTokens {
+            input_tokens: coco_types::InputTokens {
                 total: 100,
                 ..Default::default()
             },
-            output_tokens: crate::OutputTokens {
+            output_tokens: coco_types::OutputTokens {
                 total: 50,
                 ..Default::default()
             },
@@ -641,7 +641,7 @@ fn hook_outcome_status_serializes_snake_case() {
 #[test]
 fn core_event_debug_formatting_works() {
     let ev = CoreEvent::Protocol(ServerNotification::TurnStarted(TurnStartedParams {
-        turn_id: crate::TurnId::from("t-dbg"),
+        turn_id: coco_types::TurnId::from("t-dbg"),
     }));
     let s = format!("{ev:?}");
     assert!(s.contains("Protocol"));
@@ -859,7 +859,7 @@ fn task_completed_uses_ts_task_notification_shape() {
         task_id: "t1".into(),
         tool_use_id: Some("u1".into()),
         status: TaskCompletionStatus::Completed,
-        killed_by: Some(crate::TaskKilledBy::Parent),
+        killed_by: Some(coco_types::TaskKilledBy::Parent),
         output_file: "/tmp/out.txt".into(),
         summary: "done".into(),
         usage: None,
@@ -896,11 +896,11 @@ fn session_result_has_model_usage_and_permission_denials() {
         stop_reason: "end_turn".into(),
         total_cost_usd: 0.01,
         usage: TokenUsage {
-            input_tokens: crate::InputTokens {
+            input_tokens: coco_types::InputTokens {
                 total: 100,
                 ..Default::default()
             },
-            output_tokens: crate::OutputTokens {
+            output_tokens: coco_types::OutputTokens {
                 total: 50,
                 ..Default::default()
             },
@@ -940,7 +940,7 @@ fn session_started_has_all_init_fields() {
         skills: vec![],
         mcp_servers: vec![McpServerInit {
             name: "github".into(),
-            status: crate::server_request::McpConnectionStatus::Connected,
+            status: coco_types::McpConnectionStatus::Connected,
         }],
         plugins: vec![],
         api_key_source: Some("env".into()),

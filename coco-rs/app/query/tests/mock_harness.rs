@@ -201,7 +201,7 @@ pub async fn run_plan_mode_turn(
 pub async fn run_plan_mode_turn_with_events(
     model: Arc<dyn LanguageModel>,
     params: PlanModeTurnParams,
-) -> (QueryResult, Vec<coco_types::CoreEvent>) {
+) -> (QueryResult, Vec<coco_event_types::CoreEvent>) {
     let cancel = CancellationToken::new();
     let session_id = match coco_types::SessionId::try_new(params.session_id.clone()) {
         Ok(id) => id,

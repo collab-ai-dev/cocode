@@ -22,9 +22,8 @@ use crate::state::AppState;
 use crate::state::JourneyMode;
 use crate::state::JourneyState;
 use crate::state::ModalState;
-use coco_types::{
-    AgentSkillLifecycleWire, JourneyAction, JourneyNodeBodyWire, JourneyNodeId, JourneyNodeWire,
-};
+use coco_event_types::{AgentSkillLifecycleWire, JourneyNodeBodyWire, JourneyNodeWire};
+use coco_types::{JourneyAction, JourneyNodeId};
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 

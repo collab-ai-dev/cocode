@@ -10,6 +10,7 @@ members = [
     "common/config-reload",
     "common/model-card",
     "common/llm-types",
+    "common/event-types",
 
     # ─── utils/ (28) ───
     "utils/absolute-path",
@@ -159,6 +160,7 @@ coco-config = { path = "common/config" }
 coco-config-reload = { path = "common/config-reload" }
 coco-model-card = { path = "common/model-card" }
 coco-llm-types = { path = "common/llm-types" }
+coco-event-types = { path = "common/event-types" }
 
 # Internal - utilities
 coco-file-encoding = { path = "utils/file-encoding" }

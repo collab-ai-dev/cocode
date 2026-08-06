@@ -44,7 +44,7 @@ pub fn slash_result_messages(
 
 pub async fn append_slash_result_to_history_and_emit(
     session: &SessionHandle,
-    event_tx: tokio::sync::mpsc::Sender<coco_types::CoreEvent>,
+    event_tx: tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>,
     command: &str,
     args: &str,
     text: &str,
@@ -67,7 +67,7 @@ pub fn context_usage_messages(
 
 pub async fn append_context_usage_to_history_and_emit(
     session: &SessionHandle,
-    event_tx: tokio::sync::mpsc::Sender<coco_types::CoreEvent>,
+    event_tx: tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>,
     args: &str,
     result: coco_types::ContextUsageResult,
 ) -> Vec<Arc<coco_messages::Message>> {
@@ -108,7 +108,7 @@ pub fn local_command_messages(
 
 pub async fn append_local_command_to_history_and_emit(
     session: &SessionHandle,
-    event_tx: tokio::sync::mpsc::Sender<coco_types::CoreEvent>,
+    event_tx: tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>,
     command: &str,
     output: &str,
     should_respond: bool,
@@ -130,7 +130,7 @@ pub fn compact_summary_message(summary: &str) -> Option<coco_messages::Message> 
 
 pub async fn append_compact_summary_to_history_and_emit(
     session: &SessionHandle,
-    event_tx: tokio::sync::mpsc::Sender<coco_types::CoreEvent>,
+    event_tx: tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>,
     summary: &str,
 ) -> Option<Vec<Arc<coco_messages::Message>>> {
     let message = compact_summary_message(summary)?;
@@ -150,7 +150,7 @@ pub fn fork_skill_result_messages(metadata: &str, body: &str) -> Vec<coco_messag
 
 pub async fn append_fork_skill_result_to_history_and_emit(
     session: &SessionHandle,
-    event_tx: tokio::sync::mpsc::Sender<coco_types::CoreEvent>,
+    event_tx: tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>,
     metadata: &str,
     body: &str,
 ) -> Vec<Arc<coco_messages::Message>> {
@@ -202,7 +202,7 @@ pub fn model_role_change_messages(
 
 pub async fn append_model_role_change_to_history_and_emit(
     session: &SessionHandle,
-    event_tx: tokio::sync::mpsc::Sender<coco_types::CoreEvent>,
+    event_tx: tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>,
     changed: &coco_types::ModelRoleChangedParams,
     display_name: &str,
     is_remote: bool,

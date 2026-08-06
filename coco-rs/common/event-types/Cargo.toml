@@ -1,0 +1,26 @@
+[package]
+name = "coco-event-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+coco-types.workspace = true
+serde = { workspace = true, features = ["derive", "rc"] }
+serde_json.workspace = true
+schemars = { workspace = true, optional = true }
+strum = { workspace = true, features = ["derive"] }
+uuid = { workspace = true, features = ["v4", "serde"] }
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+
+# `export_schema` emits the SDK JSON Schemas for both this crate's wire types
+# and the `coco-types` DTOs they embed; it lives here because only this side
+# can see both.
+[[example]]
+name = "export_schema"
+required-features = ["schema"]
+
+[features]
+schema = ["dep:schemars", "coco-types/schema"]

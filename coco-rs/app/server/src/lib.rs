@@ -21,10 +21,11 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use coco_error::{ErrorExt, Location, StatusCode, stack_trace_debug};
-use coco_types::{
-    RequestId, ServerCancelRequestParams, ServerRequest, ServerRequestDelivery, SessionAccess,
-    SessionDelivery, SessionEnvelope, SessionId, SessionLifecycleEffect, TurnId,
+use coco_event_types::SessionEnvelope;
+use coco_event_types::{
+    ServerRequestDelivery, SessionAccess, SessionDelivery, SessionLifecycleEffect,
 };
+use coco_types::{RequestId, ServerCancelRequestParams, ServerRequest, SessionId, TurnId};
 use snafu::Snafu;
 
 pub use activity::SessionActivityTracker;
@@ -97,9 +98,9 @@ impl Default for NotificationPrefs {
 impl NotificationPrefs {
     fn accepts(self, envelope: &SessionEnvelope) -> bool {
         match &envelope.event {
-            coco_types::CoreEvent::Protocol(_) => self.protocol,
-            coco_types::CoreEvent::Stream(_) => self.stream,
-            coco_types::CoreEvent::Tui(_) => self.tui,
+            coco_event_types::CoreEvent::Protocol(_) => self.protocol,
+            coco_event_types::CoreEvent::Stream(_) => self.stream,
+            coco_event_types::CoreEvent::Tui(_) => self.tui,
         }
     }
 }

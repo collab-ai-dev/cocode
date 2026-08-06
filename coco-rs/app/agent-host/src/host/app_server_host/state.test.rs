@@ -12,7 +12,7 @@ impl TurnRunner for TestTurnRunner {
         _app_server: Arc<coco_app_server::AppServer<crate::app_session::AppSessionHandle>>,
         _params: coco_types::TurnStartParams,
         _turn_id: coco_types::TurnId,
-        _event_tx: tokio::sync::mpsc::Sender<coco_types::CoreEvent>,
+        _event_tx: tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>,
         _cancel: tokio_util::sync::CancellationToken,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
         Box::pin(async { Ok(()) })

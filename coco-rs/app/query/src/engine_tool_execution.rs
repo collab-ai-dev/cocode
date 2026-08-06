@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 
+use coco_event_types::TurnEndedParams;
 use coco_llm_types::ToolCallPart;
 use coco_messages::MessageHistory;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::TokenUsage;
-use coco_types::TurnEndedParams;
 
 use crate::ContinueReason;
 use crate::QueryResult;
@@ -69,7 +69,7 @@ impl QueryEngine {
         turn_state: &mut LoopTurnState,
         response_text: String,
         history: &mut MessageHistory,
-        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
         hook_tx_opt: Option<&tokio::sync::mpsc::Sender<coco_hooks::HookExecutionEvent>>,
         state_tracker: &crate::session_state::SessionStateTracker,
         services: &LoopServices,
@@ -92,8 +92,8 @@ impl QueryEngine {
                 {
                     let _delivered = emit_protocol(
                         event_tx,
-                        coco_types::ServerNotification::PermissionModeChanged(
-                            coco_types::PermissionModeChangedParams {
+                        coco_event_types::ServerNotification::PermissionModeChanged(
+                            coco_event_types::PermissionModeChangedParams {
                                 mode,
                                 bypass_available: ctx.permission_context.bypass_available,
                             },
@@ -281,8 +281,8 @@ impl QueryEngine {
             {
                 let _delivered = emit_protocol(
                     event_tx,
-                    coco_types::ServerNotification::PermissionModeChanged(
-                        coco_types::PermissionModeChangedParams {
+                    coco_event_types::ServerNotification::PermissionModeChanged(
+                        coco_event_types::PermissionModeChangedParams {
                             mode,
                             bypass_available: self
                                 .config

@@ -114,7 +114,7 @@ async fn run_with_mock_and_policy_events(
     model: Arc<dyn LanguageModel>,
     prompt: &str,
     policy: coco_config::EmptyResponsePolicy,
-) -> (QueryResult, Vec<coco_types::CoreEvent>) {
+) -> (QueryResult, Vec<coco_event_types::CoreEvent>) {
     let client = coco_query::test_support::model_runtime_registry(model);
     let config = QueryEngineConfig {
         model_id: "scripted-mock".into(),
@@ -203,21 +203,24 @@ async fn persistent_empty_caps_at_three_nudges_then_fails() {
     let QueryOutcome::Failed(failure) = &result.outcome else {
         panic!("recovery exhaustion must be typed as failure");
     };
-    assert_eq!(failure.code, coco_types::ErrorCode::Provider);
+    assert_eq!(failure.code, coco_event_types::ErrorCode::Provider);
     let ended: Vec<_> = events
         .iter()
         .filter_map(|event| match event {
-            coco_types::CoreEvent::Protocol(coco_types::ServerNotification::TurnEnded(params)) => {
-                Some(params)
-            }
+            coco_event_types::CoreEvent::Protocol(
+                coco_event_types::ServerNotification::TurnEnded(params),
+            ) => Some(params),
             _ => None,
         })
         .collect();
     assert_eq!(ended.len(), 1);
-    let coco_types::TurnOutcome::Failed(ended_failure) = &ended[0].outcome else {
+    let coco_event_types::TurnOutcome::Failed(ended_failure) = &ended[0].outcome else {
         panic!("TurnEnded must be failed");
     };
-    assert_eq!(ended_failure.error.code, coco_types::ErrorCode::Provider);
+    assert_eq!(
+        ended_failure.error.code,
+        coco_event_types::ErrorCode::Provider
+    );
     assert_eq!(ended[0].usage, Some(result.total_usage));
     assert!(
         ended[0]
@@ -227,7 +230,7 @@ async fn persistent_empty_caps_at_three_nudges_then_fails() {
     );
     assert!(!events.iter().any(|event| matches!(
         event,
-        coco_types::CoreEvent::Protocol(coco_types::ServerNotification::MessageAppended {
+        coco_event_types::CoreEvent::Protocol(coco_event_types::ServerNotification::MessageAppended {
             message,
             ..
         }) if stored_message_text(message.as_ref()).contains(NUDGE_MARKER)
@@ -237,8 +240,8 @@ async fn persistent_empty_caps_at_three_nudges_then_fails() {
             .iter()
             .filter(|event| matches!(
                 event,
-                coco_types::CoreEvent::Stream(
-                    coco_types::AgentStreamEvent::ResponseAttemptDiscarded { .. }
+                coco_event_types::CoreEvent::Stream(
+                    coco_event_types::AgentStreamEvent::ResponseAttemptDiscarded { .. }
                 )
             ))
             .count(),
@@ -247,8 +250,8 @@ async fn persistent_empty_caps_at_three_nudges_then_fails() {
     );
     assert!(!events.iter().any(|event| matches!(
         event,
-        coco_types::CoreEvent::Stream(
-            coco_types::AgentStreamEvent::ResponseAttemptCommitted { .. }
+        coco_event_types::CoreEvent::Stream(
+            coco_event_types::AgentStreamEvent::ResponseAttemptCommitted { .. }
         )
     )));
 }
@@ -445,8 +448,8 @@ async fn persistent_tool_use_without_calls_fails_after_three_retries() {
     assert_eq!(count_persisted_nudges(&result), 0);
     assert!(matches!(
         result.outcome,
-        QueryOutcome::Failed(coco_types::ErrorPayload {
-            code: coco_types::ErrorCode::Provider,
+        QueryOutcome::Failed(coco_event_types::ErrorPayload {
+            code: coco_event_types::ErrorCode::Provider,
             ..
         })
     ));
@@ -455,12 +458,14 @@ async fn persistent_tool_use_without_calls_fails_after_three_retries() {
             .iter()
             .filter(|event| matches!(
                 event,
-                coco_types::CoreEvent::Protocol(coco_types::ServerNotification::TurnEnded(
-                    coco_types::TurnEndedParams {
-                        outcome: coco_types::TurnOutcome::Failed(_),
-                        ..
-                    }
-                ))
+                coco_event_types::CoreEvent::Protocol(
+                    coco_event_types::ServerNotification::TurnEnded(
+                        coco_event_types::TurnEndedParams {
+                            outcome: coco_event_types::TurnOutcome::Failed(_),
+                            ..
+                        }
+                    )
+                )
             ))
             .count(),
         1
@@ -484,28 +489,30 @@ async fn abnormal_stop_is_a_typed_failure_not_a_completed_turn() {
     let QueryOutcome::Failed(error) = &result.outcome else {
         panic!("content-filter terminal must fail the query");
     };
-    assert_eq!(error.code, coco_types::ErrorCode::Provider);
+    assert_eq!(error.code, coco_event_types::ErrorCode::Provider);
     assert_eq!(result.stop_reason.as_deref(), Some("content_filter"));
     assert_eq!(
         events
             .iter()
             .filter(|event| matches!(
                 event,
-                coco_types::CoreEvent::Protocol(coco_types::ServerNotification::TurnEnded(
-                    coco_types::TurnEndedParams {
-                        outcome: coco_types::TurnOutcome::Failed(_),
-                        ..
-                    }
-                ))
+                coco_event_types::CoreEvent::Protocol(
+                    coco_event_types::ServerNotification::TurnEnded(
+                        coco_event_types::TurnEndedParams {
+                            outcome: coco_event_types::TurnOutcome::Failed(_),
+                            ..
+                        }
+                    )
+                )
             ))
             .count(),
         1
     );
     assert!(!events.iter().any(|event| matches!(
         event,
-        coco_types::CoreEvent::Protocol(coco_types::ServerNotification::TurnEnded(
-            coco_types::TurnEndedParams {
-                outcome: coco_types::TurnOutcome::Completed(_),
+        coco_event_types::CoreEvent::Protocol(coco_event_types::ServerNotification::TurnEnded(
+            coco_event_types::TurnEndedParams {
+                outcome: coco_event_types::TurnOutcome::Completed(_),
                 ..
             }
         ))

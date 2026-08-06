@@ -32,9 +32,9 @@ The full Rust → JSON Schema → SDK language pipeline is working:
 
 1. **`generate_schemas.sh`** runs:
    ```
-   cargo run -p coco-types --features schema --example export_schema
+   cargo run -p coco-event-types --features schema --example export_schema
    ```
-   which invokes `coco-rs/common/types/examples/export_schema.rs`. It writes
+   which invokes `coco-rs/common/event-types/examples/export_schema.rs`. It writes
    directly to `coco-sdk/schemas/json/`:
    - 11 individual schema files (server_notification, notification_method,
      agent_stream_event, tui_only_event, client_request, client_request_method,

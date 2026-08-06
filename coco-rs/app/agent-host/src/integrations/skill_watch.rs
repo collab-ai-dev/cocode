@@ -10,10 +10,10 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use coco_event_types::CoreEvent;
+use coco_event_types::TuiOnlyEvent;
 use coco_skills::watcher::SkillChangeDetector;
 use coco_skills::watcher::session_reload_scopes;
-use coco_types::CoreEvent;
-use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;
 
 use crate::session_runtime::SessionHandle;

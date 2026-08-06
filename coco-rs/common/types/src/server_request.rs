@@ -433,7 +433,7 @@ pub struct InitializeResult {
     pub pid: Option<u32>,
     /// Fast-mode feature state if enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fast_mode_state: Option<crate::event::FastModeState>,
+    pub fast_mode_state: Option<crate::FastModeState>,
     // Local extensions (not in TS). TS parsers accept unknown fields by
     // default, so these pass through transparently. Prefixed with
     // `_cocoRs` so they're visually distinct from protocol fields.

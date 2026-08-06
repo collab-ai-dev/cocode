@@ -13,8 +13,8 @@ pub(super) async fn emit_resume_ui_state(
     // one pass instead of replaying thousands of individual appends.
     let _ = event_tx
         .send(CoreEvent::Protocol(
-            coco_types::ServerNotification::SessionResetForResume {
-                identity: coco_types::ServerNotificationIdentity::new(
+            coco_event_types::ServerNotification::SessionResetForResume {
+                identity: coco_event_types::ServerNotificationIdentity::new(
                     Some(session.session_id().clone()),
                     None,
                 ),
@@ -23,13 +23,13 @@ pub(super) async fn emit_resume_ui_state(
         .await;
     let _ = event_tx
         .send(CoreEvent::Protocol(
-            coco_types::ServerNotification::HistoryReplaced {
+            coco_event_types::ServerNotification::HistoryReplaced {
                 messages: prior_messages.clone(),
-                identity: coco_types::ServerNotificationIdentity::new(
+                identity: coco_event_types::ServerNotificationIdentity::new(
                     Some(session.session_id().clone()),
                     None,
                 ),
-                reason: coco_types::HistoryReplaceReason::Hydrate,
+                reason: coco_event_types::HistoryReplaceReason::Hydrate,
             },
         ))
         .await;
@@ -40,8 +40,8 @@ pub(super) async fn emit_resume_ui_state(
         }
         let _ = event_tx
             .send(CoreEvent::Protocol(
-                coco_types::ServerNotification::TaskPanelChanged(
-                    coco_types::TaskPanelChangedParams {
+                coco_event_types::ServerNotification::TaskPanelChanged(
+                    coco_event_types::TaskPanelChangedParams {
                         plan_tasks: Vec::new(),
                         todos_by_agent,
                         expanded_view: coco_types::ExpandedView::None,
@@ -56,7 +56,7 @@ pub(super) async fn emit_resume_ui_state(
     }
     let _ = event_tx
         .send(CoreEvent::Protocol(
-            coco_types::ServerNotification::SessionUsageUpdated(Box::new(
+            coco_event_types::ServerNotification::SessionUsageUpdated(Box::new(
                 session.session_usage_snapshot().await,
             )),
         ))
@@ -417,9 +417,9 @@ pub(super) fn runtime_session_plan_file_path(
 use std::{collections::HashMap, sync::Arc};
 
 use coco_agent_host::{goal_command, resume_resolver::ResumePlan};
+use coco_event_types::TuiOnlyEvent;
 use coco_messages::{AssistantContent, LlmMessage, Message};
 use coco_query::CoreEvent;
-use coco_types::TuiOnlyEvent;
 use tokio::sync::{Mutex, mpsc};
 use tracing::warn;
 

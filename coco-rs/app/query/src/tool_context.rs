@@ -59,6 +59,33 @@ use tokio::sync::RwLock;
 
 use crate::config::QueryEngineConfig;
 
+/// Adapts the session's concrete `FileHistoryState` store onto the
+/// tool-facing [`coco_tool_runtime::FileHistoryHandle`] seam. The app
+/// layer owns this because it is the only layer that sees both the store
+/// and the tool context — `coco-tool-runtime` deliberately does not
+/// depend on `coco-context`.
+struct FileHistoryStoreHandle {
+    store: Arc<RwLock<FileHistoryState>>,
+    config_home: PathBuf,
+}
+
+#[async_trait::async_trait]
+impl coco_tool_runtime::FileHistoryHandle for FileHistoryStoreHandle {
+    async fn track_edit(
+        &self,
+        file_path: &std::path::Path,
+        message_id: &str,
+        session_id: &str,
+    ) -> Result<(), String> {
+        self.store
+            .write()
+            .await
+            .track_edit(file_path, message_id, &self.config_home, session_id)
+            .await
+            .map_err(|e| e.to_string())
+    }
+}
+
 pub(crate) fn resolve_tool_search_strategy(
     snapshot: Option<&coco_inference::ModelRuntimeSnapshot>,
 ) -> ToolSearchStrategy {
@@ -116,7 +143,7 @@ pub(crate) struct ToolContextFactory {
     /// `NoOpSubagentDispatchScreen` — no classifier wired, so nothing to
     /// screen with.
     pub(crate) subagent_screen: Option<coco_tool_runtime::SubagentDispatchScreenHandle>,
-    pub(crate) file_read_state: Option<Arc<RwLock<coco_context::FileReadState>>>,
+    pub(crate) file_read_state: Option<Arc<RwLock<coco_types::FileReadState>>>,
     pub(crate) file_history: Option<Arc<RwLock<FileHistoryState>>>,
     pub(crate) config_home: Option<PathBuf>,
     pub(crate) tool_output_store: Option<coco_tool_runtime::ToolOutputStore>,
@@ -704,7 +731,17 @@ impl ToolContextFactory {
                 .unwrap_or_else(|| Arc::new(coco_tool_runtime::InMemoryTodoListHandle::new())),
             hook_handle: self.hook_handle.clone(),
             file_read_state: self.file_read_state.clone(),
-            file_history: self.file_history.clone(),
+            file_history: match (&self.file_history, &self.config_home) {
+                // The store resolves backup paths under `config_home`, so a
+                // history handle without one cannot write snapshots — leave
+                // it unwired rather than hand tools a store that always errors.
+                (Some(store), Some(config_home)) => Some(Arc::new(FileHistoryStoreHandle {
+                    store: store.clone(),
+                    config_home: config_home.clone(),
+                })
+                    as coco_tool_runtime::FileHistoryHandleRef),
+                _ => None,
+            },
             config_home: self.config_home.clone(),
             session_id_for_history: Some(self.session_id.to_string()),
             tool_output_store: self.tool_output_store.clone(),

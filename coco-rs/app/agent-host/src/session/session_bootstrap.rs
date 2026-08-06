@@ -164,7 +164,7 @@ pub enum SessionLateBindFailure {
 #[derive(Clone, Default)]
 pub struct SessionIntegrationOptions {
     pub existing_mcp_manager: Option<Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>>,
-    pub event_sink: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    pub event_sink: Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
     pub leader_permission_bridge: Option<coco_tool_runtime::ToolPermissionBridgeRef>,
     pub lsp: SessionLspIntegration,
     pub mcp_connect: SessionMcpConnectMode,
@@ -470,7 +470,7 @@ pub async fn install_session_late_binds(
     cwd: &Path,
     mcp_handle: Option<coco_tool_runtime::McpHandleRef>,
     lsp_handle: Option<coco_tool_runtime::LspHandleRef>,
-    event_sink: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    event_sink: Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
 ) -> Result<()> {
     // Background task runtime — owns the `TaskManager` and per-task
     // disk output; shared with `SwarmAgentHandle` so AgentTool

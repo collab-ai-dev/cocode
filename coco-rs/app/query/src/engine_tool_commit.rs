@@ -35,7 +35,7 @@ pub(crate) async fn commit_streaming_tool_outcomes<F, Fut>(
     handle: StreamingHandle<F, Fut>,
     mode: StreamingCommitMode,
     history: &mut MessageHistory,
-    event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    event_tx: &Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
     run_artifacts: &mut RunArtifacts,
     goal: Option<&coco_tool_runtime::GoalHandleRef>,
 ) -> StreamingCommitResult

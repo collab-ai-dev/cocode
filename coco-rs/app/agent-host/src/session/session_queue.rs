@@ -117,7 +117,7 @@ pub async fn wait_for_command_queue_change(session: &SessionHandle) {
 
 pub async fn dequeue_next_prompt_batch(
     session: &SessionHandle,
-    event_tx: Option<mpsc::Sender<coco_types::CoreEvent>>,
+    event_tx: Option<mpsc::Sender<coco_event_types::CoreEvent>>,
 ) -> Option<DequeuedPromptBatch> {
     let first = session
         .command_queue()

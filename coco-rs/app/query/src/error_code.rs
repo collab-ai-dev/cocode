@@ -1,5 +1,5 @@
 //! Bridge between `coco_error::StatusCategory` (the internal error
-//! taxonomy) and `coco_types::ErrorCode` (the wire-stable category
+//! taxonomy) and `coco_event_types::ErrorCode` (the wire-stable category
 //! emitted on `TurnEnded(Failed)`). Both enums live one layer apart —
 //! `coco-error` and `coco-types` deliberately don't depend on each
 //! other to keep the common-layer DAG flat — so this seam lives here
@@ -14,7 +14,7 @@
 use coco_error::BoxedError;
 use coco_error::status_code::StatusCategory;
 use coco_error::status_code::StatusCode;
-use coco_types::ErrorCode;
+use coco_event_types::ErrorCode;
 
 /// Map a `StatusCategory` to a wire-stable `ErrorCode`.
 ///

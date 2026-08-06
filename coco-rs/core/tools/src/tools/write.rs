@@ -208,7 +208,7 @@ impl Tool for WriteTool {
             }
 
             // Layer 2: mtime comparison.
-            if let Ok(disk_mtime) = coco_context::file_mtime_ms(&abs_path).await
+            if let Ok(disk_mtime) = coco_utils_common::file_mtime_ms(&abs_path).await
                 && disk_mtime > entry.mtime_ms
             {
                 return Err(ToolError::ExecutionFailed {
@@ -227,12 +227,20 @@ impl Tool for WriteTool {
             // the current disk content when the stored entry is a full real
             // snapshot. For line-range reads we can't
             // compare meaningfully, so we skip this layer.
-            if entry.is_full_real()
-                && let Ok(raw) = std::fs::read(&abs_path)
-            {
-                let detected_enc = coco_file_encoding::detect_encoding(&raw);
-                if let Ok(current) = detected_enc.decode(&raw)
-                    && current != entry.content
+            if entry.is_full_real() {
+                let stored = entry.content.clone();
+                let probe_path = abs_path.clone();
+                // Whole-file read plus encoding detect plus decode — three
+                // size-proportional passes, off the runtime worker.
+                let current = tokio::task::spawn_blocking(move || {
+                    let raw = std::fs::read(&probe_path).ok()?;
+                    coco_file_encoding::detect_encoding(&raw).decode(&raw).ok()
+                })
+                .await
+                .ok()
+                .flatten();
+                if let Some(current) = current
+                    && current != stored
                 {
                     return Err(ToolError::ExecutionFailed {
                         message: format!(
@@ -278,9 +286,14 @@ impl Tool for WriteTool {
         // preserved, not line endings. For existing files, sniff the original
         // encoding so we can preserve it on overwrite.
         let detected_encoding: coco_file_encoding::Encoding = if !is_new {
-            std::fs::read(file_path)
-                .map(|raw| coco_file_encoding::detect_encoding(&raw))
-                .unwrap_or(coco_file_encoding::Encoding::Utf8)
+            let probe_path = file_path.to_string();
+            tokio::task::spawn_blocking(move || {
+                std::fs::read(&probe_path)
+                    .map(|raw| coco_file_encoding::detect_encoding(&raw))
+                    .unwrap_or(coco_file_encoding::Encoding::Utf8)
+            })
+            .await
+            .unwrap_or(coco_file_encoding::Encoding::Utf8)
         } else {
             coco_file_encoding::Encoding::Utf8
         };
@@ -300,6 +313,17 @@ impl Tool for WriteTool {
         // new files). `write_with_format` handles BOM prepending and line-
         // ending normalization. Always pass `LineEnding::Lf` — see the
         // comment above about the line-ending design decision.
+        // Deliberately synchronous. `tool_call_runner`'s `tokio::select!`
+        // cancels a tool by DROPPING its `execute` future, and a
+        // `spawn_blocking` closure cannot be cancelled once running — so an
+        // awaited write would still land on disk while the model is told the
+        // call was cancelled, and the post-write bookkeeping
+        // (`record_file_edit` / `track_skill_triggers` / `lsp.notify_save`)
+        // would be skipped, desynchronising `FileReadState` from the file.
+        // Keeping the write inside one poll makes it atomic with respect to
+        // cancellation. The expensive part (read + full-content scans) is
+        // already off the runtime; a write of pre-computed bytes is not worth
+        // trading that invariant for.
         coco_file_encoding::write_with_format(
             path,
             content,

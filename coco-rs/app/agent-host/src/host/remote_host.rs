@@ -3,8 +3,8 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use anyhow::Result;
 use coco_app_runtime::ProcessRuntime;
 use coco_config::global_config;
+use coco_event_types::CoreEvent;
 use coco_session::SessionManager;
-use coco_types::CoreEvent;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 

@@ -4,10 +4,10 @@
 //! Per-method AppServer behavior is covered by the shared host handler
 //! and multi-session tests.
 
+use coco_event_types::ServerNotification;
 use coco_types::JsonRpcMessage;
 use coco_types::JsonRpcRequest;
 use coco_types::RequestId;
-use coco_types::ServerNotification;
 use coco_types::error_codes;
 use pretty_assertions::assert_eq;
 
@@ -230,8 +230,8 @@ async fn app_server_bridge_entrypoint_dispatches_and_forwards_external_notificat
 
 #[test]
 fn core_event_protocol_serializes_to_notification() {
-    use coco_types::ServerNotification;
-    use coco_types::TurnStartedParams;
+    use coco_event_types::ServerNotification;
+    use coco_event_types::TurnStartedParams;
 
     let event = CoreEvent::Protocol(ServerNotification::TurnStarted(TurnStartedParams {
         turn_id: coco_types::TurnId::from("t1"),
@@ -244,7 +244,7 @@ fn core_event_protocol_serializes_to_notification() {
 
 #[test]
 fn core_event_tui_is_dropped() {
-    let event = CoreEvent::Tui(coco_types::TuiOnlyEvent::ToolCallDelta {
+    let event = CoreEvent::Tui(coco_event_types::TuiOnlyEvent::ToolCallDelta {
         call_id: "c1".into(),
         delta: "foo".into(),
     });
@@ -255,7 +255,7 @@ fn core_event_tui_is_dropped() {
 fn core_event_stream_returns_none_handled_by_accumulator() {
     // Stream events are handled by the writer task's StreamAccumulator,
     // not by core_event_to_notification. They return None here.
-    use coco_types::AgentStreamEvent;
+    use coco_event_types::AgentStreamEvent;
     let event = CoreEvent::Stream(AgentStreamEvent::TextDelta {
         turn_id: "t1".into(),
         delta: "hello".into(),

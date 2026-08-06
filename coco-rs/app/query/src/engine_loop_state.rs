@@ -67,7 +67,7 @@ pub(crate) struct LoopAccumulator {
     /// Every `PermissionDecision::Deny` outcome accumulates here and
     /// flushes into `SessionResultParams.permission_denials` at session
     /// end.
-    pub(crate) permission_denials: Vec<coco_types::PermissionDenialInfo>,
+    pub(crate) permission_denials: Vec<coco_event_types::PermissionDenialInfo>,
     /// Side-channel collectors filled at emission sites so finalize
     /// doesn't need to scan `history` (which mid-run compaction can
     /// replace, invalidating any captured index).
@@ -81,7 +81,7 @@ pub(crate) struct QueryFailureStats {
     pub(crate) total_turns: i32,
     pub(crate) duration_ms: i64,
     pub(crate) duration_api_ms: i64,
-    pub(crate) permission_denials: Vec<coco_types::PermissionDenialInfo>,
+    pub(crate) permission_denials: Vec<coco_event_types::PermissionDenialInfo>,
 }
 
 impl QueryFailureStats {

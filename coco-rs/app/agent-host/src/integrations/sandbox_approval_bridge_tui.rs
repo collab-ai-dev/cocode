@@ -26,12 +26,12 @@
 //! [`SandboxApprovalDecision::Rejected`], leaving the underlying deny in place.
 
 use async_trait::async_trait;
+use coco_event_types::TuiOnlyEvent;
 use coco_query::CoreEvent;
 use coco_sandbox::{
     SandboxApprovalBridge, SandboxApprovalDecision, SandboxApprovalRequest, SandboxOperation,
 };
 use coco_tool_runtime::ToolPermissionDecision;
-use coco_types::TuiOnlyEvent;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::tui_permission_bridge::{PendingApprovalEntry, PendingApprovals};

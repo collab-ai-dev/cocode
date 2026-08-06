@@ -436,7 +436,7 @@ fn status_bar_view_counts_survive_compact_history_replace() {
             uuid::Uuid::new_v4(),
             "This session is being continued…",
         ))],
-        coco_types::HistoryReplaceReason::Compact,
+        coco_event_types::HistoryReplaceReason::Compact,
     );
 
     let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {

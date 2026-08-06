@@ -31,8 +31,8 @@ use super::session_registry::register_local_app_server_session;
 #[derive(Debug, Clone)]
 pub struct AppServerLocalTurnCompletion {
     pub started: coco_types::TurnStartResult,
-    pub ended: coco_types::TurnEndedParams,
-    pub session_result: coco_types::SessionResultParams,
+    pub ended: coco_event_types::TurnEndedParams,
+    pub session_result: coco_event_types::SessionResultParams,
 }
 
 #[derive(Clone)]

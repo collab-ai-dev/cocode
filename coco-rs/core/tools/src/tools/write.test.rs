@@ -390,8 +390,8 @@ async fn test_write_preserves_utf16le_encoding() {
 // B2.3: read-before-write + mtime+content race detection
 // ---------------------------------------------------------------------------
 
-use coco_context::FileReadEntry;
-use coco_context::FileReadState;
+use coco_types::FileReadEntry;
+use coco_types::FileReadState;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -456,7 +456,7 @@ async fn test_write_allows_overwrite_after_read() {
     let file = dir.path().join("file.txt");
     std::fs::write(&file, "first version").unwrap();
     let abs = std::fs::canonicalize(&file).unwrap();
-    let mtime = coco_context::file_mtime_ms(&abs).await.unwrap();
+    let mtime = coco_utils_common::file_mtime_ms(&abs).await.unwrap();
 
     let ctx = ctx_with_file_state();
     {
@@ -483,7 +483,7 @@ async fn test_write_allows_overwrite_after_line_range_read() {
     let file = dir.path().join("file.txt");
     std::fs::write(&file, "first version\nsecond line\n").unwrap();
     let abs = std::fs::canonicalize(&file).unwrap();
-    let mtime = coco_context::file_mtime_ms(&abs).await.unwrap();
+    let mtime = coco_utils_common::file_mtime_ms(&abs).await.unwrap();
 
     let ctx = ctx_with_file_state();
     {
@@ -513,7 +513,7 @@ async fn test_write_rejects_injected_partial_view() {
     let file = dir.path().join("file.txt");
     std::fs::write(&file, "first version\nsecond line\n").unwrap();
     let abs = std::fs::canonicalize(&file).unwrap();
-    let mtime = coco_context::file_mtime_ms(&abs).await.unwrap();
+    let mtime = coco_utils_common::file_mtime_ms(&abs).await.unwrap();
 
     let ctx = ctx_with_file_state();
     {
@@ -523,7 +523,7 @@ async fn test_write_rejects_injected_partial_view() {
             FileReadEntry::injected_partial(
                 "first version\n".into(),
                 mtime,
-                coco_context::FileReadRange::Lines {
+                coco_types::FileReadRange::Lines {
                     offset: None,
                     limit: 1,
                 },
@@ -590,7 +590,7 @@ async fn test_write_detects_content_drift() {
     let file = dir.path().join("file.txt");
     std::fs::write(&file, "current content").unwrap();
     let abs = std::fs::canonicalize(&file).unwrap();
-    let mtime = coco_context::file_mtime_ms(&abs).await.unwrap();
+    let mtime = coco_utils_common::file_mtime_ms(&abs).await.unwrap();
 
     let ctx = ctx_with_file_state();
     // Prime with STALE content but CURRENT mtime — simulates a file

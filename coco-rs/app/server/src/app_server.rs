@@ -5,10 +5,11 @@ use std::{
 };
 
 use coco_error::{ErrorExt, Location, StatusCode, stack_trace_debug};
+use coco_event_types::SessionEnvelope;
+use coco_event_types::{SessionAccess, SessionLifecycleEffect, SessionLifecycleEffectKind};
 use coco_types::{
-    ApprovalResolveParams, ElicitationResolveParams, RequestId, ServerRequest, SessionAccess,
-    SessionEnvelope, SessionId, SessionLifecycleEffect, SessionLifecycleEffectKind, SessionTarget,
-    TurnId, UserInputResolveParams,
+    ApprovalResolveParams, ElicitationResolveParams, RequestId, ServerRequest, SessionId,
+    SessionTarget, TurnId, UserInputResolveParams,
 };
 use snafu::{IntoError, ResultExt, Snafu};
 

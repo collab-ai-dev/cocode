@@ -8,9 +8,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 use anyhow::anyhow;
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
-use coco_types::TaskCompletionStatus;
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
+use coco_event_types::TaskCompletionStatus;
 use coco_types::task_type_wire;
 use serde_json::json;
 

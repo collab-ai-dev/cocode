@@ -688,7 +688,7 @@ pub(super) fn remote_event_from_notification(
     notification: JsonRpcNotification,
 ) -> Option<RemoteJsonRpcEvent> {
     match notification.method.as_str() {
-        coco_types::SESSION_EVENT_METHOD => {
+        coco_event_types::SESSION_EVENT_METHOD => {
             match decode_session_delivery_notification(notification.params) {
                 Ok(delivery) => Some(RemoteJsonRpcEvent::SessionDelivery(Box::new(delivery))),
                 Err(error) => {
@@ -697,7 +697,7 @@ pub(super) fn remote_event_from_notification(
                 }
             }
         }
-        coco_types::SESSION_LIFECYCLE_METHOD => {
+        coco_event_types::SESSION_LIFECYCLE_METHOD => {
             match decode_lifecycle_notification(notification.params) {
                 Ok(delivery) => Some(RemoteJsonRpcEvent::SessionLifecycle(delivery)),
                 Err(error) => {
@@ -821,21 +821,25 @@ fn decode_core_event(
     let payload = event
         .remove("payload")
         .ok_or_else(|| ClientError::InvalidArgument("missing session/event payload".to_string()))?;
-    let layer = layer.parse::<coco_types::EventLayer>().map_err(|()| {
-        ClientError::InvalidArgument(format!("unknown session/event layer: {layer}"))
-    })?;
+    let layer = layer
+        .parse::<coco_event_types::EventLayer>()
+        .map_err(|()| {
+            ClientError::InvalidArgument(format!("unknown session/event layer: {layer}"))
+        })?;
     match layer {
-        coco_types::EventLayer::Protocol => serde_json::from_value::<ServerNotification>(payload)
-            .map(CoreEvent::Protocol)
-            .map_err(|error| {
-                ClientError::InvalidArgument(format!("invalid protocol event: {error}"))
-            }),
-        coco_types::EventLayer::Stream => serde_json::from_value::<AgentStreamEvent>(payload)
+        coco_event_types::EventLayer::Protocol => {
+            serde_json::from_value::<ServerNotification>(payload)
+                .map(CoreEvent::Protocol)
+                .map_err(|error| {
+                    ClientError::InvalidArgument(format!("invalid protocol event: {error}"))
+                })
+        }
+        coco_event_types::EventLayer::Stream => serde_json::from_value::<AgentStreamEvent>(payload)
             .map(CoreEvent::Stream)
             .map_err(|error| {
                 ClientError::InvalidArgument(format!("invalid stream event: {error}"))
             }),
-        coco_types::EventLayer::Tui => serde_json::from_value::<TuiOnlyEvent>(payload)
+        coco_event_types::EventLayer::Tui => serde_json::from_value::<TuiOnlyEvent>(payload)
             .map(CoreEvent::Tui)
             .map_err(|error| ClientError::InvalidArgument(format!("invalid tui event: {error}"))),
     }
@@ -905,17 +909,17 @@ use std::collections::VecDeque;
 
 use coco_app_server_transport::JsonRpcNotification;
 use coco_app_server_transport::JsonRpcRequest;
+use coco_event_types::AgentStreamEvent;
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
+use coco_event_types::SessionDelivery;
+use coco_event_types::SessionEnvelope;
+use coco_event_types::SessionLifecycleEffect;
+use coco_event_types::SessionLifecycleEffectKind;
+use coco_event_types::TuiOnlyEvent;
 use coco_types::AgentId;
-use coco_types::AgentStreamEvent;
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
-use coco_types::SessionDelivery;
-use coco_types::SessionEnvelope;
 use coco_types::SessionId;
-use coco_types::SessionLifecycleEffect;
-use coco_types::SessionLifecycleEffectKind;
 use coco_types::SessionSubscribeEnvelope;
-use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;
 
 use super::ClientError;

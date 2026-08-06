@@ -1,7 +1,7 @@
 //! Rewind state update logic — extracted to stay under 800 LoC in update.rs.
 //!
 //! Per-row `+X -Y` summaries do NOT come from this module — they ride
-//! the [`coco_types::TuiOnlyEvent::RewindRowMetadataReady`] event
+//! the [`coco_event_types::TuiOnlyEvent::RewindRowMetadataReady`] event
 //! emitted by the CLI driver, which computes them from
 //! [`coco_context::FileHistoryState`] snapshot pairs (see
 //! `app/cli/src/tui_runner.rs::RequestDiffStatsBatch`). TS reads

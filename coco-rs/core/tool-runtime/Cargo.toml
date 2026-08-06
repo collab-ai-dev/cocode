@@ -12,6 +12,7 @@ testing = []
 
 [dependencies]
 coco-types.workspace = true
+coco-event-types.workspace = true
 coco-error.workspace = true
 coco-messages.workspace = true
 coco-config.workspace = true
@@ -19,9 +20,10 @@ coco-config.workspace = true
 coco-cron.workspace = true
 # Disk-backed schedule store round-trips the project config schedule file.
 coco-file-encoding.workspace = true
-coco-context.workspace = true
+# `SandboxState` is a stateful service (39 methods, Box<dyn SandboxPlatform>),
+# and `coco-shell`'s executor takes it by concrete type — it cannot be reduced
+# to a seam trait here. Carried through `ToolUseContext` only.
 coco-sandbox.workspace = true
-coco-shell.workspace = true
 # Pure-logic foundation; carries the AgentDefinition catalog snapshot that
 # `ToolUseContext` exposes to AgentTool. One-way dep — `coco-subagent`
 # does NOT depend on `coco-tool-runtime` (see core/subagent/Cargo.toml).
@@ -30,11 +32,6 @@ coco-subagent.workspace = true
 # GoalTurnDisposition). One-way leaf dep — `coco-goals` does NOT depend on
 # `coco-tool-runtime`.
 coco-goals.workspace = true
-# `ReminderMailboxRef` trait — producer-side handle threaded onto
-# `ToolUseContext` so tools / subsystems can push event-driven reminder
-# snapshots without depending on the full reminder-orchestration stack.
-# One-way: coco-system-reminder does NOT depend on coco-tool-runtime.
-coco-system-reminder.workspace = true
 coco-wire-dump.workspace = true
 coco-utils-json-repair.workspace = true
 coco-utils-common.workspace = true

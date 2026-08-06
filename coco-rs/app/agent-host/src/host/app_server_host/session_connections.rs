@@ -3,7 +3,8 @@ use std::sync::Arc;
 use coco_app_server::{
     AppServer, AttachSessionOptions, ConnectionKey, JsonRpcDispatchError, SubscribeReplay,
 };
-use coco_types::{CoreEvent, SessionEnvelope, SessionId};
+use coco_event_types::{CoreEvent, SessionEnvelope};
+use coco_types::SessionId;
 
 use crate::app_session::AppSessionHandle;
 

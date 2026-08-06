@@ -510,7 +510,7 @@ pub(crate) async fn drain_one_progress(
     let tool_use_id = progress.tool_use_id.clone();
     let _ = emit_tui(
         event_tx,
-        coco_types::TuiOnlyEvent::ToolProgress {
+        coco_event_types::TuiOnlyEvent::ToolProgress {
             tool_use_id: tool_use_id.clone(),
             data: progress.data.clone(),
         },
@@ -536,7 +536,7 @@ pub(crate) async fn drain_one_progress(
 
     let _ = emit_protocol(
         event_tx,
-        ServerNotification::ToolProgress(coco_types::ToolProgressParams {
+        ServerNotification::ToolProgress(coco_event_types::ToolProgressParams {
             tool_use_id,
             tool_name: tool_name.to_string(),
             parent_tool_use_id: progress.parent_tool_use_id,

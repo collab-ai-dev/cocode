@@ -32,6 +32,11 @@ pub use detect::RtkFlavor;
 pub(crate) use detect::RtkProbe;
 pub use detect::RtkVersion;
 
+pub use coco_types::BashOutputRewriter;
+pub use coco_types::PassthroughReason;
+pub use coco_types::RewriteOutcome;
+pub use coco_types::RewriteSite;
+
 /// Which integration tier produced a compressed Bash result. Recorded in the
 /// Bash result envelope (`rtk` field) and metrics via [`RtkTier::as_str`] —
 /// the single source of the wire strings. Phase 1 only ever emits
@@ -49,118 +54,6 @@ impl RtkTier {
             RtkTier::Builtin => "builtin",
             RtkTier::External => "external",
         }
-    }
-}
-
-/// Result of a rewrite attempt.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RewriteOutcome {
-    /// `rtk rewrite` returned exit 0|3 with a non-empty, fully-accounted-for
-    /// rewrite. Execute this string instead of the original.
-    Rewritten(String),
-    /// Execute the original command unchanged. The reason is recorded for
-    /// metrics / tracing.
-    Passthrough(PassthroughReason),
-}
-
-/// Why a command was not rewritten. Every variant terminates in "run the
-/// original command" — none is an error.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PassthroughReason {
-    /// No `rtk` / `rr-rtk` binary detected on `$PATH` (or the configured path).
-    BinaryMissing,
-    /// Detected binary is older than the minimum supported rewrite contract.
-    VersionTooOld,
-    /// `run_in_background=true`: rtk buffers-then-prints, which would stall
-    /// incremental `TaskOutput` streaming.
-    Background,
-    /// The sandbox will wrap this command: rtk's SQLite history write under
-    /// `~/.local/share/rtk` is blocked / EROFS under ReadOnly/Strict.
-    Sandboxed,
-    /// First command word is in the coco-side `rtk.exclude_commands` list.
-    Excluded,
-    /// `rtk rewrite` exit 1 — no rtk equivalent for this command.
-    NoEquivalent,
-    /// `rtk rewrite` exit 2 — a *host* deny rule matched (informational only;
-    /// coco ran its own permission engine before this).
-    HostDeny,
-    /// The rewrite probe exceeded `rtk.rewrite_timeout_ms` and was killed.
-    Timeout,
-    /// The rtk process could not be spawned.
-    SpawnError,
-    /// rr-rtk fixup: a rewritten segment didn't start with the `rtk` token, so
-    /// the rewrite could not be fully accounted for (§4.5).
-    ShapeMismatch,
-}
-
-impl PassthroughReason {
-    /// Stable metric tag value (`coco.rtk.engine_total{reason=...}`).
-    pub fn as_metric_str(self) -> &'static str {
-        match self {
-            PassthroughReason::BinaryMissing => "binary_missing",
-            PassthroughReason::VersionTooOld => "version_too_old",
-            PassthroughReason::Background => "background",
-            PassthroughReason::Sandboxed => "sandboxed",
-            PassthroughReason::Excluded => "excluded",
-            PassthroughReason::NoEquivalent => "no_equivalent",
-            PassthroughReason::HostDeny => "host_deny",
-            PassthroughReason::Timeout => "timeout",
-            PassthroughReason::SpawnError => "spawn_error",
-            PassthroughReason::ShapeMismatch => "shape_mismatch",
-        }
-    }
-}
-
-/// Execution-site facts the skip conditions (§4.3) need. Computed by the Bash
-/// tool from the *original* command before the rewrite runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RewriteSite {
-    /// `BashInput.run_in_background`.
-    pub background: bool,
-    /// The sandbox snapshot decided it will wrap this command.
-    pub sandboxed: bool,
-}
-
-/// The Bash output-compression seam. A backend acts at one or both of two
-/// lifecycle points (design §3.5): a **pre-spawn rewrite** (external tier —
-/// `git status` → `rtk git status`, whose tool output the engine then sees
-/// compressed) and a **post-exec filter** (builtin tier — compress the captured
-/// stdout of the unmodified command in-process). [`RtkRewriter`] is the only
-/// implementation today and does both, arbitrated by [`RtkMode`]; the trait
-/// exists so `BashTool` depends on the seam and its two capability predicates
-/// rather than on a concrete backend or on `RtkMode`. The whole API is
-/// **infallible**: a rewrite maps to [`RewriteOutcome::Passthrough`] and a
-/// filter to `None`, so a broken backend only declines to compress.
-#[async_trait::async_trait]
-pub trait BashOutputRewriter: std::fmt::Debug + Send + Sync {
-    /// Rewrite `command` for output compression, or decide to pass it through.
-    async fn rewrite(&self, command: &str, site: RewriteSite) -> RewriteOutcome;
-
-    /// Whether this backend performs a pre-spawn rewrite. When `false`,
-    /// `BashTool` skips [`rewrite`](BashOutputRewriter::rewrite) and spawns the
-    /// original command. **Required, no default:** a silent `true` would opt a
-    /// post-exec-only backend into modifying the spawned command it never meant
-    /// to touch — each backend must declare its tiers explicitly.
-    fn does_pre_spawn_rewrite(&self) -> bool;
-
-    /// Whether this backend performs post-exec filtering. When `true`,
-    /// `BashTool` calls [`filter_output`](BashOutputRewriter::filter_output) on
-    /// the captured stdout — but never when a pre-spawn rewrite already fired
-    /// for the same call (no double filtering, §3.5). Required, no default.
-    fn does_post_exec_filter(&self) -> bool;
-
-    /// Post-exec output compression. Given the original command, its exit code,
-    /// and captured stdout, return compressed text or `None` to keep the raw
-    /// output. Infallible — a filter panic degrades to `None`. Defaults to `None`
-    /// for pre-spawn-only backends; it is only ever called when
-    /// [`does_post_exec_filter`](BashOutputRewriter::does_post_exec_filter) is `true`.
-    async fn filter_output(
-        &self,
-        _command: &str,
-        _exit_code: i32,
-        _stdout: &str,
-    ) -> Option<String> {
-        None
     }
 }
 

@@ -31,13 +31,13 @@ mod harness;
 
 use std::sync::Arc;
 
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
 use coco_messages::AssistantContent;
 use coco_messages::Message;
 use coco_messages::create_assistant_message;
-use coco_types::CoreEvent;
 use coco_types::InputTokens;
 use coco_types::PermissionMode;
-use coco_types::ServerNotification;
 use coco_types::TokenUsage;
 use coco_types::ToolAppState;
 use harness::MockModelBuilder;

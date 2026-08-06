@@ -6,7 +6,7 @@ use coco_app_server::{
 };
 use coco_app_server_transport::JsonRpcFrame;
 use coco_error::StackError;
-use coco_types::CoreEvent;
+use coco_event_types::CoreEvent;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 

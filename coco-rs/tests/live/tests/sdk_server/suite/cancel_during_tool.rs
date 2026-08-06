@@ -23,9 +23,9 @@ use crate::sdk_server::harness::req;
 use crate::sdk_server::harness::send_initialize;
 use crate::sdk_server::harness::send_session_start;
 
+use coco_event_types::NotificationMethod;
 use coco_types::ClientRequestMethod;
 use coco_types::JsonRpcMessage;
-use coco_types::NotificationMethod;
 
 pub async fn run(provider: &str, model: &str) -> Result<()> {
     let server = build_live_server(provider, model).await?;

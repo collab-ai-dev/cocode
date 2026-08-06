@@ -765,3 +765,11 @@ impl Default for AgentDefinition {
 #[cfg(test)]
 #[path = "agent.test.rs"]
 mod tests;
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentInfo {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}

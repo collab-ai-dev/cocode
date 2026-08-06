@@ -8,10 +8,10 @@
 
 use coco_config::EnvKey;
 use coco_config::env;
-use coco_types::ToolAbortReasonPayload;
+use coco_event_types::ToolAbortReasonPayload;
+use coco_event_types::TuiOnlyEvent;
 use coco_types::ToolId;
 use coco_types::ToolName;
-use coco_types::TuiOnlyEvent;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use std::sync::Arc;
@@ -87,7 +87,7 @@ pub struct ToolExecutor {
     /// Optional protocol-event sink used to broadcast
     /// `TaskPanelChanged` after every applied `app_state_patch`. Keeps
     /// the TUI in sync with V2 plan-item and V1 todo snapshots.
-    event_tx: Option<mpsc::Sender<coco_types::CoreEvent>>,
+    event_tx: Option<mpsc::Sender<coco_event_types::CoreEvent>>,
 }
 
 /// Resolve the tool concurrency cap from the raw `COCO_MAX_TOOL_USE_CONCURRENCY`
@@ -137,7 +137,7 @@ impl ToolExecutor {
     /// `TaskPanelChanged` after applying task-related `app_state_patch`
     /// closures. Optional; omission drops the notifications silently
     /// (tests + SDK-only paths don't need UI refreshes).
-    pub fn with_event_sink(mut self, tx: mpsc::Sender<coco_types::CoreEvent>) -> Self {
+    pub fn with_event_sink(mut self, tx: mpsc::Sender<coco_event_types::CoreEvent>) -> Self {
         self.event_tx = Some(tx);
         self
     }
@@ -374,7 +374,7 @@ impl ToolExecutor {
             // patch, so snapshot creation order == generation order even
             // though delivery channels are unordered.
             guard.panel_generation += 1;
-            coco_types::TaskPanelChangedParams {
+            coco_event_types::TaskPanelChangedParams {
                 plan_tasks: guard.plan_tasks.clone(),
                 todos_by_agent: guard.todos_by_agent.clone(),
                 expanded_view: guard.expanded_view,
@@ -384,8 +384,8 @@ impl ToolExecutor {
         };
         if let Some(tx) = self.event_tx.as_ref() {
             let _ = tx
-                .send(coco_types::CoreEvent::Protocol(
-                    coco_types::ServerNotification::TaskPanelChanged(snapshot),
+                .send(coco_event_types::CoreEvent::Protocol(
+                    coco_event_types::ServerNotification::TaskPanelChanged(snapshot),
                 ))
                 .await;
         }
@@ -396,7 +396,7 @@ impl ToolExecutor {
             return;
         };
         let _ = tx
-            .send(coco_types::CoreEvent::Tui(
+            .send(coco_event_types::CoreEvent::Tui(
                 TuiOnlyEvent::ToolInterruptibilityChanged { interruptible },
             ))
             .await;

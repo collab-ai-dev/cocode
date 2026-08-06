@@ -87,10 +87,10 @@ impl PluginDialogTab {
 
 #[derive(Debug, Clone)]
 pub struct PluginDialogState {
-    pub installed: Vec<coco_types::PluginDialogInstalledRow>,
-    pub skills: Vec<coco_types::PluginDialogSkillRow>,
-    pub marketplaces: Vec<coco_types::PluginDialogMarketplaceRow>,
-    pub errors: Vec<coco_types::PluginDialogErrorRow>,
+    pub installed: Vec<coco_event_types::PluginDialogInstalledRow>,
+    pub skills: Vec<coco_event_types::PluginDialogSkillRow>,
+    pub marketplaces: Vec<coco_event_types::PluginDialogMarketplaceRow>,
+    pub errors: Vec<coco_event_types::PluginDialogErrorRow>,
     pub selected_tab: PluginDialogTab,
     pub selected_idx: usize,
     pub filter_query: String,
@@ -98,7 +98,7 @@ pub struct PluginDialogState {
 }
 
 impl PluginDialogState {
-    pub fn from_wire(payload: coco_types::PluginDialogPayload) -> Self {
+    pub fn from_wire(payload: coco_event_types::PluginDialogPayload) -> Self {
         Self {
             installed: payload.installed,
             skills: payload.skills,
@@ -213,7 +213,7 @@ impl PluginDialogState {
             .collect()
     }
 
-    pub fn focused_action(&self) -> Option<coco_types::PluginDialogAction> {
+    pub fn focused_action(&self) -> Option<coco_event_types::PluginDialogAction> {
         match self.selected_tab {
             PluginDialogTab::Installed => {
                 let item = *self.filtered_installed_items().get(self.selected_idx)?;
@@ -246,13 +246,13 @@ pub enum PluginDialogInstalledItem {
     Skill(usize),
 }
 
-fn plugin_skill_source_label(source: coco_types::SkillsDialogSource) -> &'static str {
+fn plugin_skill_source_label(source: coco_event_types::SkillsDialogSource) -> &'static str {
     match source {
-        coco_types::SkillsDialogSource::BuiltIn => "built-in",
-        coco_types::SkillsDialogSource::Project => "project",
-        coco_types::SkillsDialogSource::User => "user",
-        coco_types::SkillsDialogSource::Policy => "policy",
-        coco_types::SkillsDialogSource::Plugin => "plugin",
-        coco_types::SkillsDialogSource::Mcp => "mcp",
+        coco_event_types::SkillsDialogSource::BuiltIn => "built-in",
+        coco_event_types::SkillsDialogSource::Project => "project",
+        coco_event_types::SkillsDialogSource::User => "user",
+        coco_event_types::SkillsDialogSource::Policy => "policy",
+        coco_event_types::SkillsDialogSource::Plugin => "plugin",
+        coco_event_types::SkillsDialogSource::Mcp => "mcp",
     }
 }

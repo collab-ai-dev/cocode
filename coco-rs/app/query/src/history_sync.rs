@@ -17,14 +17,14 @@
 
 use std::sync::Arc;
 
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
+use coco_event_types::ServerNotificationIdentity;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
 use coco_messages::SystemMessage;
 use coco_messages::create_user_interruption_system_message;
-use coco_types::CoreEvent;
 use coco_types::ProviderModelSelection;
-use coco_types::ServerNotification;
-use coco_types::ServerNotificationIdentity;
 use coco_types::SessionId;
 use coco_types::TokenUsage;
 use tokio::sync::mpsc::Sender;
@@ -213,12 +213,12 @@ pub async fn history_clear_and_emit_session_reset(
 ///
 /// `reason` tells fold-keeping consumers (cumulative counters) whether
 /// the snapshot re-states known content or is a compaction product —
-/// see [`coco_types::HistoryReplaceReason`].
+/// see [`coco_event_types::HistoryReplaceReason`].
 pub async fn history_replace_and_emit(
     history: &mut MessageHistory,
     new_messages: Vec<Arc<Message>>,
     event_tx: &Option<Sender<CoreEvent>>,
-    reason: coco_types::HistoryReplaceReason,
+    reason: coco_event_types::HistoryReplaceReason,
 ) {
     let identity = identity_from(history);
     let removed = history.len();

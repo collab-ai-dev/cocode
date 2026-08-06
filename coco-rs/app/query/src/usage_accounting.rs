@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
 use coco_inference::ModelRuntimeSnapshot;
 use coco_messages::CostTracker;
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
 use coco_types::SessionId;
 use coco_types::SessionUsageSnapshot;
 use coco_types::TokenUsage;

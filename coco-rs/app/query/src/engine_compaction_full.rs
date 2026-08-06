@@ -85,9 +85,9 @@ impl QueryEngine {
         // PreCompact hooks…" spinner.
         let _ = emit_protocol(
             event_tx,
-            ServerNotification::CompactionPhase(coco_types::CompactionPhaseParams {
-                phase: coco_types::CompactionPhase::HooksStart,
-                hook_type: Some(coco_types::CompactionHookType::PreCompact),
+            ServerNotification::CompactionPhase(coco_event_types::CompactionPhaseParams {
+                phase: coco_event_types::CompactionPhase::HooksStart,
+                hook_type: Some(coco_event_types::CompactionHookType::PreCompact),
             }),
         )
         .await;
@@ -313,8 +313,8 @@ impl QueryEngine {
         // Emit phase: Summarizing — TUI flips spinner to "Compacting conversation".
         let _ = emit_protocol(
             event_tx,
-            ServerNotification::CompactionPhase(coco_types::CompactionPhaseParams {
-                phase: coco_types::CompactionPhase::Summarizing,
+            ServerNotification::CompactionPhase(coco_event_types::CompactionPhaseParams {
+                phase: coco_event_types::CompactionPhase::Summarizing,
                 hook_type: None,
             }),
         )
@@ -384,10 +384,12 @@ impl QueryEngine {
                     }
                     let _ = emit_protocol(
                         event_tx,
-                        ServerNotification::CompactionPhase(coco_types::CompactionPhaseParams {
-                            phase: coco_types::CompactionPhase::Done,
-                            hook_type: None,
-                        }),
+                        ServerNotification::CompactionPhase(
+                            coco_event_types::CompactionPhaseParams {
+                                phase: coco_event_types::CompactionPhase::Done,
+                                hook_type: None,
+                            },
+                        ),
                     )
                     .await;
                     return coco_compact::CompactOutcome::Skipped;
@@ -419,9 +421,9 @@ impl QueryEngine {
                 let summary_text = result.raw_summary.as_deref().unwrap_or(&fallback_summary);
                 let _ = emit_protocol(
                     event_tx,
-                    ServerNotification::CompactionPhase(coco_types::CompactionPhaseParams {
-                        phase: coco_types::CompactionPhase::HooksStart,
-                        hook_type: Some(coco_types::CompactionHookType::PostCompact),
+                    ServerNotification::CompactionPhase(coco_event_types::CompactionPhaseParams {
+                        phase: coco_event_types::CompactionPhase::HooksStart,
+                        hook_type: Some(coco_event_types::CompactionHookType::PostCompact),
                     }),
                 )
                 .await;
@@ -455,10 +457,12 @@ impl QueryEngine {
                 if let Some(registry) = self.hooks_for(coco_types::HookEventType::SessionStart) {
                     let _ = emit_protocol(
                         event_tx,
-                        ServerNotification::CompactionPhase(coco_types::CompactionPhaseParams {
-                            phase: coco_types::CompactionPhase::HooksStart,
-                            hook_type: Some(coco_types::CompactionHookType::SessionStart),
-                        }),
+                        ServerNotification::CompactionPhase(
+                            coco_event_types::CompactionPhaseParams {
+                                phase: coco_event_types::CompactionPhase::HooksStart,
+                                hook_type: Some(coco_event_types::CompactionHookType::SessionStart),
+                            },
+                        ),
                     )
                     .await;
                     result.hook_results.extend(
@@ -544,19 +548,21 @@ impl QueryEngine {
 
                 let _delivered = emit_protocol(
                     event_tx,
-                    ServerNotification::ContextCompacted(coco_types::ContextCompactedParams {
-                        removed_messages,
-                        summary_tokens,
-                        trigger,
-                        pre_tokens: Some(result.pre_compact_tokens),
-                        post_tokens: Some(result.post_compact_tokens),
-                    }),
+                    ServerNotification::ContextCompacted(
+                        coco_event_types::ContextCompactedParams {
+                            removed_messages,
+                            summary_tokens,
+                            trigger,
+                            pre_tokens: Some(result.pre_compact_tokens),
+                            post_tokens: Some(result.post_compact_tokens),
+                        },
+                    ),
                 )
                 .await;
                 let _ = emit_protocol(
                     event_tx,
-                    ServerNotification::CompactionPhase(coco_types::CompactionPhaseParams {
-                        phase: coco_types::CompactionPhase::Done,
+                    ServerNotification::CompactionPhase(coco_event_types::CompactionPhaseParams {
+                        phase: coco_event_types::CompactionPhase::Done,
                         hook_type: None,
                     }),
                 )
@@ -577,8 +583,8 @@ impl QueryEngine {
                 }
                 let _ = emit_protocol(
                     event_tx,
-                    ServerNotification::CompactionPhase(coco_types::CompactionPhaseParams {
-                        phase: coco_types::CompactionPhase::Done,
+                    ServerNotification::CompactionPhase(coco_event_types::CompactionPhaseParams {
+                        phase: coco_event_types::CompactionPhase::Done,
                         hook_type: None,
                     }),
                 )
@@ -613,7 +619,7 @@ pub(super) async fn emit_manual_compaction_failed(
 ) {
     let _ = emit_protocol(
         event_tx,
-        ServerNotification::CompactionFailed(coco_types::CompactionFailedParams {
+        ServerNotification::CompactionFailed(coco_event_types::CompactionFailedParams {
             error: error.to_string(),
             attempts: 1,
         }),
@@ -624,8 +630,8 @@ pub(super) async fn emit_manual_compaction_failed(
 pub(super) async fn emit_compaction_done(event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>) {
     let _ = emit_protocol(
         event_tx,
-        ServerNotification::CompactionPhase(coco_types::CompactionPhaseParams {
-            phase: coco_types::CompactionPhase::Done,
+        ServerNotification::CompactionPhase(coco_event_types::CompactionPhaseParams {
+            phase: coco_event_types::CompactionPhase::Done,
             hook_type: None,
         }),
     )
