@@ -598,7 +598,7 @@ pub(crate) fn build_early_outcome(
     model_index: usize,
     error_kind: ToolCallErrorKind,
     synthetic_message: &str,
-    permission_denial: Option<coco_types::PermissionDenialInfo>,
+    permission_denial: Option<coco_event_types::PermissionDenialInfo>,
 ) -> UnstampedToolCallOutcome {
     let tool_result_msg =
         create_error_tool_result(&tool_use_id, tool_name, tool_id.clone(), synthetic_message);

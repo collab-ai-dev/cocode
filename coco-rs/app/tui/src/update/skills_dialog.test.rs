@@ -3,8 +3,8 @@ use crate::events::TuiCommand;
 use crate::state::ModalState;
 use crate::state::SkillOverrideState;
 use crate::state::SkillsDialogState;
-use coco_types::SkillsDialogEntry;
-use coco_types::SkillsDialogPayload;
+use coco_event_types::SkillsDialogEntry;
+use coco_event_types::SkillsDialogPayload;
 
 fn dialog_with(entries: Vec<SkillsDialogEntry>) -> SkillsDialogState {
     SkillsDialogState::from_wire(SkillsDialogPayload {
@@ -13,7 +13,7 @@ fn dialog_with(entries: Vec<SkillsDialogEntry>) -> SkillsDialogState {
     })
 }
 
-fn entry(name: &str, source: coco_types::SkillsDialogSource) -> SkillsDialogEntry {
+fn entry(name: &str, source: coco_event_types::SkillsDialogSource) -> SkillsDialogEntry {
     SkillsDialogEntry {
         name: name.to_string(),
         source,
@@ -34,7 +34,7 @@ async fn space_cycles_focused_in_select_mode() {
         .ui
         .show_modal(ModalState::SkillsDialog(dialog_with(vec![entry(
             "foo",
-            coco_types::SkillsDialogSource::User,
+            coco_event_types::SkillsDialogSource::User,
         )])));
     let (tx, _rx) = tokio::sync::mpsc::channel(8);
     let _ = intercept(&mut state, &TuiCommand::InsertChar(' '), &tx).await;
@@ -52,7 +52,7 @@ async fn slash_enters_filter_mode_in_select() {
         .ui
         .show_modal(ModalState::SkillsDialog(dialog_with(vec![entry(
             "foo",
-            coco_types::SkillsDialogSource::User,
+            coco_event_types::SkillsDialogSource::User,
         )])));
     let (tx, _rx) = tokio::sync::mpsc::channel(8);
     let _ = intercept(&mut state, &TuiCommand::InsertChar('/'), &tx).await;
@@ -71,7 +71,7 @@ async fn t_in_select_mode_toggles_sort_in_filter_mode_appends() {
         .ui
         .show_modal(ModalState::SkillsDialog(dialog_with(vec![entry(
             "foo",
-            coco_types::SkillsDialogSource::User,
+            coco_event_types::SkillsDialogSource::User,
         )])));
     let (tx, _rx) = tokio::sync::mpsc::channel(8);
     let _ = intercept(&mut state, &TuiCommand::InsertChar('t'), &tx).await;
@@ -104,7 +104,7 @@ async fn slash_is_stripped_inside_filter_mode_too() {
         .ui
         .show_modal(ModalState::SkillsDialog(dialog_with(vec![entry(
             "foo",
-            coco_types::SkillsDialogSource::User,
+            coco_event_types::SkillsDialogSource::User,
         )])));
     let (tx, _rx) = tokio::sync::mpsc::channel(8);
     // Activate filter mode with one slash, then try to type another
@@ -122,7 +122,7 @@ async fn slash_is_stripped_inside_filter_mode_too() {
 #[tokio::test]
 async fn enter_in_select_emits_write_command_and_dismisses_modal() {
     let mut state = AppState::new();
-    let mut e = entry("foo", coco_types::SkillsDialogSource::User);
+    let mut e = entry("foo", coco_event_types::SkillsDialogSource::User);
     e.baseline = coco_types::SkillOverrideState::On;
     state
         .ui
@@ -163,7 +163,7 @@ async fn enter_with_no_diff_skips_round_trip_and_renders_local_toast() {
         .ui
         .show_modal(ModalState::SkillsDialog(dialog_with(vec![entry(
             "foo",
-            coco_types::SkillsDialogSource::User,
+            coco_event_types::SkillsDialogSource::User,
         )])));
     let _locale = crate::i18n::locale_test_guard("en");
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
@@ -190,7 +190,7 @@ async fn esc_in_filter_focus_clears_query_dialog_stays_open() {
         .ui
         .show_modal(ModalState::SkillsDialog(dialog_with(vec![entry(
             "foo",
-            coco_types::SkillsDialogSource::User,
+            coco_event_types::SkillsDialogSource::User,
         )])));
     {
         let d = match state.ui.modal.as_mut().unwrap() {
@@ -221,7 +221,7 @@ async fn esc_in_select_mode_closes_dialog() {
         .ui
         .show_modal(ModalState::SkillsDialog(dialog_with(vec![entry(
             "foo",
-            coco_types::SkillsDialogSource::User,
+            coco_event_types::SkillsDialogSource::User,
         )])));
     let (tx, _rx) = tokio::sync::mpsc::channel(8);
     let _ = intercept(&mut state, &TuiCommand::Cancel, &tx).await;

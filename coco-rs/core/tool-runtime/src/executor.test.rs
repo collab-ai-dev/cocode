@@ -354,7 +354,7 @@ async fn test_execute_with_bash_failure_aborts_concurrent_sibling_runtime() {
     assert_eq!(outcomes.len(), 2);
     assert!(matches!(
         observed_reason.lock().unwrap().as_ref(),
-        Some(coco_types::ToolAbortReasonPayload::SiblingError { failed_tool })
+        Some(coco_event_types::ToolAbortReasonPayload::SiblingError { failed_tool })
             if failed_tool == coco_types::ToolName::Bash.as_str()
     ));
 }

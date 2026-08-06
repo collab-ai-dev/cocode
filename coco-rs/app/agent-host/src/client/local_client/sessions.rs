@@ -106,7 +106,7 @@ impl<H: Clone + Send + Sync + 'static> LocalServerClient<H> {
     pub async fn next_session_request(
         &mut self,
         session: &LocalSessionClient,
-    ) -> Option<coco_types::ServerRequestDelivery> {
+    ) -> Option<coco_event_types::ServerRequestDelivery> {
         loop {
             // Created before the queue check: `notify_waiters` wakes every
             // `Notified` created before the call (tokio snapshots the
@@ -133,7 +133,7 @@ impl<H: Clone + Send + Sync + 'static> LocalServerClient<H> {
     /// Wait for the next server request on this connection, regardless of
     /// session. This is useful for clients that run one request dispatcher for
     /// every full-access session carried by the connection.
-    pub async fn next_server_request(&mut self) -> Option<coco_types::ServerRequestDelivery> {
+    pub async fn next_server_request(&mut self) -> Option<coco_event_types::ServerRequestDelivery> {
         loop {
             // Creation-before-check ordering; see `next_session_request`.
             let notified = self.inbound_owner.notify.notified();
@@ -177,7 +177,7 @@ impl<H: Clone + Send + Sync + 'static> LocalServerClient<H> {
 
     pub(crate) async fn next_lifecycle_effect(
         &mut self,
-    ) -> Option<coco_types::SessionLifecycleEffect> {
+    ) -> Option<coco_event_types::SessionLifecycleEffect> {
         loop {
             // Creation-before-check ordering; see `next_session_request`.
             let notified = self.inbound_owner.notify.notified();
@@ -199,7 +199,9 @@ impl<H: Clone + Send + Sync + 'static> LocalServerClient<H> {
     }
 }
 
-fn pop_any_request(state: &mut LocalInboundState) -> Option<coco_types::ServerRequestDelivery> {
+fn pop_any_request(
+    state: &mut LocalInboundState,
+) -> Option<coco_event_types::ServerRequestDelivery> {
     let session_id = state
         .requests
         .iter()
@@ -210,7 +212,7 @@ fn pop_any_request(state: &mut LocalInboundState) -> Option<coco_types::ServerRe
 fn pop_session_request(
     state: &mut LocalInboundState,
     session_id: &SessionId,
-) -> Option<coco_types::ServerRequestDelivery> {
+) -> Option<coco_event_types::ServerRequestDelivery> {
     let (request, empty) = {
         let queue = state.requests.get_mut(session_id)?;
         (queue.pop_front(), queue.is_empty())

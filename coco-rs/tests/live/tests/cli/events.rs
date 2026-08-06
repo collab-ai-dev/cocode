@@ -8,9 +8,9 @@
 //! Tests use these helpers instead of inlining `matches!` patterns so a
 //! later refactor of the event taxonomy stays mechanical.
 
-use coco_types::AgentStreamEvent;
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
+use coco_event_types::AgentStreamEvent;
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
 
 /// Names of every tool that started executing during the session.
 /// Includes duplicates when a tool runs multiple times.
@@ -45,7 +45,7 @@ pub fn turns_completed(events: &[CoreEvent]) -> usize {
             matches!(
                 e,
                 CoreEvent::Protocol(ServerNotification::TurnEnded(p))
-                    if matches!(p.outcome, coco_types::TurnOutcome::Completed(_))
+                    if matches!(p.outcome, coco_event_types::TurnOutcome::Completed(_))
             )
         })
         .count()

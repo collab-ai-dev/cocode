@@ -32,12 +32,12 @@ impl SessionRuntime {
         std::mem::drop(tokio::spawn(async move {
             while let Some(snapshot) = snapshot_rx.recv().await {
                 let session_id = snapshot.session_id.clone();
-                let event = coco_types::SessionScopedEvent::Protocol(Box::new(
-                    coco_types::ServerNotification::SessionUsageUpdated(Box::new(snapshot)),
+                let event = coco_event_types::SessionScopedEvent::Protocol(Box::new(
+                    coco_event_types::ServerNotification::SessionUsageUpdated(Box::new(snapshot)),
                 ));
                 if event_tx
-                    .send(coco_types::CoreEvent::Tui(
-                        coco_types::TuiOnlyEvent::SessionScoped {
+                    .send(coco_event_types::CoreEvent::Tui(
+                        coco_event_types::TuiOnlyEvent::SessionScoped {
                             session_id,
                             event: Box::new(event),
                         },

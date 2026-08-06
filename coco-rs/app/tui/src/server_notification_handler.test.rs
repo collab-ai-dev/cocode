@@ -11,10 +11,10 @@
 use std::time::Duration;
 use std::time::Instant;
 
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
 
-use coco_types::AgentStreamEvent;
+use coco_event_types::AgentStreamEvent;
 
 use crate::server_notification_handler::handle_event_for_test as handle_core_event;
 use crate::state::AppState;
@@ -45,7 +45,7 @@ fn test_bg_agent_task_started_bridges_into_subagents() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::TaskStarted(
-            coco_types::TaskStartedParams {
+            coco_event_types::TaskStartedParams {
                 task_id: "agent-bg-1".into(),
                 tool_use_id: Some("tu-42".into()),
                 description: "Investigate auth flow".into(),
@@ -79,7 +79,7 @@ fn test_shell_task_started_does_not_create_subagent() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::TaskStarted(
-            coco_types::TaskStartedParams {
+            coco_event_types::TaskStartedParams {
                 task_id: "sh-1".into(),
                 tool_use_id: Some("tu-99".into()),
                 description: "sleep 30".into(),
@@ -108,7 +108,7 @@ fn test_in_process_teammate_task_started_creates_teammate_kind_row() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::TaskStarted(
-            coco_types::TaskStartedParams {
+            coco_event_types::TaskStartedParams {
                 task_id: "researcher@my-team".into(),
                 tool_use_id: None,
                 description: "Kick off auth research".into(),
@@ -142,7 +142,7 @@ fn test_teammate_task_started_dedupes_on_task_id() {
     // Re-emit with the same task_id is a no-op (coordinator may
     // republish refresh-style events without duplicating rows).
     let mut state = AppState::new();
-    let params = coco_types::TaskStartedParams {
+    let params = coco_event_types::TaskStartedParams {
         task_id: "r@t".into(),
         tool_use_id: None,
         description: "".into(),
@@ -173,7 +173,7 @@ fn test_bg_agent_task_started_marks_subagent_kind() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::TaskStarted(
-            coco_types::TaskStartedParams {
+            coco_event_types::TaskStartedParams {
                 task_id: "agent-bg-X".into(),
                 tool_use_id: Some("tu-1".into()),
                 description: "task".into(),
@@ -202,7 +202,7 @@ fn test_bg_agent_task_completed_updates_subagent_status() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::TaskStarted(
-            coco_types::TaskStartedParams {
+            coco_event_types::TaskStartedParams {
                 task_id: "agent-bg-1".into(),
                 tool_use_id: Some("tu-42".into()),
                 description: "task".into(),
@@ -220,10 +220,10 @@ fn test_bg_agent_task_completed_updates_subagent_status() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::TaskCompleted(
-            coco_types::TaskCompletedParams {
+            coco_event_types::TaskCompletedParams {
                 task_id: "agent-bg-1".into(),
                 tool_use_id: Some("tu-42".into()),
-                status: coco_types::TaskCompletionStatus::Completed,
+                status: coco_event_types::TaskCompletionStatus::Completed,
                 killed_by: None,
                 output_file: String::new(),
                 summary: "Found 7 callers".into(),
@@ -247,7 +247,7 @@ fn test_permission_request_shows_prompt() {
 
     handle_core_event(
         &mut state,
-        CoreEvent::Tui(coco_types::TuiOnlyEvent::ApprovalRequired {
+        CoreEvent::Tui(coco_event_types::TuiOnlyEvent::ApprovalRequired {
             request_id: "req-1".into(),
             tool_name: "Bash".into(),
             description: "Execute command".into(),
@@ -284,7 +284,7 @@ fn test_permission_request_hides_always_allow_when_disabled() {
 
     handle_core_event(
         &mut state,
-        CoreEvent::Tui(coco_types::TuiOnlyEvent::ApprovalRequired {
+        CoreEvent::Tui(coco_event_types::TuiOnlyEvent::ApprovalRequired {
             request_id: "req-1".into(),
             tool_name: "Bash".into(),
             description: "Execute command".into(),
@@ -315,7 +315,7 @@ fn test_exit_plan_mode_permission_uses_dedicated_detail() {
 
     handle_core_event(
         &mut state,
-        CoreEvent::Tui(coco_types::TuiOnlyEvent::ApprovalRequired {
+        CoreEvent::Tui(coco_event_types::TuiOnlyEvent::ApprovalRequired {
             request_id: "req-plan".into(),
             tool_name: coco_types::ToolName::ExitPlanMode.as_str().into(),
             description: "Exit plan mode?".into(),
@@ -376,7 +376,7 @@ fn test_exit_plan_mode_no_plan_permission_uses_yes_no_choices() {
 
     handle_core_event(
         &mut state,
-        CoreEvent::Tui(coco_types::TuiOnlyEvent::ApprovalRequired {
+        CoreEvent::Tui(coco_event_types::TuiOnlyEvent::ApprovalRequired {
             request_id: "req-plan-no-plan".into(),
             tool_name: coco_types::ToolName::ExitPlanMode.as_str().into(),
             description: "Exit plan mode?".into(),
@@ -440,7 +440,7 @@ fn test_error_shows_toast() {
 
     handle_core_event(
         &mut state,
-        CoreEvent::Protocol(ServerNotification::Error(coco_types::ErrorParams {
+        CoreEvent::Protocol(ServerNotification::Error(coco_event_types::ErrorParams {
             message: "API rate limit".into(),
             category: None,
             retryable: true,
@@ -457,7 +457,7 @@ fn test_mcp_status() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::McpStartupStatus(
-            coco_types::McpStartupStatusParams {
+            coco_event_types::McpStartupStatusParams {
                 server: "github".into(),
                 status: coco_types::McpConnectionStatus::Connected,
             },
@@ -470,7 +470,7 @@ fn test_mcp_status() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::McpStartupStatus(
-            coco_types::McpStartupStatusParams {
+            coco_event_types::McpStartupStatusParams {
                 server: "github".into(),
                 status: coco_types::McpConnectionStatus::Failed,
             },
@@ -488,7 +488,7 @@ fn test_mcp_needs_auth_startup_complete_toast_points_to_mcp() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::McpStartupStatus(
-            coco_types::McpStartupStatusParams {
+            coco_event_types::McpStartupStatusParams {
                 server: "github".into(),
                 status: coco_types::McpConnectionStatus::NeedsAuth,
             },
@@ -501,7 +501,7 @@ fn test_mcp_needs_auth_startup_complete_toast_points_to_mcp() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::McpStartupComplete(
-            coco_types::McpStartupCompleteParams {
+            coco_event_types::McpStartupCompleteParams {
                 servers: vec!["github".into()],
                 failed: Vec::new(),
             },
@@ -523,7 +523,7 @@ fn test_session_ended_quits() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::SessionEnded(
-            coco_types::SessionEndedParams {
+            coco_event_types::SessionEndedParams {
                 reason: "max_turns".into(),
             },
         )),
@@ -539,7 +539,7 @@ fn test_permission_mode_changed_covers_plan_entry_and_exit() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::PermissionModeChanged(
-            coco_types::PermissionModeChangedParams {
+            coco_event_types::PermissionModeChangedParams {
                 mode: coco_types::PermissionMode::Plan,
                 bypass_available: true,
             },
@@ -551,7 +551,7 @@ fn test_permission_mode_changed_covers_plan_entry_and_exit() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::PermissionModeChanged(
-            coco_types::PermissionModeChangedParams {
+            coco_event_types::PermissionModeChangedParams {
                 mode: coco_types::PermissionMode::AcceptEdits,
                 bypass_available: false,
             },
@@ -572,7 +572,7 @@ fn test_context_compacted_toast() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::ContextCompacted(
-            coco_types::ContextCompactedParams {
+            coco_event_types::ContextCompactedParams {
                 removed_messages: 10,
                 summary_tokens: 500,
                 trigger: coco_types::CompactTrigger::Auto,
@@ -598,8 +598,8 @@ fn test_compaction_protocol_updates_running_state() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::CompactionPhase(
-            coco_types::CompactionPhaseParams {
-                phase: coco_types::CompactionPhase::Summarizing,
+            coco_event_types::CompactionPhaseParams {
+                phase: coco_event_types::CompactionPhase::Summarizing,
                 hook_type: None,
             },
         )),
@@ -612,7 +612,7 @@ fn test_compaction_protocol_updates_running_state() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::ContextCompacted(
-            coco_types::ContextCompactedParams {
+            coco_event_types::ContextCompactedParams {
                 removed_messages: 2,
                 summary_tokens: 10,
                 trigger: coco_types::CompactTrigger::Manual,
@@ -713,7 +713,7 @@ fn discarded_response_attempt_rolls_back_live_preview() {
     );
     handle_core_event(
         &mut state,
-        CoreEvent::Tui(coco_types::TuiOnlyEvent::ToolCallStreamStart {
+        CoreEvent::Tui(coco_event_types::TuiOnlyEvent::ToolCallStreamStart {
             call_id: "partial-tool".into(),
             name: "Bash".into(),
         }),
@@ -800,7 +800,7 @@ fn test_session_reset_clears_transcript_adjacent_state() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::SessionResetForResume {
-            identity: coco_types::ServerNotificationIdentity::new(
+            identity: coco_event_types::ServerNotificationIdentity::new(
                 Some(test_session_id("new-session")),
                 None,
             ),
@@ -871,7 +871,7 @@ fn test_session_reset_preserves_only_persistent_running_subagents() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::SessionResetForResume {
-            identity: coco_types::ServerNotificationIdentity::new(
+            identity: coco_event_types::ServerNotificationIdentity::new(
                 Some(test_session_id("new-session")),
                 None,
             ),
@@ -931,8 +931,8 @@ fn test_history_replaced_clears_tail_but_preserves_session_state() {
         &mut state,
         CoreEvent::Protocol(ServerNotification::HistoryReplaced {
             messages: Vec::new(),
-            identity: coco_types::ServerNotificationIdentity::default(),
-            reason: coco_types::HistoryReplaceReason::Hydrate,
+            identity: coco_event_types::ServerNotificationIdentity::default(),
+            reason: coco_event_types::HistoryReplaceReason::Hydrate,
         }),
     );
 
@@ -985,7 +985,7 @@ fn test_turn_completed_drops_streaming_orphans_keeps_committed() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::TurnEnded(
-            coco_types::TurnEndedParams::completed(
+            coco_event_types::TurnEndedParams::completed(
                 coco_types::TurnId::from("t-orphan"),
                 None,
                 Some(coco_messages::StopReason::EndTurn),
@@ -1016,7 +1016,7 @@ fn test_live_status_tokens_start_fresh_and_follow_stream_deltas() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::TurnEnded(
-            coco_types::TurnEndedParams::completed(
+            coco_event_types::TurnEndedParams::completed(
                 coco_types::TurnId::from("t-test"),
                 Some(coco_types::TokenUsage {
                     input_tokens: coco_types::InputTokens {
@@ -1037,7 +1037,7 @@ fn test_live_status_tokens_start_fresh_and_follow_stream_deltas() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::TurnStarted(
-            coco_types::TurnStartedParams {
+            coco_event_types::TurnStartedParams {
                 turn_id: coco_types::TurnId::from("t-test-2"),
             },
         )),

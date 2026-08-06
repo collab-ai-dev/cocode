@@ -1235,16 +1235,16 @@ async fn test_spawn_subagent_sync_drains_stream_events_to_task_registry() {
             config: AgentQueryConfig,
         ) -> Result<AgentQueryResult, coco_error::BoxedError> {
             let tx = config.event_tx.expect("foreground task event sink");
-            tx.send(coco_types::CoreEvent::Stream(
-                coco_types::AgentStreamEvent::TextDelta {
+            tx.send(coco_event_types::CoreEvent::Stream(
+                coco_event_types::AgentStreamEvent::TextDelta {
                     turn_id: "turn_1".into(),
                     delta: "live output".into(),
                 },
             ))
             .await
             .expect("event receiver active");
-            tx.send(coco_types::CoreEvent::Stream(
-                coco_types::AgentStreamEvent::ToolUseStarted {
+            tx.send(coco_event_types::CoreEvent::Stream(
+                coco_event_types::AgentStreamEvent::ToolUseStarted {
                     call_id: "toolu_1".into(),
                     name: "Read".into(),
                     batch_id: None,
@@ -1321,8 +1321,8 @@ async fn test_drain_fills_task_activity_summary_from_tool_input() {
             config: AgentQueryConfig,
         ) -> Result<AgentQueryResult, coco_error::BoxedError> {
             let tx = config.event_tx.expect("foreground task event sink");
-            tx.send(coco_types::CoreEvent::Stream(
-                coco_types::AgentStreamEvent::ToolUseQueued {
+            tx.send(coco_event_types::CoreEvent::Stream(
+                coco_event_types::AgentStreamEvent::ToolUseQueued {
                     call_id: "toolu_1".into(),
                     name: "Read".into(),
                     input: serde_json::json!({ "file_path": "/x" }),
@@ -1330,8 +1330,8 @@ async fn test_drain_fills_task_activity_summary_from_tool_input() {
             ))
             .await
             .expect("event receiver active");
-            tx.send(coco_types::CoreEvent::Stream(
-                coco_types::AgentStreamEvent::ToolUseStarted {
+            tx.send(coco_event_types::CoreEvent::Stream(
+                coco_event_types::AgentStreamEvent::ToolUseStarted {
                     call_id: "toolu_1".into(),
                     name: "Read".into(),
                     batch_id: None,

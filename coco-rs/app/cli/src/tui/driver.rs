@@ -74,7 +74,7 @@ pub(super) async fn run_agent_driver(
                 .await;
                 let _ = event_tx
                     .send(CoreEvent::Protocol(ServerNotification::SessionEnded(
-                        coco_types::SessionEndedParams {
+                        coco_event_types::SessionEndedParams {
                             reason: "OS signal".into(),
                         },
                     )))
@@ -781,7 +781,7 @@ pub(super) async fn run_agent_driver(
                     Err(
                         coco_agent_host::session_controls::SessionControlError::FileDiffNotEnabled,
                     ) => continue,
-                    Err(_) => Some(coco_types::RewindDiffStatsPayload::default()),
+                    Err(_) => Some(coco_event_types::RewindDiffStatsPayload::default()),
                 };
                 let _ = event_tx
                     .send(CoreEvent::Tui(TuiOnlyEvent::RewindRestorePreviewReady {
@@ -814,9 +814,9 @@ pub(super) async fn run_agent_driver(
                             rows.clear();
                             break;
                         }
-                        Err(_) => Some(coco_types::RewindDiffStatsPayload::default()),
+                        Err(_) => Some(coco_event_types::RewindDiffStatsPayload::default()),
                     };
-                    rows.push(coco_types::RewindRowMetadata {
+                    rows.push(coco_event_types::RewindRowMetadata {
                         message_id: message_id.clone(),
                         metadata,
                     });
@@ -1086,7 +1086,7 @@ pub(super) async fn run_agent_driver(
                 let _ = event_tx
                     .send(CoreEvent::Tui(TuiOnlyEvent::SessionScoped {
                         session_id: origin_session_id,
-                        event: Box::new(coco_types::SessionScopedEvent::Protocol(Box::new(
+                        event: Box::new(coco_event_types::SessionScopedEvent::Protocol(Box::new(
                             ServerNotification::CommandQueued {
                                 id: queued.id.to_string(),
                                 preview: queued.preview,
@@ -1557,7 +1557,7 @@ pub(super) async fn run_agent_driver(
                 .await;
                 let _ = event_tx
                     .send(CoreEvent::Protocol(ServerNotification::SessionEnded(
-                        coco_types::SessionEndedParams {
+                        coco_event_types::SessionEndedParams {
                             reason: "User shutdown".into(),
                         },
                     )))

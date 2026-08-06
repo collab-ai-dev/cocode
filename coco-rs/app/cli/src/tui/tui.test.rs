@@ -93,10 +93,9 @@ mod plan_prompt_editor_tests {
         .await;
 
         let event = rx.try_recv().expect("failure event sent");
-        let coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::ExitPlanPromptEditorFailed {
-            request_id,
-            error,
-        }) = event
+        let coco_event_types::CoreEvent::Tui(
+            coco_event_types::TuiOnlyEvent::ExitPlanPromptEditorFailed { request_id, error },
+        ) = event
         else {
             panic!("expected ExitPlanPromptEditorFailed, got {event:?}")
         };
@@ -174,14 +173,16 @@ use tempfile::TempDir;
 use tokio::sync::Mutex;
 
 fn expect_session_scoped_protocol(
-    event: coco_types::CoreEvent,
-) -> (coco_types::SessionId, coco_types::ServerNotification) {
+    event: coco_event_types::CoreEvent,
+) -> (coco_types::SessionId, coco_event_types::ServerNotification) {
     match event {
-        coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SessionScoped {
+        coco_event_types::CoreEvent::Tui(coco_event_types::TuiOnlyEvent::SessionScoped {
             session_id,
             event,
         }) => match *event {
-            coco_types::SessionScopedEvent::Protocol(notification) => (session_id, *notification),
+            coco_event_types::SessionScopedEvent::Protocol(notification) => {
+                (session_id, *notification)
+            }
             other => panic!("expected protocol event in session scope, got {other:?}"),
         },
         other => panic!("expected session-scoped protocol event, got {other:?}"),
@@ -621,7 +622,7 @@ fn local_bridge_for_resume_test(
     runtime: &crate::session_runtime::SessionHandle,
     runtime_factory: crate::session_runtime::SessionRuntimeFactory,
     process_runtime: Arc<coco_app_runtime::ProcessRuntime>,
-    event_sink: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    event_sink: Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
 ) -> coco_agent_host::app_server_host::AppServerLocalBridge {
     coco_agent_host::app_server_host::AppServerLocalBridge::with_host_inputs_and_server_config(
         coco_agent_host::app_server_host::HostInputs {
@@ -663,7 +664,7 @@ async fn dispatch_slash_command_for_test(
     name: &str,
     args: &str,
     runtime: &crate::session_runtime::SessionHandle,
-    event_tx: &tokio::sync::mpsc::Sender<coco_types::CoreEvent>,
+    event_tx: &tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>,
     local_app_server_bridge: &mut coco_agent_host::app_server_host::AppServerLocalBridge,
 ) -> super::SlashOutcome {
     let (current_session, _runtime_factory, _process_runtime, _cwd) =
@@ -684,7 +685,7 @@ async fn dispatch_slash_command_for_test(
 
 fn test_runtime_reload_subscriptions(
     current_session: &super::SharedSessionHandle,
-    event_tx: &tokio::sync::mpsc::Sender<coco_types::CoreEvent>,
+    event_tx: &tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>,
 ) -> Arc<Mutex<super::TuiRuntimeReloadSubscriptions>> {
     let (subscriptions, _display_rx, _error_rx) = super::TuiRuntimeReloadSubscriptions::new(
         Arc::clone(current_session),
@@ -777,11 +778,13 @@ async fn prompt_mode_bash_returns_response_turn_to_driver_channel() {
             .await
             .expect("bash completion event should be sent")
             .expect("event channel should stay open");
-        if let coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::BashCommandCompleted {
-            user_message_id,
-            output,
-            exit_code,
-        }) = event
+        if let coco_event_types::CoreEvent::Tui(
+            coco_event_types::TuiOnlyEvent::BashCommandCompleted {
+                user_message_id,
+                output,
+                exit_code,
+            },
+        ) = event
         {
             assert_eq!(user_message_id, "bash-message-id");
             assert_eq!(exit_code, 0);
@@ -882,13 +885,13 @@ async fn idle_queue_processor_starts_pending_prompt_turn() {
     let mut saw_queue_empty = false;
     while let Ok(event) = event_rx.try_recv() {
         match event {
-            coco_types::CoreEvent::Protocol(coco_types::ServerNotification::CommandDequeued {
-                id,
-            }) if id == queued_id => {
+            coco_event_types::CoreEvent::Protocol(
+                coco_event_types::ServerNotification::CommandDequeued { id },
+            ) if id == queued_id => {
                 saw_dequeued = true;
             }
-            coco_types::CoreEvent::Protocol(
-                coco_types::ServerNotification::QueueStateChanged { queued: 0 },
+            coco_event_types::CoreEvent::Protocol(
+                coco_event_types::ServerNotification::QueueStateChanged { queued: 0 },
             ) => {
                 saw_queue_empty = true;
             }
@@ -1141,14 +1144,14 @@ async fn sidechat_dispatch_rejects_nested_and_primary_only_slashes() {
                 .await
                 .expect("sidechat rejection should be emitted")
                 .expect("event channel should remain open");
-            if let coco_types::CoreEvent::Tui(
-                result @ coco_types::TuiOnlyEvent::SlashCommandResult { .. },
+            if let coco_event_types::CoreEvent::Tui(
+                result @ coco_event_types::TuiOnlyEvent::SlashCommandResult { .. },
             ) = event
             {
                 break result;
             }
         };
-        let coco_types::TuiOnlyEvent::SlashCommandResult {
+        let coco_event_types::TuiOnlyEvent::SlashCommandResult {
             session_id,
             name: emitted_name,
             text,
@@ -1240,11 +1243,9 @@ async fn btw_does_not_disturb_active_parent_turn() {
     let mut surfaced = false;
     while let Ok(Some(event)) = tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await
     {
-        if let coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SlashCommandResult {
-            name,
-            text,
-            ..
-        }) = event
+        if let coco_event_types::CoreEvent::Tui(
+            coco_event_types::TuiOnlyEvent::SlashCommandResult { name, text, .. },
+        ) = event
         {
             assert_eq!(name, "btw");
             assert!(text.contains("Couldn't start the sidechat"));
@@ -1442,26 +1443,26 @@ async fn side_chat_factory_routes_rolls_up_persists_and_restores_usage() {
             .await
             .expect("child event stream should remain live")
             .expect("child event channel should remain open");
-        if let coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SessionScoped {
+        if let coco_event_types::CoreEvent::Tui(coco_event_types::TuiOnlyEvent::SessionScoped {
             session_id,
             event: scoped,
         }) = &event
-            && let coco_types::SessionScopedEvent::Protocol(notification) = scoped.as_ref()
+            && let coco_event_types::SessionScopedEvent::Protocol(notification) = scoped.as_ref()
         {
             match notification.as_ref() {
-                coco_types::ServerNotification::SessionUsageUpdated(snapshot)
+                coco_event_types::ServerNotification::SessionUsageUpdated(snapshot)
                     if session_id == &parent_id =>
                 {
                     saw_parent_rollup_event = true;
                     assert_eq!(snapshot.session_id, parent_id);
                 }
-                coco_types::ServerNotification::SessionUsageUpdated(snapshot)
+                coco_event_types::ServerNotification::SessionUsageUpdated(snapshot)
                     if session_id == &child_id =>
                 {
                     saw_child_usage_event = true;
                     assert_eq!(snapshot.session_id, child_id);
                 }
-                coco_types::ServerNotification::TurnEnded(_) if session_id == &child_id => {
+                coco_event_types::ServerNotification::TurnEnded(_) if session_id == &child_id => {
                     saw_child_turn_end = true;
                 }
                 _ => {}
@@ -1535,22 +1536,22 @@ async fn side_chat_factory_routes_rolls_up_persists_and_restores_usage() {
             .await
             .expect("close lifecycle should publish its terminal events")
             .expect("event channel should remain open");
-        if let coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SessionScoped {
+        if let coco_event_types::CoreEvent::Tui(coco_event_types::TuiOnlyEvent::SessionScoped {
             session_id,
             event: scoped,
         }) = &event
             && session_id == &parent_id
             && matches!(
                 scoped.as_ref(),
-                coco_types::SessionScopedEvent::Protocol(notification)
-                    if matches!(notification.as_ref(), coco_types::ServerNotification::SessionUsageUpdated(_))
+                coco_event_types::SessionScopedEvent::Protocol(notification)
+                    if matches!(notification.as_ref(), coco_event_types::ServerNotification::SessionUsageUpdated(_))
             )
         {
             saw_final_parent_snapshot = true;
         }
         if matches!(
             &event,
-            coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SideChatExited {
+            coco_event_types::CoreEvent::Tui(coco_event_types::TuiOnlyEvent::SideChatExited {
                 parent_id: event_parent,
                 child_id: event_child,
             }) if event_parent == &parent_id && event_child == &child_id
@@ -1617,19 +1618,19 @@ async fn autonomous_side_chat_close_refreshes_parent_and_releases_bridge_authori
             .expect("lifecycle event should arrive")
             .expect("event channel should remain open");
         match event {
-            coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SessionScoped {
+            coco_event_types::CoreEvent::Tui(coco_event_types::TuiOnlyEvent::SessionScoped {
                 session_id,
                 event,
             }) if session_id == parent_id
                 && matches!(
                     event.as_ref(),
-                    coco_types::SessionScopedEvent::Protocol(notification)
-                        if matches!(notification.as_ref(), coco_types::ServerNotification::SessionUsageUpdated(_))
+                    coco_event_types::SessionScopedEvent::Protocol(notification)
+                        if matches!(notification.as_ref(), coco_event_types::ServerNotification::SessionUsageUpdated(_))
                 ) =>
             {
                 saw_parent_snapshot = true;
             }
-            coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SideChatExited {
+            coco_event_types::CoreEvent::Tui(coco_event_types::TuiOnlyEvent::SideChatExited {
                 parent_id: event_parent,
                 child_id: event_child,
             }) if event_parent == parent_id && event_child == child_id => {
@@ -1945,16 +1946,16 @@ async fn startup_resume_plan_uses_local_app_server_session_resume() {
     let mut saw_history = false;
     while let Ok(event) = rx.try_recv() {
         match event {
-            coco_types::CoreEvent::Protocol(
-                coco_types::ServerNotification::SessionResetForResume { identity },
+            coco_event_types::CoreEvent::Protocol(
+                coco_event_types::ServerNotification::SessionResetForResume { identity },
             ) if identity.session_id.as_ref() == Some(&target_session_id) => {
                 saw_reset = true;
             }
-            coco_types::CoreEvent::Protocol(coco_types::ServerNotification::HistoryReplaced {
-                identity,
-                messages,
-                ..
-            }) if identity.session_id.as_ref() == Some(&target_session_id) => {
+            coco_event_types::CoreEvent::Protocol(
+                coco_event_types::ServerNotification::HistoryReplaced {
+                    identity, messages, ..
+                },
+            ) if identity.session_id.as_ref() == Some(&target_session_id) => {
                 saw_history = true;
                 assert!(messages.iter().any(|message| {
                     coco_messages::wrapping::extract_text_from_message(message)
@@ -2042,15 +2043,14 @@ async fn resume_slash_uses_local_app_server_session_resume() {
     let mut saw_history = false;
     for event in events {
         match event {
-            coco_types::CoreEvent::Protocol(
-                coco_types::ServerNotification::SessionResetForResume { identity },
+            coco_event_types::CoreEvent::Protocol(
+                coco_event_types::ServerNotification::SessionResetForResume { identity },
             ) if identity.session_id.as_ref() == Some(&target_session_id) => {
                 saw_reset = true;
             }
-            coco_types::CoreEvent::Protocol(coco_types::ServerNotification::HistoryReplaced {
-                identity,
-                ..
-            }) if identity.session_id.as_ref() == Some(&target_session_id) => {
+            coco_event_types::CoreEvent::Protocol(
+                coco_event_types::ServerNotification::HistoryReplaced { identity, .. },
+            ) if identity.session_id.as_ref() == Some(&target_session_id) => {
                 saw_history = true;
             }
             _ => {}
@@ -2113,22 +2113,19 @@ async fn branch_slash_switches_to_fork_through_local_app_server() {
     let mut saw_branch_result = false;
     while let Ok(event) = rx.try_recv() {
         match event {
-            coco_types::CoreEvent::Protocol(
-                coco_types::ServerNotification::SessionResetForResume { identity },
+            coco_event_types::CoreEvent::Protocol(
+                coco_event_types::ServerNotification::SessionResetForResume { identity },
             ) if identity.session_id.as_ref() == Some(&new_session_id) => {
                 saw_reset = true;
             }
-            coco_types::CoreEvent::Protocol(coco_types::ServerNotification::HistoryReplaced {
-                identity,
-                ..
-            }) if identity.session_id.as_ref() == Some(&new_session_id) => {
+            coco_event_types::CoreEvent::Protocol(
+                coco_event_types::ServerNotification::HistoryReplaced { identity, .. },
+            ) if identity.session_id.as_ref() == Some(&new_session_id) => {
                 saw_history = true;
             }
-            coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SlashCommandResult {
-                name,
-                text,
-                ..
-            }) if name == "branch" && text.contains("Branched into a new session") => {
+            coco_event_types::CoreEvent::Tui(
+                coco_event_types::TuiOnlyEvent::SlashCommandResult { name, text, .. },
+            ) if name == "branch" && text.contains("Branched into a new session") => {
                 saw_branch_result = true;
             }
             _ => {}
@@ -2187,8 +2184,8 @@ async fn clear_slash_refreshes_local_app_server_session() {
     let mut saw_reset = false;
     while let Ok(event) = rx.try_recv() {
         match event {
-            coco_types::CoreEvent::Protocol(
-                coco_types::ServerNotification::SessionResetForResume { identity },
+            coco_event_types::CoreEvent::Protocol(
+                coco_event_types::ServerNotification::SessionResetForResume { identity },
             ) if identity.session_id.as_ref() == Some(&new_session_id) => {
                 saw_reset = true;
             }
@@ -2231,18 +2228,14 @@ async fn rename_and_tag_slashes_use_local_app_server_session_metadata_controls()
     let mut saw_tag = false;
     while let Ok(event) = rx.try_recv() {
         match event {
-            coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SlashCommandResult {
-                name,
-                text,
-                ..
-            }) if name == "rename" && text == "Session renamed to: phase-b-cleanup" => {
+            coco_event_types::CoreEvent::Tui(
+                coco_event_types::TuiOnlyEvent::SlashCommandResult { name, text, .. },
+            ) if name == "rename" && text == "Session renamed to: phase-b-cleanup" => {
                 saw_rename = true;
             }
-            coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SlashCommandResult {
-                name,
-                text,
-                ..
-            }) if name == "tag" && text == "Tag added: phase-b" => {
+            coco_event_types::CoreEvent::Tui(
+                coco_event_types::TuiOnlyEvent::SlashCommandResult { name, text, .. },
+            ) if name == "tag" && text == "Tag added: phase-b" => {
                 saw_tag = true;
             }
             _ => {}
@@ -2270,14 +2263,12 @@ async fn cost_and_status_slashes_use_local_app_server_observability() {
     let mut saw_status = false;
     while let Ok(event) = rx.try_recv() {
         match event {
-            coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SlashCommandResult {
-                name,
-                text,
-                ..
-            }) if name == "cost" && text.contains("No API usage recorded yet") => {
+            coco_event_types::CoreEvent::Tui(
+                coco_event_types::TuiOnlyEvent::SlashCommandResult { name, text, .. },
+            ) if name == "cost" && text.contains("No API usage recorded yet") => {
                 saw_cost = true;
             }
-            coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::OpenGoalStatus {
+            coco_event_types::CoreEvent::Tui(coco_event_types::TuiOnlyEvent::OpenGoalStatus {
                 title,
                 body,
                 ..
@@ -2346,24 +2337,22 @@ async fn tasks_list_and_detail_slashes_use_local_app_server_task_observability()
     let mut saw_detail = false;
     while let Ok(event) = rx.try_recv() {
         match event {
-            coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SlashCommandResult {
-                name,
-                args,
-                text,
-                ..
-            }) if name == "tasks"
+            coco_event_types::CoreEvent::Tui(
+                coco_event_types::TuiOnlyEvent::SlashCommandResult {
+                    name, args, text, ..
+                },
+            ) if name == "tasks"
                 && args == "list"
                 && text.contains(&task_id)
                 && text.contains("background work") =>
             {
                 saw_list = true;
             }
-            coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SlashCommandResult {
-                name,
-                args,
-                text,
-                ..
-            }) if name == "tasks"
+            coco_event_types::CoreEvent::Tui(
+                coco_event_types::TuiOnlyEvent::SlashCommandResult {
+                    name, args, text, ..
+                },
+            ) if name == "tasks"
                 && args == format!("detail {task_id}")
                 && text.contains(&format!("Task {task_id}"))
                 && text.contains("Interrupted: false") =>
@@ -2460,7 +2449,7 @@ async fn tasks_cancel_slash_uses_local_app_server_stop_task() {
     assert!(cancel.is_cancelled(), "task cancel token should fire");
     let event = rx.recv().await.expect("slash result event");
     match event {
-        coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SlashCommandResult {
+        coco_event_types::CoreEvent::Tui(coco_event_types::TuiOnlyEvent::SlashCommandResult {
             name,
             args,
             text,
@@ -2497,7 +2486,7 @@ async fn toggle_fast_mode_uses_local_app_server_apply_flags() {
     let (session_id, notification) = expect_session_scoped_protocol(event);
     assert_eq!(session_id, *runtime.session_id());
     match notification {
-        coco_types::ServerNotification::FastModeChanged { active } => {
+        coco_event_types::ServerNotification::FastModeChanged { active } => {
             assert!(active);
         }
         other => panic!("expected FastModeChanged, got {other:?}"),
@@ -2541,7 +2530,7 @@ async fn set_thinking_level_uses_local_app_server_set_thinking() {
     let (session_id, notification) = expect_session_scoped_protocol(event);
     assert_eq!(session_id, *runtime.session_id());
     match notification {
-        coco_types::ServerNotification::ModelRoleChanged(params) => {
+        coco_event_types::ServerNotification::ModelRoleChanged(params) => {
             assert_eq!(params.role, coco_types::ModelRole::Main);
             assert_eq!(params.effort, Some(coco_types::ReasoningEffort::High));
         }
@@ -2592,7 +2581,7 @@ async fn explicit_file_rewind_restores_files_through_local_app_server() {
     );
     let event = rx.recv().await.expect("rewind completed event");
     match event {
-        coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::RewindCompleted {
+        coco_event_types::CoreEvent::Tui(coco_event_types::TuiOnlyEvent::RewindCompleted {
             target_message_id,
             files_changed,
         }) => {
@@ -2604,7 +2593,7 @@ async fn explicit_file_rewind_restores_files_through_local_app_server() {
     while let Ok(event) = rx.try_recv() {
         if matches!(
             event,
-            coco_types::CoreEvent::Protocol(coco_types::ServerNotification::Error(_))
+            coco_event_types::CoreEvent::Protocol(coco_event_types::ServerNotification::Error(_))
         ) {
             panic!("successful file rewind should not emit an error: {event:?}");
         }
@@ -2643,7 +2632,7 @@ async fn model_slash_arg_rejects_unavailable_model() {
     assert!(matches!(outcome, super::SlashOutcome::Handled));
     let event = rx.recv().await.expect("slash result event");
     match event {
-        coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SlashCommandResult {
+        coco_event_types::CoreEvent::Tui(coco_event_types::TuiOnlyEvent::SlashCommandResult {
             name,
             args,
             text,
@@ -2709,7 +2698,7 @@ async fn inactive_slash_command_emits_session_hint_without_running_handler() {
     assert!(matches!(outcome, super::SlashOutcome::Handled));
     let event = rx.recv().await.expect("slash result event");
     match event {
-        coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SlashCommandResult {
+        coco_event_types::CoreEvent::Tui(coco_event_types::TuiOnlyEvent::SlashCommandResult {
             name,
             args,
             text,

@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use coco_app_server::AppServer;
 use coco_app_server::SessionEgress;
-use coco_types::{AgentId, CoreEvent, ServerNotification, SessionEnvelope, SessionId};
+use coco_event_types::{CoreEvent, ServerNotification, SessionEnvelope};
+use coco_types::{AgentId, SessionId};
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinHandle,

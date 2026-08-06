@@ -1,9 +1,9 @@
 use super::*;
-use coco_types::AgentStreamEvent;
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
+use coco_event_types::AgentStreamEvent;
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
+use coco_event_types::TurnStartedParams;
 use coco_types::TurnId;
-use coco_types::TurnStartedParams;
 use pretty_assertions::assert_eq;
 
 #[test]

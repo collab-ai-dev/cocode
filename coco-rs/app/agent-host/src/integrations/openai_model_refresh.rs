@@ -10,10 +10,10 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use coco_types::CoreEvent;
+use coco_event_types::CoreEvent;
+use coco_event_types::TuiOnlyEvent;
 use coco_types::ModelCatalogInfo;
 use coco_types::ProviderApi;
-use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;
 
 use crate::session_runtime::SessionHandle;

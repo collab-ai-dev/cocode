@@ -88,7 +88,7 @@ fn resolve_agent_runtime_source(
 pub async fn build_agent_team_wiring(
     session: SessionHandle,
     cwd: String,
-    panel_event_sink: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    panel_event_sink: Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
 ) -> Result<AgentTeamWiring> {
     // In-process subagents inherit the leader's `ToolPermissionBridge`
     // (installed on `SessionRuntime` and propagated by `wire_engine`):
@@ -538,7 +538,7 @@ async fn sync_agent_memory_snapshots(_session: &SessionHandle, cwd: &str) {
 pub async fn install_agent_team(
     session: SessionHandle,
     cwd: String,
-    panel_event_sink: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    panel_event_sink: Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
 ) -> anyhow::Result<()> {
     let wiring = build_agent_team_wiring(session.clone(), cwd, panel_event_sink).await?;
     session.attach_agent_handle(wiring.agent_handle).await;

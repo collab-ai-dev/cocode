@@ -3,12 +3,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use coco_event_types::SessionEnvelope;
 use coco_hub_connector::HubConnectorQueueError;
 use coco_hub_connector::HubConnectorSender;
 use coco_hub_connector::HubConnectorWorker;
 use coco_hub_connector::HubConnectorWorkerConfig;
 use coco_hub_connector::protocol::AnnounceFrame;
-use coco_types::{SessionEnvelope, SessionId};
+use coco_types::SessionId;
 use uuid::Uuid;
 
 use crate::BUILD_PACKAGE_VERSION;

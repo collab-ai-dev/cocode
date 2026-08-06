@@ -53,9 +53,11 @@
 //! can be safely dropped. Callers that want to surface them (e.g.
 //! for diagnostic traces) can consume `discard()`'s return value.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 
+use tokio::task::Id as TaskId;
 use tokio::task::JoinSet;
 
 use crate::call_plan::PreparedToolCall;
@@ -103,6 +105,21 @@ where
     /// Gate latch: once any unsafe plan is fed, subsequent safe
     /// plans also hold to preserve the no-safe-during-unsafe rule.
     any_unsafe_fed: bool,
+    /// Identity of every spawned safe task, keyed by its
+    /// [`tokio::task::Id`]. A task that panics or is cancelled yields a
+    /// `JoinError` instead of an outcome, so its `tool_use_id` has to be
+    /// recovered from here — without it the synthetic failure outcome
+    /// carries an empty id and the model's `tool_use` block is left
+    /// unpaired for the normalizer to guess at.
+    spawned: HashMap<TaskId, SpawnedIdentity>,
+}
+
+/// The parts of a [`PreparedToolCall`] needed to build a failure outcome
+/// after the plan itself has been moved into a spawned task.
+struct SpawnedIdentity {
+    tool_use_id: String,
+    tool_id: coco_types::ToolId,
+    model_index: usize,
 }
 
 impl<F, Fut> StreamingHandle<F, Fut>
@@ -118,6 +135,7 @@ where
             pending_serial: Vec::new(),
             pending_early: Vec::new(),
             any_unsafe_fed: false,
+            spawned: HashMap::new(),
         }
     }
 
@@ -203,10 +221,10 @@ where
         }
 
         let mut safe_effects: Vec<(usize, ToolSideEffects)> = Vec::new();
-        while let Some(join_res) = self.inflight.try_join_next() {
+        while let Some(join_res) = self.inflight.try_join_next_with_id() {
             let unstamped = match join_res {
-                Ok(u) => u,
-                Err(e) => join_error_outcome(e, completion_seq),
+                Ok((_id, u)) => u,
+                Err(e) => join_error_outcome(&self.spawned, &e),
             };
             let model_index = unstamped.model_index;
             let (outcome, effects) = unstamped.stamp_and_extract_effects(completion_seq);
@@ -257,14 +275,14 @@ where
         // their app_state patches to apply in model-index order
         // post-batch.
         let mut safe_effects: Vec<(usize, ToolSideEffects)> = Vec::new();
-        while let Some(join_res) = self.inflight.join_next().await {
+        while let Some(join_res) = self.inflight.join_next_with_id().await {
             let unstamped = match join_res {
-                Ok(u) => u,
+                Ok((_id, u)) => u,
                 Err(e) => {
                     // A spawned safe task panicked or was cancelled.
-                    // Produce a synthetic outcome so the completion
-                    // stream stays paired.
-                    join_error_outcome(e, completion_seq)
+                    // Produce a synthetic outcome carrying the real
+                    // tool_use_id so the completion stream stays paired.
+                    join_error_outcome(&self.spawned, &e)
                 }
             };
             let model_index = unstamped.model_index;
@@ -304,6 +322,11 @@ where
     fn start_safe_now(&mut self, prepared: PreparedToolCall) {
         let runtime = self.executor.make_runtime(prepared.model_index);
         let run_one = self.run_one.clone();
+        let identity = SpawnedIdentity {
+            tool_use_id: prepared.tool_use_id.clone(),
+            tool_id: prepared.tool_id.clone(),
+            model_index: prepared.model_index,
+        };
         // tool-runtime#8: fire the sibling-abort the moment a concurrent shell
         // tool (Bash/PowerShell) fails, so still-running safe siblings
         // self-cancel (they listen via `make_runtime`'s sibling_abort signal).
@@ -312,11 +335,12 @@ where
         // have finished, making a drain-loop abort a no-op. Shares the predicate
         // with the non-streaming `run_concurrent_batch`.
         let executor = self.executor.clone();
-        self.inflight.spawn(async move {
+        let handle = self.inflight.spawn(async move {
             let outcome = run_one(prepared, runtime).await;
             executor.abort_siblings_if_shell_error(outcome.error_kind.as_ref(), &outcome.tool_id);
             outcome
         });
+        self.spawned.insert(handle.id(), identity);
     }
 }
 
@@ -343,18 +367,25 @@ fn discard_outcome_for(prepared: PreparedToolCall) -> UnstampedToolCallOutcome {
 /// [`ToolCallErrorKind::runs_post_tool_use_failure`], this IS an
 /// execution-stage failure that should fire PostToolUseFailure).
 ///
-/// Model-index 0 is a placeholder — we don't know which plan
-/// produced the error because JoinSet doesn't track that. In practice
-/// this only fires on panic, which is rare enough to not warrant a
-/// full id-tracking wrapper.
+/// The real `tool_use_id` / `tool_id` / `model_index` are recovered from
+/// the spawn-time registry via [`tokio::task::JoinError::id`]. That
+/// pairing is load-bearing: the assistant message already carries the
+/// `tool_use` block, so an outcome without its id leaves an orphan that
+/// only the normalizer's generic synthetic result can cover — the model
+/// would be told the result was missing rather than that the tool
+/// failed, and the side-effect ordering would be attributed to the
+/// wrong model index.
 fn join_error_outcome(
-    _err: tokio::task::JoinError,
-    _completion_seq_placeholder: usize,
+    spawned: &HashMap<TaskId, SpawnedIdentity>,
+    err: &tokio::task::JoinError,
 ) -> UnstampedToolCallOutcome {
+    let identity = spawned.get(&err.id());
     UnstampedToolCallOutcome {
-        tool_use_id: String::new(),
-        tool_id: coco_types::ToolId::Custom("<join-failed>".into()),
-        model_index: 0,
+        tool_use_id: identity.map(|i| i.tool_use_id.clone()).unwrap_or_default(),
+        tool_id: identity
+            .map(|i| i.tool_id.clone())
+            .unwrap_or_else(|| coco_types::ToolId::Custom("<join-failed>".into())),
+        model_index: identity.map_or(0, |i| i.model_index),
         ordered_messages: Vec::new(),
         message_path: ToolMessagePath::Failure,
         error_kind: Some(ToolCallErrorKind::JoinFailed),

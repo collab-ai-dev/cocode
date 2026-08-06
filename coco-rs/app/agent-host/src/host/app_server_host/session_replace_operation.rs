@@ -1,7 +1,8 @@
 use std::{future::Future, sync::Arc, time::Duration};
 
 use coco_app_server::{AppReplaceStart, AppServer, ConnectionKey};
-use coco_types::{SessionAccess, SessionReplaceResult};
+use coco_event_types::SessionAccess;
+use coco_types::SessionReplaceResult;
 
 use crate::app_server_host::connection_runtime_binding::{
     build_connection_runtime_for_clear, build_connection_runtime_for_resume,

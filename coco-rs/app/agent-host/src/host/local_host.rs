@@ -17,9 +17,10 @@ use std::sync::Arc;
 
 use coco_app_runtime::ProcessRuntime;
 use coco_config::{RuntimeConfig, global_config};
+use coco_event_types::CoreEvent;
 use coco_session::SessionManager;
 use coco_tool_runtime::ToolPermissionBridgeRef;
-use coco_types::{CoreEvent, ModelSpec};
+use coco_types::ModelSpec;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 

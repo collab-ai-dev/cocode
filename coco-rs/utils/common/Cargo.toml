@@ -8,6 +8,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+tokio = { workspace = true, features = ["fs"] }
 chrono = { workspace = true }
 dirs.workspace = true
 tracing = { workspace = true }

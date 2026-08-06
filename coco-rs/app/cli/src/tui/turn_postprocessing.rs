@@ -167,7 +167,7 @@ pub(super) async fn handle_auto_truncate(
     let _ = event_tx
         .send(CoreEvent::Protocol(ServerNotification::MessageTruncated {
             keep_count: truncate.keep_count as i64,
-            identity: coco_types::ServerNotificationIdentity::default(),
+            identity: coco_event_types::ServerNotificationIdentity::default(),
         }))
         .await;
 }
@@ -247,7 +247,7 @@ pub(super) async fn handle_rewind(
                 warn!("File history rewind failed: {error}");
                 let _ = event_tx
                     .send(CoreEvent::Protocol(ServerNotification::Error(
-                        coco_types::ErrorParams {
+                        coco_event_types::ErrorParams {
                             message: format!("File rewind failed: {error}"),
                             category: Some("rewind".into()),
                             retryable: false,
@@ -333,15 +333,15 @@ pub(super) async fn handle_rewind(
             let _ = event_tx
                 .send(CoreEvent::Protocol(ServerNotification::HistoryReplaced {
                     messages: messages.into_iter().map(Arc::new).collect(),
-                    identity: coco_types::ServerNotificationIdentity::default(),
-                    reason: coco_types::HistoryReplaceReason::Rewind,
+                    identity: coco_event_types::ServerNotificationIdentity::default(),
+                    reason: coco_event_types::HistoryReplaceReason::Rewind,
                 }))
                 .await;
         }
         let _ = event_tx
             .send(CoreEvent::Protocol(ServerNotification::MessageTruncated {
                 keep_count,
-                identity: coco_types::ServerNotificationIdentity::default(),
+                identity: coco_event_types::ServerNotificationIdentity::default(),
             }))
             .await;
     }
@@ -349,7 +349,7 @@ pub(super) async fn handle_rewind(
     // Protocol-level event for SDK consumers (Phase 3.2).
     let _ = event_tx
         .send(CoreEvent::Protocol(ServerNotification::RewindCompleted(
-            coco_types::RewindCompletedParams {
+            coco_event_types::RewindCompletedParams {
                 rewound_turn,
                 restored_files: files_changed,
                 messages_removed,
@@ -410,7 +410,7 @@ pub(super) async fn handle_summarize_rewind(
             );
             let _ = event_tx
                 .send(CoreEvent::Protocol(coco_query::ServerNotification::Error(
-                    coco_types::ErrorParams {
+                    coco_event_types::ErrorParams {
                         message: "summarize: message not in active history".into(),
                         category: Some("rewind".into()),
                         retryable: false,
@@ -422,7 +422,7 @@ pub(super) async fn handle_summarize_rewind(
             warn!("partial-compact rewind failed");
             let _ = event_tx
                 .send(CoreEvent::Protocol(coco_query::ServerNotification::Error(
-                    coco_types::ErrorParams {
+                    coco_event_types::ErrorParams {
                         message: "Summarize failed".into(),
                         category: Some("rewind".into()),
                         retryable: false,

@@ -24,7 +24,7 @@
 //!   data-flow bridge.
 //!
 //! For the public event surface visible to SDK consumers, see
-//! `coco_types::CoreEvent` and `coco_types::ServerNotification`.
+//! `coco_event_types::CoreEvent` and `coco_event_types::ServerNotification`.
 
 use std::collections::HashMap;
 use std::sync::Arc;

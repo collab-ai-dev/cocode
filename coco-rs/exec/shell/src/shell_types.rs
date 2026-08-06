@@ -8,36 +8,13 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use serde::Deserialize;
-use serde::Serialize;
 use tokio::sync::watch;
 
 use coco_config::ShellConfig;
 
 use crate::snapshot::ShellSnapshot;
 
-/// Supported shell types.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ShellType {
-    Zsh,
-    Bash,
-    PowerShell,
-    Sh,
-    Cmd,
-}
-
-impl ShellType {
-    pub const fn name(&self) -> &'static str {
-        match self {
-            Self::Zsh => "zsh",
-            Self::Bash => "bash",
-            Self::PowerShell => "powershell",
-            Self::Sh => "sh",
-            Self::Cmd => "cmd",
-        }
-    }
-}
+pub use coco_types::ShellType;
 
 /// Shell configuration with path and optional environment snapshot.
 #[derive(Debug, Clone)]

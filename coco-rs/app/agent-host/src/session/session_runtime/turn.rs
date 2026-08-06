@@ -110,8 +110,8 @@ pub struct SessionStats {
     pub total_duration_api_ms: i64,
     pub total_cost_usd: f64,
     pub usage: coco_types::TokenUsage,
-    pub model_usage: std::collections::HashMap<String, coco_types::SessionModelUsage>,
-    pub permission_denials: Vec<coco_types::PermissionDenialInfo>,
+    pub model_usage: std::collections::HashMap<String, coco_event_types::SessionModelUsage>,
+    pub permission_denials: Vec<coco_event_types::PermissionDenialInfo>,
     pub last_result_text: Option<String>,
     pub last_stop_reason: Option<String>,
     pub structured_output: Option<serde_json::Value>,
@@ -121,7 +121,7 @@ pub struct SessionStats {
 }
 
 impl SessionStats {
-    fn accumulate(&mut self, params: &coco_types::SessionResultParams) {
+    fn accumulate(&mut self, params: &coco_event_types::SessionResultParams) {
         self.total_turns = self.total_turns.saturating_add(1);
         self.total_duration_api_ms = self
             .total_duration_api_ms
@@ -351,7 +351,7 @@ impl SessionTurnCoordinator {
             .clone()
     }
 
-    pub(crate) fn accumulate_result(&self, params: &coco_types::SessionResultParams) {
+    pub(crate) fn accumulate_result(&self, params: &coco_event_types::SessionResultParams) {
         self.accounting
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

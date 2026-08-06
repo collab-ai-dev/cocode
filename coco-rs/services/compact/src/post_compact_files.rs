@@ -17,12 +17,12 @@ use std::path::PathBuf;
 
 use coco_context::attachment::FileReadOptions;
 use coco_context::attachment::generate_file_attachment;
-use coco_context::file_read_state::FileReadEntry;
 use coco_llm_types::AssistantContentPart;
 use coco_messages::AttachmentMessage;
 use coco_messages::CompactFileReferencePayload;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
+use coco_types::FileReadEntry;
 use coco_types::ToolName;
 
 use crate::types::POST_COMPACT_MAX_FILES_TO_RESTORE;

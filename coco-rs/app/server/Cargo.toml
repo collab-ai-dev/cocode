@@ -15,6 +15,7 @@ workspace = true
 coco-app-server-transport.workspace = true
 coco-error.workspace = true
 coco-types.workspace = true
+coco-event-types.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true

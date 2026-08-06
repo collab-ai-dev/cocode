@@ -260,7 +260,7 @@ pub fn build_initial_session_ui_flags_payload(session: &SessionHandle) -> Initia
 
 pub async fn build_agents_dialog_payload(
     session: &SessionHandle,
-) -> coco_types::AgentsDialogPayload {
+) -> coco_event_types::AgentsDialogPayload {
     let snapshot = session.agent_catalog_snapshot().await;
 
     let active_source: std::collections::BTreeMap<String, coco_types::AgentSource> = snapshot
@@ -277,7 +277,7 @@ pub async fn build_agents_dialog_payload(
                 .get(&def.name)
                 .map(|winning| *winning != def.source)
                 .unwrap_or(false);
-            coco_types::AgentsDialogEntry {
+            coco_event_types::AgentsDialogEntry {
                 name: def.name.clone(),
                 description: def.description.clone().unwrap_or_default(),
                 source: def.source,
@@ -287,7 +287,7 @@ pub async fn build_agents_dialog_payload(
             }
         })
         .collect();
-    coco_types::AgentsDialogPayload { entries }
+    coco_event_types::AgentsDialogPayload { entries }
 }
 
 pub async fn build_active_agent_definitions_payload(
@@ -303,7 +303,7 @@ pub async fn build_active_agent_definitions_payload(
 
 pub async fn build_permissions_editor_payload(
     session: &SessionHandle,
-) -> coco_types::PermissionsEditorPayload {
+) -> coco_event_types::PermissionsEditorPayload {
     use coco_permissions::permissions_store::PermissionStore;
 
     let cwd = session.workspace_cwd().await;
@@ -311,22 +311,22 @@ pub async fn build_permissions_editor_payload(
 
     let (rules, directories, managed_only) = tokio::task::spawn_blocking(move || {
         let by_behavior = store.load_all_rules();
-        let rules: Vec<coco_types::PermissionsEditorRule> = by_behavior
+        let rules: Vec<coco_event_types::PermissionsEditorRule> = by_behavior
             .allow
             .into_iter()
             .chain(by_behavior.ask)
             .chain(by_behavior.deny)
-            .map(|r| coco_types::PermissionsEditorRule {
+            .map(|r| coco_event_types::PermissionsEditorRule {
                 behavior: r.behavior,
                 source: r.source,
                 tool_pattern: r.value.tool_pattern,
                 rule_content: r.value.rule_content,
             })
             .collect();
-        let directories: Vec<coco_types::PermissionsEditorDir> = store
+        let directories: Vec<coco_event_types::PermissionsEditorDir> = store
             .load_additional_directories()
             .into_iter()
-            .map(|(source, path)| coco_types::PermissionsEditorDir { path, source })
+            .map(|(source, path)| coco_event_types::PermissionsEditorDir { path, source })
             .collect();
         let managed_only = !store.show_always_allow_options();
         (rules, directories, managed_only)
@@ -334,7 +334,7 @@ pub async fn build_permissions_editor_payload(
     .await
     .unwrap_or_else(|_| (Vec::new(), Vec::new(), false));
 
-    coco_types::PermissionsEditorPayload {
+    coco_event_types::PermissionsEditorPayload {
         rules,
         directories,
         cwd: cwd.to_string_lossy().into_owned(),
@@ -344,7 +344,7 @@ pub async fn build_permissions_editor_payload(
 
 pub async fn build_workflow_dialog_payload(
     session: &SessionHandle,
-) -> coco_types::WorkflowDialogPayload {
+) -> coco_event_types::WorkflowDialogPayload {
     let cfg = session.current_engine_config().await;
     let cwd = if let Some(session_cwd) = cfg.session_cwd.as_ref() {
         Some(session_cwd.read().await.clone())
@@ -355,7 +355,7 @@ pub async fn build_workflow_dialog_payload(
     };
     let entries = coco_workflow::list_workflows(cwd)
         .into_iter()
-        .map(|entry| coco_types::WorkflowDialogEntry {
+        .map(|entry| coco_event_types::WorkflowDialogEntry {
             name: entry.meta.name,
             description: entry.meta.description,
             source_path: match entry.origin {
@@ -364,12 +364,12 @@ pub async fn build_workflow_dialog_payload(
             },
         })
         .collect();
-    coco_types::WorkflowDialogPayload { entries }
+    coco_event_types::WorkflowDialogPayload { entries }
 }
 
 pub async fn enrich_skills_dialog_payload(
     session: &SessionHandle,
-    payload: &mut coco_types::SkillsDialogPayload,
+    payload: &mut coco_event_types::SkillsDialogPayload,
 ) {
     let cfg = session.current_engine_config().await;
     let skills = session.skill_manager();
@@ -396,7 +396,7 @@ const JOURNEY_MAX_ROWS: usize = 12;
 pub async fn apply_journey_mutation(
     session: &SessionHandle,
     action: coco_types::JourneyAction,
-) -> Option<coco_types::JourneyMutationFailed> {
+) -> Option<coco_event_types::JourneyMutationFailed> {
     let config_home = session.config_home().clone();
     let memdir = session
         .memory_runtime()
@@ -418,8 +418,9 @@ fn run_journey_mutation(
     config_home: &std::path::Path,
     memdir: Option<&std::path::Path>,
     action: coco_types::JourneyAction,
-) -> Option<coco_types::JourneyMutationFailed> {
-    use coco_types::{JourneyEvent, JourneyMutationKind, SkillRetireReason};
+) -> Option<coco_event_types::JourneyMutationFailed> {
+    use coco_event_types::JourneyMutationKind;
+    use coco_types::{JourneyEvent, SkillRetireReason};
     match action {
         coco_types::JourneyAction::RetireSkill { path } => set_skill_disabled_reporting(
             config_home,
@@ -440,7 +441,7 @@ fn run_journey_mutation(
         ),
         coco_types::JourneyAction::DeleteMemory { filename } => {
             let Some(memdir) = memdir else {
-                return Some(coco_types::JourneyMutationFailed {
+                return Some(coco_event_types::JourneyMutationFailed {
                     kind: JourneyMutationKind::DeleteMemory,
                     target: filename,
                     message: "memory is unavailable (Feature::AutoMemory is off)".into(),
@@ -462,7 +463,7 @@ fn run_journey_mutation(
                         file = %filename,
                         "journey: memory delete failed: {e}"
                     );
-                    Some(coco_types::JourneyMutationFailed {
+                    Some(coco_event_types::JourneyMutationFailed {
                         kind: JourneyMutationKind::DeleteMemory,
                         target: filename,
                         message: e.to_string(),
@@ -480,9 +481,9 @@ fn set_skill_disabled_reporting(
     config_home: &std::path::Path,
     path: &std::path::Path,
     disabled: bool,
-    kind: coco_types::JourneyMutationKind,
+    kind: coco_event_types::JourneyMutationKind,
     event: impl FnOnce(String) -> coco_types::JourneyEvent,
-) -> Option<coco_types::JourneyMutationFailed> {
+) -> Option<coco_event_types::JourneyMutationFailed> {
     let name = skill_name_from_path(path);
     let target = name.clone().unwrap_or_else(|| path.display().to_string());
     if let Err(e) = coco_skills::set_skill_disabled(path, disabled) {
@@ -492,7 +493,7 @@ fn set_skill_disabled_reporting(
             disabled,
             "journey: skill disabled-flip failed: {e}"
         );
-        return Some(coco_types::JourneyMutationFailed {
+        return Some(coco_event_types::JourneyMutationFailed {
             kind,
             target,
             message: e.to_string(),
@@ -535,7 +536,7 @@ fn append_memory_journal_event(memdir: &std::path::Path, event: coco_types::Jour
 /// on a blocking thread (do not copy the `/memory` sync-walk-in-async wart).
 pub async fn build_journey_dialog_payload(
     session: &SessionHandle,
-) -> coco_types::JourneyDialogPayload {
+) -> coco_event_types::JourneyDialogPayload {
     let config_home = session.config_home().clone();
     let memdir = session
         .memory_runtime()
@@ -559,10 +560,10 @@ pub async fn build_journey_dialog_payload(
     .await
     .unwrap_or_else(|e| {
         tracing::warn!(error = %e, "journey assembly task failed");
-        coco_types::JourneyDialogPayload {
+        coco_event_types::JourneyDialogPayload {
             nodes: Vec::new(),
             buckets: Vec::new(),
-            stats: coco_types::JourneyStatsWire::default(),
+            stats: coco_event_types::JourneyStatsWire::default(),
         }
     })
 }
@@ -570,7 +571,7 @@ pub async fn build_journey_dialog_payload(
 fn journey_snapshot_to_wire(
     snapshot: coco_journey::JourneySnapshot,
     buckets: Vec<coco_journey::TimelineBucket>,
-) -> coco_types::JourneyDialogPayload {
+) -> coco_event_types::JourneyDialogPayload {
     let nodes = snapshot
         .nodes
         .into_iter()
@@ -578,7 +579,7 @@ fn journey_snapshot_to_wire(
         .collect();
     let buckets = buckets
         .into_iter()
-        .map(|b| coco_types::TimelineBucketWire {
+        .map(|b| coco_event_types::TimelineBucketWire {
             start_ms: b.start_ms,
             label: b.label,
             skills: b.skills,
@@ -586,7 +587,7 @@ fn journey_snapshot_to_wire(
             recency: b.recency,
         })
         .collect();
-    let stats = coco_types::JourneyStatsWire {
+    let stats = coco_event_types::JourneyStatsWire {
         learning: snapshot.stats.learning,
         learned: snapshot.stats.learned,
         retired: snapshot.stats.retired,
@@ -595,37 +596,37 @@ fn journey_snapshot_to_wire(
         busiest_day: snapshot
             .stats
             .busiest_day
-            .map(|(label, count)| coco_types::JourneyBusiestDayWire { label, count }),
+            .map(|(label, count)| coco_event_types::JourneyBusiestDayWire { label, count }),
     };
-    coco_types::JourneyDialogPayload {
+    coco_event_types::JourneyDialogPayload {
         nodes,
         buckets,
         stats,
     }
 }
 
-fn journey_node_to_wire(node: coco_journey::JourneyNode) -> coco_types::JourneyNodeWire {
+fn journey_node_to_wire(node: coco_journey::JourneyNode) -> coco_event_types::JourneyNodeWire {
     let body = match node.body {
         coco_journey::JourneyNodeBody::AgentSkill {
             path,
             lifecycle,
             telemetry,
-        } => coco_types::JourneyNodeBodyWire::AgentSkill {
+        } => coco_event_types::JourneyNodeBodyWire::AgentSkill {
             path: path.display().to_string(),
             lifecycle: journey_lifecycle_to_wire(lifecycle),
             telemetry: journey_telemetry_to_wire(&telemetry),
         },
         coco_journey::JourneyNodeBody::UserSkill { path, telemetry } => {
-            coco_types::JourneyNodeBodyWire::UserSkill {
+            coco_event_types::JourneyNodeBodyWire::UserSkill {
                 path: path.display().to_string(),
                 telemetry: journey_telemetry_to_wire(&telemetry),
             }
         }
         coco_journey::JourneyNodeBody::Memory { filename } => {
-            coco_types::JourneyNodeBodyWire::Memory { filename }
+            coco_event_types::JourneyNodeBodyWire::Memory { filename }
         }
     };
-    coco_types::JourneyNodeWire {
+    coco_event_types::JourneyNodeWire {
         date_label: coco_journey::day_label(node.last_activity_ms),
         title: node.title,
         description: node.description,
@@ -638,26 +639,30 @@ fn journey_node_to_wire(node: coco_journey::JourneyNode) -> coco_types::JourneyN
 
 fn journey_lifecycle_to_wire(
     lifecycle: coco_journey::AgentSkillLifecycle,
-) -> coco_types::AgentSkillLifecycleWire {
+) -> coco_event_types::AgentSkillLifecycleWire {
     match lifecycle {
         coco_journey::AgentSkillLifecycle::Learning {
             invocations,
             required,
-        } => coco_types::AgentSkillLifecycleWire::Learning {
-            progress: coco_types::SkillQuarantineWire {
+        } => coco_event_types::AgentSkillLifecycleWire::Learning {
+            progress: coco_event_types::SkillQuarantineWire {
                 invocations,
                 required,
             },
         },
-        coco_journey::AgentSkillLifecycle::Learned => coco_types::AgentSkillLifecycleWire::Learned,
-        coco_journey::AgentSkillLifecycle::Retired => coco_types::AgentSkillLifecycleWire::Retired,
+        coco_journey::AgentSkillLifecycle::Learned => {
+            coco_event_types::AgentSkillLifecycleWire::Learned
+        }
+        coco_journey::AgentSkillLifecycle::Retired => {
+            coco_event_types::AgentSkillLifecycleWire::Retired
+        }
     }
 }
 
 fn journey_telemetry_to_wire(
     telemetry: &coco_skills::telemetry::SkillTelemetryStats,
-) -> coco_types::SkillTelemetryWire {
-    coco_types::SkillTelemetryWire {
+) -> coco_event_types::SkillTelemetryWire {
+    coco_event_types::SkillTelemetryWire {
         success_count: telemetry.success_count,
         failure_count: telemetry.failure_count,
         patch_count: telemetry.patch_count,

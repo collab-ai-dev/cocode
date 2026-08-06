@@ -57,8 +57,8 @@ async fn test_read_basic_file() {
 
 #[tokio::test]
 async fn test_read_without_limit_reads_past_2000_lines_and_records_full() {
-    use coco_context::FileReadRange;
-    use coco_context::FileReadState;
+    use coco_types::FileReadRange;
+    use coco_types::FileReadState;
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
@@ -779,8 +779,8 @@ async fn test_read_full_read_too_large_errors() {
 /// full-file size cap — only the line and token caps apply.
 #[tokio::test]
 async fn test_read_partial_read_skips_size_cap() {
-    use coco_context::FileReadRange;
-    use coco_context::FileReadState;
+    use coco_types::FileReadRange;
+    use coco_types::FileReadState;
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
@@ -817,8 +817,8 @@ async fn test_read_partial_read_skips_size_cap() {
 
 #[tokio::test]
 async fn test_read_large_explicit_limit_streams_range() {
-    use coco_context::FileReadRange;
-    use coco_context::FileReadState;
+    use coco_types::FileReadRange;
+    use coco_types::FileReadState;
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
@@ -1203,7 +1203,7 @@ async fn test_read_notebook_image_output() {
 /// of Read calls are repeats of this shape.
 #[tokio::test]
 async fn test_read_dedup_same_call_twice() {
-    use coco_context::FileReadState;
+    use coco_types::FileReadState;
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
@@ -1247,7 +1247,7 @@ async fn test_read_dedup_same_call_twice() {
 /// Repeat Read with same explicit offset/limit args should still dedup.
 #[tokio::test]
 async fn test_read_dedup_same_explicit_range() {
-    use coco_context::FileReadState;
+    use coco_types::FileReadState;
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
@@ -1281,7 +1281,7 @@ async fn test_read_dedup_same_explicit_range() {
 /// cover the new range.
 #[tokio::test]
 async fn test_read_dedup_skipped_for_different_range() {
-    use coco_context::FileReadState;
+    use coco_types::FileReadState;
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
@@ -1321,7 +1321,7 @@ async fn test_read_dedup_skipped_for_different_range() {
 /// filesystem mtime precision (which can be 1s on ext4/HFS+).
 #[tokio::test]
 async fn test_read_dedup_invalidated_by_mtime_change() {
-    use coco_context::FileReadState;
+    use coco_types::FileReadState;
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
@@ -1377,8 +1377,8 @@ async fn test_read_dedup_invalidated_by_mtime_change() {
 /// Gated via `is_from_read_tool`.
 #[tokio::test]
 async fn test_read_dedup_skipped_after_edit() {
-    use coco_context::FileReadEntry;
-    use coco_context::FileReadState;
+    use coco_types::FileReadEntry;
+    use coco_types::FileReadState;
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
@@ -1393,7 +1393,7 @@ async fn test_read_dedup_skipped_after_edit() {
     // `set_from_read`). That mirrors what `update_after_edit` would do
     // post-edit, but more directly.
     let abs = std::fs::canonicalize(&file).unwrap();
-    let mtime = coco_context::file_mtime_ms(&abs).await.unwrap();
+    let mtime = coco_utils_common::file_mtime_ms(&abs).await.unwrap();
     {
         let frs = ctx.file_read_state.as_ref().unwrap();
         let mut frs_w = frs.write().await;

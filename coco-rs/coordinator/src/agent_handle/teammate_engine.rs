@@ -29,13 +29,13 @@ pub struct TeammateExecutionAdapter {
     /// `ToolAppState`, so their panel snapshots are
     /// session-authoritative. `None` ⇒ all teammate engine events are
     /// discarded, the pre-bridge behavior.
-    panel_event_tx: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    panel_event_tx: Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
 }
 
 impl TeammateExecutionAdapter {
     pub fn new(
         inner: coco_tool_runtime::AgentQueryEngineRef,
-        panel_event_tx: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+        panel_event_tx: Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
     ) -> Self {
         Self {
             inner,
@@ -58,13 +58,13 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
         // `ToolAppState` while the TUI panel never hears about them.
         // Every other event stays discarded, as before.
         let event_tx = self.panel_event_tx.clone().map(|panel_tx| {
-            let (tx, mut rx) = tokio::sync::mpsc::channel::<coco_types::CoreEvent>(16);
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<coco_event_types::CoreEvent>(16);
             tokio::spawn(async move {
                 while let Some(event) = rx.recv().await {
                     if matches!(
                         &event,
-                        coco_types::CoreEvent::Protocol(
-                            coco_types::ServerNotification::TaskPanelChanged(_)
+                        coco_event_types::CoreEvent::Protocol(
+                            coco_event_types::ServerNotification::TaskPanelChanged(_)
                         )
                     ) {
                         let _ = panel_tx.send(event).await;
@@ -265,7 +265,7 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
 /// bridge teammate `TaskPanelChanged` snapshots (`None` = SDK/headless).
 pub fn into_execution_engine(
     inner: coco_tool_runtime::AgentQueryEngineRef,
-    panel_event_tx: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    panel_event_tx: Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
 ) -> Arc<dyn AgentExecutionEngine> {
     Arc::new(TeammateExecutionAdapter::new(inner, panel_event_tx))
 }

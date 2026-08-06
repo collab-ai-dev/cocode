@@ -1156,6 +1156,7 @@ dependencies = [
  "coco-coordinator",
  "coco-cron",
  "coco-error",
+ "coco-event-types",
  "coco-exec-server",
  "coco-file-watch",
  "coco-frontmatter",
@@ -1256,6 +1257,7 @@ dependencies = [
  "chrono",
  "coco-app-server-transport",
  "coco-error",
+ "coco-event-types",
  "coco-types",
  "futures",
  "pretty_assertions",
@@ -1273,6 +1275,7 @@ name = "coco-app-server-client"
 version = "0.1.1"
 dependencies = [
  "coco-app-server-transport",
+ "coco-event-types",
  "coco-types",
  "futures",
  "serde",
@@ -1376,6 +1379,7 @@ dependencies = [
  "coco-config-reload",
  "coco-context",
  "coco-coordinator",
+ "coco-event-types",
  "coco-exec-server",
  "coco-frontmatter",
  "coco-git",
@@ -1442,6 +1446,7 @@ dependencies = [
  "coco-config",
  "coco-context",
  "coco-error",
+ "coco-event-types",
  "coco-hooks",
  "coco-lsp",
  "coco-mcp",
@@ -1571,6 +1576,7 @@ dependencies = [
  "coco-config",
  "coco-context",
  "coco-error",
+ "coco-event-types",
  "coco-git",
  "coco-hooks",
  "coco-memory",
@@ -1616,6 +1622,19 @@ dependencies = [
  "coco-stack-trace-macro",
  "snafu",
  "strum 0.27.2",
+]
+
+[[package]]
+name = "coco-event-types"
+version = "0.1.1"
+dependencies = [
+ "coco-types",
+ "pretty_assertions",
+ "schemars",
+ "serde",
+ "serde_json",
+ "strum 0.27.2",
+ "uuid",
 ]
 
 [[package]]
@@ -1786,6 +1805,7 @@ version = "0.1.1"
 dependencies = [
  "chrono",
  "coco-error",
+ "coco-event-types",
  "coco-hub-protocol",
  "coco-secret-redact",
  "coco-types",
@@ -2246,6 +2266,7 @@ dependencies = [
  "coco-config",
  "coco-context",
  "coco-error",
+ "coco-event-types",
  "coco-git",
  "coco-hooks",
  "coco-inference",
@@ -2270,6 +2291,7 @@ dependencies = [
  "coco-tools",
  "coco-types",
  "coco-utils-absolute-path",
+ "coco-utils-common",
  "coco-utils-json-repair",
  "coco-utils-string",
  "coco-wire-dump",
@@ -2425,6 +2447,7 @@ dependencies = [
  "coco-commands",
  "coco-config",
  "coco-error",
+ "coco-event-types",
  "coco-hub-connector",
  "coco-messages",
  "coco-session",
@@ -2481,6 +2504,7 @@ name = "coco-session-trace"
 version = "0.1.1"
 dependencies = [
  "coco-error",
+ "coco-event-types",
  "coco-types",
  "pretty_assertions",
  "serde",
@@ -2695,6 +2719,7 @@ dependencies = [
  "async-trait",
  "coco-config",
  "coco-error",
+ "coco-event-types",
  "coco-session",
  "coco-tool-runtime",
  "coco-types",
@@ -2745,6 +2770,7 @@ dependencies = [
  "coco-config",
  "coco-context",
  "coco-coordinator",
+ "coco-event-types",
  "coco-hooks",
  "coco-inference",
  "coco-llm-types",
@@ -2782,16 +2808,14 @@ dependencies = [
  "anyhow",
  "async-trait",
  "coco-config",
- "coco-context",
  "coco-cron",
  "coco-error",
+ "coco-event-types",
  "coco-file-encoding",
  "coco-goals",
  "coco-messages",
  "coco-sandbox",
- "coco-shell",
  "coco-subagent",
- "coco-system-reminder",
  "coco-types",
  "coco-utils-common",
  "coco-utils-json-repair",
@@ -2891,6 +2915,7 @@ dependencies = [
  "coco-config",
  "coco-context",
  "coco-coordinator",
+ "coco-event-types",
  "coco-file-search",
  "coco-file-watch",
  "coco-git",
@@ -2992,6 +3017,7 @@ dependencies = [
 name = "coco-types"
 version = "0.1.1"
 dependencies = [
+ "async-trait",
  "coco-llm-types",
  "coco-utils-common",
  "pretty_assertions",
@@ -3056,6 +3082,7 @@ dependencies = [
  "dirs 6.0.0",
  "serde",
  "tempfile",
+ "tokio",
  "tracing",
  "tracing-subscriber",
 ]

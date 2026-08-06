@@ -229,9 +229,9 @@ async fn send_roundtrips_all_message_variants() {
 /// Covers a delta-like hot-path notification and a structured-params one.
 #[tokio::test]
 async fn send_notification_wire_matches_default_path() {
-    use coco_types::ContentDeltaParams;
-    use coco_types::ServerNotification;
-    use coco_types::SessionEndedParams;
+    use coco_event_types::ContentDeltaParams;
+    use coco_event_types::ServerNotification;
+    use coco_event_types::SessionEndedParams;
     use serde_json::Value;
 
     // Helper: normalize a JsonRpcMessage to its wire JSON (Value). We

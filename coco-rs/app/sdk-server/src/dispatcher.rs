@@ -12,7 +12,7 @@ use std::sync::Arc;
 use coco_agent_host::app_server_host::route_app_server_session_event;
 use coco_agent_host::event_hub::ProcessEventHubEgress;
 use coco_app_server::{AppServer, SessionSeqAllocator};
-use coco_types::CoreEvent;
+use coco_event_types::CoreEvent;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 

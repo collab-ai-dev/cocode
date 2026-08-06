@@ -321,7 +321,7 @@ pub enum UserCommand {
     /// handler when the diff actually changes disk state.
     /// **No display metadata here.** TUI stashes `total_edits` on
     /// `UiState.pending_skills_save_edits` before dispatch and
-    /// reads it back when [`coco_types::TuiOnlyEvent::SkillOverridesSaved`]
+    /// reads it back when [`coco_event_types::TuiOnlyEvent::SkillOverridesSaved`]
     /// arrives. The CLI bridge only reports Ok / typed Err.
     /// The CLI bridge in `tui_runner` owns the settings persistence
     /// boundary, keeping the coco-tui crate independent of coco-config.

@@ -19,8 +19,8 @@
 //! TUI channel in the current architecture. See `event-system-design.md`
 //! §12 for the consumer routing matrix.
 
-use coco_types::ServerNotification;
-use coco_types::TaskStartedParams;
+use coco_event_types::ServerNotification;
+use coco_event_types::TaskStartedParams;
 use coco_types::task_type_wire;
 
 use crate::i18n::t;
@@ -257,8 +257,8 @@ pub(super) fn handle(
         }
         ServerNotification::CompactionPhase(p) => {
             use crate::state::session::CompactionPhaseLabel;
-            use coco_types::CompactionHookType;
-            use coco_types::CompactionPhase;
+            use coco_event_types::CompactionHookType;
+            use coco_event_types::CompactionPhase;
             state.session.compaction_phase = match (p.phase, p.hook_type) {
                 (CompactionPhase::HooksStart, Some(CompactionHookType::PreCompact)) => {
                     state.session.is_compacting = true;
@@ -375,9 +375,9 @@ pub(super) fn handle(
         }
         ServerNotification::TaskCompleted(p) => {
             let entry_status = match p.status {
-                coco_types::TaskCompletionStatus::Completed => TaskEntryStatus::Completed,
-                coco_types::TaskCompletionStatus::Failed => TaskEntryStatus::Failed,
-                coco_types::TaskCompletionStatus::Stopped => TaskEntryStatus::Stopped,
+                coco_event_types::TaskCompletionStatus::Completed => TaskEntryStatus::Completed,
+                coco_event_types::TaskCompletionStatus::Failed => TaskEntryStatus::Failed,
+                coco_event_types::TaskCompletionStatus::Stopped => TaskEntryStatus::Stopped,
             };
             if let Some(task) = state
                 .session
@@ -406,9 +406,9 @@ pub(super) fn handle(
             {
                 let prev_status = agent.status;
                 agent.status = match p.status {
-                    coco_types::TaskCompletionStatus::Completed => SubagentStatus::Completed,
-                    coco_types::TaskCompletionStatus::Failed
-                    | coco_types::TaskCompletionStatus::Stopped => SubagentStatus::Failed,
+                    coco_event_types::TaskCompletionStatus::Completed => SubagentStatus::Completed,
+                    coco_event_types::TaskCompletionStatus::Failed
+                    | coco_event_types::TaskCompletionStatus::Stopped => SubagentStatus::Failed,
                 };
                 // Freeze the timer at completion so the row stops ticking
                 // with its still-running siblings. Stamp once (gate on the
@@ -924,9 +924,9 @@ pub(super) fn handle(
                 .find(|h| h.hook_id == p.hook_id)
             {
                 hook.status = match p.outcome {
-                    coco_types::HookOutcomeStatus::Success => HookEntryStatus::Completed,
-                    coco_types::HookOutcomeStatus::Error
-                    | coco_types::HookOutcomeStatus::Cancelled => HookEntryStatus::Failed,
+                    coco_event_types::HookOutcomeStatus::Success => HookEntryStatus::Completed,
+                    coco_event_types::HookOutcomeStatus::Error
+                    | coco_event_types::HookOutcomeStatus::Cancelled => HookEntryStatus::Failed,
                 };
                 hook.output = Some(p.output);
             }

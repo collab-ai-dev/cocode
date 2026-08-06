@@ -112,7 +112,7 @@ impl SessionHandle {
         self.runtime.turn_coordinator.accounting_snapshot()
     }
 
-    pub(crate) fn accumulate_session_result(&self, params: &coco_types::SessionResultParams) {
+    pub(crate) fn accumulate_session_result(&self, params: &coco_event_types::SessionResultParams) {
         self.runtime.turn_coordinator.accumulate_result(params);
     }
 

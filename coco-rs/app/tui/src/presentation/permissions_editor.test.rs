@@ -15,11 +15,11 @@ use crate::state::PermissionsEditorState;
 use crate::state::RecentDenialRow;
 use crate::state::WizardTextField;
 use crate::theme::Theme;
+use coco_event_types::PermissionsEditorDir;
+use coco_event_types::PermissionsEditorPayload;
+use coco_event_types::PermissionsEditorRule;
 use coco_types::PermissionBehavior;
 use coco_types::PermissionRuleSource;
-use coco_types::PermissionsEditorDir;
-use coco_types::PermissionsEditorPayload;
-use coco_types::PermissionsEditorRule;
 
 fn sample_state() -> PermissionsEditorState {
     let mut state = PermissionsEditorState::from_payload(PermissionsEditorPayload {

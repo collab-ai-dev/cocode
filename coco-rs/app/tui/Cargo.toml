@@ -23,6 +23,7 @@ coco-coordinator.workspace = true
 coco-messages.workspace = true
 coco-permissions.workspace = true
 coco-types.workspace = true
+coco-event-types.workspace = true
 coco-context.workspace = true
 coco-file-search.workspace = true
 coco-file-watch.workspace = true

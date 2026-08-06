@@ -47,7 +47,7 @@ fn skills_dialog_content_renders_flat_list_with_state_and_lock() {
     let theme = Theme::default();
 
     // Empty catalog → "no skills" hint, border stays primary.
-    let empty = SkillsDialogState::from_wire(coco_types::SkillsDialogPayload {
+    let empty = SkillsDialogState::from_wire(coco_event_types::SkillsDialogPayload {
         entries: Vec::new(),
         bytes_per_token: 4,
     });
@@ -58,11 +58,11 @@ fn skills_dialog_content_renders_flat_list_with_state_and_lock() {
 
     // Mixed catalog: free user skill, plugin-locked skill, off-overridden
     // skill — covers 4-state glyph + lock annotation + plugin footer.
-    let payload = coco_types::SkillsDialogPayload {
+    let payload = coco_event_types::SkillsDialogPayload {
         entries: vec![
-            coco_types::SkillsDialogEntry {
+            coco_event_types::SkillsDialogEntry {
                 name: "deploy".into(),
-                source: coco_types::SkillsDialogSource::Project,
+                source: coco_event_types::SkillsDialogSource::Project,
                 description: "Run cargo deploy".into(),
                 plugin_name: None,
                 frontmatter_bytes: 168,
@@ -71,9 +71,9 @@ fn skills_dialog_content_renders_flat_list_with_state_and_lock() {
                 lock: None,
                 quarantine: None,
             },
-            coco_types::SkillsDialogEntry {
+            coco_event_types::SkillsDialogEntry {
                 name: "claude-api".into(),
-                source: coco_types::SkillsDialogSource::Plugin,
+                source: coco_event_types::SkillsDialogSource::Plugin,
                 description: "Anthropic SDK helper".into(),
                 plugin_name: Some("claude-plugins-official".into()),
                 frontmatter_bytes: 120,
@@ -85,9 +85,9 @@ fn skills_dialog_content_renders_flat_list_with_state_and_lock() {
                 }),
                 quarantine: None,
             },
-            coco_types::SkillsDialogEntry {
+            coco_event_types::SkillsDialogEntry {
                 name: "noisy".into(),
-                source: coco_types::SkillsDialogSource::User,
+                source: coco_event_types::SkillsDialogSource::User,
                 description: "loud".into(),
                 plugin_name: None,
                 frontmatter_bytes: 400,
@@ -121,26 +121,26 @@ fn skills_dialog_content_renders_flat_list_with_state_and_lock() {
 fn skills_dialog_shows_quarantine_progress_and_try_it_hint() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let payload = coco_types::SkillsDialogPayload {
+    let payload = coco_event_types::SkillsDialogPayload {
         entries: vec![
-            coco_types::SkillsDialogEntry {
+            coco_event_types::SkillsDialogEntry {
                 name: "fix-nextest-filter".into(),
-                source: coco_types::SkillsDialogSource::User,
+                source: coco_event_types::SkillsDialogSource::User,
                 description: "agent-learned skill".into(),
                 plugin_name: None,
                 frontmatter_bytes: 100,
                 current_local: None,
                 baseline: coco_types::SkillOverrideState::On,
                 lock: None,
-                quarantine: Some(coco_types::SkillQuarantineWire {
+                quarantine: Some(coco_event_types::SkillQuarantineWire {
                     invocations: 2,
                     required: 5,
                 }),
             },
             // A normal (non-quarantined) skill must NOT get the hint.
-            coco_types::SkillsDialogEntry {
+            coco_event_types::SkillsDialogEntry {
                 name: "deploy".into(),
-                source: coco_types::SkillsDialogSource::User,
+                source: coco_event_types::SkillsDialogSource::User,
                 description: "human skill".into(),
                 plugin_name: None,
                 frontmatter_bytes: 100,
@@ -171,8 +171,8 @@ fn skills_dialog_shows_quarantine_progress_and_try_it_hint() {
 fn plugin_dialog_installed_tab_renders_skills_section() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
-    let payload = coco_types::PluginDialogPayload {
-        installed: vec![coco_types::PluginDialogInstalledRow {
+    let payload = coco_event_types::PluginDialogPayload {
+        installed: vec![coco_event_types::PluginDialogInstalledRow {
             id: "demo@market".into(),
             name: "demo".into(),
             version: Some("1.0.0".into()),
@@ -183,20 +183,20 @@ fn plugin_dialog_installed_tab_renders_skills_section() {
             blocked_by_policy: false,
             options: Vec::new(),
             mcp_servers: Vec::new(),
-            actions: vec![coco_types::PluginDialogAction {
+            actions: vec![coco_event_types::PluginDialogAction {
                 label: "Disable plugin".into(),
                 plugin_args: "disable demo@market".into(),
             }],
         }],
-        skills: vec![coco_types::PluginDialogSkillRow {
+        skills: vec![coco_event_types::PluginDialogSkillRow {
             id: "skill:deploy".into(),
             name: "deploy".into(),
             description: "Deploy the project".into(),
-            source: coco_types::SkillsDialogSource::Project,
+            source: coco_event_types::SkillsDialogSource::Project,
             override_state: coco_types::SkillOverrideState::UserInvocableOnly,
             lock_source: Some(coco_types::SkillLockSource::Author),
             token_estimate: 42,
-            usage: Some(coco_types::PluginDialogSkillUsage {
+            usage: Some(coco_event_types::PluginDialogSkillUsage {
                 count: 3,
                 days_since_use: 2,
             }),

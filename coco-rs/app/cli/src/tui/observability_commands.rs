@@ -423,8 +423,8 @@ pub(super) fn plan_command_query_after_flip(args: &str) -> Option<&str> {
 use std::collections::HashMap;
 
 use coco_agent_host::session_controls::{self, FileHistoryDiffTarget, SessionControlError};
+use coco_event_types::TuiOnlyEvent;
 use coco_query::CoreEvent;
-use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;
 use tracing::warn;
 

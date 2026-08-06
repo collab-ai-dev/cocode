@@ -494,10 +494,87 @@ async fn test_streaming_shell_failure_aborts_concurrent_sibling() {
     assert!(
         matches!(
             observed.lock().unwrap().as_ref(),
-            Some(coco_types::ToolAbortReasonPayload::SiblingError { failed_tool })
+            Some(coco_event_types::ToolAbortReasonPayload::SiblingError { failed_tool })
                 if failed_tool == coco_types::ToolName::Bash.as_str()
         ),
         "sibling must observe SiblingError(Bash); got {:?}",
         observed.lock().unwrap()
+    );
+}
+
+// ── JoinError identity recovery ─────────────────────────────────
+
+/// `run_one` that panics for the plan whose id is `panic_me`, and
+/// otherwise behaves like [`stub_run_one`]. Models a tool whose
+/// `execute` panics after the plan was already spawned.
+async fn panicking_run_one(
+    prepared: PreparedToolCall,
+    runtime: crate::call_plan::RunOneRuntime,
+) -> UnstampedToolCallOutcome {
+    if prepared.tool_use_id == "panic_me" {
+        panic!("simulated tool panic");
+    }
+    stub_run_one(prepared, runtime).await
+}
+
+/// A panicking safe task must still surface an outcome carrying its own
+/// `tool_use_id` — the assistant message already holds the matching
+/// `tool_use` block, so an empty id would leave it orphaned and force
+/// the normalizer to cover it with a generic "result missing" synthetic
+/// instead of a real tool failure. `model_index` must survive too, since
+/// post-batch side effects apply in model order.
+#[tokio::test]
+async fn test_panicking_safe_task_reports_its_own_tool_use_id() {
+    let executor = Arc::new(ToolExecutor::new());
+    let started = Arc::new(AtomicI32::new(0));
+    let mut handle = executor.streaming_handle(panicking_run_one);
+
+    handle.feed_plan(ToolCallPlan::Runnable(Box::new(prepared(
+        "panic_me",
+        7,
+        /*safe*/ true,
+        started.clone(),
+        0,
+    ))));
+    handle.feed_plan(ToolCallPlan::Runnable(Box::new(prepared(
+        "safe_ok",
+        1,
+        /*safe*/ true,
+        started.clone(),
+        0,
+    ))));
+
+    let mut collected: Vec<(String, usize, Option<crate::call_plan::ToolCallErrorKind>)> =
+        Vec::new();
+    handle
+        .commit_flush(0, |o| {
+            collected.push((
+                o.tool_use_id().to_string(),
+                o.model_index(),
+                o.error_kind().copied(),
+            ))
+        })
+        .await;
+
+    assert_eq!(collected.len(), 2, "both plans must surface an outcome");
+
+    let failed = collected
+        .iter()
+        .find(|(_, _, kind)| *kind == Some(crate::call_plan::ToolCallErrorKind::JoinFailed))
+        .expect("the panicking task must surface a JoinFailed outcome");
+    assert_eq!(
+        failed.0, "panic_me",
+        "JoinFailed outcome must carry the panicking plan's tool_use_id, not an empty string"
+    );
+    assert_eq!(
+        failed.1, 7,
+        "JoinFailed outcome must carry the panicking plan's model_index, not a 0 placeholder"
+    );
+
+    assert!(
+        collected
+            .iter()
+            .any(|(id, _, kind)| id == "safe_ok" && kind.is_none()),
+        "the sibling safe task must still complete normally"
     );
 }

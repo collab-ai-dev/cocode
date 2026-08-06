@@ -76,8 +76,8 @@ fn goal_snapshot_modal_body(snapshot: &coco_goals::GoalSnapshot) -> String {
 
 pub fn goal_snapshot_changed_notification(
     snapshot: Option<coco_types::GoalSnapshotView>,
-) -> coco_types::ServerNotification {
-    coco_types::ServerNotification::GoalSnapshotChanged(Box::new(
+) -> coco_event_types::ServerNotification {
+    coco_event_types::ServerNotification::GoalSnapshotChanged(Box::new(
         coco_types::GoalSnapshotChangedParams { snapshot },
     ))
 }

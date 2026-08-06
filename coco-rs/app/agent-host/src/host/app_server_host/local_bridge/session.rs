@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
 use coco_app_server_client::ClientError;
-use coco_types::{
-    CoreEvent, ServerNotification, SessionId, SessionLifecycleEffectKind, SessionScopedEvent,
-    TuiOnlyEvent,
-};
+use coco_event_types::SessionLifecycleEffectKind;
+use coco_event_types::{CoreEvent, ServerNotification, SessionScopedEvent, TuiOnlyEvent};
+use coco_types::SessionId;
 use tokio::sync::mpsc;
 
 use super::super::session_close::close_local_app_server_session;
@@ -298,7 +297,7 @@ impl AppServerLocalBridge {
                 .attachment(self.client.connection_key(), &session_id)
                 .is_some()
                 && routing.session_access(self.client.connection_key(), &session_id)
-                    == Some(coco_types::SessionAccess::Full)
+                    == Some(coco_event_types::SessionAccess::Full)
         };
         let client = if already_attached {
             self.client.observe_session(session_id)

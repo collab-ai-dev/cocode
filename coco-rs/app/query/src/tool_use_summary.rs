@@ -42,6 +42,7 @@
 
 use std::time::Duration;
 
+use coco_event_types::ToolUseSummaryParams;
 use coco_inference::ModelRuntimeQueryOutcome;
 use coco_inference::ModelRuntimeRegistry;
 use coco_inference::ModelRuntimeSource;
@@ -50,7 +51,6 @@ use coco_llm_types::AssistantContentPart;
 use coco_llm_types::LlmMessage;
 use coco_llm_types::UserContentPart;
 use coco_types::ModelRole;
-use coco_types::ToolUseSummaryParams;
 
 /// System prompt for the tool-use-summary side-fork.
 const TOOL_USE_SUMMARY_SYSTEM_PROMPT: &str = "Write a short summary label describing what these tool calls accomplished. It appears as a single-line row in a mobile app and truncates around 30 characters, so think git-commit-subject, not sentence.

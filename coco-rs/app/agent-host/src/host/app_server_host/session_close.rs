@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use coco_app_server::{AppCloseStart, AppServer, JsonRpcDispatchError, RegistryError};
-use coco_types::CoreEvent;
+use coco_event_types::CoreEvent;
 use coco_types::SessionId;
 use tokio::sync::mpsc;
 use tracing::debug;
@@ -219,9 +219,9 @@ async fn emit_final_session_result(
     handle: &AppSessionHandle,
 ) {
     let result = crate::session_close::build_session_result(handle.runtime(), "closed");
-    let event = CoreEvent::Protocol(coco_types::ServerNotification::SessionResult(Box::new(
-        result,
-    )));
+    let event = CoreEvent::Protocol(coco_event_types::ServerNotification::SessionResult(
+        Box::new(result),
+    ));
     let _ = send_session_event_and_wait(notif_tx, handle.session_id().clone(), event).await;
 }
 

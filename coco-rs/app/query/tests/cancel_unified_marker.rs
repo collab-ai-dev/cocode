@@ -11,12 +11,12 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
 use coco_messages::SystemMessage;
 use coco_query::history_sync;
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
 use tokio::sync::mpsc;
 
 #[tokio::test]

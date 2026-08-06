@@ -5,9 +5,9 @@
 //! without delivery.
 
 use base64::Engine as _;
+use coco_event_types::CoreEvent;
 use coco_types::{
-    ApprovalResolveParams, CoreEvent, ElicitationResolveParams, TurnStartParams,
-    UserInputResolveParams,
+    ApprovalResolveParams, ElicitationResolveParams, TurnStartParams, UserInputResolveParams,
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;

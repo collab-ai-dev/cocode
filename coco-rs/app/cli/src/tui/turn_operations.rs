@@ -399,7 +399,7 @@ pub(super) async fn run_clear_conversation(
         .install_for_session(&new_session)
         .await;
     let notif = ServerNotification::SessionResetForResume {
-        identity: coco_types::ServerNotificationIdentity::new(Some(new_session_id), None),
+        identity: coco_event_types::ServerNotificationIdentity::new(Some(new_session_id), None),
     };
     let _ = event_tx.send(CoreEvent::Protocol(notif)).await;
     if let Some(messages) = new_session.pre_clear_rewind_messages().await {
@@ -523,10 +523,12 @@ pub(super) async fn run_side_chat(
     };
     let child_id = binding.session.session_id().clone();
     let _ = event_tx
-        .send(CoreEvent::Tui(coco_types::TuiOnlyEvent::SideChatEntered {
-            parent_id: parent_id.clone(),
-            child_id: child_id.clone(),
-        }))
+        .send(CoreEvent::Tui(
+            coco_event_types::TuiOnlyEvent::SideChatEntered {
+                parent_id: parent_id.clone(),
+                child_id: child_id.clone(),
+            },
+        ))
         .await;
     let coco_commands::handlers::btw::BtwRequest::OpenAndAsk { question } = request else {
         return;

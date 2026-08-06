@@ -1,8 +1,7 @@
 use coco_app_server_transport::{JsonRpcFrame, JsonRpcId, JsonRpcNotification, JsonRpcSuccess};
-use coco_types::{
-    CoreEvent, ServerNotification, SessionDelivery, SessionEnvelope, SessionId,
-    SessionLifecycleEffect, SessionLifecycleEffectKind, SessionState,
-};
+use coco_event_types::{CoreEvent, ServerNotification, SessionEnvelope};
+use coco_event_types::{SessionDelivery, SessionLifecycleEffect, SessionLifecycleEffectKind};
+use coco_types::{SessionId, SessionState};
 
 use super::*;
 
@@ -121,7 +120,7 @@ async fn incoming_session_events_demux_by_session_id() {
     for (session_id, seq) in [(second.clone(), 2), (first.clone(), 1)] {
         incoming
             .handle_frame(JsonRpcFrame::Notification(JsonRpcNotification::new(
-                coco_types::SESSION_EVENT_METHOD,
+                coco_event_types::SESSION_EVENT_METHOD,
                 Some(serde_json::json!({
                     "envelope": {
                         "session_id": session_id,
@@ -169,7 +168,7 @@ async fn lifecycle_activation_is_keyed_by_the_new_session() {
     let new = session("session-new");
     incoming
         .handle_frame(JsonRpcFrame::Notification(JsonRpcNotification::new(
-            coco_types::SESSION_LIFECYCLE_METHOD,
+            coco_event_types::SESSION_LIFECYCLE_METHOD,
             Some(serde_json::json!({
                 "effect": {
                     "type": "session_replaced",

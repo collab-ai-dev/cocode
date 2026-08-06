@@ -8,13 +8,14 @@
 
 use std::num::NonZeroU32;
 
+use coco_event_types::{CoreEvent, ServerNotification};
 use coco_goals::{
     Clear, CreateGoal, Edit, GoalBudget, GoalCommand, GoalObjective, GoalSnapshot, Pause,
     PauseReason, Resume,
 };
 use coco_types::{
-    CoreEvent, GoalCommandResult, GoalCreateParams, GoalEditParams, GoalSetStatusParams,
-    GoalSnapshotChangedParams, GoalStatusRequest, ServerNotification,
+    GoalCommandResult, GoalCreateParams, GoalEditParams, GoalSetStatusParams,
+    GoalSnapshotChangedParams, GoalStatusRequest,
 };
 
 use crate::app_server_host::outbound::send_session_event;

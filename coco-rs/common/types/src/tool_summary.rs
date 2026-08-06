@@ -12,6 +12,8 @@
 
 use std::str::FromStr;
 
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::MCP_TOOL_SEPARATOR;
@@ -444,3 +446,27 @@ pub fn permission_display_input(tool_name: &str, input: &Value) -> crate::Permis
 #[cfg(test)]
 #[path = "tool_summary.test.rs"]
 mod tests;
+
+/// Bounded, UI-ready permission input display.
+///
+/// This is separate from the raw tool input because approval UIs should
+/// consume sanitized display data while keeping `original_input` only for
+/// updated-input response construction and permission-rule derivation.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum PermissionDisplayInput {
+    Command(String),
+    Json(String),
+    Text(String),
+    Empty,
+}
+
+impl PermissionDisplayInput {
+    pub fn as_display_str(&self) -> &str {
+        match self {
+            Self::Command(value) | Self::Json(value) | Self::Text(value) => value,
+            Self::Empty => "",
+        }
+    }
+}

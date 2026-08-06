@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-use coco_types::ToolAbortReasonPayload;
+use coco_event_types::ToolAbortReasonPayload;
 use coco_types::TurnAbortReason;
 use tokio_util::sync::CancellationToken;
 

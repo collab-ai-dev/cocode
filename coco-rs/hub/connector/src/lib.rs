@@ -1,5 +1,7 @@
 use chrono::DateTime;
 use chrono::Utc;
+use coco_event_types::CoreEvent;
+use coco_event_types::SessionEnvelope;
 use coco_hub_protocol::AnnounceAckFrame;
 use coco_hub_protocol::AnnounceFrame;
 use coco_hub_protocol::BatchAckFrame;
@@ -10,8 +12,6 @@ use coco_hub_protocol::EventPayload;
 use coco_hub_protocol::HubFrame;
 use coco_hub_protocol::SCHEMA_VERSION_V2;
 use coco_hub_protocol::SUBPROTOCOL_V2;
-use coco_types::CoreEvent;
-use coco_types::SessionEnvelope;
 use coco_utils_rustls_provider::ensure_rustls_crypto_provider;
 use futures::SinkExt;
 use futures::StreamExt;

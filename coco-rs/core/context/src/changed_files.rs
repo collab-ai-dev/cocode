@@ -9,9 +9,9 @@
 use crate::attachment::Attachment;
 use crate::attachment::EditedImageFileAttachment;
 use crate::attachment::EditedTextFileAttachment;
-use crate::file_read_state::FileReadEntry;
-use crate::file_read_state::FileReadRange;
-use crate::file_read_state::FileReadState;
+use coco_types::FileReadEntry;
+use coco_types::FileReadRange;
+use coco_types::FileReadState;
 use std::path::PathBuf;
 
 const DIFF_CONTEXT_RADIUS: usize = 8;

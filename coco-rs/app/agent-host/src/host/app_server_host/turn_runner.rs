@@ -1,6 +1,6 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
-use coco_types::CoreEvent;
+use coco_event_types::CoreEvent;
 use tokio::sync::{RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 

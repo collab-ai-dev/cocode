@@ -5,8 +5,8 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use coco_event_types::TuiOnlyEvent;
 use coco_query::CoreEvent;
-use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;
 
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(120);

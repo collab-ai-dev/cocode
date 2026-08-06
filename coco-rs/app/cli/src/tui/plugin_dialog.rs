@@ -1,5 +1,5 @@
+use coco_event_types::TuiOnlyEvent;
 use coco_query::CoreEvent;
-use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;
 
 pub(super) async fn refresh_plugin_dialog_payload(

@@ -79,9 +79,9 @@ pub(crate) async fn handle_config_apply_flags(
         let _ = send_session_event(
             &ctx.notif_tx,
             session_id,
-            coco_types::CoreEvent::Protocol(coco_types::ServerNotification::FastModeChanged {
-                active,
-            }),
+            coco_event_types::CoreEvent::Protocol(
+                coco_event_types::ServerNotification::FastModeChanged { active },
+            ),
         )
         .await;
     }

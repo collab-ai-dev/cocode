@@ -1,9 +1,8 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
-use coco_types::{
-    ClientRequest, RequestScope, ServerRequestDelivery, SessionDelivery, SessionEnvelope,
-    SessionId, SessionLifecycleEffect, request_scope,
-};
+use coco_event_types::SessionEnvelope;
+use coco_event_types::{ServerRequestDelivery, SessionDelivery, SessionLifecycleEffect};
+use coco_types::{ClientRequest, RequestScope, SessionId, request_scope};
 
 use crate::{
     AppLiveSessionSummary, AppServer, AttachError, AttachSessionOptions, ConnectionKey,

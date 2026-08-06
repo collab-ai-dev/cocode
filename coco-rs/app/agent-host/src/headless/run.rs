@@ -684,11 +684,11 @@ pub async fn run_chat_with_options(
     });
     let budget_exhausted = matches!(
         completion.ended.outcome,
-        coco_types::TurnOutcome::BudgetExhausted(_)
+        coco_event_types::TurnOutcome::BudgetExhausted(_)
     );
     let cancelled = matches!(
         completion.ended.outcome,
-        coco_types::TurnOutcome::Interrupted(_)
+        coco_event_types::TurnOutcome::Interrupted(_)
     );
     let shutdown_timeout = Duration::from_secs(runtime_config.server.shutdown_timeout_secs as u64);
     let shutdown = ShutdownCoordinator::new("headless", shutdown_timeout)
@@ -729,21 +729,21 @@ pub async fn run_chat_with_options(
 }
 
 pub(super) fn terminal_failure_message(
-    outcome: &coco_types::TurnOutcome,
-    session_result: &coco_types::SessionResultParams,
+    outcome: &coco_event_types::TurnOutcome,
+    session_result: &coco_event_types::SessionResultParams,
 ) -> Option<String> {
     match outcome {
-        coco_types::TurnOutcome::Failed(failed) => Some(failed.error.message.clone()),
-        coco_types::TurnOutcome::Completed(_) if session_result.is_error => Some(
+        coco_event_types::TurnOutcome::Failed(failed) => Some(failed.error.message.clone()),
+        coco_event_types::TurnOutcome::Completed(_) if session_result.is_error => Some(
             session_result
                 .errors
                 .first()
                 .cloned()
                 .unwrap_or_else(|| "turn completed with an error session result".into()),
         ),
-        coco_types::TurnOutcome::Completed(_)
-        | coco_types::TurnOutcome::Interrupted(_)
-        | coco_types::TurnOutcome::MaxTurnsReached(_)
-        | coco_types::TurnOutcome::BudgetExhausted(_) => None,
+        coco_event_types::TurnOutcome::Completed(_)
+        | coco_event_types::TurnOutcome::Interrupted(_)
+        | coco_event_types::TurnOutcome::MaxTurnsReached(_)
+        | coco_event_types::TurnOutcome::BudgetExhausted(_) => None,
     }
 }

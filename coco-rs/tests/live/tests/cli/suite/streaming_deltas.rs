@@ -15,8 +15,8 @@
 //! actually being driven.
 
 use anyhow::Result;
-use coco_types::AgentStreamEvent;
-use coco_types::CoreEvent;
+use coco_event_types::AgentStreamEvent;
+use coco_event_types::CoreEvent;
 
 use crate::cli::events;
 use crate::cli::harness::SessionConfig;

@@ -1,9 +1,9 @@
 use super::*;
+use coco_event_types::PermissionsEditorDir;
+use coco_event_types::PermissionsEditorPayload;
+use coco_event_types::PermissionsEditorRule;
 use coco_types::PermissionBehavior;
 use coco_types::PermissionRuleSource;
-use coco_types::PermissionsEditorDir;
-use coco_types::PermissionsEditorPayload;
-use coco_types::PermissionsEditorRule;
 use pretty_assertions::assert_eq;
 
 fn rule(

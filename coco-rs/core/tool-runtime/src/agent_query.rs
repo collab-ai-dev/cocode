@@ -319,7 +319,7 @@ pub struct AgentQueryConfig {
     /// channel (existing behaviour). Skipped at the JSON boundary
     /// — `mpsc::Sender` doesn't serialise.
     #[serde(skip)]
-    pub event_tx: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    pub event_tx: Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
 
     /// Per-child wire dump config. When set, subagent model calls write
     /// to this config's sink instead of disabling capture.

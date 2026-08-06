@@ -9,7 +9,7 @@
 //! state framework already owns the block + border + centering layout;
 //! we only need to format the body string.
 
-use coco_types::ErrorParams;
+use coco_event_types::ErrorParams;
 
 use crate::i18n::t;
 

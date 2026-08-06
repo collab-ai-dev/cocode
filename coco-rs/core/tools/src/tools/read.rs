@@ -314,7 +314,7 @@ impl Tool for ReadTool {
                 && let Some(entry) = frs_read.peek(&abs_path)
                 && let Some(stored_input) = frs_read.read_input_range(&abs_path)
                 && stored_input == (dedup_offset, dedup_limit)
-                && let Ok(disk_mtime) = coco_context::file_mtime_ms(&abs_path).await
+                && let Ok(disk_mtime) = coco_utils_common::file_mtime_ms(&abs_path).await
                 && entry.mtime_ms == disk_mtime
             {
                 // Cache hit — return the `file_unchanged` stub:
@@ -344,7 +344,7 @@ impl Tool for ReadTool {
                     ctx,
                     path,
                     String::new(),
-                    coco_context::FileReadRange::Full,
+                    coco_types::FileReadRange::Full,
                     None,
                     None,
                 )
@@ -377,7 +377,7 @@ impl Tool for ReadTool {
                     ctx,
                     path,
                     String::new(),
-                    coco_context::FileReadRange::Full,
+                    coco_types::FileReadRange::Full,
                     None,
                     None,
                 )
@@ -414,7 +414,7 @@ impl Tool for ReadTool {
                     ctx,
                     path,
                     String::new(),
-                    coco_context::FileReadRange::Full,
+                    coco_types::FileReadRange::Full,
                     None,
                     None,
                 )
@@ -435,7 +435,7 @@ impl Tool for ReadTool {
             ReadFileKind::Text => {}
         }
 
-        let selection = super::read_loader::read_text_selection(file_path, &input)?;
+        let selection = super::read_loader::read_text_selection_async(file_path, &input).await?;
 
         if !selection.should_record {
             return Ok(ToolResult {

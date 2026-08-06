@@ -22,11 +22,11 @@ use coco_messages::Message;
 /// where the engine only `clear()`s but doesn't snapshot — and any
 /// future strategies that bypass the LLM path entirely.
 pub struct FileReadStateObserver {
-    file_read_state: Arc<RwLock<coco_context::FileReadState>>,
+    file_read_state: Arc<RwLock<coco_types::FileReadState>>,
 }
 
 impl FileReadStateObserver {
-    pub fn new(file_read_state: Arc<RwLock<coco_context::FileReadState>>) -> Self {
+    pub fn new(file_read_state: Arc<RwLock<coco_types::FileReadState>>) -> Self {
         Self { file_read_state }
     }
 }
@@ -156,7 +156,7 @@ impl CompactionObserver for LoopSentinelStateObserver {
 /// observers. Callers (CLI/SDK runners) feed in the handles they
 /// own; missing handles map to omitted observers.
 pub fn build_default_registry(
-    file_read_state: Option<Arc<RwLock<coco_context::FileReadState>>>,
+    file_read_state: Option<Arc<RwLock<coco_types::FileReadState>>>,
     denial_tracker: Option<Arc<Mutex<coco_permissions::DenialTracker>>>,
     app_state: Option<Arc<RwLock<coco_types::ToolAppState>>>,
     loop_sentinel_state: Option<Arc<Mutex<coco_skills::bundled::loop_skill::LoopSentinelState>>>,

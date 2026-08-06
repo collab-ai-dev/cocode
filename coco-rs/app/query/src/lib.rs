@@ -105,7 +105,7 @@ pub use coco_wire_dump::WireDumpConfig;
 // Re-export CoreEvent from coco-types for consumers of run_with_events().
 // The old QueryEvent enum has been deleted per event-system-design.md Phase 0:
 // QueryEngine now emits CoreEvent directly (3-layer Protocol/Stream/Tui dispatch).
-pub use coco_types::AgentStreamEvent;
-pub use coco_types::CoreEvent;
-pub use coco_types::ServerNotification;
-pub use coco_types::StreamAccumulator;
+pub use coco_event_types::AgentStreamEvent;
+pub use coco_event_types::CoreEvent;
+pub use coco_event_types::ServerNotification;
+pub use coco_event_types::StreamAccumulator;

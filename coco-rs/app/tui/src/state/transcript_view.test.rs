@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
+use coco_event_types::HistoryReplaceReason;
 use coco_messages::AssistantContent;
 use coco_messages::Message;
 use coco_messages::TextContent;
 use coco_messages::create_assistant_message;
 use coco_messages::create_user_message_with_uuid;
-use coco_types::HistoryReplaceReason;
 use coco_types::TokenUsage;
 use pretty_assertions::assert_eq;
 use uuid::Uuid;

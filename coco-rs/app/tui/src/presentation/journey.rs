@@ -12,11 +12,12 @@ use crate::i18n::t;
 use crate::presentation::layout::truncate_to_width;
 use crate::state::JourneyMode;
 use crate::state::JourneyState;
+use coco_event_types::{JourneyNodeBodyWire, JourneyNodeWire};
 use coco_tui_ui::style::UiStyles;
 use coco_tui_ui::widgets::SelectItem;
 use coco_tui_ui::widgets::SelectListStyle;
 use coco_tui_ui::widgets::render_select_list;
-use coco_types::{JourneyEvent, JourneyNodeBodyWire, JourneyNodeWire};
+use coco_types::JourneyEvent;
 
 const SKILL_GLYPH: char = '━';
 const MEMORY_GLYPH: char = '◆';
@@ -192,10 +193,10 @@ fn node_row_label(node: &JourneyNodeWire, _styles: UiStyles<'_>) -> String {
 /// Quarantine progress label (`learning 2/5`). Single definition shared by the
 /// `/journey` list rows and the `/skills` dialog so the two cannot drift.
 ///
-/// Both numbers come from the host ([`coco_types::SkillQuarantineWire`]) — the
+/// Both numbers come from the host ([`coco_event_types::SkillQuarantineWire`]) — the
 /// threshold is an operator setting, so there is deliberately no UI-side
 /// constant to fall back on.
-pub(crate) fn quarantine_progress_label(progress: coco_types::SkillQuarantineWire) -> String {
+pub(crate) fn quarantine_progress_label(progress: coco_event_types::SkillQuarantineWire) -> String {
     t!(
         "dialog.journey_learning",
         done = progress.invocations,
@@ -208,14 +209,14 @@ pub(crate) fn quarantine_progress_label(progress: coco_types::SkillQuarantineWir
 fn badge_and_status(node: &JourneyNodeWire) -> (char, String) {
     match &node.body {
         JourneyNodeBodyWire::AgentSkill { lifecycle, .. } => match lifecycle {
-            coco_types::AgentSkillLifecycleWire::Learning { progress } => {
+            coco_event_types::AgentSkillLifecycleWire::Learning { progress } => {
                 (SKILL_BADGE, quarantine_progress_label(*progress))
             }
-            coco_types::AgentSkillLifecycleWire::Learned => (
+            coco_event_types::AgentSkillLifecycleWire::Learned => (
                 SKILL_BADGE,
                 format!("{} {PROMOTED_MARK}", t!("dialog.journey_learned")),
             ),
-            coco_types::AgentSkillLifecycleWire::Retired => {
+            coco_event_types::AgentSkillLifecycleWire::Retired => {
                 (RETIRED_BADGE, t!("dialog.journey_retired").to_string())
             }
         },
@@ -305,7 +306,7 @@ fn confirm_panel(j: &JourneyState, yes_selected: bool, styles: UiStyles<'_>) -> 
     lines
 }
 
-fn telemetry_of(node: &JourneyNodeWire) -> Option<&coco_types::SkillTelemetryWire> {
+fn telemetry_of(node: &JourneyNodeWire) -> Option<&coco_event_types::SkillTelemetryWire> {
     match &node.body {
         JourneyNodeBodyWire::AgentSkill { telemetry, .. }
         | JourneyNodeBodyWire::UserSkill { telemetry, .. } => Some(telemetry),

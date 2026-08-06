@@ -470,8 +470,8 @@ async fn test_notebook_malformed_file() {
 // which is why the existing tests above still pass.
 // ---------------------------------------------------------------------------
 
-use coco_context::FileReadEntry;
-use coco_context::FileReadState;
+use coco_types::FileReadEntry;
+use coco_types::FileReadState;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -521,7 +521,7 @@ async fn test_notebook_allows_edit_after_read() {
     let notebook = minimal_notebook(5);
     let file = write_notebook(&notebook);
     let abs = std::fs::canonicalize(file.path()).unwrap();
-    let mtime = coco_context::file_mtime_ms(&abs).await.unwrap();
+    let mtime = coco_utils_common::file_mtime_ms(&abs).await.unwrap();
 
     let mut ctx = ToolUseContext::test_default();
     ctx.file_read_state = Some(Arc::new(RwLock::new(FileReadState::new())));
@@ -669,7 +669,7 @@ async fn test_notebook_rejects_edit_on_mtime_drift() {
     let notebook = minimal_notebook(5);
     let file = write_notebook(&notebook);
     let abs = std::fs::canonicalize(file.path()).unwrap();
-    let real_mtime = coco_context::file_mtime_ms(&abs).await.unwrap();
+    let real_mtime = coco_utils_common::file_mtime_ms(&abs).await.unwrap();
 
     let mut ctx = ToolUseContext::test_default();
     ctx.file_read_state = Some(Arc::new(RwLock::new(FileReadState::new())));

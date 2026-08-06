@@ -1,4 +1,4 @@
-use coco_types::CoreEvent;
+use coco_event_types::CoreEvent;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
@@ -409,9 +409,9 @@ async fn send_appended_messages(
         let _ = send_session_event(
             notif_tx,
             session_id.clone(),
-            CoreEvent::Protocol(coco_types::ServerNotification::MessageAppended {
+            CoreEvent::Protocol(coco_event_types::ServerNotification::MessageAppended {
                 message,
-                identity: coco_types::ServerNotificationIdentity::default(),
+                identity: coco_event_types::ServerNotificationIdentity::default(),
             }),
         )
         .await;
@@ -429,8 +429,8 @@ async fn emit_shortcut_turn_lifecycle(
     let _ = send_session_event(
         notif_tx,
         shortcut_turn.session_id.clone(),
-        CoreEvent::Protocol(coco_types::ServerNotification::TurnStarted(
-            coco_types::TurnStartedParams {
+        CoreEvent::Protocol(coco_event_types::ServerNotification::TurnStarted(
+            coco_event_types::TurnStartedParams {
                 turn_id: turn_id.clone(),
             },
         )),
@@ -439,8 +439,8 @@ async fn emit_shortcut_turn_lifecycle(
     let _ = send_session_event(
         notif_tx,
         shortcut_turn.session_id.clone(),
-        CoreEvent::Protocol(coco_types::ServerNotification::TurnEnded(
-            coco_types::TurnEndedParams::completed(
+        CoreEvent::Protocol(coco_event_types::ServerNotification::TurnEnded(
+            coco_event_types::TurnEndedParams::completed(
                 turn_id,
                 Some(coco_types::TokenUsage::default()),
                 None,
@@ -454,8 +454,8 @@ async fn emit_shortcut_turn_lifecycle(
 fn shortcut_session_result(
     shortcut_turn: &ShortcutTurnState,
     result_text: Option<String>,
-) -> coco_types::SessionResultParams {
-    coco_types::SessionResultParams {
+) -> coco_event_types::SessionResultParams {
+    coco_event_types::SessionResultParams {
         session_id: shortcut_turn.session_id.clone(),
         total_turns: 1,
         duration_ms: 0,

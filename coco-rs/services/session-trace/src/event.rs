@@ -1,4 +1,4 @@
-//! [`TraceEvent`] — the semantic projection of a [`coco_types::CoreEvent`].
+//! [`TraceEvent`] — the semantic projection of a [`coco_event_types::CoreEvent`].
 //!
 //! A session trace keeps only the execution facts worth replaying: which tools
 //! ran (and whether they errored), MCP calls, turn boundaries, and compaction
@@ -6,9 +6,9 @@
 //! dropped — those reconstruct from the transcript, and keeping them would make
 //! traces enormous and non-deterministic.
 
-use coco_types::AgentStreamEvent;
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
+use coco_event_types::AgentStreamEvent;
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
 use coco_types::TurnId;
 use serde::Deserialize;
 use serde::Serialize;

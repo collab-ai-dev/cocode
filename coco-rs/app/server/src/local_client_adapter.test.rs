@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
+use coco_event_types::{CoreEvent, ServerNotification, SessionEnvelope};
 use coco_types::{
-    ClientRequest, CoreEvent, ServerNotification, ServerRequest, ServerRequestUserInputParams,
-    SessionEnvelope, SessionId, SessionState,
+    ClientRequest, ServerRequest, ServerRequestUserInputParams, SessionId, SessionState,
 };
 
 use super::*;

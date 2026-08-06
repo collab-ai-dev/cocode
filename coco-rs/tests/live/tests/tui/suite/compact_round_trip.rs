@@ -26,6 +26,8 @@
 use std::time::Duration;
 
 use anyhow::Result;
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
 use coco_messages::AssistantContent;
 use coco_messages::AssistantMessage;
 use coco_messages::LlmMessage;
@@ -33,8 +35,6 @@ use coco_messages::Message;
 use coco_messages::MessageHistory;
 use coco_messages::TextContent;
 use coco_messages::UserMessage;
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
 
 use crate::tui::harness::TuiHarness;
 use crate::tui::scripted_model::Reply;
@@ -157,7 +157,7 @@ pub async fn run() -> Result<()> {
         matches!(
             e,
             CoreEvent::Protocol(ServerNotification::CompactionPhase(p))
-                if matches!(p.phase, coco_types::CompactionPhase::Done)
+                if matches!(p.phase, coco_event_types::CompactionPhase::Done)
         )
     });
     assert!(

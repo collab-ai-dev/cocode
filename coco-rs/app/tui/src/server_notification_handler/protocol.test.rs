@@ -11,11 +11,11 @@ use pretty_assertions::assert_eq;
 
 use std::sync::Arc;
 
+use coco_event_types::ServerNotification;
+use coco_event_types::SessionStartedParams;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_messages::UserMessage;
-use coco_types::ServerNotification;
-use coco_types::SessionStartedParams;
 use coco_types::TurnAbortReason;
 
 use super::clear_session_boundary_state;
@@ -192,8 +192,8 @@ fn history_replaced_clears_pre_clear_rewind_snapshot() {
         &mut state,
         ServerNotification::HistoryReplaced {
             messages: Vec::new(),
-            identity: coco_types::ServerNotificationIdentity::default(),
-            reason: coco_types::HistoryReplaceReason::Hydrate,
+            identity: coco_event_types::ServerNotificationIdentity::default(),
+            reason: coco_event_types::HistoryReplaceReason::Hydrate,
         },
         &tx,
     );
@@ -229,7 +229,7 @@ fn session_reset_for_resume_zeroes_cumulative_usage() {
     super::handle(
         &mut state,
         ServerNotification::SessionResetForResume {
-            identity: coco_types::ServerNotificationIdentity::new(
+            identity: coco_event_types::ServerNotificationIdentity::new(
                 Some(test_session_id("s2")),
                 None,
             ),
@@ -255,8 +255,8 @@ fn history_replaced_preserves_cumulative_usage() {
         &mut state,
         ServerNotification::HistoryReplaced {
             messages: Vec::new(),
-            identity: coco_types::ServerNotificationIdentity::default(),
-            reason: coco_types::HistoryReplaceReason::Hydrate,
+            identity: coco_event_types::ServerNotificationIdentity::default(),
+            reason: coco_event_types::HistoryReplaceReason::Hydrate,
         },
         &tx,
     );
@@ -318,7 +318,7 @@ fn message_appended_projects_user_interruption_for_tool_use() {
         &mut state,
         ServerNotification::MessageAppended {
             message: std::sync::Arc::new(message),
-            identity: coco_types::ServerNotificationIdentity::default(),
+            identity: coco_event_types::ServerNotificationIdentity::default(),
         },
         &tx,
     );
@@ -582,12 +582,12 @@ fn progress_params(
     task_id: &str,
     last_tool: Option<&str>,
     activities: Vec<coco_types::TaskActivity>,
-) -> coco_types::TaskProgressParams {
-    coco_types::TaskProgressParams {
+) -> coco_event_types::TaskProgressParams {
+    coco_event_types::TaskProgressParams {
         task_id: task_id.into(),
         tool_use_id: None,
         description: "running".into(),
-        usage: coco_types::TaskUsage {
+        usage: coco_event_types::TaskUsage {
             total_tokens: 0,
             input_tokens: 0,
             output_tokens: 0,
@@ -606,8 +606,11 @@ fn progress_params(
     }
 }
 
-fn local_agent_started_params(task_id: &str, tool_use_id: &str) -> coco_types::TaskStartedParams {
-    coco_types::TaskStartedParams {
+fn local_agent_started_params(
+    task_id: &str,
+    tool_use_id: &str,
+) -> coco_event_types::TaskStartedParams {
+    coco_event_types::TaskStartedParams {
         task_id: task_id.into(),
         tool_use_id: Some(tool_use_id.into()),
         description: "Map app root".into(),
@@ -626,18 +629,19 @@ fn task_started_maps_local_workflow_to_workflow_kind() {
     let mut state = AppState::new();
     let (tx, _rx) = channel();
 
-    let event = coco_types::ServerNotification::TaskStarted(coco_types::TaskStartedParams {
-        task_id: "wf_123".into(),
-        tool_use_id: Some("call-workflow".into()),
-        description: "Run workflow: analyze".into(),
-        task_type: Some(coco_types::task_type_wire::LOCAL_WORKFLOW.into()),
-        workflow_name: Some("analyze".into()),
-        prompt: None,
-        agent_name: None,
-        team_name: None,
-        color: None,
-        backend_kind: None,
-    });
+    let event =
+        coco_event_types::ServerNotification::TaskStarted(coco_event_types::TaskStartedParams {
+            task_id: "wf_123".into(),
+            tool_use_id: Some("call-workflow".into()),
+            description: "Run workflow: analyze".into(),
+            task_type: Some(coco_types::task_type_wire::LOCAL_WORKFLOW.into()),
+            workflow_name: Some("analyze".into()),
+            prompt: None,
+            agent_name: None,
+            team_name: None,
+            color: None,
+            backend_kind: None,
+        });
     super::handle(&mut state, event, &tx);
 
     let task = state
@@ -657,7 +661,7 @@ fn task_progress_stores_workflow_progress_events() {
 
     super::handle(
         &mut state,
-        coco_types::ServerNotification::TaskStarted(coco_types::TaskStartedParams {
+        coco_event_types::ServerNotification::TaskStarted(coco_event_types::TaskStartedParams {
             task_id: "wf_123".into(),
             tool_use_id: Some("call-workflow".into()),
             description: "Run workflow: analyze".into(),
@@ -678,7 +682,7 @@ fn task_progress_stores_workflow_progress_events() {
     }];
     super::handle(
         &mut state,
-        coco_types::ServerNotification::TaskProgress(progress),
+        coco_event_types::ServerNotification::TaskProgress(progress),
         &tx,
     );
 
@@ -700,7 +704,7 @@ fn task_progress_adopts_the_cumulative_workflow_snapshot() {
 
     super::handle(
         &mut state,
-        coco_types::ServerNotification::TaskStarted(coco_types::TaskStartedParams {
+        coco_event_types::ServerNotification::TaskStarted(coco_event_types::TaskStartedParams {
             task_id: "wf_123".into(),
             tool_use_id: Some("call-workflow".into()),
             description: "Run workflow: analyze".into(),
@@ -753,7 +757,7 @@ fn task_progress_adopts_the_cumulative_workflow_snapshot() {
     first.workflow_progress = vec![phase.clone(), log.clone()];
     super::handle(
         &mut state,
-        coco_types::ServerNotification::TaskProgress(first),
+        coco_event_types::ServerNotification::TaskProgress(first),
         &tx,
     );
 
@@ -770,7 +774,7 @@ fn task_progress_adopts_the_cumulative_workflow_snapshot() {
     cumulative.workflow_progress = vec![phase.clone(), log.clone(), done.clone()];
     super::handle(
         &mut state,
-        coco_types::ServerNotification::TaskProgress(cumulative),
+        coco_event_types::ServerNotification::TaskProgress(cumulative),
         &tx,
     );
 
@@ -791,7 +795,7 @@ fn task_progress_adopts_the_cumulative_workflow_snapshot() {
     let generic = progress_params("wf_123", None, Vec::new());
     super::handle(
         &mut state,
-        coco_types::ServerNotification::TaskProgress(generic),
+        coco_event_types::ServerNotification::TaskProgress(generic),
         &tx,
     );
     let task = state
@@ -811,7 +815,7 @@ fn task_progress_localizes_workflow_agent_summary() {
 
     super::handle(
         &mut state,
-        coco_types::ServerNotification::TaskStarted(coco_types::TaskStartedParams {
+        coco_event_types::ServerNotification::TaskStarted(coco_event_types::TaskStartedParams {
             task_id: "wf_123".into(),
             tool_use_id: Some("call-workflow".into()),
             description: "Run workflow: analyze".into(),
@@ -850,7 +854,7 @@ fn task_progress_localizes_workflow_agent_summary() {
     }];
     super::handle(
         &mut state,
-        coco_types::ServerNotification::TaskProgress(progress),
+        coco_event_types::ServerNotification::TaskProgress(progress),
         &tx,
     );
 
@@ -886,7 +890,7 @@ fn task_started_resolves_subagent_type_from_tool_call_input() {
         }),
     );
 
-    let event = coco_types::ServerNotification::TaskStarted(local_agent_started_params(
+    let event = coco_event_types::ServerNotification::TaskStarted(local_agent_started_params(
         "agent-app-root",
         "call-explore",
     ));
@@ -908,7 +912,7 @@ fn task_started_falls_back_to_wire_literal_when_tool_call_uncommitted() {
     let mut state = AppState::new();
     let (tx, _rx) = channel();
 
-    let event = coco_types::ServerNotification::TaskStarted(local_agent_started_params(
+    let event = coco_event_types::ServerNotification::TaskStarted(local_agent_started_params(
         "agent-x",
         "call-missing",
     ));
@@ -929,7 +933,7 @@ fn task_progress_copies_recent_activities_into_subagent() {
     state.session.subagents.push(running_subagent("agent-7af2"));
     let (tx, _rx) = channel();
 
-    let event = coco_types::ServerNotification::TaskProgress(progress_params(
+    let event = coco_event_types::ServerNotification::TaskProgress(progress_params(
         "agent-7af2",
         Some("Glob"),
         vec![
@@ -969,7 +973,7 @@ fn task_progress_empty_recent_activities_leaves_prior_buffer_intact() {
     state.session.subagents.push(agent);
     let (tx, _rx) = channel();
 
-    let event = coco_types::ServerNotification::TaskProgress(progress_params(
+    let event = coco_event_types::ServerNotification::TaskProgress(progress_params(
         "agent-1",
         Some("Bash"),
         vec![],
@@ -989,7 +993,7 @@ fn sandbox_violations_show_toast_not_modal() {
 
     super::handle(
         &mut state,
-        coco_types::ServerNotification::SandboxViolationsDetected { count: 3 },
+        coco_event_types::ServerNotification::SandboxViolationsDetected { count: 3 },
         &tx,
     );
 
@@ -1006,7 +1010,7 @@ fn sandbox_violations_show_toast_not_modal() {
 /// Uses `verification_nudge_pending` as the applied/dropped marker so
 /// the fixture avoids constructing `TaskRecord`s.
 fn panel_snapshot(generation: i64, nudge: bool) -> ServerNotification {
-    ServerNotification::TaskPanelChanged(coco_types::TaskPanelChangedParams {
+    ServerNotification::TaskPanelChanged(coco_event_types::TaskPanelChangedParams {
         plan_tasks: Vec::new(),
         todos_by_agent: std::collections::HashMap::new(),
         expanded_view: coco_types::ExpandedView::Tasks,
@@ -1049,8 +1053,8 @@ fn test_task_panel_changed_stale_generation_dropped_zero_always_applied() {
 
 // ── Subagent usage aggregation (status bar `agents` segment) ────
 
-fn task_usage(input: i64, output: i64, cache: i64, cost: f64) -> coco_types::TaskUsage {
-    coco_types::TaskUsage {
+fn task_usage(input: i64, output: i64, cache: i64, cost: f64) -> coco_event_types::TaskUsage {
+    coco_event_types::TaskUsage {
         total_tokens: input + output,
         input_tokens: input,
         output_tokens: output,
@@ -1063,17 +1067,17 @@ fn task_usage(input: i64, output: i64, cache: i64, cost: f64) -> coco_types::Tas
     }
 }
 
-fn usage_progress(task_id: &str, usage: coco_types::TaskUsage) -> ServerNotification {
+fn usage_progress(task_id: &str, usage: coco_event_types::TaskUsage) -> ServerNotification {
     let mut progress = progress_params(task_id, None, Vec::new());
     progress.usage = usage;
-    coco_types::ServerNotification::TaskProgress(progress)
+    coco_event_types::ServerNotification::TaskProgress(progress)
 }
 
-fn task_completed(task_id: &str, usage: Option<coco_types::TaskUsage>) -> ServerNotification {
-    coco_types::ServerNotification::TaskCompleted(coco_types::TaskCompletedParams {
+fn task_completed(task_id: &str, usage: Option<coco_event_types::TaskUsage>) -> ServerNotification {
+    coco_event_types::ServerNotification::TaskCompleted(coco_event_types::TaskCompletedParams {
         task_id: task_id.into(),
         tool_use_id: None,
-        status: coco_types::TaskCompletionStatus::Completed,
+        status: coco_event_types::TaskCompletionStatus::Completed,
         killed_by: None,
         output_file: String::new(),
         summary: String::new(),
@@ -1187,8 +1191,8 @@ fn test_subagent_usage_survives_compact_history_replace_and_resets_on_session_bo
         &mut state,
         ServerNotification::HistoryReplaced {
             messages: Vec::new(),
-            identity: coco_types::ServerNotificationIdentity::default(),
-            reason: coco_types::HistoryReplaceReason::Compact,
+            identity: coco_event_types::ServerNotificationIdentity::default(),
+            reason: coco_event_types::HistoryReplaceReason::Compact,
         },
         &tx,
     );
@@ -1197,7 +1201,7 @@ fn test_subagent_usage_survives_compact_history_replace_and_resets_on_session_bo
     super::handle(
         &mut state,
         ServerNotification::SessionResetForResume {
-            identity: coco_types::ServerNotificationIdentity::new(
+            identity: coco_event_types::ServerNotificationIdentity::new(
                 Some(test_session_id("next")),
                 None,
             ),
@@ -1224,8 +1228,8 @@ fn test_compact_history_replace_keeps_cumulative_counts_and_adds_one_assistant()
                 uuid::Uuid::new_v4(),
                 "This session is being continued…",
             )],
-            identity: coco_types::ServerNotificationIdentity::default(),
-            reason: coco_types::HistoryReplaceReason::Compact,
+            identity: coco_event_types::ServerNotificationIdentity::default(),
+            reason: coco_event_types::HistoryReplaceReason::Compact,
         },
         &tx,
     );

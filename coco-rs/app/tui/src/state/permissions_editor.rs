@@ -11,11 +11,11 @@
 //! through `UserCommand::ApplyPermissionUpdate` and a fresh payload
 //! re-render, so the overlay never edits the on-disk truth in place.
 
+use coco_event_types::PermissionsEditorPayload;
 use coco_types::PermissionBehavior;
 use coco_types::PermissionRuleSource;
 use coco_types::PermissionRuleValue;
 use coco_types::PermissionUpdateDestination;
-use coco_types::PermissionsEditorPayload;
 
 use crate::state::WizardTextField;
 

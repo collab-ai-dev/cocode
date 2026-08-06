@@ -301,7 +301,7 @@ impl QueryEngine {
                     // `id`), which upgrades the same row with the finalized input.
                     let _ = crate::emit::emit_tui(
                         event_tx,
-                        coco_types::TuiOnlyEvent::ToolCallStreamStart {
+                        coco_event_types::TuiOnlyEvent::ToolCallStreamStart {
                             call_id: id.clone(),
                             name: tool_name.clone(),
                         },
@@ -329,7 +329,7 @@ impl QueryEngine {
                     // these per call_id, so per-token emission is cheap.
                     let _ = crate::emit::emit_tui(
                         event_tx,
-                        coco_types::TuiOnlyEvent::ToolCallDelta { call_id: id, delta },
+                        coco_event_types::TuiOnlyEvent::ToolCallDelta { call_id: id, delta },
                     )
                     .await;
                 }

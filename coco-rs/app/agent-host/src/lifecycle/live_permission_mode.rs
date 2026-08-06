@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
-use coco_types::{
-    CoreEvent, PermissionMode, PermissionModeChangedParams, PermissionRulesBySource,
-    ServerNotification, ToolAppState,
-};
+use coco_event_types::{CoreEvent, PermissionModeChangedParams, ServerNotification};
+use coco_types::{PermissionMode, PermissionRulesBySource, ToolAppState};
 use tokio::sync::{RwLock, mpsc};
 
 use crate::{

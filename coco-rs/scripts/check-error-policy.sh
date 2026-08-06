@@ -18,6 +18,7 @@
 #   - common/error              IS coco-error (no self-dep)
 #   - common/stack-trace-macro  proc-macro crate (no runtime deps)
 #   - common/types              foundation types, zero internal deps, no errors
+#   - common/event-types        wire event DTOs split out of common/types, no errors
 #   - common/llm-types          pure vercel-ai re-export shim, no errors
 #   - common/model-card         vendor model facts, zero internal deps, no errors
 #   - services/mcp-types        auto-generated wire types, no errors
@@ -76,7 +77,8 @@ is_tier3_main_trunk() {
         # Self-dep / proc-macro / pure-types crates have no runtime errors
         # to classify, so the "must depend on coco-error" rule does not apply.
         common/error|common/stack-trace-macro) return 1 ;;
-        common/types|services/mcp-types)      return 1 ;;
+        common/types|common/event-types)       return 1 ;;
+        services/mcp-types)                   return 1 ;;
         common/llm-types)                     return 1 ;;
         common/model-card)                    return 1 ;;
         # Infallible diagnostics sink: no Result-returning public API

@@ -1,5 +1,8 @@
 use std::sync::Arc;
 
+use coco_event_types::CoreEvent;
+use coco_event_types::PermissionDenialInfo;
+use coco_event_types::TuiOnlyEvent;
 use coco_hooks::HookRegistry;
 use coco_hooks::orchestration::OrchestrationContext;
 use coco_hooks::orchestration::PermissionRequestDecision;
@@ -8,14 +11,11 @@ use coco_llm_types::ToolCallPart;
 use coco_llm_types::UserContentPart;
 use coco_messages::MessageHistory;
 use coco_tool_runtime::ToolPermissionBridgeRef;
-use coco_types::CoreEvent;
 use coco_types::PermissionDecision;
 use coco_types::PermissionDecisionReason;
-use coco_types::PermissionDenialInfo;
 use coco_types::SessionId;
 use coco_types::SessionState;
 use coco_types::ToolId;
-use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;

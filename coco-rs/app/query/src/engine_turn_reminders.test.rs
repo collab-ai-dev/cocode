@@ -264,7 +264,7 @@ async fn structured_output_no_tool_turns_stop_at_retry_cap() {
         CancellationToken::new(),
         None,
     );
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<coco_types::CoreEvent>(64);
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<coco_event_types::CoreEvent>(64);
 
     let result = engine
         .run_with_events("answer as json", event_tx, coco_types::TurnId::generate())
@@ -281,15 +281,15 @@ async fn structured_output_no_tool_turns_stop_at_retry_cap() {
         events.push(event);
     }
     let turn_ended = events.iter().find_map(|event| match event {
-        coco_types::CoreEvent::Protocol(coco_types::ServerNotification::TurnEnded(params)) => {
-            Some(params)
-        }
+        coco_event_types::CoreEvent::Protocol(coco_event_types::ServerNotification::TurnEnded(
+            params,
+        )) => Some(params),
         _ => None,
     });
     let turn_ended = turn_ended.expect("retry cap should emit TurnEnded");
     match &turn_ended.outcome {
-        coco_types::TurnOutcome::Failed(outcome) => {
-            assert_eq!(outcome.error.code, coco_types::ErrorCode::Provider);
+        coco_event_types::TurnOutcome::Failed(outcome) => {
+            assert_eq!(outcome.error.code, coco_event_types::ErrorCode::Provider);
             assert!(
                 outcome.error.message.contains("3 attempts"),
                 "failed outcome should include the configured cap"
@@ -328,7 +328,7 @@ async fn structured_output_tool_failure_cap_emits_failed_turn() {
         CancellationToken::new(),
         None,
     );
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<coco_types::CoreEvent>(64);
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<coco_event_types::CoreEvent>(64);
 
     let result = engine
         .run_with_events("answer as json", event_tx, coco_types::TurnId::generate())
@@ -341,8 +341,9 @@ async fn structured_output_tool_failure_cap_emits_failed_turn() {
     );
     let mut outcomes = Vec::new();
     while let Ok(event) = event_rx.try_recv() {
-        if let coco_types::CoreEvent::Protocol(coco_types::ServerNotification::TurnEnded(params)) =
-            event
+        if let coco_event_types::CoreEvent::Protocol(
+            coco_event_types::ServerNotification::TurnEnded(params),
+        ) = event
         {
             outcomes.push(params.outcome);
         }
@@ -353,7 +354,7 @@ async fn structured_output_tool_failure_cap_emits_failed_turn() {
         "retry cap should emit one terminal event"
     );
     assert!(
-        matches!(outcomes[0], coco_types::TurnOutcome::Failed(_)),
+        matches!(outcomes[0], coco_event_types::TurnOutcome::Failed(_)),
         "retry cap should be a failed turn, got {:?}",
         outcomes[0]
     );

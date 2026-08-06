@@ -52,13 +52,14 @@ fn parse_headless_goal_slash_rejects_other_inputs() {
 
 #[test]
 fn typed_turn_failure_is_a_headless_process_failure() {
-    let error = coco_types::ErrorPayload {
-        code: coco_types::ErrorCode::Provider,
+    let error = coco_event_types::ErrorPayload {
+        code: coco_event_types::ErrorCode::Provider,
         message: "provider returned no terminal content".into(),
     };
     let outcome =
-        coco_types::TurnEndedParams::failed("failed-turn".into(), None, error.clone()).outcome;
-    let session_result = coco_types::SessionResultParams {
+        coco_event_types::TurnEndedParams::failed("failed-turn".into(), None, error.clone())
+            .outcome;
+    let session_result = coco_event_types::SessionResultParams {
         session_id: coco_types::SessionId::generate(),
         total_turns: 1,
         duration_ms: 0,

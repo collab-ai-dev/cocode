@@ -726,7 +726,7 @@ impl QueryEngine {
     pub(crate) async fn drain_attachment_inbox(
         &self,
         history: &mut MessageHistory,
-        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
     ) -> usize {
         let mut count = 0;
         let mut rx = self.attachment_rx.lock().await;
@@ -964,7 +964,7 @@ impl QueryEngine {
     /// Set file read state for @mention dedup and changed-file detection.
     pub fn with_file_read_state(
         mut self,
-        file_read_state: Arc<RwLock<coco_context::FileReadState>>,
+        file_read_state: Arc<RwLock<coco_types::FileReadState>>,
     ) -> Self {
         self.file_read_state = Some(file_read_state);
         self

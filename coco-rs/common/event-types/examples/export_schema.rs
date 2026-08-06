@@ -6,8 +6,8 @@
 //! via `scripts/generate_python.sh`, TypeScript, Go, etc.).
 //!
 //! Usage:
-//! cargo run -p coco-types --features schema --example export_schema
-//! cargo run -p coco-types --features schema --example export_schema -- /custom/path
+//! cargo run -p coco-event-types --features schema --example export_schema
+//! cargo run -p coco-event-types --features schema --example export_schema -- /custom/path
 //!
 //! ## Bundle composition
 //!
@@ -34,7 +34,7 @@
 fn main() {
     eprintln!(
         "error: export_schema requires the `schema` feature.\n\
-         Run: cargo run -p coco-types --features schema --example export_schema"
+         Run: cargo run -p coco-event-types --features schema --example export_schema"
     );
     std::process::exit(1);
 }
@@ -62,10 +62,17 @@ use serde_json::json;
 fn write_schema<T: JsonSchema>(out_dir: &Path, name: &str) {
     let schema = schema_for!(T);
     let path = out_dir.join(format!("{name}.json"));
-    let json = serde_json::to_string_pretty(&schema).expect("serialize schema");
-    fs::write(&path, json).unwrap_or_else(|e| {
-        panic!("write {} failed: {e}", path.display());
-    });
+    let json = match serde_json::to_string_pretty(&schema) {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("serialize {name} schema failed: {e}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(e) = fs::write(&path, json) {
+        eprintln!("write {} failed: {e}", path.display());
+        std::process::exit(1);
+    }
     println!("  ✓ {}", path.display());
 }
 
@@ -73,19 +80,20 @@ fn write_schema<T: JsonSchema>(out_dir: &Path, name: &str) {
 /// Bundle accumulator with explicit-vs-transitive precedence.
 /// Each entry point is registered via `add::<T>(name)` which:
 /// 1. inserts T's top-level schema (the metadata-rich
-/// `schema_for!(T)` value, with its embedded `$defs` /
-/// `$schema` stripped) under `name` — marked **explicit**.
+///    `schema_for!(T)` value, with its embedded `$defs` /
+///    `$schema` stripped) under `name` — marked **explicit**.
 /// 2. lifts every entry of the top-level `$defs` flat into the
-/// bundle — marked **transitive**.
+///    bundle — marked **transitive**.
+///
 /// Two precedence rules:
 /// * **Explicit always wins**. When `ProviderApi` is registered
-/// explicitly *and* reached transitively via `ModelSpec.api`,
-/// the richer top-level schema (with `title` etc.) wins; the
-/// leaner transitive copy is silently dropped.
+///   explicitly *and* reached transitively via `ModelSpec.api`,
+///   the richer top-level schema (with `title` etc.) wins; the
+///   leaner transitive copy is silently dropped.
 /// * **First transitive wins**. When two unrelated entries both
-/// reach the same inner type, the schemas are equal in every
-/// case we have observed (schemars is deterministic), so we
-/// keep the first and only flag a real divergence as a conflict.
+///   reach the same inner type, the schemas are equal in every
+///   case we have observed (schemars is deterministic), so we
+///   keep the first and only flag a real divergence as a conflict.
 struct BundleBuilder {
     entries: BTreeMap<String, Value>,
     /// Names registered via the explicit top-level path. These
@@ -142,11 +150,11 @@ impl BundleBuilder {
         if self.explicit.contains_key(name) {
             return;
         }
-        if let Some(existing) = self.entries.get(name) {
-            if existing != &value {
-                self.conflicts.push(name.to_string());
-                return;
-            }
+        if let Some(existing) = self.entries.get(name)
+            && existing != &value
+        {
+            self.conflicts.push(name.to_string());
+            return;
         }
         self.entries.insert(name.to_string(), value);
     }
@@ -226,7 +234,10 @@ fn main() {
             .unwrap_or_else(|_| manifest.join("../../../coco-sdk/schemas/json"))
     };
 
-    fs::create_dir_all(&out_dir).expect("create out_dir");
+    if let Err(e) = fs::create_dir_all(&out_dir) {
+        eprintln!("create {} failed: {e}", out_dir.display());
+        std::process::exit(1);
+    }
     println!("Writing schemas to {}", out_dir.display());
     println!();
 
@@ -235,16 +246,16 @@ fn main() {
     // wrapper around Protocol/Stream/Tui and is not meant to cross the wire.
     // The three child enums are the actual wire types.
     println!("Individual schemas:");
-    write_schema::<coco_types::ServerNotification>(&out_dir, "server_notification");
-    write_schema::<coco_types::NotificationMethod>(&out_dir, "notification_method");
-    write_schema::<coco_types::AgentStreamEvent>(&out_dir, "agent_stream_event");
-    write_schema::<coco_types::TuiOnlyEvent>(&out_dir, "tui_only_event");
+    write_schema::<coco_event_types::ServerNotification>(&out_dir, "server_notification");
+    write_schema::<coco_event_types::NotificationMethod>(&out_dir, "notification_method");
+    write_schema::<coco_event_types::AgentStreamEvent>(&out_dir, "agent_stream_event");
+    write_schema::<coco_event_types::TuiOnlyEvent>(&out_dir, "tui_only_event");
     write_schema::<coco_types::ClientRequest>(&out_dir, "client_request");
     write_schema::<coco_types::ClientRequestMethod>(&out_dir, "client_request_method");
     write_schema::<coco_types::ServerRequest>(&out_dir, "server_request");
     write_schema::<coco_types::ServerRequestMethod>(&out_dir, "server_request_method");
     write_schema::<coco_types::JsonRpcMessage>(&out_dir, "jsonrpc_message");
-    write_schema::<coco_types::ThreadItem>(&out_dir, "thread_item");
+    write_schema::<coco_event_types::ThreadItem>(&out_dir, "thread_item");
     write_schema::<coco_types::SessionStartParams>(&out_dir, "session_start_request");
     println!();
 
@@ -263,10 +274,10 @@ fn main() {
     // `ClientRequest` / `ServerRequest` carry the bulk of the param
     // structs as transitives; `AgentStreamEvent` and `TuiOnlyEvent`
     // mirror the same item/delta types from a different angle.
-    bundle.add::<coco_types::ServerNotification>("ServerNotification");
-    bundle.add::<coco_types::NotificationMethod>("NotificationMethod");
-    bundle.add::<coco_types::AgentStreamEvent>("AgentStreamEvent");
-    bundle.add::<coco_types::TuiOnlyEvent>("TuiOnlyEvent");
+    bundle.add::<coco_event_types::ServerNotification>("ServerNotification");
+    bundle.add::<coco_event_types::NotificationMethod>("NotificationMethod");
+    bundle.add::<coco_event_types::AgentStreamEvent>("AgentStreamEvent");
+    bundle.add::<coco_event_types::TuiOnlyEvent>("TuiOnlyEvent");
     bundle.add::<coco_types::ClientRequest>("ClientRequest");
     bundle.add::<coco_types::ClientRequestMethod>("ClientRequestMethod");
     bundle.add::<coco_types::ServerRequest>("ServerRequest");
@@ -290,7 +301,7 @@ fn main() {
     // ThreadItem is a tagged union; its variant payload structs come
     // through transitively. Registered explicitly because it's a
     // top-level cross-language consumer (timeline rendering).
-    bundle.add::<coco_types::ThreadItem>("ThreadItem");
+    bundle.add::<coco_event_types::ThreadItem>("ThreadItem");
 
     // Provider / model addressing. Not reachable through the wire
     // unions (these live in config-layer init paths, not on the
@@ -392,8 +403,9 @@ fn main() {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "coco-app-server-protocol",
         "description": "JSON Schema bundle for the coco-rs SDK protocol types. \
-            Source: coco-rs/common/types. Generated by `cargo run -p coco-types \
-            --features schema --example export_schema`. Composition: a small \
+            Source: coco-rs/common/event-types + coco-rs/common/types. \
+            Generated by `cargo run -p coco-event-types --features schema \
+            --example export_schema`. Composition: a small \
             set of entry-point types + every type they transitively reference \
             via `$ref` (collected by `schemars::schema_for!` and flattened into \
             `$defs`). To add a new type, ensure it is reachable from an \
@@ -402,8 +414,17 @@ fn main() {
     });
 
     let bundle_path = out_dir.join("coco_app_server_protocol.schemas.json");
-    let bundle_json = serde_json::to_string_pretty(&bundle_value).expect("serialize bundle");
-    fs::write(&bundle_path, bundle_json).expect("write bundle");
+    let bundle_json = match serde_json::to_string_pretty(&bundle_value) {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("serialize bundle failed: {e}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(e) = fs::write(&bundle_path, bundle_json) {
+        eprintln!("write {} failed: {e}", bundle_path.display());
+        std::process::exit(1);
+    }
     println!("  ✓ {}", bundle_path.display());
 
     println!();

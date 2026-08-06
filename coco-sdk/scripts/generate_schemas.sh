@@ -82,7 +82,7 @@ fi
 # the "Compiling …" lines on cold builds; errors still surface.
 # ---------------------------------------------------------------------------
 log "==> Building export_schema + export_hook_input_schema (debug profile)..."
-BUILD_FLAGS=(--manifest-path "$CARGO_MANIFEST" -p coco-types --features schema --example export_schema)
+BUILD_FLAGS=(--manifest-path "$CARGO_MANIFEST" -p coco-event-types --features schema --example export_schema)
 HOOK_BUILD_FLAGS=(--manifest-path "$HOOK_CARGO_MANIFEST" -p coco-hooks --features schema --example export_hook_input_schema)
 if $QUIET_MODE; then
     cargo build "${BUILD_FLAGS[@]}" --quiet

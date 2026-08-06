@@ -73,7 +73,7 @@ pub(crate) struct TurnReminderContext<'a> {
     /// `ServerNotification::MessageAppended` and observers stay
     /// coherent (I-1 authority). `None` for paths that don't have a
     /// wire (forked agents, tests).
-    pub event_tx: &'a Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    pub event_tx: &'a Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
 }
 
 /// Immutable request inputs produced by the reminder phase. The prompt and
@@ -537,8 +537,16 @@ impl QueryEngine {
                     // resulting list is deterministic across turns.
                     let mut seen = HashSet::new();
                     candidates.retain(|p| seen.insert(p.clone()));
+                    // Resolve disk mtimes here: `FileReadState` is a pure
+                    // type and does not reach the filesystem.
+                    let mut probed = Vec::with_capacity(candidates.len());
+                    for path in &candidates {
+                        if let Ok(mtime) = coco_utils_common::file_mtime_ms(path).await {
+                            probed.push((path.clone(), mtime));
+                        }
+                    }
                     let guard = frs.read().await;
-                    guard.unchanged_paths(&candidates).await
+                    guard.unchanged_paths(&probed)
                 }
             } else {
                 Vec::new()

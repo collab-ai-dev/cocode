@@ -41,7 +41,7 @@ pub struct QueryFailure {
     source: coco_error::BoxedError,
     pub final_history: MessageHistory,
     pub total_usage: TokenUsage,
-    pub session_result: coco_types::SessionResultParams,
+    pub session_result: coco_event_types::SessionResultParams,
 }
 
 impl QueryFailure {
@@ -115,9 +115,9 @@ impl QueryEngine {
         let event_tx_opt = Some(event_tx.clone());
         let _delivered = emit_protocol(
             &event_tx_opt,
-            coco_types::ServerNotification::MessageAppended {
+            coco_event_types::ServerNotification::MessageAppended {
                 message: user_msg.clone(),
-                identity: coco_types::ServerNotificationIdentity::new(
+                identity: coco_event_types::ServerNotificationIdentity::new(
                     Some(self.session_id.clone()),
                     self.config.agent_id_string(),
                 ),
@@ -255,7 +255,7 @@ impl QueryEngine {
         if let (Some(tx), Some(id)) = (event_tx.as_ref(), cycle_turn_id.as_ref()) {
             let _ = tx
                 .send(CoreEvent::Protocol(ServerNotification::TurnStarted(
-                    coco_types::TurnStartedParams {
+                    coco_event_types::TurnStartedParams {
                         turn_id: id.clone(),
                     },
                 )))
@@ -375,10 +375,10 @@ impl QueryEngine {
                 )
                 .await;
             }
-            pending_failure_terminal = Some(coco_types::TurnEndedParams::failed(
+            pending_failure_terminal = Some(coco_event_types::TurnEndedParams::failed(
                 id.clone(),
                 Some(accumulated_usage),
-                coco_types::ErrorPayload {
+                coco_event_types::ErrorPayload {
                     message: e.to_string(),
                     code: error_code_from_boxed_error(e),
                 },
@@ -390,7 +390,7 @@ impl QueryEngine {
             // QueryOutcome is the sole failure-terminal source of truth.
             // Loop helpers return typed failures and never construct a second
             // TurnEnded payload in parallel.
-            pending_failure_terminal = Some(coco_types::TurnEndedParams::failed(
+            pending_failure_terminal = Some(coco_event_types::TurnEndedParams::failed(
                 id.clone(),
                 Some(qr.total_usage),
                 error.clone(),
@@ -530,7 +530,7 @@ impl QueryEngine {
 
         let _delivered = emit_protocol(
             event_tx,
-            ServerNotification::SessionStarted(coco_types::SessionStartedParams {
+            ServerNotification::SessionStarted(coco_event_types::SessionStartedParams {
                 session_id: self.session_id.clone(),
                 protocol_version: bootstrap.protocol_version.clone(),
                 cwd: bootstrap.cwd.clone(),
@@ -563,14 +563,14 @@ impl QueryEngine {
         &self,
         error_msg: String,
         stats: &crate::engine_loop_state::QueryFailureStats,
-    ) -> coco_types::SessionResultParams {
+    ) -> coco_event_types::SessionResultParams {
         let model_usage = stats
             .cost_tracker
             .model_entries()
             .map(|(key, usage)| {
                 (
                     key.display(),
-                    coco_types::SessionModelUsage {
+                    coco_event_types::SessionModelUsage {
                         input_tokens: usage.input_tokens,
                         output_tokens: usage.output_tokens,
                         cache_read_input_tokens: usage.cache_read_input_tokens,
@@ -583,7 +583,7 @@ impl QueryEngine {
                 )
             })
             .collect();
-        coco_types::SessionResultParams {
+        coco_event_types::SessionResultParams {
             session_id: self.session_id.clone(),
             total_turns: stats.total_turns,
             duration_ms: stats.duration_ms,
@@ -609,7 +609,7 @@ impl QueryEngine {
         &self,
         qr: &QueryResult,
         error_messages: Vec<String>,
-    ) -> coco_types::SessionResultParams {
+    ) -> coco_event_types::SessionResultParams {
         // Per-model usage aggregated from CostTracker.
         let model_usage = qr
             .cost_tracker
@@ -617,7 +617,7 @@ impl QueryEngine {
             .map(|(key, usage)| {
                 (
                     key.display(),
-                    coco_types::SessionModelUsage {
+                    coco_event_types::SessionModelUsage {
                         input_tokens: usage.input_tokens,
                         output_tokens: usage.output_tokens,
                         cache_read_input_tokens: usage.cache_read_input_tokens,
@@ -650,7 +650,7 @@ impl QueryEngine {
             ));
         }
 
-        coco_types::SessionResultParams {
+        coco_event_types::SessionResultParams {
             session_id: self.session_id.clone(),
             total_turns: qr.turns,
             duration_ms: qr.duration_ms,
@@ -738,7 +738,7 @@ impl QueryEngine {
                     hook_id,
                     hook_name,
                     hook_event,
-                } => ServerNotification::HookStarted(coco_types::HookStartedParams {
+                } => ServerNotification::HookStarted(coco_event_types::HookStartedParams {
                     hook_id,
                     hook_name,
                     hook_event,
@@ -748,7 +748,7 @@ impl QueryEngine {
                     hook_name,
                     stdout,
                     stderr,
-                } => ServerNotification::HookProgress(coco_types::HookProgressParams {
+                } => ServerNotification::HookProgress(coco_event_types::HookProgressParams {
                     hook_id,
                     hook_name,
                     // The orchestration-layer event doesn't carry the
@@ -766,7 +766,7 @@ impl QueryEngine {
                     stdout,
                     stderr,
                     outcome,
-                } => ServerNotification::HookResponse(coco_types::HookResponseParams {
+                } => ServerNotification::HookResponse(coco_event_types::HookResponseParams {
                     hook_id,
                     hook_name,
                     hook_event: String::new(),

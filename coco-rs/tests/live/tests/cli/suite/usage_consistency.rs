@@ -12,8 +12,8 @@
 //! that records into the cost tracker but forgets the wire payload).
 
 use anyhow::Result;
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
 
 use crate::cli::events;
 use crate::cli::harness::SessionConfig;

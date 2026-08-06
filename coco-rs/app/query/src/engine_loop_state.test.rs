@@ -92,7 +92,7 @@ fn failure_stats_capture_every_cross_turn_accumulator() {
             ..Default::default()
         },
     };
-    let denial = coco_types::PermissionDenialInfo {
+    let denial = coco_event_types::PermissionDenialInfo {
         tool_name: "Bash".to_string(),
         tool_use_id: "toolu_denied".to_string(),
         tool_input: serde_json::json!({"command": "unsafe"}),

@@ -3,11 +3,13 @@ use std::collections::HashMap;
 use coco_app_server_transport::{
     JsonRpcFrame, JsonRpcNotification as TransportJsonRpcNotification,
 };
-use coco_types::{
-    AgentId, AgentStreamEvent, ServerNotification, SessionId, StreamAccumulator, TurnId,
-};
 #[cfg(test)]
-use coco_types::{CoreEvent, JSONRPC_VERSION, JsonRpcNotification as LegacyJsonRpcNotification};
+use coco_event_types::CoreEvent;
+use coco_event_types::StreamAccumulator;
+use coco_event_types::{AgentStreamEvent, ServerNotification};
+use coco_types::{AgentId, SessionId, TurnId};
+#[cfg(test)]
+use coco_types::{JSONRPC_VERSION, JsonRpcNotification as LegacyJsonRpcNotification};
 use serde::Deserialize;
 #[cfg(test)]
 use serde_json::Value;
@@ -29,7 +31,7 @@ impl SdkEventRenderer {
         let JsonRpcFrame::Notification(notification) = &frame else {
             return Ok(vec![frame]);
         };
-        if notification.method != coco_types::SESSION_EVENT_METHOD {
+        if notification.method != coco_event_types::SESSION_EVENT_METHOD {
             return Ok(vec![frame]);
         }
         match self.render_session_event(notification) {
@@ -58,7 +60,7 @@ impl SdkEventRenderer {
             .envelope
             .event
             .layer
-            .parse::<coco_types::EventLayer>()
+            .parse::<coco_event_types::EventLayer>()
             .map_err(|()| {
                 <serde_json::Error as serde::de::Error>::custom(format!(
                     "unknown routed CoreEvent layer: {}",
@@ -66,17 +68,17 @@ impl SdkEventRenderer {
                 ))
             })?;
         let notifications = match layer {
-            coco_types::EventLayer::Protocol => {
+            coco_event_types::EventLayer::Protocol => {
                 let notification: ServerNotification =
                     serde_json::from_value(routed.envelope.event.payload)?;
                 self.render_protocol_event(&routed.envelope.session_id, notification)
             }
-            coco_types::EventLayer::Stream => {
+            coco_event_types::EventLayer::Stream => {
                 let event: AgentStreamEvent =
                     serde_json::from_value(routed.envelope.event.payload)?;
                 self.render_stream_event(&routed.envelope.session_id, event)
             }
-            coco_types::EventLayer::Tui => Vec::new(),
+            coco_event_types::EventLayer::Tui => Vec::new(),
         };
         notifications
             .into_iter()

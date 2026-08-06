@@ -3,10 +3,10 @@ use crate::state::SkillsDialogState;
 
 fn entry(
     name: &str,
-    source: coco_types::SkillsDialogSource,
+    source: coco_event_types::SkillsDialogSource,
     bytes: i64,
-) -> coco_types::SkillsDialogEntry {
-    coco_types::SkillsDialogEntry {
+) -> coco_event_types::SkillsDialogEntry {
+    coco_event_types::SkillsDialogEntry {
         name: name.to_string(),
         source,
         description: String::new(),
@@ -21,11 +21,15 @@ fn entry(
 
 #[test]
 fn from_wire_populates_flat_rows_with_pending_initialised_from_local_or_baseline() {
-    let payload = coco_types::SkillsDialogPayload {
+    let payload = coco_event_types::SkillsDialogPayload {
         entries: vec![
-            entry("zeta", coco_types::SkillsDialogSource::User, 40),
-            entry("alpha", coco_types::SkillsDialogSource::Project, 80),
-            entry("acme:resource", coco_types::SkillsDialogSource::Mcp, 20),
+            entry("zeta", coco_event_types::SkillsDialogSource::User, 40),
+            entry("alpha", coco_event_types::SkillsDialogSource::Project, 80),
+            entry(
+                "acme:resource",
+                coco_event_types::SkillsDialogSource::Mcp,
+                20,
+            ),
         ],
         bytes_per_token: 4,
     };
@@ -44,8 +48,8 @@ fn from_wire_populates_flat_rows_with_pending_initialised_from_local_or_baseline
 
 #[test]
 fn from_wire_falls_back_to_four_bytes_per_token_when_zero() {
-    let payload = coco_types::SkillsDialogPayload {
-        entries: vec![entry("foo", coco_types::SkillsDialogSource::User, 0)],
+    let payload = coco_event_types::SkillsDialogPayload {
+        entries: vec![entry("foo", coco_event_types::SkillsDialogSource::User, 0)],
         bytes_per_token: 0,
     };
     let state = SkillsDialogState::from_wire(payload);
@@ -55,11 +59,11 @@ fn from_wire_falls_back_to_four_bytes_per_token_when_zero() {
 
 #[test]
 fn filtered_view_sorts_by_source_then_name_when_default() {
-    let payload = coco_types::SkillsDialogPayload {
+    let payload = coco_event_types::SkillsDialogPayload {
         entries: vec![
-            entry("zeta", coco_types::SkillsDialogSource::User, 1),
-            entry("alpha", coco_types::SkillsDialogSource::User, 1),
-            entry("foo", coco_types::SkillsDialogSource::BuiltIn, 1),
+            entry("zeta", coco_event_types::SkillsDialogSource::User, 1),
+            entry("alpha", coco_event_types::SkillsDialogSource::User, 1),
+            entry("foo", coco_event_types::SkillsDialogSource::BuiltIn, 1),
         ],
         bytes_per_token: 4,
     };
@@ -72,11 +76,11 @@ fn filtered_view_sorts_by_source_then_name_when_default() {
 
 #[test]
 fn filtered_view_sorts_by_token_desc_when_sort_toggled() {
-    let payload = coco_types::SkillsDialogPayload {
+    let payload = coco_event_types::SkillsDialogPayload {
         entries: vec![
-            entry("small", coco_types::SkillsDialogSource::User, 10),
-            entry("big", coco_types::SkillsDialogSource::User, 1000),
-            entry("mid", coco_types::SkillsDialogSource::Project, 100),
+            entry("small", coco_event_types::SkillsDialogSource::User, 10),
+            entry("big", coco_event_types::SkillsDialogSource::User, 1000),
+            entry("mid", coco_event_types::SkillsDialogSource::Project, 100),
         ],
         bytes_per_token: 4,
     };
@@ -89,13 +93,13 @@ fn filtered_view_sorts_by_token_desc_when_sort_toggled() {
 
 #[test]
 fn filter_query_matches_name_description_and_source_label_lowercased() {
-    let mut e1 = entry("deploy-rs", coco_types::SkillsDialogSource::User, 10);
+    let mut e1 = entry("deploy-rs", coco_event_types::SkillsDialogSource::User, 10);
     e1.description = "Run cargo deploy".to_string();
-    let mut e2 = entry("review", coco_types::SkillsDialogSource::Project, 20);
+    let mut e2 = entry("review", coco_event_types::SkillsDialogSource::Project, 20);
     e2.description = "Code review helper".to_string();
-    let mut e3 = entry("noise", coco_types::SkillsDialogSource::Plugin, 5);
+    let mut e3 = entry("noise", coco_event_types::SkillsDialogSource::Plugin, 5);
     e3.description = "Unrelated".to_string();
-    let payload = coco_types::SkillsDialogPayload {
+    let payload = coco_event_types::SkillsDialogPayload {
         entries: vec![e1, e2, e3],
         bytes_per_token: 4,
     };
@@ -130,14 +134,14 @@ fn filter_query_matches_name_description_and_source_label_lowercased() {
 
 #[test]
 fn cycle_focused_advances_pending_unless_locked() {
-    let mut locked_row = entry("locked", coco_types::SkillsDialogSource::User, 10);
+    let mut locked_row = entry("locked", coco_event_types::SkillsDialogSource::User, 10);
     locked_row.lock = Some(coco_types::SkillLock {
         source: coco_types::SkillLockSource::Policy,
         forced_value: coco_types::SkillOverrideState::Off,
     });
-    let payload = coco_types::SkillsDialogPayload {
+    let payload = coco_event_types::SkillsDialogPayload {
         entries: vec![
-            entry("free", coco_types::SkillsDialogSource::User, 10),
+            entry("free", coco_event_types::SkillsDialogSource::User, 10),
             locked_row,
         ],
         bytes_per_token: 4,
@@ -177,8 +181,8 @@ fn cycle_focused_advances_pending_unless_locked() {
 
 #[test]
 fn compute_save_diff_emits_value_when_diverged_and_null_when_returning_to_baseline() {
-    let payload = coco_types::SkillsDialogPayload {
-        entries: vec![entry("foo", coco_types::SkillsDialogSource::User, 1)],
+    let payload = coco_event_types::SkillsDialogPayload {
+        entries: vec![entry("foo", coco_event_types::SkillsDialogSource::User, 1)],
         bytes_per_token: 4,
     };
     let mut state = SkillsDialogState::from_wire(payload);

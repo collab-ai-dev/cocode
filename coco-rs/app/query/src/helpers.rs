@@ -99,7 +99,7 @@ pub(crate) fn convert_to_assistant_content(part: AssistantContentPart) -> Assist
 pub async fn drain_command_queue_into_history(
     queue: &CommandQueue,
     history: &mut MessageHistory,
-    event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    event_tx: &Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
     max_priority: QueuePriority,
     agent_id: Option<&str>,
 ) {
@@ -369,12 +369,12 @@ pub(crate) fn build_blocking_limit_api_error_message(
 /// SDK consumer's perspective.
 pub(crate) fn hook_outcome_to_status(
     outcome: coco_types::HookOutcome,
-) -> coco_types::HookOutcomeStatus {
+) -> coco_event_types::HookOutcomeStatus {
     match outcome {
-        coco_types::HookOutcome::Success => coco_types::HookOutcomeStatus::Success,
-        coco_types::HookOutcome::Blocking => coco_types::HookOutcomeStatus::Error,
-        coco_types::HookOutcome::NonBlockingError => coco_types::HookOutcomeStatus::Error,
-        coco_types::HookOutcome::Cancelled => coco_types::HookOutcomeStatus::Cancelled,
+        coco_types::HookOutcome::Success => coco_event_types::HookOutcomeStatus::Success,
+        coco_types::HookOutcome::Blocking => coco_event_types::HookOutcomeStatus::Error,
+        coco_types::HookOutcome::NonBlockingError => coco_event_types::HookOutcomeStatus::Error,
+        coco_types::HookOutcome::Cancelled => coco_event_types::HookOutcomeStatus::Cancelled,
     }
 }
 
@@ -413,7 +413,7 @@ pub(crate) fn extract_last_assistant_text(history: &MessageHistory) -> String {
 /// `commit_flush` surfaces it in the correct post-assistant slot.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn complete_tool_call_with_error_mode(
-    event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    event_tx: &Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
     history: &mut MessageHistory,
     tool_call_id: &str,
     tool_name: &str,
@@ -441,7 +441,7 @@ pub(crate) async fn complete_tool_call_with_error_mode(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn complete_tool_call_with_error_messages_mode(
-    event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    event_tx: &Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
     history: &mut MessageHistory,
     tool_call_id: &str,
     tool_name: &str,
@@ -488,7 +488,7 @@ pub(crate) async fn complete_tool_call_with_error_messages_mode(
 /// as a permission denial.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn complete_tool_call_clarification_messages(
-    event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    event_tx: &Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
     history: &mut MessageHistory,
     tool_call_id: &str,
     tool_name: &str,

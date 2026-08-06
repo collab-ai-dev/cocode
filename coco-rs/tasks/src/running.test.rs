@@ -186,9 +186,9 @@ async fn remove_completed_keeps_unnotified_terminal_tasks() {
 // for every lifecycle transition. Tests exercise the full round-trip
 // for one happy-path task plus one failure path.
 
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
-use coco_types::TaskCompletionStatus;
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
+use coco_event_types::TaskCompletionStatus;
 use tokio::sync::mpsc;
 
 fn collect(rx: &mut mpsc::Receiver<CoreEvent>) -> Vec<ServerNotification> {

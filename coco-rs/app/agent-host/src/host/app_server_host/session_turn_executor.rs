@@ -17,7 +17,8 @@
 
 use std::{pin::Pin, sync::Arc};
 
-use coco_types::{CoreEvent, TurnStartParams};
+use coco_event_types::CoreEvent;
+use coco_types::TurnStartParams;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -169,9 +170,9 @@ fn run_turn_with_session(
                 // I-1: emit so AppServer observers see the warning row.
                 let _ = event_tx
                     .send(CoreEvent::Protocol(
-                        coco_types::ServerNotification::MessageAppended {
+                        coco_event_types::ServerNotification::MessageAppended {
                             message: warning_msg,
-                            identity: coco_types::ServerNotificationIdentity::default(),
+                            identity: coco_event_types::ServerNotificationIdentity::default(),
                         },
                     ))
                     .await;
@@ -183,8 +184,8 @@ fn run_turn_with_session(
                 // filter "real failures" from "hook said no".
                 let _ = event_tx
                     .send(CoreEvent::Protocol(
-                        coco_types::ServerNotification::TurnStarted(
-                            coco_types::TurnStartedParams {
+                        coco_event_types::ServerNotification::TurnStarted(
+                            coco_event_types::TurnStartedParams {
                                 turn_id: cycle_turn_id.clone(),
                             },
                         ),
@@ -192,13 +193,13 @@ fn run_turn_with_session(
                     .await;
                 let _ = event_tx
                     .send(CoreEvent::Protocol(
-                        coco_types::ServerNotification::TurnEnded(
-                            coco_types::TurnEndedParams::failed(
+                        coco_event_types::ServerNotification::TurnEnded(
+                            coco_event_types::TurnEndedParams::failed(
                                 cycle_turn_id.clone(),
                                 /*usage*/ None,
-                                coco_types::ErrorPayload {
+                                coco_event_types::ErrorPayload {
                                     message: warning.clone(),
-                                    code: coco_types::ErrorCode::HookBlocked,
+                                    code: coco_event_types::ErrorCode::HookBlocked,
                                 },
                             ),
                         ),
@@ -218,17 +219,17 @@ fn run_turn_with_session(
                 // I-1: emit so AppServer observers see both rows.
                 let _ = event_tx
                     .send(CoreEvent::Protocol(
-                        coco_types::ServerNotification::MessageAppended {
+                        coco_event_types::ServerNotification::MessageAppended {
                             message: prompt_msg,
-                            identity: coco_types::ServerNotificationIdentity::default(),
+                            identity: coco_event_types::ServerNotificationIdentity::default(),
                         },
                     ))
                     .await;
                 let _ = event_tx
                     .send(CoreEvent::Protocol(
-                        coco_types::ServerNotification::MessageAppended {
+                        coco_event_types::ServerNotification::MessageAppended {
                             message: stop_msg_obj,
-                            identity: coco_types::ServerNotificationIdentity::default(),
+                            identity: coco_event_types::ServerNotificationIdentity::default(),
                         },
                     ))
                     .await;
@@ -239,8 +240,8 @@ fn run_turn_with_session(
                 // completion monitor, and SDK stream consumers forever.
                 let _ = event_tx
                     .send(CoreEvent::Protocol(
-                        coco_types::ServerNotification::TurnStarted(
-                            coco_types::TurnStartedParams {
+                        coco_event_types::ServerNotification::TurnStarted(
+                            coco_event_types::TurnStartedParams {
                                 turn_id: cycle_turn_id.clone(),
                             },
                         ),
@@ -248,13 +249,13 @@ fn run_turn_with_session(
                     .await;
                 let _ = event_tx
                     .send(CoreEvent::Protocol(
-                        coco_types::ServerNotification::TurnEnded(
-                            coco_types::TurnEndedParams::failed(
+                        coco_event_types::ServerNotification::TurnEnded(
+                            coco_event_types::TurnEndedParams::failed(
                                 cycle_turn_id.clone(),
                                 /*usage*/ None,
-                                coco_types::ErrorPayload {
+                                coco_event_types::ErrorPayload {
                                     message: stop_msg.clone(),
-                                    code: coco_types::ErrorCode::HookBlocked,
+                                    code: coco_event_types::ErrorCode::HookBlocked,
                                 },
                             ),
                         ),
@@ -296,9 +297,9 @@ fn run_turn_with_session(
             for m in new_msgs.iter().cloned() {
                 let _ = event_tx
                     .send(CoreEvent::Protocol(
-                        coco_types::ServerNotification::MessageAppended {
+                        coco_event_types::ServerNotification::MessageAppended {
                             message: std::sync::Arc::new(m),
-                            identity: coco_types::ServerNotificationIdentity::default(),
+                            identity: coco_event_types::ServerNotificationIdentity::default(),
                         },
                     ))
                     .await;
@@ -335,14 +336,14 @@ fn run_turn_with_session(
             while let Some(event) = core_event_rx.recv().await {
                 if matches!(
                     event,
-                    CoreEvent::Protocol(coco_types::ServerNotification::TurnEnded(_))
+                    CoreEvent::Protocol(coco_event_types::ServerNotification::TurnEnded(_))
                 ) {
                     pending_terminal = Some(event);
                     continue;
                 }
                 if matches!(
                     event,
-                    CoreEvent::Protocol(coco_types::ServerNotification::ContextCompacted(_))
+                    CoreEvent::Protocol(coco_event_types::ServerNotification::ContextCompacted(_))
                 ) {
                     session_for_forward.re_append_session_metadata().await;
                 }
@@ -394,8 +395,8 @@ fn run_turn_with_session(
                     };
                     let _ = event_tx_for_error
                         .send(CoreEvent::Protocol(
-                            coco_types::ServerNotification::TurnEnded(
-                                coco_types::TurnEndedParams::interrupted(
+                            coco_event_types::ServerNotification::TurnEnded(
+                                coco_event_types::TurnEndedParams::interrupted(
                                     cycle_turn_id.clone(),
                                     Some(result.total_usage),
                                     reason,
@@ -417,8 +418,8 @@ fn run_turn_with_session(
                     // exactly one terminal on every exit path.
                     let _ = event_tx_for_error
                         .send(CoreEvent::Protocol(
-                            coco_types::ServerNotification::TurnEnded(
-                                coco_types::TurnEndedParams::completed(
+                            coco_event_types::ServerNotification::TurnEnded(
+                                coco_event_types::TurnEndedParams::completed(
                                     cycle_turn_id.clone(),
                                     /*usage*/ None,
                                     /*stop_reason*/ None,
@@ -450,8 +451,8 @@ fn run_turn_with_session(
                     // Interrupted terminator supersedes any engine `Failed`.
                     let _ = event_tx_for_error
                         .send(CoreEvent::Protocol(
-                            coco_types::ServerNotification::TurnEnded(
-                                coco_types::TurnEndedParams::interrupted(
+                            coco_event_types::ServerNotification::TurnEnded(
+                                coco_event_types::TurnEndedParams::interrupted(
                                     cycle_turn_id.clone(),
                                     Some(e.total_usage),
                                     coco_types::TurnAbortReason::UserCancel,
@@ -471,13 +472,13 @@ fn run_turn_with_session(
                     // consumers and waiters see a complete cycle.
                     let _ = event_tx_for_error
                         .send(CoreEvent::Protocol(
-                            coco_types::ServerNotification::TurnEnded(
-                                coco_types::TurnEndedParams::failed(
+                            coco_event_types::ServerNotification::TurnEnded(
+                                coco_event_types::TurnEndedParams::failed(
                                     cycle_turn_id.clone(),
                                     Some(e.total_usage),
-                                    coco_types::ErrorPayload {
+                                    coco_event_types::ErrorPayload {
                                         message: e.to_string(),
-                                        code: coco_types::ErrorCode::Unknown,
+                                        code: coco_event_types::ErrorCode::Unknown,
                                     },
                                 ),
                             ),

@@ -103,7 +103,7 @@ pub(super) async fn apply_role_through_app_server(
             );
             let _ = event_tx
                 .send(CoreEvent::Protocol(ServerNotification::Error(
-                    coco_types::ErrorParams {
+                    coco_event_types::ErrorParams {
                         message: format!(
                             "failed to apply {role_label} -> {provider}/{model_id}: {error}",
                             role_label = role.as_str(),
@@ -146,4 +146,4 @@ pub(super) async fn apply_role_through_app_server(
     .await;
 }
 use super::session_target;
-use coco_types::{CoreEvent, ServerNotification};
+use coco_event_types::{CoreEvent, ServerNotification};

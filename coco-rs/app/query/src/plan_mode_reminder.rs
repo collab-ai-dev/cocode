@@ -74,7 +74,7 @@ pub struct PlanModeReminder {
     is_teammate_awaiting: bool,
     /// Optional protocol-event sink for surfacing plan-approval requests
     /// to the leader's TUI as `ServerNotification::PlanApprovalRequested`.
-    event_tx: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    event_tx: Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
     /// Teammate live permission-mode override. In-process teammates read this
     /// ahead of app_state, so approval responses must update it too.
     live_permission_mode: Option<Arc<RwLock<PermissionMode>>>,
@@ -146,7 +146,7 @@ impl PlanModeReminder {
     /// `ServerNotification::PlanApprovalRequested`.
     pub fn with_event_sink(
         mut self,
-        event_tx: tokio::sync::mpsc::Sender<coco_types::CoreEvent>,
+        event_tx: tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>,
     ) -> Self {
         self.event_tx = Some(event_tx);
         self
@@ -386,15 +386,15 @@ impl PlanModeReminder {
 
         if let Some(tx) = self.event_tx.as_ref() {
             for (_idx, req) in &pending {
-                let params = coco_types::PlanApprovalRequestedParams {
+                let params = coco_event_types::PlanApprovalRequestedParams {
                     request_id: req.request_id.clone(),
                     from: req.from.clone(),
                     plan_file_path: Some(req.plan_file_path.clone()),
                     plan_content: req.plan_content.clone(),
                 };
                 let _ = tx
-                    .send(coco_types::CoreEvent::Protocol(
-                        coco_types::ServerNotification::PlanApprovalRequested(params),
+                    .send(coco_event_types::CoreEvent::Protocol(
+                        coco_event_types::ServerNotification::PlanApprovalRequested(params),
                     ))
                     .await;
             }

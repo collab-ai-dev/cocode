@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use coco_context::FileHistoryState;
-use coco_context::FileReadState;
 use coco_messages::Message;
 use coco_query::QueryEngineConfig;
+use coco_types::FileReadState;
 use coco_types::ModelRole;
 use coco_types::SessionId;
 use coco_types::ToolAppState;

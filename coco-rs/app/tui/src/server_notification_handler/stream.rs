@@ -10,7 +10,7 @@
 //! creates the streaming state so deltas are never silently dropped. See
 //! `server_notification_handler.test.rs` for the regression test.
 
-use coco_types::AgentStreamEvent;
+use coco_event_types::AgentStreamEvent;
 use coco_types::MCP_TOOL_PREFIX;
 use coco_types::MCP_TOOL_SEPARATOR;
 

@@ -1,10 +1,13 @@
 use std::sync::{Arc, Mutex};
 
 use coco_app_server_transport::{JsonRpcFrame, JsonRpcRequest, JsonRpcSuccess};
+use coco_event_types::{CoreEvent, ServerNotification, SessionEnvelope};
+use coco_event_types::{
+    ServerRequestDelivery, SessionDelivery, SessionLifecycleEffect, SessionLifecycleEffectKind,
+};
 use coco_types::{
-    ClientRequestMethod, CoreEvent, RequestId, ServerNotification, ServerRequest,
-    ServerRequestDelivery, ServerRequestUserInputParams, SessionDelivery, SessionEnvelope,
-    SessionId, SessionLifecycleEffect, SessionLifecycleEffectKind, SessionState,
+    ClientRequestMethod, RequestId, ServerRequest, ServerRequestUserInputParams, SessionId,
+    SessionState,
 };
 
 use super::*;
@@ -114,7 +117,7 @@ fn session_event_wire_shape_is_keyed_by_session() {
     };
     let params = notification.params.expect("params");
 
-    assert_eq!(notification.method, coco_types::SESSION_EVENT_METHOD);
+    assert_eq!(notification.method, coco_event_types::SESSION_EVENT_METHOD);
     assert_eq!(params["envelope"]["session_id"], session_id.as_str());
     assert_eq!(params.as_object().expect("params object").len(), 1);
 }
@@ -132,7 +135,10 @@ fn lifecycle_wire_shape_is_keyed_by_session() {
     };
     let params = notification.params.expect("params");
 
-    assert_eq!(notification.method, coco_types::SESSION_LIFECYCLE_METHOD);
+    assert_eq!(
+        notification.method,
+        coco_event_types::SESSION_LIFECYCLE_METHOD
+    );
     assert_eq!(params["effect"]["session_id"], session_id.as_str());
     assert_eq!(params.as_object().expect("params object").len(), 1);
 }

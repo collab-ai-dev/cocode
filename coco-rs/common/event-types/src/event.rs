@@ -1,12 +1,24 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::GoalSnapshotChangedParams;
-use crate::TokenUsage;
-use crate::wire_tagged::wire_tagged_enum;
-use crate::{QueuedCommandEditImage, SubmittedComposer};
+use coco_types::AgentInfo;
+use coco_types::FastModeState;
+use coco_types::GoalSnapshotChangedParams;
+use coco_types::ModelRoleChangedParams;
+use coco_types::PermissionDisplayInput;
+use coco_types::RateLimitStatus;
+use coco_types::SessionState;
+use coco_types::SkillLock;
+use coco_types::SkillLockSource;
+use coco_types::SkillOverrideState;
+use coco_types::TokenUsage;
+use coco_types::TurnAbortReason;
+use coco_types::wire_tagged_enum;
+use coco_types::{QueuedCommandEditImage, SubmittedComposer};
 
-fn empty_session_id_as_none<'de, D>(deserializer: D) -> Result<Option<crate::SessionId>, D::Error>
+fn empty_session_id_as_none<'de, D>(
+    deserializer: D,
+) -> Result<Option<coco_types::SessionId>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -16,7 +28,7 @@ where
     if value.is_empty() {
         return Ok(None);
     }
-    crate::SessionId::try_new(value)
+    coco_types::SessionId::try_new(value)
         .map(Some)
         .map_err(serde::de::Error::custom)
 }
@@ -29,13 +41,13 @@ pub struct ServerNotificationIdentity {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "empty_session_id_as_none"
     )]
-    pub session_id: Option<crate::SessionId>,
+    pub session_id: Option<coco_types::SessionId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
 }
 
 impl ServerNotificationIdentity {
-    pub fn new(session_id: Option<crate::SessionId>, agent_id: Option<String>) -> Self {
+    pub fn new(session_id: Option<coco_types::SessionId>, agent_id: Option<String>) -> Self {
         Self {
             session_id,
             agent_id,
@@ -102,7 +114,7 @@ impl ServerNotificationIdentity {
 /// ## Known cross-sender emission sites (tolerated)
 ///
 /// - `ContextCompacted` is emitted from two sites inside `run_session_loop`
-///  (reactive compaction and auto-compaction). Semantics are idempotent;
+///   (reactive compaction and auto-compaction). Semantics are idempotent;
 ///   consumers may see two notifications carrying the same summary.
 /// - `Error` may be emitted from budget-exhaustion and query-execution
 ///   paths. Consumers MUST treat Errors as independent signals; they are
@@ -242,7 +254,7 @@ impl CoreEvent {
         }
     }
 
-    pub fn turn_id(&self) -> Option<crate::TurnId> {
+    pub fn turn_id(&self) -> Option<coco_types::TurnId> {
         match self {
             Self::Protocol(notification) => notification.turn_id(),
             Self::Stream(event) => event.turn_id(),
@@ -258,11 +270,11 @@ impl CoreEvent {
 /// not stamp or persist session identity themselves.
 #[derive(Debug, Clone)]
 pub struct SessionEnvelope {
-    pub session_id: crate::SessionId,
+    pub session_id: coco_types::SessionId,
     /// Optional subagent attribution under the root session.
-    pub agent_id: Option<crate::AgentId>,
+    pub agent_id: Option<coco_types::AgentId>,
     /// Turn-scoped event id when the payload belongs to one logical turn.
-    pub turn_id: Option<crate::TurnId>,
+    pub turn_id: Option<coco_types::TurnId>,
     /// Durable per-session sequence. `None` means live-only, non-replayable.
     pub session_seq: Option<i64>,
     pub event: CoreEvent,
@@ -274,8 +286,8 @@ impl SessionEnvelope {
     /// Durable events call `next_session_seq` exactly once. Ephemeral events
     /// never call it and are stamped with `session_seq: None`.
     pub fn stamp(
-        session_id: crate::SessionId,
-        agent_id: Option<crate::AgentId>,
+        session_id: coco_types::SessionId,
+        agent_id: Option<coco_types::AgentId>,
         event: CoreEvent,
         next_session_seq: impl FnOnce() -> i64,
     ) -> Self {
@@ -302,9 +314,9 @@ impl SessionEnvelope {
 
     /// Build a durable envelope that participates in replay/ring retention.
     pub fn durable(
-        session_id: crate::SessionId,
-        agent_id: Option<crate::AgentId>,
-        turn_id: Option<crate::TurnId>,
+        session_id: coco_types::SessionId,
+        agent_id: Option<coco_types::AgentId>,
+        turn_id: Option<coco_types::TurnId>,
         session_seq: i64,
         event: CoreEvent,
     ) -> Self {
@@ -319,9 +331,9 @@ impl SessionEnvelope {
 
     /// Build a live-only envelope for stream/TUI events that must not be replayed.
     pub fn ephemeral(
-        session_id: crate::SessionId,
-        agent_id: Option<crate::AgentId>,
-        turn_id: Option<crate::TurnId>,
+        session_id: coco_types::SessionId,
+        agent_id: Option<coco_types::AgentId>,
+        turn_id: Option<coco_types::TurnId>,
         event: CoreEvent,
     ) -> Self {
         Self {
@@ -357,27 +369,27 @@ pub enum AgentStreamEvent {
     /// Begin one provider response attempt within a logical turn. Text and
     /// thinking deltas remain provisional until the matching commit.
     ResponseAttemptStarted {
-        turn_id: crate::TurnId,
+        turn_id: coco_types::TurnId,
         attempt: i32,
     },
     /// Commit the provisional text/thinking deltas for an attempt.
     ResponseAttemptCommitted {
-        turn_id: crate::TurnId,
+        turn_id: coco_types::TurnId,
         attempt: i32,
     },
     /// Discard provisional deltas from a malformed attempt before retrying.
     ResponseAttemptDiscarded {
-        turn_id: crate::TurnId,
+        turn_id: coco_types::TurnId,
         attempt: i32,
     },
     /// Text content delta from assistant response.
     TextDelta {
-        turn_id: crate::TurnId,
+        turn_id: coco_types::TurnId,
         delta: String,
     },
     /// Thinking/reasoning delta from extended thinking.
     ThinkingDelta {
-        turn_id: crate::TurnId,
+        turn_id: coco_types::TurnId,
         delta: String,
     },
     /// Tool use block received from API (input complete). Creates a ThreadItem.
@@ -419,7 +431,7 @@ pub enum AgentStreamEvent {
 }
 
 impl AgentStreamEvent {
-    pub fn turn_id(&self) -> Option<crate::TurnId> {
+    pub fn turn_id(&self) -> Option<coco_types::TurnId> {
         match self {
             Self::ResponseAttemptStarted { turn_id, .. }
             | Self::ResponseAttemptCommitted { turn_id, .. }
@@ -448,7 +460,7 @@ impl AgentStreamEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadItem {
     pub item_id: String,
-    pub turn_id: crate::TurnId,
+    pub turn_id: coco_types::TurnId,
     pub details: ThreadItemDetails,
 }
 
@@ -636,7 +648,7 @@ matching `NotificationMethod` discriminant.",
     /// Session ended.
     "session/ended" => SessionEnded(SessionEndedParams),
     /// Session usage snapshot updated.
-    "session/usageUpdated" => SessionUsageUpdated(Box<crate::SessionUsageSnapshot>),
+    "session/usageUpdated" => SessionUsageUpdated(Box<coco_types::SessionUsageSnapshot>),
 
     // === History lifecycle (4) ===
     //
@@ -657,7 +669,7 @@ matching `NotificationMethod` discriminant.",
     /// teammates / subagents. Single-session SDK consumers may ignore
     /// both fields (`#[serde(default)]` keeps the wire forward-compat).
     "history/messageAppended" => MessageAppended {
-        message: std::sync::Arc<crate::messages::Message>,
+        message: std::sync::Arc<coco_types::messages::Message>,
         #[serde(flatten)]
         identity: ServerNotificationIdentity,
     },
@@ -686,7 +698,7 @@ matching `NotificationMethod` discriminant.",
     /// appends still use `MessageAppended` — this variant models
     /// bulk replacement (a genuinely different operation).
     "history/replaced" => HistoryReplaced {
-        messages: Vec<std::sync::Arc<crate::messages::Message>>,
+        messages: Vec<std::sync::Arc<coco_types::messages::Message>>,
         #[serde(flatten)]
         identity: ServerNotificationIdentity,
         #[serde(default)]
@@ -897,7 +909,7 @@ matching `NotificationMethod` discriminant.",
     /// Stream stall detected.
     "stream/stallDetected" => StreamStallDetected {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        turn_id: Option<crate::TurnId>,
+        turn_id: Option<coco_types::TurnId>,
     },
     /// Stream watchdog warning.
     "stream/watchdogWarning" => StreamWatchdogWarning { elapsed_secs: f64 },
@@ -944,7 +956,7 @@ impl ServerNotification {
     // Exhaustive on purpose: this accessor is the `SessionEnvelope`
     // migration seam, so a new identity-bearing variant must be classified
     // here rather than silently returning `None` under a wildcard.
-    pub fn session_id(&self) -> Option<&crate::SessionId> {
+    pub fn session_id(&self) -> Option<&coco_types::SessionId> {
         match self {
             Self::MessageAppended { identity, .. }
             | Self::MessageTruncated { identity, .. }
@@ -1184,7 +1196,7 @@ impl ServerNotification {
         }
     }
 
-    pub fn turn_id(&self) -> Option<crate::TurnId> {
+    pub fn turn_id(&self) -> Option<coco_types::TurnId> {
         match self {
             Self::TurnStarted(params) => Some(params.turn_id.clone()),
             Self::TurnEnded(params) => Some(params.turn_id.clone()),
@@ -1285,7 +1297,7 @@ const _: () = assert!(
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStartedParams {
-    pub session_id: crate::SessionId,
+    pub session_id: coco_types::SessionId,
     /// Local extension: protocol version negotiation.
     pub protocol_version: String,
     pub cwd: String,
@@ -1334,7 +1346,7 @@ pub struct SessionStartedParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerInit {
     pub name: String,
-    pub status: crate::server_request::McpConnectionStatus,
+    pub status: coco_types::McpConnectionStatus,
 }
 
 /// Plugin init entry (inline struct in TS).
@@ -1352,7 +1364,7 @@ pub struct PluginInit {
 /// Matches TS `SDKResultMessageSchema` (coreSchemas.ts:1407-1451).
 /// TS has two subtype variants (success/error) unified here with `is_error` flag.
 pub struct SessionResultParams {
-    pub session_id: crate::SessionId,
+    pub session_id: coco_types::SessionId,
     pub total_turns: i32,
     pub duration_ms: i64,
     pub duration_api_ms: i64,
@@ -1403,16 +1415,6 @@ pub struct PermissionDenialInfo {
     pub tool_name: String,
     pub tool_use_id: String,
     pub tool_input: serde_json::Value,
-}
-
-/// Matches TS `FastModeStateSchema` (coreSchemas.ts:1883-1889).
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FastModeState {
-    Off,
-    Cooldown,
-    On,
 }
 
 // ---------------------------------------------------------------------------
@@ -1505,7 +1507,7 @@ pub struct SessionEndedParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnStartedParams {
-    pub turn_id: crate::TurnId,
+    pub turn_id: coco_types::TurnId,
 }
 
 /// Terminal event for one logical user-prompt cycle. The
@@ -1523,7 +1525,7 @@ pub struct TurnStartedParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnEndedParams {
-    pub turn_id: crate::TurnId,
+    pub turn_id: coco_types::TurnId,
     /// Token usage accumulated over the cycle. `None` only when
     /// the emitter genuinely does not know (runner-side bail
     /// before engine entry, or late-cancel emitter that does not
@@ -1579,7 +1581,7 @@ pub enum TurnOutcome {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompletedOutcome {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stop_reason: Option<crate::StopReason>,
+    pub stop_reason: Option<coco_types::StopReason>,
 }
 
 /// Payload for [`TurnOutcome::Failed`]. `error.code` is the
@@ -1623,9 +1625,9 @@ pub struct BudgetExhaustedOutcome {
 
 impl TurnEndedParams {
     pub fn completed(
-        turn_id: crate::TurnId,
+        turn_id: coco_types::TurnId,
         usage: Option<TokenUsage>,
-        stop_reason: Option<crate::StopReason>,
+        stop_reason: Option<coco_types::StopReason>,
     ) -> Self {
         Self {
             turn_id,
@@ -1635,7 +1637,11 @@ impl TurnEndedParams {
         }
     }
 
-    pub fn failed(turn_id: crate::TurnId, usage: Option<TokenUsage>, error: ErrorPayload) -> Self {
+    pub fn failed(
+        turn_id: coco_types::TurnId,
+        usage: Option<TokenUsage>,
+        error: ErrorPayload,
+    ) -> Self {
         Self {
             turn_id,
             usage,
@@ -1645,7 +1651,7 @@ impl TurnEndedParams {
     }
 
     pub fn interrupted(
-        turn_id: crate::TurnId,
+        turn_id: coco_types::TurnId,
         usage: Option<TokenUsage>,
         abort_reason: TurnAbortReason,
     ) -> Self {
@@ -1658,7 +1664,7 @@ impl TurnEndedParams {
     }
 
     pub fn max_turns_reached(
-        turn_id: crate::TurnId,
+        turn_id: coco_types::TurnId,
         usage: Option<TokenUsage>,
         max_turns: i32,
     ) -> Self {
@@ -1671,7 +1677,7 @@ impl TurnEndedParams {
     }
 
     pub fn budget_exhausted(
-        turn_id: crate::TurnId,
+        turn_id: coco_types::TurnId,
         usage: Option<TokenUsage>,
         used_tokens: i64,
         budget_tokens: Option<i64>,
@@ -1789,30 +1795,6 @@ pub enum HistoryReplaceReason {
     Rewind,
 }
 
-/// Why a turn was aborted. Lets consumers distinguish user cancel,
-/// submit interrupt, permission abort, and system pre-emption.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TurnAbortReason {
-    /// User-initiated cancel (Ctrl+C in the TUI, `control/interrupt`
-    /// in the SDK). The only reason that may trigger auto-restore.
-    UserCancel,
-    /// Streaming submit interruption: the user submitted new input while
-    /// all running tools were cancel-interruptible.
-    SubmitInterrupt,
-    /// System pre-empted the in-flight turn so another session-level
-    /// operation can run (Clear / Compact / Rewind / Shutdown / new
-    /// SubmitInput). Auto-restore is suppressed — the user did not
-    /// request a rewind.
-    SystemPreempt,
-    /// Permission flow aborted the turn instead of returning a normal
-    /// model-visible denial.
-    PermissionAbort,
-    /// Turn moved to the background.
-    Background,
-}
-
 /// Structured reason for a tool abort notification.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1832,7 +1814,7 @@ pub struct ContentDeltaParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub item_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<crate::TurnId>,
+    pub turn_id: Option<coco_types::TurnId>,
     pub delta: String,
 }
 
@@ -1840,7 +1822,7 @@ pub struct ContentDeltaParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpStartupStatusParams {
     pub server: String,
-    pub status: crate::server_request::McpConnectionStatus,
+    pub status: coco_types::McpConnectionStatus,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1872,7 +1854,7 @@ pub struct ContextCompactedParams {
     /// without this field default to `Auto`. Defaulted via serde so
     /// off-the-wire payloads from older SDK clients keep parsing.
     #[serde(default = "default_compact_trigger_param")]
-    pub trigger: crate::CompactTrigger,
+    pub trigger: coco_types::CompactTrigger,
     /// Estimated tokens before compaction (post-strategy LLM input view).
     /// `None` for paths that do not measure (e.g. micro/time-based may
     /// skip when the savings are 0).
@@ -1883,8 +1865,8 @@ pub struct ContextCompactedParams {
     pub post_tokens: Option<i64>,
 }
 
-fn default_compact_trigger_param() -> crate::CompactTrigger {
-    crate::CompactTrigger::Auto
+fn default_compact_trigger_param() -> coco_types::CompactTrigger {
+    coco_types::CompactTrigger::Auto
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -2001,7 +1983,7 @@ pub struct TaskCompletedParams {
     pub tool_use_id: Option<String>,
     pub status: TaskCompletionStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub killed_by: Option<crate::TaskKilledBy>,
+    pub killed_by: Option<coco_types::TaskKilledBy>,
     pub output_file: String,
     pub summary: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2044,9 +2026,9 @@ pub struct TaskProgressParams {
     /// Capped at `MAX_RECENT_ACTIVITIES = 5`. Empty when the task hasn't run a
     /// tool yet or the producer is a legacy code path.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub recent_activities: Vec<crate::task::TaskActivity>,
+    pub recent_activities: Vec<coco_types::TaskActivity>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub workflow_progress: Vec<crate::task::WorkflowProgressEvent>,
+    pub workflow_progress: Vec<coco_types::WorkflowProgressEvent>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -2102,10 +2084,10 @@ pub struct PlanApprovalRequestedParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskPanelChangedParams {
-    pub plan_tasks: Vec<crate::TaskRecord>,
+    pub plan_tasks: Vec<coco_types::TaskRecord>,
     #[serde(default)]
-    pub todos_by_agent: std::collections::HashMap<String, Vec<crate::TodoRecord>>,
-    pub expanded_view: crate::ExpandedView,
+    pub todos_by_agent: std::collections::HashMap<String, Vec<coco_types::TodoRecord>>,
+    pub expanded_view: coco_types::ExpandedView,
     pub verification_nudge_pending: bool,
     /// Monotonic snapshot generation (`ToolAppState::panel_generation`).
     /// Multiple producers (leader executor, subagent/teammate bridges)
@@ -2133,35 +2115,12 @@ pub struct ModelFallbackParams {
     pub reason: String,
 }
 
-/// Payload for [`crate::ServerNotification::ModelRoleChanged`]. Carries
-/// the resolved binding (model + provider + thinking effort) that the
-/// TUI applies to `state.session.model_by_role[role]` and, when
-/// `role == Main`, also to `state.session.{model, provider,
-/// thinking_effort}` for the status bar.
-///
-/// Emitted by `tui_runner` after applying an in-memory override via
-/// `SessionRuntime::apply_role_override` / `apply_role_effort`. No
-/// persistence to settings.json — that's the user's job.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelRoleChangedParams {
-    pub role: crate::ModelRole,
-    pub model_id: String,
-    pub provider: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context_window: Option<i64>,
-    /// `None` ⇒ engine falls back to the model's
-    /// `default_thinking_level`. `Some(_)` ⇒ explicit user choice.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effort: Option<crate::ReasoningEffort>,
-}
-
 /// Payload for MoA reference lifecycle events.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MoaReferenceParams {
-    pub turn_id: crate::TurnId,
-    pub role: crate::ModelRole,
+    pub turn_id: coco_types::TurnId,
+    pub role: coco_types::ModelRole,
     pub preset: String,
     pub index: i32,
     pub count: i32,
@@ -2177,8 +2136,8 @@ pub struct MoaReferenceParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MoaAggregatingParams {
-    pub turn_id: crate::TurnId,
-    pub role: crate::ModelRole,
+    pub turn_id: coco_types::TurnId,
+    pub role: coco_types::ModelRole,
     pub preset: String,
     pub count: i32,
 }
@@ -2186,7 +2145,7 @@ pub struct MoaAggregatingParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionModeChangedParams {
-    pub mode: crate::PermissionMode,
+    pub mode: coco_types::PermissionMode,
     #[serde(default)]
     pub bypass_available: bool,
 }
@@ -2219,15 +2178,6 @@ pub struct RateLimitParams {
     pub rate_limit_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utilization: Option<f64>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RateLimitStatus {
-    Allowed,
-    AllowedWarning,
-    Rejected,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -2270,14 +2220,6 @@ pub struct CostWarningParams {
 pub struct SandboxStateChangedParams {
     pub active: bool,
     pub enforcement: String,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentInfo {
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -2350,45 +2292,9 @@ pub struct SummarizeCompletedParams {
     pub summary_tokens: i32,
 }
 
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionState {
-    /// Turn completed, waiting for user input.
-    Idle,
-    /// Agent is actively processing.
-    Running,
-    /// Waiting for user action (approval, question, elicitation).
-    RequiresAction,
-}
-
 // ---------------------------------------------------------------------------
 // TuiOnlyEvent — TUI-exclusive events (21 variants)
 // ---------------------------------------------------------------------------
-
-/// Bounded, UI-ready permission input display.
-///
-/// This is separate from the raw tool input because approval UIs should
-/// consume sanitized display data while keeping `original_input` only for
-/// updated-input response construction and permission-rule derivation.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
-pub enum PermissionDisplayInput {
-    Command(String),
-    Json(String),
-    Text(String),
-    Empty,
-}
-
-impl PermissionDisplayInput {
-    pub fn as_display_str(&self) -> &str {
-        match self {
-            Self::Command(value) | Self::Json(value) | Self::Text(value) => value,
-            Self::Empty => "",
-        }
-    }
-}
 
 /// TUI-exclusive events.
 ///
@@ -2414,7 +2320,7 @@ pub enum TuiOnlyEvent {
     #[serde(skip)]
     #[cfg_attr(feature = "schema", schemars(skip))]
     SessionScoped {
-        session_id: crate::SessionId,
+        session_id: coco_types::SessionId,
         event: Box<SessionScopedEvent>,
     },
     // === Permission / Question overlays (4) ===
@@ -2439,11 +2345,11 @@ pub enum TuiOnlyEvent {
         #[serde(default)]
         show_always_allow: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        choices: Option<Vec<crate::PermissionAskChoice>>,
+        choices: Option<Vec<coco_types::PermissionAskChoice>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        detail: Option<crate::PermissionRequestDetail>,
+        detail: Option<coco_types::PermissionRequestDetail>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        permission_suggestions: Vec<crate::PermissionUpdate>,
+        permission_suggestions: Vec<coco_types::PermissionUpdate>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         original_input: Option<serde_json::Value>,
         /// Tool execution cwd used to resolve relative paths in
@@ -2453,7 +2359,7 @@ pub enum TuiOnlyEvent {
         /// Identity badge of the requesting cross-process teammate, if
         /// any — rendered in the prompt so the leader sees who is asking.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        worker_badge: Option<crate::WorkerBadge>,
+        worker_badge: Option<coco_types::WorkerBadge>,
     },
     /// AskUserQuestion overlay needed. `input` carries the full tool
     /// input dict (the `questions[]` array, etc.) verbatim so the TUI
@@ -2492,7 +2398,7 @@ pub enum TuiOnlyEvent {
     PermissionExplanationReady {
         request_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        explanation: Option<crate::PermissionExplanation>,
+        explanation: Option<coco_types::PermissionExplanation>,
     },
 
     // === Picker / data-ready events (7) ===
@@ -2508,7 +2414,7 @@ pub enum TuiOnlyEvent {
     /// The registry lives in the CLI process so this pushes a snapshot
     /// rather than querying inline.
     AvailableCommandsRefreshed {
-        commands: Vec<crate::SlashCommandInfo>,
+        commands: Vec<coco_types::SlashCommandInfo>,
     },
     /// Provider availability changed (e.g. after an in-session `/login` or
     /// `/logout`) — the CLI re-ran `build_provider_statuses` and pushes the
@@ -2516,7 +2422,7 @@ pub enum TuiOnlyEvent {
     /// This clears a `NotLoggedIn` gate in the `/model` picker without a
     /// restart.
     ProviderStatusesRefreshed {
-        statuses: Vec<crate::ProviderStatusInfo>,
+        statuses: Vec<coco_types::ProviderStatusInfo>,
     },
     /// Live `/models` discovery finished (e.g. after login) — the CLI merged
     /// the provider's reported models onto the static catalog and pushes the
@@ -2524,7 +2430,7 @@ pub enum TuiOnlyEvent {
     /// letting the `/model` picker show subscription-only models without a
     /// restart.
     ModelCatalogRefreshed {
-        entries: Vec<crate::ModelCatalogInfo>,
+        entries: Vec<coco_types::ModelCatalogInfo>,
     },
     /// Queued command was removed from the engine queue and is ready to
     /// restore into the composer for editing.
@@ -2550,7 +2456,7 @@ pub enum TuiOnlyEvent {
     /// `/resume` with no args opens the saved-chat picker;
     /// `/resume <id-or-name>` bypasses this and resumes directly.
     OpenSessionBrowser {
-        sessions: Vec<crate::SessionSummary>,
+        sessions: Vec<coco_types::SessionSummary>,
     },
     /// One streamed batch from the resume picker's transcript-content search.
     SessionSearchResults {
@@ -2558,7 +2464,7 @@ pub enum TuiOnlyEvent {
         /// Identity issued by the picker when this exact search began. The
         /// query text alone is insufficient when a user types `a -> ab -> a`.
         request_id: u64,
-        hits: Vec<crate::SessionSearchHit>,
+        hits: Vec<coco_types::SessionSearchHit>,
         complete: bool,
     },
     /// Rewind picker per-row metadata, emitted once on picker mount.
@@ -2588,7 +2494,7 @@ pub enum TuiOnlyEvent {
     /// the picker recover a prompt from the prior session when the new
     /// session has no selectable messages yet.
     RewindPreClearSnapshot {
-        messages: Vec<std::sync::Arc<crate::messages::Message>>,
+        messages: Vec<std::sync::Arc<coco_types::messages::Message>>,
     },
 
     // === Compaction / speculation toasts (4) ===
@@ -2683,7 +2589,7 @@ pub enum TuiOnlyEvent {
     /// output (often command-specific status / git output / prompt
     /// preview).
     SlashCommandResult {
-        session_id: crate::SessionId,
+        session_id: coco_types::SessionId,
         name: String,
         /// Raw argument string the user typed (e.g. `sonnet` for
         /// `/model sonnet`). Threaded into the model-visible echo
@@ -2698,7 +2604,7 @@ pub enum TuiOnlyEvent {
     /// does not reach across layers to compute durations, tokens, or the last
     /// achieved goal.
     OpenGoalStatus {
-        session_id: crate::SessionId,
+        session_id: coco_types::SessionId,
         title: String,
         body: String,
     },
@@ -2706,15 +2612,15 @@ pub enum TuiOnlyEvent {
     /// report (the TUI cannot reach the engine to compute it). Replaces the
     /// former markdown-in-transcript output and the removed `Ctrl+W` overlay.
     OpenContextUsage {
-        session_id: crate::SessionId,
-        result: crate::server_request::ContextUsageResult,
+        session_id: coco_types::SessionId,
+        result: coco_types::ContextUsageResult,
     },
     /// Dispatcher-side breadcrumb for slash commands the runtime couldn't
     /// fully execute (missing handler, handler error, empty Prompt body,
     /// dialog wiring pending). The TUI translates `kind` via the i18n
     /// catalog before rendering.
     SlashCommandStatus {
-        session_id: crate::SessionId,
+        session_id: coco_types::SessionId,
         name: String,
         /// Argument string the user typed after the command, used to render the
         /// `❯ /name args` echo alongside the status. Empty when none was given.
@@ -2872,7 +2778,9 @@ pub enum TuiOnlyEvent {
     /// filtered to `ProviderAuth::OAuth`, with logged-in state) since the TUI
     /// cannot reach `runtime_config` directly; confirm emits
     /// `UserCommand::ProviderLogin` to run that instance's OAuth flow.
-    OpenLoginPicker { entries: Vec<crate::LoginEntryInfo> },
+    OpenLoginPicker {
+        entries: Vec<coco_types::LoginEntryInfo>,
+    },
     /// Open the interactive `/add-dir` overlay (no-argument form). The TUI
     /// shows a directory-path text input; confirm re-dispatches
     /// `/add-dir <path>` to reuse the validated session-add path.
@@ -2903,13 +2811,13 @@ pub enum TuiOnlyEvent {
     /// turn events so they render in the child view. See
     /// `docs/internal/sidechat-architecture.md`.
     SideChatEntered {
-        parent_id: crate::SessionId,
-        child_id: crate::SessionId,
+        parent_id: coco_types::SessionId,
+        child_id: coco_types::SessionId,
     },
     /// The sidechat child closed: the TUI restores the stashed primary view.
     SideChatExited {
-        parent_id: crate::SessionId,
-        child_id: crate::SessionId,
+        parent_id: coco_types::SessionId,
+        child_id: coco_types::SessionId,
     },
 }
 
@@ -2946,7 +2854,7 @@ pub struct JourneyNodeWire {
     /// `JourneyRecord` intentionally does not derive `JsonSchema`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "schema", schemars(with = "Vec<serde_json::Value>"))]
-    pub history: Vec<crate::JourneyRecord>,
+    pub history: Vec<coco_types::JourneyRecord>,
 }
 
 /// Wire mirror of the node kind + kind-specific data (`tag = "kind"`).
@@ -3207,84 +3115,6 @@ pub struct WorkflowDialogEntry {
     pub source_path: Option<String>,
 }
 
-/// Per-skill override state stored under `skill_overrides` in any
-/// settings tier. Drives the `/skills` 4-state editor ladder.
-///
-/// Wire format is kebab-case (`"on"`, `"name-only"`,
-/// `"user-invocable-only"`, `"off"`) — JSON settings files round-trip
-/// without translation.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SkillOverrideState {
-    /// Default — full description in model listing, both user `/` and
-    /// model Skill-tool invocation allowed.
-    On,
-    /// Name-only listing (model sees `- name` without description);
-    /// **model can still invoke**. Saves description tokens.
-    NameOnly,
-    /// Hidden from model listing; Skill tool rejects model invocation
-    /// **unless** the user typed `/<name>` in the current turn. Slash
-    /// dispatcher still works.
-    UserInvocableOnly,
-    /// Fully disabled — hidden from listing AND `/` autocomplete;
-    /// Skill tool rejects every invocation attempt.
-    Off,
-}
-
-impl SkillOverrideState {
-    /// Cycle to the next state in the TS 4-state ladder
-    /// (`on → name-only → user-invocable-only → off → on`). Used by
-    /// the `/skills` dialog Space key.
-    pub const fn next(self) -> Self {
-        match self {
-            Self::On => Self::NameOnly,
-            Self::NameOnly => Self::UserInvocableOnly,
-            Self::UserInvocableOnly => Self::Off,
-            Self::Off => Self::On,
-        }
-    }
-}
-
-/// Which precedence layer originated a non-overridable lock on a
-/// skill's `skill_overrides` state. Mirrors the four `lock.source`
-/// values returned by TS `oT5` (`cli_inner_pretty.js:476885-476893`).
-///
-/// In precedence order (highest first): [`Self::Policy`] →
-/// [`Self::Flag`] → [`Self::Author`] → [`Self::Plugin`]. A lock means
-/// the `/skills` dialog renders `🔒 <label>` for the row and refuses
-/// to cycle it (Space is a no-op).
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SkillLockSource {
-    /// `policySettings.skill_overrides[name]` — enterprise-managed.
-    Policy,
-    /// `flagSettings.skill_overrides[name]` — `--settings <path>`
-    /// invocation override.
-    Flag,
-    /// Skill frontmatter `disable-model-invocation: true` — author
-    /// forced to `user-invocable-only`.
-    Author,
-    /// `skill.source == Plugin` — plugin-contributed skills are
-    /// forced to `on` (manage via `/plugin` instead).
-    Plugin,
-}
-
-/// A non-overridable lock on a skill row in the `/skills` dialog.
-/// Carries both the originating tier ([`Self::source`]) and the
-/// forced 4-state value ([`Self::forced_value`]) so downstream
-/// renderers don't need to re-derive the value from per-tier maps.
-///
-/// TS mirror: `oT5` returns `{ value, source }` —
-/// `cli_inner_pretty.js:476885-476893`.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SkillLock {
-    pub source: SkillLockSource,
-    pub forced_value: SkillOverrideState,
-}
-
 /// Payload for [`TuiOnlyEvent::OpenPluginDialog`].
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -3542,10 +3372,10 @@ pub struct AgentsDialogEntry {
     /// omitted it — the renderer falls back to a placeholder.
     pub description: String,
     /// Which source loaded this entry.
-    pub source: crate::AgentSource,
+    pub source: coco_types::AgentSource,
     /// Optional badge color from frontmatter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<crate::AgentColorName>,
+    pub color: Option<coco_types::AgentColorName>,
     /// `true` when this `agent_type` is shadowed by a higher-priority
     /// source (still loadable, but the active resolution picks the
     /// override). TS: `is_overridden` flag in `loadAgentsDir.ts`.
@@ -3593,8 +3423,8 @@ pub struct PermissionsEditorPayload {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PermissionsEditorRule {
-    pub behavior: crate::PermissionBehavior,
-    pub source: crate::PermissionRuleSource,
+    pub behavior: coco_types::PermissionBehavior,
+    pub source: coco_types::PermissionRuleSource,
     /// Tool the rule targets — e.g. `"Bash"`, `"Read"`, `"mcp__slack__*"`.
     pub tool_pattern: String,
     /// Optional in-tool content pattern — e.g. `"git *"` for `Bash(git *)`.
@@ -3609,7 +3439,7 @@ pub struct PermissionsEditorDir {
     pub path: String,
     /// Source layer that contributed the directory (drives the inline
     /// source label and the read-only gate for policy entries).
-    pub source: crate::PermissionRuleSource,
+    pub source: coco_types::PermissionRuleSource,
 }
 
 /// Categorization of a `SlashCommandStatus` payload. Each variant maps to

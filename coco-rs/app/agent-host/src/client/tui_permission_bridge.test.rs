@@ -1,5 +1,5 @@
 use super::*;
-use coco_types::CoreEvent;
+use coco_event_types::CoreEvent;
 
 fn dummy_request(id: &str) -> ToolPermissionRequest {
     ToolPermissionRequest {

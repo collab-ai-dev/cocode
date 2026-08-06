@@ -21,3 +21,18 @@ pub fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<
     tmp.persist(path).map_err(|e| e.error)?;
     Ok(())
 }
+
+/// File modification time in epoch milliseconds.
+///
+/// Lives here rather than beside the read-state cache that consumes it:
+/// `coco-types` holds types, and an async stat there would put `tokio::fs`
+/// on every crate that depends on it.
+pub async fn file_mtime_ms(path: &Path) -> std::io::Result<i64> {
+    let meta = tokio::fs::metadata(path).await?;
+    let mtime = meta
+        .modified()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    Ok(mtime)
+}

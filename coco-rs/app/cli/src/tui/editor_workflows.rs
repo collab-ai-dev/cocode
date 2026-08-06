@@ -349,7 +349,7 @@ async fn emit_session_control_error(
     category: &str,
     message: impl Into<String>,
 ) {
-    let notification = ServerNotification::Error(coco_types::ErrorParams {
+    let notification = ServerNotification::Error(coco_event_types::ErrorParams {
         message: message.into(),
         category: Some(category.to_string()),
         retryable: true,
@@ -357,7 +357,7 @@ async fn emit_session_control_error(
     let _ = event_tx
         .send(CoreEvent::Tui(TuiOnlyEvent::SessionScoped {
             session_id: session_id.clone(),
-            event: Box::new(coco_types::SessionScopedEvent::Protocol(Box::new(
+            event: Box::new(coco_event_types::SessionScopedEvent::Protocol(Box::new(
                 notification,
             ))),
         }))
@@ -528,8 +528,8 @@ pub(super) fn truncate_output(text: String, max_bytes: usize, max_lines: usize) 
     truncated
 }
 use anyhow::Result;
+use coco_event_types::TuiOnlyEvent;
 use coco_query::{CoreEvent, ServerNotification};
-use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;
 use tracing::warn;
 

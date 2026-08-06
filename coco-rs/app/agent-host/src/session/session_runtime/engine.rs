@@ -4,13 +4,13 @@ use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use coco_event_types::CoreEvent;
 use coco_messages::MessageHistory;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
 use coco_query::SessionStartHookSideEffectSink;
 use coco_query::SessionStartHookSideEffects;
 use coco_tool_runtime::TurnAbortSignal;
-use coco_types::CoreEvent;
 use coco_types::SessionId;
 use coco_types::ToolAppState;
 

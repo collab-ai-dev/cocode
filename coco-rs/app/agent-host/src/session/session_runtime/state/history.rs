@@ -22,7 +22,7 @@ impl SessionRuntime {
     pub async fn append_messages_to_history_and_emit(
         &self,
         messages: Vec<coco_messages::Message>,
-        event_tx: Option<mpsc::Sender<coco_types::CoreEvent>>,
+        event_tx: Option<mpsc::Sender<coco_event_types::CoreEvent>>,
     ) -> Vec<Arc<coco_messages::Message>> {
         let mut history = self.history_resources.history().lock().await;
         for message in messages {

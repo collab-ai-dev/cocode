@@ -412,14 +412,14 @@ fn render_installed_tab(p: &PluginDialogState, body: &mut String) {
     }
 }
 
-fn plugin_skill_source_label(source: coco_types::SkillsDialogSource) -> &'static str {
+fn plugin_skill_source_label(source: coco_event_types::SkillsDialogSource) -> &'static str {
     match source {
-        coco_types::SkillsDialogSource::BuiltIn => "built-in",
-        coco_types::SkillsDialogSource::Project => "project",
-        coco_types::SkillsDialogSource::User => "user",
-        coco_types::SkillsDialogSource::Policy => "policy",
-        coco_types::SkillsDialogSource::Plugin => "plugin",
-        coco_types::SkillsDialogSource::Mcp => "mcp",
+        coco_event_types::SkillsDialogSource::BuiltIn => "built-in",
+        coco_event_types::SkillsDialogSource::Project => "project",
+        coco_event_types::SkillsDialogSource::User => "user",
+        coco_event_types::SkillsDialogSource::Policy => "policy",
+        coco_event_types::SkillsDialogSource::Plugin => "plugin",
+        coco_event_types::SkillsDialogSource::Mcp => "mcp",
     }
 }
 

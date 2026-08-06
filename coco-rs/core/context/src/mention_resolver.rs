@@ -14,12 +14,12 @@ use crate::attachment::AttachmentBudget;
 use crate::attachment::DirectoryAttachment;
 use crate::attachment::FileReadOptions;
 use crate::attachment::generate_file_attachment;
-use crate::file_read_state::FileReadEntry;
-use crate::file_read_state::FileReadRange;
-use crate::file_read_state::FileReadState;
-use crate::file_read_state::file_mtime_ms;
 use crate::user_input::Mention;
 use crate::user_input::MentionType;
+use coco_types::FileReadEntry;
+use coco_types::FileReadRange;
+use coco_types::FileReadState;
+use coco_utils_common::file_mtime_ms;
 
 /// Options for mention resolution.
 pub struct MentionResolveOptions<'a> {

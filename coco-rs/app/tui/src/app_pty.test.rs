@@ -36,6 +36,7 @@ use ratatui::widgets::Paragraph;
 use super::App;
 use crate::events::TuiEvent;
 use crate::terminal::Tui;
+use coco_event_types::CoreEvent;
 use coco_tui_ui::engine::CursorClaim;
 use coco_tui_ui::engine::compatibility::TerminalCompatibility;
 use coco_tui_ui::engine::frame_backend::FrameCrosstermBackend;
@@ -45,7 +46,6 @@ use coco_tui_ui::engine::terminal::DirectHistoryInsert;
 use coco_tui_ui::engine::terminal::SurfaceBackend;
 use coco_tui_ui::engine::terminal::SurfaceTerminal;
 use coco_tui_ui::engine::terminal::TerminalWriteStats;
-use coco_types::CoreEvent;
 
 /// Crossterm's normal cursor query reads process-global stdin. This wrapper
 /// keeps the production ANSI writer but tracks cursor/size locally so the app

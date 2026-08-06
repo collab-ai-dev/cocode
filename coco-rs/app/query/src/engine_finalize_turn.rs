@@ -293,7 +293,7 @@ impl QueryEngine {
                     history,
                     survivors,
                     event_tx,
-                    coco_types::HistoryReplaceReason::Trim,
+                    coco_event_types::HistoryReplaceReason::Trim,
                 )
                 .await;
             }
@@ -333,7 +333,7 @@ impl QueryEngine {
         let removed = (pre_count - history.len() as i32).max(0);
         let _ = emit_protocol(
             event_tx,
-            ServerNotification::ContextCompacted(coco_types::ContextCompactedParams {
+            ServerNotification::ContextCompacted(coco_event_types::ContextCompactedParams {
                 removed_messages: removed,
                 summary_tokens: 0,
                 trigger: coco_types::CompactTrigger::Reactive,
@@ -442,7 +442,7 @@ impl QueryEngine {
         // `Later`-priority items (background task-completion notifications)
         // drain only after a Sleep; else the boundary drain caps at `Next`.
         sleep_ran: bool,
-    ) -> Option<coco_types::TurnEndedParams> {
+    ) -> Option<coco_event_types::TurnEndedParams> {
         // Periodic terminal-task eviction. Fires every turn regardless
         // of success / failure / cancellation outcome. Without a periodic
         // sweep `TaskManager`'s in-memory map grows monotonically over a
@@ -568,13 +568,15 @@ impl QueryEngine {
                     // want the distinction in custom UIs.
                     let _ = emit_protocol(
                         event_tx,
-                        ServerNotification::ContextCompacted(coco_types::ContextCompactedParams {
-                            removed_messages: res.messages_cleared,
-                            summary_tokens: 0,
-                            trigger: coco_types::CompactTrigger::Auto,
-                            pre_tokens: Some(pre_tb_tokens),
-                            post_tokens: Some(post_tb_tokens),
-                        }),
+                        ServerNotification::ContextCompacted(
+                            coco_event_types::ContextCompactedParams {
+                                removed_messages: res.messages_cleared,
+                                summary_tokens: 0,
+                                trigger: coco_types::CompactTrigger::Auto,
+                                pre_tokens: Some(pre_tb_tokens),
+                                post_tokens: Some(post_tb_tokens),
+                            },
+                        ),
                     )
                     .await;
                     // The next response's cache_read drop is from us, not a
@@ -646,13 +648,15 @@ impl QueryEngine {
                 );
                 let _ = emit_protocol(
                     event_tx,
-                    ServerNotification::ContextCompacted(coco_types::ContextCompactedParams {
-                        removed_messages: cleared,
-                        summary_tokens: 0,
-                        trigger: coco_types::CompactTrigger::Auto,
-                        pre_tokens: Some(pre_prune_tokens),
-                        post_tokens: Some(estimated_tokens),
-                    }),
+                    ServerNotification::ContextCompacted(
+                        coco_event_types::ContextCompactedParams {
+                            removed_messages: cleared,
+                            summary_tokens: 0,
+                            trigger: coco_types::CompactTrigger::Auto,
+                            pre_tokens: Some(pre_prune_tokens),
+                            post_tokens: Some(estimated_tokens),
+                        },
+                    ),
                 )
                 .await;
                 // The next response's cache_read drop is from us, not a
@@ -815,7 +819,7 @@ impl QueryEngine {
             let post_micro_tokens = history.tokens_with_last_usage();
             let _ = emit_protocol(
                 event_tx,
-                ServerNotification::ContextCompacted(coco_types::ContextCompactedParams {
+                ServerNotification::ContextCompacted(coco_event_types::ContextCompactedParams {
                     removed_messages: removed,
                     summary_tokens: 0,
                     trigger: coco_types::CompactTrigger::Auto,

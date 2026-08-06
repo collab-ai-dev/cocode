@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use anyhow::Result;
+use coco_event_types::CoreEvent;
 use coco_hooks::HookRegistry;
 use coco_inference::ModelRuntimeSource;
 use coco_query::CommandQueue;
@@ -20,7 +21,6 @@ use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
 use coco_query::QueryResult;
 use coco_tool_runtime::ToolRegistry;
-use coco_types::CoreEvent;
 use coco_types::Features;
 use coco_types::PermissionMode;
 use coco_types::ToolOverrides;

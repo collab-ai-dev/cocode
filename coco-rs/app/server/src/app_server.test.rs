@@ -3,10 +3,8 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use coco_types::{
-    ServerRequestDelivery, ServerRequestUserInputParams, SessionAccess, SessionTarget,
-    UserInputResolveParams,
-};
+use coco_event_types::{ServerRequestDelivery, SessionAccess};
+use coco_types::{ServerRequestUserInputParams, SessionTarget, UserInputResolveParams};
 
 use super::*;
 
@@ -440,9 +438,11 @@ fn test_envelope(session_id: SessionId, seq: i64) -> SessionEnvelope {
         None,
         None,
         seq,
-        coco_types::CoreEvent::Protocol(coco_types::ServerNotification::SessionStateChanged {
-            state: coco_types::SessionState::Running,
-        }),
+        coco_event_types::CoreEvent::Protocol(
+            coco_event_types::ServerNotification::SessionStateChanged {
+                state: coco_types::SessionState::Running,
+            },
+        ),
     )
 }
 

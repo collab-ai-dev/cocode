@@ -199,18 +199,6 @@ impl FileReadState {
         );
     }
 
-    /// Returns `true` if the file is in cache and disk mtime matches.
-    pub async fn is_unchanged(&self, path: &Path) -> bool {
-        let canonical = path.to_path_buf();
-        let Some(entry) = self.entries.get(&canonical) else {
-            return false;
-        };
-        match file_mtime_ms(&canonical).await {
-            Ok(disk_mtime) => entry.mtime_ms == disk_mtime,
-            Err(_) => false,
-        }
-    }
-
     /// Subset of `candidates` whose cached mtime still matches disk —
     /// i.e. the model already has the current content and a re-inject
     /// would be redundant. Feeds `AlreadyReadFileGenerator` in
@@ -218,14 +206,21 @@ impl FileReadState {
     /// Paths not in the cache are excluded (no way to prove "already
     /// read" without a prior read). Paths whose mtime diverges are also
     /// excluded (content changed → content loader should re-inject).
-    pub async fn unchanged_paths(&self, candidates: &[PathBuf]) -> Vec<PathBuf> {
-        let mut result = Vec::new();
-        for path in candidates {
-            if self.is_unchanged(path).await {
-                result.push(path.clone());
-            }
-        }
-        result
+    ///
+    /// Takes each candidate's already-resolved disk mtime rather than
+    /// stat-ing it here: this crate holds types, and reaching the
+    /// filesystem from one would put `tokio::fs` on the dependency tree of
+    /// all 45 crates that use it. The caller owns the I/O.
+    pub fn unchanged_paths(&self, candidates: &[(PathBuf, i64)]) -> Vec<PathBuf> {
+        candidates
+            .iter()
+            .filter(|(path, disk_mtime)| {
+                self.entries
+                    .get(path)
+                    .is_some_and(|entry| entry.mtime_ms == *disk_mtime)
+            })
+            .map(|(path, _)| path.clone())
+            .collect()
     }
 
     pub fn invalidate(&mut self, path: &Path) {
@@ -286,17 +281,6 @@ impl FileReadState {
             }
         }
     }
-}
-
-/// Get file modification time in epoch milliseconds.
-pub async fn file_mtime_ms(path: &Path) -> std::io::Result<i64> {
-    let meta = tokio::fs::metadata(path).await?;
-    let mtime = meta
-        .modified()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
-    Ok(mtime)
 }
 
 #[cfg(test)]

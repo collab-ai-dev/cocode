@@ -11,8 +11,8 @@
 //! `on_restore_preview_ready`, `on_rewind_completed` — so the match
 //! arms stay scannable.
 
+use coco_event_types::TuiOnlyEvent;
 use coco_messages::SystemMessageLevel;
-use coco_types::TuiOnlyEvent;
 
 use crate::command::SlashTranscriptEntry;
 use crate::command::SystemPushKind;
@@ -700,9 +700,13 @@ pub(super) fn handle(
         // dropped keypress.
         TuiOnlyEvent::JourneyMutationFailed { failure } => {
             let key = match failure.kind {
-                coco_types::JourneyMutationKind::RetireSkill => "toast.journey_retire_failed",
-                coco_types::JourneyMutationKind::RestoreSkill => "toast.journey_restore_failed",
-                coco_types::JourneyMutationKind::DeleteMemory => "toast.journey_delete_failed",
+                coco_event_types::JourneyMutationKind::RetireSkill => "toast.journey_retire_failed",
+                coco_event_types::JourneyMutationKind::RestoreSkill => {
+                    "toast.journey_restore_failed"
+                }
+                coco_event_types::JourneyMutationKind::DeleteMemory => {
+                    "toast.journey_delete_failed"
+                }
             };
             state.ui.add_toast(Toast::error(
                 t!(
@@ -965,7 +969,7 @@ pub(super) fn handle(
             args,
             kind,
         } => {
-            use coco_types::SlashCommandStatusKind;
+            use coco_event_types::SlashCommandStatusKind;
             // Render dispatcher statuses inline tool-style (`❯ /cmd args` +
             // `⎿ …`) so they match the success path and a real tool result,
             // rather than a detached system note. `Failed` is the only true
@@ -1185,7 +1189,10 @@ fn on_open_rewind_picker(
 /// One in-place pass per row keyed by `message_id`; `metadata: None`
 /// signals that the checkpoint has no code restore (renders "⚠ No code
 /// restore").
-fn on_row_metadata_ready(state: &mut AppState, rows: Vec<coco_types::RewindRowMetadata>) -> bool {
+fn on_row_metadata_ready(
+    state: &mut AppState,
+    rows: Vec<coco_event_types::RewindRowMetadata>,
+) -> bool {
     let Some(ModalState::Rewind(r)) = state.ui.modal.as_mut() else {
         return false;
     };
@@ -1228,7 +1235,7 @@ fn on_row_metadata_ready(state: &mut AppState, rows: Vec<coco_types::RewindRowMe
 fn on_restore_preview_ready(
     state: &mut AppState,
     message_id: String,
-    stats: Option<coco_types::RewindDiffStatsPayload>,
+    stats: Option<coco_event_types::RewindDiffStatsPayload>,
 ) -> bool {
     let Ok(stats_uuid) = uuid::Uuid::parse_str(&message_id) else {
         tracing::warn!(
@@ -1496,10 +1503,10 @@ fn str_field<'a>(v: &'a serde_json::Value, key: &str) -> &'a str {
 /// from `UiState.pending_skills_save_edits`); only consumed on the
 /// Ok branch.
 fn format_skill_overrides_save_toast(
-    result: coco_types::SkillOverridesSaveResult,
+    result: coco_event_types::SkillOverridesSaveResult,
     total_edits: usize,
 ) -> String {
-    use coco_types::SkillOverridesSaveResult;
+    use coco_event_types::SkillOverridesSaveResult;
     match result {
         SkillOverridesSaveResult::Ok if total_edits == 0 => {
             t!("dialog.skills_save_no_changes").to_string()
@@ -1523,14 +1530,16 @@ fn format_skill_overrides_save_toast(
     }
 }
 
-/// Translate an [`coco_types::AgentsDialogPayload`] into the flat
+/// Translate an [`coco_event_types::AgentsDialogPayload`] into the flat
 /// row list rendered by the Library tab.
 ///
 /// Source ordering: User → Project → Local (collapsed into Project until
 /// coco-rs distinguishes worktree-local from repo-root project) → Managed
 /// → Plugin → Flag → Built-in. Empty groups are omitted; built-in always
 /// renders last.
-fn build_library_rows(payload: coco_types::AgentsDialogPayload) -> Vec<crate::state::LibraryRow> {
+fn build_library_rows(
+    payload: coco_event_types::AgentsDialogPayload,
+) -> Vec<crate::state::LibraryRow> {
     use crate::state::LibraryRow;
     use coco_types::AgentSource;
     let mut rows = vec![LibraryRow::CreateNew];
@@ -1547,7 +1556,7 @@ fn build_library_rows(payload: coco_types::AgentsDialogPayload) -> Vec<crate::st
         (AgentSource::BuiltIn, "dialog.agents_group_builtin"),
     ];
     for (source, label_key) in group_order {
-        let group_entries: Vec<&coco_types::AgentsDialogEntry> = payload
+        let group_entries: Vec<&coco_event_types::AgentsDialogEntry> = payload
             .entries
             .iter()
             .filter(|e| e.source == *source)

@@ -486,20 +486,22 @@ impl AgentQueryEngine for QueryEngineAdapter {
     }
 }
 
-fn status_for_query_error(code: coco_types::ErrorCode) -> coco_error::StatusCode {
+fn status_for_query_error(code: coco_event_types::ErrorCode) -> coco_error::StatusCode {
     match code {
-        coco_types::ErrorCode::Common | coco_types::ErrorCode::Unknown => {
+        coco_event_types::ErrorCode::Common | coco_event_types::ErrorCode::Unknown => {
             coco_error::StatusCode::Internal
         }
-        coco_types::ErrorCode::Input => coco_error::StatusCode::InvalidRequest,
-        coco_types::ErrorCode::Io => coco_error::StatusCode::IoError,
-        coco_types::ErrorCode::Network => coco_error::StatusCode::NetworkError,
-        coco_types::ErrorCode::Auth => coco_error::StatusCode::AuthenticationFailed,
-        coco_types::ErrorCode::HookBlocked => coco_error::StatusCode::PermissionDenied,
-        coco_types::ErrorCode::Config => coco_error::StatusCode::InvalidConfig,
-        coco_types::ErrorCode::Provider => coco_error::StatusCode::ProviderError,
-        coco_types::ErrorCode::Resource => coco_error::StatusCode::ResourcesExhausted,
-        coco_types::ErrorCode::SystemReminder => coco_error::StatusCode::ReminderGeneratorFailed,
+        coco_event_types::ErrorCode::Input => coco_error::StatusCode::InvalidRequest,
+        coco_event_types::ErrorCode::Io => coco_error::StatusCode::IoError,
+        coco_event_types::ErrorCode::Network => coco_error::StatusCode::NetworkError,
+        coco_event_types::ErrorCode::Auth => coco_error::StatusCode::AuthenticationFailed,
+        coco_event_types::ErrorCode::HookBlocked => coco_error::StatusCode::PermissionDenied,
+        coco_event_types::ErrorCode::Config => coco_error::StatusCode::InvalidConfig,
+        coco_event_types::ErrorCode::Provider => coco_error::StatusCode::ProviderError,
+        coco_event_types::ErrorCode::Resource => coco_error::StatusCode::ResourcesExhausted,
+        coco_event_types::ErrorCode::SystemReminder => {
+            coco_error::StatusCode::ReminderGeneratorFailed
+        }
     }
 }
 

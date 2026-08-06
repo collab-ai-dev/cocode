@@ -18,25 +18,25 @@
 //! consumers (event hub, transcript JSONL) can clone the wire shape
 //! without dragging cancel-token Arcs through them.
 
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
+use coco_event_types::TaskCompletedParams;
+use coco_event_types::TaskCompletionStatus;
+use coco_event_types::TaskProgressParams;
+use coco_event_types::TaskStartedParams;
+use coco_event_types::TaskUsage;
 use coco_tool_runtime::AgentExecutionPhase;
 use coco_tool_runtime::DetachOutcome;
 use coco_tool_runtime::DetachSource;
 use coco_types::BackendType;
-use coco_types::CoreEvent;
 use coco_types::FieldUpdate;
-use coco_types::ServerNotification;
 use coco_types::ShellExtras;
-use coco_types::TaskCompletedParams;
-use coco_types::TaskCompletionStatus;
 use coco_types::TaskExtras;
 use coco_types::TaskKilledBy;
 use coco_types::TaskProgress;
-use coco_types::TaskProgressParams;
-use coco_types::TaskStartedParams;
 use coco_types::TaskStateBase;
 use coco_types::TaskStatus;
 use coco_types::TaskType;
-use coco_types::TaskUsage;
 use coco_types::TeammateExtras;
 use coco_types::TeammateRef;
 use coco_types::TeammateTaskMessage;

@@ -1,11 +1,11 @@
 use std::collections::VecDeque;
 
-use coco_types::AgentStreamEvent;
-use coco_types::CoreEvent;
-use coco_types::ServerNotification;
-use coco_types::TaskProgressParams;
-use coco_types::TaskUsage;
-use coco_types::TuiOnlyEvent;
+use coco_event_types::AgentStreamEvent;
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
+use coco_event_types::TaskProgressParams;
+use coco_event_types::TaskUsage;
+use coco_event_types::TuiOnlyEvent;
 use coco_types::WorkflowProgressEvent;
 use crossterm::event::Event;
 use crossterm::event::KeyCode;
@@ -515,7 +515,7 @@ fn deferred_event_buffer_never_coalesces_across_attempt_boundaries() {
 #[test]
 fn deferred_tool_input_never_coalesces_across_attempt_boundaries() {
     let mut buffer = VecDeque::from([
-        CoreEvent::Tui(coco_types::TuiOnlyEvent::ToolCallDelta {
+        CoreEvent::Tui(coco_event_types::TuiOnlyEvent::ToolCallDelta {
             call_id: "reused".into(),
             delta: "discarded".into(),
         }),
@@ -531,14 +531,15 @@ fn deferred_tool_input_never_coalesces_across_attempt_boundaries() {
 
     defer_core_event(
         &mut buffer,
-        CoreEvent::Tui(coco_types::TuiOnlyEvent::ToolCallDelta {
+        CoreEvent::Tui(coco_event_types::TuiOnlyEvent::ToolCallDelta {
             call_id: "reused".into(),
             delta: "fresh".into(),
         }),
     );
 
     assert_eq!(buffer.len(), 4);
-    let CoreEvent::Tui(coco_types::TuiOnlyEvent::ToolCallDelta { delta, .. }) = &buffer[3] else {
+    let CoreEvent::Tui(coco_event_types::TuiOnlyEvent::ToolCallDelta { delta, .. }) = &buffer[3]
+    else {
         panic!("second attempt tool delta");
     };
     assert_eq!(delta, "fresh");

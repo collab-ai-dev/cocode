@@ -21,7 +21,7 @@ impl QueryEngine {
         continuation: TurnContinuation,
         cycle_turn_id: Option<coco_types::TurnId>,
         stop_reason: Option<coco_messages::StopReason>,
-    ) -> Option<coco_types::TurnEndedParams> {
+    ) -> Option<coco_event_types::TurnEndedParams> {
         self.flush_successful_turn_state(history).await;
         self.emit_reasoning_metadata_for_last_assistant(event_tx, history, &usage, None)
             .await;
@@ -55,7 +55,7 @@ impl QueryEngine {
         usage: TokenUsage,
         cycle_turn_id: Option<coco_types::TurnId>,
         stop_reason: Option<coco_messages::StopReason>,
-    ) -> Option<coco_types::TurnEndedParams> {
+    ) -> Option<coco_event_types::TurnEndedParams> {
         self.emit_reasoning_metadata_for_last_assistant(event_tx, history, &usage, None)
             .await;
         if let Some(id) = cycle_turn_id {
@@ -106,7 +106,7 @@ impl QueryEngine {
         usage: TokenUsage,
         history_len: usize,
         stop_reason: Option<coco_messages::StopReason>,
-    ) -> coco_types::TurnEndedParams {
+    ) -> coco_event_types::TurnEndedParams {
         info!(
             cycle_turn_id = %cycle_turn_id,
             tokens_in = usage.input_tokens.total,
@@ -115,7 +115,7 @@ impl QueryEngine {
             ?stop_reason,
             "turn ended (completed)"
         );
-        coco_types::TurnEndedParams::completed(cycle_turn_id, Some(usage), stop_reason)
+        coco_event_types::TurnEndedParams::completed(cycle_turn_id, Some(usage), stop_reason)
     }
 
     /// Emit `ReasoningMetadataAttached` so the TUI side-cache can anchor
@@ -189,7 +189,7 @@ impl QueryEngine {
         let _ = emit_protocol(
             event_tx,
             ServerNotification::ReasoningMetadataAttached(
-                coco_types::ReasoningMetadataAttachedParams {
+                coco_event_types::ReasoningMetadataAttachedParams {
                     message_uuid: last_assistant_uuid.to_string(),
                     duration_ms,
                     reasoning_tokens: usage.output_tokens.reasoning,
@@ -657,7 +657,7 @@ impl QueryEngine {
     pub(crate) async fn run_skill_review_finalize(
         &self,
         history: &mut MessageHistory,
-        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
     ) {
         let Some(runtime) = self.skill_review_runtime.as_ref() else {
             return;
@@ -709,7 +709,7 @@ impl QueryEngine {
     async fn project_skill_learn_notices(
         &self,
         history: &mut MessageHistory,
-        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
     ) {
         let Some(runtime) = self.skill_review_runtime.as_ref() else {
             return;

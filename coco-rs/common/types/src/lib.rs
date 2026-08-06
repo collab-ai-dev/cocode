@@ -19,9 +19,9 @@ mod client_request;
 mod command;
 mod composer;
 pub mod context_usage;
-mod event;
 mod extended;
 pub mod features;
+mod file_read_state;
 mod fork_label;
 mod goal;
 mod hook;
@@ -46,10 +46,11 @@ mod provider_auth_status;
 mod rate_limit;
 mod sandbox;
 mod server_request;
-mod session_access;
+mod session;
+mod shell_seam;
 pub mod side_query;
+mod skill;
 mod stream;
-mod stream_accumulator;
 mod task;
 mod task_list;
 mod thinking;
@@ -58,6 +59,7 @@ mod tool;
 mod tool_filter;
 pub mod tool_summary;
 mod tool_wire_name;
+mod turn;
 mod wire_tagged;
 mod workflow;
 
@@ -76,7 +78,7 @@ pub use app_state::{
 };
 
 // Per-provider rate-limit state (lives on `ToolAppState.rate_limits`).
-pub use rate_limit::RateLimitEntry;
+pub use rate_limit::{RateLimitEntry, RateLimitStatus};
 
 // Attachment taxonomy (full `AttachmentKind` catalog + coverage)
 pub use attachment_kind::{
@@ -93,8 +95,9 @@ pub use cache::{
 
 // Agent types
 pub use agent::{
-    AgentColorName, AgentDefinition, AgentIsolation, AgentMcpServerSpec, AgentSource, AgentTypeId,
-    MemoryScope, ModelInheritance, ModelSource, SubagentType, ToolAllowList, WorkerBadge,
+    AgentColorName, AgentDefinition, AgentInfo, AgentIsolation, AgentMcpServerSpec, AgentSource,
+    AgentTypeId, MemoryScope, ModelInheritance, ModelSource, SubagentType, ToolAllowList,
+    WorkerBadge,
 };
 
 // Inter-agent IPC (mailbox protocol + sub-agent state snapshots)
@@ -109,45 +112,18 @@ pub use apply_patch_preview::{
     AskUserQuestionAnswered, AskUserQuestionResult, ExitPlanModeResult, ToolDisplayData,
 };
 
-// Event types (three-layer CoreEvent system; see event-system-design.md)
-pub use event::{
-    AgentInfo, AgentSkillLifecycleWire, AgentStreamEvent, AgentsDialogEntry, AgentsDialogPayload,
-    AgentsKilledParams, CompactionFailedParams, CompactionHookType, CompactionPhase,
-    CompactionPhaseParams, ContentDeltaParams, ContextClearedParams, ContextCompactedParams,
-    ContextUsageWarningParams, CoreEvent, CostWarningParams, ElicitationCompleteParams, ErrorCode,
-    ErrorParams, ErrorPayload, EventLayer, EventReplayPolicy, FastModeState, FileChangeInfo,
-    FileChangeKind, FilesPersistedParams, HistoryReplaceReason, HookOutcomeStatus,
-    HookProgressParams, HookResponseParams, HookStartedParams, IdeDiagnosticsUpdatedParams,
-    IdeSelectionChangedParams, ItemStatus, JourneyBusiestDayWire, JourneyDialogPayload,
-    JourneyMutationFailed, JourneyMutationKind, JourneyNodeBodyWire, JourneyNodeWire,
-    JourneyStatsWire, LocalCommandOutputParams, McpServerInit, McpStartupCompleteParams,
-    McpStartupStatusParams, MemoryDialogEntry, MemoryDialogRowKind, MemoryDialogScope,
-    MoaAggregatingParams, MoaReferenceParams, ModelFallbackParams, ModelRoleChangedParams,
-    NotificationMethod, PermissionDenialInfo, PermissionDisplayInput, PermissionModeChangedParams,
-    PermissionsEditorDir, PermissionsEditorPayload, PermissionsEditorRule, PersistedFileError,
-    PersistedFileInfo, PlanApprovalRequestedParams, PluginDialogAction, PluginDialogErrorRow,
-    PluginDialogInstalledRow, PluginDialogMarketplaceRow, PluginDialogMcpServerRow,
-    PluginDialogMcpToolRow, PluginDialogOptionRow, PluginDialogPayload, PluginDialogSkillRow,
-    PluginDialogSkillUsage, PluginInit, RateLimitParams, RateLimitStatus,
-    ReasoningMetadataAttachedParams, RewindCompletedParams, RewindDiffStatsPayload,
-    RewindRowMetadata, SESSION_EVENT_METHOD, SESSION_LIFECYCLE_METHOD, SandboxStateChangedParams,
-    ServerNotification, ServerNotificationIdentity, SessionEndedParams, SessionEnvelope,
-    SessionModelUsage, SessionResultParams, SessionScopedEvent, SessionStartedParams, SessionState,
-    SkillLock, SkillLockSource, SkillOverrideState, SkillOverridesSaveErrorKind,
-    SkillOverridesSaveResult, SkillQuarantineWire, SkillTelemetryWire, SkillsDialogEntry,
-    SkillsDialogPayload, SkillsDialogSource, SlashCommandStatusKind, SummarizeCompletedParams,
-    TaskCompletedParams, TaskCompletionStatus, TaskPanelChangedParams, TaskProgressParams,
-    TaskStartedParams, TaskUsage, ThreadItem, ThreadItemDetails, TimelineBucketWire,
-    ToolAbortReasonPayload, ToolProgressParams, ToolUseSummaryParams, TuiOnlyEvent,
-    TurnAbortReason, TurnEndedParams, TurnOutcome, TurnStartedParams, WorkflowDialogEntry,
-    WorkflowDialogPayload, WorktreeEnteredParams, WorktreeExitedParams,
-};
-pub use stream_accumulator::StreamAccumulator;
+pub use provider::{FastModeState, ModelRoleChangedParams};
+pub use session::SessionState;
+pub use skill::{SkillLock, SkillLockSource, SkillOverrideState};
+pub use tool_summary::PermissionDisplayInput;
+pub use turn::TurnAbortReason;
 
-// Session delivery DTOs shared by server routing and client adapters.
-pub use session_access::{
-    ServerRequestDelivery, SessionAccess, SessionDelivery, SessionLifecycleEffect,
-    SessionLifecycleEffectKind,
+// Tool ↔ shell-backend contracts. Defined here so `coco-tool-runtime` can
+// carry them on `ToolUseContext` without linking `coco-shell`; the
+// implementations live in `coco-shell`.
+pub use shell_seam::{
+    BashOutputRewriter, BuildExecOpts, BuiltCommand, PassthroughReason, RewriteOutcome,
+    RewriteSite, ShellProvider, ShellType,
 };
 
 // Client request types (Phase 2 — SDK control protocol, SDK → agent)
@@ -279,6 +255,10 @@ pub use features::{
 
 // Fork-label discriminator (used by logs / telemetry / transcripts to
 // identify framework-spawned, cache-shared side-channel queries).
+pub use file_read_state::FileReadEntry;
+pub use file_read_state::FileReadRange;
+pub use file_read_state::FileReadState;
+pub use file_read_state::ReadEvidence;
 pub use fork_label::ForkLabel;
 pub use goal::{
     GoalCommandResult, GoalCreateParams, GoalEditParams, GoalSetStatusParams,

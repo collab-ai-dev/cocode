@@ -153,8 +153,8 @@ Add for `None` / booleans / numeric literals. Skip for string/char literals unle
 │  Vercel AI:   ai → openai, openai-compatible, google,                │
 │               google-codeassist, xai, groq, anthropic, bytedance     │
 │               (on provider + provider-utils)                         │
-│  Common:      types, llm-types, config, config-reload, error, otel,  │
-│               stack-trace-macro, model-card                          │
+│  Common:      types, llm-types, event-types, config, config-reload,  │
+│               error, otel, stack-trace-macro, model-card             │
 │  Utils:       see Utils table below                                  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -210,6 +210,7 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 |-------|---------|
 | `types` | Foundation types incl. Message family + wire-tagged unions. Source-level vercel-ai-free (DTOs reach via `coco-llm-types`). |
 | `llm-types` | DTO seam: pure re-export shim for `vercel-ai-provider` shapes; SDK upgrades edit this + `services/inference` (dual-seam) |
+| `event-types` | Wire event surface split out of `types`: `CoreEvent` envelope, `ServerNotification`, `AgentStreamEvent`, `TuiOnlyEvent`, `StreamAccumulator`, session-delivery DTOs. Depends on `types`; only wire-speaking crates depend on it, so event churn does not rebuild the workspace |
 | `config` | Layered config: JSON + env + runtime overrides + hot reload |
 | `config-reload` | Settings hot-reload watcher (`RuntimeReloader` over settings files + `managed-settings.d`) |
 | `error` | Unified errors with `StatusCode` classification (snafu + virtstack) |

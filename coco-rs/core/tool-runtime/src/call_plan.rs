@@ -14,9 +14,9 @@
 //! types. `coco-query` owns the `ToolCallRunner` implementation and
 //! the message-bucket helpers; the executor schedules and stamps.
 //!
+use coco_event_types::PermissionDenialInfo;
 use coco_messages::Message;
 use coco_types::AppStatePatch;
-use coco_types::PermissionDenialInfo;
 use coco_types::PermissionResolutionDetail;
 use coco_types::PermissionUpdate;
 use coco_types::ToolId;

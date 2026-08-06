@@ -113,13 +113,13 @@ pub(super) const SIDECHAT_SLASH_POLICY_MESSAGE: &str =
 /// Centralised so the single-row and batch paths emit identically.
 pub(super) fn diff_stats_to_payload(
     stats: coco_context::DiffStats,
-) -> coco_types::RewindDiffStatsPayload {
+) -> coco_event_types::RewindDiffStatsPayload {
     let file_paths: Vec<String> = stats
         .files_changed
         .iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
-    coco_types::RewindDiffStatsPayload {
+    coco_event_types::RewindDiffStatsPayload {
         insertions: stats.insertions,
         deletions: stats.deletions,
         file_paths,

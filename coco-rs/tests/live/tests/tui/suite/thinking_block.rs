@@ -26,8 +26,8 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use coco_types::AgentStreamEvent;
-use coco_types::CoreEvent;
+use coco_event_types::AgentStreamEvent;
+use coco_event_types::CoreEvent;
 
 use crate::tui::harness::TuiHarness;
 use crate::tui::scripted_model::Reply;

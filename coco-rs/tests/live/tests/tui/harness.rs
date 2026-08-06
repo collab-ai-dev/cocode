@@ -46,6 +46,10 @@ use std::time::Duration;
 use anyhow::Context as _;
 use anyhow::Result;
 use anyhow::anyhow;
+use coco_event_types::AgentStreamEvent;
+use coco_event_types::CoreEvent;
+use coco_event_types::ServerNotification;
+use coco_event_types::TuiOnlyEvent;
 use coco_hooks::HookDefinition;
 use coco_hooks::HookRegistry;
 use coco_inference::LanguageModel;
@@ -59,13 +63,9 @@ use coco_tui::UserCommand;
 use coco_tui::keybinding_bridge;
 use coco_tui::server_notification_handler::handle_core_event;
 use coco_tui::update::handle_command;
-use coco_types::AgentStreamEvent;
-use coco_types::CoreEvent;
 use coco_types::Features;
 use coco_types::PermissionMode;
-use coco_types::ServerNotification;
 use coco_types::ToolOverrides;
-use coco_types::TuiOnlyEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -922,7 +922,7 @@ impl TaskHandle for WorkflowHarnessTaskHandle {
         let _ = self
             .event_tx
             .send(CoreEvent::Protocol(ServerNotification::TaskStarted(
-                coco_types::TaskStartedParams {
+                coco_event_types::TaskStartedParams {
                     task_id: task_id.clone(),
                     tool_use_id: request.tool_use_id,
                     description,
@@ -963,11 +963,11 @@ impl TaskHandle for WorkflowHarnessTaskHandle {
         let _ = self
             .event_tx
             .send(CoreEvent::Protocol(ServerNotification::TaskProgress(
-                coco_types::TaskProgressParams {
+                coco_event_types::TaskProgressParams {
                     task_id: task_id.to_string(),
                     tool_use_id: snapshot.tool_use_id,
                     description: snapshot.description,
-                    usage: coco_types::TaskUsage {
+                    usage: coco_event_types::TaskUsage {
                         total_tokens: 0,
                         input_tokens: 0,
                         output_tokens: 0,
@@ -1002,10 +1002,10 @@ impl TaskHandle for WorkflowHarnessTaskHandle {
         let _ = self
             .event_tx
             .send(CoreEvent::Protocol(ServerNotification::TaskCompleted(
-                coco_types::TaskCompletedParams {
+                coco_event_types::TaskCompletedParams {
                     task_id: task_id.to_string(),
                     tool_use_id: snapshot.tool_use_id,
-                    status: coco_types::TaskCompletionStatus::Completed,
+                    status: coco_event_types::TaskCompletionStatus::Completed,
                     killed_by: None,
                     output_file: snapshot.output_file.display().to_string(),
                     summary: payload.result.unwrap_or(snapshot.description),
@@ -1023,10 +1023,10 @@ impl TaskHandle for WorkflowHarnessTaskHandle {
         let _ = self
             .event_tx
             .send(CoreEvent::Protocol(ServerNotification::TaskCompleted(
-                coco_types::TaskCompletedParams {
+                coco_event_types::TaskCompletedParams {
                     task_id: task_id.to_string(),
                     tool_use_id: snapshot.tool_use_id,
-                    status: coco_types::TaskCompletionStatus::Failed,
+                    status: coco_event_types::TaskCompletionStatus::Failed,
                     killed_by: None,
                     output_file: snapshot.output_file.display().to_string(),
                     summary: error.to_string(),

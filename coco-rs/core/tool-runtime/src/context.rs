@@ -1,10 +1,9 @@
-use coco_context::FileHistoryState;
-use coco_context::FileReadState;
 use coco_messages::Message;
 use coco_types::ActiveShellTool;
 use coco_types::AgentId;
 use coco_types::AgentTypeId;
 use coco_types::Features;
+use coco_types::FileReadState;
 use coco_types::SessionId;
 use coco_types::ThinkingLevel;
 use coco_types::ToolFilter;
@@ -143,7 +142,7 @@ pub struct ToolUseContext {
     /// `None` for tests / SDK paths that haven't wired the provider —
     /// `BashTool` falls back to constructing a fresh per-call executor
     /// (no snapshot benefit but still functional).
-    pub shell_provider: Option<std::sync::Arc<dyn coco_shell::ShellProvider>>,
+    pub shell_provider: Option<std::sync::Arc<dyn coco_types::ShellProvider>>,
     /// Session-scoped Bash output rewriter — compresses dev-tool output before
     /// it reaches the model. `Some` only when the capability is enabled;
     /// constructed once at session bootstrap and cloned onto every tool
@@ -151,7 +150,7 @@ pub struct ToolUseContext {
     /// (the only impl today is rtk, `RtkRewriter`); `None` ⇒ Bash behaves
     /// exactly as before. Gated at construction per the "subsystem entry point"
     /// rule.
-    pub output_rewriter: Option<std::sync::Arc<dyn coco_shell::BashOutputRewriter>>,
+    pub output_rewriter: Option<std::sync::Arc<dyn coco_types::BashOutputRewriter>>,
     /// Frozen anchor — captured at session start. BashTool's
     /// `reset_cwd_if_outside_project` uses it to snap back when the
     /// live cwd drifts out of the allowed working set. `None` for
@@ -393,9 +392,8 @@ pub struct ToolUseContext {
     /// post-execute instruction text variant. Source is
     /// `settings.plan_mode.workflow == Interview` only (no Growthbook,
     /// no env var). Mirrors the same field on
-    /// `coco_tool_runtime::PromptOptions` and the
-    /// `is_plan_interview_phase` field on
-    /// `coco_system_reminder::GeneratorContext`.
+    /// `coco_tool_runtime::PromptOptions` and on the reminder layer's
+    /// `GeneratorContext`.
     pub is_plan_interview_phase: bool,
     /// Whether user modified input during permission prompt.
     pub user_modified: bool,
@@ -548,9 +546,13 @@ pub struct ToolUseContext {
     pub file_read_state: Option<Arc<RwLock<FileReadState>>>,
 
     // ── File History ──
-    /// File history for checkpoint/rewind. Shared across concurrent tool calls.
-    pub file_history: Option<Arc<RwLock<FileHistoryState>>>,
-    /// Config home directory for file history backup storage.
+    /// Checkpoint/rewind edit tracking. `None` resolves to
+    /// [`crate::NoOpFileHistoryHandle`] — edits still apply, they are
+    /// just not rewindable.
+    pub file_history: Option<crate::FileHistoryHandleRef>,
+    /// Config home directory. Consumed by tools that resolve
+    /// config-relative paths (e.g. plan-mode artifacts); file-history
+    /// backups now resolve it inside the `FileHistoryHandle` adapter.
     pub config_home: Option<PathBuf>,
     /// Session ID for file history backup naming.
     pub session_id_for_history: Option<String>,

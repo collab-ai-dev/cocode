@@ -14,6 +14,7 @@ coco-error.workspace = true
 coco-lsp.workspace = true
 coco-mcp.workspace = true
 coco-types.workspace = true
+coco-event-types.workspace = true
 coco-plugins.workspace = true
 coco-secret-redact.workspace = true
 coco-skills.workspace = true

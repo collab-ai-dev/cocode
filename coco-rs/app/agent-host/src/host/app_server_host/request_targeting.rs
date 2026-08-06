@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use coco_app_server::{AppServer, JsonRpcDispatchError};
-use coco_types::{ClientRequest, RequestScope, SessionAccess, SessionId, request_scope};
+use coco_event_types::SessionAccess;
+use coco_types::{ClientRequest, RequestScope, SessionId, request_scope};
 
 use crate::app_session::AppSessionHandle;
 

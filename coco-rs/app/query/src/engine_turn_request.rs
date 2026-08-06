@@ -49,7 +49,7 @@ impl QueryEngine {
         turn_state: &mut LoopTurnState,
         services: &mut LoopServices,
         history: &mut MessageHistory,
-        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
         hook_tx_opt: Option<&tokio::sync::mpsc::Sender<coco_hooks::HookExecutionEvent>>,
         cycle_turn_id: Option<coco_types::TurnId>,
         turn_id: &str,

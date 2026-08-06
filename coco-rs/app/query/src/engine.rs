@@ -8,6 +8,7 @@ use crate::command_queue::CommandQueue;
 use crate::emit::emit_protocol;
 use crate::session_state::SessionStateTracker;
 use coco_context::FileHistoryState;
+use coco_event_types::TurnEndedParams;
 use coco_hooks::HookRegistry;
 use coco_inference::ModelRuntimeRegistry;
 use coco_inference::ModelRuntimeSource;
@@ -18,7 +19,6 @@ use coco_messages::create_plan_implementation_message;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::TurnAbortSignal;
 use coco_types::ToolAppState;
-use coco_types::TurnEndedParams;
 
 use crate::helpers::convert_to_assistant_content;
 use crate::helpers::extract_last_assistant_text;
@@ -105,7 +105,7 @@ pub struct QueryEngine {
     /// turn.
     pub(crate) pending_tool_use_summary: Arc<
         tokio::sync::Mutex<
-            Option<tokio::task::JoinHandle<Option<coco_types::ToolUseSummaryParams>>>,
+            Option<tokio::task::JoinHandle<Option<coco_event_types::ToolUseSummaryParams>>>,
         >,
     >,
     /// Mid-turn command queue for steering. Carries both human-typed
@@ -113,7 +113,7 @@ pub struct QueryEngine {
     /// messages (via `QueueOrigin::Coordinator` / `QueueOrigin::TaskNotification`).
     pub(crate) command_queue: CommandQueue,
     /// Session-level file read state for @mention dedup and changed-file detection.
-    pub(crate) file_read_state: Option<Arc<RwLock<coco_context::FileReadState>>>,
+    pub(crate) file_read_state: Option<Arc<RwLock<coco_types::FileReadState>>>,
     /// File history for checkpoint/rewind.
     pub(crate) file_history: Option<Arc<RwLock<FileHistoryState>>>,
     /// Config home directory for file history backup storage.
@@ -638,13 +638,13 @@ impl QueryEngine {
                     // lifecycle so it can attach the final SessionResult.
                     let terminal = cycle_turn_id.as_ref().map(|id| {
                         if hit_max_turns {
-                            coco_types::TurnEndedParams::max_turns_reached(
+                            coco_event_types::TurnEndedParams::max_turns_reached(
                                 id.clone(),
                                 Some(acc.total_usage),
                                 self.config.max_turns.unwrap_or(0),
                             )
                         } else {
-                            coco_types::TurnEndedParams::budget_exhausted(
+                            coco_event_types::TurnEndedParams::budget_exhausted(
                                 id.clone(),
                                 Some(acc.total_usage),
                                 acc.total_usage.input_tokens.total
@@ -682,7 +682,7 @@ impl QueryEngine {
                     // so SDK consumers can surface the warning.
                     let _delivered = emit_protocol(
                         &event_tx,
-                        crate::ServerNotification::Error(coco_types::ErrorParams {
+                        crate::ServerNotification::Error(coco_event_types::ErrorParams {
                             message,
                             category: Some("budget".into()),
                             retryable: false,
@@ -1279,7 +1279,7 @@ impl QueryEngine {
     async fn consume_pending_plan_mode_clear_context(
         &self,
         history: &mut MessageHistory,
-        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
         turn: i32,
     ) {
         consume_pending_plan_mode_clear_context(self.app_state.as_ref(), history, event_tx, turn)
@@ -1389,7 +1389,7 @@ pub(crate) fn tool_input_from_wire_state(
 async fn consume_pending_plan_mode_clear_context(
     app_state: Option<&Arc<RwLock<ToolAppState>>>,
     history: &mut MessageHistory,
-    event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    event_tx: &Option<tokio::sync::mpsc::Sender<coco_event_types::CoreEvent>>,
     turn: i32,
 ) {
     let Some(state_handle) = app_state else {

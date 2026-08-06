@@ -23,7 +23,7 @@ pub(crate) async fn apply_local_session_operation(
         LocalSessionOperation::Close { connection, target } => {
             let session_id = target.session_id.clone();
             app_server
-                .validate_session_target(connection, &target, coco_types::SessionAccess::Full)
+                .validate_session_target(connection, &target, coco_event_types::SessionAccess::Full)
                 .map_err(|error| {
                     app_server_lifecycle_error_parts("validate close target", error)
                 })?;

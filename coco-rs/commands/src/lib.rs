@@ -201,13 +201,13 @@ pub enum DialogSpec {
     ///
     /// Dialog has no toggle / search / sort — only Esc to close.
     SkillsList {
-        payload: coco_types::SkillsDialogPayload,
+        payload: coco_event_types::SkillsDialogPayload,
     },
     /// `/agents` — 2-tab overlay (Running + Library). Payload only
     /// carries the Library entries; the Running tab reads
     /// `SessionState.subagents` at render time.
     AgentsList {
-        payload: coco_types::AgentsDialogPayload,
+        payload: coco_event_types::AgentsDialogPayload,
     },
     /// `/journey` — learning-timeline overlay (learned skills + memories over
     /// time). Payload-less by design: the CLI/host translation site assembles
