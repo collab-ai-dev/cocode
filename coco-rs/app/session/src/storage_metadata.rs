@@ -225,6 +225,7 @@ pub fn fold_transcript_metadata(entries: &[Entry], session_id: &SessionId) -> Tr
                 | MetadataEntry::McpToolExposure { .. }
                 | MetadataEntry::GoalSnapshot { .. }
                 | MetadataEntry::GoalCleared { .. }
+                | MetadataEntry::WorldStateSnapshot { .. }
                 | MetadataEntry::SessionSeqWatermark { .. } => {}
             },
             Entry::Unknown(_) => {}

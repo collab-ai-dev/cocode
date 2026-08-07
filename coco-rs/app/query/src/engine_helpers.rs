@@ -18,8 +18,6 @@ use coco_llm_types::UserContentPart;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
-use std::collections::HashMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -30,14 +28,6 @@ use crate::emit::emit_protocol;
 use crate::emit::emit_stream;
 use crate::emit::emit_tui;
 use crate::model_runtime::ModelFallbackReason;
-
-const RETIRED_DEFERRED_TOOL_NAMES: &[&str] = &[
-    "Frame",
-    "FrameRead",
-    "TeamCreate",
-    "TeamDelete",
-    "SuggestBackgroundPR",
-];
 
 /// Per-call buffer used while consuming `StreamEvent`s for a single turn.
 /// `input_json` is appended from `ToolCallDelta` chunks and parsed on
@@ -194,72 +184,6 @@ pub(crate) fn extract_streaming_result_text(ordered: &[Message]) -> String {
     String::new()
 }
 
-/// Compute the `deferred_tools_delta`.
-///
-/// **Three inputs**:
-///
-///   - `current_deferred` — names the model can find via `ToolSearch`
-///     this turn but cannot yet invoke directly.
-///   - `current_loaded` — names the model already has full schema for
-///     (eager tools + discovered deferred tools).
-///   - `last_announced` — names announced in the most recent
-///     `deferred_tools_delta` reminder, persisted on `ToolAppState`.
-///
-/// Diff rules:
-///
-///   - `added = current_deferred - last_announced` — newly searchable
-///     names the model has not been told about yet (MCP server just
-///     connected, or first turn after session start).
-///   - `removed = last_announced - (current_deferred ∪ current_loaded)`
-///     — names the model knew about that have left the registry
-///     entirely (MCP server disconnect). A name that moves from
-///     deferred → loaded (model discovered it via `ToolSearch`) is
-///     **silently** kept in the announced pool — its schema now
-///     appears directly in the request's tool list, no further
-///     reminder is required.
-///
-/// Returns `None` when both diffs are empty.
-pub(crate) fn compute_tools_delta(
-    current_deferred: &[String],
-    current_loaded: &[String],
-    last_announced: &HashSet<String>,
-) -> Option<coco_system_reminder::DeferredToolsDeltaInfo> {
-    let registry_pool: HashSet<&str> = current_deferred
-        .iter()
-        .map(String::as_str)
-        .chain(current_loaded.iter().map(String::as_str))
-        .collect();
-
-    let mut added_lines: Vec<String> = current_deferred
-        .iter()
-        .filter(|t| !is_retired_deferred_tool_name(t))
-        .filter(|t| !last_announced.contains(t.as_str()))
-        .map(|t| format!("- {t}"))
-        .collect();
-    let mut removed_names: Vec<String> = last_announced
-        .iter()
-        .filter(|t| !is_retired_deferred_tool_name(t))
-        .filter(|t| !registry_pool.contains(t.as_str()))
-        .cloned()
-        .collect();
-
-    if added_lines.is_empty() && removed_names.is_empty() {
-        return None;
-    }
-    // Stable ordering so consecutive emissions with the same delta
-    // produce byte-identical reminders (simpler to diff in tests + logs).
-    added_lines.sort();
-    removed_names.sort();
-    Some(coco_system_reminder::DeferredToolsDeltaInfo {
-        added_lines,
-        removed_names,
-    })
-}
-
-fn is_retired_deferred_tool_name(name: &str) -> bool {
-    RETIRED_DEFERRED_TOOL_NAMES.contains(&name)
-}
-
 /// Whether the most recent assistant message's total context exceeds
 /// `threshold` tokens.
 ///
@@ -305,126 +229,6 @@ pub(crate) fn latest_user_input_text(history: &MessageHistory) -> Option<String>
         }
     }
     None
-}
-
-/// Compute the `mcp_instructions_delta` between the current server-instruction
-/// set and the last-announced set on `ToolAppState`.
-///
-/// The announced map is persisted on
-/// `app_state.last_announced_mcp_instructions` so the diff is
-/// O(|current ∪ announced|).
-pub(crate) fn compute_mcp_instructions_delta(
-    current: &HashMap<String, String>,
-    last_announced: &HashMap<String, String>,
-) -> Option<coco_system_reminder::McpInstructionsDeltaInfo> {
-    let mut added_blocks: Vec<String> = current
-        .iter()
-        .filter(|(name, text)| {
-            last_announced
-                .get(name.as_str())
-                .is_none_or(|prev| prev != *text)
-        })
-        .map(|(name, text)| format!("## {name}\n\n{text}"))
-        .collect();
-    let mut removed_names: Vec<String> = last_announced
-        .keys()
-        .filter(|name| !current.contains_key(name.as_str()))
-        .cloned()
-        .collect();
-
-    if added_blocks.is_empty() && removed_names.is_empty() {
-        return None;
-    }
-    added_blocks.sort();
-    removed_names.sort();
-    Some(coco_system_reminder::McpInstructionsDeltaInfo {
-        added_blocks,
-        removed_names,
-    })
-}
-
-/// Maximum MCP servers listed in one `mcp_servers_delta` announcement (plan §8).
-const MAX_ANNOUNCED_MCP_SERVERS: usize = 8;
-
-/// Compute the `mcp_servers_delta`: announce the current connected MCP servers
-/// when the set changed since `last_announced`. Returns `None` when there is no
-/// change or when there are no servers. The list is sorted and capped, with an
-/// omitted count.
-pub(crate) fn compute_mcp_servers_delta(
-    current: &[coco_system_reminder::McpServerSummary],
-    last_announced: &std::collections::BTreeMap<String, coco_types::McpServerAnnouncementState>,
-) -> Option<coco_system_reminder::McpServersDeltaInfo> {
-    let current_state: std::collections::BTreeMap<_, _> = current
-        .iter()
-        .map(|server| {
-            (
-                server.name.clone(),
-                coco_types::McpServerAnnouncementState {
-                    tool_count: server.tool_count,
-                    description: server.description.clone(),
-                },
-            )
-        })
-        .collect();
-    if &current_state == last_announced {
-        return None;
-    }
-    let removed_names = last_announced
-        .keys()
-        .filter(|name| !current_state.contains_key(name.as_str()))
-        .cloned()
-        .collect();
-    let mut servers = current.to_vec();
-    servers.sort_by(|a, b| a.name.cmp(&b.name));
-    let omitted = servers.len().saturating_sub(MAX_ANNOUNCED_MCP_SERVERS);
-    servers.truncate(MAX_ANNOUNCED_MCP_SERVERS);
-    Some(coco_system_reminder::McpServersDeltaInfo {
-        servers,
-        removed_names,
-        omitted,
-    })
-}
-
-/// Compute the `agent_listing_delta` between the current agent types and
-/// the last-announced set on `ToolAppState`. `is_initial` is true when no
-/// agents have been announced yet (first emission of the session); that
-/// flips the "Available agent types" header (vs "New agent types are now
-/// available").
-///
-/// `show_concurrency_note` is unconditionally `true` here. The concurrency
-/// hint is informational and always relevant — the renderer
-/// (`agent_listing_delta.rs`) emits it on every delta, not just the initial
-/// one, so the model is reminded to parallelize when new agents become
-/// available.
-pub(crate) fn compute_agents_delta(
-    current_agents: &[String],
-    last_announced: &HashSet<String>,
-) -> Option<coco_system_reminder::AgentListingDeltaInfo> {
-    let current_set: HashSet<&String> = current_agents.iter().collect();
-
-    let mut added_lines: Vec<String> = current_agents
-        .iter()
-        .filter(|t| !last_announced.contains(t.as_str()))
-        .map(|t| format!("- {t}"))
-        .collect();
-    let mut removed_types: Vec<String> = last_announced
-        .iter()
-        .filter(|t| !current_set.contains(*t))
-        .cloned()
-        .collect();
-
-    if added_lines.is_empty() && removed_types.is_empty() {
-        return None;
-    }
-    added_lines.sort();
-    removed_types.sort();
-    let is_initial = last_announced.is_empty();
-    Some(coco_system_reminder::AgentListingDeltaInfo {
-        added_lines,
-        removed_types,
-        is_initial,
-        show_concurrency_note: true,
-    })
 }
 
 /// LRU + time-window throttle for protocol-level tool-progress events.

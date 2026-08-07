@@ -6,8 +6,8 @@
 //!
 //! 1. `ctx.config.attachments.agent_listing_delta` — default on.
 //! 2. `ctx.agent_listing_delta.is_some()` with non-empty delta —
-//!    engine pre-computes by diffing active agents against prior
-//!    announcements in history.
+//!    computed by `app/query::world_state::diff` against the persisted
+//!    `WorldStateSnapshot.agent_types` baseline.
 //!
 //! Output: three optional sections joined by `"\n\n"`:
 //! - Added (header depends on `is_initial`).

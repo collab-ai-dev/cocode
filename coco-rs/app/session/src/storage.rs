@@ -355,6 +355,28 @@ pub enum MetadataEntry {
         snapshot: serde_json::Value,
     },
 
+    /// What the model had been told, as of the entry preceding this one.
+    ///
+    /// Append-only; the last record per `agent_id` is authoritative on resume.
+    /// Without it a resumed session recomputes every announce delta against an
+    /// empty baseline and re-announces the whole inventory — deferred tools,
+    /// agent catalog, MCP servers, and every server's full instruction block —
+    /// on top of a restored history that already contains the announcements.
+    ///
+    /// Typed rather than a passthrough blob (unlike [`Self::GoalSnapshot`] and
+    /// [`Self::FileHistorySnapshot`]): `coco-types` is already a dependency
+    /// here, so the untyped escape hatch buys nothing.
+    #[serde(rename = "world-state-snapshot")]
+    WorldStateSnapshot {
+        session_id: SessionId,
+        /// Visibility scope. `None` is the main session; each subagent has its
+        /// own baseline because they see different tool sets and agent
+        /// catalogs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
+        snapshot: coco_types::WorldStateSnapshot,
+    },
+
     /// Tombstones the current goal so a subsequent scan returns nothing.
     /// Appended when a goal is cleared.
     #[serde(rename = "goal-cleared")]
@@ -372,6 +394,44 @@ pub struct GoalSnapshotRecord {
     pub goal_id: String,
     pub state_version: u64,
     pub snapshot: serde_json::Value,
+}
+
+/// One scope's restored world-state baseline.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorldStateSnapshotRecord {
+    /// `None` is the main session.
+    pub agent_id: Option<String>,
+    pub snapshot: coco_types::WorldStateSnapshot,
+}
+
+/// The latest world-state baseline per visibility scope.
+///
+/// Last write wins per `agent_id`: the record is rewritten whole on every
+/// change, so there is no patch to apply and no ordering to reconcile —
+/// replaying a truncated or interleaved transcript can only ever yield a
+/// baseline the model was genuinely told at some point, which at worst causes
+/// one redundant announcement.
+pub fn latest_world_state_snapshots(entries: &[Entry]) -> Vec<WorldStateSnapshotRecord> {
+    let mut latest: Vec<WorldStateSnapshotRecord> = Vec::new();
+    for entry in entries {
+        let Entry::Metadata(MetadataEntry::WorldStateSnapshot {
+            agent_id, snapshot, ..
+        }) = entry
+        else {
+            continue;
+        };
+        match latest
+            .iter_mut()
+            .find(|record| record.agent_id == *agent_id)
+        {
+            Some(record) => record.snapshot = snapshot.clone(),
+            None => latest.push(WorldStateSnapshotRecord {
+                agent_id: agent_id.clone(),
+                snapshot: snapshot.clone(),
+            }),
+        }
+    }
+    latest
 }
 
 /// The current goal snapshot: the highest-`state_version` [`MetadataEntry::GoalSnapshot`]

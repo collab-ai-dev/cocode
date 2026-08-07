@@ -22,6 +22,7 @@ use crate::PermissionMode;
 use crate::PermissionRuleSource;
 use crate::PermissionRulesBySource;
 use crate::RateLimitEntry;
+use crate::WorldStateSnapshot;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -260,18 +261,21 @@ pub struct ToolAppState {
     /// agent worktrees are tracked separately by the coordinator.
     pub active_worktree: Option<ActiveWorktreeState>,
 
-    // ── Phase 2 delta-reminder announce state ────────────────────────
-    /// Main-session compatibility mirror for the scoped announced-tool
-    /// baseline. Use [`Self::last_announced_tools_for_scope`] and
-    /// [`Self::set_last_announced_tools_for_scope`] for new reads/writes.
-    pub last_announced_tools: HashSet<String>,
-
-    /// Tool wire-names announced via the most recent `deferred_tools_delta`
-    /// reminder, separated by visibility scope. The main session and each
-    /// subagent can have different filtered tool sets; sharing one baseline
-    /// makes a subagent's first turn look like the main session's tools were
-    /// removed.
-    pub last_announced_tools_by_scope: HashMap<String, HashSet<String>>,
+    // ── Model-visible world state (the announce baseline) ────────────
+    /// What the model has been told, per visibility scope. The main session
+    /// and each subagent see different tool sets and agent catalogs, so one
+    /// shared baseline would make a subagent's first turn look like the main
+    /// session's tools had been removed.
+    ///
+    /// Unlike the rest of this struct, this baseline is **persisted** — the
+    /// session transcript carries it beside the history it describes (see
+    /// `coco_session::MetadataEntry::WorldStateSnapshot`) and resume seeds it
+    /// back. Without that, a resumed session re-announces every inventory on
+    /// top of a restored history that already contains the announcements.
+    ///
+    /// Read/write through [`Self::world_state_for_scope`] /
+    /// [`Self::set_world_state_for_scope`].
+    pub world_state_by_scope: HashMap<String, WorldStateSnapshot>,
 
     /// Wire-names of deferred tools the model has discovered via
     /// `ToolSearch` and that should now be exposed to the LLM with
@@ -303,27 +307,10 @@ pub struct ToolAppState {
     /// array is stable and the prefix stays warm.
     pub discovered_tool_names: HashSet<String>,
 
-    /// Agent types announced via the most recent `agent_listing_delta`
-    /// reminder. reconstructed from prior delta attachments.
-    pub last_announced_agents: HashSet<String>,
-
-    /// Per-server MCP instructions announced via the most recent
-    /// `mcp_instructions_delta` reminder. Keyed by server name;
-    /// value is the instruction text (hashable on content).
-    /// reconstructed from prior delta attachments.
-    pub last_announced_mcp_instructions: std::collections::HashMap<String, String>,
-
     /// Dynamic-workflow size guideline as the model currently understands it.
     /// See [`WorkflowSizeAnnouncement`] for why the pinned and announced values
     /// are tracked separately.
     pub workflow_size: WorkflowSizeAnnouncement,
-
-    /// Full normalized MCP-server announcement baseline per visibility scope.
-    /// Counts and descriptions are part of the comparison so reconnects and
-    /// metadata changes are announced; one agent can never suppress another
-    /// agent's first scoped reminder.
-    pub last_announced_mcp_servers_by_scope:
-        HashMap<String, BTreeMap<String, McpServerAnnouncementState>>,
 
     // ── Agent progress summaries gate ──────────────────────────────
     /// Whether per-spawn periodic AgentSummary timers should run.
@@ -384,49 +371,23 @@ pub struct ToolAppState {
 }
 
 impl ToolAppState {
-    pub fn last_announced_tools_for_scope(&self, agent_id: Option<&str>) -> HashSet<String> {
-        let key = agent_scope_key(agent_id);
-        self.last_announced_tools_by_scope
-            .get(&key)
-            .cloned()
-            .unwrap_or_else(|| {
-                if agent_id.is_none() {
-                    self.last_announced_tools.clone()
-                } else {
-                    HashSet::new()
-                }
-            })
-    }
-
-    pub fn set_last_announced_tools_for_scope(
-        &mut self,
-        agent_id: Option<&str>,
-        tools: HashSet<String>,
-    ) {
-        if agent_id.is_none() {
-            self.last_announced_tools = tools.clone();
-        }
-        self.last_announced_tools_by_scope
-            .insert(agent_scope_key(agent_id), tools);
-    }
-
-    pub fn last_announced_mcp_servers_for_scope(
-        &self,
-        agent_id: Option<&str>,
-    ) -> BTreeMap<String, McpServerAnnouncementState> {
-        self.last_announced_mcp_servers_by_scope
+    /// What this scope's model has been told. An absent scope reads as an
+    /// empty snapshot — "never told anything" — which is exactly what a fresh
+    /// subagent needs.
+    pub fn world_state_for_scope(&self, agent_id: Option<&str>) -> WorldStateSnapshot {
+        self.world_state_by_scope
             .get(&agent_scope_key(agent_id))
             .cloned()
             .unwrap_or_default()
     }
 
-    pub fn set_last_announced_mcp_servers_for_scope(
+    pub fn set_world_state_for_scope(
         &mut self,
         agent_id: Option<&str>,
-        servers: BTreeMap<String, McpServerAnnouncementState>,
+        snapshot: WorldStateSnapshot,
     ) {
-        self.last_announced_mcp_servers_by_scope
-            .insert(agent_scope_key(agent_id), servers);
+        self.world_state_by_scope
+            .insert(agent_scope_key(agent_id), snapshot);
     }
 
     /// The local ISO date this scope last emitted (or seeded) a
@@ -444,14 +405,8 @@ impl ToolAppState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct McpServerAnnouncementState {
-    pub tool_count: usize,
-    pub description: Option<String>,
-}
-
 /// Visibility-scope key for the per-agent baselines on [`ToolAppState`]
-/// (announced tools, announced MCP servers, date-change latch). The main
+/// (world state, date-change latch). The main
 /// session and each subagent see different worlds, so they must not share
 /// one baseline entry.
 fn agent_scope_key(agent_id: Option<&str>) -> String {

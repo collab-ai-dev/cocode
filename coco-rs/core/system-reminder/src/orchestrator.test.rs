@@ -237,7 +237,7 @@ async fn with_default_generators_registers_all_builtins() {
         SystemReminderOrchestrator::new(SystemReminderConfig::default()).with_default_generators();
     assert_eq!(
         o.generator_count(),
-        46,
+        47,
         "QueuedCommand is drained by query finalize, not the default reminder registry"
     );
 }
@@ -301,6 +301,7 @@ async fn default_registry_order_matches_ts_attachment_batches() {
             AgentListingDelta,
             McpInstructionsDelta,
             McpServersDelta,
+            ModelSwitch,
             CompanionIntro,
             NestedMemory,
             RelevantMemories,

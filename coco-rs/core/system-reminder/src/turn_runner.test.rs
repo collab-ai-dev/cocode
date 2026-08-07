@@ -60,6 +60,7 @@ fn minimal_input<'a>(
         agent_listing_delta: None,
         mcp_instructions_delta: None,
         mcp_servers_delta: None,
+        model_switch: None,
         hook_events: Vec::new(),
         diagnostics: Vec::new(),
         output_style: None,

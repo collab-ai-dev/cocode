@@ -182,6 +182,8 @@ pub struct TurnReminderInput<'a> {
     pub mcp_instructions_delta: Option<crate::generator::McpInstructionsDeltaInfo>,
     /// Pre-computed `mcp_servers_delta`.
     pub mcp_servers_delta: Option<crate::generator::McpServersDeltaInfo>,
+    /// Set when this scope's model changed since its persisted world state.
+    pub model_switch: Option<crate::generator::ModelSwitchInfo>,
 
     // ── Phase 3 cross-crate snapshots ──
     pub hook_events: Vec<crate::generator::HookEvent>,
@@ -285,6 +287,7 @@ pub async fn run_turn_reminders(
         agent_listing_delta,
         mcp_instructions_delta,
         mcp_servers_delta,
+        model_switch,
         hook_events,
         diagnostics,
         output_style,
@@ -399,6 +402,7 @@ pub async fn run_turn_reminders(
         .agent_listing_delta(agent_listing_delta)
         .mcp_instructions_delta(mcp_instructions_delta)
         .mcp_servers_delta(mcp_servers_delta)
+        .model_switch(model_switch)
         .hook_events(hook_events)
         .diagnostics(diagnostics)
         .output_style(output_style)

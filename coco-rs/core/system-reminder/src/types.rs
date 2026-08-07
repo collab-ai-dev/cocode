@@ -150,26 +150,31 @@ pub enum AttachmentType {
     /// settings flag (default off).
     CompanionIntro,
 
-    // ── Phase 2 history-diff delta reminders (Core tier) ──
+    // ── World-state delta reminders (Core tier) ──
+    // Each is a diff against `coco_types::WorldStateSnapshot` — the persisted
+    // per-scope record of what this model has already been told. The engine
+    // computes the diff in `app/query::world_state`; the generators only
+    // render it.
     /// Announces tool additions / removals via ToolSearch mid-session.
-    /// Engine pre-computes the delta against prior announcements in
-    /// history; generator emits when the delta is non-empty.
     DeferredToolsDelta,
 
-    /// Announces agent-type additions / removals for the Agent tool.
-    /// Engine pre-computes the delta (with `is_initial` on first emit +
-    /// optional concurrency note).
+    /// Announces agent-type additions / removals for the Agent tool
+    /// (with `is_initial` on first emit + optional concurrency note).
     AgentListingDelta,
 
-    /// Announces MCP server instructions added / removed since last
-    /// announcement. Engine pre-computes by diffing current server
-    /// instructions against prior announcements in history.
+    /// Announces MCP server instructions added / removed since the last
+    /// announcement.
     McpInstructionsDelta,
 
     /// Announces which MCP servers are available to search this turn (name +
     /// discoverable tool count + description). Fires on a real change to the
     /// visible server set.
     McpServersDelta,
+
+    /// Announces that the session's model changed mid-run. The static system
+    /// prompt is built once at engine construction and keeps asserting the
+    /// model it was built with, so nothing else corrects the record.
+    ModelSwitch,
 
     /// Standing nudge that undiscovered deferred tools can be loaded via
     /// ToolSearch — distinct from the one-shot [`DeferredToolsDelta`](Self::DeferredToolsDelta)
@@ -289,6 +294,7 @@ impl AttachmentType {
             | Self::AgentListingDelta
             | Self::McpInstructionsDelta
             | Self::McpServersDelta
+            | Self::ModelSwitch
             | Self::ToolSearchUsageReminder
             | Self::QueuedCommand
             | Self::SkillListing
@@ -354,6 +360,7 @@ impl AttachmentType {
             | Self::AgentListingDelta
             | Self::McpInstructionsDelta
             | Self::McpServersDelta
+            | Self::ModelSwitch
             | Self::ToolSearchUsageReminder
             | Self::HookSuccess
             | Self::HookBlockingError
@@ -414,6 +421,7 @@ impl AttachmentType {
             Self::AgentListingDelta => "agent_listing_delta",
             Self::McpInstructionsDelta => "mcp_instructions_delta",
             Self::McpServersDelta => "mcp_servers_delta",
+            Self::ModelSwitch => "model_switch",
             Self::ToolSearchUsageReminder => "tool_search_usage_reminder",
             Self::HookSuccess => "hook_success",
             Self::HookBlockingError => "hook_blocking_error",
@@ -469,6 +477,7 @@ impl AttachmentType {
             Self::AgentListingDelta,
             Self::McpInstructionsDelta,
             Self::McpServersDelta,
+            Self::ModelSwitch,
             Self::ToolSearchUsageReminder,
             Self::HookSuccess,
             Self::HookBlockingError,
@@ -546,6 +555,7 @@ impl From<AttachmentType> for coco_types::AttachmentKind {
             AttachmentType::AgentListingDelta => K::AgentListingDelta,
             AttachmentType::McpInstructionsDelta => K::McpInstructionsDelta,
             AttachmentType::McpServersDelta => K::McpServersDelta,
+            AttachmentType::ModelSwitch => K::ModelSwitch,
             AttachmentType::ToolSearchUsageReminder => K::ToolSearchUsageReminder,
             AttachmentType::HookSuccess => K::HookSuccess,
             AttachmentType::HookBlockingError => K::HookBlockingError,

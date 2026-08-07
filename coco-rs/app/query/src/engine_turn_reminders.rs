@@ -38,10 +38,6 @@ use coco_types::ToolAppState;
 use coco_types::ToolName;
 
 use crate::engine::QueryEngine;
-use crate::engine_helpers::compute_agents_delta;
-use crate::engine_helpers::compute_mcp_instructions_delta;
-use crate::engine_helpers::compute_mcp_servers_delta;
-use crate::engine_helpers::compute_tools_delta;
 use crate::engine_helpers::latest_user_input_text;
 use crate::plan_mode_reminder::PlanModeReminder;
 
@@ -97,9 +93,11 @@ impl QueryEngine {
     /// `app_state` snapshot + a parallel [`ReminderSources::materialize`].
     /// 3. Run the orchestrator → reminders.
     /// 4. Post-emit bookkeeping: clear stale exit flags, bump plan-mode
-    /// cadence counters, refresh "last announced" sets for delta
-    /// reminders.
-    /// 5. Drain silent attachments, inject reminders into history.
+    /// cadence counters.
+    /// 5. Drain silent attachments, inject reminders into history, then
+    /// advance + persist the world-state baseline for the sections that
+    /// fired (`commit_world_state_baseline` — after injection, so a crash
+    /// re-announces instead of silently omitting).
     /// Returns the `app_state` snapshot the caller passes to
     /// [`QueryEngine::build_tool_definitions`] for the same turn — same
     /// permission mode / pre-plan-mode / stripped-rules view the reminders
@@ -299,27 +297,6 @@ impl QueryEngine {
         // can control it per session without re-reading settings from
         // disk.
         let reminder_auto_compact_enabled = self.config.is_auto_compact_active();
-        // Diff the current **deferred** tool set against the last
-        // announced set on app_state. The loaded set is supplied so a
-        // tool that moves deferred → loaded (model discovered via
-        // `ToolSearch`) stays silently in the announced pool.
-        // Non-empty added or removed triggers the `deferred_tools_delta`
-        // reminder.
-        let reminder_deferred_tools_delta = compute_tools_delta(
-            &reminder_deferred_tools,
-            &reminder_loaded_tools,
-            &app_state_snapshot.last_announced_tools_for_scope(self.config.agent_id_str()),
-        );
-        // Hand the deferred list to post-emit bookkeeping — replaces
-        // `announced` with the current deferred set after emission. Moved
-        // (last use): the delta above already read it by reference.
-        let reminder_deferred_tools_clone = reminder_deferred_tools;
-        // Diff the current agent-type set (resolved above from the wired
-        // catalog) against the last-announced set on app_state.
-        let reminder_agent_listing_delta = compute_agents_delta(
-            &reminder_current_agents,
-            &app_state_snapshot.last_announced_agents,
-        );
         // Date-change latch: current local ISO date vs. the one stored for
         // this engine's scope in `ToolAppState.last_emitted_date_by_scope`.
         // When they differ, emit once + update that scope. Runs at turn start
@@ -591,20 +568,24 @@ impl QueryEngine {
             Some(handle) => handle.goal_context_fragment().await,
             None => None,
         };
-        let reminder_mcp_baseline =
-            app_state_snapshot.last_announced_mcp_servers_for_scope(self.config.agent_id_str());
-        let reminder_mcp_current: BTreeMap<_, _> = reminder_mcp_server_summaries
-            .iter()
-            .map(|server| {
-                (
-                    server.name.clone(),
-                    coco_types::McpServerAnnouncementState {
-                        tool_count: server.tool_count,
-                        description: server.description.clone(),
-                    },
-                )
-            })
-            .collect();
+        // Everything the model may need telling about, diffed in one place
+        // against this scope's persisted baseline. The baseline is only
+        // advanced after emission (see `adopt_fired` below), so a generator
+        // that is disabled or times out retries next turn instead of losing
+        // its announcement.
+        let reminder_world_state_baseline =
+            app_state_snapshot.world_state_for_scope(self.config.agent_id_str());
+        let reminder_world_state = crate::world_state::diff(
+            &crate::world_state::WorldStateInput {
+                model: &self.config.model_id,
+                deferred_tools: &reminder_deferred_tools,
+                loaded_tools: &reminder_loaded_tools,
+                agent_types: &reminder_current_agents,
+                mcp_servers: &reminder_mcp_server_summaries,
+                mcp_instructions: &materialized.mcp_instructions_current,
+            },
+            &reminder_world_state_baseline,
+        );
         let reminder_input = TurnReminderInput {
             config: reminder_orchestrator.config(),
             turn_number: reminder_human_turn_number,
@@ -628,7 +609,7 @@ impl QueryEngine {
             fallback_permission_mode: self.config.permission_mode,
             is_auto_classifier_active: reminder_auto_classifier_active,
             tools: reminder_tools,
-            deferred_tools: reminder_deferred_tools_clone.clone(),
+            deferred_tools: reminder_deferred_tools.clone(),
             is_task_v2_enabled: reminder_task_v2_enabled,
             history,
             todo_key: reminder_todo_key.to_string(),
@@ -660,22 +641,11 @@ impl QueryEngine {
             companion_name: None,
             companion_species: None,
             has_prior_companion_intro: false,
-            deferred_tools_delta: reminder_deferred_tools_delta,
-            agent_listing_delta: reminder_agent_listing_delta,
-            // McpSource.instructions() returns the current per-server map;
-            // engine diffs against `last_announced_mcp_instructions` to
-            // produce the delta (same pattern as deferred_tools_delta).
-            mcp_instructions_delta: compute_mcp_instructions_delta(
-                &materialized.mcp_instructions_current,
-                &app_state_snapshot.last_announced_mcp_instructions,
-            ),
-            // Announce connected MCP servers so the model knows what to
-            // ToolSearch for. Fully disabling MCP is handled by the MCP feature
-            // and server activation controls, not by exposure policy.
-            mcp_servers_delta: compute_mcp_servers_delta(
-                &reminder_mcp_server_summaries,
-                &reminder_mcp_baseline,
-            ),
+            deferred_tools_delta: reminder_world_state.deferred_tools.clone(),
+            agent_listing_delta: reminder_world_state.agent_listing.clone(),
+            mcp_instructions_delta: reminder_world_state.mcp_instructions.clone(),
+            mcp_servers_delta: reminder_world_state.mcp_servers.clone(),
+            model_switch: reminder_world_state.model_switch.clone(),
             // Phase 3: cross-crate state flows via `ReminderSources`.
             // Sources that aren't wired → default output → generator skips.
             hook_events: materialized.hook_events,
@@ -766,56 +736,29 @@ impl QueryEngine {
             app_state_snapshot.needs_auto_mode_exit_attachment && reminder_is_auto_mode;
         let needs_reminder_bookkeeping =
             !reminders.is_empty() || stale_plan_exit_flag || stale_auto_exit_flag;
-        if needs_reminder_bookkeeping && self.app_state.is_some() {
-            let fired_types: HashSet<ReminderAttachmentType> =
-                reminders.iter().map(|r| r.attachment_type).collect();
-            if let Some(state) = self.app_state.as_ref() {
-                let mut guard = state.write().await;
-                // Clear stale one-shot exit flags when the engine is
-                // still in the matching mode instead of preserving them
-                // for a later, unrelated turn.
-                if stale_plan_exit_flag {
-                    guard.needs_plan_mode_exit_attachment = false;
-                    guard.pending_plan_mode_exit_outcome = None;
-                }
-                if stale_auto_exit_flag {
-                    guard.needs_auto_mode_exit_attachment = false;
-                }
-                if fired_types.contains(&ReminderAttachmentType::PlanModeExit) {
-                    guard.needs_plan_mode_exit_attachment = false;
-                    guard.pending_plan_mode_exit_outcome = None;
-                }
-                if fired_types.contains(&ReminderAttachmentType::AutoModeExit) {
-                    guard.needs_auto_mode_exit_attachment = false;
-                }
-                if fired_types.contains(&ReminderAttachmentType::PlanModeReentry) {
-                    guard.has_exited_plan_mode = false;
-                }
-                // Replace the announced set with the current **deferred**
-                // tool list after successful emission. Subsequent turns
-                // then diff against the fresh baseline.
-                if fired_types.contains(&ReminderAttachmentType::DeferredToolsDelta) {
-                    guard.set_last_announced_tools_for_scope(
-                        self.config.agent_id_str(),
-                        reminder_deferred_tools_clone.iter().cloned().collect(),
-                    );
-                }
-                // Same pattern for the agent-listing delta.
-                if fired_types.contains(&ReminderAttachmentType::AgentListingDelta) {
-                    guard.last_announced_agents = reminder_current_agents.iter().cloned().collect();
-                }
-                // Same pattern for the MCP-instructions delta.
-                if fired_types.contains(&ReminderAttachmentType::McpInstructionsDelta) {
-                    guard.last_announced_mcp_instructions =
-                        materialized.mcp_instructions_current.clone();
-                }
-                // Same pattern for the MCP-servers delta baseline.
-                if fired_types.contains(&ReminderAttachmentType::McpServersDelta) {
-                    guard.set_last_announced_mcp_servers_for_scope(
-                        self.config.agent_id_str(),
-                        reminder_mcp_current.clone(),
-                    );
-                }
+        let fired_types: HashSet<ReminderAttachmentType> =
+            reminders.iter().map(|r| r.attachment_type).collect();
+        if needs_reminder_bookkeeping && let Some(state) = self.app_state.as_ref() {
+            let mut guard = state.write().await;
+            // Clear stale one-shot exit flags when the engine is
+            // still in the matching mode instead of preserving them
+            // for a later, unrelated turn.
+            if stale_plan_exit_flag {
+                guard.needs_plan_mode_exit_attachment = false;
+                guard.pending_plan_mode_exit_outcome = None;
+            }
+            if stale_auto_exit_flag {
+                guard.needs_auto_mode_exit_attachment = false;
+            }
+            if fired_types.contains(&ReminderAttachmentType::PlanModeExit) {
+                guard.needs_plan_mode_exit_attachment = false;
+                guard.pending_plan_mode_exit_outcome = None;
+            }
+            if fired_types.contains(&ReminderAttachmentType::AutoModeExit) {
+                guard.needs_auto_mode_exit_attachment = false;
+            }
+            if fired_types.contains(&ReminderAttachmentType::PlanModeReentry) {
+                guard.has_exited_plan_mode = false;
             }
         }
 
@@ -850,6 +793,18 @@ impl QueryEngine {
                 "injecting reminder batch",
             );
         }
+        // The world-state commit criterion: attachment kinds that actually
+        // entered model-visible history — collected here, downstream of the
+        // silence/visibility routing, so a reminder that inject_reminders
+        // diverted to display-only can never advance the baseline.
+        let landed_kinds: HashSet<coco_types::AttachmentKind> = batch
+            .model_visible
+            .iter()
+            .filter_map(|msg| match msg {
+                Message::Attachment(att) => Some(att.kind),
+                _ => None,
+            })
+            .collect();
         for msg in batch.model_visible {
             crate::history_sync::history_push_and_emit(history, msg, event_tx).await;
         }
@@ -869,6 +824,21 @@ impl QueryEngine {
                 "silent reminder routed to display-only sink"
             );
         }
+
+        // Advance and persist this scope's world-state baseline — strictly
+        // AFTER the reminders entered the authoritative history above. The
+        // baseline asserts "the model has been told"; writing it first would
+        // let a crash in between record announcements that never happened,
+        // which resume then suppresses forever. This order fails the other
+        // way: a crash before the metadata write costs one re-announcement.
+        // (Message-transcript persistence rides the MessageAppended events
+        // emitted above — the same seam every message uses.)
+        //
+        // Runs even when nothing fired: a first turn still records the model
+        // id, without which a later `/model` switch has no previous value to
+        // compare against and goes unannounced.
+        self.commit_world_state_baseline(&reminder_world_state, &landed_kinds)
+            .await;
 
         TurnReminderSnapshot {
             app_state: app_state_snapshot,
@@ -1008,6 +978,56 @@ impl QueryEngine {
         let state = self.app_state.as_ref()?;
         let mut guard = state.write().await;
         reconcile_workflow_size(&mut guard, self.config.workflow_size)
+    }
+
+    /// Record what the model has now been told, for this agent scope.
+    ///
+    /// Ordering matters and mirrors the reason this baseline exists at all:
+    /// the reminders are already in history by the time this runs, and the
+    /// snapshot is written to the transcript only after the in-memory
+    /// baseline advances. A crash anywhere in between can therefore only
+    /// cause a re-announcement on resume, never a silent omission.
+    ///
+    /// A no-op write is skipped so an idle turn does not append a redundant
+    /// transcript record.
+    async fn commit_world_state_baseline(
+        &self,
+        delta: &crate::world_state::WorldStateDelta,
+        landed: &HashSet<coco_types::AttachmentKind>,
+    ) {
+        let Some(state) = self.app_state.as_ref() else {
+            return;
+        };
+        let agent_id = self.config.agent_id_str();
+        let snapshot = {
+            let mut guard = state.write().await;
+            let mut snapshot = guard.world_state_for_scope(agent_id);
+            let previous = snapshot.clone();
+            delta.adopt_fired(&mut snapshot, landed);
+            if snapshot == previous {
+                return;
+            }
+            guard.set_world_state_for_scope(agent_id, snapshot.clone());
+            snapshot
+        };
+
+        let (Some(store), Some(session_id)) = (&self.transcript_store, &self.transcript_session_id)
+        else {
+            return;
+        };
+        if let Err(err) = store.append_metadata(
+            session_id.as_str(),
+            &coco_session::MetadataEntry::WorldStateSnapshot {
+                session_id: session_id.clone(),
+                agent_id: agent_id.map(str::to_string),
+                snapshot,
+            },
+        ) {
+            // Non-fatal: a lost record costs one redundant announcement on the
+            // next resume, which is the same failure the in-memory-only
+            // baseline had all the time.
+            tracing::warn!("failed to persist world-state snapshot: {err}");
+        }
     }
 }
 

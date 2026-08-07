@@ -7,8 +7,8 @@
 //!
 //! 1. `ctx.config.attachments.deferred_tools_delta` — default on.
 //! 2. `ctx.deferred_tools_delta.is_some()` with non-empty delta —
-//!    engine pre-computes by diffing `ctx.tools` against prior
-//!    `deferred_tools_delta` attachments in history.
+//!    computed by `app/query::world_state::diff` against the persisted
+//!    `WorldStateSnapshot.deferred_tools` baseline.
 //!
 //! Text format: two optional sections joined by `"\n\n"`, each a header
 //! line followed by newline-joined entries. The "added" header spells out

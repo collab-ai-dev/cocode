@@ -73,6 +73,7 @@ pub mod tool_use_summary;
 mod trace_names;
 pub mod usage_accounting;
 mod wire_tap_adapter;
+mod world_state;
 
 pub use budget::BudgetDecision;
 pub use budget::BudgetTracker;

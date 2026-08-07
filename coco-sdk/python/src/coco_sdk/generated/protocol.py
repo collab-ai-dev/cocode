@@ -145,6 +145,7 @@ class AttachmentKind(str, Enum):
     user_context = "user_context"
     workflow_size_guideline_change = "workflow_size_guideline_change"
     tool_search_usage_reminder = "tool_search_usage_reminder"
+    model_switch = "model_switch"
 
 
 class Capability(str, Enum):

@@ -62,6 +62,7 @@ mod tool_wire_name;
 mod turn;
 mod wire_tagged;
 mod workflow;
+mod world_state;
 
 // === Re-exports ===
 
@@ -73,9 +74,12 @@ pub use composer::{
 // App-state (cross-turn shared state carried on ToolUseContext)
 pub use app_state::{
     ActiveWorktreeState, AppStatePatch, AppStateReadHandle, ElicitationGuard,
-    LiveToolPermissionState, McpServerAnnouncementState, PendingPermissionGuard,
-    PendingPlanVerificationState, ToolAppState, WorkflowSizeAnnouncement,
+    LiveToolPermissionState, PendingPermissionGuard, PendingPlanVerificationState, ToolAppState,
+    WorkflowSizeAnnouncement,
 };
+
+// Model-visible world state (the persisted announce baseline on ToolAppState)
+pub use world_state::{ContentDigest, McpServerAnnouncementState, WorldStateSnapshot};
 
 // Per-provider rate-limit state (lives on `ToolAppState.rate_limits`).
 pub use rate_limit::{RateLimitEntry, RateLimitStatus};

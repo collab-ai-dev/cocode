@@ -6,8 +6,8 @@
 //!
 //! 1. `ctx.config.attachments.mcp_instructions_delta` — default on.
 //! 2. `ctx.mcp_instructions_delta.is_some()` with non-empty delta —
-//!    engine pre-computes by diffing current MCP server instructions
-//!    against prior announcements in history.
+//!    computed by `app/query::world_state::diff` against the persisted
+//!    `WorldStateSnapshot.mcp_instruction_digests` baseline.
 //!
 //! Output: two optional sections
 //! joined by `"\n\n"`.

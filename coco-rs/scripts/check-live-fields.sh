@@ -43,6 +43,9 @@ TARGETS=(
     "core/tool-runtime/src/context.rs:ToolUseContext"
     "app/query/src/config.rs:QueryEngineConfig"
     "core/system-reminder/src/generator.rs:GeneratorContext"
+    # Persisted announce baseline: a section added here but never wired into
+    # the diff would stay `None` forever and silently stop announcing.
+    "common/types/src/world_state.rs:WorldStateSnapshot"
 )
 
 violations=0

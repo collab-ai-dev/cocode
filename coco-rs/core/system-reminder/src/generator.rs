@@ -289,23 +289,20 @@ pub struct GeneratorContext<'a> {
     /// by scanning history.
     pub has_prior_companion_intro: bool,
 
-    // ── Phase 2 history-diff delta snapshots ──
-    /// Pre-computed deferred-tools delta. `Some(info)` with either
-    /// `added_lines` or `removed_names` non-empty triggers emission.
-    /// Engine scans history for prior `DeferredToolsDelta` attachments
-    /// and diffs current `tools` against the accumulated announced set.
+    // ── World-state delta snapshots ──
+    // Each is computed by `app/query::world_state::diff` against the
+    // persisted per-scope `coco_types::WorldStateSnapshot` — the record of
+    // what this model has already been told. Generators only render;
+    // `Some(info)` triggers emission.
     pub deferred_tools_delta: Option<DeferredToolsDeltaInfo>,
-
-    /// Pre-computed agent-listing delta. Engine scans for prior
-    /// `AgentListingDelta` attachments in history and diffs current
-    /// `agent_definitions` against them.
     pub agent_listing_delta: Option<AgentListingDeltaInfo>,
-
-    /// Pre-computed MCP instructions delta. Engine scans for prior
-    /// `McpInstructionsDelta` attachments and diffs current server
-    /// instructions (from `services/mcp`) against them.
     pub mcp_instructions_delta: Option<McpInstructionsDeltaInfo>,
     pub mcp_servers_delta: Option<McpServersDeltaInfo>,
+
+    /// Set when this scope's model id differs from the one recorded in its
+    /// persisted `WorldStateSnapshot`. `None` on a first-ever turn — there is
+    /// no switch to report and the system prompt is still accurate.
+    pub model_switch: Option<ModelSwitchInfo>,
 
     // ── Phase 3 cross-crate snapshots ──
     /// Hook events collected from the async hook registry this turn.
@@ -473,6 +470,7 @@ pub struct GeneratorContextBuilder<'a> {
     agent_listing_delta: Option<AgentListingDeltaInfo>,
     mcp_instructions_delta: Option<McpInstructionsDeltaInfo>,
     mcp_servers_delta: Option<McpServersDeltaInfo>,
+    model_switch: Option<ModelSwitchInfo>,
     hook_events: Vec<HookEvent>,
     diagnostics: Vec<DiagnosticFileSummary>,
     output_style: Option<OutputStyleSnapshot>,
@@ -558,6 +556,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             agent_listing_delta: None,
             mcp_instructions_delta: None,
             mcp_servers_delta: None,
+            model_switch: None,
             hook_events: Vec::new(),
             diagnostics: Vec::new(),
             output_style: None,
@@ -851,6 +850,11 @@ impl<'a> GeneratorContextBuilder<'a> {
         self
     }
 
+    pub fn model_switch(mut self, info: Option<ModelSwitchInfo>) -> Self {
+        self.model_switch = info;
+        self
+    }
+
     pub fn hook_events(mut self, events: Vec<HookEvent>) -> Self {
         self.hook_events = events;
         self
@@ -1046,6 +1050,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             agent_listing_delta: self.agent_listing_delta,
             mcp_instructions_delta: self.mcp_instructions_delta,
             mcp_servers_delta: self.mcp_servers_delta,
+            model_switch: self.model_switch,
             hook_events: self.hook_events,
             diagnostics: self.diagnostics,
             output_style: self.output_style,
@@ -1072,6 +1077,15 @@ impl<'a> GeneratorContextBuilder<'a> {
             auto_mode_attachments_since_exit: self.auto_mode_attachments_since_exit,
         }
     }
+}
+
+/// A mid-session model change, as the model needs to hear it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelSwitchInfo {
+    /// Model id recorded in the scope's previous snapshot.
+    pub previous: String,
+    /// Model id this turn actually runs as.
+    pub current: String,
 }
 
 /// Deferred-tools delta snapshot. `added_lines` entries are
