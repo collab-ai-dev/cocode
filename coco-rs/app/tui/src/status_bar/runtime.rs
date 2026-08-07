@@ -285,8 +285,22 @@ async fn run_status_line_command_with_timeout(
         .stderr(Stdio::null())
         .spawn()?;
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(input_json.as_bytes()).await?;
-        stdin.write_all(b"\n").await?;
+        // The JSON on stdin is an offer, not a requirement: `date`, `printf`,
+        // or a script that only shells out to git never reads it and exits
+        // straight away. That closes the pipe before the write lands, and the
+        // resulting EPIPE says "the command didn't want the input" — not
+        // "the command failed". Propagating it would break such a statusline
+        // intermittently, decided purely by which side the scheduler ran first.
+        let written = async {
+            stdin.write_all(input_json.as_bytes()).await?;
+            stdin.write_all(b"\n").await
+        }
+        .await;
+        match written {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+            Err(e) => return Err(e.into()),
+        }
     }
 
     let mut stdout = child.stdout.take();

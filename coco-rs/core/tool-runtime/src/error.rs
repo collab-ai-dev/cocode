@@ -164,28 +164,6 @@ impl fmt::Display for SyntheticToolError {
     }
 }
 
-/// OTel telemetry event for tool execution completion.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolUseEvent {
-    pub tool_id: ToolId,
-    pub success: bool,
-    pub duration_ms: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub validation_error_code: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub validation_error_message: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error_class: Option<String>,
-    #[serde(default)]
-    pub is_mcp: bool,
-    #[serde(default)]
-    pub is_concurrency_safe: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub query_chain_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub query_depth: Option<i32>,
-}
-
 #[cfg(test)]
 #[path = "error.test.rs"]
 mod tests;

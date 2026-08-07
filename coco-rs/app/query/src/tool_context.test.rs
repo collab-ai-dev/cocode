@@ -1258,3 +1258,35 @@ async fn test_factory_messages_snapshot_supports_fork_recursion_guard() {
         "normal user history must NOT trip the guard",
     );
 }
+
+/// `AgentTool`'s fork path fails closed when
+/// `ToolUseContext.rendered_system_prompt` is absent, so a hardcoded `None`
+/// in the factory silently disables fork-subagent mode instead of degrading
+/// it. The field must mirror the config the same way `custom_system_prompt`
+/// does.
+#[tokio::test]
+async fn factory_mirrors_rendered_system_prompt_from_config() {
+    let config = QueryEngineConfig {
+        system_prompt: Some(coco_context::SystemPrompt::from_text(
+            "PARENT SYSTEM PROMPT".to_string(),
+        )),
+        ..test_config()
+    };
+    let ctx = factory(config).build(ToolContextOverrides::default()).await;
+    assert_eq!(
+        ctx.rendered_system_prompt.as_deref(),
+        Some("PARENT SYSTEM PROMPT"),
+        "fork-eligible tool calls need the parent's rendered prompt; a `None` here \
+         makes every fork spawn hard-error"
+    );
+}
+
+/// Absent config ⇒ absent field. The fork path's error message is the
+/// intended behaviour in that case, not a silent fallback.
+#[tokio::test]
+async fn factory_leaves_rendered_system_prompt_unset_without_config() {
+    let ctx = factory(test_config())
+        .build(ToolContextOverrides::default())
+        .await;
+    assert_eq!(ctx.rendered_system_prompt, None);
+}

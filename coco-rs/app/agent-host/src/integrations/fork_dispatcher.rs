@@ -163,7 +163,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             // Sub-context isolation primitives applied at the
             // per-call ToolUseContext build site (tool_context.rs
             // reads `fork_isolation` and applies auto agent_id,
-            // fresh denial tracking, query_chain_id / query_depth
+            // fresh denial tracking, query_depth
             // bump, allowed_write_roots fence, and require_can_use_tool).
             fork_isolation: Some(Arc::new({
                 let mut iso =

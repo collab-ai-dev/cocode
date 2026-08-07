@@ -74,7 +74,7 @@ members = [
     "services/mcp-types",
     "services/rmcp-client",
     "services/lsp",
-    "services/compact",
+    "core/compact",
     "services/provider-auth",
     "services/session-trace",
     "services/wire-dump",
@@ -219,7 +219,7 @@ coco-mcp-skills = { path = "services/mcp-skills" }
 coco-mcp-types = { path = "services/mcp-types" }
 coco-rmcp-client = { path = "services/rmcp-client" }
 coco-lsp = { path = "services/lsp" }
-coco-compact = { path = "services/compact" }
+coco-compact = { path = "core/compact" }
 coco-session-trace = { path = "services/session-trace" }
 coco-wire-dump = { path = "services/wire-dump" }
 coco-test-harness = { path = "tests/harness" }

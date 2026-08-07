@@ -128,9 +128,13 @@ invokes**, **what state isolates**, and **how the result surfaces**:
   side query that **shares the parent's prompt cache** via `CacheSafeParams`.
   Labels enumerated by `coco_types::ForkLabel`. Never mutates parent
   transcript. `ForkContextOverrides` (`fork_context.rs`) gives per-call
-  isolation: auto agent_id, fresh `DenialTrackingState`, fresh
-  `query_chain_id` + `query_depth` bump (counts toward the shared subagent
-  depth cap), `allowed_write_roots` fence, `require_can_use_tool` toggle.
+  isolation: auto agent_id, fresh `DenialTrackingState`, `query_depth` bump
+  (counts toward the shared subagent depth cap), `allowed_write_roots`
+  fence, `require_can_use_tool` toggle. There is deliberately no chain id:
+  the per-fork `query_chain_id` was minted on both `ToolUseContext` and
+  `ToolUseEvent` but never consumed on either — no telemetry ever grouped
+  by it — so it was removed rather than left as a UUID allocated per fork
+  for nobody. Reintroduce it together with its consumer, not before.
 - **Subagent** (`AgentTool` model-spawned via
   `coco_tool_runtime::AgentHandle`) — full multi-turn child engine, may run
   for hours, lives in `task_runtime`. Own cache key. Inherits permission

@@ -312,7 +312,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // dream / session_memory; agent_summary timer), build a
             // `ForkContextOverrides` so the per-call ToolUseContext
             // builder applies auto agent_id, fresh DenialTracker,
-            // query_chain_id / query_depth bump, and write fence.
+            // query_depth bump and write fence.
             // User-invoked AgentTool spawns leave `fork_label = None`
             // and skip isolation (they inherit the parent context).
             fork_isolation: config.fork_label.map(|label| {

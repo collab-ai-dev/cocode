@@ -97,7 +97,6 @@ pub use derive::derive_input_schema_value;
 pub use disk_backed_schedule_store::DiskBackedScheduleStore;
 pub use error::SyntheticToolError;
 pub use error::ToolError;
-pub use error::ToolUseEvent;
 pub use error::classify_tool_error;
 pub use error::format_tool_error;
 pub use executor::PendingToolCall;
