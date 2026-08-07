@@ -16,7 +16,6 @@
 mod full;
 use full::*;
 
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -1003,99 +1002,57 @@ impl QueryEngine {
                     })
             })
             .collect();
-        let current_mcp_server_state: std::collections::BTreeMap<_, _> = current_mcp_servers
-            .iter()
-            .map(|server| {
-                (
-                    server.name.clone(),
-                    coco_types::McpServerAnnouncementState {
-                        tool_count: server.tool_count,
-                        description: server.description.clone(),
-                    },
-                )
-            })
-            .collect();
         let current_mcp_instructions = materialized.mcp_instructions_current;
 
-        let baseline_tools = if preserved_contains_attachment_kind(
-            preserved_history,
-            coco_types::AttachmentKind::DeferredToolsDelta,
-        ) {
-            app_state_snapshot.last_announced_tools_for_scope(self.config.agent_id_str())
-        } else {
-            HashSet::new()
-        };
-        let baseline_agents = if preserved_contains_attachment_kind(
-            preserved_history,
-            coco_types::AttachmentKind::AgentListingDelta,
-        ) {
-            app_state_snapshot.last_announced_agents.clone()
-        } else {
-            HashSet::new()
-        };
-        let baseline_mcp = if preserved_contains_attachment_kind(
-            preserved_history,
-            coco_types::AttachmentKind::McpInstructionsDelta,
-        ) {
-            app_state_snapshot.last_announced_mcp_instructions.clone()
-        } else {
-            HashMap::new()
-        };
-        let baseline_mcp_servers = if preserved_contains_attachment_kind(
-            preserved_history,
-            coco_types::AttachmentKind::McpServersDelta,
-        ) {
-            app_state_snapshot.last_announced_mcp_servers_for_scope(self.config.agent_id_str())
-        } else {
-            std::collections::BTreeMap::new()
-        };
-
-        let deferred_delta = crate::engine_helpers::compute_tools_delta(
-            &current_deferred_tools,
-            &current_loaded_tools,
-            &baseline_tools,
-        );
-        let agent_delta =
-            crate::engine_helpers::compute_agents_delta(&current_agents, &baseline_agents);
-        let mcp_delta = crate::engine_helpers::compute_mcp_instructions_delta(
-            &current_mcp_instructions,
-            &baseline_mcp,
-        );
-        let mcp_servers_delta = crate::engine_helpers::compute_mcp_servers_delta(
-            &current_mcp_servers,
-            &baseline_mcp_servers,
+        // Compaction rewrote history: any announcement whose attachment did not
+        // survive must be made again. Clearing per section — rather than
+        // resetting the whole baseline — means a compaction that preserved the
+        // MCP announcement but dropped the agent listing re-announces exactly
+        // the agent listing. `Message::Attachment` carries its typed
+        // `AttachmentKind`, so "did this announcement survive?" is an enum
+        // comparison, not a scan for rendered text.
+        let mut baseline = app_state_snapshot.world_state_for_scope(self.config.agent_id_str());
+        crate::world_state::retain_surviving(&mut baseline, |kind| {
+            preserved_contains_attachment_kind(preserved_history, kind)
+        });
+        let delta = crate::world_state::diff(
+            &crate::world_state::WorldStateInput {
+                model: &self.config.model_id,
+                deferred_tools: &current_deferred_tools,
+                loaded_tools: &current_loaded_tools,
+                agent_types: &current_agents,
+                mcp_servers: &current_mcp_servers,
+                mcp_instructions: &current_mcp_instructions,
+            },
+            &baseline,
         );
 
         let ctx = coco_system_reminder::GeneratorContextBuilder::new(&self.config.system_reminder)
-            .deferred_tools_delta(deferred_delta)
-            .agent_listing_delta(agent_delta)
-            .mcp_instructions_delta(mcp_delta)
-            .mcp_servers_delta(mcp_servers_delta)
+            .deferred_tools_delta(delta.deferred_tools.clone())
+            .agent_listing_delta(delta.agent_listing.clone())
+            .mcp_instructions_delta(delta.mcp_instructions.clone())
+            .mcp_servers_delta(delta.mcp_servers.clone())
+            .model_switch(delta.model_switch.clone())
             .build();
+        // The same generators the turn path runs for these sections, behind
+        // the same config gate — a reminder the user disabled must not
+        // resurface through the compaction path. `ModelSwitchGenerator` is
+        // required here: a `/model` switch followed by `/compact` before the
+        // next turn has no other place to announce, and `adopt_fired`
+        // advances the model section unconditionally.
+        let generators: [&dyn coco_system_reminder::AttachmentGenerator; 5] = [
+            &coco_system_reminder::DeferredToolsDeltaGenerator,
+            &coco_system_reminder::AgentListingDeltaGenerator,
+            &coco_system_reminder::McpInstructionsDeltaGenerator,
+            &coco_system_reminder::McpServersDeltaGenerator,
+            &coco_system_reminder::ModelSwitchGenerator,
+        ];
         let mut reminders = Vec::new();
-        for generated in [
-            coco_system_reminder::AttachmentGenerator::generate(
-                &coco_system_reminder::DeferredToolsDeltaGenerator,
-                &ctx,
-            )
-            .await,
-            coco_system_reminder::AttachmentGenerator::generate(
-                &coco_system_reminder::AgentListingDeltaGenerator,
-                &ctx,
-            )
-            .await,
-            coco_system_reminder::AttachmentGenerator::generate(
-                &coco_system_reminder::McpInstructionsDeltaGenerator,
-                &ctx,
-            )
-            .await,
-            coco_system_reminder::AttachmentGenerator::generate(
-                &coco_system_reminder::McpServersDeltaGenerator,
-                &ctx,
-            )
-            .await,
-        ] {
-            match generated {
+        for generator in generators {
+            if !generator.is_enabled(&self.config.system_reminder) {
+                continue;
+            }
+            match generator.generate(&ctx).await {
                 Ok(Some(reminder)) => reminders.push(reminder),
                 Ok(None) => {}
                 Err(e) => warn!("post-compact delta reminder generation failed: {e}"),
@@ -1110,12 +1067,17 @@ impl QueryEngine {
             }
         }
 
+        // Advance the baseline from what actually reached the model-visible
+        // batch — downstream of both the config gate and the visibility
+        // routing — so nothing can be recorded as told without having been
+        // said. A section that did not land retries on the next turn.
+        let landed: HashSet<coco_types::AttachmentKind> =
+            attachments.iter().map(|att| att.kind).collect();
+        delta.adopt_fired(&mut baseline, &landed);
+
         let state = PostCompactDeltaState {
-            current_deferred_tools,
             agent_id: self.config.agent_id_string(),
-            current_agents,
-            current_mcp_instructions,
-            current_mcp_servers: current_mcp_server_state,
+            snapshot: baseline,
         };
         (attachments, state)
     }
@@ -1166,17 +1128,41 @@ impl QueryEngine {
         let Some(app_state) = &self.app_state else {
             return;
         };
-        let mut guard = app_state.write().await;
-        guard.set_last_announced_tools_for_scope(
-            delta_state.agent_id.as_deref(),
-            delta_state.current_deferred_tools.into_iter().collect(),
-        );
-        guard.last_announced_agents = delta_state.current_agents.into_iter().collect();
-        guard.last_announced_mcp_instructions = delta_state.current_mcp_instructions;
-        guard.set_last_announced_mcp_servers_for_scope(
-            delta_state.agent_id.as_deref(),
-            delta_state.current_mcp_servers,
-        );
+        {
+            let mut guard = app_state.write().await;
+            // A compaction that preserved every announcement and changed no
+            // inventory adopts an identical baseline — skip the write and
+            // the transcript record instead of appending a no-op line per
+            // compaction (the turn path has the same skip).
+            if guard.world_state_for_scope(delta_state.agent_id.as_deref()) == delta_state.snapshot
+            {
+                return;
+            }
+            guard.set_world_state_for_scope(
+                delta_state.agent_id.as_deref(),
+                delta_state.snapshot.clone(),
+            );
+        }
+        // Persist, same ordering rule as `commit_world_state_baseline`: the
+        // re-announcement attachments are already in the rewritten history
+        // (every call site runs after `replace_history_after_compact`).
+        // Without this write, a section that `retain_surviving` cleared and
+        // whose re-announcement then failed leaves disk saying "told" while
+        // memory says "retry" — and a resume in that window drops the retry.
+        let (Some(store), Some(session_id)) = (&self.transcript_store, &self.transcript_session_id)
+        else {
+            return;
+        };
+        if let Err(err) = store.append_metadata(
+            session_id.as_str(),
+            &coco_session::MetadataEntry::WorldStateSnapshot {
+                session_id: session_id.clone(),
+                agent_id: delta_state.agent_id,
+                snapshot: delta_state.snapshot,
+            },
+        ) {
+            tracing::warn!("failed to persist post-compact world-state snapshot: {err}");
+        }
     }
 
     fn create_current_plan_attachment(&self) -> Option<coco_messages::AttachmentMessage> {

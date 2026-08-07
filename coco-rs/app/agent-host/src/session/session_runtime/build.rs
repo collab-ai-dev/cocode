@@ -10,7 +10,7 @@ use coco_tool_runtime::MailboxHandleRef;
 use coco_types::{ModelRole, SessionId, ToolAppState};
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::{
     SessionAgentCatalogResources, SessionCatalogResources, SessionCommandResources,
@@ -344,7 +344,10 @@ impl SessionRuntime {
 
         // Shared per-session ToolAppState (plan-mode reminder cadence,
         // exited_plan_mode flag, per-scope date-change latches, etc.).
-        let app_state: Arc<RwLock<ToolAppState>> = Arc::new(RwLock::new(ToolAppState::default()));
+        let app_state: Arc<RwLock<ToolAppState>> = Arc::new(RwLock::new(restore_world_state(
+            transcript_store.as_ref(),
+            &session_id,
+        )));
         let auto_mode_state = Arc::new(coco_permissions::AutoModeState::new());
         auto_mode_state.set_active(permission_mode == coco_types::PermissionMode::Auto);
         auto_mode_state.set_cli_flag(permission_mode == coco_types::PermissionMode::Auto);
@@ -842,3 +845,34 @@ impl SessionRuntime {
         Ok(Arc::new(runtime))
     }
 }
+
+/// Restore what the model had already been told, per agent scope.
+///
+/// This is the only durable part of `ToolAppState`. Without it a resumed
+/// session diffs every announce delta against an empty baseline and
+/// re-announces the whole inventory — deferred tools, agent catalog, MCP
+/// servers, and every server's full instruction block — on top of the history
+/// it just restored, which already contains those announcements.
+///
+/// A missing or unreadable transcript is not an error: a fresh session has no
+/// entries yet, and any other read failure costs one redundant announcement,
+/// not correctness.
+fn restore_world_state(
+    transcript_store: &dyn coco_session::SessionStore,
+    session_id: &str,
+) -> ToolAppState {
+    let mut state = ToolAppState::default();
+    match transcript_store.load_entries(session_id) {
+        Ok(entries) => {
+            for record in coco_session::latest_world_state_snapshots(&entries) {
+                state.set_world_state_for_scope(record.agent_id.as_deref(), record.snapshot);
+            }
+        }
+        Err(e) => debug!("no world-state baseline to restore: {e}"),
+    }
+    state
+}
+
+#[cfg(test)]
+#[path = "build.test.rs"]
+mod tests;

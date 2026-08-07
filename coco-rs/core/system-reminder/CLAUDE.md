@@ -6,8 +6,9 @@ Per-turn dynamic `<system-reminder>` injection. Owns the reminder subsystem: typ
 
 - `AttachmentType` — one variant per reminder; full catalog is `AttachmentType::all()`.
   Conceptually grouped by phase: core plan/auto/todo/task reminders; engine-local
-  (token/budget/companion/goal-context); history-diff deltas (deferred tools /
-  agent listing / MCP instructions); cross-crate snapshots (hooks, diagnostics,
+  (token/budget/companion/goal-context); **world-state deltas** (deferred tools /
+  agent listing / MCP servers + instructions / model switch — see below);
+  cross-crate snapshots (hooks, diagnostics,
   skills, team, queued commands, …); user-input tier (@-mentions, MCP resources,
   agent mentions); IDE; silent-native (`already_read_file` / `edited_image_file`).
 - `ReminderTier` — `Core` (all agents) / `MainAgentOnly` / `UserPrompt` (only when user input is present).
@@ -38,6 +39,28 @@ Per-turn dynamic `<system-reminder>` injection. Owns the reminder subsystem: typ
   / `Cron`); each origin gets its own framing prose.
 - `InjectedMessage` / `inject_reminders` — converts orchestrator output into `coco_types::Message::Attachment`.
 - `SystemReminderConfig` / `AttachmentSettings` — **live in `coco-config`** (re-exported here); every reminder toggleable via `Settings.system_reminder`.
+
+## World state vs. cadence
+
+Two different questions, two different mechanisms — do not merge them.
+
+- *"A session fact the model should know until it changes"* → **world state**.
+  Diffed in `app/query::world_state` against `coco_types::WorldStateSnapshot`,
+  the per-agent-scope record of what this model has already been told. That
+  snapshot is **persisted** into the session transcript
+  (`coco_session::MetadataEntry::WorldStateSnapshot`) and restored at session
+  build, so a resumed session does not re-announce an inventory the reloaded
+  history already contains. Generators here (`deferred_tools_delta`,
+  `agent_listing_delta`, `mcp_servers_delta`, `mcp_instructions_delta`,
+  `model_switch`) only *render* the diff.
+- *"A prompt we re-issue on a schedule"* → a cadenced generator, below.
+
+The baseline advances only for sections whose reminder actually reached
+history (`WorldStateDelta::adopt_fired`), so a generator that is disabled,
+times out, or errors retries next turn instead of losing its announcement.
+`model_switch` is the one exception and adopts unconditionally: the mismatch
+it reports never resolves on its own, so a suppressed notice would otherwise
+re-fire every turn for the rest of the session.
 
 ## Cadence lives in generators (no orchestrator throttle)
 

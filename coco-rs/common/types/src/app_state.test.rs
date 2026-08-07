@@ -2,7 +2,6 @@ use super::ElicitationGuard;
 use super::PendingPermissionGuard;
 use super::ToolAppState;
 use crate::PermissionMode;
-use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 
 #[test]
@@ -107,29 +106,29 @@ fn struct_update_syntax_composes() {
 }
 
 #[test]
-fn announced_tools_are_scoped_by_agent_id() {
+fn world_state_is_scoped_by_agent_id() {
+    let main = crate::WorldStateSnapshot {
+        deferred_tools: ["TaskOutput".to_string()].into_iter().collect(),
+        ..Default::default()
+    };
+    let agent = crate::WorldStateSnapshot {
+        deferred_tools: ["AgentScopedTool".to_string()].into_iter().collect(),
+        ..Default::default()
+    };
+
     let mut s = ToolAppState::default();
-    s.set_last_announced_tools_for_scope(None, HashSet::from(["TaskOutput".to_string()]));
+    s.set_world_state_for_scope(None, main.clone());
 
-    assert_eq!(
-        s.last_announced_tools_for_scope(None),
-        HashSet::from(["TaskOutput".to_string()])
-    );
-    assert!(s.last_announced_tools_for_scope(Some("agent-a")).is_empty());
+    assert_eq!(s.world_state_for_scope(None), main);
+    // A subagent that has been told nothing must not inherit the main
+    // session's baseline — otherwise its first turn reads as "the main
+    // session's tools were removed".
+    assert!(s.world_state_for_scope(Some("agent-a")).is_empty());
 
-    s.set_last_announced_tools_for_scope(
-        Some("agent-a"),
-        HashSet::from(["AgentScopedTool".to_string()]),
-    );
+    s.set_world_state_for_scope(Some("agent-a"), agent.clone());
 
-    assert_eq!(
-        s.last_announced_tools_for_scope(Some("agent-a")),
-        HashSet::from(["AgentScopedTool".to_string()])
-    );
-    assert_eq!(
-        s.last_announced_tools_for_scope(None),
-        HashSet::from(["TaskOutput".to_string()])
-    );
+    assert_eq!(s.world_state_for_scope(Some("agent-a")), agent);
+    assert_eq!(s.world_state_for_scope(None), main);
 }
 
 #[test]

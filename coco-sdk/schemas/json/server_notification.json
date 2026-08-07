@@ -2133,6 +2133,11 @@
           "description": "Standing nudge that undiscovered deferred tools can be loaded via\nToolSearch — distinct from the one-shot [`DeferredToolsDelta`](Self::DeferredToolsDelta)\nchange-announcer. Fires whenever deferred tools remain undiscovered;\nhighest-leverage for non-Anthropic providers where ToolSearch is\npromoted rather than native.",
           "type": "string",
           "const": "tool_search_usage_reminder"
+        },
+        {
+          "description": "The session's model changed mid-run. The static system prompt is built\nonce at engine construction, so it keeps asserting the model it was\nbuilt with; this is the only thing that tells the model otherwise.",
+          "type": "string",
+          "const": "model_switch"
         }
       ]
     },

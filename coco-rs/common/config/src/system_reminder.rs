@@ -136,6 +136,12 @@ pub struct AttachmentSettings {
     /// for `defer` / `use_tool` exposure modes. On by default.
     pub mcp_servers_delta: bool,
 
+    /// Model-switch notice. Fires when the session's model changes mid-run,
+    /// which the static system prompt cannot express — it is built once at
+    /// engine construction and keeps asserting the model it was built with.
+    /// On by default.
+    pub model_switch: bool,
+
     /// Recurring tool-search usage nudge. Fires whenever deferred tools
     /// remain undiscovered, reminding the model to load their schemas via
     /// ToolSearch before concluding a capability is missing. On by default;
@@ -236,6 +242,7 @@ impl Default for AttachmentSettings {
             agent_listing_delta: true,
             mcp_instructions_delta: true,
             mcp_servers_delta: true,
+            model_switch: true,
             tool_search_usage_reminder: true,
             // Phase 3 — on by default; generators short-circuit when ctx state is empty.
             hook_success: true,

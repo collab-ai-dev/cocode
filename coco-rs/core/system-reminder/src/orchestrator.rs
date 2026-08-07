@@ -103,13 +103,13 @@ impl SystemReminderOrchestrator {
             HookBlockingErrorGenerator, HookStoppedContinuationGenerator, HookSuccessGenerator,
             IdeOpenedFileGenerator, IdeSelectionGenerator, InvokedSkillsGenerator,
             McpInstructionsDeltaGenerator, McpResourcesGenerator, McpServersDeltaGenerator,
-            NestedMemoryGenerator, OutputStyleGenerator, OutputTokenUsageGenerator,
-            PlanModeEnterGenerator, PlanModeExitGenerator, PlanModeReentryGenerator,
-            RelevantMemoriesGenerator, SkillDiscoveryGenerator, SkillListingGenerator,
-            TaskRemindersGenerator, TaskStatusGenerator, TeamContextGenerator,
-            TeammateMailboxGenerator, TodoRemindersGenerator, TokenUsageGenerator,
-            ToolSearchUsageReminderGenerator, UltrathinkEffortGenerator, UserContextGenerator,
-            VerifyPlanReminderGenerator,
+            ModelSwitchGenerator, NestedMemoryGenerator, OutputStyleGenerator,
+            OutputTokenUsageGenerator, PlanModeEnterGenerator, PlanModeExitGenerator,
+            PlanModeReentryGenerator, RelevantMemoriesGenerator, SkillDiscoveryGenerator,
+            SkillListingGenerator, TaskRemindersGenerator, TaskStatusGenerator,
+            TeamContextGenerator, TeammateMailboxGenerator, TodoRemindersGenerator,
+            TokenUsageGenerator, ToolSearchUsageReminderGenerator, UltrathinkEffortGenerator,
+            UserContextGenerator, VerifyPlanReminderGenerator,
         };
 
         // UserInput batch.
@@ -132,6 +132,7 @@ impl SystemReminderOrchestrator {
         self.add_generator(Arc::new(AgentListingDeltaGenerator));
         self.add_generator(Arc::new(McpInstructionsDeltaGenerator));
         self.add_generator(Arc::new(McpServersDeltaGenerator));
+        self.add_generator(Arc::new(ModelSwitchGenerator));
         self.add_generator(Arc::new(CompanionIntroGenerator));
         self.add_generator(Arc::new(NestedMemoryGenerator));
         self.add_generator(Arc::new(RelevantMemoriesGenerator));

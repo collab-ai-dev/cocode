@@ -1430,3 +1430,95 @@ fn test_latest_goal_snapshot_new_goal_after_clear() {
     assert_eq!(record.goal_id, "g2");
     assert_eq!(record.snapshot["marker"], "new");
 }
+
+fn world_state_entry(agent_id: Option<&str>, model: &str) -> Entry {
+    Entry::Metadata(MetadataEntry::WorldStateSnapshot {
+        session_id: test_session_id("s"),
+        agent_id: agent_id.map(str::to_string),
+        snapshot: coco_types::WorldStateSnapshot {
+            model: Some(model.to_string()),
+            ..Default::default()
+        },
+    })
+}
+
+#[test]
+fn test_latest_world_state_snapshot_is_last_write_wins() {
+    // The record is rewritten whole on every change, so replay is a scan for
+    // the last one — no patch application, no ordering to reconcile.
+    let entries = vec![
+        world_state_entry(None, "first"),
+        world_state_entry(None, "second"),
+    ];
+
+    let restored = latest_world_state_snapshots(&entries);
+
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored[0].snapshot.model.as_deref(), Some("second"));
+}
+
+#[test]
+fn test_latest_world_state_snapshots_are_kept_per_agent_scope() {
+    let entries = vec![
+        world_state_entry(None, "main"),
+        world_state_entry(Some("agent-a"), "sub"),
+        world_state_entry(None, "main-2"),
+    ];
+
+    let restored = latest_world_state_snapshots(&entries);
+
+    assert_eq!(restored.len(), 2);
+    let main = restored
+        .iter()
+        .find(|r| r.agent_id.is_none())
+        .expect("main scope restored");
+    let agent = restored
+        .iter()
+        .find(|r| r.agent_id.as_deref() == Some("agent-a"))
+        .expect("subagent scope restored");
+    assert_eq!(main.snapshot.model.as_deref(), Some("main-2"));
+    assert_eq!(agent.snapshot.model.as_deref(), Some("sub"));
+}
+
+#[test]
+fn test_world_state_snapshot_round_trips_through_the_jsonl_envelope() {
+    // The whole fix rests on this record surviving a write/read cycle: if it
+    // does not, resume re-announces the full inventory into a history that
+    // already contains it.
+    let entry = Entry::Metadata(MetadataEntry::WorldStateSnapshot {
+        session_id: test_session_id("s"),
+        agent_id: None,
+        snapshot: coco_types::WorldStateSnapshot {
+            model: Some("claude-opus-5".to_string()),
+            deferred_tools: ["WebFetch".to_string()].into_iter().collect(),
+            agent_types: ["Explore".to_string()].into_iter().collect(),
+            mcp_servers: [(
+                "github".to_string(),
+                coco_types::McpServerAnnouncementState {
+                    tool_count: 14,
+                    description: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+            mcp_instruction_digests: [(
+                "github".to_string(),
+                coco_types::ContentDigest::of("use gh"),
+            )]
+            .into_iter()
+            .collect(),
+        },
+    });
+
+    let line = serde_json::to_string(&entry).expect("entry serializes");
+    // Through the real reader: `Entry` has no `Deserialize` impl, and a record
+    // the parser does not recognize degrades to `Entry::Unknown` rather than
+    // failing loudly — so a serde mismatch here would be silent in production.
+    let parsed = super::storage_chain::parse_entry(&line);
+
+    assert_eq!(parsed, entry);
+    assert!(
+        line.contains("\"world-state-snapshot\""),
+        "kebab-case discriminator is the wire contract: {line}"
+    );
+}

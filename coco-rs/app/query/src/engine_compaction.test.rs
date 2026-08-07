@@ -1257,3 +1257,107 @@ fn test_compact_fallback_records_carry_compact_source() {
     assert_eq!(records[0].from_model_id, "primary");
     assert_eq!(records[0].to_model_id, "fallback");
 }
+
+#[tokio::test]
+async fn post_compact_delta_announces_a_pending_model_switch() {
+    // `/model` then `/compact` before any intervening turn: the switch notice
+    // must ride the post-compact attachments. `adopt_fired` advances the
+    // model baseline unconditionally, so if this path skipped the generator
+    // the pending switch would be recorded as told without ever being said.
+    let app_state = Arc::new(RwLock::new({
+        let mut state = ToolAppState::default();
+        state.set_world_state_for_scope(
+            None,
+            coco_types::WorldStateSnapshot {
+                model: Some("model-a".to_string()),
+                ..Default::default()
+            },
+        );
+        state
+    }));
+    let config = QueryEngineConfig {
+        model_id: "model-b".to_string(),
+        ..Default::default()
+    };
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        crate::test_support::model_runtime_registry(Arc::new(CapturingModel::default())),
+        Arc::new(coco_tool_runtime::ToolRegistry::new()),
+        CancellationToken::new(),
+        None,
+    )
+    .with_app_state(app_state.clone());
+
+    let (attachments, delta_state) = engine
+        .create_post_compact_delta_attachments::<coco_messages::Message>(&[])
+        .await;
+
+    let switch = attachments
+        .iter()
+        .find(|att| att.kind == coco_types::AttachmentKind::ModelSwitch)
+        .expect("post-compact attachments announce the pending model switch");
+    let coco_messages::AttachmentBody::Api(LlmMessage::User { content, .. }) = &switch.body else {
+        panic!("model-switch attachment carries an API body: {switch:?}");
+    };
+    let text = content
+        .iter()
+        .find_map(|part| match part {
+            UserContentPart::Text(text) => Some(text.text.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    assert!(text.contains("model-a"), "names the previous model: {text}");
+    assert!(text.contains("model-b"), "names the current model: {text}");
+    assert_eq!(
+        delta_state.snapshot.model.as_deref(),
+        Some("model-b"),
+        "the baseline handed to bookkeeping is the adopted one"
+    );
+}
+
+#[tokio::test]
+async fn post_compact_delta_honors_the_reminder_config_gate() {
+    // The compaction path runs the same generators as the turn path and must
+    // honor the same per-reminder config toggles — a reminder the user
+    // disabled cannot resurface through `/compact`. The model baseline still
+    // advances (the documented unconditional exception), so the disabled
+    // notice is dropped, not deferred.
+    let app_state = Arc::new(RwLock::new({
+        let mut state = ToolAppState::default();
+        state.set_world_state_for_scope(
+            None,
+            coco_types::WorldStateSnapshot {
+                model: Some("model-a".to_string()),
+                ..Default::default()
+            },
+        );
+        state
+    }));
+    let mut config = QueryEngineConfig {
+        model_id: "model-b".to_string(),
+        ..Default::default()
+    };
+    config.system_reminder.attachments.model_switch = false;
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("test-session").unwrap(),
+        crate::test_support::model_runtime_registry(Arc::new(CapturingModel::default())),
+        Arc::new(coco_tool_runtime::ToolRegistry::new()),
+        CancellationToken::new(),
+        None,
+    )
+    .with_app_state(app_state.clone());
+
+    let (attachments, delta_state) = engine
+        .create_post_compact_delta_attachments::<coco_messages::Message>(&[])
+        .await;
+
+    assert!(
+        !attachments
+            .iter()
+            .any(|att| att.kind == coco_types::AttachmentKind::ModelSwitch),
+        "disabled reminder must not resurface through compaction"
+    );
+    assert_eq!(delta_state.snapshot.model.as_deref(), Some("model-b"));
+}

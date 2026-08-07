@@ -92,6 +92,7 @@ fn serde_roundtrip_preserves_all_fields() {
             agent_listing_delta: false,
             mcp_instructions_delta: true,
             mcp_servers_delta: true,
+            model_switch: true,
             tool_search_usage_reminder: true,
             hook_success: true,
             hook_blocking_error: true,

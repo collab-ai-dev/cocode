@@ -89,6 +89,10 @@ pub enum AttachmentKind {
     AgentListingDelta,
     McpInstructionsDelta,
     McpServersDelta,
+    /// The session's model changed mid-run. The static system prompt is built
+    /// once at engine construction, so it keeps asserting the model it was
+    /// built with; this is the only thing that tells the model otherwise.
+    ModelSwitch,
     HookSuccess,
     HookBlockingError,
     HookAdditionalContext,
@@ -177,6 +181,7 @@ impl AttachmentKind {
             Self::AgentListingDelta => "agent_listing_delta",
             Self::McpInstructionsDelta => "mcp_instructions_delta",
             Self::McpServersDelta => "mcp_servers_delta",
+            Self::ModelSwitch => "model_switch",
             Self::HookSuccess => "hook_success",
             Self::HookBlockingError => "hook_blocking_error",
             Self::HookAdditionalContext => "hook_additional_context",
@@ -263,6 +268,7 @@ impl AttachmentKind {
             | AgentListingDelta
             | McpInstructionsDelta
             | McpServersDelta
+            | ModelSwitch
             | HookSuccess
             | HookBlockingError
             | HookAdditionalContext
@@ -367,6 +373,7 @@ impl AttachmentKind {
             | ToolSearchUsageReminder
             | McpInstructionsDelta
             | McpServersDelta
+            | ModelSwitch
             | CompanionIntro
             | TokenUsage
             | UltrathinkEffort
@@ -699,6 +706,9 @@ pub const fn coverage_of(kind: AttachmentKind) -> Coverage {
         },
         McpServersDelta => Coverage::Reminder {
             generator: "McpServersDeltaGenerator",
+        },
+        ModelSwitch => Coverage::Reminder {
+            generator: "ModelSwitchGenerator",
         },
         HookSuccess => Coverage::Reminder {
             generator: "HookSuccessGenerator",
