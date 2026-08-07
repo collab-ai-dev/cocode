@@ -657,7 +657,9 @@ impl Tool for AgentTool {
         // `is_fork_spawn`, so a `Fork{..}` + teammate shape can never be
         // constructed (the team branch is classified first, above).
         let spawn_mode = if is_fork_spawn {
-            let Some(rendered_system_prompt) = ctx.rendered_system_prompt.clone() else {
+            let Some(rendered_system_prompt) =
+                ctx.rendered_system_prompt.as_deref().map(str::to_owned)
+            else {
                 return Err(ToolError::ExecutionFailed {
                     message: "Fork mode requested but parent's rendered system prompt is \
                               unavailable. The runtime must populate \

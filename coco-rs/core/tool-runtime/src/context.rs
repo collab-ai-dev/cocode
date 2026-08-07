@@ -298,9 +298,6 @@ pub struct ToolUseContext {
     pub parent_runtime_snapshot: Option<Arc<coco_types::SubagentRuntimeSnapshot>>,
 
     // ── File Tracking ──
-    /// File reading limits.
-    pub file_reading_limits: FileReadingLimits,
-
     // ── Tracking Sets (session-scoped dedup) ──
     /// Paths that triggered nested memory loading.
     ///
@@ -312,8 +309,6 @@ pub struct ToolUseContext {
     /// cloned context all push into the same set, mirroring the
     /// `dynamic_skill_dir_triggers` design.
     pub nested_memory_attachment_triggers: Arc<RwLock<HashSet<String>>>,
-    /// Already-loaded nested memory file paths.
-    pub loaded_nested_memory_paths: HashSet<String>,
     /// Directories that triggered dynamic skill discovery.
     ///
     /// When Read/Write/Edit touch a file, we walk up to find any
@@ -338,13 +333,7 @@ pub struct ToolUseContext {
     /// `Arc<RwLock<>>` rationale (concurrent siblings push into one
     /// set; one drain per batch).
     pub dynamic_skill_path_triggers: Arc<RwLock<HashSet<String>>>,
-    /// Skill names discovered during this session.
-    pub discovered_skill_names: HashSet<String>,
-
     // ── Decision Tracking ──
-    /// Per-tool execution decisions (accept/reject).
-    pub tool_decisions: HashMap<String, ToolDecision>,
-
     // ── Flags ──
     /// Whether this context is running as a teammate in a swarm team.
     ///
@@ -395,23 +384,22 @@ pub struct ToolUseContext {
     /// `coco_tool_runtime::PromptOptions` and on the reminder layer's
     /// `GeneratorContext`.
     pub is_plan_interview_phase: bool,
-    /// Whether user modified input during permission prompt.
-    pub user_modified: bool,
     /// Require can_use_tool check before execution.
     pub require_can_use_tool: bool,
     /// Preserve tool use results (don't tombstone during compaction).
     pub preserve_tool_use_results: bool,
 
     // ── Cached Prompt ──
-    /// Rendered system prompt (for tools that need prompt context).
-    pub rendered_system_prompt: Option<String>,
-    /// Experimental critical system reminder.
-    pub critical_system_reminder: Option<String>,
+    /// Parent's rendered system prompt, consumed by `AgentTool`'s fork path.
+    ///
+    /// `Arc<str>`, not `String`: this context is deep-cloned twice per tool
+    /// call, and the rendered prompt is tens of kilobytes. A `String` here
+    /// would copy the whole prompt on every call to serve a code path that
+    /// fires only when fork-subagent mode is on. The fork site materialises
+    /// it once instead.
+    pub rendered_system_prompt: Option<Arc<str>>,
 
     // ── IDs for active tool tracking ──
-    /// Currently in-progress tool use IDs.
-    pub in_progress_tool_use_ids: Arc<RwLock<HashSet<String>>>,
-
     // ── LLM Side Queries ──
     /// Handle for making LLM side-queries from tools.
     pub side_query: SideQueryHandle,
@@ -611,34 +599,8 @@ pub struct ToolUseContext {
     pub local_denial_tracking: Option<Arc<Mutex<DenialTracker>>>,
 
     // ── Query Tracking ──
-    /// Query chain ID for telemetry grouping.
-    pub query_chain_id: Option<String>,
     /// Query depth (0 = main, 1+ = subagent).
     pub query_depth: i32,
-}
-
-/// File reading limits for tools.
-#[derive(Debug, Clone, Default)]
-pub struct FileReadingLimits {
-    /// Maximum tokens for file content.
-    pub max_tokens: Option<i64>,
-    /// Maximum file size in bytes.
-    pub max_size_bytes: Option<i64>,
-}
-
-/// A tool execution decision record.
-#[derive(Debug, Clone)]
-pub struct ToolDecision {
-    pub source: String,
-    pub decision: ToolDecisionKind,
-    pub timestamp: i64,
-}
-
-/// Accept or reject.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolDecisionKind {
-    Accept,
-    Reject,
 }
 
 use coco_types::PermissionMode;
@@ -669,7 +631,7 @@ impl ToolUseContext {
 
     /// Clone the context for use in concurrent tool execution.
     ///
-    /// Shares Arc-wrapped state (messages, in_progress IDs, app_state, denial tracking)
+    /// Shares Arc-wrapped state (messages, app_state, denial tracking)
     /// while cloning value types. Concurrent tools are read-only and self-contained,
     /// so they only need the shared references and config.
     pub fn clone_for_concurrent(&self) -> Self {
@@ -723,16 +685,12 @@ impl ToolUseContext {
             agent_type: self.agent_type.clone(),
             agent_catalog: self.agent_catalog.clone(),
             parent_runtime_snapshot: self.parent_runtime_snapshot.clone(),
-            file_reading_limits: self.file_reading_limits.clone(),
             // Share both trigger sets across concurrent siblings so all
             // pushes from the batch land in one place for app/query to
             // drain. See field docs on the struct.
             nested_memory_attachment_triggers: self.nested_memory_attachment_triggers.clone(),
-            loaded_nested_memory_paths: HashSet::new(),
             dynamic_skill_dir_triggers: self.dynamic_skill_dir_triggers.clone(),
             dynamic_skill_path_triggers: self.dynamic_skill_path_triggers.clone(),
-            discovered_skill_names: HashSet::new(),
-            tool_decisions: HashMap::new(),
             is_teammate: self.is_teammate,
             is_in_process_teammate: self.is_in_process_teammate,
             plan_mode_required: self.plan_mode_required,
@@ -740,12 +698,9 @@ impl ToolUseContext {
             team_name: self.team_name.clone(),
             plan_verify_execution: self.plan_verify_execution,
             is_plan_interview_phase: self.is_plan_interview_phase,
-            user_modified: false,
             require_can_use_tool: self.require_can_use_tool,
             preserve_tool_use_results: self.preserve_tool_use_results,
             rendered_system_prompt: self.rendered_system_prompt.clone(),
-            critical_system_reminder: self.critical_system_reminder.clone(),
-            in_progress_tool_use_ids: self.in_progress_tool_use_ids.clone(),
             side_query: self.side_query.clone(),
             subagent_screen: self.subagent_screen.clone(),
             mcp: self.mcp.clone(),
@@ -779,7 +734,6 @@ impl ToolUseContext {
             plans_dir: self.plans_dir.clone(),
             app_state: self.app_state.clone(),
             local_denial_tracking: self.local_denial_tracking.clone(),
-            query_chain_id: self.query_chain_id.clone(),
             query_depth: self.query_depth,
         }
     }
@@ -1048,13 +1002,9 @@ impl ToolUseContext {
             agent_type: None,
             agent_catalog: None,
             parent_runtime_snapshot: None,
-            file_reading_limits: FileReadingLimits::default(),
             nested_memory_attachment_triggers: Arc::new(RwLock::new(HashSet::new())),
-            loaded_nested_memory_paths: HashSet::new(),
             dynamic_skill_dir_triggers: Arc::new(RwLock::new(HashSet::new())),
             dynamic_skill_path_triggers: Arc::new(RwLock::new(HashSet::new())),
-            discovered_skill_names: HashSet::new(),
-            tool_decisions: HashMap::new(),
             is_teammate: false,
             is_in_process_teammate: false,
             plan_mode_required: false,
@@ -1062,12 +1012,9 @@ impl ToolUseContext {
             team_name: None,
             plan_verify_execution: false,
             is_plan_interview_phase: false,
-            user_modified: false,
             require_can_use_tool: false,
             preserve_tool_use_results: false,
             rendered_system_prompt: None,
-            critical_system_reminder: None,
-            in_progress_tool_use_ids: Arc::new(RwLock::new(HashSet::new())),
             side_query: Arc::new(crate::side_query::NoOpSideQuery),
             subagent_screen: Arc::new(crate::subagent_screen::NoOpSubagentDispatchScreen),
             mcp: Arc::new(crate::mcp_handle::NoOpMcpHandle),
@@ -1101,7 +1048,6 @@ impl ToolUseContext {
             plans_dir: None,
             app_state: None,
             local_denial_tracking: None,
-            query_chain_id: None,
             query_depth: 0,
         }
     }

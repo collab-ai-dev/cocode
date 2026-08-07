@@ -12,8 +12,12 @@
 //!
 //! - `thinking_level`, `is_non_interactive`, `max_budget_usd`,
 //! `total_token_budget`,
-//! `custom_system_prompt`, `append_system_prompt` — previously hardcoded
+//! `custom_system_prompt`, `append_system_prompt`,
+//! `rendered_system_prompt` — previously hardcoded
 //! defaults in `engine.rs`. Now mirrored from `QueryEngineConfig`.
+//! A hardcoded `None` here is not a harmless default: `AgentTool`'s
+//! fork path fails closed on a missing `rendered_system_prompt`, so the
+//! omission disabled fork-subagent mode outright rather than degrading it.
 //! - `main_loop_model` snapshots the currently-active model. The engine
 //! passes `ToolContextOverrides.current_model_id` at build time from
 //! `ModelRuntime::current_model_id()` so post-fallback contexts reflect
@@ -633,14 +637,9 @@ impl ToolContextFactory {
             // `ToolContextFactory::with_parent_runtime_snapshot` from
             // the runtime registry snapshot.
             parent_runtime_snapshot: self.parent_runtime_snapshot.clone(),
-            file_reading_limits: Default::default(),
             nested_memory_attachment_triggers: Arc::new(RwLock::new(Default::default())),
-            loaded_nested_memory_paths: Default::default(),
             dynamic_skill_dir_triggers: Arc::new(RwLock::new(Default::default())),
             dynamic_skill_path_triggers: Arc::new(RwLock::new(Default::default())),
-            discovered_skill_names: Default::default(),
-            tool_decisions: Default::default(),
-            user_modified: false,
             // Fork isolation honors `require_can_use_tool` flag —
             // speculation needs this so overlay path-rewrites always
             // run regardless of hook auto-approve config.
@@ -652,9 +651,15 @@ impl ToolContextFactory {
                     .map(|iso| iso.require_can_use_tool)
                     .unwrap_or(false),
             preserve_tool_use_results: false,
-            rendered_system_prompt: None,
-            critical_system_reminder: None,
-            in_progress_tool_use_ids: Arc::new(RwLock::new(Default::default())),
+            // Fork-mode spawns (`AgentTool` under `COCO_FORK_SUBAGENT`) hard-error
+            // without this, so it must mirror the config exactly like
+            // `custom_system_prompt` above — a hardcoded `None` here silently
+            // disables the whole feature.
+            rendered_system_prompt: self
+                .config
+                .system_prompt
+                .as_ref()
+                .map(|p| Arc::from(p.full_text().as_str())),
             side_query: Arc::new(coco_tool_runtime::NoOpSideQuery),
             subagent_screen: self
                 .subagent_screen
@@ -773,14 +778,6 @@ impl ToolContextFactory {
                     coco_tool_runtime::DenialTracker::new(),
                 ))
             }),
-            // Query-tracking chain id: forks start a fresh UUID so
-            // telemetry can group fork traffic separately from main
-            // loop.
-            query_chain_id: self
-                .config
-                .fork_isolation
-                .as_ref()
-                .map(|_| uuid::Uuid::new_v4().to_string()),
             // Query-tracking depth. A fork runs one level deeper than its
             // caller via `child_query_depth()` so forked subagents count
             // toward the same cap as plain spawns; a plain spawn carries
