@@ -150,7 +150,7 @@ pub async fn run_git(
     cwd: Option<&Path>,
     timeout: Duration,
 ) -> Result<(), GitToolingError> {
-    let mut cmd = tokio::process::Command::new("git");
+    let mut cmd = crate::hardened_tokio_git();
     cmd.args(args);
     if let Some(d) = cwd {
         cmd.current_dir(d);
@@ -217,7 +217,7 @@ pub fn parse_origin_slug(url: &str) -> Option<String> {
 /// URL does not parse to a slug. Fail-closed: hardened against interactive
 /// prompts, 5s timeout.
 pub async fn github_origin_slug(dir: &Path) -> Option<String> {
-    let mut cmd = tokio::process::Command::new("git");
+    let mut cmd = crate::hardened_tokio_git();
     cmd.arg("-C")
         .arg(dir)
         .arg("config")

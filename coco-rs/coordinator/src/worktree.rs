@@ -38,7 +38,6 @@
 
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::Arc;
 
 use coco_error::ErrorExt;
@@ -250,7 +249,7 @@ impl AgentWorktreeManager {
         // `--git-common-dir` returns the SHARED .git directory across
         // worktrees (main repo's .git), not the current worktree's
         // .git/worktrees/<name> link.
-        let output = Command::new("git")
+        let output = coco_git::hardened_std_git()
             .arg("-C")
             .arg(cwd)
             .args(["rev-parse", "--git-common-dir"])
@@ -335,7 +334,7 @@ impl AgentWorktreeManager {
 
         // `-B` creates-or-resets the branch; an existing agent worktree
         // can be reused.
-        let add_output = Command::new("git")
+        let add_output = coco_git::hardened_std_git()
             .arg("-C")
             .arg(&self.canonical_git_root)
             .args(["worktree", "add", "-B", &branch])
@@ -495,7 +494,7 @@ impl AgentWorktreeManager {
 
         // Remove worktree from main repo (not from inside the
         // worktree — `git` would refuse).
-        let remove_output = Command::new("git")
+        let remove_output = coco_git::hardened_std_git()
             .arg("-C")
             .arg(&session.git_root)
             .args(["worktree", "remove", "--force"])
@@ -512,7 +511,7 @@ impl AgentWorktreeManager {
 
         // Delete the temp branch. Non-fatal if it fails (e.g. branch
         // was detached); TS also swallows errors here.
-        let _ = Command::new("git")
+        let _ = coco_git::hardened_std_git()
             .arg("-C")
             .arg(&session.git_root)
             .args(["branch", "-D", &session.branch])
@@ -600,7 +599,7 @@ fn has_unpushed_commits(path: &Path) -> Result<bool, WorktreeError> {
 /// Run `git -C <cwd> <args>` and return stdout, or a `GitFailed` / `Io` error
 /// (callers fail-closed to "keep the worktree" on error).
 fn git_stdout(cwd: &Path, args: &[&str]) -> Result<String, WorktreeError> {
-    let out = Command::new("git")
+    let out = coco_git::hardened_std_git()
         .arg("-C")
         .arg(cwd)
         .args(args)
@@ -652,7 +651,7 @@ fn configure_hooks_path(repo_root: &Path, worktree_path: &Path) -> Result<(), Wo
         return Ok(()); // no hooks dir — nothing to configure.
     };
     let hooks_str = hooks_path.to_string_lossy().into_owned();
-    let output = Command::new("git")
+    let output = coco_git::hardened_std_git()
         .arg("-C")
         .arg(worktree_path)
         .args(["config", "core.hooksPath", &hooks_str])

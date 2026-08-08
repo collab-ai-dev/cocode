@@ -1447,6 +1447,7 @@ dependencies = [
  "coco-context",
  "coco-error",
  "coco-event-types",
+ "coco-git",
  "coco-hooks",
  "coco-lsp",
  "coco-mcp",

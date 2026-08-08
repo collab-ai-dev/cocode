@@ -11,6 +11,7 @@ workspace = true
 coco-config.workspace = true
 coco-context.workspace = true
 coco-error.workspace = true
+coco-git.workspace = true
 coco-lsp.workspace = true
 coco-mcp.workspace = true
 coco-types.workspace = true

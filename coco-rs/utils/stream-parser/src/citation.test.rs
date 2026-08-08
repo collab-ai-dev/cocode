@@ -20,6 +20,27 @@ where
     all
 }
 
+/// Differential invariant: any chunking of the input must yield the same
+/// visible text and extracted payloads as feeding it whole. Pins the class of
+/// bug where buffering behaves differently when a tag (or a look-alike
+/// prefix, or a multi-byte char) straddles a chunk boundary.
+#[test]
+fn citation_parser_is_chunking_invariant() {
+    let input = "前缀 <oai-mem-citation>源 A</oai-mem-citation> 中文 \
+                 <oai-mem-cite 诱饵 <oai-mem-citation>b</oai-mem-citation> 尾巴";
+    let whole = collect_chunks(&mut CitationStreamParser::new(), &[input]);
+    let chars: Vec<char> = input.chars().collect();
+    for size in [1usize, 2, 3, 7] {
+        let chunks: Vec<String> = chars.chunks(size).map(|c| c.iter().collect()).collect();
+        let refs: Vec<&str> = chunks.iter().map(String::as_str).collect();
+        let out = collect_chunks(&mut CitationStreamParser::new(), &refs);
+        assert_eq!(
+            out, whole,
+            "chunked-by-{size}-chars diverged from whole-input parse"
+        );
+    }
+}
+
 #[test]
 fn citation_parser_streams_across_chunk_boundaries() {
     let mut parser = CitationStreamParser::new();

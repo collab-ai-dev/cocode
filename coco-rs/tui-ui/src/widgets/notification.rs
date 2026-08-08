@@ -15,6 +15,8 @@ use crate::terminal_detect::terminal_info;
 pub enum NotificationBackend {
     /// iTerm2 proprietary OSC 9;1 sequence.
     ITerm2,
+    /// Plain OSC 9 (`ESC ] 9 ; body BEL`) — the widely-cloned simple form.
+    Osc9,
     /// Kitty OSC 99 notification (title + body + focus action).
     Kitty,
     /// Ghostty OSC 777 notify protocol.
@@ -40,6 +42,8 @@ impl NotificationBackend {
         match name {
             // WezTerm implements iTerm2's OSC 9;1.
             TerminalName::Iterm2 | TerminalName::WezTerm => Self::ITerm2,
+            // Warp supports the plain OSC 9 form, not the 9;1 variant.
+            TerminalName::Warp => Self::Osc9,
             TerminalName::Kitty => Self::Kitty,
             TerminalName::Ghostty => Self::Ghostty,
             TerminalName::AppleTerminal => Self::TerminalBell,
@@ -49,7 +53,6 @@ impl NotificationBackend {
             | TerminalName::Konsole
             | TerminalName::VsCode
             | TerminalName::Vte
-            | TerminalName::Warp
             | TerminalName::WindowsTerminal
             | TerminalName::Dumb
             | TerminalName::Unknown => Self::Disabled,
@@ -64,6 +67,7 @@ impl NotificationBackend {
     pub fn send(self, writer: &mut impl Write, title: &str, message: &str) -> std::io::Result<()> {
         match self {
             Self::ITerm2 => write!(writer, "{}", wrap(&iterm2_osc(title, message))),
+            Self::Osc9 => write!(writer, "{}", wrap(&osc9(title, message))),
             Self::Kitty => {
                 let id = kitty_id();
                 write!(writer, "{}", wrap(&kitty_title_osc(id, title)))?;
@@ -89,6 +93,16 @@ pub fn notify(title: &str, message: &str) {
 }
 
 // ── OSC sequence builders ──
+
+/// Plain OSC 9 notification, BEL-terminated (Warp and other simple clones).
+fn osc9(title: &str, message: &str) -> String {
+    let display = if title.is_empty() {
+        message.to_string()
+    } else {
+        format!("{title}: {message}")
+    };
+    format!("\x1b]9;{display}\x07")
+}
 
 /// iTerm2 OSC 9;1 notification (`OSC.ITERM2 == "9;1;"`).
 /// Payload format: `\n\n{display}`.
