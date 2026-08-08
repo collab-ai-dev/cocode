@@ -89,7 +89,7 @@ impl CommandHandler for CommitPromptHandler {
 }
 
 async fn run_git(cwd: &Path, args: &[&str]) -> crate::Result<String> {
-    let output = tokio::process::Command::new("git")
+    let output = coco_git::hardened_tokio_git()
         .current_dir(cwd)
         .args(args)
         .output()

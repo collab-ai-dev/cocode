@@ -4,6 +4,7 @@ use super::NotificationBackend;
 use super::iterm2_osc;
 use super::kitty_body_osc;
 use super::kitty_title_osc;
+use super::osc9;
 use super::wrap_for;
 use crate::terminal_detect::Multiplexer;
 use crate::terminal_detect::TerminalName;
@@ -68,6 +69,7 @@ fn backend_for_terminal_maps_each_known_terminal() {
             TerminalName::AppleTerminal,
             NotificationBackend::TerminalBell,
         ),
+        (TerminalName::Warp, NotificationBackend::Osc9),
         (TerminalName::Alacritty, NotificationBackend::Disabled),
         (TerminalName::Unknown, NotificationBackend::Disabled),
     ] {
@@ -86,6 +88,12 @@ fn disabled_backend_is_no_op() {
         .send(&mut buf, "t", "m")
         .unwrap();
     assert!(buf.is_empty());
+}
+
+#[test]
+fn osc9_is_plain_form_with_bel_terminator() {
+    assert_eq!(osc9("coco", "done"), "\x1b]9;coco: done\x07");
+    assert_eq!(osc9("", "done"), "\x1b]9;done\x07");
 }
 
 #[test]

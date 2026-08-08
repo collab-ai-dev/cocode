@@ -32,6 +32,48 @@ fn make_mcp_tool() -> McpTool {
     )
 }
 
+/// A valid-but-huge wire schema must not register verbatim (it would ride in
+/// every request); the tool stays callable behind a permissive envelope and
+/// the description says so.
+#[test]
+fn mcp_tool_degrades_oversized_schema_to_permissive_envelope() {
+    let huge_enum: Vec<String> = (0..2_000).map(|i| format!("variant_{i}")).collect();
+    let tool = mcp_tool(
+        "server".into(),
+        "tool".into(),
+        "desc".into(),
+        json!({"properties": {"mode": {"type": "string", "enum": huge_enum}}}),
+        McpToolAnnotations::default(),
+    );
+    pretty_assertions::assert_eq!(
+        Tool::runtime_validation_schema(&tool).as_value(),
+        &json!({"type": "object", "additionalProperties": true}),
+    );
+    let desc = Tool::description(&tool, &Value::Null, &DescriptionOptions::default());
+    assert!(desc.contains("Input schema omitted"), "got: {desc}");
+    // Permissive envelope validates anything the model sends.
+    assert!(
+        Tool::runtime_validation_schema(&tool)
+            .validate(&json!({"mode": "variant_1", "extra": 42}))
+            .is_ok()
+    );
+}
+
+/// Schemas inside the byte budget register verbatim — the degrade path must
+/// not fire on ordinary tools.
+#[test]
+fn mcp_tool_keeps_in_budget_schema_verbatim() {
+    let tool = make_mcp_tool();
+    assert!(
+        !Tool::description(&tool, &Value::Null, &DescriptionOptions::default())
+            .contains("Input schema omitted")
+    );
+    pretty_assertions::assert_eq!(
+        Tool::runtime_validation_schema(&tool).as_value(),
+        &json!({"type": "object", "properties": {}}),
+    );
+}
+
 #[test]
 fn mcp_tool_bounds_untrusted_description_once_at_construction() {
     let tool = mcp_tool(

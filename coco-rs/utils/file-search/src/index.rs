@@ -250,6 +250,15 @@ pub async fn discover_files(cwd: &Path) -> DiscoveryResult {
 /// Try to discover files using git ls-files.
 async fn try_git_ls_files(cwd: &Path) -> Option<DiscoveryResult> {
     let output = Command::new("git")
+        // Inlined copy of `coco_git::HARDENED_CONFIG_ARGS` — utils crates
+        // take no internal deps. Refuses planted bare repos and repo-local
+        // fsmonitor executables on this automatic invocation.
+        .args([
+            "-c",
+            "safe.bareRepository=explicit",
+            "-c",
+            "core.fsmonitor=false",
+        ])
         .arg("ls-files")
         .arg("--recurse-submodules")
         .current_dir(cwd)

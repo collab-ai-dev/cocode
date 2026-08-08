@@ -16,6 +16,13 @@ use serde_json::Value;
 /// Max bytes retained from an MCP server-supplied tool description.
 const MAX_MCP_DESCRIPTION_BYTES: usize = 2048;
 
+/// Max serialized bytes for a server-supplied input schema. The schema rides
+/// in every request while the tool is loaded, so an oversized (even valid)
+/// schema is a per-turn context tax. Over budget the tool stays callable
+/// behind a permissive envelope — the server still validates its own inputs —
+/// rather than being dropped or blowing the prompt.
+const MAX_MCP_SCHEMA_BYTES: usize = 8 * 1024;
+
 const MCP_AUTH_PROMPT: &str = "Authenticate with an MCP server by name to enable its tools and resources. Prefer a server's own `mcp__<server>__authenticate` tool when one is offered — use this generic tool only as a fallback for a server that needs authentication but is not already surfacing its own authenticate tool. Call with the server name to start the OAuth flow — you'll receive an authorization URL to share with the user; once the user authorizes in their browser, the server's real tools become available automatically.";
 
 const LIST_MCP_RESOURCES_DESCRIPTION: &str = "Lists available resources from configured MCP servers.\nEach resource object includes a 'server' field indicating which server it's from.\n\nUsage examples:\n- List all resources from all servers: `listMcpResources`\n- List resources from a specific server: `listMcpResources({ server: \"myserver\" })`";
@@ -638,14 +645,40 @@ impl McpTool {
             Value::Object(_) => schema,
             _ => serde_json::json!({ "properties": {} }),
         };
+        // Oversized-but-valid schemas degrade instead of registering: the
+        // serialize-for-length is registration-time only. Serialization of a
+        // `Value` cannot fail, but if it ever did, treating it as oversized
+        // keeps the bound in force.
+        let schema_bytes = serde_json::to_vec(&raw).map_or(usize::MAX, |bytes| bytes.len());
+        let schema_omitted = schema_bytes > MAX_MCP_SCHEMA_BYTES;
+        let raw = if schema_omitted {
+            tracing::warn!(
+                server = %server_name,
+                tool = %tool_name,
+                schema_bytes,
+                budget = MAX_MCP_SCHEMA_BYTES,
+                "MCP tool schema over budget; degrading to a permissive envelope"
+            );
+            serde_json::json!({ "type": "object", "additionalProperties": true })
+        } else {
+            raw
+        };
         let schema = coco_tool_runtime::ToolInputSchema::from_value(raw)?;
         let truncated =
             coco_utils_string::take_bytes_at_char_boundary(&description, MAX_MCP_DESCRIPTION_BYTES);
-        let tool_description = if truncated.len() < description.len() {
+        let mut tool_description = if truncated.len() < description.len() {
             format!("{truncated}… [truncated]")
         } else {
             description
         };
+        if schema_omitted {
+            let kb = schema_bytes / 1024;
+            tool_description.push_str(&format!(
+                "\n\nInput schema omitted ({kb} KB exceeds the {} KB budget); \
+                 pass arguments as documented by the server.",
+                MAX_MCP_SCHEMA_BYTES / 1024
+            ));
+        }
         Ok(Self {
             info: McpToolInfo {
                 server_name,

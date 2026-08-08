@@ -244,7 +244,7 @@ pub fn destroy_worktree(worktree_path: &str) -> crate::Result<()> {
         return Ok(());
     }
     // Try git worktree remove first
-    let status = std::process::Command::new("git")
+    let status = coco_git::hardened_std_git()
         .args(["worktree", "remove", "--force", worktree_path])
         .status();
     if status.is_ok_and(|s| s.success()) {

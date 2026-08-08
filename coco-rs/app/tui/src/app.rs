@@ -934,7 +934,15 @@ where
 
     fn handle_surface_attention_requested(&mut self) {
         let message = crate::i18n::t!("notification.action_required").to_string();
-        coco_tui_ui::widgets::notification::notify(coco_config::constants::PRODUCT_NAME, &message);
+        // Desktop banner only when the user has switched away — while the
+        // terminal is focused the toast below is already in view, matching
+        // the turn-complete notification's focus gate.
+        if !self.state.ui.terminal_focused {
+            coco_tui_ui::widgets::notification::notify(
+                coco_config::constants::PRODUCT_NAME,
+                &message,
+            );
+        }
         self.state.ui.add_toast(Toast::warning(message));
     }
 

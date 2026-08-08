@@ -211,7 +211,7 @@ impl Tool for EnterWorktreeTool {
         let default_branch = coco_git::get_default_branch(&current_cwd);
         let origin_ref = format!("origin/{default_branch}");
         let base_branch = {
-            let local_ok = tokio::process::Command::new("git")
+            let local_ok = coco_git::hardened_tokio_git()
                 .current_dir(&current_cwd)
                 .args(["rev-parse", "--verify", "--quiet", &origin_ref])
                 .output()
@@ -223,7 +223,7 @@ impl Tool for EnterWorktreeTool {
             } else {
                 // Fetch the default branch (no credential prompt). On failure the
                 // base falls back to the current HEAD (e.g. a repo with no remote).
-                let fetched = tokio::process::Command::new("git")
+                let fetched = coco_git::hardened_tokio_git()
                     .current_dir(&current_cwd)
                     .env("GIT_TERMINAL_PROMPT", "0")
                     .env("GIT_ASKPASS", "")
@@ -240,7 +240,7 @@ impl Tool for EnterWorktreeTool {
             }
         };
         // Base SHA = `original_head_commit` (the discardedCommits baseline).
-        let original_head_commit = tokio::process::Command::new("git")
+        let original_head_commit = coco_git::hardened_tokio_git()
             .current_dir(&current_cwd)
             .args(["rev-parse", base_branch.as_str()])
             .output()
@@ -252,7 +252,7 @@ impl Tool for EnterWorktreeTool {
 
         // Create from the resolved base with `-B` (reset any orphan branch left
         // by a prior removed worktree dir).
-        let output = tokio::process::Command::new("git")
+        let output = coco_git::hardened_tokio_git()
             .current_dir(&current_cwd)
             .args([
                 "worktree",
@@ -296,7 +296,7 @@ impl Tool for EnterWorktreeTool {
                 let mut guard = app_state.write().await;
                 guard.active_worktree = None;
             }
-            let _ = tokio::process::Command::new("git")
+            let _ = coco_git::hardened_tokio_git()
                 .current_dir(&state.original_cwd)
                 .args(["worktree", "remove", "--force", &worktree_path_string])
                 .output()
@@ -542,7 +542,7 @@ impl Tool for ExitWorktreeTool {
             }
             args.push(&path_display);
 
-            let output = tokio::process::Command::new("git")
+            let output = coco_git::hardened_tokio_git()
                 .current_dir(&restore_target)
                 .args(&args)
                 .output()

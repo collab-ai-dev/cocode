@@ -5,10 +5,15 @@ mod apply;
 mod branch;
 mod errors;
 mod ghost_commits;
+mod hardening;
 mod operations;
 mod platform;
 mod remote;
 mod worktree;
+
+pub use hardening::HARDENED_CONFIG_ARGS;
+pub use hardening::hardened_std_git;
+pub use hardening::hardened_tokio_git;
 
 // Basic git operations
 pub use operations::commit_all;

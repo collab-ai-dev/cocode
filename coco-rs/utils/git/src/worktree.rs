@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -26,7 +26,7 @@ pub fn worktree_paths(cwd: &Path) -> Vec<PathBuf> {
 }
 
 fn run_worktree_list(cwd: &Path) -> std::io::Result<Vec<PathBuf>> {
-    let mut child = Command::new("git")
+    let mut child = crate::hardened_std_git()
         .args(["worktree", "list", "--porcelain"])
         .current_dir(cwd)
         .stdout(Stdio::piped())
@@ -150,19 +150,19 @@ pub fn cleanup_orphaned_worktrees(cwd: &Path) -> i32 {
     let count = orphans.len() as i32;
     for orphan in &orphans {
         // Remove the worktree directory
-        let _ = Command::new("git")
+        let _ = crate::hardened_std_git()
             .current_dir(cwd)
             .args(["worktree", "remove", "--force", &orphan.path])
             .output();
 
         // Delete the orphaned branch
-        let _ = Command::new("git")
+        let _ = crate::hardened_std_git()
             .current_dir(cwd)
             .args(["branch", "-D", &orphan.branch])
             .output();
     }
 
-    let _ = Command::new("git")
+    let _ = crate::hardened_std_git()
         .current_dir(cwd)
         .args(["worktree", "prune"])
         .output();
@@ -172,7 +172,7 @@ pub fn cleanup_orphaned_worktrees(cwd: &Path) -> i32 {
 
 /// Parse `git worktree list --porcelain` to find agent/task-* worktrees.
 fn list_orphaned_worktrees(cwd: &Path) -> Option<Vec<OrphanedWorktree>> {
-    let output = Command::new("git")
+    let output = crate::hardened_std_git()
         .current_dir(cwd)
         .args(["worktree", "list", "--porcelain"])
         .output()

@@ -3,7 +3,6 @@ use std::ffi::OsString;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
 
 use crate::GitToolingError;
 
@@ -284,7 +283,7 @@ where
         args_vec.push(OsString::from(arg.as_ref()));
     }
     let command_string = build_command_string(&args_vec);
-    let mut command = Command::new("git");
+    let mut command = crate::hardened_std_git();
     command.current_dir(dir);
     if let Some(envs) = env {
         for (key, value) in envs {
