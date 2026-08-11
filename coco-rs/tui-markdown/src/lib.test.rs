@@ -735,6 +735,29 @@ fn table_wide_cjk_cell_wraps_width_aware() {
 }
 
 #[test]
+fn table_hard_wrap_keeps_extended_graphemes_intact() {
+    let cell = vec![LinkedSpan {
+        span: Span::styled(
+            "A👩\u{200d}🚀B⚠\u{fe0f}C",
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        target: Some("https://example.com".to_string()),
+    }];
+
+    let rows = wrap_styled_cell(&cell, 2);
+    let text_rows: Vec<String> = rows
+        .iter()
+        .map(|row| row.iter().map(|span| span.span.content.as_ref()).collect())
+        .collect();
+
+    assert_eq!(text_rows, ["A", "👩\u{200d}🚀", "B", "⚠\u{fe0f}", "C"]);
+    assert!(rows.iter().flatten().all(|span| {
+        span.span.style.add_modifier.contains(Modifier::BOLD)
+            && span.target.as_deref() == Some("https://example.com")
+    }));
+}
+
+#[test]
 fn narrow_many_column_table_does_not_panic() {
     // D2: the floor-overflow branch must survive a budget smaller than the sum
     // of per-column minimums without deleting cell content.

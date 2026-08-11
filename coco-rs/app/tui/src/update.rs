@@ -1396,8 +1396,12 @@ async fn request_session_search(state: &AppState, command_tx: &mpsc::Sender<User
 fn permission_body_scroll_bound(state: &AppState) -> u16 {
     match state.ui.interaction.active_prompt.as_ref() {
         Some(crate::state::PanePromptState::Permission(p)) => {
-            let lines = crate::presentation::request::permission_body_line_count(p);
-            u16::try_from(lines.saturating_mul(2)).unwrap_or(u16::MAX)
+            let rows = crate::presentation::request::permission_body_row_bound(
+                p,
+                state.session.permission_mode,
+                coco_tui_ui::style::UiStyles::new(&state.ui.theme),
+            );
+            u16::try_from(rows).unwrap_or(u16::MAX)
         }
         _ => 0,
     }

@@ -29,6 +29,7 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
@@ -1261,19 +1262,19 @@ fn cell_width(cell: &[LinkedSpan]) -> usize {
         .sum()
 }
 
-/// Width of the widest glyph in a cell. A column may hard-wrap a long word, but
-/// it must never be narrower than a glyph or the glyph would be dropped.
-fn widest_glyph_width(cell: &[LinkedSpan]) -> usize {
+/// Width of the widest grapheme in a cell. A column may hard-wrap a long word,
+/// but it must never be narrower than a grapheme or the grapheme would be split.
+fn widest_grapheme_width(cell: &[LinkedSpan]) -> usize {
     cell.iter()
-        .flat_map(|span| span.span.content.chars())
-        .filter_map(UnicodeWidthChar::width)
+        .flat_map(|span| span.span.content.graphemes(true))
+        .map(UnicodeWidthStr::width)
         .max()
         .unwrap_or(0)
 }
 
 /// Distribute `budget` columns across `col_count` columns: prefer natural
 /// (unwrapped) widths, and when they overflow, give every column its
-/// widest-glyph floor first, then share the remainder proportionally to how
+/// widest-grapheme floor first, then share the remainder proportionally to how
 /// much more each column "wants" (natural − floor). No column is capped at a
 /// fixed maximum, so wide cells wrap rather than silently truncate.
 fn column_widths(
@@ -1287,7 +1288,7 @@ fn column_widths(
     let mut consider = |cells: &[TableCell]| {
         for (i, cell) in cells.iter().enumerate().take(col_count) {
             natural[i] = natural[i].max(cell_width(cell));
-            floor[i] = floor[i].max(widest_glyph_width(cell));
+            floor[i] = floor[i].max(widest_grapheme_width(cell));
         }
     };
     consider(header);
@@ -1343,44 +1344,48 @@ fn column_widths(
 
 /// Wrap a styled cell to `width` columns at word boundaries, returning one span
 /// vector per visual line. Word styling (bold/italic/code/link) is preserved;
-/// words wider than the column are hard-broken by character so nothing is lost.
+/// words wider than the column are hard-broken by grapheme so nothing is lost
+/// and joined emoji / variation selectors remain intact.
 fn wrap_styled_cell(cell: &[LinkedSpan], width: usize) -> Vec<Vec<LinkedSpan>> {
     let width = width.max(1);
-    let chars: Vec<(char, Style, Option<String>)> = cell
+    // Borrow source graphemes through layout. This keeps the hard-wrap unit
+    // Unicode-safe without allocating one String per grapheme; only the final
+    // coalesced output spans become owned.
+    let graphemes: Vec<(&str, Style, Option<&str>)> = cell
         .iter()
         .flat_map(|span| {
             let style = span.span.style;
+            let target = span.target.as_deref();
             span.span
                 .content
-                .chars()
-                .map(move |ch| (ch, style, span.target.clone()))
+                .graphemes(true)
+                .map(move |grapheme| (grapheme, style, target))
         })
         .collect();
-    if chars.is_empty() {
+    if graphemes.is_empty() {
         return vec![Vec::new()];
     }
 
-    let mut rows: Vec<Vec<(char, Style, Option<String>)>> = Vec::new();
-    let mut cur: Vec<(char, Style, Option<String>)> = Vec::new();
+    let mut rows: Vec<Vec<(&str, Style, Option<&str>)>> = Vec::new();
+    let mut cur: Vec<(&str, Style, Option<&str>)> = Vec::new();
     let mut cur_w = 0usize;
-    let char_w = |ch: char| UnicodeWidthChar::width(ch).unwrap_or(0);
-    let trim_trailing = |row: &mut Vec<(char, Style, Option<String>)>| {
-        while row.last().is_some_and(|(c, _, _)| *c == ' ') {
+    let trim_trailing = |row: &mut Vec<(&str, Style, Option<&str>)>| {
+        while row.last().is_some_and(|(text, _, _)| *text == " ") {
             row.pop();
         }
     };
 
     let mut i = 0;
-    while i < chars.len() {
-        if chars[i].0 == ' ' {
+    while i < graphemes.len() {
+        if graphemes[i].0 == " " {
             let start = i;
-            while i < chars.len() && chars[i].0 == ' ' {
+            while i < graphemes.len() && graphemes[i].0 == " " {
                 i += 1;
             }
             if cur_w == 0 {
                 continue; // drop leading spaces on a wrapped row
             }
-            let run = &chars[start..i];
+            let run = &graphemes[start..i];
             if cur_w + run.len() <= width {
                 cur.extend_from_slice(run);
                 cur_w += run.len();
@@ -1392,11 +1397,14 @@ fn wrap_styled_cell(cell: &[LinkedSpan], width: usize) -> Vec<Vec<LinkedSpan>> {
         }
 
         let start = i;
-        while i < chars.len() && chars[i].0 != ' ' {
+        while i < graphemes.len() && graphemes[i].0 != " " {
             i += 1;
         }
-        let word = &chars[start..i];
-        let word_w: usize = word.iter().map(|(c, _, _)| char_w(*c)).sum();
+        let word = &graphemes[start..i];
+        let word_w: usize = word
+            .iter()
+            .map(|(text, _, _)| UnicodeWidthStr::width(*text))
+            .sum();
 
         if cur_w + word_w <= width {
             cur.extend_from_slice(word);
@@ -1414,48 +1422,48 @@ fn wrap_styled_cell(cell: &[LinkedSpan], width: usize) -> Vec<Vec<LinkedSpan>> {
                 rows.push(std::mem::take(&mut cur));
                 cur_w = 0;
             }
-            for (c, st, target) in word {
-                let cw = char_w(*c);
-                if cur_w > 0 && cur_w + cw > width {
+            for (text, style, target) in word {
+                let grapheme_width = UnicodeWidthStr::width(*text);
+                if cur_w > 0 && cur_w + grapheme_width > width {
                     rows.push(std::mem::take(&mut cur));
                     cur_w = 0;
                 }
                 // This only occurs for a direct width-1 call: table column
-                // allocation keeps a glyph-width floor. Retain the glyph on
+                // allocation keeps a grapheme-width floor. Retain the grapheme on
                 // its own visual row instead of silently deleting it.
-                if cur_w == 0 && cw > width {
-                    cur.push((*c, *st, target.clone()));
-                    cur_w = cw;
+                if cur_w == 0 && grapheme_width > width {
+                    cur.push((*text, *style, *target));
+                    cur_w = grapheme_width;
                     continue;
                 }
-                cur.push((*c, *st, target.clone()));
-                cur_w += cw;
+                cur.push((*text, *style, *target));
+                cur_w += grapheme_width;
             }
         }
     }
     trim_trailing(&mut cur);
     rows.push(cur);
 
-    rows.iter().map(|row| group_chars(row)).collect()
+    rows.iter().map(|row| group_graphemes(row)).collect()
 }
 
-/// Coalesce a run of `(char, style)` into the minimal set of styled spans.
-fn group_chars(row: &[(char, Style, Option<String>)]) -> Vec<LinkedSpan> {
+/// Coalesce graphemes with the same style/link into the minimal set of spans.
+fn group_graphemes(row: &[(&str, Style, Option<&str>)]) -> Vec<LinkedSpan> {
     let mut spans: Vec<LinkedSpan> = Vec::new();
     let mut buf = String::new();
-    let mut current: Option<(Style, Option<String>)> = None;
-    for (ch, style, target) in row {
-        if current.as_ref() == Some(&(*style, target.clone())) {
-            buf.push(*ch);
+    let mut current: Option<(Style, Option<&str>)> = None;
+    for (text, style, target) in row {
+        if current == Some((*style, *target)) {
+            buf.push_str(text);
         } else {
             if let Some((style, target)) = current.take() {
                 spans.push(LinkedSpan {
                     span: Span::styled(std::mem::take(&mut buf), style),
-                    target,
+                    target: target.map(str::to_string),
                 });
             }
-            buf.push(*ch);
-            current = Some((*style, target.clone()));
+            buf.push_str(text);
+            current = Some((*style, *target));
         }
     }
     if let Some((style, target)) = current
@@ -1463,7 +1471,7 @@ fn group_chars(row: &[(char, Style, Option<String>)]) -> Vec<LinkedSpan> {
     {
         spans.push(LinkedSpan {
             span: Span::styled(buf, style),
-            target,
+            target: target.map(str::to_string),
         });
     }
     spans

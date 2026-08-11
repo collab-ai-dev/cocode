@@ -6115,6 +6115,43 @@ async fn stream_error_emits_turn_failed_for_sdk_iterator() {
         failed, 1,
         "stream error must emit exactly one TurnEnded(Failed) before propagating"
     );
+    let api_error = events.iter().find_map(|event| {
+        let CoreEvent::Protocol(ServerNotification::MessageAppended { message, .. }) = event else {
+            return None;
+        };
+        let coco_messages::Message::System(coco_messages::SystemMessage::ApiError(error)) =
+            message.as_ref()
+        else {
+            return None;
+        };
+        Some(error.error.as_str())
+    });
+    assert_eq!(
+        api_error,
+        Some("The provider request failed. Check the selected model and try again.")
+    );
+    assert!(
+        !api_error
+            .unwrap_or_default()
+            .contains("synthetic provider failure")
+    );
+    let failed_message = events.iter().find_map(|event| {
+        let CoreEvent::Protocol(ServerNotification::TurnEnded(params)) = event else {
+            return None;
+        };
+        let coco_event_types::TurnOutcome::Failed(failed) = &params.outcome else {
+            return None;
+        };
+        Some(failed.error.message.as_str())
+    });
+    assert_eq!(failed_message, api_error);
+    let session_error = events.iter().find_map(|event| {
+        let CoreEvent::Protocol(ServerNotification::SessionResult(params)) = event else {
+            return None;
+        };
+        params.errors.first().map(String::as_str)
+    });
+    assert_eq!(session_error, api_error);
     assert_turn_result_matches_session_result(&events, |outcome| {
         matches!(outcome, coco_event_types::TurnOutcome::Failed(_))
     });

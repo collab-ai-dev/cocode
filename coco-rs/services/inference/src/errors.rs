@@ -336,6 +336,51 @@ impl ErrorExt for InferenceError {
             .map(|ms| Duration::from_millis(ms as u64))
     }
 
+    /// Provider diagnostics can contain raw JSON, transport internals, and
+    /// duplicated wrapper context. Keep those in logs and expose stable,
+    /// actionable copy at the error boundary consumed by SDK/TUI surfaces.
+    fn output_msg(&self) -> String {
+        match self {
+            Self::AuthenticationFailed { .. } => {
+                "Authentication failed. Check the provider credentials and sign in again."
+                    .to_string()
+            }
+            Self::RateLimited { .. } => {
+                "The provider rate limit was reached. Wait before trying again.".to_string()
+            }
+            Self::ContextWindowExceeded { .. } => {
+                "The request exceeds the model's context window. Reduce the conversation or use a model with a larger context window."
+                    .to_string()
+            }
+            Self::ProviderError { status, .. } if *status > 0 => format!(
+                "The provider rejected the request (HTTP {status}). Check the selected model and request settings."
+            ),
+            Self::ProviderError { .. } => {
+                "The provider request failed. Check the selected model and try again.".to_string()
+            }
+            Self::NetworkError { .. } => {
+                "Could not reach the model provider. Check the network and try again.".to_string()
+            }
+            Self::StreamInterrupted { .. } => {
+                "The model response was interrupted. Try again.".to_string()
+            }
+            Self::Cancelled { .. } => "The request was cancelled.".to_string(),
+            Self::Overloaded { .. } => {
+                "The model provider is temporarily overloaded. Try again shortly.".to_string()
+            }
+            Self::InvalidRequest { .. } => {
+                "The provider rejected the request. Check the prompt and model settings."
+                    .to_string()
+            }
+            Self::UnknownProvider { provider, .. } => format!(
+                "Provider `{provider}` is not configured. Add it to the provider settings."
+            ),
+            Self::ProviderBuildFailed { provider_name, .. } => format!(
+                "Could not initialize provider `{provider_name}`. Check its settings and credentials."
+            ),
+        }
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -354,7 +399,7 @@ impl InferenceError {
 
 fn truncate_body(body: &str) -> String {
     if body.len() > 500 {
-        format!("{}...", &body[..500])
+        format!("{}...", &body[..body.floor_char_boundary(500)])
     } else {
         body.to_string()
     }

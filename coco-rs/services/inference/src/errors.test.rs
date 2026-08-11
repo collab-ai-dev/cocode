@@ -179,3 +179,27 @@ fn test_body_truncation() {
         panic!("expected ProviderError for 404");
     }
 }
+
+#[test]
+fn test_body_truncation_is_utf8_safe() {
+    let long_body = "界".repeat(300);
+    let err = InferenceError::from_http_status(404, &long_body, None);
+    let InferenceError::ProviderError { message, .. } = err else {
+        panic!("expected ProviderError for 404");
+    };
+    assert_eq!(message, format!("{}...", "界".repeat(166)));
+}
+
+#[test]
+fn output_message_hides_raw_provider_payload_and_is_actionable() {
+    let raw = r#"{"error":{"message":"internal upstream exploded","secret":"token"}}"#;
+    let err = InferenceError::from_http_status(503, raw, None);
+    let message = err.output_msg();
+
+    assert_eq!(
+        message,
+        "The model provider is temporarily overloaded. Try again shortly."
+    );
+    assert!(!message.contains("upstream exploded"));
+    assert!(!message.contains("token"));
+}

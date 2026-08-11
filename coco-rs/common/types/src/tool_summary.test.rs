@@ -130,6 +130,19 @@ fn test_cap_single_line_truncates_with_ellipsis() {
 }
 
 #[test]
+fn permission_display_preserves_complete_multiline_shell_script() {
+    let script = format!(
+        "#!/usr/bin/env bash\nprintf 'first line\\n'\n{}\nprintf 'last line\\n'",
+        "界👩\u{200d}🚀".repeat(400)
+    );
+
+    assert_eq!(
+        permission_display_input(ToolName::Bash.as_str(), &json!({"command": script})),
+        crate::PermissionDisplayInput::Command(script)
+    );
+}
+
+#[test]
 fn test_partial_primary_arg_extracts_incomplete_bash_command() {
     // Mid-stream: command value not yet closed.
     assert_eq!(

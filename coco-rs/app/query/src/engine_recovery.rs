@@ -923,8 +923,8 @@ impl QueryEngine {
                     // session transcript carries the prompt_too_long
                     // marker, then bail. No partial response existed
                     // (stream never opened), so the engine's Err path
-                    // is the right exit. The PlainError is tagged
-                    // `ContextWindowExceeded` for status-code routing.
+                    // is the right exit. Preserve the typed inference error so
+                    // status and user-safe output survive type erasure.
                     crate::history_sync::history_push_and_emit(
                         history,
                         crate::helpers::build_abnormal_stop_api_error_message(
@@ -934,13 +934,7 @@ impl QueryEngine {
                         event_tx,
                     )
                     .await;
-                    return StreamErrorOutcome::Bail(Box::new(coco_error::PlainError::new(
-                        format!(
-                            "LLM stream open failed: context window exceeded \
-                             and reactive compaction could not recover ({e})"
-                        ),
-                        coco_error::StatusCode::ContextWindowExceeded,
-                    )));
+                    return StreamErrorOutcome::Bail(coco_error::boxed_err(e));
                 }
             }
         }
@@ -967,10 +961,7 @@ impl QueryEngine {
                     active = services.current_model_id(),
                     "capacity error recorded by model runtime; surfacing error",
                 );
-                return StreamErrorOutcome::Bail(Box::new(coco_error::PlainError::new(
-                    format!("LLM stream open failed: {e}"),
-                    coco_error::StatusCode::ProviderError,
-                )));
+                return StreamErrorOutcome::Bail(coco_error::boxed_err(e));
             }
             for event in events {
                 if let coco_inference::ModelRuntimeEvent::FallbackSwitched {
@@ -996,10 +987,7 @@ impl QueryEngine {
                 }
             }
         }
-        StreamErrorOutcome::Bail(Box::new(coco_error::PlainError::new(
-            format!("LLM stream open failed: {e}"),
-            coco_error::StatusCode::ProviderError,
-        )))
+        StreamErrorOutcome::Bail(coco_error::boxed_err(e))
     }
 
     /// Drive recovery for a mid-stream `StreamEvent::Error`. Mirrors
@@ -1047,10 +1035,15 @@ impl QueryEngine {
         // `coco_inference::errors` — the engine layer matches on the
         // enum variant per the multi-provider boundary rule in
         // `CLAUDE.md`.
-        let classified = coco_inference::InferenceError::classify_stream_message(&err_msg);
+        let classified = coco_inference::InferenceError::classify_stream_message(&err_msg)
+            .unwrap_or_else(|| {
+                coco_inference::InferenceError::from_http_status(
+                    /*status*/ 0, &err_msg, /*retry_after*/ None,
+                )
+            });
         if matches!(
-            classified,
-            Some(coco_inference::InferenceError::ContextWindowExceeded { .. })
+            &classified,
+            coco_inference::InferenceError::ContextWindowExceeded { .. }
         ) {
             match self
                 .handle_context_overflow(history, event_tx, &mut turn_state.budget, "mid_stream")
@@ -1076,17 +1069,11 @@ impl QueryEngine {
                         event_tx,
                     )
                     .await;
-                    return StreamErrorOutcome::Bail(Box::new(coco_error::PlainError::new(
-                        format!(
-                            "LLM stream failed mid-stream: context window exceeded \
-                             and reactive compaction could not recover ({err_msg})"
-                        ),
-                        coco_error::StatusCode::ContextWindowExceeded,
-                    )));
+                    return StreamErrorOutcome::Bail(coco_error::boxed_err(classified));
                 }
             }
         }
-        if let Some(capacity) = capacity_kind_from(classified.as_ref()) {
+        if let Some(capacity) = capacity_kind_from(Some(&classified)) {
             // Finding A1 (mid-stream parity with stream-open):
             // mid-stream 429 / 529 must also propagate to
             // `ToolAppState.rate_limits` so post-turn forks
@@ -1139,10 +1126,7 @@ impl QueryEngine {
                     active = services.current_model_id(),
                     "capacity error mid-stream recorded by model runtime; surfacing error",
                 );
-                return StreamErrorOutcome::Bail(Box::new(coco_error::PlainError::new(
-                    format!("LLM stream failed: {err_msg}"),
-                    coco_error::StatusCode::ProviderError,
-                )));
+                return StreamErrorOutcome::Bail(coco_error::boxed_err(classified));
             };
             for event in events {
                 if let coco_inference::ModelRuntimeEvent::FallbackSwitched {
@@ -1208,10 +1192,7 @@ impl QueryEngine {
         }
         self.model_runtimes
             .finish_call(token, coco_inference::ModelCommunicationOutcome::Failure);
-        StreamErrorOutcome::Bail(Box::new(coco_error::PlainError::new(
-            format!("LLM stream failed: {err_msg}"),
-            coco_error::StatusCode::ProviderError,
-        )))
+        StreamErrorOutcome::Bail(coco_error::boxed_err(classified))
     }
 }
 
