@@ -289,7 +289,6 @@ pub(crate) async fn prepare_one_pending_tool_call(
             .and_then(|p| p.to_str())
             .map(str::to_owned),
         args.completion_event_mode,
-        args.ctx.avoid_permission_prompts,
         args.deferred_tool_completions.as_deref_mut(),
     )
     .resolve(

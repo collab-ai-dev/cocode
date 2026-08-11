@@ -4178,7 +4178,7 @@
       ]
     },
     "PermissionDisplayInput": {
-      "description": "Bounded, UI-ready permission input display.\n\nThis is separate from the raw tool input because approval UIs should\nconsume sanitized display data while keeping `original_input` only for\nupdated-input response construction and permission-rule derivation.",
+      "description": "UI-ready permission input display.\n\nThis is separate from the raw tool input because approval UIs should\nconsume sanitized display data while keeping `original_input` only for\nupdated-input response construction and permission-rule derivation. Shell\ncommands are intentionally complete: an approval surface must not authorize\na script that it only showed partially. Other generic projections may stay\nbounded because they are descriptive previews rather than executable text.",
       "oneOf": [
         {
           "type": "object",

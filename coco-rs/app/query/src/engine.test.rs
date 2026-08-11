@@ -1581,7 +1581,8 @@ async fn test_max_budget_usd_tool_call_preserves_pairing_without_execution() {
         tools,
         cancel,
         None,
-    );
+    )
+    .with_permission_bridge(approved_test_bridge());
 
     let result = engine.run("hi").await.expect("budget stop is a result");
 
@@ -2772,7 +2773,8 @@ async fn exit_plan_mode_observable_input_excludes_disk_plan() {
         None,
     )
     .with_config_home(tmp.path().to_path_buf())
-    .with_app_state(app_state);
+    .with_app_state(app_state)
+    .with_permission_bridge(approved_test_bridge());
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
     let collector = tokio::spawn(async move {
         let mut events = Vec::new();
@@ -3254,7 +3256,8 @@ async fn pre_tool_use_updated_input_reaches_execution() {
         tools,
         cancel,
         Some(Arc::new(hooks)),
-    );
+    )
+    .with_permission_bridge(approved_test_bridge());
     let result = engine.run("rewrite through hook").await.expect("ok");
 
     let output = tool_result_text(&result.final_messages, "hook_rewrite_1")
@@ -3323,7 +3326,8 @@ async fn post_tool_use_receives_effective_input() {
         tools,
         cancel,
         Some(Arc::new(hooks)),
-    );
+    )
+    .with_permission_bridge(approved_test_bridge());
     let result = engine.run("rewrite and post-hook").await.expect("ok");
 
     assert_eq!(result.response_text, "done");
@@ -3382,7 +3386,8 @@ async fn post_tool_use_updated_mcp_output_rewrites_mcp_result() {
         tools,
         cancel,
         Some(Arc::new(hooks)),
-    );
+    )
+    .with_permission_bridge(approved_test_bridge());
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
     let collector = tokio::spawn(async move {
         let mut events = Vec::new();
@@ -3459,7 +3464,8 @@ async fn post_tool_use_updated_mcp_output_is_ignored_for_non_mcp_tool() {
         tools,
         cancel,
         Some(Arc::new(hooks)),
-    );
+    )
+    .with_permission_bridge(approved_test_bridge());
     let result = engine
         .run("do not rewrite non-mcp output")
         .await
@@ -3511,7 +3517,8 @@ async fn post_tool_use_additional_context_is_injected() {
         tools,
         cancel,
         Some(Arc::new(hooks)),
-    );
+    )
+    .with_permission_bridge(approved_test_bridge());
     let result = engine
         .run("post-hook additional context")
         .await
@@ -3567,7 +3574,8 @@ async fn post_tool_use_prevent_continuation_stops_next_turn() {
         tools,
         cancel,
         Some(Arc::new(hooks)),
-    );
+    )
+    .with_permission_bridge(approved_test_bridge());
     let result = engine.run("post-hook stop continuation").await.expect("ok");
 
     assert_eq!(model.call_count.load(Ordering::SeqCst), 1);
@@ -3621,7 +3629,8 @@ async fn non_mcp_success_path_orders_post_hook_messages_before_new_messages() {
         tools,
         cancel,
         Some(Arc::new(hooks)),
-    );
+    )
+    .with_permission_bridge(approved_test_bridge());
     let result = engine.run("check non-mcp ordering").await.expect("ok");
 
     let tool_result_idx =
@@ -3693,7 +3702,8 @@ async fn mcp_success_path_defers_post_hook_messages_until_after_prevent() {
         tools,
         cancel,
         Some(Arc::new(hooks)),
-    );
+    )
+    .with_permission_bridge(approved_test_bridge());
     let result = engine.run("check mcp ordering").await.expect("ok");
 
     let tool_result_idx =
@@ -3758,7 +3768,8 @@ async fn failure_path_orders_error_result_before_post_tool_use_failure_context()
         tools,
         cancel,
         Some(Arc::new(hooks)),
-    );
+    )
+    .with_permission_bridge(approved_test_bridge());
     let result = engine.run("check failure ordering").await.expect("ok");
 
     let error_output = tool_result_error_text(&result.final_messages, "failure_ordering_1")
@@ -4373,8 +4384,7 @@ impl LanguageModel for AskingToolCallMock {
 async fn test_requires_action_emitted_on_permission_ask() {
     // Phase 2.F.1: when a tool's check_permissions returns Ask, the engine
     // emits SessionStateChanged::RequiresAction, then transitions back to
-    // Running. Currently the Ask still falls through to Allow — the full
-    // approval roundtrip is wired in Phase 2.C.4.
+    // Running. With no approval bridge, the Ask is denied fail-closed.
     let model = Arc::new(AskingToolCallMock {
         call_count: AtomicI32::new(0),
     });
@@ -4433,7 +4443,7 @@ async fn test_requires_action_emitted_on_permission_ask() {
         );
     }
 
-    // And since Ask auto-allows, the turn still completes successfully.
+    assert_eq!(result.permission_denials.len(), 1);
     assert_eq!(result.turns, 2);
 }
 
@@ -4626,6 +4636,10 @@ impl ToolPermissionBridge for RecordingBridge {
             detail: None,
         })
     }
+}
+
+fn approved_test_bridge() -> Arc<dyn ToolPermissionBridge> {
+    Arc::new(RecordingBridge::new(ToolPermissionDecision::Approved))
 }
 
 /// Mock that emits a single tool_call to `asking_mock`, then on the
@@ -4924,9 +4938,7 @@ async fn pre_tool_use_block_runs_before_permission_ask() {
 }
 
 #[tokio::test]
-async fn ask_branch_without_bridge_falls_back_to_auto_allow() {
-    // Sanity: existing (pre-2.C.9) behavior still works when no bridge
-    // is installed. The tool auto-executes despite returning Ask.
+async fn ask_branch_without_bridge_denies_instead_of_auto_allowing() {
     let model = Arc::new(AskingToolThenTextMock {
         call_count: AtomicI32::new(0),
     });
@@ -4935,19 +4947,20 @@ async fn ask_branch_without_bridge_falls_back_to_auto_allow() {
     let registry = ToolRegistry::new();
     registry.register(Arc::new(AskingMockTool));
     let tools = Arc::new(registry);
-    let cancel = CancellationToken::new();
-
     let engine = QueryEngine::new(
         QueryEngineConfig::default(),
         coco_types::SessionId::try_new("test-session").unwrap(),
         client,
         tools,
-        cancel,
+        CancellationToken::new(),
         None,
     );
-    let result = engine.run("run it").await.expect("should succeed");
+    let result = engine.run("run it").await.expect("turn should recover");
 
-    assert_eq!(result.permission_denials.len(), 0);
+    assert_eq!(result.permission_denials.len(), 1);
+    let output = tool_result_error_text(&result.final_messages, "ask_call_1")
+        .expect("denial should produce an error tool result");
+    assert!(output.contains("no approval bridge is available"));
     assert_eq!(result.response_text, "done");
 }
 

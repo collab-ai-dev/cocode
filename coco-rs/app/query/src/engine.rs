@@ -122,7 +122,7 @@ pub struct QueryEngine {
     pub(crate) session_bootstrap: Option<SessionBootstrap>,
     /// Optional permission bridge for routing `PermissionDecision::Ask`
     /// outcomes to an external authority (swarm leader or SDK client).
-    /// `None` uses the engine's fallback auto-allow behavior.
+    /// With no bridge, an `Ask` not resolved by a permission hook is denied.
     pub(crate) permission_bridge: Option<coco_tool_runtime::ToolPermissionBridgeRef>,
     /// Auto-mode state + rules for the 2-stage LLM classifier. When active,
     /// tool calls that return `PermissionDecision::Ask` are first run through

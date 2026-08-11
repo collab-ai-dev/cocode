@@ -57,6 +57,46 @@ fn fork_conversation_rejects_source_as_destination() {
     assert_eq!(std::fs::read_to_string(path).unwrap(), "original\n");
 }
 
+#[test]
+fn can_resume_stops_after_the_first_valid_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("torn-tail.jsonl");
+    let mut bytes = br#"{"session_id":"s1","uuid":"u1"}
+"#
+    .to_vec();
+    bytes.extend_from_slice(&[0xff, 0xfe, b'\n']);
+    std::fs::write(&path, bytes).unwrap();
+
+    assert!(
+        can_resume_session(&path),
+        "a valid prefix remains resumable when a later append is torn"
+    );
+}
+
+#[test]
+fn fork_conversation_streams_blank_and_invalid_lines_consistently() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("source.jsonl");
+    let dst = dir.path().join("dest.jsonl");
+    let mut source = "\n{\"session_id\":\"src\",\"text\":\"🙂\"}\r\nnot json\n\n"
+        .as_bytes()
+        .to_vec();
+    source.extend_from_slice(&[0xff, 0xfe, b'\n']);
+    std::fs::write(&src, source).unwrap();
+
+    fork_conversation(&src, &dst, "dest", dir.path()).unwrap();
+
+    let output = std::fs::read(dst).unwrap();
+    let lines: Vec<&[u8]> = output.split(|byte| *byte == b'\n').collect();
+    assert_eq!(lines.len(), 4);
+    let entry: serde_json::Value = serde_json::from_slice(lines[0]).unwrap();
+    assert_eq!(entry["session_id"], "dest");
+    assert_eq!(entry["text"], "🙂");
+    assert_eq!(lines[1], b"not json");
+    assert_eq!(lines[2], &[0xff, 0xfe]);
+    assert!(lines[3].is_empty());
+}
+
 // ---------------------------------------------------------------------------
 // load_conversation_for_resume — the actual resume entry point.
 // Each test writes a synthetic JSONL transcript and walks the function.

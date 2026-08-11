@@ -48,7 +48,8 @@ and per-candidate adversarial verification whose default stance was "this gap
 is not real." It followed `xai-grok-pager`, `xai-grok-shell`, and their direct
 TUI dependencies. It was not a complete audit of every grok module or of all
 36 codegen crates changed by the 1.0.0 interval; that broader crate comparison
-is deliberately separate from this UI plan.
+is deliberately separate from this UI plan and is now complete in the
+[full-crate audit](../grok-build-release-crate-audit-2026-08.md).
 
 Original outcome: **57 confirmed work items, 5 rejected candidates.** After
 the 1.0.0 refresh and the corrective verification in §1.2, the current
@@ -101,7 +102,7 @@ coco gaps, not changed-file count.
 | `session_load_barrier` replay ordering | **Do not port.** It repairs grok's shared ACP firehose during session replacement. coco demultiplexes per session and scopes AppServer shutdown; another barrier would create a second lifecycle authority. |
 | Global forced-process exit timeout | **Do not port.** coco already uses scoped shutdown coordination, AppServer timeouts, and frame-writer drain. A process-wide `_exit` watchdog discards cleanup invariants; add a PTY regression only if a reproducible hang remains. |
 | App-owned scrollback layout/selection refinements | **Do not port.** Native scrollback remains invariant 1. Only the renderer-independent table grapheme fix crosses the boundary. |
-| MCP large-image, sandbox retry, session-fork memory, and provider retry fixes | **Route to owning crates, outside this plan.** They are useful release signals but not TUI ports; require a confirmed coco-side defect before opening work. |
+| MCP large-image, sandbox retry, session-fork memory, and provider retry fixes | **Owner-crate audit complete.** Session-fork memory and deny-glob enforcement were confirmed and fixed; MCP media and generic provider-retry gaps were disproved. See the [full-crate audit](../grok-build-release-crate-audit-2026-08.md). |
 
 Net portfolio change from this refresh and verification: add C10 and F8,
 reject F3 and the proposed G5 `auto` replacement, and mark D2's product

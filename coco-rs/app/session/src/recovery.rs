@@ -22,7 +22,8 @@ use coco_messages::TurnInterruptionState;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::BufRead;
-use std::io::Read;
+use std::io::BufReader;
+use std::io::BufWriter;
 use std::io::Write;
 use std::path::Path;
 
@@ -623,16 +624,18 @@ fn relink_live_preserved_segment(
 
 /// Check if a session can be resumed (transcript exists and is valid).
 pub fn can_resume_session(transcript_path: &Path) -> bool {
-    if !transcript_path.exists() {
+    let Ok(file) = std::fs::File::open(transcript_path) else {
         return false;
+    };
+    for line in BufReader::new(file).lines() {
+        let Ok(line) = line else {
+            return false;
+        };
+        if !line.trim().is_empty() && serde_json::from_str::<serde_json::Value>(&line).is_ok() {
+            return true;
+        }
     }
-    std::fs::read_to_string(transcript_path)
-        .map(|content| {
-            content.lines().any(|line| {
-                !line.trim().is_empty() && serde_json::from_str::<serde_json::Value>(line).is_ok()
-            })
-        })
-        .unwrap_or(false)
+    false
 }
 
 /// Fork a conversation — copy the transcript into a new session file,
@@ -653,44 +656,55 @@ pub fn fork_conversation(
         )
         .into());
     }
-    if let Some(parent) = dest_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    let parent = dest_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)?;
     // Transcript appends take an exclusive lock on this file. A shared lock
     // gives the fork one complete point-in-time snapshot without attempting to
     // reacquire the runtime's session-ownership lease.
-    let mut source_file = std::fs::File::open(source_path)?;
+    let source_file = std::fs::File::open(source_path)?;
     fs2::FileExt::lock_shared(&source_file)?;
-    let mut source = String::new();
-    source_file.read_to_string(&mut source)?;
-    let mut out = String::with_capacity(source.len());
-    for line in source.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        match serde_json::from_str::<serde_json::Value>(line) {
-            Ok(mut value) => {
-                if let Some(obj) = value.as_object_mut() {
-                    if obj.contains_key("session_id") {
+    let mut reader = BufReader::new(source_file);
+    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+    {
+        let mut writer = BufWriter::new(temp.as_file_mut());
+        let mut line = Vec::new();
+        while reader.read_until(b'\n', &mut line)? != 0 {
+            while line
+                .last()
+                .is_some_and(|byte| matches!(byte, b'\r' | b'\n'))
+            {
+                line.pop();
+            }
+            if line.iter().all(u8::is_ascii_whitespace) {
+                line.clear();
+                continue;
+            }
+            match serde_json::from_slice::<serde_json::Value>(&line) {
+                Ok(mut value) => {
+                    if let Some(obj) = value.as_object_mut() {
+                        if obj.contains_key("session_id") {
+                            obj.insert(
+                                "session_id".to_string(),
+                                serde_json::Value::String(dest_session_id.to_string()),
+                            );
+                        }
                         obj.insert(
-                            "session_id".to_string(),
-                            serde_json::Value::String(dest_session_id.to_string()),
+                            "cwd".to_string(),
+                            serde_json::Value::String(dest_cwd.display().to_string()),
                         );
                     }
-                    obj.insert(
-                        "cwd".to_string(),
-                        serde_json::Value::String(dest_cwd.display().to_string()),
-                    );
+                    serde_json::to_writer(&mut writer, &value)?;
                 }
-                out.push_str(&serde_json::to_string(&value).unwrap_or_else(|_| line.to_string()));
+                Err(_) => writer.write_all(&line)?,
             }
-            Err(_) => out.push_str(line),
+            writer.write_all(b"\n")?;
+            line.clear();
         }
-        out.push('\n');
+        writer.flush()?;
     }
-    let parent = dest_path.parent().unwrap_or_else(|| Path::new("."));
-    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
-    temp.write_all(out.as_bytes())?;
     temp.as_file().sync_all()?;
     temp.persist_noclobber(dest_path)
         .map_err(|error| error.error)?;

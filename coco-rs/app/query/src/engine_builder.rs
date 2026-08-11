@@ -952,7 +952,8 @@ impl QueryEngine {
 
     /// Attach a permission bridge so `PermissionDecision::Ask` outcomes
     /// are forwarded to an external authority (e.g. the SDK client via
-    /// `SdkPermissionBridge`) instead of auto-allowing.
+    /// `SdkPermissionBridge`). Without a bridge, an `Ask` not resolved by a
+    /// permission hook is denied.
     pub fn with_permission_bridge(
         mut self,
         bridge: coco_tool_runtime::ToolPermissionBridgeRef,

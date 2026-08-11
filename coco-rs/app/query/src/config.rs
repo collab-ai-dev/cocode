@@ -167,12 +167,10 @@ pub struct QueryEngineConfig {
     /// session-level side effects only (self-fork suppression, the "sdk"
     /// label, prompt assembly) — NOT permission decisions.
     pub is_non_interactive: bool,
-    /// Whether the session cannot show an interactive permission prompt, so a
-    /// residual `Ask` must fail closed (Deny) instead of silently auto-allowing.
-    /// True for forked / async subagents and headless `-p`. Kept distinct
-    /// from `is_non_interactive`: the top-level `-p` flag is non-interactive
-    /// yet still propagates `Ask` to an SDK `canUseTool` consumer, so the
-    /// two concepts must be independently settable.
+    /// Whether permission classifiers must resolve would-be prompts as Deny.
+    /// True for forked / async subagents and headless `-p`. Kept distinct from
+    /// `is_non_interactive`: top-level `-p` may still have an SDK
+    /// `canUseTool` consumer, so the concepts remain independently settable.
     pub avoid_permission_prompts: bool,
     /// Debug-logging surface for tools (CLI `--debug`). Visible on
     /// `ToolUseContext.debug`. Defaults to `false`.

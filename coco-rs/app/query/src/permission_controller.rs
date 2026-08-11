@@ -81,10 +81,6 @@ pub(crate) struct PermissionController<'a> {
     cwd: Option<String>,
     completion_event_mode: ToolCompletionEventMode,
     deferred_tool_completions: Option<&'a mut crate::helpers::DeferredToolCompletionBuffer>,
-    /// True when the session cannot show an interactive permission prompt.
-    /// When set, a residual `Ask` with no permission bridge fails closed
-    /// (Deny) rather than silently auto-allowing.
-    avoid_permission_prompts: bool,
 }
 
 impl<'a> PermissionController<'a> {
@@ -102,7 +98,6 @@ impl<'a> PermissionController<'a> {
         orchestration_ctx: Option<&'a OrchestrationContext>,
         cwd: Option<String>,
         completion_event_mode: ToolCompletionEventMode,
-        avoid_permission_prompts: bool,
         deferred_tool_completions: Option<&'a mut crate::helpers::DeferredToolCompletionBuffer>,
     ) -> Self {
         Self {
@@ -119,7 +114,6 @@ impl<'a> PermissionController<'a> {
             cwd,
             completion_event_mode,
             deferred_tool_completions,
-            avoid_permission_prompts,
         }
     }
 
@@ -215,8 +209,7 @@ impl<'a> PermissionController<'a> {
         ask: PermissionAskPayload,
     ) -> PermissionOutcome {
         // Transition to RequiresAction while waiting for the approval path,
-        // then back to Running when it resolves. No bridge preserves legacy
-        // headless auto-allow behavior.
+        // then back to Running when it resolves.
         self.state_tracker
             .transition_to(SessionState::RequiresAction, self.event_tx)
             .await;
@@ -289,43 +282,31 @@ impl<'a> PermissionController<'a> {
         }
 
         let Some(bridge) = self.permission_bridge else {
-            // No interactive bridge. In a non-interactive (headless / SDK
-            // print) session there is no one to prompt, so a residual `Ask`
-            // must fail closed — DENY — rather than silently auto-allowing.
-            // An interactive session with no bridge keeps the legacy
-            // embedded-host permissive fallback.
-            if self.avoid_permission_prompts {
-                warn!(
-                    tool = tool_call.tool_name,
-                    "denying tool: interactive approval unavailable in non-interactive session"
-                );
-                self.record_denial(tool_call, tool_input);
-                let output = format!(
-                    "Permission to use {} requires interactive approval, which is \
-                     unavailable in this non-interactive session.",
-                    tool_call.tool_name
-                );
-                complete_tool_call_with_error_mode(
-                    self.event_tx,
-                    self.history,
-                    &tool_call.tool_call_id,
-                    provider_tool_name,
-                    tool_id,
-                    &output,
-                    coco_tool_runtime::ToolCallErrorKind::PermissionDenied,
-                    self.completion_event_mode,
-                    self.deferred_tool_completions.as_deref_mut(),
-                )
-                .await;
-                self.state_tracker
-                    .transition_to(SessionState::Running, self.event_tx)
-                    .await;
-                return PermissionOutcome::Denied;
-            }
+            // `Ask` represents an explicit approval gate. Without a bridge
+            // there is no authority that can approve it, regardless of
+            // whether the host otherwise considers itself interactive.
+            warn!(
+                tool = tool_call.tool_name,
+                "denying tool: interactive approval bridge unavailable"
+            );
+            self.record_denial(tool_call, tool_input);
+            let output = unavailable_approval_message(&tool_call.tool_name);
+            complete_tool_call_with_error_mode(
+                self.event_tx,
+                self.history,
+                &tool_call.tool_call_id,
+                provider_tool_name,
+                tool_id,
+                &output,
+                coco_tool_runtime::ToolCallErrorKind::PermissionDenied,
+                self.completion_event_mode,
+                self.deferred_tool_completions.as_deref_mut(),
+            )
+            .await;
             self.state_tracker
                 .transition_to(SessionState::Running, self.event_tx)
                 .await;
-            return allow_outcome(None, None, None, None);
+            return PermissionOutcome::Denied;
         };
 
         let request = coco_tool_runtime::ToolPermissionRequest {
@@ -615,6 +596,18 @@ fn recent_denial_display(tool_name: &str, tool_input: &serde_json::Value) -> Str
     }
 }
 
+fn unavailable_approval_message(tool_name: &str) -> String {
+    if tool_name == coco_types::ToolName::AskUserQuestion.as_str() {
+        return "No user is available through this session to answer questions. \
+                Continue with your best judgment; do not wait for clarification."
+            .to_string();
+    }
+    format!(
+        "Permission to use {tool_name} requires interactive approval, but no \
+         approval bridge is available for this session."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -655,5 +648,14 @@ mod tests {
 
         assert!(bounded.len() <= coco_types::MAX_PERMISSION_FEEDBACK_BYTES);
         assert!(bounded.chars().all(|ch| ch == '🙂'));
+    }
+
+    #[test]
+    fn headless_question_denial_tells_the_model_to_continue() {
+        let message = unavailable_approval_message(ToolName::AskUserQuestion.as_str());
+
+        assert!(message.contains("No user is available"));
+        assert!(message.contains("Continue with your best judgment"));
+        assert!(!message.contains("declined"));
     }
 }
