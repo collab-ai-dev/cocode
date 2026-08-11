@@ -29,6 +29,7 @@ mod id;
 pub mod journey;
 mod jsonrpc;
 mod log;
+mod mcp_execution_policy;
 mod mcp_exposure;
 pub mod messages;
 // Flat re-export at the crate root: `coco_types::Message` reads better
@@ -304,6 +305,7 @@ pub use token::{
 };
 
 // Tool types (ToolResult moved to coco-messages because new_messages: Vec<Message>)
+pub use mcp_execution_policy::McpExecutionPolicy;
 pub use mcp_exposure::McpToolExposure;
 pub use tool::{
     AGENT_WORKTREE_BRANCH_PREFIX, MCP_TOOL_PREFIX, MCP_TOOL_SEPARATOR, ToolId, ToolName,

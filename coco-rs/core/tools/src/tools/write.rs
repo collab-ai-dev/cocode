@@ -11,7 +11,11 @@ use coco_types::ToolName;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use std::io::ErrorKind;
 use std::path::Path;
+
+use super::file_safety::FileTargetKind;
+use super::file_safety::VerifiedWrite;
 
 /// Long-form tool description shown to the model.
 const WRITE_TOOL_DESCRIPTION: &str = "Writes a file to the local filesystem.
@@ -33,8 +37,8 @@ pub struct WriteInput {
 }
 
 /// Typed output for [`WriteTool`] — tagged enum keyed by the operation
-/// performed. `filePath` is camelCase on the wire
-/// (`mapToolResultToToolResultBlockParam`).
+/// performed. `filePath` is camelCase on the wire; `verified` means the
+/// requested bytes were read back from disk before success was returned.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WriteOutput {
@@ -42,18 +46,22 @@ pub enum WriteOutput {
     Create {
         #[serde(rename = "filePath")]
         file_path: String,
+        verified: VerifiedWrite,
     },
     /// Existing file overwritten.
     Update {
         #[serde(rename = "filePath")]
         file_path: String,
+        verified: VerifiedWrite,
     },
 }
 
 impl WriteOutput {
     fn file_path(&self) -> &str {
         match self {
-            WriteOutput::Create { file_path } | WriteOutput::Update { file_path } => file_path,
+            WriteOutput::Create { file_path, .. } | WriteOutput::Update { file_path, .. } => {
+                file_path
+            }
         }
     }
 }
@@ -140,9 +148,13 @@ impl Tool for WriteTool {
     fn render_for_model(&self, out: &WriteOutput) -> Vec<ToolResultContentPart> {
         let file_path = out.file_path();
         let text = match out {
-            WriteOutput::Create { .. } => format!("File created successfully at: {file_path}"),
+            WriteOutput::Create { .. } => format!(
+                "File created successfully at: {file_path}. The content was verified on disk; no reread is needed."
+            ),
             WriteOutput::Update { .. } => {
-                format!("The file {file_path} has been updated successfully.")
+                format!(
+                    "The file {file_path} has been updated successfully and verified on disk; no reread is needed."
+                )
             }
         };
         vec![ToolResultContentPart::Text {
@@ -165,7 +177,26 @@ impl Tool for WriteTool {
         // so SDK consumers can intercept via the approval bridge.
         super::sandbox_preflight::preflight_path(ctx, path, /*write=*/ true).await?;
 
-        let is_new = !path.exists();
+        let is_new = match super::file_safety::inspect_mutation_target(path) {
+            Ok(FileTargetKind::Regular) => false,
+            Ok(kind) => {
+                return Err(ToolError::InvalidInput {
+                    message: format!(
+                        "Cannot write {file_path}: it is {}, not a regular file.",
+                        kind.description()
+                    ),
+                    error_code: None,
+                });
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => true,
+            Err(error) => {
+                return Err(ToolError::ExecutionFailed {
+                    message: format!("Failed to inspect {file_path}: {error}"),
+                    display_data: None,
+                    source: None,
+                });
+            }
+        };
 
         // Read-before-write enforcement + race detection.
         //
@@ -233,7 +264,7 @@ impl Tool for WriteTool {
                 // Whole-file read plus encoding detect plus decode — three
                 // size-proportional passes, off the runtime worker.
                 let current = tokio::task::spawn_blocking(move || {
-                    let raw = std::fs::read(&probe_path).ok()?;
+                    let raw = coco_utils_common::read_regular(&probe_path).ok()?;
                     coco_file_encoding::detect_encoding(&raw).decode(&raw).ok()
                 })
                 .await
@@ -288,7 +319,7 @@ impl Tool for WriteTool {
         let detected_encoding: coco_file_encoding::Encoding = if !is_new {
             let probe_path = file_path.to_string();
             tokio::task::spawn_blocking(move || {
-                std::fs::read(&probe_path)
+                coco_utils_common::read_regular(Path::new(&probe_path))
                     .map(|raw| coco_file_encoding::detect_encoding(&raw))
                     .unwrap_or(coco_file_encoding::Encoding::Utf8)
             })
@@ -310,9 +341,9 @@ impl Tool for WriteTool {
         }
 
         // Encode the content using the detected encoding (UTF-8 default for
-        // new files). `write_with_format` handles BOM prepending and line-
-        // ending normalization. Always pass `LineEnding::Lf` — see the
-        // comment above about the line-ending design decision.
+        // new files), including BOM and line-ending normalization. Always
+        // pass `LineEnding::Lf` — see the comment above about the line-ending
+        // design decision.
         // Deliberately synchronous. `tool_call_runner`'s `tokio::select!`
         // cancels a tool by DROPPING its `execute` future, and a
         // `spawn_blocking` closure cannot be cancelled once running — so an
@@ -324,17 +355,12 @@ impl Tool for WriteTool {
         // cancellation. The expensive part (read + full-content scans) is
         // already off the runtime; a write of pre-computed bytes is not worth
         // trading that invariant for.
-        coco_file_encoding::write_with_format(
-            path,
+        let expected_bytes = coco_file_encoding::encode_with_format(
             content,
             detected_encoding,
             coco_file_encoding::LineEnding::Lf,
-        )
-        .map_err(|e| ToolError::ExecutionFailed {
-            message: format!("failed to write {file_path}: {e}"),
-            display_data: None,
-            source: None,
-        })?;
+        );
+        let verified = super::file_safety::commit_file(path, &expected_bytes)?;
 
         crate::record_file_edit(ctx, path, content.to_string()).await;
         // Skill auto-discovery + conditional-skill activation — when a write
@@ -351,10 +377,12 @@ impl Tool for WriteTool {
         let data = if is_new {
             WriteOutput::Create {
                 file_path: file_path.to_string(),
+                verified,
             }
         } else {
             WriteOutput::Update {
                 file_path: file_path.to_string(),
+                verified,
             }
         };
         Ok(ToolResult {

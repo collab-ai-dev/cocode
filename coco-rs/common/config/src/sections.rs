@@ -1831,6 +1831,11 @@ pub struct PartialMcpRuntimeSettings {
     pub tool_exposure: Option<coco_types::McpToolExposure>,
     /// Per-server overrides keyed by MCP server name.
     pub server_tool_exposure: HashMap<String, coco_types::McpToolExposure>,
+    /// Default authority granted to MCP tool calls. Server annotations are
+    /// untrusted unless this is explicitly set to `trust_read_only_hints`.
+    pub execution_policy: Option<coco_types::McpExecutionPolicy>,
+    /// Per-server execution-policy overrides keyed by MCP server name.
+    pub server_execution_policy: HashMap<String, coco_types::McpExecutionPolicy>,
     /// Keepalive ping cadence for HTTP/SSE MCP servers, seconds.
     /// Streamable-HTTP session TTLs can be as low as ~15 s; a periodic
     /// ping keeps them alive. `0` disables; values below 5 clamp to 5.
@@ -1865,6 +1870,10 @@ pub struct McpRuntimeConfig {
     pub tool_exposure: coco_types::McpToolExposure,
     /// Per-server exposure overrides keyed by MCP server name.
     pub server_tool_exposure: HashMap<String, coco_types::McpToolExposure>,
+    /// Default execution trust policy. Defaults to `always_ask`.
+    pub execution_policy: coco_types::McpExecutionPolicy,
+    /// Per-server execution-policy overrides keyed by MCP server name.
+    pub server_execution_policy: HashMap<String, coco_types::McpExecutionPolicy>,
     /// Keepalive ping cadence for HTTP/SSE MCP servers, seconds.
     /// See `PartialMcpRuntimeSettings::keepalive_interval_secs`; `None`
     /// uses the built-in default (180 s).
@@ -1900,6 +1909,11 @@ impl McpRuntimeConfig {
             config.tool_exposure = v;
         }
         config.server_tool_exposure = settings.merged.mcp_runtime.server_tool_exposure.clone();
+        if let Some(policy) = settings.merged.mcp_runtime.execution_policy {
+            config.execution_policy = policy;
+        }
+        config.server_execution_policy =
+            settings.merged.mcp_runtime.server_execution_policy.clone();
         if let Some(raw) = env.get_string(EnvKey::CocoMcpToolExposure) {
             match raw.parse::<coco_types::McpToolExposure>() {
                 Ok(value) => config.tool_exposure = value,

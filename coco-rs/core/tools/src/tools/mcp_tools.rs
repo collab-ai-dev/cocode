@@ -759,16 +759,49 @@ impl Tool for McpTool {
     }
 
     fn is_concurrency_safe(&self, _: &Value) -> bool {
-        // Only concurrent-safe if the server declares read-only.
-        self.annotations.read_only_hint
+        // A server hint cannot prove that concurrent calls are side-effect
+        // free. Serialize dynamic MCP calls even when the operator opts into
+        // trusting the hint for approval purposes.
+        false
     }
 
     fn is_read_only(&self, _: &Value) -> bool {
-        self.annotations.read_only_hint
+        // Keep untrusted server annotations out of the central permission
+        // evaluator's read-only fast path. `check_permissions` applies the
+        // explicit per-server execution policy instead.
+        false
     }
 
     fn is_destructive(&self, _: &Value) -> bool {
         self.annotations.destructive_hint
+    }
+
+    async fn check_permissions(
+        &self,
+        _input: &Value,
+        ctx: &ToolUseContext,
+    ) -> coco_types::ToolCheckResult {
+        let policy = ctx.mcp.execution_policy(&self.info.server_name);
+        let auto_approve = match policy {
+            coco_types::McpExecutionPolicy::AlwaysAsk => false,
+            coco_types::McpExecutionPolicy::TrustReadOnlyHints => self.annotations.read_only_hint,
+            coco_types::McpExecutionPolicy::Full => true,
+        };
+        if auto_approve {
+            return coco_types::ToolCheckResult::Allow {
+                updated_input: None,
+                feedback: None,
+            };
+        }
+        coco_types::ToolCheckResult::Ask {
+            message: format!(
+                "MCP tool {} from server {} requires approval under the {:?} execution policy.",
+                self.info.tool_name, self.info.server_name, policy
+            ),
+            suggestions: Vec::new(),
+            choices: None,
+            detail: None,
+        }
     }
 
     /// Decode the MCP server-provided content envelope back into typed

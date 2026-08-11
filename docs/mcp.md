@@ -152,6 +152,33 @@ and `mcp.server_tool_exposure` overrides individual server names:
 
 To disable MCP completely, turn off `features.mcp`, disable/deny the server, or filter its tools. Exposure controls placement of surviving tools; it is not an activation switch.
 
+### Tool execution trust
+
+Schema exposure and execution authority are separate policies. MCP server tool
+annotations are self-declared and untrusted by default, so every dynamic MCP
+tool call requires approval unless the operator opts into a wider policy:
+
+```jsonc
+{
+  "mcp": {
+    // "always_ask" (default), "trust_read_only_hints", or "full"
+    "execution_policy": "always_ask",
+    "server_execution_policy": {
+      "local-memory": "trust_read_only_hints",
+      "company-internal": "full"
+    }
+  }
+}
+```
+
+- `always_ask` requires approval for every call.
+- `trust_read_only_hints` auto-approves only tools for which that server reports `readOnlyHint: true`.
+- `full` auto-approves every tool call from that server.
+
+Explicit deny rules still win before execution policy is evaluated. MCP hints
+never enable concurrent batching: dynamic calls remain serialized because a
+server declaration cannot prove absence of side effects.
+
 ## Which servers actually run
 
 Defining a server and running it are separate decisions with separate owners. The config files above say *what* a server is; whether a defined server connects in a given project is resolved at session start from three inputs, strongest first:

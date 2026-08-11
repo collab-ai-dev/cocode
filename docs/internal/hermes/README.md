@@ -4,6 +4,8 @@
 > 对照对象:`/lyz/codespace/cocode/coco-rs`(多 provider LLM SDK + CLI,Rust,Claude Code 移植)
 > 生成日期:2026-07-02 · 聚焦 Hermes 两大宣传能力:**自进化(self-evolution)** 与 **IM 接入**
 
+> **时效说明:** 本页正文保留 2026-07-02 的产品级快照，不再代表所有能力的当前实现状态（例如后续的 skill-learn 与 07-25 Hermes 吸收批次）。当前代码事实和 release 增量以 [hermes-opt-0811.md](hermes-opt-0811.md) 为准；历史文档中的“缺失/开放”标签只应作为当时证据阅读。
+
 ---
 
 ## 这份报告是什么
@@ -33,7 +35,7 @@ Hermes 自我定位为"唯一内建学习回路的 Agent":它从经验中创造�
 | ② | [IM 网关](design-02-im-gateway.md) | **战略**:新建 GatewayRunner daemon,入站走 `QueueOrigin::Im`、出站走 `CoreEvent` egress,复用 headless query 路径;先 Telegram 后 Slack |
 | ④ | [Journey 学习时间线 + Journal 事件源(English)](design-04-journey.md) | **①③ 落地后的可观测面 + 执行开发计划**(2026-07-16,基于已实现的 `coco-skill-learn` 现状,纯英文,**已对抗式评审**——30 项引用审计 + 12 项集成缝核查,17 项修正已并入正文,见其 §11 review log):`/journey` TUI 时间线(学到的技能+记忆)、append-only journal 补齐时间维度、delete/edit 往返;含 12 个 work package 的执行计划与 learn 闭环 6 项优化(notices、用户主动 `/learn`、signal/cursor/退避、config 化) |
 
-### Release-log 吸收分析(2026-07-10,English)
+### Release-log 吸收分析(2026-07-10 → 2026-08-11, English)
 
 上面五篇聚焦自进化与 IM;下面这条线是另一次独立分析——通读 Hermes 全部 21 个
 release(v0.2.0→v0.18.2)提取优化点,并逐项对照 coco-rs 现状(31 项事实带
@@ -41,13 +43,14 @@ file:line 取证)后的吸收清单与开发计划:
 
 | 文档 | 内容 |
 |------|------|
-| [hermes-opt-0724.md](hermes-opt-0724.md) | **当前有效计划(2026-07-24)**:逐项复核 07-10 清单在 coco 的最新状态(offload/goal runtime/Grep 分组/会话搜索等已落地项关闭)、吸收 v0.19.0 "Quicksilver"(~2245 commits)+ 961 个 post-tag 提交的新增优化点(压缩加固、MoA 加固、耐久 ledger、Gemini 签名 sentinel 等),并重排 P0/P1/P2 与落地顺序 |
+| [hermes-opt-0811.md](hermes-opt-0811.md) | **当前有效增量(2026-08-11)**:复核 v0.20 "Herald" 与 1,146 个 post-tag 提交；关闭 07-24 后已经落地的主体项，并把新增收益收敛为文件工具安全/自恢复这一条架构链。含本轮实现、破坏性语义调整，以及 MCP trust/原子写/二进制嗅探的后续边界 |
+| [hermes-opt-0724.md](hermes-opt-0724.md) | (已被 0811 版取代)逐项复核 07-10 清单在 coco 的状态、吸收 v0.19.0 "Quicksilver" 与 961 个 post-tag 提交的优化点 |
 | [hermes-opt.md](hermes-opt.md) | (已被 0724 版取代)全量 release-log 扫描结论 v0.2.0→v0.18.2:已具备清单、P0/P1/P2 吸收分级、反面教训、落地顺序 |
 | [plans/](plans/README.md) | 按 PR 切分的成套开发计划(10 篇),每篇含 Hermes 源码引用证据(仓库相对路径,锚定 commit `a7f65e3bc`)与 coco-rs 落点;各计划的 07-24 有效性盖章见 hermes-opt-0724.md §7 |
 
 ---
 
-## 核心结论(TL;DR)
+## 2026-07-02 核心结论(TL;DR，历史快照)
 
 ### Hermes 真正领先的两处,恰是它的宣传点
 

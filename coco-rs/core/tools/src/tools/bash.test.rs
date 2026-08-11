@@ -1713,6 +1713,62 @@ async fn test_bash_redirect_within_tree_passes() {
 }
 
 #[tokio::test]
+async fn test_bash_redirect_to_instruction_file_always_asks() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(temp.path().to_path_buf());
+    ctx.permission_context.mode = coco_types::PermissionMode::BypassPermissions;
+
+    let result = <BashTool as DynTool>::check_permissions(
+        &BashTool,
+        &json!({"command": "echo hi > AGENTS.md"}),
+        &ctx,
+    )
+    .await;
+
+    assert!(matches!(result, coco_types::ToolCheckResult::Ask { .. }));
+}
+
+#[tokio::test]
+async fn test_bash_interpreter_write_to_instruction_file_always_asks() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(temp.path().to_path_buf());
+    ctx.permission_context.mode = coco_types::PermissionMode::BypassPermissions;
+
+    let result = <BashTool as DynTool>::check_permissions(
+        &BashTool,
+        &json!({"command": "python -c 'from pathlib import Path; Path(\"CLAUDE.md\").write_text(\"x\")'"}),
+        &ctx,
+    )
+    .await;
+
+    assert!(matches!(result, coco_types::ToolCheckResult::Ask { .. }));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_bash_redirect_to_hard_link_always_asks() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let protected = temp.path().join("AGENTS.md");
+    let alias = temp.path().join("ordinary.md");
+    std::fs::write(&protected, "instructions").unwrap();
+    std::fs::hard_link(&protected, &alias).unwrap();
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(temp.path().to_path_buf());
+    ctx.permission_context.mode = coco_types::PermissionMode::BypassPermissions;
+
+    let result = <BashTool as DynTool>::check_permissions(
+        &BashTool,
+        &json!({"command": "echo changed > ordinary.md"}),
+        &ctx,
+    )
+    .await;
+
+    assert!(matches!(result, coco_types::ToolCheckResult::Ask { .. }));
+}
+
+#[tokio::test]
 async fn test_bash_redirect_after_cd_asks() {
     let ctx = ToolUseContext::test_default();
     let result = <BashTool as DynTool>::check_permissions(

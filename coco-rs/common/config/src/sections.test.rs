@@ -1137,6 +1137,36 @@ fn test_mcp_runtime_config_resolves_server_exposure_overrides() {
 }
 
 #[test]
+fn test_mcp_runtime_config_defaults_to_ask_and_resolves_server_execution_overrides() {
+    let settings = settings_with_sources(Settings {
+        mcp_runtime: PartialMcpRuntimeSettings {
+            execution_policy: Some(coco_types::McpExecutionPolicy::TrustReadOnlyHints),
+            server_execution_policy: HashMap::from([(
+                "untrusted".into(),
+                coco_types::McpExecutionPolicy::AlwaysAsk,
+            )]),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+
+    let config = McpRuntimeConfig::resolve(&settings, &EnvSnapshot::default());
+
+    assert_eq!(
+        config.execution_policy,
+        coco_types::McpExecutionPolicy::TrustReadOnlyHints
+    );
+    assert_eq!(
+        config.server_execution_policy.get("untrusted"),
+        Some(&coco_types::McpExecutionPolicy::AlwaysAsk)
+    );
+    assert_eq!(
+        McpRuntimeConfig::default().execution_policy,
+        coco_types::McpExecutionPolicy::AlwaysAsk
+    );
+}
+
+#[test]
 fn test_voice_config_defaults() {
     let c = VoiceConfig::default();
     assert_eq!(c.backend, VoiceBackend::Remote);

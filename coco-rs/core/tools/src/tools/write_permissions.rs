@@ -45,6 +45,21 @@ pub(crate) fn check_write_permission_for_paths(
         };
     }
 
+    if let Some(path) = protected_instruction_path(paths_to_check) {
+        return ToolCheckResult::Ask {
+            message: format!(
+                "{tool_name} wants to modify the agent instruction file {path}. \
+                 This can change the agent's behavior for future turns and requires approval for this operation."
+            ),
+            // Deliberately omit persistent allow suggestions. Instruction files
+            // are approved one operation at a time, even in accept-edits or
+            // bypass-permissions mode.
+            suggestions: Vec::new(),
+            choices: None,
+            detail: None,
+        };
+    }
+
     let cwd_str = cwd.to_string_lossy();
     let internal_ctx = coco_permissions::filesystem::InternalPathContext {
         cwd: &cwd_str,
@@ -144,6 +159,79 @@ pub(crate) fn check_write_permission_for_paths(
             ToolCheckResult::Passthrough
         }
     }
+}
+
+fn protected_instruction_path(paths: &[String]) -> Option<&str> {
+    paths.iter().find_map(|path| {
+        let file_name = Path::new(path).file_name()?.to_str()?;
+        coco_context::MEMORY_FILE_CANDIDATES
+            .iter()
+            .chain(coco_context::MEMORY_LOCAL_FILE_CANDIDATES)
+            .any(|candidate| file_name.eq_ignore_ascii_case(candidate))
+            .then_some(path.as_str())
+    })
+}
+
+/// Return a force-approval reason for a shell-visible mutation target.
+///
+/// Shell commands mutate files in place, unlike the atomic local file tools.
+/// Therefore an existing multiply-linked file is also sensitive: an ordinary
+/// looking alias may share its inode with an instruction file elsewhere.
+pub(crate) fn shell_write_hazard(target: &str, cwd: &str) -> Option<String> {
+    let paths = coco_permissions::filesystem::get_paths_for_permission_check(target, cwd);
+    if let Some(path) = protected_instruction_path(&paths) {
+        return Some(format!(
+            "Shell command may modify the agent instruction file {path}; this operation requires approval."
+        ));
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+
+        if let Some(path) = paths
+            .iter()
+            .find(|path| std::fs::metadata(path).is_ok_and(|metadata| metadata.nlink() > 1))
+        {
+            return Some(format!(
+                "Shell command may modify multiply-linked file {path}; an alias could be an agent instruction file, so this operation requires approval."
+            ));
+        }
+    }
+
+    None
+}
+
+/// Inspect literal path-like fragments in an arbitrary non-read-only shell
+/// command. This covers interpreter invocations such as
+/// `python -c 'Path("AGENTS.md").write_text(...)'` that are outside the
+/// command-specific redirect/copy extractors.
+pub(crate) fn shell_command_literal_hazard(command: &str, cwd: &str) -> Option<String> {
+    command
+        .split(|character: char| {
+            character.is_whitespace()
+                || matches!(
+                    character,
+                    '\'' | '"'
+                        | '`'
+                        | '('
+                        | ')'
+                        | '['
+                        | ']'
+                        | '{'
+                        | '}'
+                        | ','
+                        | ';'
+                        | '='
+                        | '>'
+                        | '<'
+                        | '|'
+                        | '&'
+                )
+        })
+        .map(str::trim)
+        .filter(|candidate| !candidate.is_empty() && !candidate.starts_with('-'))
+        .find_map(|candidate| shell_write_hazard(candidate, cwd))
 }
 
 pub(crate) fn effective_cwd(ctx: &ToolUseContext) -> PathBuf {
@@ -257,3 +345,7 @@ fn tool_wide_allow_rule_exists(
         })
     })
 }
+
+#[cfg(test)]
+#[path = "write_permissions.test.rs"]
+mod tests;

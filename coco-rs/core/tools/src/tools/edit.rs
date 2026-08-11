@@ -11,7 +11,11 @@ use coco_types::ToolName;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use std::io::ErrorKind;
 use std::path::Path;
+
+use super::file_safety::FileTargetKind;
+use super::file_safety::VerifiedWrite;
 
 /// Long-form tool description shown to the model.
 ///
@@ -46,8 +50,9 @@ pub struct EditInput {
 
 /// Typed output for [`EditTool`]. Field names are camelCase for JSON
 /// wire format. `userModified` is always `false` in coco-rs — there is
-/// no TUI accept-with-edits overlay.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// no TUI accept-with-edits overlay. `verified` is true only after the
+/// requested bytes have been read back from disk.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditOutput {
     #[serde(default, rename = "filePath")]
     pub file_path: String,
@@ -57,6 +62,7 @@ pub struct EditOutput {
     pub user_modified: bool,
     #[serde(default, rename = "replacementCount")]
     pub replacement_count: usize,
+    verified: VerifiedWrite,
 }
 
 /// Edit tool — performs exact string replacements in files.
@@ -148,10 +154,12 @@ impl Tool for EditTool {
         let file_path = out.file_path.as_str();
         let text = if out.replace_all {
             format!(
-                "The file {file_path} has been updated. All occurrences were successfully replaced."
+                "The file {file_path} has been updated and verified on disk. All occurrences were successfully replaced; no reread is needed."
             )
         } else {
-            format!("The file {file_path} has been updated successfully.")
+            format!(
+                "The file {file_path} has been updated successfully and verified on disk; no reread is needed."
+            )
         };
         vec![ToolResultContentPart::Text {
             text,
@@ -175,12 +183,33 @@ impl Tool for EditTool {
         // so SDK consumers can intercept via the approval bridge.
         super::sandbox_preflight::preflight_path(ctx, path, /*write=*/ true).await?;
 
+        let is_new = match super::file_safety::inspect_mutation_target(path) {
+            Ok(FileTargetKind::Regular) => false,
+            Ok(kind) => {
+                return Err(ToolError::InvalidInput {
+                    message: format!(
+                        "Cannot edit {file_path}: it is {}, not a regular file.",
+                        kind.description()
+                    ),
+                    error_code: None,
+                });
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => true,
+            Err(error) => {
+                return Err(ToolError::ExecutionFailed {
+                    message: format!("Failed to inspect {file_path}: {error}"),
+                    display_data: None,
+                    source: None,
+                });
+            }
+        };
+
         // #21: an empty `old_string` on a
         // nonexistent file is new-file creation — write `new_string` as
         // the whole file (creating parent dirs). The read-before-edit and
         // match logic below all assume an existing file, so this path
         // short-circuits before them.
-        if old_string.is_empty() && !path.exists() {
+        if old_string.is_empty() && is_new {
             if let Some(err) = crate::check_write_root_fence(ctx, path) {
                 return Err(ToolError::ExecutionFailed {
                     message: err,
@@ -207,11 +236,7 @@ impl Tool for EditTool {
             crate::track_file_edit(ctx, path).await;
             // Synchronous for cancellation atomicity — see the note on the
             // main edit path's write below.
-            std::fs::write(file_path, new_string).map_err(|e| ToolError::ExecutionFailed {
-                message: format!("failed to write {file_path}: {e}"),
-                display_data: None,
-                source: None,
-            })?;
+            let verified = super::file_safety::commit_file(path, new_string.as_bytes())?;
             crate::record_file_edit(ctx, path, new_string.to_string()).await;
             crate::track_skill_triggers(ctx, path).await;
             ctx.lsp.notify_save(path).await;
@@ -221,6 +246,7 @@ impl Tool for EditTool {
                     replace_all,
                     user_modified: false,
                     replacement_count: 1,
+                    verified,
                 },
                 new_messages: vec![],
                 app_state_patch: None,
@@ -229,9 +255,9 @@ impl Tool for EditTool {
             });
         }
 
-        if !path.exists() {
+        if is_new {
             return Err(ToolError::ExecutionFailed {
-                message: format!("File not found: {file_path}"),
+                message: super::file_safety::missing_path_message(path, ctx).await,
                 display_data: None,
                 source: None,
             });
@@ -285,15 +311,15 @@ impl Tool for EditTool {
             {
                 match (entry.range, entry.evidence) {
                     (coco_types::FileReadRange::Full, coco_types::ReadEvidence::RealFileView) => {
-                        let raw = tokio::fs::read(&abs_path).await.map_err(|e| {
-                            ToolError::ExecutionFailed {
+                        let raw = coco_utils_common::read_regular_async(&abs_path)
+                            .await
+                            .map_err(|e| ToolError::ExecutionFailed {
                                 message: format!(
                                     "failed to read {file_path} for stale edit check: {e}"
                                 ),
                                 display_data: None,
                                 source: None,
-                            }
-                        })?;
+                            })?;
                         let enc = coco_file_encoding::detect_encoding(&raw);
                         let current = enc.decode(&raw).map_err(|e| ToolError::ExecutionFailed {
                             message: format!(
@@ -346,7 +372,7 @@ impl Tool for EditTool {
             if entry.is_full_real()
                 && let Ok(meta) = tokio::fs::metadata(&abs_path).await
                 && meta.len() <= LAYER2_MAX_BYTES
-                && let Ok(raw) = tokio::fs::read(&abs_path).await
+                && let Ok(raw) = coco_utils_common::read_regular_async(&abs_path).await
             {
                 let enc = coco_file_encoding::detect_encoding(&raw);
                 if let Ok(current) = enc.decode(&raw)
@@ -423,11 +449,7 @@ impl Tool for EditTool {
         // cancellation. The expensive part (read + full-content scans) is
         // already off the runtime; a write of pre-computed bytes is not worth
         // trading that invariant for.
-        std::fs::write(file_path, &new_content).map_err(|e| ToolError::ExecutionFailed {
-            message: format!("failed to write {file_path}: {e}"),
-            display_data: None,
-            source: None,
-        })?;
+        let verified = super::file_safety::commit_file(path, new_content.as_bytes())?;
 
         crate::record_file_edit(ctx, path, new_content).await;
         // Skill auto-discovery + conditional-skill activation — when an
@@ -447,6 +469,7 @@ impl Tool for EditTool {
                 replace_all,
                 user_modified: false,
                 replacement_count: count,
+                verified,
             },
             new_messages: vec![],
             app_state_patch: None,
@@ -565,8 +588,15 @@ fn read_and_apply_edit(
     new_string: &str,
     replace_all: bool,
 ) -> Result<(String, usize), ToolError> {
-    let content = std::fs::read_to_string(file_path).map_err(|e| ToolError::ExecutionFailed {
-        message: format!("failed to read {file_path}: {e}"),
+    let raw = coco_utils_common::read_regular(Path::new(file_path)).map_err(|e| {
+        ToolError::ExecutionFailed {
+            message: format!("failed to read {file_path}: {e}"),
+            display_data: None,
+            source: None,
+        }
+    })?;
+    let content = String::from_utf8(raw).map_err(|e| ToolError::ExecutionFailed {
+        message: format!("failed to decode {file_path} as UTF-8: {e}"),
         display_data: None,
         source: None,
     })?;

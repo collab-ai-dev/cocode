@@ -63,7 +63,7 @@ regex.workspace = true
 unicode-normalization.workspace = true
 walkdir.workspace = true
 uuid = { workspace = true, features = ["v4"] }
-tokio = { workspace = true, features = ["process", "time", "fs"] }
+tokio = { workspace = true, features = ["process", "time", "fs", "rt-multi-thread"] }
 tokio-util.workspace = true
 tracing.workspace = true
 reqwest = { workspace = true, features = ["rustls-tls", "stream"] }

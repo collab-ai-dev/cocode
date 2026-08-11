@@ -274,6 +274,7 @@ async fn test_write_new_file() {
     // builds the human message from these fields.
     assert_eq!(result.data["type"], "create");
     assert_eq!(result.data["filePath"], file.to_str().unwrap());
+    assert_eq!(result.data["verified"], true);
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "hello\nworld\n");
 }
 
@@ -294,31 +295,35 @@ async fn test_write_overwrite_existing() {
 
     assert_eq!(result.data["type"], "update");
     assert_eq!(result.data["filePath"], file.to_str().unwrap());
+    assert_eq!(result.data["verified"], true);
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "new content");
 }
 
 #[tokio::test]
 async fn test_write_render_for_model_create_branch() {
     use coco_tool_runtime::ToolResultContentPart;
-    let data = json!({"type": "create", "filePath": "/abs/new.txt"});
-    let parts = <WriteTool as DynTool>::render_for_model(&WriteTool, &data);
-    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
-        panic!("expected Text part");
-    };
-    assert_eq!(text, "File created successfully at: /abs/new.txt");
-}
-
-#[tokio::test]
-async fn test_write_render_for_model_update_branch() {
-    use coco_tool_runtime::ToolResultContentPart;
-    let data = json!({"type": "update", "filePath": "/abs/existing.txt"});
+    let data = json!({"type": "create", "filePath": "/abs/new.txt", "verified": true});
     let parts = <WriteTool as DynTool>::render_for_model(&WriteTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
     assert_eq!(
         text,
-        "The file /abs/existing.txt has been updated successfully."
+        "File created successfully at: /abs/new.txt. The content was verified on disk; no reread is needed."
+    );
+}
+
+#[tokio::test]
+async fn test_write_render_for_model_update_branch() {
+    use coco_tool_runtime::ToolResultContentPart;
+    let data = json!({"type": "update", "filePath": "/abs/existing.txt", "verified": true});
+    let parts = <WriteTool as DynTool>::render_for_model(&WriteTool, &data);
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("expected Text part");
+    };
+    assert_eq!(
+        text,
+        "The file /abs/existing.txt has been updated successfully and verified on disk; no reread is needed."
     );
 }
 

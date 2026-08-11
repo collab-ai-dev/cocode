@@ -71,3 +71,34 @@ fn changed_file_text_loader_returns_decoded_raw_content() {
 
     assert_eq!(content, "raw\ncontent\n");
 }
+
+#[test]
+fn binary_signature_detects_binary_content_without_an_extension() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("download");
+    std::fs::write(&file, b"\x89PNG\r\n\x1a\nrest").expect("write");
+
+    assert_eq!(sniff_binary_signature(&file).unwrap(), Some("PNG image"));
+}
+
+#[cfg(unix)]
+#[test]
+fn text_loader_rejects_a_fifo_without_blocking() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fifo = dir.path().join("pipe.txt");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let input = ReadInput {
+        file_path: fifo.display().to_string(),
+        offset: None,
+        limit: None,
+        pages: None,
+    };
+
+    assert!(read_text_selection(&input.file_path, &input).is_err());
+}
