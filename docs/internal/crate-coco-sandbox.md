@@ -70,7 +70,7 @@ top of a generic **runtime** that does the actual platform wrapping.
 | `SandboxState::update_config(...)` | Hot-reload (called by `SettingsWatcher`) |
 | `SandboxConfig` | Runtime restriction lists: writable roots, deny paths, `denied_read_globs`, `glob_scan_max_depth`, allow-network, proxy state |
 | `SandboxSettings` | User-facing settings: `enabled`, `fail_if_unavailable`, `excluded_commands`, `filesystem.*`, `network.*`, `ignore_violations` |
-| `glob_expansion::expand` | Bounded-depth glob expander for `denied_read_globs` (uses `globset` + `walkdir`); platforms call this at wrap time |
+| `glob_expansion` | Shared portable glob validation; bounded Linux expansion and anchored macOS Seatbelt-regex translation |
 | `EnforcementLevel` | `Disabled` / `ReadOnly` / `WorkspaceWrite` / `Strict` — runtime behavior (resolved from `SandboxMode`) |
 | `SandboxBypass` | `No` / `Requested` — non-bool param wrapper |
 | `WritableRoot` | Path + `readonly_subpaths` — auto-detects `.git` pointer files |
@@ -134,15 +134,28 @@ metacharacters (`*`, `?`, `[`) are routed by the adapter into
 `SandboxConfig.denied_read_globs`; literal paths land in
 `denied_read_paths` as before. At platform-wrap time both
 `platform/macos.rs` and `platform/linux.rs` call
-`glob_expansion::expand(roots, globs, glob_scan_max_depth)` to enumerate
-matches under the writable roots and merge them into the deny list:
+the shared validator rejects patterns whose meaning would diverge between
+globset and Seatbelt. Relative patterns are anchored below each writable root;
+absolute patterns use their own literal prefix. Enforcement then stays
+platform-native:
 
-- macOS — append to the Seatbelt `(deny file-read* (subpath ...))` block
-- Linux — emit `--ro-bind-try /dev/null <path>` per match, same trick
-  used for symlink-attack mitigation
+- macOS — emit anchored `(deny file-read* (regex ...))` rules. These cover
+  matching paths created after command launch and include canonical and
+  `/private` firmlink aliases.
+- Linux — enumerate existing matches below each glob's literal prefix and emit
+  `--ro-bind-try /dev/null <path>` per match. Canonical symlink targets are
+  masked too.
 
-`mandatory_deny_search_depth` (default 3) caps the walk so a poorly-scoped
-glob (`**/*.env`) cannot stall the bootstrap.
+Linux expansion is fail-closed. `mandatory_deny_search_depth` defaults to 64;
+the walk also caps at 4,096 matches and two million visited entries. Invalid or
+non-portable syntax, walk errors, a directory at the depth cap,
+or an exceeded budget prevents the command from starting. Linux cannot protect
+a new matching path created after its mount namespace is built; macOS runtime
+regexes do.
+
+The portable subset supports `*` and complete `**` path segments. `?`,
+character classes, brace expansion, backslash escapes, `.`/`..`, and partial
+`**` segments are rejected instead of acquiring platform-dependent meanings.
 
 ## Hot Reload
 

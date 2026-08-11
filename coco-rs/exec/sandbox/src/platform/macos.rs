@@ -49,7 +49,8 @@ impl SandboxPlatform for MacOsSandbox {
             return Ok(());
         }
 
-        let profile = generate_seatbelt_profile(config, command, session_tag, extra_writable_binds);
+        let profile =
+            generate_seatbelt_profile(config, command, session_tag, extra_writable_binds)?;
 
         info!(
             enforcement = ?config.enforcement,
@@ -96,11 +97,23 @@ fn generate_seatbelt_profile(
     command: &str,
     session_tag: &str,
     extra_writable_binds: &[std::path::PathBuf],
-) -> String {
+) -> Result<String> {
     use std::fmt::Write;
 
     let mut profile = String::with_capacity(8192);
     let home = dirs_home();
+    let writable_roots: Vec<std::path::PathBuf> = config
+        .writable_roots
+        .iter()
+        .map(|root| root.path.clone())
+        .collect();
+    let glob_filters =
+        crate::glob_expansion::seatbelt_regex_filters(&writable_roots, &config.denied_read_globs)
+            .map_err(|error| {
+            crate::error::SandboxError::apply_error(format!(
+                "deny-read glob translation failed: {error}"
+            ))
+        })?;
 
     // Version header + deny-default with command tag for violation correlation.
     // The tag is embedded in the deny message so macOS log stream entries
@@ -142,8 +155,7 @@ fn generate_seatbelt_profile(
     }
     profile.push('\n');
 
-    // Denied read paths (from config.denied_read_paths + config.denied_paths
-    // + glob-expanded `denied_read_globs`).
+    // Denied read paths and runtime glob filters.
     //
     // Seatbelt evaluates filter rules bottom-to-top and applies the first
     // matching rule, so emitting `allow_read` carve-outs **after** the deny
@@ -151,31 +163,19 @@ fn generate_seatbelt_profile(
     // deny rules still cover their non-allowed siblings. Matches the TS
     // `allowRead`
     // takes precedence over `denyRead` for matching paths.
-    let writable_root_paths: Vec<std::path::PathBuf> = config
-        .writable_roots
-        .iter()
-        .map(|r| r.path.clone())
-        .collect();
-    let glob_expanded = crate::glob_expansion::expand(
-        &writable_root_paths,
-        &config.denied_read_globs,
-        config.glob_scan_max_depth.max(0) as usize,
-    );
     let has_denied_reads = !config.denied_read_paths.is_empty()
         || !config.denied_paths.is_empty()
-        || !glob_expanded.is_empty();
+        || !glob_filters.is_empty();
     if has_denied_reads {
         profile.push_str("; Explicitly denied read paths\n");
-        for path in config
-            .denied_read_paths
-            .iter()
-            .chain(&config.denied_paths)
-            .chain(&glob_expanded)
-        {
+        for path in config.denied_read_paths.iter().chain(&config.denied_paths) {
             for variant in macos_path_variants(path) {
                 let escaped = escape_sbpl_path(&variant);
                 let _ = writeln!(profile, "(deny file-read* (subpath \"{escaped}\"))");
             }
+        }
+        for filter in glob_filters {
+            let _ = writeln!(profile, "(deny file-read* {filter})");
         }
         profile.push('\n');
     }
@@ -291,7 +291,7 @@ fn generate_seatbelt_profile(
         profile.push_str("(allow mach-lookup (global-name \"com.apple.trustd.agent\"))\n");
     }
 
-    profile
+    Ok(profile)
 }
 
 /// Get TMPDIR variants with both `/private/var/` and `/var/` paths.

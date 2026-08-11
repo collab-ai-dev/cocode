@@ -50,7 +50,7 @@ fn test_sandbox_settings_default_disabled() {
     // PTY is allowed by default (codex-rs seatbelt base policy parity); only an
     // explicit `"allow_pty": false` disables it (covered below).
     assert!(settings.allow_pty);
-    assert_eq!(settings.mandatory_deny_search_depth, 3);
+    assert_eq!(settings.mandatory_deny_search_depth, 64);
     assert!(settings.ripgrep.is_none());
 }
 
@@ -285,7 +285,7 @@ fn test_sandbox_settings_from_empty_json() {
     assert!(settings.filesystem.deny_read.is_empty());
     assert!(settings.filesystem.allow_read.is_empty());
     assert!(settings.credentials.is_none());
-    assert_eq!(settings.mandatory_deny_search_depth, 3);
+    assert_eq!(settings.mandatory_deny_search_depth, 64);
 }
 
 #[test]

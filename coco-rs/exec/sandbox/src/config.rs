@@ -216,18 +216,13 @@ pub struct SandboxConfig {
     /// Paths explicitly denied for reading.
     #[serde(default)]
     pub denied_read_paths: Vec<PathBuf>,
-    /// Glob patterns explicitly denied for reading. Expanded at wrap time
-    /// against [`writable_roots`] using
-    /// [`crate::glob_expansion::expand`], bounded by
-    /// [`SandboxSettings::mandatory_deny_search_depth`]. Mirrors the
-    /// codex-rs `glob_scan_max_depth` behavior — TS delegates this to
-    /// `@anthropic-ai/sandbox-runtime` calling `sandbox.ripgrep.command`.
+    /// Glob patterns explicitly denied for reading. Linux expands them
+    /// fail-closed at wrap time; macOS compiles them to runtime Seatbelt
+    /// regexes. Relative patterns apply below each writable root.
     #[serde(default)]
     pub denied_read_globs: Vec<String>,
-    /// Maximum directory walk depth when expanding `denied_read_globs`.
-    /// Defaults to 3 (matches `SandboxSettings::default`); platform
-    /// wrappers carry this in `SandboxConfig` so a hot-reload of
-    /// settings reaches the platform without an out-of-band channel.
+    /// Linux directory-walk depth below a glob's literal prefix. Reaching the
+    /// cap is an error because a deeper deny match could be hidden.
     #[serde(default = "default_glob_scan_max_depth")]
     pub glob_scan_max_depth: i32,
     /// Paths to re-allow reading even when shadowed by `denied_read_paths`
@@ -296,7 +291,7 @@ impl Default for SandboxConfig {
 }
 
 fn default_glob_scan_max_depth() -> i32 {
-    3
+    64
 }
 
 fn default_true() -> bool {
