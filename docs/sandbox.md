@@ -120,7 +120,7 @@ differ, which is a wart worth remembering when moving a path between blocks.
       "allow_git_config": false,
       "allow_managed_read_paths_only": false
     },
-    "mandatory_deny_search_depth": 3
+    "mandatory_deny_search_depth": 64
   }
 }
 ```
@@ -130,11 +130,15 @@ for matching paths. `allow_git_config` (default `false`) controls whether
 `.git/config` and `~/.gitconfig` are writable.
 
 `deny_read` entries containing `*`, `?`, or `[` are treated as glob patterns.
-They are expanded against your writable roots at sandbox-bootstrap time, bounded
-by `mandatory_deny_search_depth` (default `3`), and the matching files are added
-to the platform deny list. Globs that match nothing are dropped silently; if a
-pattern needs deeper expansion than the cap allows, use an explicit absolute path
-instead.
+Relative patterns apply below each writable root; absolute patterns use their
+own literal prefix. Linux enumerates existing matches at command-wrap time,
+bounded by `mandatory_deny_search_depth` (default `64`), 4,096 matches, and two
+million visited entries. macOS emits anchored Seatbelt regexes, so matching files
+created after launch remain protected. Invalid or ambiguous syntax, a Linux walk
+error, or any exceeded cap fails closed and the command is not started.
+The portable subset supports `*` and complete `**` path segments; `?`,
+character classes, braces, backslash escapes, `.`/`..`, and partial `**`
+segments are rejected.
 
 `allow_managed_read_paths_only`, when set in managed policy, honors `allow_read`
 only from the policy layer — user, project, local, and flag entries are ignored,
@@ -351,7 +355,7 @@ Every key under `sandbox`, with its default:
 | `enable_weaker_nested_sandbox` | `false` | Relax isolation for Docker/WSL nesting. |
 | `enable_weaker_network_isolation` | `false` | macOS: allow the trustd mach lookup Go binaries (`gh`, `gcloud`, `terraform`, `kubectl`) need for TLS verification. |
 | `allow_pty` | `true` | macOS: allow sandboxed commands to allocate TTYs. |
-| `mandatory_deny_search_depth` | `3` | Directory walk depth when expanding `deny_read` globs. |
+| `mandatory_deny_search_depth` | `64` | Linux walk depth below a `deny_read` glob's literal prefix; reaching it fails closed. |
 | `ripgrep` | unset | Custom ripgrep binary and default args. |
 
 ## See also

@@ -6,6 +6,16 @@ use crate::config::WritableRoot;
 
 use super::*;
 
+fn generate_seatbelt_profile(
+    config: &SandboxConfig,
+    command: &str,
+    session_tag: &str,
+    extra_writable_binds: &[PathBuf],
+) -> String {
+    super::generate_seatbelt_profile(config, command, session_tag, extra_writable_binds)
+        .expect("test profile should be valid")
+}
+
 #[test]
 fn test_macos_sandbox_available() {
     let sandbox = MacOsSandbox;
@@ -389,6 +399,24 @@ fn test_generate_seatbelt_profile_denied_paths_also_deny_read() {
     assert!(
         profile.contains("(deny file-read* (subpath \"/sensitive/data\"))"),
         "denied_paths should also generate file-read* deny rules"
+    );
+}
+
+#[test]
+fn test_generate_seatbelt_profile_denied_glob_is_runtime_regex() {
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::WorkspaceWrite,
+        writable_roots: vec![WritableRoot::unprotected("/workspace")],
+        denied_read_globs: vec!["**/*.env".to_string()],
+        allow_network: true,
+        ..Default::default()
+    };
+
+    let profile = generate_seatbelt_profile(&config, "ls", "_test_SBX", &[]);
+
+    assert!(
+        profile.contains(r#"(deny file-read* (regex #"^/workspace/(.*/)?[^/]*\.env$"))"#),
+        "runtime regex must protect matching files created after launch"
     );
 }
 

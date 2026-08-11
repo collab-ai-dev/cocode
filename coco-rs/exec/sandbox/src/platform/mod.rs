@@ -7,7 +7,8 @@
 use crate::config::SandboxConfig;
 use crate::error::Result;
 
-#[cfg(target_os = "macos")]
+// Keep the pure SBPL generator compiled and tested on non-macOS CI.
+#[cfg(any(target_os = "macos", test))]
 pub mod macos;
 
 #[cfg(target_os = "linux")]

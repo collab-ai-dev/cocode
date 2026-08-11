@@ -2425,6 +2425,7 @@ dependencies = [
  "libc",
  "pretty_assertions",
  "rand 0.9.4",
+ "regex",
  "seccompiler",
  "serde",
  "serde_json",

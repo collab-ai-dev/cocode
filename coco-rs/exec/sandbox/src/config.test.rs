@@ -159,6 +159,7 @@ fn test_sandbox_config_default() {
     assert!(config.writable_roots.is_empty());
     assert!(config.denied_paths.is_empty());
     assert!(config.allowed_read_paths.is_empty());
+    assert_eq!(config.glob_scan_max_depth, 64);
     assert!(!config.allow_network);
 }
 
@@ -189,6 +190,7 @@ fn test_sandbox_config_from_empty_json() {
     assert!(config.writable_roots.is_empty());
     assert!(config.denied_paths.is_empty());
     assert!(config.allowed_read_paths.is_empty());
+    assert_eq!(config.glob_scan_max_depth, 64);
     assert!(!config.allow_network);
 }
 

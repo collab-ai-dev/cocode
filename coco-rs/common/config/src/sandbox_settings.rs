@@ -311,7 +311,8 @@ pub struct SandboxSettings {
     #[serde(default = "default_true")]
     pub allow_pty: bool,
 
-    /// Directory search depth for mandatory deny path discovery (Linux).
+    /// Linux directory search depth for deny-glob discovery. Reaching the cap
+    /// fails closed so a deeper match cannot be silently omitted.
     #[serde(default = "default_mandatory_deny_search_depth")]
     pub mandatory_deny_search_depth: i32,
 
@@ -337,7 +338,7 @@ fn default_enabled_platforms() -> Vec<String> {
 }
 
 fn default_mandatory_deny_search_depth() -> i32 {
-    3
+    64
 }
 
 impl Default for SandboxSettings {
