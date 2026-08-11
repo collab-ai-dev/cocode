@@ -458,6 +458,17 @@ impl Tool for BashTool {
         // overrides it (only `DontAsk` converts it to deny).
         let cwd = bash_gate_cwd(ctx).await;
         let command_analysis = coco_shell::analyze_compound_command(command, &cwd);
+        if !is_read_only_command(command)
+            && let Some(message) =
+                super::write_permissions::shell_command_literal_hazard(command, &cwd)
+        {
+            return coco_types::ToolCheckResult::Ask {
+                message,
+                suggestions: Vec::new(),
+                choices: None,
+                detail: None,
+            };
+        }
         if let Some(reason) = coco_shell::check_dangerous_removal(command, &cwd) {
             return coco_types::ToolCheckResult::Ask {
                 message: reason,
@@ -538,6 +549,14 @@ impl Tool for BashTool {
                     detail: None,
                 };
             }
+            if let Some(message) = super::write_permissions::shell_write_hazard(&target, &cwd) {
+                return coco_types::ToolCheckResult::Ask {
+                    message,
+                    suggestions: Vec::new(),
+                    choices: None,
+                    detail: None,
+                };
+            }
             if !is_path_within_allowed_dirs(&target, &cwd, &additional_dirs) {
                 return coco_types::ToolCheckResult::Ask {
                     message: format!(
@@ -573,6 +592,14 @@ impl Tool for BashTool {
                 return coco_types::ToolCheckResult::Ask {
                     message: "Shell expansion syntax in a write path requires manual approval."
                         .into(),
+                    suggestions: Vec::new(),
+                    choices: None,
+                    detail: None,
+                };
+            }
+            if let Some(message) = super::write_permissions::shell_write_hazard(&target, &cwd) {
+                return coco_types::ToolCheckResult::Ask {
+                    message,
                     suggestions: Vec::new(),
                     choices: None,
                     detail: None,

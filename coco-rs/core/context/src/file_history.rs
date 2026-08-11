@@ -227,8 +227,8 @@ async fn origin_file_changed(origin: &Path, backup_path: &Path) -> Result<bool> 
     }
 
     // Fall back to byte comparison.
-    let origin_bytes = fs::read(origin).await?;
-    let backup_bytes = fs::read(backup_path).await?;
+    let origin_bytes = coco_utils_common::read_regular_async(origin).await?;
+    let backup_bytes = coco_utils_common::read_regular_async(backup_path).await?;
     Ok(origin_bytes != backup_bytes)
 }
 
@@ -376,7 +376,7 @@ impl FileHistoryState {
         let backup_name = backup_file_name(file_path, TRACK_EDIT_VERSION);
         let dest = resolve_backup_path(config_home, session_id, &backup_name);
 
-        let backup_file_name = match fs::read(file_path).await {
+        let backup_file_name = match coco_utils_common::read_regular_async(file_path).await {
             Ok(content) => {
                 ensure_parent_dir(&dest).await?;
                 let size = content.len() as u64;
@@ -487,7 +487,7 @@ impl FileHistoryState {
                 let bname = backup_file_name(file_path, version);
                 let dest = resolve_backup_path(config_home, session_id, &bname);
 
-                let backup_file = match fs::read(file_path).await {
+                let backup_file = match coco_utils_common::read_regular_async(file_path).await {
                     Ok(content) => {
                         ensure_parent_dir(&dest).await?;
                         let size = content.len() as u64;
@@ -997,9 +997,14 @@ async fn plan_snapshot_file(
         Some(bname) => {
             let bp = checked_backup_path(config_home, session_id, &bname)?;
             if origin_file_changed(file_path, &bp).await.unwrap_or(true) {
-                let content = fs::read(&bp).await.map_err(|e| {
-                    crate::ContextError::generic(format!("reading backup {}: {e}", bp.display()))
-                })?;
+                let content = coco_utils_common::read_regular_async(&bp)
+                    .await
+                    .map_err(|e| {
+                        crate::ContextError::generic(format!(
+                            "reading backup {}: {e}",
+                            bp.display()
+                        ))
+                    })?;
                 #[cfg(unix)]
                 let permissions = fs::metadata(&bp).await.ok().map(|meta| meta.permissions());
                 return Ok(Some(RestorePlanAction {

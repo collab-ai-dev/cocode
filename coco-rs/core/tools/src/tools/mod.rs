@@ -10,6 +10,7 @@ pub mod config;
 pub mod edit;
 pub mod edit_utils;
 pub(crate) mod file_filter;
+pub(crate) mod file_safety;
 pub mod glob;
 pub mod goal_tools;
 pub mod grep;

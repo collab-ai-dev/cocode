@@ -8,6 +8,7 @@
 //!
 //! The trait indirection exists for testability.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use coco_config::RuntimeConfig;
@@ -29,6 +30,8 @@ use tokio::sync::RwLock;
 /// implements `McpHandle`.
 pub struct McpManagerAdapter {
     manager: Arc<Mutex<McpConnectionManager>>,
+    execution_policy: coco_types::McpExecutionPolicy,
+    server_execution_policy: HashMap<String, coco_types::McpExecutionPolicy>,
     /// Optional hook registry for firing `Elicitation` /
     /// `ElicitationResult` hooks when an MCP server requests user
     /// input. `None` keeps the legacy no-op behaviour.
@@ -72,11 +75,24 @@ impl McpManagerAdapter {
     pub fn new(manager: Arc<Mutex<McpConnectionManager>>) -> Self {
         Self {
             manager,
+            execution_policy: coco_types::McpExecutionPolicy::AlwaysAsk,
+            server_execution_policy: HashMap::new(),
             hook_registry: None,
             elicitation_ctx_factory: None,
             elicitation_counter: None,
             skill_bridge: None,
         }
+    }
+
+    /// Install the operator-resolved MCP execution trust boundary.
+    pub fn with_execution_policy(
+        mut self,
+        default: coco_types::McpExecutionPolicy,
+        by_server: HashMap<String, coco_types::McpExecutionPolicy>,
+    ) -> Self {
+        self.execution_policy = default;
+        self.server_execution_policy = by_server;
+        self
     }
 
     /// Install hook context so dynamic-MCP-server elicitations fire
@@ -152,6 +168,13 @@ impl McpManagerAdapter {
 
 #[async_trait::async_trait]
 impl McpHandle for McpManagerAdapter {
+    fn execution_policy(&self, server_name: &str) -> coco_types::McpExecutionPolicy {
+        self.server_execution_policy
+            .get(server_name)
+            .copied()
+            .unwrap_or(self.execution_policy)
+    }
+
     async fn list_resources(
         &self,
         server_name: Option<&str>,

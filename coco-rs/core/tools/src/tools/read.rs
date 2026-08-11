@@ -11,8 +11,10 @@ use coco_types::ToolName;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
+use std::io::ErrorKind;
 use std::path::Path;
 
+use super::file_safety::FileTargetKind;
 use super::read_loader::ReadFileKind;
 
 /// Short per-call UI label, returned by `async description()`.
@@ -39,10 +41,6 @@ Usage:
 - This tool can only read files, not directories. To read a directory, use an ls command via the Bash tool.
 - You will regularly be asked to read screenshots. If the user provides a path to a screenshot, ALWAYS use this tool to view the file at the path. This tool will work with all temporary file paths.
 - If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents.";
-
-pub fn is_blocked_device_path(file_path: &str) -> bool {
-    super::read_loader::is_blocked_device_path(file_path)
-}
 
 /// Typed input for [`ReadTool`].
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -230,20 +228,6 @@ impl Tool for ReadTool {
 
         let path = Path::new(file_path);
 
-        // Device file blocklist — reject `/dev/zero`, `/dev/stdin`, etc.
-        // BEFORE the existence check because some of these (/dev/stdin)
-        // exist but would hang the tool indefinitely. `/dev/null` is OK
-        // and falls through.
-        if is_blocked_device_path(file_path) {
-            return Err(ToolError::InvalidInput {
-                message: format!(
-                    "Cannot read device file: {file_path}. \
-                     Reading this path would hang or return unbounded data."
-                ),
-                error_code: None,
-            });
-        }
-
         // Sandbox pre-flight — give SDK consumers a chance to deny before
         // we touch the filesystem. Platform sandboxes (bwrap/Seatbelt)
         // catch the same violations at kernel level after `read()`, but
@@ -251,24 +235,42 @@ impl Tool for ReadTool {
         // reason to the model instead of an opaque `EACCES`.
         super::sandbox_preflight::preflight_path(ctx, path, /*write=*/ false).await?;
 
-        // Check existence
-        if !path.exists() {
-            return Err(ToolError::ExecutionFailed {
-                message: format!("File not found: {file_path}"),
-                display_data: None,
-                source: None,
-            });
+        match super::file_safety::inspect_file_target(path) {
+            Ok(FileTargetKind::Regular) => {}
+            Ok(kind) => {
+                return Err(ToolError::InvalidInput {
+                    message: format!(
+                        "Cannot read {file_path}: it is {}, not a regular file. No read was attempted.",
+                        kind.description()
+                    ),
+                    error_code: None,
+                });
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                return Err(ToolError::ExecutionFailed {
+                    message: super::file_safety::missing_path_message(path, ctx).await,
+                    display_data: None,
+                    source: None,
+                });
+            }
+            Err(error) => {
+                return Err(ToolError::ExecutionFailed {
+                    message: format!("Failed to inspect {file_path}: {error}"),
+                    display_data: None,
+                    source: None,
+                });
+            }
         }
 
-        // Check if directory
-        if path.is_dir() {
-            return Err(ToolError::InvalidInput {
-                message: format!(
-                    "{file_path} is a directory, not a file. Use Bash with ls to list directory contents."
-                ),
-                error_code: None,
-            });
-        }
+        let read_kind = match super::read_loader::classify_read_path(path) {
+            ReadFileKind::Text => match super::read_loader::sniff_binary_signature(path)? {
+                Some(format) => ReadFileKind::Binary {
+                    extension: format.to_string(),
+                },
+                None => ReadFileKind::Text,
+            },
+            kind => kind,
+        };
 
         // ── R7-T9: file_unchanged dedup ──
         //
@@ -298,7 +300,7 @@ impl Tool for ReadTool {
         // Only attempt dedup for plain text reads. Image/PDF/notebook
         // paths fall through to their dedicated handlers below — they
         // call `record_file_read` themselves and never need a stub.
-        let is_special_extension = super::read_loader::is_special_read_path(path);
+        let is_special_extension = !matches!(read_kind, ReadFileKind::Text);
         if !is_special_extension
             && let Some(frs) = &ctx.file_read_state
             && let Ok(abs_path) = std::fs::canonicalize(path)
@@ -338,7 +340,7 @@ impl Tool for ReadTool {
             }
         }
 
-        match super::read_loader::classify_read_path(path) {
+        match read_kind {
             ReadFileKind::SupportedImage { media_type } => {
                 crate::record_file_read(
                     ctx,
@@ -736,8 +738,15 @@ fn text_output(
 /// the language for code cells (defaults to `"python"`). For missing
 /// `cell_id` we synthesize `cell-N`.
 fn read_notebook(file_path: &str) -> Result<ToolResult<Value>, ToolError> {
-    let content = std::fs::read_to_string(file_path).map_err(|e| ToolError::ExecutionFailed {
-        message: format!("failed to read notebook: {e}"),
+    let bytes = coco_utils_common::read_regular(Path::new(file_path)).map_err(|e| {
+        ToolError::ExecutionFailed {
+            message: format!("failed to read notebook: {e}"),
+            display_data: None,
+            source: None,
+        }
+    })?;
+    let content = String::from_utf8(bytes).map_err(|e| ToolError::ExecutionFailed {
+        message: format!("notebook is not valid UTF-8: {e}"),
         display_data: None,
         source: None,
     })?;
@@ -981,10 +990,12 @@ const PDF_MAX_PAGES_PER_READ: usize = 20;
 /// - `"1-5"`   → pages 1 through 5 inclusive (1-based)
 /// - missing   → all pages, capped at [`PDF_MAX_PAGES_PER_READ`]
 fn read_pdf(file_path: &str, pages: Option<&str>) -> Result<ToolResult<Value>, ToolError> {
-    let bytes = std::fs::read(file_path).map_err(|e| ToolError::ExecutionFailed {
-        message: format!("failed to read PDF: {e}"),
-        display_data: None,
-        source: None,
+    let bytes = coco_utils_common::read_regular(Path::new(file_path)).map_err(|e| {
+        ToolError::ExecutionFailed {
+            message: format!("failed to read PDF: {e}"),
+            display_data: None,
+            source: None,
+        }
     })?;
 
     // `pdf-extract` prefers a byte slice; extracting text from `bytes`

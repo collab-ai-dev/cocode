@@ -56,6 +56,7 @@ async fn test_edit_single_replacement() {
     assert_eq!(result.data["filePath"], file.to_str().unwrap());
     assert_eq!(result.data["replaceAll"], false);
     assert_eq!(result.data["replacementCount"], 1);
+    assert_eq!(result.data["verified"], true);
     let content = std::fs::read_to_string(&file).unwrap();
     assert!(content.contains("hello world"));
     assert!(!content.contains("\"hi\""));
@@ -689,25 +690,28 @@ async fn test_edit_rejects_stale_line_range_read() {
 #[test]
 fn edit_render_single_replacement_branch() {
     use coco_tool_runtime::ToolResultContentPart;
-    let data = json!({"filePath": "/abs/file.rs", "replaceAll": false, "userModified": false});
-    let parts = <EditTool as DynTool>::render_for_model(&EditTool, &data);
-    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
-        panic!("expected Text part");
-    };
-    assert_eq!(text, "The file /abs/file.rs has been updated successfully.");
-}
-
-#[test]
-fn edit_render_replace_all_branch() {
-    use coco_tool_runtime::ToolResultContentPart;
-    let data = json!({"filePath": "/abs/multi.rs", "replaceAll": true, "userModified": false});
+    let data = json!({"filePath": "/abs/file.rs", "replaceAll": false, "userModified": false, "verified": true});
     let parts = <EditTool as DynTool>::render_for_model(&EditTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
     assert_eq!(
         text,
-        "The file /abs/multi.rs has been updated. All occurrences were successfully replaced."
+        "The file /abs/file.rs has been updated successfully and verified on disk; no reread is needed."
+    );
+}
+
+#[test]
+fn edit_render_replace_all_branch() {
+    use coco_tool_runtime::ToolResultContentPart;
+    let data = json!({"filePath": "/abs/multi.rs", "replaceAll": true, "userModified": false, "verified": true});
+    let parts = <EditTool as DynTool>::render_for_model(&EditTool, &data);
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("expected Text part");
+    };
+    assert_eq!(
+        text,
+        "The file /abs/multi.rs has been updated and verified on disk. All occurrences were successfully replaced; no reread is needed."
     );
 }
 

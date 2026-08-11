@@ -75,8 +75,8 @@ pub enum McpContentBlock {
 
 /// MCP tool annotations — safety hints from the MCP server.
 ///
-/// These are server-declared hints, not guarantees. Used for concurrency
-/// batching and permission decisions.
+/// These are server-declared hints, not guarantees. Execution decisions may
+/// consult them only under an explicit [`coco_types::McpExecutionPolicy`].
 #[derive(Debug, Clone, Default)]
 pub struct McpToolAnnotations {
     /// Tool only reads data, no side effects. Default: false.
@@ -152,6 +152,12 @@ pub struct McpToolSchema {
 /// depending on `coco-mcp` directly.
 #[async_trait::async_trait]
 pub trait McpHandle: Send + Sync {
+    /// Resolve execution trust for one server. Handles without explicit
+    /// operator configuration fail closed.
+    fn execution_policy(&self, _server_name: &str) -> coco_types::McpExecutionPolicy {
+        coco_types::McpExecutionPolicy::AlwaysAsk
+    }
+
     /// List resources from an MCP server.
     async fn list_resources(
         &self,

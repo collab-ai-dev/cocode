@@ -133,6 +133,69 @@ fn always_load_propagates_from_meta_opt_out() {
     assert!(tool.should_defer());
 }
 
+#[tokio::test]
+async fn mcp_execution_policy_does_not_trust_server_hints_by_default() {
+    let tool = mcp_tool(
+        "test-server".into(),
+        "read".into(),
+        "read".into(),
+        json!({"properties": {}}),
+        McpToolAnnotations {
+            read_only_hint: true,
+            ..Default::default()
+        },
+    );
+    let ctx = ToolUseContext::test_default();
+
+    let decision = <McpTool as DynTool>::check_permissions(&tool, &json!({}), &ctx).await;
+
+    assert!(matches!(decision, coco_types::ToolCheckResult::Ask { .. }));
+    assert!(!<McpTool as DynTool>::is_read_only(&tool, &json!({})));
+    assert!(!<McpTool as DynTool>::is_concurrency_safe(
+        &tool,
+        &json!({})
+    ));
+}
+
+#[tokio::test]
+async fn mcp_execution_policy_only_trusts_hints_when_explicitly_selected() {
+    let read_tool = mcp_tool(
+        "test-server".into(),
+        "read".into(),
+        "read".into(),
+        json!({"properties": {}}),
+        McpToolAnnotations {
+            read_only_hint: true,
+            ..Default::default()
+        },
+    );
+    let write_tool = make_mcp_tool();
+    let mut ctx = ToolUseContext::test_default();
+    ctx.mcp = Arc::new(PolicyHandle(
+        coco_types::McpExecutionPolicy::TrustReadOnlyHints,
+    ));
+
+    let read = <McpTool as DynTool>::check_permissions(&read_tool, &json!({}), &ctx).await;
+    let write = <McpTool as DynTool>::check_permissions(&write_tool, &json!({}), &ctx).await;
+
+    assert!(matches!(read, coco_types::ToolCheckResult::Allow { .. }));
+    assert!(matches!(write, coco_types::ToolCheckResult::Ask { .. }));
+}
+
+#[tokio::test]
+async fn full_mcp_execution_policy_approves_unannotated_tools() {
+    let tool = make_mcp_tool();
+    let mut ctx = ToolUseContext::test_default();
+    ctx.mcp = Arc::new(PolicyHandle(coco_types::McpExecutionPolicy::Full));
+
+    let decision = <McpTool as DynTool>::check_permissions(&tool, &json!({}), &ctx).await;
+
+    assert!(matches!(
+        decision,
+        coco_types::ToolCheckResult::Allow { .. }
+    ));
+}
+
 // ---------------------------------------------------------------------------
 // Schema wire-envelope preservation — guards against the DeepSeek
 // `type: null` regression. McpTool::input_json_schema must hand back
@@ -736,6 +799,47 @@ struct AuthHandle {
 }
 
 struct DirectoryResourceHandle;
+
+struct PolicyHandle(coco_types::McpExecutionPolicy);
+
+#[async_trait::async_trait]
+impl coco_tool_runtime::McpHandle for PolicyHandle {
+    fn execution_policy(&self, _: &str) -> coco_types::McpExecutionPolicy {
+        self.0
+    }
+
+    async fn list_resources(
+        &self,
+        _: Option<&str>,
+    ) -> Result<Vec<McpResourceInfo>, coco_error::BoxedError> {
+        Ok(Vec::new())
+    }
+
+    async fn read_resource(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<Vec<McpResourceContent>, coco_error::BoxedError> {
+        unreachable!("permission tests do not read resources")
+    }
+
+    async fn call_tool(
+        &self,
+        _: &str,
+        _: &str,
+        _: Option<serde_json::Value>,
+    ) -> Result<McpToolCallResult, coco_error::BoxedError> {
+        unreachable!("permission tests do not execute tools")
+    }
+
+    async fn authenticate(&self, _: &str) -> Result<String, coco_error::BoxedError> {
+        unreachable!("permission tests do not authenticate")
+    }
+
+    async fn connected_servers(&self) -> Vec<String> {
+        Vec::new()
+    }
+}
 
 #[async_trait::async_trait]
 impl coco_tool_runtime::McpHandle for DirectoryResourceHandle {

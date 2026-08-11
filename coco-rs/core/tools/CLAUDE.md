@@ -42,6 +42,7 @@ meta-validation and `ToolInputSchema`'s size bounds are the point.
 
 - `record_file_read` / `record_file_edit` — updates `FileReadState` for @mention dedup + Read-tool `file_unchanged` detection
 - `tools::read_loader` — side-effect-free file classification/loading shared by `ReadTool` and background changed-file scans
+- `tools::file_safety` — mutation-target policy, deterministic missing-path suggestions, and atomic verified commits shared by local file tools
 - `check_team_mem_secret` — blocks writes containing secrets into team-memory paths (layered detection: authoritative via `coco-memory::team_paths` + substring fallback, gated by `coco-secret-redact`)
 - `track_nested_memory_attachment` — pushes read paths into `ctx.nested_memory_attachment_triggers` for next-turn CLAUDE.md loading
 - `track_skill_discovery` — discovers `.coco/skills` in file ancestry, pushes to `ctx.dynamic_skill_dir_triggers`
@@ -58,6 +59,10 @@ meta-validation and `ToolInputSchema`'s size bounds are the point.
   `type Input = Value` tool inherits the same obligation. See
   `docs/internal/tool-schema-final-plan.md` and the Schema-ownership section in
   `core/tool-runtime/CLAUDE.md`.
+- Read/Write/Edit/NotebookEdit and background changed-file reads accept regular files only. Reads use `coco_utils_common::open_regular` / `read_regular_async`, which validate the opened descriptor and use nonblocking opens on Unix. Mutations inspect the final directory entry without following symlinks. Do not add path-name blocklists for devices or FIFOs.
+- Write/Edit/NotebookEdit commit through `coco_utils_common::replace_regular_atomic`: same-directory temp file, exact streaming verification, existing mode-bit preservation, final-symlink rejection, and hard-link breakage. Post-write read-state, skill-trigger, or LSP bookkeeping happens only after the proof marker exists. ApplyPatch is executor-backed; add equivalent guarantees at the executor filesystem boundary rather than assuming local `std::fs` access.
+- Write/Edit/NotebookEdit/ApplyPatch share `tools::write_permissions`; writes to context-loaded instruction files always require one-operation approval, including under accept-edits and bypass-permissions modes. Bash independently applies the same name/canonical-path policy and force-asks for multiply-linked mutation targets.
+- Dynamic MCP annotations are untrusted input. `McpTool::check_permissions` resolves `McpExecutionPolicy` from the MCP handle; no MCP hint may enter the central read-only fast path or concurrency batching.
 - All file-mutation tools (Edit/Write/NotebookEdit/apply_patch/Bash) invoke the team-mem secret guard + file-history tracking helpers before touching disk.
 
 ### Task/Todo defer policy

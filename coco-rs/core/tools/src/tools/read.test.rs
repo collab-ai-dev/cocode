@@ -168,17 +168,16 @@ async fn test_read_empty_file() {
     .await
     .unwrap();
 
-    // Content is empty; an empty file routes through the offset warning
-    // (readFileInRangeFast yields one empty line → totalLines == 1).
+    // Empty files are distinct from requests whose offset is past EOF.
     assert_eq!(result.data["file"]["content"].as_str().unwrap(), "");
-    assert_eq!(result.data["file"]["totalLines"].as_i64().unwrap(), 1);
+    assert_eq!(result.data["file"]["totalLines"].as_i64().unwrap(), 0);
     let parts = <ReadTool as DynTool>::render_for_model(&ReadTool, &result.data);
     let [ToolResultContentPart::Text { text, .. }] = parts.as_slice() else {
         panic!("expected one Text part, got {parts:?}");
     };
     assert_eq!(
         text,
-        "<system-reminder>Warning: the file exists but is shorter than the provided offset (1). The file has 1 lines.</system-reminder>"
+        "<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>"
     );
 }
 
@@ -572,6 +571,7 @@ async fn test_read_bmp_returns_placeholder() {
 /// Blocked device paths must be rejected with InvalidInput. These paths
 /// never get `std::fs::read_to_string` called on them, so there's no risk
 /// of hanging on /dev/stdin.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_read_blocks_dev_zero() {
     let ctx = ToolUseContext::test_default();
@@ -582,6 +582,7 @@ async fn test_read_blocks_dev_zero() {
     assert!(err.contains("device"), "error should mention device: {err}");
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn test_read_blocks_dev_stdin() {
     let ctx = ToolUseContext::test_default();
@@ -590,22 +591,19 @@ async fn test_read_blocks_dev_stdin() {
     assert!(result.is_err());
 }
 
-/// `/dev/null` is NOT blocked — it's a common sink and reading returns EOF
-/// immediately. Opening it for read is harmless.
+/// Character devices are rejected by type, including devices that happen to
+/// return EOF immediately. The file tools operate only on regular files.
+#[cfg(unix)]
 #[tokio::test]
-async fn test_read_dev_null_is_not_blocked() {
+async fn test_read_blocks_dev_null() {
     let ctx = ToolUseContext::test_default();
     let result =
         <ReadTool as DynTool>::execute(&ReadTool, json!({"file_path": "/dev/null"}), &ctx).await;
-    // Either succeeds (treating as empty file) or fails with a different
-    // reason — the key assertion is the error is NOT "cannot read device
-    // file" which would only come from the blocklist.
-    if let Err(e) = &result {
-        assert!(
-            !e.to_string().contains("Cannot read device file"),
-            "/dev/null must not be blocklisted"
-        );
-    }
+    let error = result.unwrap_err().to_string();
+    assert!(
+        error.contains("character device"),
+        "unexpected error: {error}"
+    );
 }
 
 // ---------------------------------------------------------------------------

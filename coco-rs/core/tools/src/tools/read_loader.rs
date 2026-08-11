@@ -10,6 +10,8 @@ use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Read;
+use std::io::Seek;
+use std::io::SeekFrom;
 use std::path::Path;
 
 use super::read::ReadInput;
@@ -40,21 +42,6 @@ const BINARY_EXTENSIONS: &[&str] = &[
     "exe", "dll", "so", "dylib", "o", "a", "bin", "class", "pyc", "pyo", "wasm", "zip", "tar",
     "gz", "bz2", "xz", "7z", "rar", "mp3", "mp4", "wav", "avi", "mov", "mkv", "flv", "ttf", "otf",
     "woff", "woff2", "eot", "sqlite", "db",
-];
-
-const BLOCKED_DEVICE_PATHS: &[&str] = &[
-    "/dev/zero",
-    "/dev/random",
-    "/dev/urandom",
-    "/dev/full",
-    "/dev/stdin",
-    "/dev/tty",
-    "/dev/console",
-    "/dev/stdout",
-    "/dev/stderr",
-    "/dev/fd/0",
-    "/dev/fd/1",
-    "/dev/fd/2",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,10 +76,6 @@ pub struct LoadedImage {
     pub display_height: u32,
 }
 
-pub fn is_blocked_device_path(file_path: &str) -> bool {
-    BLOCKED_DEVICE_PATHS.contains(&file_path)
-}
-
 pub fn classify_read_path(path: &Path) -> ReadFileKind {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
         return ReadFileKind::Text;
@@ -123,29 +106,93 @@ pub fn classify_read_path(path: &Path) -> ReadFileKind {
     ReadFileKind::Text
 }
 
-pub fn is_special_read_path(path: &Path) -> bool {
-    !matches!(classify_read_path(path), ReadFileKind::Text)
+/// Identify common binary formats by magic bytes.
+///
+/// This is diagnostic only: specialized image/PDF/notebook handling remains
+/// extension-routed, while a binary payload with a text-looking name is kept
+/// out of the text decoder.
+pub(crate) fn sniff_binary_signature(path: &Path) -> Result<Option<&'static str>, ToolError> {
+    let file = coco_utils_common::open_regular(path).map_err(|e| ToolError::ExecutionFailed {
+        message: format!(
+            "failed to inspect binary signature for {}: {e}",
+            path.display()
+        ),
+        display_data: None,
+        source: None,
+    })?;
+    let mut prefix = Vec::with_capacity(16);
+    file.take(16)
+        .read_to_end(&mut prefix)
+        .map_err(|e| ToolError::ExecutionFailed {
+            message: format!(
+                "failed to inspect binary signature for {}: {e}",
+                path.display()
+            ),
+            display_data: None,
+            source: None,
+        })?;
+
+    let format = if prefix.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("PNG image")
+    } else if prefix.starts_with(b"\xff\xd8\xff") {
+        Some("JPEG image")
+    } else if prefix.starts_with(b"GIF87a") || prefix.starts_with(b"GIF89a") {
+        Some("GIF image")
+    } else if prefix.starts_with(b"%PDF-") {
+        Some("PDF document")
+    } else if prefix.starts_with(b"PK\x03\x04")
+        || prefix.starts_with(b"PK\x05\x06")
+        || prefix.starts_with(b"PK\x07\x08")
+    {
+        Some("ZIP archive")
+    } else if prefix.starts_with(b"\x1f\x8b") {
+        Some("gzip archive")
+    } else if prefix.starts_with(b"\x7fELF") {
+        Some("ELF executable")
+    } else if prefix.starts_with(b"MZ") {
+        Some("PE executable")
+    } else if prefix.starts_with(b"\0asm") {
+        Some("WebAssembly module")
+    } else if prefix.starts_with(b"SQLite format 3\0") {
+        Some("SQLite database")
+    } else if prefix.starts_with(b"Rar!\x1a\x07") {
+        Some("RAR archive")
+    } else if prefix.starts_with(b"7z\xbc\xaf\x27\x1c") {
+        Some("7z archive")
+    } else {
+        None
+    };
+    Ok(format)
 }
 
 pub(crate) fn read_text_selection(
     file_path: &str,
     input: &ReadInput,
 ) -> Result<TextReadSelection, ToolError> {
-    let metadata = std::fs::metadata(file_path).map_err(|e| ToolError::ExecutionFailed {
-        message: format!("failed to stat {file_path}: {e}"),
+    let mut file = coco_utils_common::open_regular(Path::new(file_path)).map_err(|e| {
+        ToolError::ExecutionFailed {
+            message: format!("failed to open regular file {file_path}: {e}"),
+            display_data: None,
+            source: None,
+        }
+    })?;
+    let metadata = file.metadata().map_err(|e| ToolError::ExecutionFailed {
+        message: format!("failed to inspect opened file {file_path}: {e}"),
         display_data: None,
         source: None,
     })?;
 
     if input.limit.is_some() && metadata.len() > MAX_READ_OUTPUT_BYTES as u64 {
-        return read_text_selection_streaming(file_path, input);
+        return read_text_selection_streaming(file_path, input, file);
     }
 
-    let raw_bytes = std::fs::read(file_path).map_err(|e| ToolError::ExecutionFailed {
-        message: format!("failed to read {file_path}: {e}"),
-        display_data: None,
-        source: None,
-    })?;
+    let mut raw_bytes = Vec::new();
+    file.read_to_end(&mut raw_bytes)
+        .map_err(|e| ToolError::ExecutionFailed {
+            message: format!("failed to read {file_path}: {e}"),
+            display_data: None,
+            source: None,
+        })?;
 
     if input.limit.is_none() && raw_bytes.len() > MAX_READ_OUTPUT_BYTES {
         return Err(ToolError::InvalidInput {
@@ -186,11 +233,12 @@ pub(crate) async fn read_text_selection_async(
 }
 
 pub fn read_full_text_for_changed_file(file_path: &Path) -> Result<String, ToolError> {
-    let raw_bytes = std::fs::read(file_path).map_err(|e| ToolError::ExecutionFailed {
-        message: format!("failed to read {}: {e}", file_path.display()),
-        display_data: None,
-        source: None,
-    })?;
+    let raw_bytes =
+        coco_utils_common::read_regular(file_path).map_err(|e| ToolError::ExecutionFailed {
+            message: format!("failed to read {}: {e}", file_path.display()),
+            display_data: None,
+            source: None,
+        })?;
     decode_text_bytes(&file_path.display().to_string(), &raw_bytes)
 }
 
@@ -220,7 +268,7 @@ fn read_text_selection_from_content(
             range: coco_types::FileReadRange::Full,
             num_lines: 0,
             start_line: offset,
-            total_lines: 1,
+            total_lines: 0,
             should_record: false,
         });
     }
@@ -300,14 +348,9 @@ fn read_text_selection_from_content(
 fn read_text_selection_streaming(
     file_path: &str,
     input: &ReadInput,
+    mut file: File,
 ) -> Result<TextReadSelection, ToolError> {
-    reject_unsupported_streaming_encoding(file_path)?;
-
-    let file = File::open(file_path).map_err(|e| ToolError::ExecutionFailed {
-        message: format!("failed to read {file_path}: {e}"),
-        display_data: None,
-        source: None,
-    })?;
+    reject_unsupported_streaming_encoding(file_path, &mut file)?;
     let mut reader = BufReader::new(file);
     let offset = normalized_offset(input);
     let Some(limit) = explicit_limit(input) else {
@@ -399,12 +442,10 @@ fn read_text_selection_streaming(
     })
 }
 
-fn reject_unsupported_streaming_encoding(file_path: &str) -> Result<(), ToolError> {
-    let mut file = File::open(file_path).map_err(|e| ToolError::ExecutionFailed {
-        message: format!("failed to read {file_path}: {e}"),
-        display_data: None,
-        source: None,
-    })?;
+fn reject_unsupported_streaming_encoding(
+    file_path: &str,
+    file: &mut File,
+) -> Result<(), ToolError> {
     let mut prefix = [0u8; 3];
     let bytes = file
         .read(&mut prefix)
@@ -423,6 +464,12 @@ fn reject_unsupported_streaming_encoding(file_path: &str) -> Result<(), ToolErro
             source: None,
         });
     }
+    file.seek(SeekFrom::Start(0))
+        .map_err(|e| ToolError::ExecutionFailed {
+            message: format!("failed to rewind {file_path}: {e}"),
+            display_data: None,
+            source: None,
+        })?;
     Ok(())
 }
 
@@ -483,52 +530,46 @@ pub async fn read_image_for_tool(
     file_path: &str,
     media_type: &str,
 ) -> Result<LoadedImage, ToolError> {
-    let metadata =
-        tokio::fs::metadata(file_path)
-            .await
-            .map_err(|e| ToolError::ExecutionFailed {
-                message: format!("failed to stat image {file_path}: {e}"),
-                display_data: None,
-                source: None,
-            })?;
-    if metadata.len() > MAX_IMAGE_DECODE_BYTES {
-        return Err(ToolError::ExecutionFailed {
-            message: format!(
-                "Image file too large to decode: {} bytes > {MAX_IMAGE_DECODE_BYTES} byte \
-                 limit. This cap exists to prevent accidentally loading huge files; if you \
-                 genuinely need to process a larger image, resize it first with an external \
-                 tool (e.g. `magick input.png -resize 2048x2048 output.png`).",
-                metadata.len()
-            ),
-            display_data: None,
-            source: None,
-        });
-    }
-
     let file_path_owned = file_path.to_string();
     let hint_path = std::path::PathBuf::from(file_path);
-    let encoded =
-        tokio::task::spawn_blocking(move || -> Result<coco_utils_image::EncodedImage, String> {
-            let raw = std::fs::read(&file_path_owned)
+    let (encoded, original_size) = tokio::task::spawn_blocking(
+        move || -> Result<(coco_utils_image::EncodedImage, u64), String> {
+            let mut file = coco_utils_common::open_regular(&hint_path)
+                .map_err(|e| format!("failed to open regular image {file_path_owned}: {e}"))?;
+            let original_size = file
+                .metadata()
+                .map_err(|e| format!("failed to inspect opened image {file_path_owned}: {e}"))?
+                .len();
+            if original_size > MAX_IMAGE_DECODE_BYTES {
+                return Err(format!(
+                    "Image file too large to decode: {original_size} bytes > \
+                     {MAX_IMAGE_DECODE_BYTES} byte limit. This cap exists to prevent \
+                     accidentally loading huge files; resize it first with an external tool."
+                ));
+            }
+            let mut raw = Vec::with_capacity(original_size as usize);
+            file.read_to_end(&mut raw)
                 .map_err(|e| format!("failed to read image {file_path_owned}: {e}"))?;
-            coco_utils_image::load_for_prompt_bytes(
+            let encoded = coco_utils_image::load_for_prompt_bytes(
                 &hint_path,
                 raw,
                 coco_utils_image::PromptImageMode::ResizeToFit,
             )
-            .map_err(|e| format!("image processing failed: {e}"))
-        })
-        .await
-        .map_err(|e| ToolError::ExecutionFailed {
-            message: format!("spawn_blocking failed: {e}"),
-            display_data: None,
-            source: None,
-        })?
-        .map_err(|e| ToolError::ExecutionFailed {
-            message: e,
-            display_data: None,
-            source: None,
-        })?;
+            .map_err(|e| format!("image processing failed: {e}"))?;
+            Ok((encoded, original_size))
+        },
+    )
+    .await
+    .map_err(|e| ToolError::ExecutionFailed {
+        message: format!("spawn_blocking failed: {e}"),
+        display_data: None,
+        source: None,
+    })?
+    .map_err(|e| ToolError::ExecutionFailed {
+        message: e,
+        display_data: None,
+        source: None,
+    })?;
 
     if encoded.mime != media_type {
         tracing::debug!(
@@ -540,7 +581,7 @@ pub async fn read_image_for_tool(
     Ok(LoadedImage {
         base64: base64::engine::general_purpose::STANDARD.encode(&encoded.bytes),
         media_type: encoded.mime,
-        original_size: metadata.len(),
+        original_size,
         original_width: encoded.original_width,
         original_height: encoded.original_height,
         display_width: encoded.width,

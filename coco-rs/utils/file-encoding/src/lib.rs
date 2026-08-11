@@ -233,6 +233,16 @@ pub fn read_with_format(path: &Path) -> Result<(String, Encoding, LineEnding), E
     Ok((content, encoding, line_ending))
 }
 
+/// Encode content with the specified encoding and line ending.
+///
+/// Normalizes line endings and prepends the encoding's BOM when required.
+pub fn encode_with_format(content: &str, encoding: Encoding, line_ending: LineEnding) -> Vec<u8> {
+    let normalized = normalize_line_endings(content, line_ending);
+    let mut bytes = encoding.bom().to_vec();
+    bytes.extend(encoding.encode(&normalized));
+    bytes
+}
+
 /// Write content to a file with the specified encoding and line ending.
 ///
 /// Normalizes line endings to the target format before writing.
@@ -242,14 +252,7 @@ pub fn write_with_format(
     encoding: Encoding,
     line_ending: LineEnding,
 ) -> Result<(), EncodingError> {
-    // Normalize line endings
-    let normalized = normalize_line_endings(content, line_ending);
-
-    // Encode content
-    let mut bytes = encoding.bom().to_vec();
-    bytes.extend(encoding.encode(&normalized));
-
-    std::fs::write(path, bytes)?;
+    std::fs::write(path, encode_with_format(content, encoding, line_ending))?;
     Ok(())
 }
 
@@ -271,14 +274,7 @@ pub async fn write_with_format_async(
     encoding: Encoding,
     line_ending: LineEnding,
 ) -> Result<(), EncodingError> {
-    // Normalize line endings
-    let normalized = normalize_line_endings(content, line_ending);
-
-    // Encode content
-    let mut bytes = encoding.bom().to_vec();
-    bytes.extend(encoding.encode(&normalized));
-
-    tokio::fs::write(path, bytes).await?;
+    tokio::fs::write(path, encode_with_format(content, encoding, line_ending)).await?;
     Ok(())
 }
 

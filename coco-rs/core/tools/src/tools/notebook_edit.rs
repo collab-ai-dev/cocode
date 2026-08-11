@@ -11,8 +11,9 @@
 //! Cell ID generation uses a 13-char alphanumeric base-36 string and
 //! only applies when the notebook's nbformat is ≥ 4.5.
 //!
-//! File-history hook: `track_file_edit` runs before `tokio::fs::write`
-//! so a pre-edit backup is captured for the rewind subsystem.
+//! File-history hook: `track_file_edit` runs before the atomic commit
+//! so a pre-edit backup is captured for the rewind subsystem. The written
+//! bytes are verified before post-write bookkeeping.
 
 use async_trait::async_trait;
 use coco_messages::ToolResult;
@@ -115,6 +116,7 @@ pub enum NotebookEditOutput {
         /// the notebook uses nbformat < 4.5 (no per-cell ids).
         #[serde(default)]
         cell_id: Option<String>,
+        verified: super::file_safety::VerifiedWrite,
     },
     Insert {
         #[serde(default)]
@@ -126,6 +128,7 @@ pub enum NotebookEditOutput {
         /// Freshly-generated cell id (nbformat ≥ 4.5) or `null` for
         /// older notebooks. Serialized as JSON `null` rather than omitted.
         new_cell_id: Option<String>,
+        verified: super::file_safety::VerifiedWrite,
     },
     Delete {
         #[serde(default)]
@@ -136,6 +139,7 @@ pub enum NotebookEditOutput {
         cell_index: usize,
         #[serde(default)]
         cell_id: Option<String>,
+        verified: super::file_safety::VerifiedWrite,
     },
 }
 
@@ -243,7 +247,10 @@ impl Tool for NotebookEditTool {
     /// cell_index / cell_id are TUI/state concerns.
     fn render_for_model(&self, out: &NotebookEditOutput) -> Vec<ToolResultContentPart> {
         vec![ToolResultContentPart::Text {
-            text: out.message().to_string(),
+            text: format!(
+                "{} The notebook was verified on disk; no reread is needed.",
+                out.message()
+            ),
             provider_options: None,
         }]
     }
@@ -264,6 +271,34 @@ impl Tool for NotebookEditTool {
 
         let edit_mode = input.edit_mode;
         let cell_id = input.cell_id.as_str();
+        let path = std::path::Path::new(notebook_path);
+
+        match super::file_safety::inspect_mutation_target(path) {
+            Ok(super::file_safety::FileTargetKind::Regular) => {}
+            Ok(kind) => {
+                return Err(ToolError::InvalidInput {
+                    message: format!(
+                        "Cannot edit notebook {notebook_path}: it is {}, not a regular file.",
+                        kind.description()
+                    ),
+                    error_code: None,
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(ToolError::ExecutionFailed {
+                    message: super::file_safety::missing_path_message(path, ctx).await,
+                    display_data: None,
+                    source: None,
+                });
+            }
+            Err(error) => {
+                return Err(ToolError::ExecutionFailed {
+                    message: format!("Failed to inspect notebook '{notebook_path}': {error}"),
+                    display_data: None,
+                    source: None,
+                });
+            }
+        }
 
         // Enforce read-before-edit: without this guard the model can edit a
         // notebook it never saw (or
@@ -315,13 +350,18 @@ impl Tool for NotebookEditTool {
         }
 
         // Read the notebook file
-        let content = tokio::fs::read_to_string(notebook_path)
+        let raw = coco_utils_common::read_regular_async(path)
             .await
             .map_err(|e| ToolError::ExecutionFailed {
                 message: format!("Failed to read notebook '{notebook_path}': {e}"),
                 display_data: None,
                 source: None,
             })?;
+        let content = String::from_utf8(raw).map_err(|e| ToolError::ExecutionFailed {
+            message: format!("Failed to decode notebook '{notebook_path}' as UTF-8: {e}"),
+            display_data: None,
+            source: None,
+        })?;
 
         let mut notebook: Value =
             serde_json::from_str(&content).map_err(|e| ToolError::ExecutionFailed {
@@ -514,13 +554,7 @@ impl Tool for NotebookEditTool {
         // Mirrors Edit/Write/apply_patch ordering.
         crate::track_file_edit(ctx, std::path::Path::new(notebook_path)).await;
 
-        tokio::fs::write(notebook_path, &updated)
-            .await
-            .map_err(|e| ToolError::ExecutionFailed {
-                message: format!("Failed to write notebook '{notebook_path}': {e}"),
-                display_data: None,
-                source: None,
-            })?;
+        let verified = super::file_safety::commit_file(path, updated.as_bytes())?;
 
         // Notify the LSP server of the save so diagnostics refresh. Best-effort.
         ctx.lsp
@@ -538,6 +572,7 @@ impl Tool for NotebookEditTool {
                 notebook_path: notebook_path_string,
                 cell_index,
                 cell_id: resolved_cell_id,
+                verified,
             },
             NotebookEditMode::Insert => NotebookEditOutput::Insert {
                 message: result_msg,
@@ -545,12 +580,14 @@ impl Tool for NotebookEditTool {
                 cell_index,
                 // `new_cell_id` is emitted even when null (nbformat < 4.5).
                 new_cell_id,
+                verified,
             },
             NotebookEditMode::Delete => NotebookEditOutput::Delete {
                 message: result_msg,
                 notebook_path: notebook_path_string,
                 cell_index,
                 cell_id: resolved_cell_id,
+                verified,
             },
         };
 

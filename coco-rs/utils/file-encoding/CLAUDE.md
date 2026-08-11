@@ -8,5 +8,6 @@ Detect and round-trip file encoding (UTF-8 ± BOM, UTF-16LE/BE) and line endings
 | `Encoding` | `Utf8` / `Utf8WithBom` / `Utf16Le` / `Utf16Be` with `encode`/`decode`/`bom` |
 | `LineEnding` | `Lf` / `CrLf` / `Cr` |
 | `detect_encoding`, `detect_line_ending` | Byte/content sniffers (BOM first, CRLF heuristic) |
+| `encode_with_format` | Canonical content → exact bytes (line-ending normalization + BOM); use when a caller must verify the subsequent write |
 | `read_with_format` / `write_with_format` | Sync + async round-trip helpers |
 | `preserve_trailing_newline`, `normalize_line_endings` | Reduce spurious diffs on edit |

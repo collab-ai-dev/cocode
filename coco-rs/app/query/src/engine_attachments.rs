@@ -395,9 +395,6 @@ impl QueryEngine {
 
 async fn changed_file_read_allowed(ctx: &ToolUseContext, path: &std::path::Path) -> bool {
     let file_path = path.display().to_string();
-    if coco_tools::tools::read::is_blocked_device_path(&file_path) {
-        return false;
-    }
     let input = coco_tools::tools::read::ReadInput {
         file_path,
         offset: None,
@@ -432,6 +429,9 @@ async fn load_changed_file_observation(
         }
         Err(_) => return None,
     };
+    if !metadata.is_file() {
+        return None;
+    }
     let disk_mtime = metadata_mtime_ms(&metadata);
     if disk_mtime <= candidate.cached_mtime_ms {
         return None;

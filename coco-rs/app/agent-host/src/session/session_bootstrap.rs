@@ -671,6 +671,10 @@ pub async fn bootstrap_session_mcp(
         .elicitation_pending_count
         .clone();
     let adapter = crate::mcp_handle_adapter::McpManagerAdapter::new(manager.clone())
+        .with_execution_policy(
+            session.runtime_config().mcp.execution_policy,
+            session.runtime_config().mcp.server_execution_policy.clone(),
+        )
         .with_elicitation_hooks(
             session.hook_registry(),
             session.orchestration_ctx_factory(),
