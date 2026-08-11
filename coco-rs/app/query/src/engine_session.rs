@@ -361,6 +361,9 @@ impl QueryEngine {
         if let (Err(e), Some(id)) = (&result, cycle_turn_id.as_ref())
             && !self.cancel.is_cancelled()
         {
+            // `Display` is diagnostic and may contain raw provider JSON.
+            // `output_msg` is the error owner's stable, user-safe projection.
+            let user_message = e.output_msg();
             let already_reported = history
                 .last()
                 .is_some_and(|m| coco_messages::predicates::is_api_error_message(m.as_ref()));
@@ -368,7 +371,7 @@ impl QueryEngine {
                 crate::history_sync::history_push_and_emit(
                     &mut history,
                     coco_messages::create_api_error_message(
-                        &e.to_string(),
+                        &user_message,
                         /*status_code*/ None,
                     ),
                     &event_tx,
@@ -379,7 +382,7 @@ impl QueryEngine {
                 id.clone(),
                 Some(accumulated_usage),
                 coco_event_types::ErrorPayload {
-                    message: e.to_string(),
+                    message: user_message,
                     code: error_code_from_boxed_error(e),
                 },
             ));
@@ -440,7 +443,7 @@ impl QueryEngine {
         // immediately before it, with the same final params embedded.
         let params = match &result {
             Ok(qr) => self.build_session_result_params(qr, /*error_messages*/ Vec::new()),
-            Err(e) => self.build_session_error_params(e.to_string(), &failure_stats),
+            Err(e) => self.build_session_error_params(e.output_msg(), &failure_stats),
         };
         if let Some(terminal) = pending_failure_terminal.or(pending_success_terminal) {
             let _delivered = emit_protocol(

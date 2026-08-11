@@ -22,6 +22,7 @@ pulldown-cmark.workspace = true
 syntect.workspace = true
 two-face.workspace = true
 tracing.workspace = true
+unicode-segmentation.workspace = true
 unicode-width.workspace = true
 coco-tui-mermaid = { workspace = true, optional = true }
 

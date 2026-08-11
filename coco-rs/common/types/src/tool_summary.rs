@@ -429,10 +429,12 @@ pub fn permission_display_input(tool_name: &str, input: &Value) -> crate::Permis
     if is_shell_tool(tool_name)
         && let Some(command) = input.get("command").and_then(Value::as_str)
     {
-        return crate::PermissionDisplayInput::Command(cap_single_line(
-            command,
-            PERMISSION_DISPLAY_MAX_CHARS,
-        ));
+        // Approval is the last safety boundary before execution. Preserve the
+        // exact script, including authored newlines and content past the
+        // generic preview cap; the TUI already scrolls long permission bodies
+        // while pinning the decision rows. `original_input` remains separate
+        // for rule/response semantics, so presentation never needs to read it.
+        return crate::PermissionDisplayInput::Command(command.to_string());
     }
 
     let display = tool_input_multiline(tool_name, input, PERMISSION_DISPLAY_MAX_CHARS);
@@ -447,11 +449,14 @@ pub fn permission_display_input(tool_name: &str, input: &Value) -> crate::Permis
 #[path = "tool_summary.test.rs"]
 mod tests;
 
-/// Bounded, UI-ready permission input display.
+/// UI-ready permission input display.
 ///
 /// This is separate from the raw tool input because approval UIs should
 /// consume sanitized display data while keeping `original_input` only for
-/// updated-input response construction and permission-rule derivation.
+/// updated-input response construction and permission-rule derivation. Shell
+/// commands are intentionally complete: an approval surface must not authorize
+/// a script that it only showed partially. Other generic projections may stay
+/// bounded because they are descriptive previews rather than executable text.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]

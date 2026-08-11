@@ -32,7 +32,8 @@ pub struct PermissionPromptState {
     /// Cursor position within `choices`, or within the classic
     /// approve / always-allow / deny action list when `choices.is_none()`.
     pub selected_choice: usize,
-    /// Bounded, sanitized display projection of the tool input.
+    /// Sanitized display projection of the tool input. Shell commands are
+    /// complete so approval never relies on a truncated script preview.
     /// Raw input must stay in `original_input` and must not be read by
     /// presentation code.
     pub display_input: coco_types::PermissionDisplayInput,

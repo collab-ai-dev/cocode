@@ -658,6 +658,32 @@ fn generic_permission_content_uses_display_input_not_raw_original_input() {
 }
 
 #[test]
+fn generic_permission_content_keeps_complete_multiline_shell_script() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let mut state = permission_prompt(PermissionDetail::Generic {
+        input_preview: String::new(),
+    });
+    let script = format!("echo first\n{}\necho last", "界👩\u{200d}🚀".repeat(400));
+    state.display_input = coco_types::PermissionDisplayInput::Command(script.clone());
+
+    let (_, body, _) = permission_content(
+        &state,
+        coco_types::PermissionMode::Default,
+        UiStyles::new(&theme),
+    );
+
+    assert!(body.contains(&script));
+    assert!(
+        permission_body_row_bound(
+            &state,
+            coco_types::PermissionMode::Default,
+            UiStyles::new(&theme),
+        ) > 800
+    );
+}
+
+#[test]
 fn permission_content_truncates_unicode_file_edit_preview() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();

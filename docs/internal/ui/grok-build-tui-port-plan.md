@@ -1,11 +1,12 @@
 # Grok-Build TUI Port & Optimization Plan
 
-Status: execution-ready optimization portfolio derived from a verified
-comparative analysis of the grok-build TUI (`xai-grok-pager` and sibling
-crates) against `coco-tui`. Every work item below survived an adversarial
-verification pass that read the coco-rs source to refute the claimed gap;
-items that failed verification are listed in [Rejected Candidates](#rejected-candidates)
-so they are not re-proposed later.
+Status: execution-ready optimization portfolio, refreshed through the public
+grok-shell 1.0.0 release and the 2026-08-10 post-release head. It is derived
+from a verified comparative analysis of the grok-build TUI (`xai-grok-pager`
+and sibling crates) against `coco-tui`. Every work item below survived an
+adversarial verification pass that read the coco-rs source to refute the
+claimed gap; items that failed verification are listed in
+[Rejected Candidates](#rejected-candidates) so they are not re-proposed later.
 
 Authority: this document does not override the architectural invariants in
 `terminal-surface-design.md`, `native-scrollback-architecture.md`, or
@@ -25,7 +26,13 @@ Pinned revisions:
   (2026-07-16)
 - refreshed grok analysis: `dd04f397b1d02f2272b092555669dfba1f01bc85`
   (2026-07-30)
-- coco comparison point: `e90fce49ba111061993c5d7c58f4a586b4babb8b`
+- grok-shell 1.0.0 release sync:
+  `afbc0fb710320c7add294c2106d447ecc3e3af2e` (2026-08-07)
+- latest grok analysis: `b13fa526f5112c0b20dad5f1f2300d3d3b127895`
+  (2026-08-10)
+- original coco comparison point: `e90fce49ba111061993c5d7c58f4a586b4babb8b`
+- latest coco comparison point: `6f1b98bb8ed7f68bfdd279099074fab4d5717875`
+  (2026-08-11)
 
 Effort legend: **S** < 1 day, **M** = 1–3 days, **L** = 1–2 weeks,
 **XL** > 2 weeks — including companion `.test.rs` files and insta snapshots
@@ -35,16 +42,17 @@ where UI-visible.
 
 ## 1. Scope & Method
 
-Three multi-agent analysis rounds were run (68 agents): seven parallel
-dimension surveys over both codebases, cross-dimension merge into canonical
-candidates, a completeness critique that back-filled missed subsystems, and a
-per-candidate adversarial verification pass whose default stance was "this gap
-is not real" and which read coco source to try to refute each claim. Two
-dimensions (render/flicker, scrollback UX) were re-surveyed after transport
-failures; their load-bearing coco-side claims were then hand-verified against
-source (all confirmed).
+The historical comparison used three TUI-focused analysis rounds: dimension
+surveys over both codebases, cross-dimension merge into canonical candidates,
+and per-candidate adversarial verification whose default stance was "this gap
+is not real." It followed `xai-grok-pager`, `xai-grok-shell`, and their direct
+TUI dependencies. It was not a complete audit of every grok module or of all
+36 codegen crates changed by the 1.0.0 interval; that broader crate comparison
+is deliberately separate from this UI plan.
 
-Outcome: **57 confirmed work items, 5 rejected candidates.** This document
+Original outcome: **57 confirmed work items, 5 rejected candidates.** After
+the 1.0.0 refresh and the corrective verification in §1.2, the current
+portfolio is **57 confirmed work items, 7 rejected candidates**. This document
 turns the confirmed items into implementation designs.
 
 ### 1.1 2026-08-01 upstream refresh
@@ -66,6 +74,39 @@ new code as automatically portable.
 | Expanded PTY scenarios and resize benchmark | **Carry into A7.** The test patterns are useful; their alt-screen assertions must be rewritten around coco's native-scrollback engine. |
 | Headless message reducer | **Out of this TUI port.** coco's app-server boundary already owns transport separation; copying a second reducer into `app/tui` would blur ownership. |
 | Empty-Enter plan prompt regression tests | **Already present.** `confirm_with_empty_no_feedback_keeps_exit_plan_prompt_open` pins the same behavior in coco. |
+
+### 1.2 2026-08-11 grok-shell 1.0.0 and post-release refresh
+
+The reference was fast-forwarded again from `dd04f39` to `b13fa52`. The public
+1.0.0 release accounts for the product-facing changes; the later commits are
+mostly ACP session-load ordering, app-owned scrollback layout, and shutdown
+hardening. The complete `crates/codegen` interval changes **860 files across 36
+top-level crates** (+98,225 / -31,254). The earlier 259-file figure described
+only `xai-grok-pager` (whose actual subtotal is +37,969 / -8,190), not the
+release as a whole. Decisions below are based on architecture and confirmed
+coco gaps, not changed-file count.
+
+| Upstream 1.0.0 / post-release change | coco decision |
+| --- | --- |
+| Narrow markdown tables reflow cell contents | **Already complete; absorb one correctness fix.** D2 already preserves styled cells and links, distributes width proportionally, wraps CJK-aware, and falls back to labelled records. This refresh hardens its last-resort wrap to operate on extended grapheme clusters, matching the upstream 1.0.0 fix without copying its renderer. |
+| Skip the project-directory prompt outside a recognized project | **Reject F3.** Upstream removed the interception because it adds friction before the first useful action. coco should not build the feature that the reference just backed out. Explicit directory/session commands remain the honest boundary. |
+| Follow dark/light appearance over SSH and tmux | **Do not replace `auto`; reject the original G5 premise.** coco's `auto` intentionally follows the terminal background (OSC 11 → `COLORFGBG` → dark), which is the correct default locally and over SSH. Desktop-system following is a separate opt-in product feature, not a correction to `auto`. |
+| Permission prompts show the full script; long shell bodies support Ctrl+F | **Adopt as C10 at the existing seam.** The producer now supplies the complete command through `PermissionDisplayInput`; the existing prompt already has PageUp/PageDown scrolling and pinned action rows. The TUI never falls back to `original_input`. No second expansion mode or DTO is needed. |
+| Clean, actionable API error banners | **Adopt as F8 at the typed error owner.** `InferenceError::output_msg` now produces stable, provider-neutral user copy and the query engine uses it for transcript and turn-failure events. Raw provider diagnostics remain in logs. Replacing unrelated `ErrorParams` would not fix this path. |
+| Central key-owner model; consistent Tab/Esc in prompts | **Already covered structurally.** coco's active modal, interaction priority, `keybinding_bridge`, bottom-pane routing, and modal routing already provide a single owner. Add regressions when a concrete mismatch is found; a second owner enum would duplicate authority. |
+| Dedicated `/feedback` report surface | **Already covered.** coco has a dedicated `ModalState::Feedback` command flow; product upload policy is separate from TUI architecture. |
+| Previous-turn summary in dashboard rows | **Defer to G7.** It requires a protocol read model for other sessions; grok reads in-process agent state. Do not smuggle cross-session state into `app/tui`. |
+| Alphabetized extensions with collapsible Skills | **Already covered at the product seam.** coco has a dedicated searchable skills surface. Revisit grouping only if settings/extensions are intentionally unified under G2. |
+| Queue reordering/send-now and cancellation fixes | **No direct port.** F2/c44 already define coco's steering semantics at the AppServer boundary. Add typed queue operations only for a new multi-item editing requirement, not to mimic an in-process queue. |
+| `session_load_barrier` replay ordering | **Do not port.** It repairs grok's shared ACP firehose during session replacement. coco demultiplexes per session and scopes AppServer shutdown; another barrier would create a second lifecycle authority. |
+| Global forced-process exit timeout | **Do not port.** coco already uses scoped shutdown coordination, AppServer timeouts, and frame-writer drain. A process-wide `_exit` watchdog discards cleanup invariants; add a PTY regression only if a reproducible hang remains. |
+| App-owned scrollback layout/selection refinements | **Do not port.** Native scrollback remains invariant 1. Only the renderer-independent table grapheme fix crosses the boundary. |
+| MCP large-image, sandbox retry, session-fork memory, and provider retry fixes | **Route to owning crates, outside this plan.** They are useful release signals but not TUI ports; require a confirmed coco-side defect before opening work. |
+
+Net portfolio change from this refresh and verification: add C10 and F8,
+reject F3 and the proposed G5 `auto` replacement, and mark D2's product
+behavior complete. C10 and F8 require no compatibility shim because they fix
+existing producer/error-owner seams rather than creating parallel contracts.
 
 ---
 
@@ -201,6 +242,8 @@ without new evidence.
 | c38 | Display-refresh-aware draw cadence | coco's paint clock is demand-driven (spinner self-schedules at 50 ms); the free-running-frame problem grok solves does not exist here |
 | c41 | Remote announcements banner | Weak product need; toast infrastructure already exists |
 | c44 | Queue send-now / interject | coco already merges queued prompts into the in-flight turn (`app/tui/src/update.rs:364-380` "Steer (queue) whenever a turn is in flight") |
+| F3 | Project picker before the first prompt | grok-shell 1.0.0 removed/skips this interception outside project directories; explicit directory/session actions are clearer and avoid startup friction |
+| G5 | Replace `auto` with `follow_terminal` / `follow_system` | `auto` already has one precise and correct meaning: follow the actual terminal background at startup. OS appearance is not a safer default over SSH/tmux and repeated OSC 11 probing can consume user input. Treat optional desktop-system following as a separate future feature. |
 
 ---
 
@@ -926,6 +969,34 @@ pattern is the template).
 deny-reason inline input as one more interceptor cloned from the ExitPlanMode
 feedback flow. Snapshots for both.
 
+### C10. Full permission-script review in the existing scroll surface — ROI high, S
+
+**Implementation status (2026-08-11): complete.**
+
+**Problem (verified against 1.0.0).** `permission_display_input` collapsed a
+shell command to one line and capped it at 1,200 characters. The approval
+state also carries `original_input`, but its security invariant correctly
+forbids presentation code from reading that value. Long scripts, heredocs, and
+multi-line commands therefore could not be fully audited before approval.
+
+**Landed design.** Keep the existing DTO and ownership instead of adding a
+second command body:
+
+- The AppServer-side producer preserves the complete shell command in the
+  existing `PermissionDisplayInput::Command`. Generic non-executable previews
+  remain bounded. `original_input` stays response/rule-only.
+- The permission overlay already scrolls its body with PageUp/PageDown while
+  pinning decision rows. Reuse that single interaction owner; a Ctrl+F
+  expansion toggle would duplicate state without revealing more content.
+- The update-side scroll bound now accounts for display width, not just logical
+  line count, so one very long line is fully reachable after wrapping.
+- No transport cap silently turns an incomplete executable script into an
+  approvable preview.
+
+**Tests.** Complete multi-line shell bodies beyond the former cap, CJK and ZWJ
+emoji, producer-to-presentation preservation, and a width-independent scroll
+bound for a very long line.
+
 ---
 
 ## 6. Workstream D — Rendering Quality (markdown / diff / tables)
@@ -961,20 +1032,24 @@ separators; ANSI-theme fallback snapshot; theme-token audit test.
 
 ### D2. Table cell wrapping + proportional column widths + styled cells — ROI high, M
 
-**Problem (verified).** `tui-markdown/src/lib.rs`: cells are flattened to
-plain `String` at parse time (`:916-918`, `:963-966` — bold/italic/code/link
-styling discarded); `finish_table` caps every column uniformly at
-`(budget/cols).clamp(3,40)` (`:1114-1115`); `pad_cell` truncates overflow with
-an ellipsis (`:1281-1303`) — **silent data loss** on any cell over 40 columns;
-one visual line per row always.
+**Implementation status (2026-08-11): complete.** `tui-markdown` retains
+styled/link-bearing spans, assigns widths from content floors and proportional
+want, wraps cells without data loss, handles double-width CJK, and falls back
+to labelled records when a grid cannot remain legible. The 1.0.0 refresh also
+moved the hard-wrap unit from Unicode scalar values to extended grapheme
+clusters, so ZWJ emoji and variation selectors stay intact while style and
+OSC 8 sidecars survive the split.
 
-**Decision.** Re-implement grok's algorithm natively in the Writer (no grok
-types): cells become `Vec<Span<'static>>`; column sizing = min-word floors +
-proportional distribution of remaining budget by "want" (natural width);
-cell wrapping via `textwrap` producing multiple visual lines per logical row;
-width-aware (CJK=2) throughout via existing truncation utilities. **Skip**
-everything tied to grok's owned scrollback (`table_geometry` selection/export,
-`TableHyperlink` machinery).
+**Original problem (before implementation).** Cells were flattened to plain
+strings, styling was discarded, columns received uniform caps, and long cell
+content was ellipsized — silent data loss with one visual line per row.
+
+**Landed design.** The algorithm is native to the Writer (no grok types):
+cells are styled spans; column sizing uses grapheme-width floors plus
+proportional distribution of remaining budget by natural-width want; wrapping
+produces multiple visual lines per logical row. Everything tied to grok's
+owned scrollback (`table_geometry` selection/export, `TableHyperlink`
+machinery) remains intentionally absent.
 
 **Tests.** Snapshots: skewed tables at 60/100/140 cols, CJK cells, inline code
 + links inside cells, degenerate (1-col, 12-col) shapes.
@@ -1278,20 +1353,15 @@ to expose more UI.
   multi-surface consistency enhancement, not missing single-surface steering
   UX; do not implement it before that requirement exists.
 
-### F3. Project picker (non-project-dir first-prompt interception) — ROI medium, M
+### F3. Project picker (non-project-dir first-prompt interception) — rejected
 
-**Problem (verified).** Launching from `$HOME`/Downloads silently makes that
-dir the project (CLAUDE.md discovery, session slug, permissions all key off
-cwd); no nudge, no recent-projects affordance anywhere.
-
-**Decision.** ~100-LoC pure classifier (git-ancestor ⇒ project; home/downloads
-/tmp ⇒ not) in a small utils crate or `utils/git` adjunct; recent dirs from
-`app/session`'s cross-project catalog (dedupe by cwd, newest 5); interception
-at first prompt submit (not startup — zero cost on the happy path, slash
-commands exempt) via the existing question/select modal; dir switch routes
-through the session-restart path (the one tricky piece — reuse the existing
-directory-change machinery rather than in-place cwd mutation); opt-out
-persisted via `write_user_setting`.
+**Refresh decision (2026-08-11).** Do not implement. grok-shell 1.0.0 now
+skips the project-directory prompt in non-project directories, reversing the
+reference behavior on which this candidate was based. Intercepting the first
+prompt guesses user intent, delays useful work, and couples cwd classification
+to session restart. Keep cwd explicit: launch in the desired directory or use
+the session/directory affordance. A future recent-project command can reuse
+F1's catalog without intercepting submission.
 
 ### F4. Welcome screen (pre-session surface) — ROI medium, L
 
@@ -1351,6 +1421,36 @@ seen-cap, occlusion-paused TTL, clear-on-submit. Home: `tui-ui/src/widgets/`
 tick wiring on the existing animation tick. Migrate the Ctrl+R hint onto it;
 add at most two detectors initially. Anti-nag semantics are the point — do
 not ship more than one visible tip slot.
+
+### F8. Typed actionable error presentation — ROI high, M
+
+**Implementation status (2026-08-11): complete for the verified API path.**
+
+**Problem (verified against 1.0.0).** The main inference failure path did not
+travel through `ErrorParams`. Query-session finalization wrote
+`BoxedError::to_string()` directly into `SystemMessage::ApiError`, the failed
+`TurnOutcome`, and `SessionResult`. Provider JSON and wrapper internals could
+therefore leak into transcript and client-visible failure copy. The previous
+proposal to replace `ErrorParams` targeted the wrong contract.
+
+**Landed design.** Classification and user copy stay with the typed inference
+error owner:
+
+- `InferenceError::output_msg` exhaustively maps its existing typed variants to
+  stable, provider-neutral, actionable messages. Presentation does not parse
+  provider strings and `tui-ui` remains domain-free.
+- The query engine uses that projection for transcript API errors and
+  `ErrorPayload`, while existing diagnostic logs retain the raw `Display`
+  chain for debugging.
+- `ErrorParams` is unchanged because breaking it would neither affect nor
+  improve this failure path. Disregarding compatibility is not a reason to
+  replace an unrelated DTO.
+- The same review found and fixed a UTF-8 panic in the diagnostic-body limiter:
+  truncation now uses a valid character boundary rather than `&body[..500]`.
+
+**Tests.** Provider payload redaction at the error boundary, exact propagation
+of safe copy into transcript, failed-turn, and session-result events, and CJK
+truncation at the 500-byte boundary.
 
 ---
 
@@ -1450,18 +1550,28 @@ quantization in `adapt_color` (`Theme::downsample` is already
 capability-parameterized); one shell-side wiring change auto-substituting
 DarkAnsi/LightAnsi at Basic and a monochrome pass at None.
 
-### G5. Live OS dark/light theme follow — ROI medium, M
+### G5. Preserve terminal-background `auto`; system follow is deferred
 
-**Problem (verified).** The OSC 11 probe runs exactly once per process
-(`system_theme_probe.rs:19-28`, OnceLock-guarded); toggling OS dark mode
-mid-session leaves a stale theme; `auto` maps only to built-in Dark/Light
-(`theme/config.rs:797-812`) — daltonized/custom themes cannot participate.
+**Finding after corrective verification: the claimed defect does not exist.**
+`ThemeSetting::Auto` has a precise product meaning: resolve the actual terminal
+background once through OSC 11, then `COLORFGBG`, then dark. That is the right
+default for local terminals, SSH, and tmux because the remote desktop's system
+appearance need not match the terminal profile.
 
-**Decision.** Poller (the `dark-light` crate) feeding the **existing**
-theme-reload channel (`reload_rx` → `apply_theme_reload`, `app.rs:560` — the
-chokepoint already exists for theme.json hot-reload); `auto` becomes a
-configurable pair `{ auto_dark: ThemeName, auto_light: ThemeName }` resolved
-through the existing registry. Watcher respects runtime setting changes.
+**Decision.** Keep `auto` and make no theme-contract change. In particular:
+
+- Do not rename it to `follow_terminal`; the longer name does not add semantic
+  information and removing `auto` would only create configuration churn.
+- Do not make OS polling the default. A future opt-in `follow_system` mode may
+  be useful as a product feature, but it needs an explicit user requirement,
+  lifecycle ownership, dedup/cancellation tests, and custom theme-pair design.
+- Do not repeatedly issue OSC 11 queries after startup merely to simulate
+  following. Unsolicited terminal replies can race with input and require a
+  proven tmux/terminal capability path.
+- tmux DCS wrapping remains an evidence-driven terminal-compatibility change,
+  independent of the configuration vocabulary.
+
+No code was changed for G5.
 
 ### G6. Terminal-native (polarity-safe) built-in theme — ROI medium, S
 
@@ -1543,10 +1653,11 @@ tests; the copy elision rides along with the ratatui 0.30.2
 `CellDiffOption` migration, §2.4) → A2 (resize quiet period) → A3 (focus
 heal) → B6 (bounded drain) → B3 (+B7) (overlay cache) → B4 (purge sites) →
 C6 (fuzzy highlights) → C1 (undo/redo) → C2 (soft-wrap) → C9 (permission
-prompt).
+prompt) → C10 (full permission body, complete).
 
 **Phase 2 — rendering quality + terminal robustness:**
-D1 (diff highlight) → D2 (tables) → A4 (mode ledger) → A5 (fault handler;
+D1 (diff highlight) → D2 (tables, complete) → F8 (safe typed-error projection,
+complete) → A4 (mode ledger) → A5 (fault handler;
 unsafe sign-off first) → C5 (Ctrl+R) → G4 (color tiers) → G6 (terminal theme)
 → E3 (per-cell copy) → D5 (mermaid sequence).
 
@@ -1554,8 +1665,8 @@ unsafe sign-off first) → C5 (Ctrl+R) → G4 (color tiers) → G6 (terminal the
 C3 (text elements, complete) → B2 (append-only streaming, complete) → E1
 (transcript search, complete) → F1 (session picker, complete) → D3 (OSC 8
 phase 1, complete) → B5 (memory trace, complete) → E4 (expand ring, complete)
-→ G5 (live theme) → E2 (sticky headers) → D4 (LaTeX) → F6
-(title/progress) → F7 (tips) → F3 (project picker).
+→ E2 (sticky headers) → D4 (LaTeX) → F6 (title/progress) → F7 (tips). F3 and
+the proposed G5 `auto` replacement are rejected.
 
 **Phase 4 — strategic (design review before code):**
 G2 phase 1 (settings registry/search, complete; editors remain) → G1

@@ -986,10 +986,18 @@ async fn a1_handle_stream_open_error_unrelated_error_bails() {
         )
         .await;
 
-    assert!(
-        matches!(outcome, StreamErrorOutcome::Bail(_)),
-        "auth failure must surface as Bail so the caller returns Err, got {outcome:?}",
+    let StreamErrorOutcome::Bail(error) = outcome else {
+        panic!("auth failure must surface as Bail so the caller returns Err");
+    };
+    assert_eq!(
+        error.status_code(),
+        coco_error::StatusCode::AuthenticationFailed
     );
+    assert_eq!(
+        error.output_msg(),
+        "Authentication failed. Check the provider credentials and sign in again."
+    );
+    assert!(!error.output_msg().contains("expired key"));
     let snap = app_state.read().await;
     assert!(
         snap.rate_limits.is_empty(),
