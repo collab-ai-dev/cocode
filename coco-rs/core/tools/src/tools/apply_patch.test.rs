@@ -719,7 +719,7 @@ async fn execute_move_refreshes_file_state_for_destination_and_source() {
     let destination = dir.path().join("destination.txt");
     std::fs::write(&source, "before\n").unwrap();
     let source = std::fs::canonicalize(source).unwrap();
-    let mtime = coco_context::file_mtime_ms(&source).await.unwrap();
+    let mtime = coco_utils_common::file_mtime_ms(&source).await.unwrap();
     let mut state = FileReadState::new();
     state.set(
         source.clone(),
