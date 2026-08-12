@@ -2,11 +2,13 @@
 
 Status: complete point-in-time comparison, 2026-08-12.
 
-This is the non-UI companion to
+This is the release-diff companion to
 [`ui/grok-build-tui-port-plan.md`](ui/grok-build-tui-port-plan.md). It records
-the complete `crates/codegen` review requested after the TUI analysis; it does
-not redefine crate-owned types or stable architecture. The code and canonical
-`crate-coco-*.md` documents remain authoritative.
+the complete review of crates changed in the selected release interval; it is
+not a full inventory of the upstream workspace. That larger scope is covered
+by the [full workspace crate audit](grok-build-workspace-crate-audit-2026-08.md).
+Neither document redefines crate-owned types or stable architecture. The code
+and canonical `crate-coco-*.md` documents remain authoritative.
 
 ## Scope and method
 
@@ -40,7 +42,7 @@ insufficient to justify adding lifecycle complexity.
 
 | Release | Main upstream signal | coco result |
 | --- | --- | --- |
-| 0.2.117 | Custom CA, background-agent stop, task ACP status/wait fixes, plan approval, resize performance | CA and ACP product seams are not equivalent. Task lifecycle and plan behavior were checked; no matching defect. UI resize work remains in the TUI plan. |
+| 0.2.117 | Custom CA, background-agent stop, task ACP status/wait fixes, plan approval, resize performance | ACP cancellation is already safe at coco's frame boundary. The later full-workspace pass disproved the initial CA deferral and absorbed additive enterprise roots at a leaf HTTP-policy seam. Task/plan behavior had no matching defect; resize work remains in the TUI plan. |
 | 0.2.118 | Session delete, shortcuts, tmux diagnostics, sidechat retry, compact cancellation, task limits/status, plan UI, context errors | UI/product items stay in the TUI plan. coco already has typed task limits, session-scoped sidechat, and compact cancellation ownership; no direct port. |
 | 0.2.119 | Free deny globs, safer automation, Mermaid, picker fixes, bounded task logs, auth, startup work | Deny-glob enforcement had real fail-open and platform-semantic defects and was rebuilt. Task storage was already disk-backed and bounded, but a UTF-8 tail panic was found and fixed. Other items are UI or product-specific. |
 | 0.2.120 | Model status, changes refresh, task log sizing, export message | UI items stay in the TUI plan. Existing task output accounting and export ownership were already adequate. |
@@ -65,6 +67,12 @@ insufficient to justify adding lifecycle complexity.
 
 ### Landed in the owner-crate remediation
 
+- `coco-utils-extra-ca`: the full-workspace follow-up corrected the initial CA
+  assessment. A capped, one-time PEM loader validates certificates before
+  exposing version-neutral DER to reqwest 0.12 and the quarantined MCP
+  reqwest 0.13 adapter. Every application-layer HTTP client now receives the
+  additive roots; provider SDKs remain independent and production inference
+  gives them an injected client.
 - `coco-session`: session resumability and fork copying no longer materialize
   an entire JSONL transcript. Forking streams byte records through a bounded
   buffer, preserves malformed/torn records, rewrites valid `session_id`

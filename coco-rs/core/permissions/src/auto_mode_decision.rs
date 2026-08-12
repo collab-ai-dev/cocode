@@ -41,11 +41,11 @@ pub struct AutoModeContext<'a> {
     pub cwd: Option<&'a str>,
     /// Additional writable roots (keys of `ToolPermissionContext.additional_dirs`).
     pub additional_dirs: &'a [String],
-    /// True when the session cannot show an interactive prompt. When set, decisions
-    /// that would otherwise fall back to an interactive Ask instead DENY — a
-    /// headless Ask is auto-allowed downstream, so falling through would
-    /// defeat the safety check. Distinct from session-level
-    /// `is_non_interactive` (which drives side effects, not permissions).
+    /// True when session policy forbids interactive prompts. Decisions that
+    /// would otherwise return `Ask` deny at this boundary, preserving the
+    /// caller's explicit no-prompt contract even if a bridge is installed.
+    /// Distinct from session-level `is_non_interactive` (which drives side
+    /// effects, not permissions).
     pub avoid_permission_prompts: bool,
 }
 
@@ -230,9 +230,8 @@ fn allow() -> PermissionDecision {
     }
 }
 
-/// Map a "needs human review" outcome to a decision: an interactive Ask
-/// normally, but a Deny when no interactive prompt is reachable (an Ask would
-/// be silently auto-allowed downstream).
+/// Map a "needs human review" outcome to an interactive `Ask`, or to `Deny`
+/// when the caller explicitly forbids permission prompts.
 fn require_interactive_or_deny(
     message: String,
     reason: PermissionDecisionReason,

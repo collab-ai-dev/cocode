@@ -199,7 +199,7 @@ async fn test_write_traversal_is_immune_interactive_ask() {
 #[tokio::test]
 async fn test_write_traversal_headless_denies() {
     let mut tracker = DenialTracker::new();
-    // Same immune block in headless → Deny (a headless Ask would auto-allow).
+    // Same immune block with prompts forbidden → Deny at this boundary.
     let result = can_use_tool_in_auto_mode::<coco_messages::Message, _, _>(
         "Write",
         &json!({"file_path": "../../../etc/cron.d/evil", "content": "x"}),

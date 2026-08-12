@@ -88,11 +88,10 @@ pub async fn run_tui(
                 })
         });
 
-    // P0: build channels FIRST so the TUI permission bridge can
-    // capture the notification sender. Without this, the engine's
-    // `PermissionDecision::Ask` path falls back to legacy auto-allow
-    // (permission_controller.rs:100-107), which is the wrong default
-    // for interactive sessions.
+    // Build channels first so the TUI permission bridge can capture the
+    // notification sender. Without an installed bridge, a residual
+    // `PermissionDecision::Ask` fails closed; interactive sessions need the
+    // bridge to present that request instead of denying it as unavailable.
     let (command_tx, command_rx, notification_tx, notification_rx) = create_channels();
     let pending_approvals = coco_agent_host::tui_permission_bridge::new_pending_map();
     // Keep a concrete `Arc<TuiPermissionBridge>` alongside the trait

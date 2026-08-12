@@ -48,8 +48,10 @@ and per-candidate adversarial verification whose default stance was "this gap
 is not real." It followed `xai-grok-pager`, `xai-grok-shell`, and their direct
 TUI dependencies. It was not a complete audit of every grok module or of all
 36 codegen crates changed by the 1.0.0 interval; that broader crate comparison
-is deliberately separate from this UI plan and is now complete in the
-[full-crate audit](../grok-build-release-crate-audit-2026-08.md).
+is deliberately separate from this UI plan. The release-diff subset is in the
+[release crate audit](../grok-build-release-crate-audit-2026-08.md), and the
+entire workspace is in the
+[full workspace audit](../grok-build-workspace-crate-audit-2026-08.md).
 
 Original outcome: **57 confirmed work items, 5 rejected candidates.** After
 the 1.0.0 refresh and the corrective verification in §1.2, the current
