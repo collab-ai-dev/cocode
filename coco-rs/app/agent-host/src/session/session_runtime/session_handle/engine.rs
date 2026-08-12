@@ -1,6 +1,20 @@
 use super::*;
 
 impl SessionHandle {
+    /// Evaluate the deterministic portion of one tool permission request using
+    /// the session's live rules and tool context. The query-layer result names
+    /// every dynamic stage it intentionally skips.
+    pub async fn probe_static_permission(
+        &self,
+        tool_name: &str,
+        input: serde_json::Value,
+    ) -> coco_types::StaticPermissionProbeResult {
+        self.build_engine(tokio_util::sync::CancellationToken::new())
+            .await
+            .probe_static_permission(tool_name, input)
+            .await
+    }
+
     pub async fn build_engine(
         &self,
         cancel: tokio_util::sync::CancellationToken,

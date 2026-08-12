@@ -592,6 +592,16 @@ pub struct PluginInstallationEntry {
     pub last_updated: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_commit_sha: Option<String>,
+    /// SHA-256 over normalized relative paths, sizes, and file contents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_file_count: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_total_bytes: Option<i64>,
+    /// Exact marketplace source descriptor used for this installation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<PluginSource>,
 }
 
 /// Installed plugin metadata (V1 format, keyed by plugin ID).

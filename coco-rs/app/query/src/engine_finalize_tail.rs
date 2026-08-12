@@ -251,12 +251,11 @@ impl QueryEngine {
 
         let (Some(store), Some(sid)) = (
             self.transcript_store.as_ref(),
-            self.transcript_session_id
-                .as_ref()
-                .map(coco_types::SessionId::as_str),
+            self.transcript_session_id.as_ref(),
         ) else {
             return Ok(());
         };
+        let sid_str = sid.as_str();
 
         let cwd_path = self.config.workspace_cwd();
         let cwd = cwd_path.display().to_string();
@@ -289,7 +288,7 @@ impl QueryEngine {
             if !self
                 .agent_transcript_seeded
                 .swap(true, std::sync::atomic::Ordering::Relaxed)
-                && let Ok(Some(prior)) = store.load_agent_messages(sid, agent_id)
+                && let Ok(Some(prior)) = store.load_agent_messages(sid_str, agent_id)
             {
                 seen.extend(prior.iter().filter_map(|m| m.uuid().copied()));
             }
@@ -301,7 +300,13 @@ impl QueryEngine {
                 starting_parent_uuid: None,
                 git_branch,
             };
-            store.append_agent_message_chain(sid, agent_id, &message_refs, &mut seen, options)?;
+            store.append_agent_message_chain(
+                sid_str,
+                agent_id,
+                &message_refs,
+                &mut seen,
+                options,
+            )?;
             return Ok(());
         }
 
@@ -318,7 +323,10 @@ impl QueryEngine {
             starting_parent_uuid: None,
             git_branch,
         };
-        store.append_message_chain(sid, &message_refs, &mut seen_guard, options)?;
+        store.append_message_chain(sid_str, &message_refs, &mut seen_guard, options)?;
+        if let Err(error) = store.clear_inflight_turn(sid.clone()).await {
+            warn!(%error, "failed to clear committed in-flight turn journal");
+        }
         Ok(())
     }
 

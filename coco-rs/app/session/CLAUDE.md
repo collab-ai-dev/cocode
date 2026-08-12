@@ -40,6 +40,7 @@ boundary is separate from disk wire.
 | `Session` | Derived view `{id, created_at, updated_at?, model, working_dir, title?, message_count, total_tokens, tags}` — built from `TranscriptMetadata`, never persisted as its own file |
 | `SessionManager` | `create` (in-memory only) / `load` / `resume` / `list` / `delete` / `most_recent` / `cleanup(keep_count)` / `cleanup_older_than` |
 | `TranscriptStore`, `TranscriptEntry`, `TranscriptMetadata`, `TranscriptUsage` | Segmented append-only JSONL journal with per-entry usage. `<sid>.jsonl` is the stable catalog handle; 50 MiB segments continue as `.segment-NNNNNN`. Path layout via `Arc<ProjectPaths>` |
+| `InFlightTurnStore`, `InFlightTurnSnapshot` | Bounded, atomically replaced crash journal for the visible tail of a streaming main-session turn; canonical transcript commit clears it |
 | `Entry`, `MetadataEntry` | Tagged union: transcript message vs metadata entry (custom-title, tag, last-prompt, summary, file-history-snapshot, marble-origami-{commit,snapshot}, content-replacement, session-seq-watermark, …). `SessionSeqWatermark` records the durable `session_seq` high-water mark (folded as `TranscriptMetadata.session_seq_watermark`) so a restarted process skip-aheads its seq counter on resume. |
 | `ModelCostEntry` | Per-model cost row inside a `CostSummary` metadata entry. Resume-side cost replay is not yet wired (`coco-messages::CostTracker::start_with_recovery` consumes the in-memory tracker only); the typed entry stays so write-path emission keeps a stable shape. |
 | `PromptHistory`, `HistoryEntry` | Ring of user-typed prompts (for up-arrow recall) |
@@ -66,6 +67,7 @@ normalised session cwd / worktree path, with a djb2 suffix for paths over
 │       ├── <session-id>.jsonl               # transcript journal segment 0 / catalog handle
 │       ├── <session-id>.jsonl.segment-000001 # rotated journal segment
 │       └── <session-id>/                    # per-session artifacts
+│           ├── inflight-turn.json           # transient streaming-turn crash journal
 │           ├── subagents/
 │           │   ├── agent-<id>.jsonl         # bg agent journal segment 0
 │           │   └── agent-<id>.meta.json     # AgentMetadata sidecar

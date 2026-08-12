@@ -83,6 +83,9 @@ pub async fn dispatch_client_request(req: ClientRequest, ctx: HandlerContext) ->
         }
         ClientRequest::SetThinking(params) => runtime::handle_set_thinking(params, &ctx).await,
         ClientRequest::SetAgentColor(params) => runtime::handle_set_agent_color(params, &ctx).await,
+        ClientRequest::ProbePermission(params) => {
+            runtime::handle_probe_permission(params, &ctx).await
+        }
         ClientRequest::ApplyPermissionUpdate(params) => {
             runtime::handle_apply_permission_update(params, &ctx).await
         }

@@ -233,7 +233,9 @@ async fn install_from_marketplace(target: &str, config_home: &std::path::Path) -
         Err(e @ coco_plugins::install::InstallError::BlockedByPolicy { .. })
         | Err(e @ coco_plugins::install::InstallError::DependencyBlockedByPolicy { .. })
         | Err(e @ coco_plugins::install::InstallError::ResolutionFailed(_))
-        | Err(e @ coco_plugins::install::InstallError::SettingsWriteFailed(_)) => {
+        | Err(e @ coco_plugins::install::InstallError::SettingsWriteFailed(_))
+        | Err(e @ coco_plugins::install::InstallError::InvalidArtifact { .. })
+        | Err(e @ coco_plugins::install::InstallError::RollbackFailed { .. }) => {
             anyhow::bail!("{e}")
         }
         Err(coco_plugins::install::InstallError::Other(e)) => Err(e.into()),

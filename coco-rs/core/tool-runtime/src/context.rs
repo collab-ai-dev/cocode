@@ -26,6 +26,7 @@ use crate::hook_handle::HookHandleRef;
 use crate::lsp_handle::LspHandleRef;
 use crate::mcp_handle::McpHandleRef;
 use crate::permission_bridge::ToolPermissionBridgeRef;
+use crate::programmatic_tool::ProgrammaticToolCallHandleRef;
 use crate::registry::ToolRegistry;
 use crate::schedule_store::ScheduleStoreRef;
 use crate::side_query::SideQueryHandle;
@@ -85,6 +86,14 @@ pub struct ToolUseContext {
     // ── Options (from QueryEngineConfig) ──
     /// Available tools registry.
     pub tools: Arc<ToolRegistry>,
+    /// Optional sandboxed-runtime bridge for read-only programmatic tool
+    /// calls. The application layer owns the implementation so every call
+    /// traverses the canonical query pipeline.
+    pub programmatic_tools: Option<ProgrammaticToolCallHandleRef>,
+    /// Require the final, fully rewritten tool input to remain provably
+    /// read-only. Set only by sandboxed programmatic callers; the query
+    /// preparer enforces it after both hook and permission input rewrites.
+    pub require_read_only: bool,
     /// Main loop model identifier.
     pub main_loop_model: String,
     /// Thinking level configuration.
@@ -637,6 +646,8 @@ impl ToolUseContext {
     pub fn clone_for_concurrent(&self) -> Self {
         Self {
             tools: self.tools.clone(),
+            programmatic_tools: self.programmatic_tools.clone(),
+            require_read_only: self.require_read_only,
             main_loop_model: self.main_loop_model.clone(),
             thinking_level: self.thinking_level.clone(),
             is_non_interactive: self.is_non_interactive,
@@ -935,6 +946,8 @@ impl ToolUseContext {
     fn test_default_inner() -> Self {
         Self {
             tools: Arc::new(ToolRegistry::new()),
+            programmatic_tools: None,
+            require_read_only: false,
             main_loop_model: "test-model".into(),
             thinking_level: None,
             is_non_interactive: false,

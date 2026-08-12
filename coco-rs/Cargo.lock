@@ -2210,7 +2210,9 @@ dependencies = [
  "coco-types",
  "coco-utils-common",
  "coco-utils-extra-ca",
+ "fs2",
  "hex",
+ "libc",
  "notify",
  "pretty_assertions",
  "regex",
@@ -2492,6 +2494,7 @@ dependencies = [
 name = "coco-session"
 version = "0.1.1"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
  "chrono",
  "coco-config",
@@ -2501,6 +2504,7 @@ dependencies = [
  "coco-paths",
  "coco-secret-redact",
  "coco-types",
+ "coco-utils-common",
  "coco-utils-string",
  "fs2",
  "libc",
@@ -2510,6 +2514,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "tracing",
  "uuid",
 ]
@@ -2836,8 +2841,10 @@ dependencies = [
  "coco-utils-json-repair",
  "coco-utils-string",
  "coco-wire-dump",
+ "fs2",
  "futures",
  "jsonschema",
+ "libc",
  "pretty_assertions",
  "schemars",
  "serde",

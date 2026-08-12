@@ -144,8 +144,9 @@ pub use client_request::{
     SessionReplacement, SessionResumeParams, SessionStartParams, SessionStatusResult,
     SessionSubscribeParams, SessionTarget, SessionToggleTagParams, SessionToggleTagResult,
     SessionTurnsListParams, SetAgentColorParams, SetModelParams, SetModelRoleParams,
-    SetPermissionModeParams, SetThinkingParams, StopTaskParams, TaskDetailParams, TaskDetailResult,
-    TaskListResult, TurnStartParams, UpdateEnvParams, UserInputResolveParams, request_scope,
+    SetPermissionModeParams, SetThinkingParams, StaticPermissionProbeParams, StopTaskParams,
+    TaskDetailParams, TaskDetailResult, TaskListResult, TurnStartParams, UpdateEnvParams,
+    UserInputResolveParams, request_scope,
 };
 
 // Hook callback output (stable wire format; mirrors
@@ -231,9 +232,10 @@ pub use permission::{
     AdditionalWorkingDir, ClassifierBehavior, ClassifierMode, ClassifierUsage, ExitPlanChoice,
     ExitPlanModeAllowedPrompt, ExitPlanModeOutcome, MAX_PERMISSION_FEEDBACK_BYTES,
     PendingClassifierCheck, PermissionAbortReason, PermissionAskChoice, PermissionBehavior,
-    PermissionDecision, PermissionDecisionReason, PermissionRequestDetail,
-    PermissionResolutionDetail, PermissionRule, PermissionRuleSource, PermissionRuleValue,
-    PermissionRulesBySource, PermissionUpdate, PermissionUpdateDestination, ToolCheckResult,
+    PermissionDecision, PermissionDecisionReason, PermissionProbeDynamicStage,
+    PermissionProbeValidation, PermissionRequestDetail, PermissionResolutionDetail, PermissionRule,
+    PermissionRuleSource, PermissionRuleValue, PermissionRulesBySource, PermissionUpdate,
+    PermissionUpdateDestination, StaticPermissionProbeResult, ToolCheckResult,
     ToolPermissionContext, WorkingDirectorySource, content_matches, matches_rule,
     parse_rule_pattern, tool_matches_pattern,
 };

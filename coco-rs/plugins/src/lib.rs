@@ -4,6 +4,7 @@
 //! from (commands / hooks / skills via the bridges).
 //!
 
+pub mod artifact;
 pub mod builtins;
 pub mod command_bridge;
 pub mod dependency;

@@ -1203,6 +1203,14 @@ class ClientRequestControlSetAgentColor(BaseModel):
     params: SetAgentColorParams
 
 
+class ClientRequestControlProbePermission(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["control/probePermission"] = Field(
+        default="control/probePermission", alias="method"
+    )
+    params: StaticPermissionProbeParams
+
+
 class ClientRequestControlApplyPermissionUpdate(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["control/applyPermissionUpdate"] = Field(
@@ -1371,6 +1379,7 @@ ClientRequest = Annotated[
         ClientRequestControlSetPermissionMode,
         ClientRequestControlSetThinking,
         ClientRequestControlSetAgentColor,
+        ClientRequestControlProbePermission,
         ClientRequestControlApplyPermissionUpdate,
         ClientRequestControlResetSessionPermissionRules,
         ClientRequestControlStopTask,
@@ -4641,6 +4650,12 @@ class SetThinkingParams(BaseModel):
     thinking_level: ThinkingLevel | None = None
 
 
+class StaticPermissionProbeParams(BaseModel):
+    input: Any
+    target: SessionTarget
+    tool_name: str
+
+
 class StopTaskParams(BaseModel):
     target: SessionTarget
     task_id: str
@@ -4712,6 +4727,7 @@ class ClientRequestMethod(str, Enum):
     CONTROL_SET_PERMISSION_MODE = "control/setPermissionMode"
     CONTROL_SET_THINKING = "control/setThinking"
     CONTROL_SET_AGENT_COLOR = "control/setAgentColor"
+    CONTROL_PROBE_PERMISSION = "control/probePermission"
     CONTROL_APPLY_PERMISSION_UPDATE = "control/applyPermissionUpdate"
     CONTROL_RESET_SESSION_PERMISSION_RULES = "control/resetSessionPermissionRules"
     CONTROL_STOP_TASK = "control/stopTask"
@@ -5114,6 +5130,22 @@ class SetAgentColorRequest(BaseModel):
 SetAgentColorRequestParams = SetAgentColorRequest.SetAgentColorRequestParams
 
 
+class StaticPermissionProbeRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["control/probePermission"] = Field(
+        default="control/probePermission"
+    )
+    params: StaticPermissionProbeRequestParams
+
+    class StaticPermissionProbeRequestParams(StaticPermissionProbeParams):
+        pass
+
+
+StaticPermissionProbeRequestParams = (
+    StaticPermissionProbeRequest.StaticPermissionProbeRequestParams
+)
+
+
 class ApplyPermissionUpdateRequest(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["control/applyPermissionUpdate"] = Field(
@@ -5390,6 +5422,7 @@ ClientRequest = Annotated[
         SetPermissionModeRequest,
         SetThinkingRequest,
         SetAgentColorRequest,
+        StaticPermissionProbeRequest,
         ApplyPermissionUpdateRequest,
         ResetSessionPermissionRulesRequest,
         StopTaskRequest,

@@ -4,6 +4,27 @@ use super::session_control_error;
 use crate::app_server_host::request_handlers::{HandlerContext, HandlerResult};
 use crate::session_controls;
 
+/// `control/probePermission` — deterministic, side-effect-free permission
+/// analysis. The result remains provisional because hooks, classifiers,
+/// can-use-tool callbacks, and approvals are deliberately not invoked.
+pub(crate) async fn handle_probe_permission(
+    params: coco_types::StaticPermissionProbeParams,
+    ctx: &HandlerContext,
+) -> HandlerResult {
+    let Some(session) = ctx.resolve_runtime().await else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "No active session".to_string(),
+            data: None,
+        };
+    };
+    HandlerResult::ok(
+        session
+            .probe_static_permission(&params.tool_name, params.input)
+            .await,
+    )
+}
+
 /// `control/setPermissionMode` — mutate the session's permission mode.
 ///
 /// Writes:

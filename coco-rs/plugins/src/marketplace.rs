@@ -545,6 +545,45 @@ impl MarketplaceManager {
         entry: &PluginMarketplaceEntry,
         scope: PluginScope,
     ) -> crate::Result<PathBuf> {
+        let version_dir = self.install_path(marketplace_name, entry);
+        std::fs::create_dir_all(&version_dir)?;
+        self.materialize_plugin_to(marketplace_name, entry, &version_dir)
+            .await?;
+
+        tracing::info!(
+            plugin = %entry.name,
+            version = ?entry.version,
+            scope = ?scope,
+            path = %version_dir.display(),
+            "plugin installed to cache"
+        );
+
+        Ok(version_dir)
+    }
+
+    pub(crate) fn install_path(
+        &self,
+        marketplace_name: &str,
+        entry: &PluginMarketplaceEntry,
+    ) -> PathBuf {
+        let cache_dir = self
+            .plugins_dir
+            .join("cache")
+            .join(sanitize_for_path(marketplace_name))
+            .join(sanitize_for_path(&entry.name));
+        match &entry.version {
+            Some(version) => cache_dir.join(sanitize_for_path(version)),
+            None => cache_dir.join("latest"),
+        }
+    }
+
+    /// Materialize one marketplace entry into an empty staging directory.
+    pub(crate) async fn materialize_plugin_to(
+        &self,
+        marketplace_name: &str,
+        entry: &PluginMarketplaceEntry,
+        destination: &Path,
+    ) -> crate::Result<()> {
         let known = self.load_known_marketplaces();
         let mkt_entry = known.get(marketplace_name).ok_or_else(|| {
             crate::PluginError::generic(
@@ -552,19 +591,7 @@ impl MarketplaceManager {
                 format!("marketplace '{marketplace_name}' is not registered"),
             )
         })?;
-
-        let cache_dir = self
-            .plugins_dir
-            .join("cache")
-            .join(sanitize_for_path(marketplace_name))
-            .join(sanitize_for_path(&entry.name));
-
-        let version_dir = match &entry.version {
-            Some(v) => cache_dir.join(sanitize_for_path(v)),
-            None => cache_dir.join("latest"),
-        };
-
-        std::fs::create_dir_all(&version_dir)?;
+        tokio::fs::create_dir_all(destination).await?;
 
         // For local sources, copy plugin content.
         match &entry.source {
@@ -577,17 +604,28 @@ impl MarketplaceManager {
                     mkt_base.parent().unwrap_or(mkt_base).join(rel_path)
                 };
 
-                if !source_dir.is_dir() {
-                    return Err(crate::PluginError::generic(
+                let destination = destination.to_path_buf();
+                tokio::task::spawn_blocking(move || {
+                    let source_type =
+                        std::fs::symlink_metadata(&source_dir).map(|metadata| metadata.file_type());
+                    if !source_type.is_ok_and(|file_type| file_type.is_dir()) {
+                        return Err(crate::PluginError::generic(
+                            "marketplace",
+                            format!(
+                                "plugin source is not a real directory: {}",
+                                source_dir.display()
+                            ),
+                        ));
+                    }
+                    copy_dir_contents(&source_dir, &destination)
+                })
+                .await
+                .map_err(|error| {
+                    crate::PluginError::generic(
                         "marketplace",
-                        format!(
-                            "plugin source directory not found: {}",
-                            source_dir.display()
-                        ),
-                    ));
-                }
-
-                copy_dir_contents(&source_dir, &version_dir)?;
+                        format!("plugin copy task failed: {error}"),
+                    )
+                })??;
             }
             crate::schemas::PluginSource::Remote(remote) => {
                 // Remote plugin source: the manifest points at an external
@@ -595,22 +633,13 @@ impl MarketplaceManager {
                 // per-plugin (git clone / npm / pip). On any failure remove the
                 // empty version dir so no broken enabled-but-empty entry is
                 // left on disk for the loader to choke on.
-                if let Err(e) = crate::fetch::fetch_plugin_source(remote, &version_dir).await {
-                    let _ = std::fs::remove_dir_all(&version_dir);
+                if let Err(e) = crate::fetch::fetch_plugin_source(remote, destination).await {
+                    let _ = tokio::fs::remove_dir_all(destination).await;
                     return Err(e);
                 }
             }
         }
-
-        tracing::info!(
-            plugin = %entry.name,
-            version = ?entry.version,
-            scope = ?scope,
-            path = %version_dir.display(),
-            "plugin installed to cache"
-        );
-
-        Ok(version_dir)
+        Ok(())
     }
 }
 
@@ -687,25 +716,48 @@ fn sanitize_for_path(s: &str) -> String {
     result
 }
 
-/// Recursively copy directory contents (files only, shallow).
+/// Copy a bounded directory tree without following links or recursing on the
+/// call stack.
 fn copy_dir_contents(src: &Path, dst: &Path) -> crate::Result<()> {
-    if !src.is_dir() {
-        return Err(crate::PluginError::generic(
-            "marketplace",
-            format!("source is not a directory: {}", src.display()),
-        ));
-    }
-    std::fs::create_dir_all(dst)?;
+    const MAX_COPY_ENTRIES: i64 = 20_000;
+    let mut directories = vec![(src.to_path_buf(), dst.to_path_buf())];
+    let mut entry_count = 0i64;
+    while let Some((source_dir, destination_dir)) = directories.pop() {
+        std::fs::create_dir_all(&destination_dir)?;
+        for entry in std::fs::read_dir(&source_dir)? {
+            let entry = entry?;
+            entry_count = entry_count.checked_add(1).ok_or_else(|| {
+                crate::PluginError::generic("marketplace", "plugin source entry count overflow")
+            })?;
+            if entry_count > MAX_COPY_ENTRIES {
+                return Err(crate::PluginError::generic(
+                    "marketplace",
+                    format!("plugin source exceeds {MAX_COPY_ENTRIES} directory entries"),
+                ));
+            }
 
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-
-        if src_path.is_dir() {
-            copy_dir_contents(&src_path, &dst_path)?;
-        } else {
-            std::fs::copy(&src_path, &dst_path)?;
+            let src_path = entry.path();
+            let dst_path = destination_dir.join(entry.file_name());
+            let file_type = std::fs::symlink_metadata(&src_path)?.file_type();
+            if file_type.is_symlink() {
+                return Err(crate::PluginError::generic(
+                    "marketplace",
+                    format!("plugin source contains a symlink: {}", src_path.display()),
+                ));
+            }
+            if file_type.is_dir() {
+                directories.push((src_path, dst_path));
+            } else if file_type.is_file() {
+                std::fs::copy(&src_path, &dst_path)?;
+            } else {
+                return Err(crate::PluginError::generic(
+                    "marketplace",
+                    format!(
+                        "plugin source contains a special file: {}",
+                        src_path.display()
+                    ),
+                ));
+            }
         }
     }
     Ok(())

@@ -41,6 +41,8 @@ serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
 async-trait.workspace = true
 futures = { workspace = true, features = ["alloc"] }
+fs2.workspace = true
+libc.workspace = true
 jsonschema.workspace = true
 # Used by `derive` module to produce `ToolInputSchema` from
 # `#[derive(JsonSchema)]` input/output structs — one artifact per tool

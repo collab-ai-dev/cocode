@@ -37,6 +37,7 @@ use coco_inference::AssistantTurnSnapshot;
 use coco_inference::StreamEvent;
 use coco_llm_types::AssistantContentPart;
 use coco_llm_types::LlmMessage;
+use coco_llm_types::ReasoningPart;
 use coco_llm_types::TextPart;
 use coco_llm_types::ToolCallPart;
 use coco_messages::AssistantMessage;
@@ -194,6 +195,7 @@ impl QueryEngine {
         streaming_model_index: &mut usize,
         state_tracker: &SessionStateTracker,
         event_turn_id: &coco_types::TurnId,
+        assistant_message_uuid: uuid::Uuid,
         _consts: &LoopConstants,
         services: &LoopServices,
         acc: &mut LoopAccumulator,
@@ -234,6 +236,19 @@ impl QueryEngine {
         // appropriate variant before breaking.
         let mut outcome = StreamOutcome::PrematureClose;
         let mut response_id = None;
+        let mut last_journal_write = std::time::Instant::now();
+        let journal_model_id = services.current_model_id();
+        self.write_inflight_turn_snapshot(
+            history,
+            event_turn_id,
+            assistant_message_uuid,
+            &journal_model_id,
+            &response_text,
+            &reasoning_text,
+            &tool_order,
+            &tool_buffers,
+        )
+        .await;
 
         loop {
             let event = tokio::select! {
@@ -272,6 +287,18 @@ impl QueryEngine {
                         },
                     )
                     .await;
+                    self.maybe_write_inflight_turn_snapshot(
+                        &mut last_journal_write,
+                        history,
+                        event_turn_id,
+                        assistant_message_uuid,
+                        &journal_model_id,
+                        &response_text,
+                        &reasoning_text,
+                        &tool_order,
+                        &tool_buffers,
+                    )
+                    .await;
                 }
                 StreamEvent::ReasoningDelta { text } => {
                     reasoning_text.push_str(&text);
@@ -281,6 +308,18 @@ impl QueryEngine {
                             turn_id: event_turn_id.clone(),
                             delta: text,
                         },
+                    )
+                    .await;
+                    self.maybe_write_inflight_turn_snapshot(
+                        &mut last_journal_write,
+                        history,
+                        event_turn_id,
+                        assistant_message_uuid,
+                        &journal_model_id,
+                        &response_text,
+                        &reasoning_text,
+                        &tool_order,
+                        &tool_buffers,
                     )
                     .await;
                 }
@@ -530,6 +569,18 @@ impl QueryEngine {
                             }
                         }
                     }
+                    self.maybe_write_inflight_turn_snapshot(
+                        &mut last_journal_write,
+                        history,
+                        event_turn_id,
+                        assistant_message_uuid,
+                        &journal_model_id,
+                        &response_text,
+                        &reasoning_text,
+                        &tool_order,
+                        &tool_buffers,
+                    )
+                    .await;
                 }
                 StreamEvent::Finish {
                     usage,
@@ -538,6 +589,17 @@ impl QueryEngine {
                     snapshot,
                     ..
                 } => {
+                    self.write_inflight_turn_snapshot(
+                        history,
+                        event_turn_id,
+                        assistant_message_uuid,
+                        &journal_model_id,
+                        &response_text,
+                        &reasoning_text,
+                        &tool_order,
+                        &tool_buffers,
+                    )
+                    .await;
                     // `%stop_reason` renders the full `FinishReason` —
                     // its `Display` annotates the provider-original raw
                     // when it differs from the projection (e.g.
@@ -578,6 +640,17 @@ impl QueryEngine {
                     break;
                 }
                 StreamEvent::Error { message, .. } => {
+                    self.write_inflight_turn_snapshot(
+                        history,
+                        event_turn_id,
+                        assistant_message_uuid,
+                        &journal_model_id,
+                        &response_text,
+                        &reasoning_text,
+                        &tool_order,
+                        &tool_buffers,
+                    )
+                    .await;
                     // Nothing committed to the user yet ⇒ a retryable
                     // mid-stream error can be re-issued in place without
                     // duplicating visible output. `tool_order` empty also
@@ -615,6 +688,171 @@ impl QueryEngine {
             tool_buffers,
             outcome,
             response_id,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn maybe_write_inflight_turn_snapshot(
+        &self,
+        last_write: &mut std::time::Instant,
+        history: &MessageHistory,
+        turn_id: &coco_types::TurnId,
+        assistant_uuid: uuid::Uuid,
+        model: &str,
+        response_text: &str,
+        reasoning_text: &str,
+        tool_order: &[String],
+        tool_buffers: &HashMap<String, StreamingToolCallBuffer>,
+    ) {
+        const WRITE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(400);
+        if last_write.elapsed() < WRITE_INTERVAL {
+            return;
+        }
+        self.write_inflight_turn_snapshot(
+            history,
+            turn_id,
+            assistant_uuid,
+            model,
+            response_text,
+            reasoning_text,
+            tool_order,
+            tool_buffers,
+        )
+        .await;
+        *last_write = std::time::Instant::now();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn write_inflight_turn_snapshot(
+        &self,
+        history: &MessageHistory,
+        turn_id: &coco_types::TurnId,
+        assistant_uuid: uuid::Uuid,
+        model: &str,
+        response_text: &str,
+        reasoning_text: &str,
+        tool_order: &[String],
+        tool_buffers: &HashMap<String, StreamingToolCallBuffer>,
+    ) {
+        // Per-agent transcripts have their own lifecycle and are not resumed as
+        // the main session. Keep this journal scoped to the canonical thread.
+        if self.config.agent_id_str().is_some() {
+            return;
+        }
+        let (Some(store), Some(session_id)) = (
+            self.transcript_store.as_ref(),
+            self.transcript_session_id.as_ref(),
+        ) else {
+            return;
+        };
+
+        let mut messages = history
+            .iter()
+            .rev()
+            .find(|message| matches!(message.as_ref(), Message::User(_)))
+            .map(|message| vec![message.as_ref().clone()])
+            .unwrap_or_default();
+        let mut content = Vec::new();
+        if !reasoning_text.is_empty() {
+            content.push(AssistantContentPart::Reasoning(ReasoningPart::new(
+                reasoning_text,
+            )));
+        }
+        if !response_text.is_empty() {
+            content.push(AssistantContentPart::Text(TextPart {
+                text: response_text.to_string(),
+                provider_metadata: None,
+            }));
+        }
+        for id in tool_order {
+            let Some(buffer) = tool_buffers.get(id).filter(|buffer| buffer.complete) else {
+                continue;
+            };
+            let (input, invalid, invalid_reason) =
+                crate::engine::tool_input_from_wire_state(&buffer.tool_name, &buffer.input_state);
+            content.push(AssistantContentPart::ToolCall(ToolCallPart {
+                tool_call_id: id.clone(),
+                tool_name: buffer.tool_name.clone(),
+                input,
+                provider_executed: None,
+                invalid: invalid || buffer.invalid,
+                invalid_reason: invalid_reason.or_else(|| buffer.invalid_reason.clone()),
+                provider_metadata: None,
+            }));
+        }
+        if !content.is_empty() {
+            messages.push(Message::Assistant(AssistantMessage {
+                message: LlmMessage::Assistant {
+                    content,
+                    provider_options: None,
+                },
+                uuid: assistant_uuid,
+                model: model.to_string(),
+                stop_reason: None,
+                usage: None,
+                cost_usd: None,
+                request_id: None,
+                api_error: None,
+            }));
+        }
+        let updated_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as i64)
+            .unwrap_or(0);
+        let snapshot = coco_session::InFlightTurnSnapshot {
+            session_id: session_id.clone(),
+            turn_id: turn_id.to_string(),
+            updated_at_ms,
+            messages,
+        };
+        if let Err(error) = store.write_inflight_turn(snapshot).await {
+            tracing::debug!(%error, "failed to persist in-flight turn snapshot");
+        }
+    }
+
+    /// Refresh the crash journal from canonical in-memory history after a tool
+    /// batch commits its ordered results. This closes the short window between
+    /// tool completion and the final JSONL append without teaching the tool
+    /// runner about session persistence.
+    pub(crate) async fn write_inflight_history_snapshot(
+        &self,
+        history: &MessageHistory,
+        turn_id: &coco_types::TurnId,
+    ) {
+        if self.config.agent_id_str().is_some() {
+            return;
+        }
+        let (Some(store), Some(session_id)) = (
+            self.transcript_store.as_ref(),
+            self.transcript_session_id.as_ref(),
+        ) else {
+            return;
+        };
+        let Some(start) = history
+            .iter()
+            .enumerate()
+            .filter_map(|(index, message)| {
+                matches!(message.as_ref(), Message::User(_)).then_some(index)
+            })
+            .next_back()
+        else {
+            return;
+        };
+        let snapshot = coco_session::InFlightTurnSnapshot {
+            session_id: session_id.clone(),
+            turn_id: turn_id.to_string(),
+            updated_at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_millis() as i64)
+                .unwrap_or(0),
+            messages: history
+                .iter()
+                .skip(start)
+                .map(|message| message.as_ref().clone())
+                .collect(),
+        };
+        if let Err(error) = store.write_inflight_turn(snapshot).await {
+            tracing::debug!(%error, "failed to persist completed tool batch snapshot");
         }
     }
 

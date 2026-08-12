@@ -73,6 +73,18 @@ impl<H: Clone + Send + Sync + 'static> LocalServerClient<H> {
             .await
     }
 
+    pub async fn probe_permission<Handler>(
+        &self,
+        handler: &Handler,
+        params: StaticPermissionProbeParams,
+    ) -> Result<StaticPermissionProbeResult, ClientError>
+    where
+        Handler: LocalClientRequestHandler,
+    {
+        self.send_typed_client_request(handler, ClientRequest::ProbePermission(params))
+            .await
+    }
+
     /// Apply a goal status transition (pause / resume) through the goal control
     /// plane (design §8.2). Used by the TUI `Ctrl+C` path to pause an active goal
     /// before cancelling its turn, so the interrupt cannot orphan it.

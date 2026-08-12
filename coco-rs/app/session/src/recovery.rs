@@ -280,6 +280,8 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
         }
     }
 
+    merge_inflight_turn_projection(transcript_path, &mut messages);
+
     let sanitized = coco_messages::sanitize_messages_for_resume(messages);
     let messages = sanitized.messages;
     let turn_interruption_state = sanitized.turn_interruption_state;
@@ -371,6 +373,66 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
         mode: latest_mode,
         mcp_tool_exposure: latest_mcp_tool_exposure,
     })
+}
+
+/// Fold the crash journal onto the canonical transcript when its assistant
+/// message has not already been committed. Corrupt, oversized, expired, or
+/// cross-session artifacts are ignored: recovery aids never override truth.
+fn merge_inflight_turn_projection(transcript_path: &Path, messages: &mut Vec<Message>) {
+    const MAX_BYTES: usize = 8 * 1024 * 1024;
+    const MAX_MESSAGES: usize = 512;
+    const MAX_AGE_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+
+    let Some(stem) = transcript_path.file_stem().and_then(|stem| stem.to_str()) else {
+        return;
+    };
+    let Some(parent) = transcript_path.parent() else {
+        return;
+    };
+    let path = parent.join(stem).join("inflight-turn.json");
+    let bytes = match coco_utils_common::read_regular(&path) {
+        Ok(bytes) if bytes.len() <= MAX_BYTES => bytes,
+        _ => return,
+    };
+    let Ok(snapshot) = serde_json::from_slice::<crate::InFlightTurnSnapshot>(&bytes) else {
+        return;
+    };
+    if snapshot.session_id.as_str() != stem || snapshot.messages.len() > MAX_MESSAGES {
+        return;
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0);
+    const MAX_FUTURE_SKEW_MS: i64 = 5 * 60 * 1000;
+    if snapshot.updated_at_ms <= 0
+        || snapshot.updated_at_ms > now_ms.saturating_add(MAX_FUTURE_SKEW_MS)
+        || now_ms.saturating_sub(snapshot.updated_at_ms) > MAX_AGE_MS
+    {
+        let _ = std::fs::remove_file(path);
+        return;
+    }
+
+    let mut known: HashSet<uuid::Uuid> =
+        messages.iter().filter_map(Message::uuid).copied().collect();
+    let assistant_ids: Vec<uuid::Uuid> = snapshot
+        .messages
+        .iter()
+        .filter(|message| matches!(message, Message::Assistant(_)))
+        .filter_map(Message::uuid)
+        .copied()
+        .collect();
+    if !assistant_ids.is_empty() && assistant_ids.iter().all(|uuid| known.contains(uuid)) {
+        let _ = std::fs::remove_file(path);
+        return;
+    }
+    for message in snapshot.messages {
+        match message.uuid() {
+            Some(uuid) if known.insert(*uuid) => messages.push(message),
+            Some(_) => {}
+            None => messages.push(message),
+        }
+    }
 }
 
 fn walk_parent_chain_indices(

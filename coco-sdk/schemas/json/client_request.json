@@ -501,6 +501,22 @@
       "properties": {
         "method": {
           "type": "string",
+          "const": "control/probePermission"
+        },
+        "params": {
+          "$ref": "#/$defs/StaticPermissionProbeParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
           "const": "control/applyPermissionUpdate"
         },
         "params": {
@@ -2422,6 +2438,24 @@
       },
       "required": [
         "target"
+      ]
+    },
+    "StaticPermissionProbeParams": {
+      "description": "Params for `control/probePermission`.",
+      "type": "object",
+      "properties": {
+        "input": true,
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
+        },
+        "tool_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "tool_name",
+        "input"
       ]
     },
     "StopTaskParams": {

@@ -21,6 +21,7 @@ fn timing<'a>(
 ) -> CronTiming<'a> {
     CronTiming {
         id,
+        schedule_digest: format!("{cron}:{created}:{last_fired:?}:{recurring}"),
         cron,
         created_at_ms: created,
         last_fired_at_ms: last_fired,
@@ -51,6 +52,40 @@ fn tick_fires_recurring_once_when_due_then_reschedules() {
             .is_empty()
     );
     assert_eq!(st.next_fire_time(), Some(ms(2025, 1, 2, 9, 0)));
+}
+
+#[test]
+fn same_id_schedule_edit_invalidates_cached_next_fire() {
+    let created = ms(2025, 1, 1, 7, 0);
+    let mut state = CronTickState::new();
+    let original = vec![timing("same", "0 9 * * *", created, None, true)];
+    assert!(state.tick(&original, ms(2025, 1, 1, 8, 0), 0).is_empty());
+
+    let edited = vec![timing("same", "0 8 * * *", created, None, true)];
+    let fires = state.tick(&edited, ms(2025, 1, 1, 8, 30), 0);
+    assert_eq!(fires.len(), 1, "edited schedule must be recomputed");
+}
+
+#[test]
+fn failed_storage_claim_can_invalidate_speculative_reschedule() {
+    let created = ms(2025, 1, 1, 8, 0);
+    let tasks = vec![timing("same", "0 9 * * *", created, None, true)];
+    let mut state = CronTickState::new();
+    assert_eq!(
+        state
+            .tick(&tasks, ms(2025, 1, 1, 9, 0), RECURRING_MAX_AGE_MS)
+            .len(),
+        1
+    );
+
+    state.invalidate("same");
+    assert_eq!(
+        state
+            .tick(&tasks, ms(2025, 1, 1, 9, 1), RECURRING_MAX_AGE_MS)
+            .len(),
+        1,
+        "an uncommitted claim must remain due on the next tick"
+    );
 }
 
 #[test]

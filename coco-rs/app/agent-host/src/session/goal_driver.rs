@@ -334,6 +334,17 @@ impl GoalDriver {
     /// turn holds the slot the burst is skipped; the AppServer turn-completion path
     /// re-signals the edge once the slot frees (Phase B), so continuation resumes.
     async fn drive_once_awaiting(self: &Arc<Self>) {
+        // Do not reserve the session turn slot merely to discover that there is
+        // no goal to drive. Headless startup submits its first user turn as soon
+        // as bootstrap completes; an empty startup reconcile used to race that
+        // submission and spuriously return `TurnAlreadyRunning` under load.
+        //
+        // A goal created after this check still cannot lose its edge: creation
+        // notifies `self.edge`, and `Notify` retains a permit until the driver
+        // loop reaches `notified()`.
+        if !self.goal_runtime.has_live_goal_sync() {
+            return;
+        }
         let driver = Arc::clone(self);
         let (done_tx, done_rx) = tokio::sync::oneshot::channel();
         let scheduled = self.burst_scheduler.schedule(Box::pin(async move {

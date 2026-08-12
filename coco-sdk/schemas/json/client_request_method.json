@@ -35,6 +35,7 @@
     "control/setPermissionMode",
     "control/setThinking",
     "control/setAgentColor",
+    "control/probePermission",
     "control/applyPermissionUpdate",
     "control/resetSessionPermissionRules",
     "control/stopTask",

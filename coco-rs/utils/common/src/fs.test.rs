@@ -62,6 +62,18 @@ fn regular_open_rejects_fifo_without_blocking() {
 
 #[cfg(unix)]
 #[test]
+fn regular_open_rejects_symlink_targets() {
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("target");
+    let link = temp.path().join("link");
+    std::fs::write(&target, b"secret").unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    open_regular(&link).expect_err("leaf symlinks must fail closed");
+}
+
+#[cfg(unix)]
+#[test]
 fn atomic_replace_rejects_symlink_targets() {
     let temp = tempfile::tempdir().unwrap();
     let target = temp.path().join("target");

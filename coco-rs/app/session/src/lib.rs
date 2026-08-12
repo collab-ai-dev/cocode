@@ -44,6 +44,8 @@ pub use storage::latest_goal_snapshot;
 pub use storage::latest_world_state_snapshots;
 pub use store::AgentTranscriptStore;
 pub use store::DiskCatalog;
+pub use store::InFlightTurnSnapshot;
+pub use store::InFlightTurnStore;
 pub use store::InMemoryCatalog;
 pub use store::InMemoryStore;
 pub use store::ResolvedSession;

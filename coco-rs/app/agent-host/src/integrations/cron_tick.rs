@@ -3,7 +3,7 @@
 //!
 //! Every second it reads the schedule store, asks the pure
 //! [`coco_cron::CronTickState`] which tasks crossed a fire boundary, and
-//! dispatches each fire by payload. A prompt job enqueues its prompt through
+//! atomically claims each fire, then dispatches it by payload. A prompt job enqueues its prompt through
 //! the session queue with cron origin; a script job runs its shell command
 //! off-turn and only reaches the agent when it asked to
 //! (see [`crate::integrations::cron_script`]). The enqueue wakes the idle
@@ -11,11 +11,12 @@
 //! (`tui::run_agent_driver` selects on `command_queue().wait_for_change`),
 //! so the scheduled prompt runs as a turn; if a turn is already in flight it
 //! drains at the next turn boundary. Recurring tasks are rescheduled (and their
-//! `last_fired_at` persisted); one-shot / aged tasks are removed.
+//! `last_fired_at` persisted before dispatch); one-shot / aged tasks are
+//! removed before dispatch. The store claim is cross-process, so two Coco
+//! processes cannot execute the same fire.
 //!
-//! Deferred: cross-process lease lock, the chokidar file-watcher
-//! (the 1s tick re-reads the file every pass, so external edits are picked up
-//! within ≤1s), jitter, and the missed-task AskUserQuestion variant
+//! Deferred: the chokidar file-watcher (the 1s tick re-reads the file every
+//! pass, so external edits are picked up within ≤1s), jitter, and the missed-task AskUserQuestion variant
 //! (missed one-shots are surfaced as a batched notification — see
 //! [`build_missed_notification`]).
 //!
@@ -53,6 +54,7 @@ fn now_ms() -> i64 {
 fn timing(t: &CronTask) -> CronTiming<'_> {
     CronTiming {
         id: &t.id,
+        schedule_digest: t.schedule_digest().as_str().to_string(),
         cron: &t.cron,
         created_at_ms: t.created_at,
         last_fired_at_ms: t.last_fired_at,
@@ -123,7 +125,17 @@ async fn process_missed_for_session(session: &SessionHandle) {
     // Surface missed one-shot tasks as one batched notification, then remove
     // them so the tick doesn't fire them directly. Recurring tasks that came
     // due while down fire on the next scheduler tick below.
-    let initial = store.list_all_cron_tasks().await.unwrap_or_default();
+    let initial = match store.list_all_cron_tasks().await {
+        Ok(tasks) => tasks,
+        Err(error) => {
+            tracing::warn!(
+                target: "coco::cron",
+                %error,
+                "failed to read schedules while checking missed tasks"
+            );
+            return;
+        }
+    };
     let now0 = now_ms();
     let missed_ids: Vec<String> = {
         let timings: Vec<CronTiming> = initial.iter().map(timing).collect();
@@ -133,13 +145,26 @@ async fn process_missed_for_session(session: &SessionHandle) {
         return;
     }
 
-    let missed: Vec<&CronTask> = initial
+    let mut claimed = Vec::new();
+    for task in initial
         .iter()
-        .filter(|t| missed_ids.iter().any(|m| m == &t.id))
-        .collect();
-    crate::session_queue::enqueue_cron_prompt(session, build_missed_notification(&missed)).await;
-    let refs: Vec<&str> = missed_ids.iter().map(String::as_str).collect();
-    let _ = store.remove_cron_tasks(&refs).await;
+        .filter(|task| missed_ids.iter().any(|missed| missed == &task.id))
+    {
+        match store.claim_cron_task(task, now0, true).await {
+            Ok(Some(task)) => claimed.push(task),
+            Ok(None) => {}
+            Err(error) => tracing::warn!(
+                target: "coco::cron",
+                id = %task.id,
+                %error,
+                "failed to claim missed scheduled task"
+            ),
+        }
+    }
+    if !claimed.is_empty() {
+        let refs: Vec<&CronTask> = claimed.iter().collect();
+        crate::session_queue::enqueue_cron_prompt(session, build_missed_notification(&refs)).await;
+    }
 }
 
 async fn process_tick_for_session(
@@ -170,41 +195,85 @@ async fn process_tick_for_session(
         state.tick(&timings, now, RECURRING_MAX_AGE_MS)
     };
     for fire in fires {
-        if let Some(task) = tasks.iter().find(|t| t.id == fire.id) {
-            tracing::info!(
-                target: "coco::cron",
-                id = %fire.id, recurring = fire.recurring, aged = fire.aged,
-                "scheduled task fired"
-            );
-            let cwd = current_cwd.read().await.clone();
-            match &task.payload {
-                CronPayload::Prompt { prompt } => {
-                    let prompt = {
-                        let mut state = loop_sentinel_state.lock().await;
-                        expand_scheduled_prompt(
-                            prompt,
-                            &project_root,
-                            &cwd,
-                            &mut state,
-                            loop_persistent_preamble_enabled,
-                        )
-                    };
-                    crate::session_queue::enqueue_cron_prompt(session, prompt).await;
-                }
-                CronPayload::Script { script, on_output } => {
-                    spawn_script_job(
-                        session, notify_tx, in_flight, &fire.id, script, *on_output, cwd,
+        let Some(expected) = tasks.iter().find(|task| task.id == fire.id) else {
+            continue;
+        };
+        let remove_after_claim = !fire.recurring || fire.aged;
+        let task = match store
+            .claim_cron_task(expected, now, remove_after_claim)
+            .await
+        {
+            Ok(Some(task)) => task,
+            Ok(None) => {
+                state.invalidate(&fire.id);
+                tracing::debug!(
+                    target: "coco::cron",
+                    id = %fire.id,
+                    "scheduled task changed or was claimed by another process"
+                );
+                continue;
+            }
+            Err(error) => {
+                state.invalidate(&fire.id);
+                tracing::warn!(
+                    target: "coco::cron",
+                    id = %fire.id,
+                    %error,
+                    "scheduled task claim failed"
+                );
+                continue;
+            }
+        };
+        tracing::info!(
+            target: "coco::cron",
+            id = %fire.id,
+            schedule_digest = %task.schedule_digest().as_str(),
+            recurring = fire.recurring,
+            aged = fire.aged,
+            "scheduled task claimed"
+        );
+        let cwd = current_cwd.read().await.clone();
+        match &task.payload {
+            CronPayload::Prompt { prompt } => {
+                let prompt = {
+                    let mut state = loop_sentinel_state.lock().await;
+                    expand_scheduled_prompt(
+                        prompt,
+                        &project_root,
+                        &cwd,
+                        &mut state,
+                        loop_persistent_preamble_enabled,
                     )
-                    .await;
-                }
+                };
+                crate::session_queue::enqueue_cron_prompt(
+                    session,
+                    tag_scheduled_prompt(&task, &prompt, now),
+                )
+                .await;
+            }
+            CronPayload::Script { script, on_output } => {
+                spawn_script_job(
+                    session, notify_tx, in_flight, &fire.id, script, *on_output, cwd,
+                )
+                .await;
             }
         }
-        if fire.recurring && !fire.aged {
-            let _ = store.mark_cron_tasks_fired(&[&fire.id], now).await;
-        } else {
-            let _ = store.remove_cron_tasks(&[&fire.id]).await;
-        }
     }
+}
+
+/// Attach trusted, content-free scheduler facts without mixing them into the
+/// user-authored job body. The digest makes logs/transcripts correlatable while
+/// avoiding raw prompt content in observability fields.
+fn tag_scheduled_prompt(task: &CronTask, prompt: &str, fired_at_ms: i64) -> String {
+    let run_time = chrono::DateTime::from_timestamp_millis(fired_at_ms)
+        .map(|time| time.to_rfc3339())
+        .unwrap_or_else(|| fired_at_ms.to_string());
+    let metadata = serde_json::json!({
+        "id": task.id,
+        "run_time": run_time,
+        "schedule_digest": task.schedule_digest().as_str(),
+    });
+    format!("<scheduled-task-metadata>\n{metadata}\n</scheduled-task-metadata>\n\n{prompt}")
 }
 
 /// Start one script job detached, unless the previous run of the same job is

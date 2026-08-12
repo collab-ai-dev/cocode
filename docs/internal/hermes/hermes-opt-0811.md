@@ -56,10 +56,11 @@ extracted from Hermes's post-tag hardening wave:
 
 `coco-utils-common::open_regular` is the cross-crate I/O boundary. It opens
 first, then validates the opened descriptor rather than trusting a preceding
-path lookup. Unix opens include `O_NONBLOCK | O_CLOEXEC`, so replacing a checked
-path with a FIFO cannot hang a worker. Sync and async byte readers share this
-contract. Large range reads inspect the prefix and stream lines from the same
-descriptor instead of reopening the path.
+path lookup. Unix opens include `O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC`, so leaf
+symlinks fail closed and replacing a checked path with a FIFO cannot hang a
+worker. Sync and async byte readers share this contract. Large range reads
+inspect the prefix and stream lines from the same descriptor instead of
+reopening the path.
 
 `core/tools/src/tools/file_safety.rs` retains tool policy: diagnostic target
 classification, mutation inspection with `symlink_metadata`, missing-path
@@ -151,6 +152,74 @@ server annotations therefore cannot upgrade themselves into a central read-
 only fast path or parallel side-effect batch. Existing deny rules still run
 first.
 
+### 3.6 Transactional plugin dependency closures
+
+Marketplace installation now resolves and policy-checks the complete closure,
+materializes every member under a private staging root, rejects links/special
+files/oversized trees, validates each manifest, and computes a stable SHA-256
+tree digest before changing a live cache path. Publication is serialized by
+process and cross-process locks. Existing paths are moved to rollback backups;
+the installation ledger is atomically replaced before settings activation, and
+any in-process failure restores both the ledger and published paths. Provenance
+records retain the exact source descriptor, source revision, digest, file count
+and byte count.
+
+The settings mutation uses the config crate's locked atomic JSONC-aware writer,
+so plugin enable/disable and installation activation no longer race unrelated
+settings writes. Ledger and artifact reads are bounded regular-file reads, and
+lock descriptors reject leaf symlinks on Unix.
+
+### 3.7 Provisional static permission probes
+
+`control/probePermission` is a typed session-read protocol method. It builds the
+live tool context, applies availability/filter gates, schema and typed input
+validation, then evaluates the central deterministic rule boundary. Its result
+is deliberately named `provisional_decision` and explicitly lists the dynamic
+stages not evaluated, in runtime order: pre-tool hooks, `canUseTool`, auto-mode
+classification and human approval. The probe never executes a tool or presents
+the result as an authorization token.
+
+### 3.8 Read-only programmatic tools in Workflow QuickJS
+
+Workflow scripts expose `tool(name, input)` through a narrow host capability.
+The workflow runtime does not own tool policy: the query layer captures the
+request's materialization and re-enters the canonical `ToolCallRunner` with an
+isolated transcript projection. Only dynamically proven read-only calls enter
+the runner; permission prompts fail closed, recursive programmatic calls are
+disabled, and read-only classification is checked again after both hook and
+approval input rewrites. Streaming and non-streaming contexts receive the same
+bridge.
+
+### 3.9 Cross-process cron claims and schedule identity
+
+Durable schedule read-modify-write operations hold both a process mutex and a
+regular-file advisory lock, and publish through verified atomic replacement.
+Malformed durable state fails closed instead of being interpreted as an empty
+schedule. A due fire is claimed against the exact task snapshot; recurring
+tasks are stamped and one-shot/aged tasks are removed before dispatch, so only
+one process wins. Missed-task notifications use the same claim boundary.
+
+The scheduler cache keys each id by a digest of every timing field. It
+invalidates on same-id edits and also rolls back speculative cache advancement
+when a storage claim fails. Prompt jobs receive a trusted metadata envelope
+containing id, run time and a content-free schedule digest; logs correlate by
+the same digest without recording prompt bodies.
+
+### 3.10 Durable in-flight turn projection
+
+The streaming path atomically replaces one bounded `inflight-turn.json`
+projection containing the current user tail plus partial assistant text,
+reasoning and complete tool calls. Disk work runs through `spawn_blocking`; a
+successful canonical JSONL append removes the projection. Canonical transcript
+batches now serialize before opening, append under one descriptor lock, fsync
+once, and advance UUID dedup only after the durable append succeeds.
+
+Resume folds a valid, recent, same-session projection onto canonical messages
+by UUID before interruption sanitization. Corrupt, oversized, expired and
+cross-session artifacts never override transcript truth; a canonical assistant
+with the same UUID removes the stale projection. Explicit rewind also clears
+the journal so discarded branches cannot be revived.
+
 ## 4. Architecture decisions
 
 The implementation follows four constraints:
@@ -172,12 +241,13 @@ the executor filesystem boundary.
 
 ## 5. Remaining scoped follow-ups
 
-### P1: executor-backed ApplyPatch atomicity
+### Excluded: executor-backed ApplyPatch atomicity
 
 Giving ApplyPatch the same atomic verified commit contract requires extending
 the executor filesystem abstraction rather than reaching around it with local
 `std::fs`. That work must cover local and remote implementations and preserve
-the same explicit metadata contract.
+the same explicit metadata contract. It is intentionally excluded here because
+it already has a separate refactoring plan.
 
 ### P2: stable/volatile prompt-cache boundaries (evidence required)
 
@@ -199,9 +269,10 @@ material miss source.
 
 ## 7. Verification contract
 
-Tests cover descriptor rejection of FIFOs, symlink mutation refusal, atomic
-mode preservation and hard-link breakage, deterministic bounded suggestions,
-binary signatures, empty-file rendering, protected names through file tools,
-Bash redirects/interpreters/hard links, and all three MCP execution policies.
-The required repository checks remain `just fmt`, targeted crate tests and
-`just quick-check`.
+Tests cover descriptor rejection of FIFOs and symlinks, atomic mode preservation
+and hard-link breakage, deterministic bounded suggestions, binary signatures,
+empty-file rendering, protected names through file tools, Bash redirects and
+interpreters, MCP execution policies, plugin rollback/integrity, permission
+probe staging, programmatic tool hosting, cross-instance cron claims/cache
+invalidation, transcript append safety and in-flight recovery. The required
+repository checks remain `just fmt`, targeted crate tests and `just quick-check`.

@@ -242,6 +242,13 @@ pub(crate) async fn prepare_one_pending_tool_call(
         )
         .await?;
 
+    if args.ctx.require_read_only
+        && !is_dynamic_read_only(&tool, &tool_id, effective_input.as_value(), args.ctx).await
+    {
+        complete_read_only_violation(args, &semantic_call, &provider_tool_name, &tool_id).await;
+        return None;
+    }
+
     let decision = resolve_permission_decision(
         &semantic_call,
         &tool,
@@ -324,6 +331,16 @@ pub(crate) async fn prepare_one_pending_tool_call(
     )
     .await?;
 
+    // Permission callbacks may supply an updated input. Re-check at the final
+    // settlement boundary so neither hooks nor approvals can widen a
+    // programmatic read-only capability into a mutating call.
+    if args.ctx.require_read_only
+        && !is_dynamic_read_only(&tool, &tool_id, effective_input.as_value(), args.ctx).await
+    {
+        complete_read_only_violation(args, &semantic_call, &provider_tool_name, &tool_id).await;
+        return None;
+    }
+
     Some((
         PendingToolCall {
             tool_use_id: semantic_call.tool_call_id.clone(),
@@ -346,6 +363,26 @@ pub(crate) async fn prepare_one_pending_tool_call(
             approval_content_message,
         },
     ))
+}
+
+async fn complete_read_only_violation(
+    args: &mut PendingToolPreparation<'_>,
+    tool_call: &ToolCallPart,
+    provider_tool_name: &coco_types::WireToolName,
+    tool_id: &ToolId,
+) {
+    crate::helpers::complete_tool_call_with_error_mode(
+        args.event_tx,
+        args.history,
+        &tool_call.tool_call_id,
+        provider_tool_name.as_str(),
+        tool_id,
+        "Programmatic tool calls are restricted to inputs that remain provably read-only.",
+        coco_tool_runtime::ToolCallErrorKind::PermissionDenied,
+        args.completion_event_mode,
+        args.deferred_tool_completions.as_deref_mut(),
+    )
+    .await;
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -708,7 +745,7 @@ fn can_use_tool_reason_label(reason: &DecisionReason) -> String {
 /// opinion survives an evaluator-side `Allow` decision — `updatedInput`
 /// is preserved on downstream allows so a tool can normalize input
 /// even when a user-allow rule is present.
-async fn evaluate_with_rules(
+pub(crate) async fn evaluate_with_rules(
     tool: &Arc<dyn DynTool>,
     effective_input: &Value,
     ctx: &ToolUseContext,
@@ -804,6 +841,18 @@ fn dynamic_read_only(
         return bash_dynamic_read_only(command, shell_cwd.unwrap_or("/"));
     }
     tool.is_read_only(input)
+}
+
+/// Evaluate the same dynamic read-only predicate used by permission
+/// classification, including cwd-aware Bash analysis.
+pub(crate) async fn is_dynamic_read_only(
+    tool: &Arc<dyn DynTool>,
+    tool_id: &ToolId,
+    input: &Value,
+    ctx: &ToolUseContext,
+) -> bool {
+    let shell_cwd = shell_analysis_cwd(tool_id, ctx).await;
+    dynamic_read_only(tool.as_ref(), tool_id, input, shell_cwd.as_deref())
 }
 
 fn bash_dynamic_read_only(command: &str, cwd: &str) -> bool {

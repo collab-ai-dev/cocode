@@ -151,8 +151,7 @@ fn apply_patch(path: &Path, patch: &Value) -> Result<(), SettingsWriteError> {
 /// Existing JSONC is accepted. A stable sibling lock coordinates coco
 /// processes, while the process mutex coordinates threads; replacement then
 /// uses the canonical sibling-tempfile writer.
-#[cfg(test)]
-pub(crate) fn mutate_settings_file(
+pub fn mutate_settings_file(
     path: &Path,
     mutate: impl FnOnce(&mut Value) -> Result<(), String>,
 ) -> Result<(), SettingsWriteError> {

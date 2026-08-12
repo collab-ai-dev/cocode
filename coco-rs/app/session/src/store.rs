@@ -42,6 +42,19 @@ use crate::storage::TranscriptEntry;
 use crate::storage::TranscriptMetadata;
 use crate::storage::TranscriptStore;
 
+/// Crash-recovery projection of the visible tail of one running turn.
+///
+/// This is deliberately a replace-in-place artifact rather than transcript
+/// truth. The canonical JSONL remains append-only; a successful canonical
+/// flush removes this projection.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct InFlightTurnSnapshot {
+    pub session_id: SessionId,
+    pub turn_id: String,
+    pub updated_at_ms: i64,
+    pub messages: Vec<Message>,
+}
+
 /// Per-project transcript IO — the hot path. Object-safe, synchronous,
 /// `Send + Sync`. A remote backend bridges async internally (durable-on-
 /// return appends; the rare reads `block_on` a dedicated handle).
@@ -186,16 +199,32 @@ pub trait UsageSnapshotStore: Send + Sync {
     fn load_usage_snapshot(&self, session_id: &str) -> crate::Result<Option<SessionUsageSnapshot>>;
 }
 
+/// Transient crash journal for the currently streaming turn.
+#[async_trait::async_trait]
+pub trait InFlightTurnStore: Send + Sync {
+    async fn write_inflight_turn(&self, snapshot: InFlightTurnSnapshot) -> crate::Result<()>;
+    async fn load_inflight_turn(
+        &self,
+        session_id: SessionId,
+    ) -> crate::Result<Option<InFlightTurnSnapshot>>;
+    async fn clear_inflight_turn(&self, session_id: SessionId) -> crate::Result<()>;
+}
+
 /// Everything a consumer holding one store handle needs. Combined via a
 /// blanket impl so `Arc<dyn SessionStore>` is one object while the
 /// focused sub-traits stay available for narrower consumers / backends
 /// (ISP without tripping over Rust's no-`dyn A + B` rule).
 pub trait SessionStore:
-    TranscriptIo + AgentTranscriptStore + UsageSnapshotStore + SessionLeaseStore
+    TranscriptIo + AgentTranscriptStore + UsageSnapshotStore + InFlightTurnStore + SessionLeaseStore
 {
 }
-impl<T: TranscriptIo + AgentTranscriptStore + UsageSnapshotStore + SessionLeaseStore> SessionStore
-    for T
+impl<
+    T: TranscriptIo
+        + AgentTranscriptStore
+        + UsageSnapshotStore
+        + InFlightTurnStore
+        + SessionLeaseStore,
+> SessionStore for T
 {
 }
 
@@ -449,6 +478,76 @@ impl UsageSnapshotStore for TranscriptStore {
     }
 }
 
+#[async_trait::async_trait]
+impl InFlightTurnStore for TranscriptStore {
+    async fn write_inflight_turn(&self, snapshot: InFlightTurnSnapshot) -> crate::Result<()> {
+        const MAX_INFLIGHT_TURN_BYTES: usize = 8 * 1024 * 1024;
+        let path = self
+            .session_artifact_dir(snapshot.session_id.as_str())
+            .join("inflight-turn.json");
+        let bytes = serde_json::to_vec(&snapshot)?;
+        if bytes.len() > MAX_INFLIGHT_TURN_BYTES {
+            return Err(crate::SessionError::generic(format!(
+                "in-flight turn exceeds {MAX_INFLIGHT_TURN_BYTES} byte limit"
+            )));
+        }
+        tokio::task::spawn_blocking(move || {
+            coco_utils_common::replace_regular_atomic(&path, bytes).map(|_| ())
+        })
+        .await
+        .map_err(|error| crate::SessionError::generic(format!("journal writer join: {error}")))??;
+        Ok(())
+    }
+
+    async fn load_inflight_turn(
+        &self,
+        session_id: SessionId,
+    ) -> crate::Result<Option<InFlightTurnSnapshot>> {
+        const MAX_INFLIGHT_TURN_BYTES: usize = 8 * 1024 * 1024;
+        let path = self
+            .session_artifact_dir(session_id.as_str())
+            .join("inflight-turn.json");
+        let bytes = tokio::task::spawn_blocking(move || coco_utils_common::read_regular(&path))
+            .await
+            .map_err(|error| {
+                crate::SessionError::generic(format!("journal reader join: {error}"))
+            })?;
+        let bytes = match bytes {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        if bytes.len() > MAX_INFLIGHT_TURN_BYTES {
+            return Err(crate::SessionError::generic(format!(
+                "in-flight turn exceeds {MAX_INFLIGHT_TURN_BYTES} byte limit"
+            )));
+        }
+        let snapshot: InFlightTurnSnapshot = serde_json::from_slice(&bytes)?;
+        if snapshot.session_id != session_id {
+            return Err(crate::SessionError::generic(
+                "in-flight turn session id does not match its artifact path",
+            ));
+        }
+        Ok(Some(snapshot))
+    }
+
+    async fn clear_inflight_turn(&self, session_id: SessionId) -> crate::Result<()> {
+        let path = self
+            .session_artifact_dir(session_id.as_str())
+            .join("inflight-turn.json");
+        let removed = tokio::task::spawn_blocking(move || std::fs::remove_file(path))
+            .await
+            .map_err(|error| {
+                crate::SessionError::generic(format!("journal cleanup join: {error}"))
+            })?;
+        match removed {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+}
+
 /// Disk-backed [`SessionCatalog`]. Spans `<memory_base>/projects/*/`,
 /// resolving the same way [`SessionManager`](crate::SessionManager) does.
 pub struct DiskCatalog {
@@ -549,6 +648,7 @@ struct InMemoryState {
     agent_messages: HashMap<(String, String), Vec<Arc<Message>>>,
     agent_metadata: HashMap<(String, String), AgentMetadata>,
     usage: HashMap<String, SessionUsageSnapshot>,
+    inflight_turns: HashMap<String, InFlightTurnSnapshot>,
 }
 
 /// Process-lifetime, non-persistent [`SessionStore`] — every trait method
@@ -989,6 +1089,28 @@ impl UsageSnapshotStore for InMemoryStore {
 
     fn load_usage_snapshot(&self, session_id: &str) -> crate::Result<Option<SessionUsageSnapshot>> {
         Ok(self.lock().usage.get(session_id).cloned())
+    }
+}
+
+#[async_trait::async_trait]
+impl InFlightTurnStore for InMemoryStore {
+    async fn write_inflight_turn(&self, snapshot: InFlightTurnSnapshot) -> crate::Result<()> {
+        self.lock()
+            .inflight_turns
+            .insert(snapshot.session_id.to_string(), snapshot);
+        Ok(())
+    }
+
+    async fn load_inflight_turn(
+        &self,
+        session_id: SessionId,
+    ) -> crate::Result<Option<InFlightTurnSnapshot>> {
+        Ok(self.lock().inflight_turns.get(session_id.as_str()).cloned())
+    }
+
+    async fn clear_inflight_turn(&self, session_id: SessionId) -> crate::Result<()> {
+        self.lock().inflight_turns.remove(session_id.as_str());
+        Ok(())
     }
 }
 

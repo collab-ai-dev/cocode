@@ -192,6 +192,14 @@ impl SessionRuntime {
         ) {
             warn!(error = %e, session_id = %session_id, message_id, "failed to persist rewind last-prompt metadata");
         }
+        if let Err(error) = self
+            .persistence
+            .transcript_store()
+            .clear_inflight_turn(session_id.clone())
+            .await
+        {
+            warn!(%error, session_id = %session_id, "failed to clear stale in-flight turn after rewind");
+        }
         Some((idx as i32, messages_removed, kept))
     }
 }

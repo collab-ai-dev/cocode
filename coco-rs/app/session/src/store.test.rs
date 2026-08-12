@@ -147,6 +147,75 @@ fn test_in_memory_store_round_trips_through_dyn_session_store() {
     );
 }
 
+#[tokio::test]
+async fn in_memory_inflight_turn_round_trips_and_clears() {
+    let store: Arc<dyn SessionStore> = Arc::new(InMemoryStore::new());
+    let snapshot = crate::InFlightTurnSnapshot {
+        session_id: test_session_id("mem-session"),
+        turn_id: "turn-1".to_string(),
+        updated_at_ms: 42,
+        messages: sample_conversation(),
+    };
+
+    store.write_inflight_turn(snapshot).await.unwrap();
+    let loaded = store
+        .load_inflight_turn(test_session_id("mem-session"))
+        .await
+        .unwrap()
+        .expect("snapshot");
+    assert_eq!(loaded.turn_id, "turn-1");
+    assert_eq!(loaded.messages.len(), 2);
+
+    store
+        .clear_inflight_turn(test_session_id("mem-session"))
+        .await
+        .unwrap();
+    assert!(
+        store
+            .load_inflight_turn(test_session_id("mem-session"))
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn disk_inflight_turn_is_atomically_replaceable_and_clearable() {
+    let dir = tempfile::tempdir().unwrap();
+    let concrete = TranscriptStore::new(Arc::new(coco_paths::ProjectPaths::new(
+        dir.path().to_path_buf(),
+        Path::new("/journal"),
+    )));
+    let artifact = concrete
+        .session_artifact_dir("disk-session")
+        .join("inflight-turn.json");
+    let store: Arc<dyn SessionStore> = Arc::new(concrete);
+    let mut snapshot = crate::InFlightTurnSnapshot {
+        session_id: test_session_id("disk-session"),
+        turn_id: "turn-1".to_string(),
+        updated_at_ms: 42,
+        messages: sample_conversation(),
+    };
+
+    store.write_inflight_turn(snapshot.clone()).await.unwrap();
+    snapshot.turn_id = "turn-2".to_string();
+    store.write_inflight_turn(snapshot).await.unwrap();
+
+    assert!(artifact.is_file());
+    let loaded = store
+        .load_inflight_turn(test_session_id("disk-session"))
+        .await
+        .unwrap()
+        .expect("snapshot");
+    assert_eq!(loaded.turn_id, "turn-2");
+
+    store
+        .clear_inflight_turn(test_session_id("disk-session"))
+        .await
+        .unwrap();
+    assert!(!artifact.exists());
+}
+
 /// The same workload through both backends must derive identical
 /// *content* metadata — only the fs-stat trio (created/modified/size) may
 /// differ. This is the load-bearing "trait isn't disk-shaped" assertion.

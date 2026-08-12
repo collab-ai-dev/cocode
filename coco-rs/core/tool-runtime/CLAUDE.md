@@ -30,6 +30,7 @@ Decouple tool → subsystem circular deps; each has a `NoOp*` test double and is
 | `ToolPermissionBridge` | Interactive permission request/decision/resolution |
 | `GoalHandle` | Tool-facing seam onto the session goal runtime; leaf dep on `coco-goals` domain types, never on `coco-goal-runtime` |
 | `CanUseToolHandle` | Per-fork tool-execution gate (`Allow{updated_input}` / `Deny{message}` / `Ask`) in `can_use_tool.rs`; dispatched from `app/query::tool_call_preparer::resolve_can_use_tool_decision` (step 3.5) BEFORE the tool's built-in `check_permissions`; `Allow{updated_input}` is the speculation overlay's path-rewrite hook |
+| `ProgrammaticToolCallHandle` | Narrow sandbox callback for read-only tool calls; the query-layer implementation re-enters the canonical runner and rejects any input that is not dynamically provable as read-only |
 
 Also: `PlanApprovalMessage`/`Request`/`Response` DTOs, and `check_verification_nudge(&[&str])` — shared pure helper used by both V1 `TodoWrite` and V2 `TaskUpdate` (`/verif/i` gate, ≥3 items).
 
@@ -38,6 +39,9 @@ Also: `PlanApprovalMessage`/`Request`/`Response` DTOs, and `check_verification_n
 - **Safe tools** (read-only, idempotent) execute concurrently; **unsafe tools** queue and execute after streaming stop. `ToolExecutor` orchestrates this.
 - All cross-subsystem interaction (tasks, agents, hooks, MCP, mailbox) goes through callback handle traits — `coco-tool-runtime` does NOT depend on `coco-tools`, `coco-tasks`, `coco-commands`, etc. Implementations are injected via `ToolUseContext` at runtime.
 - `ToolUseContext` is the typed payload carried across tool invocations (see main CLAUDE.md "Typed Structs over JSON Values" for the `ToolAppState` migration story).
+- `ToolUseContext::require_read_only` is a capability restriction, not a hint:
+  query re-checks the dynamic predicate after PreToolUse and permission input
+  rewrites so callbacks cannot widen a sandboxed call into mutation.
 
 ## Schema ownership
 

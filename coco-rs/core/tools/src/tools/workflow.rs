@@ -75,6 +75,7 @@ fn workflow_prompt() -> String {
 The script is plain JavaScript that MUST begin with `export const meta = {{ name, description, phases }}` (a pure object literal) and MUST be deterministic — no `Date.now()`, `Math.random()`, or `new Date()`.\n\n\
 Globals available to the script:\n\
 - `agent(prompt, opts?)` — spawn one subagent and `await` its result text. opts: {{ label, phase, agentType, model, effort, isolation, schema }}. isolation may be \"worktree\"; \"remote\" is not available.\n\
+- `tool(name, input?)` — run one provably read-only tool through the normal validation, hooks, permission, and cancellation pipeline. Mutating or approval-requiring calls fail closed.\n\
 - `parallel(thunks)` — run `[() => agent(...), ...]` concurrently (a barrier); a failed call resolves to `null`.\n\
 - `pipeline(items, ...stages)` — flow each item independently through all stages; a stage gets `(prev, item, index)`.\n\
 - `phase(title)` / `log(message)` — emit progress. Use the SAME phase titles here as in `meta.phases`; they are matched exactly.\n\
@@ -462,6 +463,7 @@ impl Tool for WorkflowTool {
                     log_assistant_responses: ctx.log_assistant_responses,
                     permission_context: ctx.permission_context.clone(),
                     messages: ctx.messages.clone(),
+                    programmatic_tools: ctx.programmatic_tools.clone(),
                     subagent_screen: ctx.subagent_screen.clone(),
                     session_usage: ctx.session_usage.clone(),
                     mcp_tool_exposure: ctx.mcp_tool_exposure,

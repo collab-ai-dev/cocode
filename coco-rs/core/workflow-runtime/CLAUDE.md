@@ -68,6 +68,10 @@ explicit no-op is the honest version of "silently does nothing".
   the callback leaves a whole fan-out reading as permanently queued. Every
   frame re-states both timestamps: the downstream reducer replaces a node
   wholesale, so a field dropped from the terminal frame is erased.
+- `tool(name, input?)` — async, host-backed, and read-only. The concrete host
+  must route it through the application's canonical validation, permissions,
+  hooks, cancellation, and result path; unsafe or dynamically-unprovable calls
+  reject. QuickJS never receives raw registry access.
 - `parallel(funcs)` / `pipeline(items, ...stages)` — JS-defined
   combinators over `Promise.allSettled`, `WORKFLOW_ARRAY_CAP` items max;
   concurrency is bounded host-side (each `agent()` waits on a permit).
