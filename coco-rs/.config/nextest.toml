@@ -2,6 +2,18 @@
 # Do not increase, fix your test instead
 slow-timeout = { period = "15s", terminate-after = 2 }
 
+# These tests each construct complete session/AppServer fixtures. They finish
+# in well under a second alone, but can starve behind workspace-wide process
+# and filesystem contention. Reserve the full scheduler while they run instead
+# of weakening the timeout that catches genuine hangs.
+[[profile.default.overrides]]
+filter = 'package(coco-cli) & test(/(local_app_server_completes_plain_then_file_mention_turn|idle_queue_processor_starts_pending_prompt_turn)$/)'
+threads-required = "num-test-threads"
+
+[[profile.default.overrides]]
+filter = 'package(coco-agent-host) & test(targeted_project_and_local_config_writes_cannot_modify_the_sibling_project)'
+threads-required = "num-test-threads"
+
 # `coco-tests-live` is the one package whose tests spawn the real `coco`
 # binary (two full process starts per test), so its wall-clock is dominated by
 # process startup rather than in-process work. The 15s/30s default above is
