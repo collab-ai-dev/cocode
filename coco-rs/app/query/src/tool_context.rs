@@ -523,6 +523,8 @@ impl ToolContextFactory {
         };
         ToolUseContext {
             tools: self.tools.clone(),
+            programmatic_tools: None,
+            require_read_only: false,
             main_loop_model,
             // Honor the config-driven values that the previous inline
             // constructor hardcoded.

@@ -1375,6 +1375,39 @@ fn test_append_message_chain_parents_tool_result_to_source_assistant() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn failed_chain_append_does_not_advance_dedup_or_follow_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let (_dir, store, project_dir) = test_store();
+    let sid = "symlink-session";
+    let target = project_dir.join("outside.jsonl");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    std::fs::write(&target, b"keep\n").unwrap();
+    symlink(&target, store.transcript_path(sid)).unwrap();
+
+    let message = coco_messages::create_user_message("must not escape");
+    let uuid = *message.uuid().expect("message uuid");
+    let mut seen = std::collections::HashSet::new();
+    let error = store
+        .append_message_chain(
+            sid,
+            std::iter::once(&message),
+            &mut seen,
+            ChainWriteOptions {
+                cwd: "/tmp".into(),
+                timestamp: "2025-01-15T10:00:00Z".into(),
+                ..Default::default()
+            },
+        )
+        .expect_err("symlink transcript must fail closed");
+
+    assert!(error.to_string().contains("symlink"));
+    assert!(!seen.contains(&uuid), "failed writes must remain retryable");
+    assert_eq!(std::fs::read(&target).unwrap(), b"keep\n");
+}
+
 #[test]
 fn test_append_message_chain_write_failure_does_not_commit_seen_state() {
     let (_dir, store, _project_dir) = test_store();

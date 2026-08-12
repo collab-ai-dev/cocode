@@ -383,6 +383,10 @@ fn test_installed_plugins_manager_roundtrip() {
             installed_at: Some("2024-01-01T00:00:00Z".to_string()),
             last_updated: None,
             git_commit_sha: None,
+            artifact_sha256: None,
+            artifact_file_count: None,
+            artifact_total_bytes: None,
+            source: None,
         },
     );
     assert!(mgr.is_installed("test@mkt"));

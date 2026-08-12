@@ -869,6 +869,7 @@ impl QueryEngine {
                 token: stream_token,
                 snapshot: opened_runtime_snapshot,
             } = opened_stream;
+            let assistant_message_uuid = uuid::Uuid::new_v4();
 
             let consumed = self
                 .consume_stream(
@@ -882,6 +883,7 @@ impl QueryEngine {
                     &mut streaming_model_index,
                     state_tracker,
                     &event_turn_id,
+                    assistant_message_uuid,
                     &consts,
                     &services,
                     &mut acc,

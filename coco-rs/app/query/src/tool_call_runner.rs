@@ -75,6 +75,9 @@ pub(crate) struct ToolCallRunOutcome {
     /// Number of failed `StructuredOutput` tool invocations in this batch.
     pub structured_output_failed_attempts: u32,
     pub permission_aborted: bool,
+    /// Raw typed tool data captured only for the isolated read-only
+    /// programmatic runner. Normal model-authored batches leave this absent.
+    pub programmatic_output: Option<serde_json::Value>,
 }
 
 pub(crate) struct ToolCallRunner<'a> {
@@ -226,6 +229,11 @@ impl<'a> ToolCallRunner<'a> {
         let hook_tx = self.hook_tx_opt;
         let contexts = &tool_result_contexts;
         let event_tx = self.event_tx;
+        let programmatic_output = self
+            .ctx
+            .require_read_only
+            .then(|| Arc::new(std::sync::Mutex::new(None)));
+        let output_capture = programmatic_output.clone();
 
         let mut control = Control::default();
         if permission_aborted {
@@ -239,6 +247,7 @@ impl<'a> ToolCallRunner<'a> {
                 plans,
                 |prepared, runtime| {
                     let orchestration_ctx = orchestration_ctx.clone();
+                    let output_capture = output_capture.clone();
                     async move {
                         let ctx_entry = contexts.get(&prepared.tool_use_id);
                         let semantic_tool_name = ctx_entry
@@ -309,6 +318,14 @@ impl<'a> ToolCallRunner<'a> {
                             r = prepared.tool.execute(effective_input.as_value().clone(), &call_ctx) => r,
                             () = call_ctx.abort.cancelled() => Err(tool_error_from_abort(&call_ctx.abort)),
                         };
+                        if let (Some(capture), Ok(result)) =
+                            (output_capture.as_ref(), execute_result.as_ref())
+                        {
+                            *capture
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                                Some(result.data.clone());
+                        }
 
                         build_outcome_from_execution(RunOneTail {
                             tool_use_id: prepared.tool_use_id.clone(),
@@ -403,6 +420,13 @@ impl<'a> ToolCallRunner<'a> {
                 },
             )
             .await;
+
+        if let Some(output) = programmatic_output {
+            control.programmatic_output = output
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+        }
 
         // 5. Commit ordered messages and emit Completed events now
         //    that we're outside the executor's sync on_outcome
@@ -516,6 +540,7 @@ struct Control {
     structured_output_attempts: u32,
     structured_output_failed_attempts: u32,
     permission_aborted: bool,
+    programmatic_output: Option<serde_json::Value>,
 }
 
 impl Default for Control {
@@ -527,6 +552,7 @@ impl Default for Control {
             structured_output_attempts: 0,
             structured_output_failed_attempts: 0,
             permission_aborted: false,
+            programmatic_output: None,
         }
     }
 }
@@ -540,6 +566,7 @@ impl Control {
             structured_output_attempts: self.structured_output_attempts,
             structured_output_failed_attempts: self.structured_output_failed_attempts,
             permission_aborted: self.permission_aborted,
+            programmatic_output: self.programmatic_output,
         }
     }
 }

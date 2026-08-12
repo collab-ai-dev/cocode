@@ -81,6 +81,7 @@ gap additions.",
         "control/setPermissionMode" => SetPermissionMode(SetPermissionModeParams),
         "control/setThinking" => SetThinking(SetThinkingParams),
         "control/setAgentColor" => SetAgentColor(SetAgentColorParams),
+        "control/probePermission" => ProbePermission(StaticPermissionProbeParams),
         "control/applyPermissionUpdate" => ApplyPermissionUpdate(ApplyPermissionUpdateParams),
         "control/resetSessionPermissionRules" => ResetSessionPermissionRules(SessionTarget),
         "control/stopTask" => StopTask(StopTaskParams),
@@ -157,7 +158,8 @@ pub const fn request_scope(method: ClientRequestMethod) -> RequestScope {
         | ClientRequestMethod::TaskList
         | ClientRequestMethod::TaskDetail
         | ClientRequestMethod::McpStatus
-        | ClientRequestMethod::ContextUsage => RequestScope::SessionRead,
+        | ClientRequestMethod::ContextUsage
+        | ClientRequestMethod::ProbePermission => RequestScope::SessionRead,
         ClientRequestMethod::SessionRename
         | ClientRequestMethod::SessionToggleTag
         | ClientRequestMethod::SessionGoalCreate
@@ -232,6 +234,7 @@ impl ClientRequest {
             Self::SetPermissionMode(params) => Some(&params.target),
             Self::SetThinking(params) => Some(&params.target),
             Self::SetAgentColor(params) => Some(&params.target),
+            Self::ProbePermission(params) => Some(&params.target),
             Self::ApplyPermissionUpdate(params) => Some(&params.target),
             Self::StopTask(params) => Some(&params.target),
             Self::RewindFiles(params) => Some(&params.target),
@@ -803,6 +806,15 @@ pub struct SetModelRoleParams {
 pub struct SetPermissionModeParams {
     pub target: SessionTarget,
     pub mode: PermissionMode,
+}
+
+/// Params for `control/probePermission`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StaticPermissionProbeParams {
+    pub target: SessionTarget,
+    pub tool_name: String,
+    pub input: serde_json::Value,
 }
 
 /// Params for `control/setThinking`.

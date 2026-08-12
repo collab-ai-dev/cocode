@@ -252,7 +252,7 @@ impl QueryEngine {
 
         let streaming_ctx: Option<Arc<ToolUseContext>> = if self.config.streaming_tool_execution {
             let current_tool_search_strategy = tool_materialization.tool_search_strategy();
-            let base = self
+            let mut base = self
                 .tool_context_factory(hook_tx_opt)
                 .build(crate::tool_context::ToolContextOverrides {
                     user_message_id: Some(consts.user_uuid.clone()),
@@ -263,6 +263,9 @@ impl QueryEngine {
                     tool_materialization: Some(Arc::new(tool_materialization.clone())),
                 })
                 .await;
+            let materialization = Arc::new(tool_materialization.clone());
+            base.programmatic_tools =
+                Some(self.programmatic_tool_handle(base.clone(), materialization));
             Some(Arc::new(base))
         } else {
             None

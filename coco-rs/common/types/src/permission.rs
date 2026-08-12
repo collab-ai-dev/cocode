@@ -458,6 +458,46 @@ pub enum PermissionDecision {
     },
 }
 
+/// Runtime stages intentionally skipped by a side-effect-free permission
+/// probe. A probe reports the deterministic decision available before these
+/// stages; it never presents that decision as final authorization.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionProbeDynamicStage {
+    CanUseTool,
+    PreToolUseHooks,
+    AutoModeClassifier,
+    HumanApproval,
+}
+
+/// Input-validation outcome for a static permission probe.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum PermissionProbeValidation {
+    Valid,
+    Invalid { message: String },
+    Unavailable { message: String },
+}
+
+/// Side-effect-free permission analysis for one concrete tool/input pair.
+///
+/// `provisional_decision` is absent when the tool is unavailable or input
+/// validation fails. Even when present it is not an execution grant: every
+/// stage in `not_evaluated` may still change the runtime outcome.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StaticPermissionProbeResult {
+    pub tool_id: String,
+    pub validation: PermissionProbeValidation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalized_input: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisional_decision: Option<PermissionDecision>,
+    pub not_evaluated: Vec<PermissionProbeDynamicStage>,
+}
+
 /// A permission update action.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]

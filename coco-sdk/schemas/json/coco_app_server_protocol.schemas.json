@@ -2059,6 +2059,22 @@
         {
           "properties": {
             "method": {
+              "const": "control/probePermission",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/StaticPermissionProbeParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "control/applyPermissionUpdate",
               "type": "string"
             },
@@ -2402,6 +2418,7 @@
         "control/setPermissionMode",
         "control/setThinking",
         "control/setAgentColor",
+        "control/probePermission",
         "control/applyPermissionUpdate",
         "control/resetSessionPermissionRules",
         "control/stopTask",
@@ -12100,6 +12117,24 @@
           "type": "string"
         }
       ]
+    },
+    "StaticPermissionProbeParams": {
+      "description": "Params for `control/probePermission`.",
+      "properties": {
+        "input": true,
+        "target": {
+          "$ref": "#/$defs/SessionTarget"
+        },
+        "tool_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "tool_name",
+        "input"
+      ],
+      "type": "object"
     },
     "StopTaskParams": {
       "description": "Params for `control/stopTask`.",

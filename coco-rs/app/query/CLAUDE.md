@@ -20,6 +20,8 @@ decisions. Emits `coco_types::CoreEvent` directly (no intermediate event enum).
 | `single_turn::*` | One-shot turn execution (no loop) |
 | `engine_finalize_turn` / `engine_finalize_tail` | Turn finalization + continuation, memory-reminder, suggestion, rate-limit helpers |
 | `engine_compaction` / `engine_compaction_full` | Manual/session-memory entry paths; full-compaction execution |
+| `static_permission_probe` | Side-effect-free validation + deterministic permission-rule projection; explicitly reports every skipped dynamic stage |
+| `programmatic_tool` | Read-only sandbox bridge back through the canonical validation, hooks, permission, cancellation, and result pipeline |
 
 ## Turn Lifecycle
 
@@ -38,6 +40,12 @@ decisions. Emits `coco_types::CoreEvent` directly (no intermediate event enum).
 9.  Drain CommandQueue → attachment messages (User w/ system-reminder wrap)
 10. Goto 1 if tools remain; else emit TurnEnded(Completed)
 ```
+
+During main-session streaming, `engine_stream_consume` atomically refreshes a
+bounded `InFlightTurnSnapshot` containing the visible user/assistant/tool tail.
+Canonical transcript append is the commit point and clears the projection;
+resume may fold a recent same-session journal by message UUID. Subagents and
+discarded attempt-only deltas never enter this journal.
 
 ## Emitted CoreEvent Variants
 

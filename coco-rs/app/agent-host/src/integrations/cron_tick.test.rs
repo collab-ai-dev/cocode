@@ -108,3 +108,21 @@ fn scheduled_non_sentinel_prompt_is_unchanged() {
 
     assert_eq!(prompt, "check deployment");
 }
+
+#[test]
+fn scheduled_prompt_metadata_is_tagged_with_content_free_identity() {
+    let task = task("job-1", "0 9 * * *", "private prompt body");
+    let digest = task.schedule_digest().as_str().to_string();
+
+    let tagged = tag_scheduled_prompt(&task, "expanded private body", 1_735_722_000_000);
+
+    assert!(tagged.starts_with("<scheduled-task-metadata>\n"));
+    assert!(tagged.contains("\"id\":\"job-1\""));
+    assert!(tagged.contains(&digest));
+    assert!(tagged.ends_with("\n\nexpanded private body"));
+    let metadata = tagged.lines().nth(1).expect("metadata JSON");
+    assert!(
+        !metadata.contains("private"),
+        "metadata must not contain prompt content"
+    );
+}

@@ -22,7 +22,8 @@ use coco_types::{
     SessionStatusResult, SessionSubscribeParams, SessionSubscribeResult, SessionTarget,
     SessionToggleTagParams, SessionToggleTagResult, SessionTurnsListParams, SessionTurnsListResult,
     SetAgentColorParams, SetModelParams, SetModelRoleParams, SetModelRoleResult,
-    SetPermissionModeParams, SetThinkingParams, StopTaskParams, TaskDetailParams, TaskDetailResult,
+    SetPermissionModeParams, SetThinkingParams, StaticPermissionProbeParams,
+    StaticPermissionProbeResult, StopTaskParams, TaskDetailParams, TaskDetailResult,
     TaskListResult, TurnStartParams, TurnStartResult, UpdateEnvParams, UserInputResolveParams,
 };
 

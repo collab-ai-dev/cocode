@@ -321,6 +321,10 @@ fn make_installed_manager(
                 installed_at: Some("2024-01-01T00:00:00Z".to_string()),
                 last_updated: None,
                 git_commit_sha: None,
+                artifact_sha256: None,
+                artifact_file_count: None,
+                artifact_total_bytes: None,
+                source: None,
             },
         );
     }

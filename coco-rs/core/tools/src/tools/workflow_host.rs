@@ -25,6 +25,7 @@ use coco_tool_runtime::AgentSpawnRequest;
 use coco_tool_runtime::AgentSpawnRouting;
 use coco_tool_runtime::AgentSpawnStatus;
 use coco_tool_runtime::AgentSpawnTelemetry;
+use coco_tool_runtime::ProgrammaticToolCallHandleRef;
 use coco_tool_runtime::SpawnMode;
 use coco_tool_runtime::TaskHandleRef;
 use coco_types::SessionId;
@@ -65,6 +66,10 @@ pub(crate) struct WorkflowSpawnContext {
     /// The launching agent's transcript, so the dispatch screen's classifier
     /// judges each `agent()` request in the context that produced it.
     pub messages: Arc<Vec<Arc<coco_messages::Message>>>,
+    /// Narrow bridge back to the canonical tool runner. Workflow scripts only
+    /// request provably read-only calls; validation and policy remain owned
+    /// by the application layer.
+    pub programmatic_tools: Option<ProgrammaticToolCallHandleRef>,
     /// Screens each `agent()` dispatch — see
     /// [`coco_tool_runtime::subagent_screen`].
     pub subagent_screen: coco_tool_runtime::SubagentDispatchScreenHandle,
@@ -319,6 +324,21 @@ impl WorkflowRunHost {
 
 #[async_trait::async_trait(?Send)]
 impl WorkflowHost for WorkflowRunHost {
+    async fn run_tool(
+        &self,
+        tool_name: String,
+        input: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let Some(handle) = self.spawn_ctx.programmatic_tools.clone() else {
+            return Err("programmatic tool calls are not available".to_string());
+        };
+        self.main_handle
+            .spawn(async move { handle.call_read_only(tool_name, input).await })
+            .await
+            .map_err(|error| format!("programmatic tool task join error: {error}"))?
+            .map_err(|error| error.to_string())
+    }
+
     async fn run_agent(
         &self,
         prompt: String,

@@ -122,6 +122,19 @@ impl CronTask {
             CronPayload::Script { script, .. } => format!("$ {script}"),
         }
     }
+
+    /// Stable cross-process fingerprint of the timing fields consumed by the
+    /// scheduler. Payload edits do not move the next fire; schedule edits do.
+    pub fn schedule_digest(&self) -> coco_types::ContentDigest {
+        coco_types::ContentDigest::of(&format!(
+            "{}\0{}\0{:?}\0{}\0{}",
+            self.cron,
+            self.created_at,
+            self.last_fired_at,
+            self.is_recurring(),
+            self.permanent.unwrap_or(false),
+        ))
+    }
 }
 
 /// A remote trigger entry (CCR-backed; see `RemoteTriggerTool`).
@@ -192,6 +205,17 @@ pub trait ScheduleStore: Send + Sync {
         ids: &[&str],
         fired_at: i64,
     ) -> Result<(), coco_error::BoxedError>;
+    /// Atomically claim one due task against the exact snapshot used by the
+    /// scheduler. Durable stores must serialize this across processes. A live
+    /// recurring task is stamped before return; one-shot/aged tasks are
+    /// removed before return. `None` means another scheduler won the claim or
+    /// the task changed since the caller's read.
+    async fn claim_cron_task(
+        &self,
+        expected: &CronTask,
+        fired_at: i64,
+        remove_after_claim: bool,
+    ) -> Result<Option<CronTask>, coco_error::BoxedError>;
 
     // ── Remote triggers (RemoteTriggerTool — CCR; see its struct doc) ──
     async fn create_trigger(
@@ -264,6 +288,25 @@ impl ScheduleStore for InMemoryScheduleStore {
             }
         }
         Ok(())
+    }
+
+    async fn claim_cron_task(
+        &self,
+        expected: &CronTask,
+        fired_at: i64,
+        remove_after_claim: bool,
+    ) -> Result<Option<CronTask>, coco_error::BoxedError> {
+        let mut tasks = self.tasks.write().await;
+        let Some(index) = tasks.iter().position(|task| task == expected) else {
+            return Ok(None);
+        };
+        let claimed = tasks[index].clone();
+        if remove_after_claim {
+            tasks.remove(index);
+        } else {
+            tasks[index].last_fired_at = Some(fired_at);
+        }
+        Ok(Some(claimed))
     }
 
     async fn create_trigger(
@@ -352,6 +395,14 @@ impl ScheduleStore for NoOpScheduleStore {
         _fired_at: i64,
     ) -> Result<(), coco_error::BoxedError> {
         Ok(())
+    }
+    async fn claim_cron_task(
+        &self,
+        _expected: &CronTask,
+        _fired_at: i64,
+        _remove_after_claim: bool,
+    ) -> Result<Option<CronTask>, coco_error::BoxedError> {
+        Ok(None)
     }
     async fn create_trigger(
         &self,

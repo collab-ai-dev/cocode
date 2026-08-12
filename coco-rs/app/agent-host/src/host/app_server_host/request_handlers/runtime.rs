@@ -16,7 +16,7 @@ pub(crate) use model::{
 };
 pub(crate) use observability::{handle_context_usage, handle_session_cost, handle_session_status};
 pub(crate) use permission::{
-    handle_apply_permission_update, handle_reset_session_permission_rules,
+    handle_apply_permission_update, handle_probe_permission, handle_reset_session_permission_rules,
     handle_set_permission_mode,
 };
 pub(crate) use reload::{handle_config_apply_flags, handle_hook_reload, handle_plugin_reload};

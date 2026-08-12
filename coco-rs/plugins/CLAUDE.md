@@ -27,6 +27,16 @@ contribution bridges register from it.
   bootstrap and `/reload-plugins` register commands / hooks / skills from this.
 - `get_plugin_dirs(config_dir, project_dir)` — `{config_home}/plugins/*` +
   `{project}/.cocode/plugins/*` (the inline standing dirs).
+- `install_plugin_from_marketplace` (`install`) — resolves and policy-checks
+  the full dependency closure, materializes and validates every member under
+  staging, publishes with rollback backups, atomically records provenance,
+  then activates the closure in settings as the transaction commit point.
+
+Install serialization is both in-process and cross-process. The installation
+ledger records the inspected tree SHA-256, file count, byte count, declared
+source, and source commit when available. A closure member is never trusted
+merely because settings already marks it enabled; every install rematerializes
+and validates the complete closure.
 
 ## Modules
 - `loader` — manifest reading, per-dir validation, and the `load_all_plugins` orchestrator

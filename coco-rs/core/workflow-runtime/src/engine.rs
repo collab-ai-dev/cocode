@@ -290,9 +290,10 @@ struct GlobalsSetup {
     child_group: Option<String>,
 }
 
-/// Install the host-backed globals: `agent` (async), `phase`/`log` (sync),
-/// `args` (frozen JSON), `budget` (frozen), and `workflow` (async, depth-aware:
-/// host-backed at depth 0, throwing the one-level guard at depth >= 1).
+/// Install the host-backed globals: `agent` / read-only `tool` (async),
+/// `phase`/`log` (sync), `args` (frozen JSON), `budget` (frozen), and
+/// `workflow` (async, depth-aware: host-backed at depth 0, throwing the
+/// one-level guard at depth >= 1).
 ///
 /// The agent ordinal, phase table and replay cursor come from `state` rather
 /// than from context-local cells, so a nested `workflow()` continues the
@@ -406,6 +407,8 @@ fn install_globals<'js>(ctx: &Ctx<'js>, setup: GlobalsSetup) -> rquickjs::Result
     // `Arc<WorkflowRunState>` and hands the same one to the child engine.
     let workflow_host = host.clone();
     let workflow_sync_budget = sync_budget.clone();
+    let tool_host = host.clone();
+    let tool_sync_budget = sync_budget.clone();
 
     // agent(prompt, opts?) — async; spawns one subagent and awaits its result.
     {
@@ -591,6 +594,45 @@ fn install_globals<'js>(ctx: &Ctx<'js>, setup: GlobalsSetup) -> rquickjs::Result
         globals.set(
             "agent",
             Function::new(ctx.clone(), Async(agent))?.with_name("agent")?,
+        )?;
+    }
+
+    // tool(name, input?) — async, read-only, and host-governed. The concrete
+    // host routes this through the same validation/permission/hook/cancel path
+    // as a model-originated call; QuickJS never receives a registry or raw tool
+    // object.
+    {
+        let call = move |ctx: Ctx<'js>, tool_name: String, input: Opt<Value<'js>>| {
+            let host = tool_host.clone();
+            let sync_budget = tool_sync_budget.clone();
+            sync_budget.reset();
+            let input = match input.0 {
+                Some(value) => js_to_json(&ctx, value),
+                None => Ok(serde_json::Value::Object(serde_json::Map::new())),
+            };
+            let ctx2 = ctx.clone();
+            async move {
+                let input = match input {
+                    Ok(input) => input,
+                    Err(error) => {
+                        let thrown = format!("invalid tool input: {error}").into_js(&ctx2)?;
+                        return Err(ctx2.throw(thrown));
+                    }
+                };
+                let outcome = host.run_tool(tool_name, input).await;
+                sync_budget.reset();
+                match outcome {
+                    Ok(value) => json_to_js(&ctx2, &value),
+                    Err(message) => {
+                        let thrown = message.into_js(&ctx2)?;
+                        Err(ctx2.throw(thrown))
+                    }
+                }
+            }
+        };
+        globals.set(
+            "tool",
+            Function::new(ctx.clone(), Async(call))?.with_name("tool")?,
         )?;
     }
 

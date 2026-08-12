@@ -180,6 +180,7 @@ mappings:
 | `/model` picker | `set_model_role` |
 | Ctrl+T thinking / fast-mode toggle | `set_thinking` / `config_apply_flags` |
 | permission mode / `/permissions`, `/add-dir` | `set_permission_mode` / `apply_permission_update` (`reset` → `reset_session_permission_rules`) |
+| static permission diagnostics | `probe_permission` (`control/probePermission`; provisional and non-authorizing) |
 | `/color` | `set_agent_color` |
 | `/tasks cancel` / Ctrl+B / list / detail | `stop_task` / `background_all_tasks` / `task_list` / `task_detail` |
 | `/rewind` (file-restore half) | `rewind_files` (conversation truncation stays TUI-local) |

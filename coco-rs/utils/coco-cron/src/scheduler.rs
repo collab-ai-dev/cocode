@@ -17,9 +17,13 @@ pub const RECURRING_MAX_AGE_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 /// The timing-only view of a task the scheduler core needs. The owning record
 /// (prompt, durable, agent_id) lives in the store layer; the core sees only
 /// what it needs to decide *when* to fire.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct CronTiming<'a> {
     pub id: &'a str,
+    /// Stable digest of every field that influences the next fire. A caller
+    /// may edit a task in place while retaining its id; the digest prevents
+    /// this process from continuing to use the old cached schedule.
+    pub schedule_digest: String,
     pub cron: &'a str,
     pub created_at_ms: i64,
     pub last_fired_at_ms: Option<i64>,
@@ -53,7 +57,13 @@ pub fn is_recurring_task_aged(t: &CronTiming<'_>, now_ms: i64, max_age_ms: i64) 
 /// of `Infinity` in the `nextFireAt` map.
 #[derive(Debug, Default)]
 pub struct CronTickState {
-    next_fire_at: HashMap<String, i64>,
+    next_fire_at: HashMap<String, CachedFire>,
+}
+
+#[derive(Debug)]
+struct CachedFire {
+    schedule_digest: String,
+    next_fire_at_ms: i64,
 }
 
 impl CronTickState {
@@ -84,8 +94,12 @@ impl CronTickState {
         for t in tasks {
             seen.insert(t.id);
 
-            let next = match self.next_fire_at.get(t.id) {
-                Some(&n) => n,
+            let next = match self
+                .next_fire_at
+                .get(t.id)
+                .filter(|cached| cached.schedule_digest == t.schedule_digest)
+            {
+                Some(cached) => cached.next_fire_at_ms,
                 None => {
                     let anchor = if t.recurring {
                         t.last_fired_at_ms.unwrap_or(t.created_at_ms)
@@ -93,7 +107,13 @@ impl CronTickState {
                         t.created_at_ms
                     };
                     let n = next_cron_run_ms(t.cron, anchor).unwrap_or(i64::MAX);
-                    self.next_fire_at.insert(t.id.to_string(), n);
+                    self.next_fire_at.insert(
+                        t.id.to_string(),
+                        CachedFire {
+                            schedule_digest: t.schedule_digest.clone(),
+                            next_fire_at_ms: n,
+                        },
+                    );
                     n
                 }
             };
@@ -106,7 +126,13 @@ impl CronTickState {
             if t.recurring && !aged {
                 // Reschedule from `now`, not from the matched instant.
                 let new_next = next_cron_run_ms(t.cron, now_ms).unwrap_or(i64::MAX);
-                self.next_fire_at.insert(t.id.to_string(), new_next);
+                self.next_fire_at.insert(
+                    t.id.to_string(),
+                    CachedFire {
+                        schedule_digest: t.schedule_digest.clone(),
+                        next_fire_at_ms: new_next,
+                    },
+                );
             } else {
                 self.next_fire_at.remove(t.id);
             }
@@ -128,9 +154,16 @@ impl CronTickState {
     pub fn next_fire_time(&self) -> Option<i64> {
         self.next_fire_at
             .values()
-            .copied()
+            .map(|cached| cached.next_fire_at_ms)
             .filter(|&n| n != i64::MAX)
             .min()
+    }
+
+    /// Forget one speculative tick result when the storage-layer claim did not
+    /// commit. The next tick will recompute from the latest task snapshot
+    /// instead of skipping a due fire because this in-memory cache advanced.
+    pub fn invalidate(&mut self, id: &str) {
+        self.next_fire_at.remove(id);
     }
 }
 

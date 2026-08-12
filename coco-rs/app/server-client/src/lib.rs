@@ -52,8 +52,9 @@ use coco_types::{
     SessionSubscribeParams, SessionSubscribeResult, SessionTarget, SessionToggleTagParams,
     SessionToggleTagResult, SessionTurnsListParams, SessionTurnsListResult, SetAgentColorParams,
     SetModelParams, SetModelRoleParams, SetModelRoleResult, SetPermissionModeParams,
-    SetThinkingParams, StopTaskParams, TaskDetailParams, TaskDetailResult, TaskListResult,
-    TurnStartParams, TurnStartResult, UpdateEnvParams, UserInputResolveParams,
+    SetThinkingParams, StaticPermissionProbeParams, StaticPermissionProbeResult, StopTaskParams,
+    TaskDetailParams, TaskDetailResult, TaskListResult, TurnStartParams, TurnStartResult,
+    UpdateEnvParams, UserInputResolveParams,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::connect_async;
@@ -790,6 +791,14 @@ impl RemoteJsonRpcClient {
         target: SessionTarget,
     ) -> Result<ContextUsageResult, ClientError> {
         self.send_typed_client_request(ClientRequest::ContextUsage(target))
+            .await
+    }
+
+    pub async fn probe_permission(
+        &self,
+        params: StaticPermissionProbeParams,
+    ) -> Result<StaticPermissionProbeResult, ClientError> {
+        self.send_typed_client_request(ClientRequest::ProbePermission(params))
             .await
     }
 

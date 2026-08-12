@@ -1,4 +1,7 @@
-use std::sync::Mutex;
+use std::sync::{
+    Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use super::*;
 use coco_goal_runtime::{
@@ -79,6 +82,22 @@ impl BurstScheduler for ImmediateBurstScheduler {
         &self,
         burst: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
     ) -> bool {
+        tokio::spawn(burst);
+        true
+    }
+}
+
+#[derive(Default)]
+struct RecordingBurstScheduler {
+    scheduled: AtomicUsize,
+}
+
+impl BurstScheduler for RecordingBurstScheduler {
+    fn schedule(
+        &self,
+        burst: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+    ) -> bool {
+        self.scheduled.fetch_add(1, Ordering::Relaxed);
         tokio::spawn(burst);
         true
     }
@@ -169,6 +188,31 @@ async fn test_reconcile_is_idempotent_for_the_same_wake() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     assert_eq!(scheduled.len(), 1);
+}
+
+#[tokio::test]
+async fn empty_startup_reconcile_does_not_reserve_the_turn_slot() {
+    let store = Arc::new(InMemoryGoalStore::new());
+    let sid = SessionId::try_new("empty-goal-driver-test").expect("session id");
+    let runtime = Arc::new(GoalRuntimeHandle::new(sid, store, None));
+    let burst_scheduler = Arc::new(RecordingBurstScheduler::default());
+    let driver = Arc::new(GoalDriver::new(
+        runtime,
+        Arc::new(ScriptedPort::new(GoalTurnDisposition::Unreported)),
+        Arc::new(GoalContextMaterializer::new(Arc::new(NoPlanSource))),
+        Arc::new(GoalCompletionCoordinator::new(
+            Arc::new(InMemoryEvidenceStore::new()),
+            Arc::new(AlwaysVerified),
+        )),
+        AutonomousAdmission::new(1),
+        Arc::new(RecordingScheduler::default()),
+        burst_scheduler.clone(),
+        Arc::new(tokio::sync::Notify::new()),
+    ));
+
+    driver.drive_once_awaiting().await;
+
+    assert_eq!(burst_scheduler.scheduled.load(Ordering::Relaxed), 0);
 }
 
 #[test]

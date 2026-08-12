@@ -28,6 +28,14 @@ struct FakeHost {
 
 #[async_trait::async_trait(?Send)]
 impl WorkflowHost for FakeHost {
+    async fn run_tool(
+        &self,
+        tool_name: String,
+        input: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        Ok(serde_json::json!({ "tool": tool_name, "input": input }))
+    }
+
     async fn run_agent(
         &self,
         prompt: String,
@@ -281,6 +289,33 @@ fn runs_dsl_script_with_agent_parallel_phase_log_and_args() {
         .count();
     assert_eq!(starts, 3);
     assert_eq!(done, 3);
+}
+
+#[test]
+fn tool_global_returns_host_value() {
+    let host = Arc::new(FakeHost::default());
+    let result = run(
+        host,
+        r#"return await tool("Read", { file_path: "/tmp/demo" });"#,
+        serde_json::Value::Null,
+    )
+    .expect("run");
+
+    assert_eq!(result["tool"], "Read");
+    assert_eq!(result["input"]["file_path"], "/tmp/demo");
+}
+
+#[test]
+fn tool_global_rejects_non_json_input_instead_of_substituting_empty_object() {
+    let host = Arc::new(FakeHost::default());
+    let error = run(
+        host,
+        r#"return await tool("Read", { unsupported: 1n });"#,
+        serde_json::Value::Null,
+    )
+    .expect_err("BigInt input is not JSON");
+
+    assert!(error.to_string().contains("invalid tool input"));
 }
 
 #[test]

@@ -268,6 +268,10 @@ fn test_installed_plugins_file_v2_roundtrip() {
             installed_at: Some("2024-01-15T10:30:00Z".to_string()),
             last_updated: None,
             git_commit_sha: None,
+            artifact_sha256: None,
+            artifact_file_count: None,
+            artifact_total_bytes: None,
+            source: None,
         }],
     );
 

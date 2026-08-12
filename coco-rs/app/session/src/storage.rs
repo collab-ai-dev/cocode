@@ -1575,12 +1575,7 @@ pub(crate) fn append_jsonl_payload(path: &Path, payload: &[u8]) -> crate::Result
     let _guard = path_lock
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut coordinator = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(path)?;
+    let (mut coordinator, coordinator_existed) = open_regular_transcript_file(path)?;
     fs2::FileExt::lock_exclusive(&coordinator)?;
     let segments = transcript_segment_paths(path)?;
     let (segment_index, mut target) = segments
@@ -1603,15 +1598,54 @@ pub(crate) fn append_jsonl_payload(path: &Path, payload: &[u8]) -> crate::Result
     }
     if target == path {
         write_payload_transactionally(&mut coordinator, payload)?;
+        sync_parent_for_new_file(path, coordinator_existed)?;
     } else {
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(target)?;
+        let (mut file, target_existed) = open_regular_transcript_file(&target)?;
         write_payload_transactionally(&mut file, payload)?;
+        sync_parent_for_new_file(&target, target_existed)?;
     }
+    Ok(())
+}
+
+fn open_regular_transcript_file(path: &Path) -> crate::Result<(std::fs::File, bool)> {
+    let existed = match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(crate::SessionError::generic(format!(
+                "refusing to append through transcript symlink `{}`",
+                path.display()
+            )));
+        }
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error.into()),
+    };
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).truncate(false).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(crate::SessionError::generic(format!(
+            "transcript `{}` is not a regular file",
+            path.display()
+        )));
+    }
+    Ok((file, existed))
+}
+
+#[cfg(unix)]
+fn sync_parent_for_new_file(path: &Path, existed: bool) -> crate::Result<()> {
+    if !existed && let Some(parent) = path.parent() {
+        std::fs::File::open(parent)?.sync_all()?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn sync_parent_for_new_file(_path: &Path, _existed: bool) -> crate::Result<()> {
     Ok(())
 }
 

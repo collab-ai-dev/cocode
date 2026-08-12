@@ -16,8 +16,9 @@ pub struct VerifiedFileCommit(());
 /// Open a path without ever blocking on a FIFO and validate the opened object.
 ///
 /// Validation is descriptor-based: a path swap between lookup and open cannot
-/// make the caller read from an unchecked object. On Unix, `O_NONBLOCK` makes
-/// opening a FIFO safe; it has no effect on regular files.
+/// make the caller read from an unchecked object. On Unix, `O_NOFOLLOW`
+/// rejects a symlink at the leaf and `O_NONBLOCK` makes opening a FIFO safe;
+/// neither flag changes ordinary regular-file reads.
 pub fn open_regular(path: &Path) -> std::io::Result<File> {
     let mut options = OpenOptions::new();
     options.read(true);
@@ -35,7 +36,7 @@ pub fn open_regular(path: &Path) -> std::io::Result<File> {
 #[cfg(unix)]
 fn configure_regular_open(options: &mut OpenOptions) {
     use std::os::unix::fs::OpenOptionsExt as _;
-    options.custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC);
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
 }
 
 #[cfg(not(unix))]
@@ -70,7 +71,7 @@ pub async fn read_regular_async(path: &Path) -> std::io::Result<Vec<u8>> {
 
 #[cfg(unix)]
 fn configure_regular_open_async(options: &mut tokio::fs::OpenOptions) {
-    options.custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC);
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
 }
 
 #[cfg(not(unix))]

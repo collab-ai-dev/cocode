@@ -22,6 +22,113 @@ fn can_resume_rejects_a_journal_with_any_oversized_segment() {
 }
 
 #[test]
+fn resume_recovers_uncommitted_inflight_assistant_tail() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = dir.path().join("s1.jsonl");
+    std::fs::write(&transcript, format!("{}\n", user_line("u1", "hello"))).unwrap();
+    let assistant = coco_messages::create_assistant_message(
+        vec![coco_messages::AssistantContent::Text(
+            coco_messages::TextContent {
+                text: "partial answer".to_string(),
+                provider_metadata: None,
+            },
+        )],
+        "mock-model",
+        coco_types::TokenUsage::default(),
+    );
+    let updated_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let snapshot = crate::InFlightTurnSnapshot {
+        session_id: coco_types::SessionId::try_new("s1").unwrap(),
+        turn_id: "turn-1".to_string(),
+        updated_at_ms,
+        messages: vec![assistant],
+    };
+    let journal = dir.path().join("s1").join("inflight-turn.json");
+    std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
+    let _verified =
+        coco_utils_common::replace_regular_atomic(&journal, serde_json::to_vec(&snapshot).unwrap())
+            .unwrap();
+
+    let recovered = load_conversation_for_resume(&transcript).unwrap();
+    assert!(
+        recovered
+            .messages
+            .iter()
+            .any(|message| assistant_text(message) == Some("partial answer"))
+    );
+}
+
+#[test]
+fn resume_merges_unknown_journal_tail_after_a_committed_assistant() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = dir.path().join("s1.jsonl");
+    let committed_uuid = uuid::Uuid::new_v4();
+    std::fs::write(
+        &transcript,
+        format!(
+            "{}\n{}\n",
+            user_line("u1", "hello"),
+            assistant_line(
+                &committed_uuid.to_string(),
+                "u1",
+                "committed answer",
+                "mock-model",
+                None,
+            )
+        ),
+    )
+    .unwrap();
+
+    let make_assistant = |text: &str, uuid| {
+        let mut message = coco_messages::create_assistant_message(
+            vec![coco_messages::AssistantContent::Text(
+                coco_messages::TextContent {
+                    text: text.to_string(),
+                    provider_metadata: None,
+                },
+            )],
+            "mock-model",
+            coco_types::TokenUsage::default(),
+        );
+        let Message::Assistant(assistant) = &mut message else {
+            unreachable!("assistant constructor returned another message variant");
+        };
+        assistant.uuid = uuid;
+        message
+    };
+    let snapshot = crate::InFlightTurnSnapshot {
+        session_id: coco_types::SessionId::try_new("s1").unwrap(),
+        turn_id: "turn-1".to_string(),
+        updated_at_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64,
+        messages: vec![
+            make_assistant("committed answer", committed_uuid),
+            make_assistant("uncommitted answer", uuid::Uuid::new_v4()),
+        ],
+    };
+    let journal = dir.path().join("s1").join("inflight-turn.json");
+    std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
+    let _verified =
+        coco_utils_common::replace_regular_atomic(&journal, serde_json::to_vec(&snapshot).unwrap())
+            .unwrap();
+
+    let recovered = load_conversation_for_resume(&transcript).unwrap();
+    assert_eq!(
+        recovered
+            .messages
+            .iter()
+            .filter_map(assistant_text)
+            .collect::<Vec<_>>(),
+        vec!["committed answer", "uncommitted answer"]
+    );
+}
+
+#[test]
 fn test_fork_conversation_relabels_session_id() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("source.jsonl");

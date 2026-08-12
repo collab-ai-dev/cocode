@@ -193,6 +193,17 @@ pub type WorkflowAgentStarted<'a> = &'a dyn Fn();
 /// still `Send + Sync` so `Arc<dyn WorkflowHost>` can be constructed and shared.
 #[async_trait::async_trait(?Send)]
 pub trait WorkflowHost: Send + Sync + 'static {
+    /// `tool(name, input)` → execute one provably read-only tool call through
+    /// the application's canonical tool pipeline. The default keeps embedders
+    /// fail-closed until they explicitly wire the capability.
+    async fn run_tool(
+        &self,
+        _tool_name: String,
+        _input: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        Err("programmatic tool calls are not available".into())
+    }
+
     /// `agent()` → spawn one subagent and await its result.
     ///
     /// `Err` is a *failure* (the subagent errored, stalled out, or could not be

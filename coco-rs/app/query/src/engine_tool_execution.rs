@@ -85,6 +85,9 @@ impl QueryEngine {
         streaming_control_prevent: Option<String>,
     ) -> ToolExecutionBranch {
         if streaming_executed {
+            if let Some(turn_id) = cycle_turn_id.as_ref() {
+                self.write_inflight_history_snapshot(history, turn_id).await;
+            }
             if let (Some(state), Some(ctx)) = (self.app_state.as_ref(), streaming_ctx.as_ref()) {
                 let permission_mode_after_tools = state.read().await.permissions.mode;
                 if permission_mode_after_tools != Some(ctx.permission_context.mode)
@@ -227,7 +230,7 @@ impl QueryEngine {
         }
 
         let tool_search_strategy = tool_materialization.tool_search_strategy();
-        let ctx = self
+        let mut ctx = self
             .tool_context_factory(hook_tx_opt)
             .build(crate::tool_context::ToolContextOverrides {
                 user_message_id: Some(consts.user_uuid.clone()),
@@ -238,6 +241,8 @@ impl QueryEngine {
                 tool_materialization: Some(std::sync::Arc::new(tool_materialization.clone())),
             })
             .await;
+        let materialization = Arc::new(tool_materialization.clone());
+        ctx.programmatic_tools = Some(self.programmatic_tool_handle(ctx.clone(), materialization));
 
         let permission_mode_before_tools = match self.app_state.as_ref() {
             Some(state) => state.read().await.permissions.mode,
@@ -271,6 +276,9 @@ impl QueryEngine {
         }
         .run()
         .await;
+        if let Some(turn_id) = cycle_turn_id.as_ref() {
+            self.write_inflight_history_snapshot(history, turn_id).await;
+        }
 
         if let Some(state) = self.app_state.as_ref() {
             let permissions_after_tools = {

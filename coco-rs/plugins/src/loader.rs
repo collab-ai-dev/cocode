@@ -526,9 +526,20 @@ pub struct InstalledPluginsManager {
 impl InstalledPluginsManager {
     /// Load from the given path, or create empty V2 if file doesn't exist.
     pub fn load(file_path: PathBuf) -> crate::Result<Self> {
-        let data = if file_path.exists() {
-            let content = std::fs::read_to_string(&file_path)?;
-            let raw: serde_json::Value = serde_json::from_str(&content)?;
+        const MAX_LEDGER_BYTES: usize = 8 * 1024 * 1024;
+        let bytes = match coco_utils_common::read_regular(&file_path) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
+        let data = if let Some(bytes) = bytes {
+            if bytes.len() > MAX_LEDGER_BYTES {
+                return Err(crate::PluginError::generic(
+                    "loader",
+                    format!("installed plugin ledger exceeds {MAX_LEDGER_BYTES} bytes"),
+                ));
+            }
+            let raw: serde_json::Value = serde_json::from_slice(&bytes)?;
 
             let version = raw
                 .get("version")
@@ -602,7 +613,7 @@ impl InstalledPluginsManager {
             std::fs::create_dir_all(parent)?;
         }
         let content = serde_json::to_string_pretty(&self.data)?;
-        std::fs::write(&self.file_path, content)?;
+        let _verified = coco_utils_common::replace_regular_atomic(&self.file_path, content)?;
         Ok(())
     }
 
@@ -657,6 +668,10 @@ fn migrate_v1_to_v2(raw: &serde_json::Value) -> crate::Result<InstalledPluginsFi
             installed_at,
             last_updated,
             git_commit_sha,
+            artifact_sha256: None,
+            artifact_file_count: None,
+            artifact_total_bytes: None,
+            source: None,
         };
 
         plugins.insert(id, vec![entry]);

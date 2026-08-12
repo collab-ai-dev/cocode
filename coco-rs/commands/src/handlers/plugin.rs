@@ -319,7 +319,9 @@ async fn install_plugin(target: &str) -> crate::Result<String> {
         Err(e @ coco_plugins::install::InstallError::BlockedByPolicy { .. })
         | Err(e @ coco_plugins::install::InstallError::DependencyBlockedByPolicy { .. })
         | Err(e @ coco_plugins::install::InstallError::ResolutionFailed(_))
-        | Err(e @ coco_plugins::install::InstallError::SettingsWriteFailed(_)) => Ok(e.to_string()),
+        | Err(e @ coco_plugins::install::InstallError::SettingsWriteFailed(_))
+        | Err(e @ coco_plugins::install::InstallError::InvalidArtifact { .. })
+        | Err(e @ coco_plugins::install::InstallError::RollbackFailed { .. }) => Ok(e.to_string()),
         Err(coco_plugins::install::InstallError::Other(e)) => Err(e.into()),
     }
 }

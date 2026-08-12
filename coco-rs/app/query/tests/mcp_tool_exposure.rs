@@ -300,6 +300,10 @@ struct RecordingMcpHandle {
 
 #[async_trait]
 impl McpHandle for RecordingMcpHandle {
+    fn execution_policy(&self, _server_name: &str) -> coco_types::McpExecutionPolicy {
+        coco_types::McpExecutionPolicy::Full
+    }
+
     async fn list_resources(
         &self,
         _server_name: Option<&str>,

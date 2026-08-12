@@ -27,6 +27,7 @@ pub mod pending_messages;
 pub mod permission_bridge;
 pub mod permission_rule_handle;
 pub mod plan_approval;
+pub mod programmatic_tool;
 pub mod registry;
 pub mod schedule_store;
 pub mod schema;
@@ -151,6 +152,9 @@ pub use permission_rule_handle::PermissionRuleHandleRef;
 pub use plan_approval::PlanApprovalMessage;
 pub use plan_approval::PlanApprovalRequest;
 pub use plan_approval::PlanApprovalResponse;
+pub use programmatic_tool::{
+    ProgrammaticToolCallError, ProgrammaticToolCallHandle, ProgrammaticToolCallHandleRef,
+};
 pub use registry::MaterializedTool;
 pub use registry::MaterializedToolLookup;
 pub use registry::ToolLookup;
