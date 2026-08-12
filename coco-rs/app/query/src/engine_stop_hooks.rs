@@ -34,8 +34,8 @@ use crate::engine_loop_state::LoopTurnState;
 #[path = "engine_stop_hooks.test.rs"]
 mod tests;
 
-/// What [`QueryEngine::run_stop_hooks`] decided. The four variants
-/// Map to the four exit shapes of the stop hook arm.
+/// What [`QueryEngine::run_stop_hooks`] decided. Variants map directly to the
+/// exit shapes of the stop-hook arm.
 #[derive(Debug)]
 pub(crate) enum StopHookDecision {
     /// `isApiErrorMessage(lastMessage)` returned `true`: skip normal Stop hooks
@@ -63,6 +63,12 @@ pub(crate) enum StopHookDecision {
     /// caller writes `turn_state.transition = Some(StopHookBlocking)`
     /// (already done internally) and `continue`s the outer loop.
     BlockedContinueLoop,
+    /// The hook feedback was added to history but could not cross the durable
+    /// transcript barrier. The caller must fail the cycle rather than retrying
+    /// with state that cannot be resumed.
+    PersistenceFailed {
+        error: coco_event_types::ErrorPayload,
+    },
     /// A Stop hook returned `prevent_continuation`. Caller should
     /// return `QueryResult { stop_reason: "stop_hook_prevented" }`
     /// after running any post-turn flush helpers it owns.
@@ -202,7 +208,14 @@ impl QueryEngine {
                         event_tx,
                     )
                     .await;
-                    self.flush_successful_turn_state(history).await;
+                    if let Err(error) = self.flush_successful_turn_state(history).await {
+                        let error = coco_event_types::ErrorPayload {
+                            message: format!("failed to persist session transcript: {error}"),
+                            code: coco_event_types::ErrorCode::Io,
+                        };
+                        warn!(message = %error.message, "stop-hook durability barrier failed");
+                        return StopHookDecision::PersistenceFailed { error };
+                    }
                     turn_state.transition = Some(ContinueReason::StopHookBlocking);
                     // Mark the recursion so the next Stop firing carries
                     // `stop_hook_active: true`.

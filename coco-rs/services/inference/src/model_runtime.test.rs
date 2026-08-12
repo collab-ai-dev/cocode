@@ -416,6 +416,68 @@ fn test_concurrent_explicit_lookup_returns_canonical_runtime() {
 }
 
 #[test]
+fn test_concurrent_distinct_explicit_lookups_build_each_runtime_once() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let mut providers = BTreeMap::new();
+    providers.insert(
+        "local".to_string(),
+        local_provider(&["main", "lazy-a", "lazy-b"]),
+    );
+    let runtime_config = coco_config::build_runtime_config_with(
+        isolated_settings(Settings {
+            models: coco_config::ModelSelectionSettings {
+                main: Some(role_slots("local", "main")),
+                ..Default::default()
+            },
+            providers,
+            ..Default::default()
+        }),
+        coco_config::EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+        coco_config::CatalogPaths::empty_in(tmp.path()),
+        coco_config::parse_enabled_setting_sources(None),
+    )
+    .expect("runtime config");
+    let registry = Arc::new(
+        ModelRuntimeRegistry::new(
+            Arc::new(runtime_config),
+            None,
+            Arc::new(crate::header_template::HeaderVars::empty()),
+        )
+        .expect("runtime registry"),
+    );
+    let build_count = Arc::new(AtomicUsize::new(0));
+    let initial_builds = Arc::new(std::sync::Barrier::new(2));
+    registry.set_lazy_build_hook({
+        let build_count = Arc::clone(&build_count);
+        let initial_builds = Arc::clone(&initial_builds);
+        Arc::new(move || {
+            let call = build_count.fetch_add(1, Ordering::SeqCst);
+            if call < 2 {
+                initial_builds.wait();
+            }
+        })
+    });
+
+    let handles = ["lazy-a", "lazy-b"].map(|model_id| {
+        let registry = Arc::clone(&registry);
+        std::thread::spawn(move || {
+            registry
+                .runtime_for_explicit(selection("local", model_id))
+                .expect("explicit runtime")
+        })
+    });
+    let runtimes = handles.map(|handle| handle.join().expect("lookup thread"));
+
+    assert!(!Arc::ptr_eq(&runtimes[0], &runtimes[1]));
+    assert_eq!(
+        build_count.load(Ordering::SeqCst),
+        2,
+        "publishing one cache key must not invalidate another key's build"
+    );
+}
+
+#[test]
 fn stale_lazy_build_cannot_publish_after_reconcile() {
     let old_url = "http://old.example/v1";
     let new_url = "http://new.example/v1";

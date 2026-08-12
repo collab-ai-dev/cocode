@@ -18,6 +18,7 @@ use vercel_ai_provider::Warning;
 
 use crate::openai_capabilities::SystemMessageMode;
 
+use super::provider_metadata::hosted_tool_status;
 use super::provider_metadata::is_raw_reasoning;
 use super::provider_metadata::read_compaction_provider_metadata;
 use super::provider_metadata::reasoning_encrypted_content;
@@ -536,17 +537,28 @@ fn emit_provider_executed_tool_call(
 ) {
     let call_id = call_ids.project(&call.tool_call_id);
     let result_value = result.map(|result| raw_tool_result_value(&result.output));
+    let status = call
+        .provider_metadata
+        .as_ref()
+        .and_then(hosted_tool_status)
+        .unwrap_or_else(|| {
+            if result.is_some_and(|result| result.is_error) {
+                "failed"
+            } else {
+                "completed"
+            }
+        });
     match call.tool_name.as_str() {
         "web_search" => items.push(json!({
             "type": "web_search_call",
             "id": call_id,
-            "status": "completed",
+            "status": status,
         })),
         "file_search" => {
             let mut item = json!({
                 "type": "file_search_call",
                 "id": call_id,
-                "status": "completed",
+                "status": status,
             });
             if let Some(value) = result_value {
                 item["results"] = value;
@@ -557,7 +569,7 @@ fn emit_provider_executed_tool_call(
             let mut item = json!({
                 "type": "code_interpreter_call",
                 "id": call_id,
-                "status": "completed",
+                "status": status,
                 "code": call.input.get("code").cloned().unwrap_or(Value::Null),
             });
             if let Some(value) = result_value {
@@ -568,8 +580,8 @@ fn emit_provider_executed_tool_call(
         "image_generation" => items.push(json!({
             "type": "image_generation_call",
             "id": call_id,
-            "status": if result.is_some_and(|result| result.is_error) { "failed" } else { "completed" },
-            "result": result_value,
+            "status": status,
+            "result": result.and_then(|result| image_generation_result(&result.output)),
         })),
         "shell" => {
             let item_id = provider_metadata_string(call.provider_metadata.as_ref(), "itemId")
@@ -663,10 +675,9 @@ fn emit_provider_executed_tool_call(
                     "server_label": server_label,
                     "status": if result.is_some_and(|result| result.is_error) { "failed" } else { "completed" },
                 });
-                if let Some(approval_id) = provider_metadata_string(
-                    call.provider_metadata.as_ref(),
-                    "approvalRequestId",
-                ) {
+                if let Some(approval_id) =
+                    provider_metadata_string(call.provider_metadata.as_ref(), "approvalRequestId")
+                {
                     item["approval_request_id"] = Value::String(approval_id.to_string());
                 }
                 if let Some(result) = result {
@@ -726,6 +737,17 @@ fn raw_tool_result_value(content: &ToolResultContent) -> Value {
                 .unwrap_or_else(|| "Tool execution denied.".into()),
         ),
         ToolResultContent::Content { .. } => serialize_tool_result_for_responses(content),
+    }
+}
+
+fn image_generation_result(content: &ToolResultContent) -> Option<Value> {
+    match content {
+        ToolResultContent::Content { value, .. } => value.iter().find_map(|part| match part {
+            ToolResultContentPart::FileData { data, .. } => Some(Value::String(data.clone())),
+            _ => None,
+        }),
+        ToolResultContent::Json { value, .. } if value.is_string() => Some(value.clone()),
+        _ => None,
     }
 }
 

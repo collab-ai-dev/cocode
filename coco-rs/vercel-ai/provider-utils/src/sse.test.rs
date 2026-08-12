@@ -1,66 +1,109 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
-fn drain(dec: &mut SseDecoder) -> Vec<String> {
-    let mut out = Vec::new();
-    while let Some(line) = dec.next_data_line() {
-        out.push(line);
+fn drain(decoder: &mut SseDecoder) -> Vec<SseEvent> {
+    let mut events = Vec::new();
+    while let Some(event) = decoder.next_event().expect("decode event") {
+        events.push(event);
     }
-    out
+    events
 }
 
 #[test]
-fn parses_data_lines_and_skips_done() {
-    let mut dec = SseDecoder::new();
-    dec.push(b"data: {\"a\":1}\n\ndata: {\"b\":2}\n\ndata: [DONE]\n\n");
-    assert_eq!(drain(&mut dec), vec!["{\"a\":1}", "{\"b\":2}"]);
+fn test_sse_decoder_frames_events_and_preserves_event_type() {
+    let mut decoder = SseDecoder::new();
+    decoder
+        .push(b": comment\nevent: message\ndata: {\"a\":1}\n\ndata:{\"b\":2}\r\n\r\n")
+        .expect("push");
+
+    assert_eq!(
+        drain(&mut decoder),
+        vec![
+            SseEvent {
+                event: Some("message".into()),
+                data: "{\"a\":1}".into(),
+            },
+            SseEvent {
+                event: None,
+                data: "{\"b\":2}".into(),
+            },
+        ]
+    );
 }
 
 #[test]
-fn accepts_data_without_space_and_trims_cr() {
-    let mut dec = SseDecoder::new();
-    dec.push(b"data:{\"a\":1}\r\n");
-    assert_eq!(drain(&mut dec), vec!["{\"a\":1}"]);
+fn test_sse_decoder_joins_multiline_data() {
+    let mut decoder = SseDecoder::new();
+    decoder
+        .push(b"event: content\ndata: first\ndata: second\n\n")
+        .expect("push");
+
+    assert_eq!(
+        drain(&mut decoder),
+        vec![SseEvent {
+            event: Some("content".into()),
+            data: "first\nsecond".into(),
+        }]
+    );
 }
 
 #[test]
-fn skips_non_data_lines() {
-    let mut dec = SseDecoder::new();
-    dec.push(b": comment\nevent: ping\ndata: {\"ok\":true}\n");
-    assert_eq!(drain(&mut dec), vec!["{\"ok\":true}"]);
-}
-
-#[test]
-fn buffers_partial_line_until_newline() {
-    let mut dec = SseDecoder::new();
-    dec.push(b"data: {\"a\":");
-    assert!(dec.next_data_line().is_none()); // no newline yet
-    dec.push(b"1}\n");
-    assert_eq!(drain(&mut dec), vec!["{\"a\":1}"]);
-}
-
-#[test]
-fn multibyte_char_split_across_chunks_is_not_corrupted() {
-    // "世界" — each char is 3 UTF-8 bytes. Split the first char across two
-    // pushes, mid-sequence, to reproduce a network chunk boundary.
-    let full = "data: {\"t\":\"世界\"}\n".as_bytes().to_vec();
-    let split_at = full.iter().position(|&b| b == 0xE4).unwrap() + 1; // mid "世"
-    let mut dec = SseDecoder::new();
-    dec.push(&full[..split_at]);
-    assert!(dec.next_data_line().is_none());
-    dec.push(&full[split_at..]);
-    assert_eq!(drain(&mut dec), vec!["{\"t\":\"世界\"}"]);
-}
-
-#[test]
-fn emoji_split_across_three_chunks() {
-    // "🚀" is 4 UTF-8 bytes; feed one byte at a time.
-    let full = "data: \"🚀\"\n".as_bytes().to_vec();
-    let mut dec = SseDecoder::new();
-    for b in &full[..full.len() - 1] {
-        dec.push(&[*b]);
-        assert!(dec.next_data_line().is_none());
+fn test_sse_decoder_preserves_utf8_at_every_chunk_boundary() {
+    let full = "data: {\"text\":\"世界🚀\"}\n\n".as_bytes();
+    for split_at in 0..=full.len() {
+        let mut decoder = SseDecoder::new();
+        decoder.push(&full[..split_at]).expect("first chunk");
+        let mut events = drain(&mut decoder);
+        decoder.push(&full[split_at..]).expect("second chunk");
+        events.extend(drain(&mut decoder));
+        assert_eq!(
+            events,
+            vec![SseEvent {
+                event: None,
+                data: "{\"text\":\"世界🚀\"}".into(),
+            }],
+            "split at byte {split_at}"
+        );
     }
-    dec.push(&[*full.last().unwrap()]);
-    assert_eq!(drain(&mut dec), vec!["\"🚀\""]);
+}
+
+#[test]
+fn test_sse_decoder_rejects_invalid_utf8() {
+    let mut decoder = SseDecoder::new();
+    decoder.push(b"data: \xff\n\n").expect("push");
+    assert!(matches!(
+        decoder.next_event(),
+        Err(SseDecodeError::InvalidUtf8 { .. })
+    ));
+}
+
+#[test]
+fn test_sse_decoder_rejects_oversized_unterminated_event() {
+    let mut decoder = SseDecoder::with_max_event_bytes(8);
+    let error = decoder
+        .push(b"data: 123")
+        .expect_err("unterminated event must be bounded");
+    assert!(matches!(error, SseDecodeError::EventTooLarge { limit: 8 }));
+}
+
+#[test]
+fn test_sse_decoder_rejects_oversized_complete_event() {
+    let mut decoder = SseDecoder::with_max_event_bytes(8);
+    let error = decoder
+        .push(b"data: 123\n\n")
+        .expect_err("complete buffered event must be bounded");
+    assert!(matches!(error, SseDecodeError::EventTooLarge { limit: 8 }));
+}
+
+#[test]
+fn test_sse_decoder_flushes_event_at_eof() {
+    let mut decoder = SseDecoder::new();
+    decoder.push(b"event: done\ndata: final").expect("push");
+    assert_eq!(
+        decoder.finish().expect("finish"),
+        Some(SseEvent {
+            event: Some("done".into()),
+            data: "final".into(),
+        })
+    );
 }

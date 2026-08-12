@@ -27,6 +27,31 @@ pub fn build_responses_provider_metadata(
     }
 }
 
+/// Replay-only metadata shared by provider-executed Responses tools.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HostedToolReplayMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+}
+
+/// Preserve the provider's terminal tool status for native Responses replay.
+pub fn build_hosted_tool_provider_metadata(status: Option<&str>) -> Option<ProviderMetadata> {
+    let status = status?;
+    let value = serde_json::to_value(HostedToolReplayMetadata {
+        status: Some(status.to_string()),
+    })
+    .ok()?;
+    let mut metadata = ProviderMetadata::default();
+    metadata.0.insert("openai".into(), value);
+    Some(metadata)
+}
+
+/// Recover a provider-executed tool status captured on the previous turn.
+pub fn hosted_tool_status(metadata: &ProviderMetadata) -> Option<&str> {
+    metadata.0.get("openai")?.get("status")?.as_str()
+}
+
 /// Key under the `"openai"` namespace carrying the encrypted reasoning blob
 /// (the store=false chain-of-thought carrier). Single source of truth so the
 /// stream/non-stream writers and the sendback reader can never drift.

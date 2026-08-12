@@ -50,6 +50,7 @@ use super::openai_responses_api::ResponsesStreamEvent;
 use super::openai_responses_options::extract_responses_options;
 use super::prepare_tools::prepare_responses_tools;
 use super::provider_metadata::build_compaction_provider_metadata;
+use super::provider_metadata::build_hosted_tool_provider_metadata;
 use super::provider_metadata::build_reasoning_provider_metadata;
 use super::provider_metadata::build_responses_provider_metadata;
 use super::provider_metadata::raw_reasoning_segment_id;
@@ -718,36 +719,47 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                     }
                 }
                 // Provider-executed tools — emit as ToolCall with provider_executed flag
-                ResponseOutputItem::WebSearchCall { id, .. } => {
+                ResponseOutputItem::WebSearchCall { id, status } => {
                     content.push(AssistantContentPart::ToolCall(ToolCallPart {
                         tool_call_id: id.clone().unwrap_or_default(),
                         tool_name: "web_search".into(),
                         input: json!({ "type": "web_search" }),
                         provider_executed: Some(true),
-                        provider_metadata: None,
+                        provider_metadata: build_hosted_tool_provider_metadata(status.as_deref()),
                         invalid: false,
                         invalid_reason: None,
                     }));
                 }
-                ResponseOutputItem::FileSearchCall { id, results, .. } => {
-                    let mut meta = None;
-                    if let Some(r) = results
-                        && let Ok(v) = serde_json::to_value(r)
-                    {
-                        meta = Some(ProviderMetadata(HashMap::from([("results".into(), v)])));
-                    }
+                ResponseOutputItem::FileSearchCall {
+                    id,
+                    status,
+                    results,
+                } => {
+                    let call_id = id.clone().unwrap_or_default();
                     content.push(AssistantContentPart::ToolCall(ToolCallPart {
-                        tool_call_id: id.clone().unwrap_or_default(),
+                        tool_call_id: call_id.clone(),
                         tool_name: "file_search".into(),
                         input: json!({ "type": "file_search" }),
                         provider_executed: Some(true),
-                        provider_metadata: meta,
+                        provider_metadata: build_hosted_tool_provider_metadata(status.as_deref()),
                         invalid: false,
                         invalid_reason: None,
                     }));
+                    if let Some(results) = results {
+                        content.push(AssistantContentPart::ToolResult(
+                            vercel_ai_provider::ToolResultPart::new(
+                                call_id,
+                                "file_search",
+                                vercel_ai_provider::ToolResultContent::json(json!(results)),
+                            ),
+                        ));
+                    }
                 }
                 ResponseOutputItem::CodeInterpreterCall {
-                    id, code, outputs, ..
+                    id,
+                    status,
+                    code,
+                    outputs,
                 } => {
                     let call_id = id.clone().unwrap_or_default();
                     content.push(AssistantContentPart::ToolCall(ToolCallPart {
@@ -755,7 +767,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         tool_name: "code_interpreter".into(),
                         input: json!({ "type": "code_interpreter", "code": code }),
                         provider_executed: Some(true),
-                        provider_metadata: None,
+                        provider_metadata: build_hosted_tool_provider_metadata(status.as_deref()),
                         invalid: false,
                         invalid_reason: None,
                     }));
@@ -770,20 +782,29 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         ));
                     }
                 }
-                ResponseOutputItem::ImageGenerationCall { id, result, .. } => {
+                ResponseOutputItem::ImageGenerationCall { id, status, result } => {
                     let call_id = id.clone().unwrap_or_default();
                     content.push(AssistantContentPart::ToolCall(ToolCallPart {
                         tool_call_id: call_id.clone(),
                         tool_name: "image_generation".into(),
                         input: json!({ "type": "image_generation" }),
                         provider_executed: Some(true),
-                        provider_metadata: None,
+                        provider_metadata: build_hosted_tool_provider_metadata(status.as_deref()),
                         invalid: false,
                         invalid_reason: None,
                     }));
                     if let Some(res) = result {
-                        content.push(AssistantContentPart::File(
-                            vercel_ai_provider::FilePart::from_base64(res, "image/png"),
+                        content.push(AssistantContentPart::ToolResult(
+                            vercel_ai_provider::ToolResultPart::new(
+                                call_id,
+                                "image_generation",
+                                vercel_ai_provider::ToolResultContent::content_parts(vec![
+                                    vercel_ai_provider::ToolResultContentPart::file_data(
+                                        res,
+                                        "image/png",
+                                    ),
+                                ]),
+                            ),
                         ));
                     }
                 }
@@ -1167,7 +1188,7 @@ fn create_responses_stream(
 
 struct ResponsesStreamState {
     byte_stream: vercel_ai_provider_utils::ByteStream,
-    buffer: String,
+    decoder: vercel_ai_provider_utils::SseDecoder,
     pending: std::collections::VecDeque<LanguageModelV4StreamPart>,
     active_texts: HashMap<String, ActiveTextItem>,
     active_fn_calls: HashMap<String, ActiveFnCall>,
@@ -1211,7 +1232,7 @@ impl ResponsesStreamState {
 
         Self {
             byte_stream,
-            buffer: String::new(),
+            decoder: vercel_ai_provider_utils::SseDecoder::new(),
             pending,
             active_texts: HashMap::new(),
             active_fn_calls: HashMap::new(),
@@ -1348,32 +1369,32 @@ impl ResponsesStreamState {
         use futures::StreamExt;
         match self.byte_stream.next().await {
             Some(Ok(bytes)) => {
-                let text = String::from_utf8_lossy(&bytes);
-                self.buffer.push_str(&text);
-                self.process_buffer();
+                self.decoder
+                    .push(&bytes)
+                    .map_err(|error| AISdkError::new(format!("SSE framing error: {error}")))?;
+                while let Some(event) = self
+                    .decoder
+                    .next_event()
+                    .map_err(|error| AISdkError::new(format!("SSE framing error: {error}")))?
+                {
+                    if event.data != "[DONE]" {
+                        self.process_event(&event.data);
+                    }
+                }
                 Ok(true)
             }
             Some(Err(e)) => Err(AISdkError::new(format!("Stream read error: {e}"))),
-            None => Ok(false),
-        }
-    }
-
-    fn process_buffer(&mut self) {
-        while let Some(line_end) = self.buffer.find('\n') {
-            let line_len = line_end + 1;
-            let line = self.buffer[..line_end].trim_end_matches('\r');
-            if let Some(data) = line
-                .strip_prefix("data: ")
-                .or_else(|| line.strip_prefix("data:"))
-                && !data.is_empty()
-                && data != "[DONE]"
-            {
-                let data = data.to_string();
-                self.buffer.drain(..line_len);
-                self.process_event(&data);
-                continue;
+            None => {
+                if let Some(event) = self
+                    .decoder
+                    .finish()
+                    .map_err(|error| AISdkError::new(format!("SSE framing error: {error}")))?
+                    && event.data != "[DONE]"
+                {
+                    self.process_event(&event.data);
+                }
+                Ok(false)
             }
-            self.buffer.drain(..line_len);
         }
     }
 
@@ -1974,35 +1995,43 @@ impl ResponsesStreamState {
             // OutputItemDone — emit ToolCall + ToolResult for provider-executed tools
             ResponsesStreamEvent::OutputItemDone { item: Some(item) } => {
                 match &item {
-                    ResponseOutputItem::WebSearchCall { id, .. } => {
+                    ResponseOutputItem::WebSearchCall { id, status } => {
                         let item_id = id.clone().unwrap_or_default();
                         self.pending
                             .push_back(LanguageModelV4StreamPart::ToolInputEnd {
                                 id: item_id.clone(),
                                 provider_metadata: None,
                             });
-                        self.pending.push_back(LanguageModelV4StreamPart::ToolCall(
-                            vercel_ai_provider::LanguageModelV4ToolCall::from_json(
-                                &item_id,
-                                "web_search",
-                                json!({ "type": "web_search" }),
-                            )
-                            .with_provider_executed(true),
-                        ));
+                        let mut call = vercel_ai_provider::LanguageModelV4ToolCall::from_json(
+                            &item_id,
+                            "web_search",
+                            json!({ "type": "web_search" }),
+                        )
+                        .with_provider_executed(true);
+                        call.provider_metadata =
+                            build_hosted_tool_provider_metadata(status.as_deref());
+                        self.pending
+                            .push_back(LanguageModelV4StreamPart::ToolCall(call));
                     }
-                    ResponseOutputItem::FileSearchCall { id, results, .. } => {
+                    ResponseOutputItem::FileSearchCall {
+                        id,
+                        status,
+                        results,
+                    } => {
                         let item_id = id.clone().unwrap_or_default();
                         self.pending
                             .push_back(LanguageModelV4StreamPart::ToolInputEnd {
                                 id: item_id.clone(),
                                 provider_metadata: None,
                             });
-                        let tc = vercel_ai_provider::LanguageModelV4ToolCall::from_json(
+                        let mut tc = vercel_ai_provider::LanguageModelV4ToolCall::from_json(
                             &item_id,
                             "file_search",
                             json!({ "type": "file_search" }),
                         )
                         .with_provider_executed(true);
+                        tc.provider_metadata =
+                            build_hosted_tool_provider_metadata(status.as_deref());
                         self.pending
                             .push_back(LanguageModelV4StreamPart::ToolCall(tc));
                         // Emit results as ToolResult
@@ -2018,7 +2047,10 @@ impl ResponsesStreamState {
                         }
                     }
                     ResponseOutputItem::CodeInterpreterCall {
-                        id, code, outputs, ..
+                        id,
+                        status,
+                        code,
+                        outputs,
                     } => {
                         let item_id = id.clone().unwrap_or_default();
                         self.pending
@@ -2026,12 +2058,14 @@ impl ResponsesStreamState {
                                 id: item_id.clone(),
                                 provider_metadata: None,
                             });
-                        let tc = vercel_ai_provider::LanguageModelV4ToolCall::from_json(
+                        let mut tc = vercel_ai_provider::LanguageModelV4ToolCall::from_json(
                             &item_id,
                             "code_interpreter",
                             json!({ "type": "code_interpreter", "code": code }),
                         )
                         .with_provider_executed(true);
+                        tc.provider_metadata =
+                            build_hosted_tool_provider_metadata(status.as_deref());
                         self.pending
                             .push_back(LanguageModelV4StreamPart::ToolCall(tc));
                         if let Some(outs) = outputs {
@@ -2045,25 +2079,37 @@ impl ResponsesStreamState {
                                 ));
                         }
                     }
-                    ResponseOutputItem::ImageGenerationCall { id, result, .. } => {
+                    ResponseOutputItem::ImageGenerationCall { id, status, result } => {
                         let item_id = id.clone().unwrap_or_default();
                         self.pending
                             .push_back(LanguageModelV4StreamPart::ToolInputEnd {
                                 id: item_id.clone(),
                                 provider_metadata: None,
                             });
-                        let tc = vercel_ai_provider::LanguageModelV4ToolCall::from_json(
+                        let mut tc = vercel_ai_provider::LanguageModelV4ToolCall::from_json(
                             &item_id,
                             "image_generation",
                             json!({ "type": "image_generation" }),
                         )
                         .with_provider_executed(true);
+                        tc.provider_metadata =
+                            build_hosted_tool_provider_metadata(status.as_deref());
                         self.pending
                             .push_back(LanguageModelV4StreamPart::ToolCall(tc));
                         if let Some(res) = result {
-                            self.pending.push_back(LanguageModelV4StreamPart::File(
-                                vercel_ai_provider::FilePart::from_base64(res, "image/png"),
-                            ));
+                            self.pending
+                                .push_back(LanguageModelV4StreamPart::ToolResult(
+                                    vercel_ai_provider::LanguageModelV4ToolResult::new(
+                                        &item_id,
+                                        "image_generation",
+                                        vercel_ai_provider::ToolResultContent::content_parts(vec![
+                                            vercel_ai_provider::ToolResultContentPart::file_data(
+                                                res,
+                                                "image/png",
+                                            ),
+                                        ]),
+                                    ),
+                                ));
                         }
                     }
                     ResponseOutputItem::ShellCall {

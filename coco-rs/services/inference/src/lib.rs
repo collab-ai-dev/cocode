@@ -93,6 +93,7 @@ pub use prompt_layout::put_system_prompt_parts;
 pub use prompt_layout::take_layout_options;
 pub use retry::RetryConfig;
 pub use stream::AssistantTurnSnapshot;
+pub use stream::MAX_STREAMED_ASSISTANT_TURN_BYTES;
 pub use stream::ReasoningSegment;
 pub use stream::StreamEvent;
 pub use stream::StreamMetrics;

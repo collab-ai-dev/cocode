@@ -24,16 +24,30 @@ pub(super) fn read_transcript_metadata(
     path: &Path,
     session_id: &str,
 ) -> crate::Result<TranscriptMetadata> {
-    if !path.exists() {
+    let segments = transcript_segment_paths(path)?;
+    if segments.is_empty() {
         return Err(crate::SessionError::TranscriptNotFound {
             path: path.to_path_buf(),
         });
     }
 
-    let file_meta = std::fs::metadata(path)?;
-    let file_size = file_meta.len();
+    let first_path = &segments[0].1;
+    let last_path = &segments[segments.len() - 1].1;
+    let first_meta = std::fs::metadata(first_path)?;
+    let last_meta = std::fs::metadata(last_path)?;
+    let file_size = segments.iter().try_fold(0_u64, |total, (_, segment)| {
+        let length = std::fs::metadata(segment)?.len();
+        if length > MAX_TRANSCRIPT_SEGMENT_BYTES {
+            return Err(crate::SessionError::generic(format!(
+                "transcript segment too large ({} bytes, max {MAX_TRANSCRIPT_SEGMENT_BYTES}): {}",
+                length,
+                segment.display()
+            )));
+        }
+        Ok(total.saturating_add(length))
+    })?;
 
-    let created_at = file_meta
+    let created_at = first_meta
         .created()
         .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
         .duration_since(std::time::UNIX_EPOCH)
@@ -41,7 +55,7 @@ pub(super) fn read_transcript_metadata(
         .as_millis()
         .to_string();
 
-    let modified_at = file_meta
+    let modified_at = last_meta
         .modified()
         .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
         .duration_since(std::time::UNIX_EPOCH)
@@ -55,10 +69,16 @@ pub(super) fn read_transcript_metadata(
     // sidechain/message-count signal; the tail pass picks up the
     // metadata entries (`custom-title`, `tag`, `last-prompt`) that
     // are re-appended on exit so they survive head-truncation.
-    let content = if file_size > LITE_READ_WINDOW * 2 {
-        read_head_and_tail(path, LITE_READ_WINDOW)?
+    let content = if segments.len() > 1 {
+        format!(
+            "{}\n{}",
+            read_head_and_tail(first_path, LITE_READ_WINDOW)?,
+            read_head_and_tail(last_path, LITE_READ_WINDOW)?
+        )
+    } else if file_size > LITE_READ_WINDOW * 2 {
+        read_head_and_tail(first_path, LITE_READ_WINDOW)?
     } else {
-        std::fs::read_to_string(path)?
+        std::fs::read_to_string(first_path)?
     };
     let entries: Vec<Entry> = content
         .lines()

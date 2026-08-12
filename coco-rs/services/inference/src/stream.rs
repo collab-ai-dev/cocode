@@ -14,11 +14,11 @@ use coco_llm_types::ReasoningFilePart;
 use coco_llm_types::SourcePart;
 use coco_llm_types::ToolApprovalRequestPart;
 use coco_llm_types::ToolInputInvalidReason;
-use coco_llm_types::ToolResultContent;
 use coco_llm_types::ToolResultPart;
 use coco_llm_types::Usage;
 use coco_types::TokenUsage;
 use std::collections::HashMap;
+use std::io::Write;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,6 +37,7 @@ pub use vercel_ai::StreamMetrics;
 pub use vercel_ai::StreamProcessorConfig;
 
 const DEFAULT_PROCESS_STREAM_STALL_THRESHOLD: Duration = Duration::from_secs(20);
+pub const MAX_STREAMED_ASSISTANT_TURN_BYTES: usize = 8 * 1024 * 1024;
 
 // ─── AssistantTurnSnapshot — per-turn full-fidelity assistant content ────
 //
@@ -175,6 +176,7 @@ struct AssistantTurnSnapshotState {
     active_reasoning: HashMap<String, usize>,
     active_tool: HashMap<String, usize>,
     response_id: Option<String>,
+    budget: StreamTurnBudget,
 }
 
 impl AssistantTurnSnapshotState {
@@ -427,7 +429,7 @@ impl AssistantTurnSnapshotState {
                 let mut part = ToolResultPart::new(
                     result.tool_call_id.clone(),
                     result.tool_name.clone(),
-                    ToolResultContent::json(result.result.clone()),
+                    result.output.clone(),
                 );
                 part.is_error = result.is_error.unwrap_or(false);
                 part.provider_metadata = result.provider_metadata.clone();
@@ -468,11 +470,73 @@ impl AssistantTurnSnapshotState {
 
             // ─── Non-content / lifecycle / unhandled ─────────────────
             //
-            // StreamStart / Finish / Error / ResponseMetadata / Raw /
-            // ToolResult —
-            // none belong in the assistant content vector. Drop.
+            // StreamStart / Finish / Error / Raw, plus preliminary
+            // ToolResult values, do not belong in replayable assistant
+            // content. Final ToolResult values are handled above.
             _ => {}
         }
+    }
+}
+
+struct StreamTurnBudget {
+    used: usize,
+    limit: usize,
+}
+
+impl Default for StreamTurnBudget {
+    fn default() -> Self {
+        Self {
+            used: 0,
+            limit: MAX_STREAMED_ASSISTANT_TURN_BYTES,
+        }
+    }
+}
+
+impl StreamTurnBudget {
+    fn charge(&mut self, part: &LanguageModelV4StreamPart) -> Result<(), String> {
+        let remaining = self.limit.saturating_sub(self.used);
+        let mut writer = StreamBudgetWriter {
+            written: 0,
+            remaining,
+            exceeded: false,
+        };
+        if let Err(error) = serde_json::to_writer(&mut writer, part) {
+            if writer.exceeded {
+                return Err(format!(
+                    "assistant stream exceeds the {}-byte safety limit",
+                    self.limit
+                ));
+            }
+            return Err(format!(
+                "assistant stream part is not serializable: {error}"
+            ));
+        }
+        self.used = self.used.saturating_add(writer.written);
+        Ok(())
+    }
+}
+
+struct StreamBudgetWriter {
+    written: usize,
+    remaining: usize,
+    exceeded: bool,
+}
+
+impl Write for StreamBudgetWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self.written.saturating_add(bytes.len()) > self.remaining {
+            self.exceeded = true;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::FileTooLarge,
+                "assistant stream budget exceeded",
+            ));
+        }
+        self.written = self.written.saturating_add(bytes.len());
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -586,12 +650,19 @@ pub async fn process_stream_with_config(
                         // thin metrics + idle-timeout adapter and does no
                         // accumulation of its own; content state is owned here
                         // so per-part `provider_metadata` round-trips intact.
-                        turn_state.update(&part);
-                        (
-                            stream_event_from_part(part, metrics, &mut turn_state),
-                            metrics,
-                            false,
-                        )
+                        match turn_state.budget.charge(&part) {
+                            Ok(()) => {
+                                turn_state.update(&part);
+                                (
+                                    stream_event_from_part(part, metrics, &mut turn_state),
+                                    metrics,
+                                    false,
+                                )
+                            }
+                            Err(message) => {
+                                (Some(StreamEvent::Error { message, metrics }), metrics, true)
+                            }
+                        }
                     }
                     Err(error) => (
                         Some(StreamEvent::Error {

@@ -57,7 +57,7 @@ sweep — only items with concrete user-visible value.
 | `prepare_step` provider_options | Deep merge via `merge_provider_options(call, step)` instead of pick | `packages/ai/src/util/merge-objects.ts` + `generate-text.ts:630` |
 | Prototype-pollution filter | `__proto__` / `constructor` / `prototype` dropped during deep merge | `merge-objects.ts:43-46` |
 | Runtime / tool context | Non-breaking `Arc<dyn Any>` (TS uses generic `RUNTIME_CONTEXT`) | `generate-text.ts:RUNTIME_CONTEXT` |
-| Stream `ToolCall` / `ToolResult` | v4 `LanguageModelV4ToolCall` (input: String) / `LanguageModelV4ToolResult` (result: JSONValue) | `language-model-v4-stream-part.ts` |
+| Stream `ToolCall` / `ToolResult` | v4 `LanguageModelV4ToolCall` / `LanguageModelV4ToolResult` with typed `ToolResultContent` output | `language-model-v4-stream-part.ts` |
 | OpenAI-compatible streaming tool-calls | Outer `pendingToolCalls` buffer + `StreamingToolCallTracker` (arguments-before-name semantics) | `packages/openai-compatible/src/chat/openai-compatible-chat-language-model.ts:466-524` |
 | OpenAI-compatible options key | camelCase > raw > `openaiCompatible` precedence + deprecation warning | TS `getProviderOptions` precedence |
 | Anthropic `inference_geo` | New option (`"us"` / `"global"`) | `@ai-sdk/anthropic` |

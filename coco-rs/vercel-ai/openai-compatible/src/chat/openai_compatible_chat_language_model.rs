@@ -762,14 +762,32 @@ impl ChatStreamState {
 
         match self.byte_stream.next().await {
             Some(Ok(bytes)) => {
-                self.decoder.push(&bytes);
-                while let Some(data) = self.decoder.next_data_line() {
-                    self.process_data_line(&data);
+                self.decoder
+                    .push(&bytes)
+                    .map_err(|error| AISdkError::new(format!("SSE framing error: {error}")))?;
+                while let Some(event) = self
+                    .decoder
+                    .next_event()
+                    .map_err(|error| AISdkError::new(format!("SSE framing error: {error}")))?
+                {
+                    if event.data != "[DONE]" {
+                        self.process_data_line(&event.data);
+                    }
                 }
                 Ok(true)
             }
             Some(Err(e)) => Err(AISdkError::new(format!("Stream read error: {e}"))),
-            None => Ok(false),
+            None => {
+                if let Some(event) = self
+                    .decoder
+                    .finish()
+                    .map_err(|error| AISdkError::new(format!("SSE framing error: {error}")))?
+                    && event.data != "[DONE]"
+                {
+                    self.process_data_line(&event.data);
+                }
+                Ok(false)
+            }
         }
     }
 

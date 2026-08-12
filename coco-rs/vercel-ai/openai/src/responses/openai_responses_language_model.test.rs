@@ -519,6 +519,34 @@ async fn client_tool_search_stream_uses_call_id_and_emits_arguments() {
 }
 
 #[tokio::test]
+async fn responses_stream_preserves_utf8_split_across_single_byte_chunks() {
+    use bytes::Bytes;
+    use futures::StreamExt;
+
+    let event = serde_json::json!({
+        "type": "response.output_text.delta",
+        "item_id": "message_1",
+        "delta": "世界🚀",
+        "logprobs": null
+    });
+    let bytes = format!("data: {event}\n\n").into_bytes();
+    let byte_stream: vercel_ai_provider_utils::ByteStream =
+        Box::pin(futures::stream::iter(bytes.into_iter().map(|byte| {
+            Ok::<Bytes, reqwest::Error>(Bytes::from(vec![byte]))
+        })));
+    let mut stream = create_responses_stream(byte_stream, Vec::new(), false);
+    let mut text = String::new();
+
+    while let Some(part) = stream.next().await {
+        if let LanguageModelV4StreamPart::TextDelta { delta, .. } = part.expect("stream part") {
+            text.push_str(&delta);
+        }
+    }
+
+    assert_eq!(text, "世界🚀");
+}
+
+#[tokio::test]
 async fn mcp_approval_stream_preserves_tool_name_and_server_context() {
     use bytes::Bytes;
     use futures::StreamExt;
@@ -596,11 +624,14 @@ async fn mcp_stream_preserves_replay_metadata_and_result() {
     assert_eq!(metadata.0["approvalRequestId"], "approval_123");
     let result = result.expect("MCP result");
     assert_eq!(result.tool_call_id, "mcp_123");
-    assert_eq!(result.result, serde_json::json!({"answer": 42}));
+    assert_eq!(
+        result.output,
+        vercel_ai_provider::ToolResultContent::json(serde_json::json!({"answer": 42}))
+    );
 }
 
 #[tokio::test]
-async fn image_generation_stream_emits_canonical_file_instead_of_json_result() {
+async fn image_generation_stream_preserves_call_result_and_status_for_replay() {
     use bytes::Bytes;
     use futures::StreamExt;
 
@@ -620,28 +651,36 @@ async fn image_generation_stream_emits_canonical_file_instead_of_json_result() {
         )]));
     let mut stream = create_responses_stream(byte_stream, Vec::new(), false);
     let mut saw_call = false;
-    let mut file = None;
-    let mut saw_result = false;
+    let mut image_call = None;
+    let mut result = None;
 
     while let Some(part) = stream.next().await {
         match part.expect("stream part") {
-            LanguageModelV4StreamPart::ToolCall(call) => {
-                saw_call |= call.tool_name == "image_generation";
+            LanguageModelV4StreamPart::ToolCall(value) => {
+                if value.tool_name == "image_generation" {
+                    saw_call = true;
+                    image_call = Some(value);
+                }
             }
-            LanguageModelV4StreamPart::File(value) => file = Some(value),
-            LanguageModelV4StreamPart::ToolResult(_) => saw_result = true,
+            LanguageModelV4StreamPart::ToolResult(value) => result = Some(value),
             _ => {}
         }
     }
 
     assert!(saw_call);
-    assert!(!saw_result, "base64 media must not bypass File bounding");
-    let file = file.expect("canonical generated file");
-    assert_eq!(file.media_type, "image/png");
+    let call = image_call.expect("image generation call");
     assert_eq!(
-        file.data
-            .as_data()
-            .and_then(vercel_ai_provider::FileRawData::as_base64),
-        Some("aW1hZ2U=")
+        crate::responses::provider_metadata::hosted_tool_status(
+            call.provider_metadata.as_ref().expect("status metadata")
+        ),
+        Some("completed")
+    );
+    let result = result.expect("paired image generation result");
+    assert_eq!(result.tool_call_id, "image_123");
+    assert_eq!(
+        result.output,
+        vercel_ai_provider::ToolResultContent::content_parts(vec![
+            vercel_ai_provider::ToolResultContentPart::file_data("aW1hZ2U=", "image/png")
+        ])
     );
 }

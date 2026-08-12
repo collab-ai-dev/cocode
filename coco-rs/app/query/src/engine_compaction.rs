@@ -88,8 +88,8 @@ impl QueryEngine {
                     if boundary.preserved_segment.is_some()
             )
         });
-        if has_preserved_segment {
-            self.record_transcript_tail(history).await;
+        if has_preserved_segment && let Err(error) = self.record_transcript_tail(history).await {
+            warn!(%error, "failed to persist transcript after compaction");
         }
 
         crate::history_sync::history_replace_and_emit(
@@ -99,7 +99,9 @@ impl QueryEngine {
             coco_event_types::HistoryReplaceReason::Compact,
         )
         .await;
-        self.record_transcript_tail(history).await;
+        if let Err(error) = self.record_transcript_tail(history).await {
+            warn!(%error, "failed to persist transcript after compaction");
+        }
     }
 
     /// Public manual entry-point for `/compact [instructions]`.

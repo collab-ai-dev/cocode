@@ -376,7 +376,7 @@ fn create_completion_stream(
 
     struct State {
         byte_stream: vercel_ai_provider_utils::ByteStream,
-        buffer: String,
+        decoder: vercel_ai_provider_utils::SseDecoder,
         pending: std::collections::VecDeque<LanguageModelV4StreamPart>,
         text_id: String,
         usage: Option<super::openai_compatible_completion_api::OpenAICompatibleCompletionUsage>,
@@ -390,7 +390,7 @@ fn create_completion_stream(
     let stream = futures::stream::unfold(
         State {
             byte_stream,
-            buffer: String::new(),
+            decoder: vercel_ai_provider_utils::SseDecoder::new(),
             pending: {
                 let mut q = std::collections::VecDeque::new();
                 q.push_back(LanguageModelV4StreamPart::StreamStart { warnings });
@@ -414,24 +414,29 @@ fn create_completion_stream(
                 }
                 match state.byte_stream.next().await {
                     Some(Ok(bytes)) => {
-                        let text = String::from_utf8_lossy(&bytes);
-                        state.buffer.push_str(&text);
-
-                        // Process lines
-                        while let Some(pos) = state.buffer.find('\n') {
-                            let line = state.buffer[..pos].trim_end_matches('\r').to_string();
-                            state.buffer = state.buffer[pos + 1..].to_string();
-
-                            if line.is_empty() {
-                                continue;
-                            }
-                            if let Some(data) = line.strip_prefix("data: ") {
-                                if data == "[DONE]" {
-                                    continue;
+                        if let Err(error) = state.decoder.push(&bytes) {
+                            state.done = true;
+                            return Some((
+                                Err(AISdkError::new(format!("SSE framing error: {error}"))),
+                                state,
+                            ));
+                        }
+                        loop {
+                            let event = match state.decoder.next_event() {
+                                Ok(Some(event)) => event,
+                                Ok(None) => break,
+                                Err(error) => {
+                                    state.done = true;
+                                    return Some((
+                                        Err(AISdkError::new(format!("SSE framing error: {error}"))),
+                                        state,
+                                    ));
                                 }
-
+                            };
+                            let data = event.data;
+                            if data != "[DONE]" {
                                 // Parse once as Value for reuse
-                                let raw: serde_json::Value = match serde_json::from_str(data) {
+                                let raw: serde_json::Value = match serde_json::from_str(&data) {
                                     Ok(v) => v,
                                     Err(e) => {
                                         state.finish_reason = Some("error".to_string());

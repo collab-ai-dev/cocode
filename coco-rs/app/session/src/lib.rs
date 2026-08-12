@@ -659,7 +659,15 @@ impl SessionManager {
                 if path.extension().is_none_or(|e| e != "jsonl") {
                     continue;
                 }
-                let Ok(meta) = entry.metadata() else { continue };
+                let Ok(segments) = storage::transcript_segment_paths(&path) else {
+                    continue;
+                };
+                let Some((_, latest_segment)) = segments.last() else {
+                    continue;
+                };
+                let Ok(meta) = std::fs::metadata(latest_segment) else {
+                    continue;
+                };
                 let Ok(mtime) = meta.modified() else { continue };
                 if mtime >= cutoff {
                     continue;
@@ -675,18 +683,24 @@ impl SessionManager {
                 else {
                     continue;
                 };
-                let Ok(meta) = std::fs::metadata(&path) else {
+                // Rotation may have happened between the optimistic stat and
+                // lease acquisition. Rediscover under the lease and judge the
+                // journal by its actual latest segment.
+                let Ok(segments) = storage::transcript_segment_paths(&path) else {
+                    continue;
+                };
+                let Some((_, latest_segment)) = segments.last() else {
+                    continue;
+                };
+                let Ok(meta) = std::fs::metadata(latest_segment) else {
                     continue;
                 };
                 let Ok(mtime) = meta.modified() else { continue };
                 if mtime >= cutoff {
                     continue;
                 }
-                match std::fs::remove_file(&path) {
-                    Ok(()) => removed += 1,
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => return Err(e.into()),
-                }
+                storage::remove_transcript_journal(&path)?;
+                removed += 1;
             }
         }
         Ok(removed)

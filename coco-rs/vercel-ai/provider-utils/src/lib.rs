@@ -141,7 +141,10 @@ pub use schema::ValidationError;
 
 pub use schema::as_schema;
 pub use schema::json_schema;
+pub use sse::DEFAULT_MAX_SSE_EVENT_BYTES;
+pub use sse::SseDecodeError;
 pub use sse::SseDecoder;
+pub use sse::SseEvent;
 
 pub use url::is_url_supported;
 pub use url::parse_data_url;

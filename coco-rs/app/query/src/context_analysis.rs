@@ -37,12 +37,19 @@ pub enum ContextAnalysisError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("failed to prepare provider artifacts: {message}"))]
+    AssistantPayload {
+        message: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 impl ErrorExt for ContextAnalysisError {
     fn status_code(&self) -> StatusCode {
         match self {
             Self::MissingModelInfo { .. } => StatusCode::InvalidArguments,
+            Self::AssistantPayload { .. } => StatusCode::IoError,
         }
     }
 
@@ -199,7 +206,12 @@ pub async fn analyze_engine_context_with_sources(
         Some(state) => state.read().await.clone(),
         None => ToolAppState::default(),
     };
-    let built = engine.build_prompt(history).await;
+    let built = engine.build_prompt(history).await.map_err(|error| {
+        context_analysis_error::AssistantPayloadSnafu {
+            message: error.to_string(),
+        }
+        .build()
+    })?;
     let tool_defs = engine.build_tool_definitions_detailed(&app_state).await;
 
     let system_text = first_system_text(&built.prompt);

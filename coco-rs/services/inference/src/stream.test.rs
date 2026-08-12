@@ -327,6 +327,29 @@ async fn process_stream_reports_error_parts_with_metrics() {
     }
 }
 
+#[tokio::test]
+async fn process_stream_rejects_turn_before_accumulating_oversized_delta() {
+    let parts = vec![Ok(LanguageModelV4StreamPart::TextDelta {
+        id: "t1".into(),
+        delta: "x".repeat(super::MAX_STREAMED_ASSISTANT_TURN_BYTES),
+        provider_metadata: None,
+    })];
+    let (tx, mut rx) = mpsc::channel::<StreamEvent>(4);
+    tokio::spawn(process_stream(Box::pin(futures::stream::iter(parts)), tx));
+
+    match rx.recv().await {
+        Some(StreamEvent::Error { message, .. }) => {
+            assert!(message.contains("assistant stream exceeds"));
+            assert!(message.contains("safety limit"));
+        }
+        other => panic!("expected bounded stream error, got {other:?}"),
+    }
+    assert!(
+        rx.recv().await.is_none(),
+        "budget failure must terminate stream"
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn process_stream_with_config_uses_custom_stall_threshold() {
     let stream = futures::stream::unfold(0usize, |idx| async move {
