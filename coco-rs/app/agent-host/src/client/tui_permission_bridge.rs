@@ -3,10 +3,10 @@
 //!
 //! ## Why
 //!
-//! Without an installed bridge, the engine's `permission_controller`
-//! treats `PermissionDecision::Ask` as "auto-allow" (legacy headless
-//! fallback at `permission_controller.rs:100-107`). For interactive
-//! TUI users that's the wrong default — Ask should prompt, not pass.
+//! The engine's `permission_controller` fails closed when a residual
+//! `PermissionDecision::Ask` has no installed bridge. Interactive TUI users
+//! need a bridge so the request can be presented and explicitly resolved
+//! instead of being denied as unavailable.
 //!
 //! This module wires the loop:
 //!
@@ -40,7 +40,7 @@
 //! ## Cross-mode contract
 //!
 //! Worker subagents (AgentTool spawns) inherit the leader's bridge
-//! via `wire_engine`. So a worker's tool deny in TUI mode prompts the
+//! via `wire_engine`. So a worker's unresolved `Ask` in TUI mode reaches the
 //! leader's prompt automatically — no per-spawn install needed.
 
 use std::collections::HashMap;
