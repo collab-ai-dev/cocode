@@ -2,6 +2,7 @@ use coco_llm_types::AssistantContentPart;
 use coco_llm_types::FinishReason;
 use coco_llm_types::ProviderMetadata;
 use coco_llm_types::ReasoningPart;
+use coco_llm_types::SourcePart;
 use coco_llm_types::StopReason;
 use coco_llm_types::TextPart;
 use coco_llm_types::ToolCallPart;
@@ -461,6 +462,35 @@ async fn snapshot_preserves_provider_metadata_on_every_variant() {
         }
         other => panic!("expected ToolCall, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn snapshot_preserves_typed_document_source_fields() {
+    let source = SourcePart::document("doc-1", "Spec", "application/pdf")
+        .with_filename("spec.pdf")
+        .with_metadata(meta("google", "citation", "citation-1"));
+    let parts = vec![
+        Ok(LanguageModelV4StreamPart::Source(source.clone())),
+        Ok(LanguageModelV4StreamPart::Finish {
+            usage: Usage::new(1, 1),
+            finish_reason: FinishReason::new(StopReason::EndTurn),
+            provider_metadata: None,
+        }),
+    ];
+    let stream = futures::stream::iter(parts);
+    let (tx, mut rx) = mpsc::channel::<StreamEvent>(8);
+    tokio::spawn(process_stream(Box::pin(stream), tx));
+
+    while let Some(event) = rx.recv().await {
+        if let StreamEvent::Finish { snapshot, .. } = event {
+            assert!(matches!(
+                snapshot.parts.as_slice(),
+                [super::TurnPart::Source(actual)] if actual == &source
+            ));
+            return;
+        }
+    }
+    panic!("expected finish event");
 }
 
 /// Multiple reasoning segments per turn preserve their own metadata.
@@ -1090,4 +1120,56 @@ async fn tool_input_round_trips_through_synthetic_stream() {
     let round_tripped: serde_json::Value =
         serde_json::from_str(&json_accumulator).expect("accumulated JSON should parse");
     assert_eq!(round_tripped, original_input);
+}
+
+#[tokio::test]
+async fn process_stream_preserves_canonical_structured_parts_and_provider_result() {
+    let file = coco_llm_types::FilePart::from_url("https://example.com/output.png", "image/png")
+        .with_filename("output.png");
+    let approval = coco_llm_types::ToolApprovalRequestPart::new("approval-1", "call-1")
+        .with_tool_name("remote_search")
+        .with_context("remote MCP server");
+    let custom = coco_llm_types::CustomPart::new("provider-state");
+    let parts = vec![
+        Ok(LanguageModelV4StreamPart::File(file.clone())),
+        Ok(LanguageModelV4StreamPart::ToolApprovalRequest(
+            approval.clone(),
+        )),
+        Ok(LanguageModelV4StreamPart::Custom(custom.clone())),
+        Ok(LanguageModelV4StreamPart::ToolResult(
+            vercel_ai_provider::LanguageModelV4ToolResult::new(
+                "call-1",
+                "remote_search",
+                serde_json::json!({"matches": 3}),
+            ),
+        )),
+        Ok(LanguageModelV4StreamPart::Finish {
+            usage: Usage::new(1, 1),
+            finish_reason: FinishReason::new(StopReason::EndTurn),
+            provider_metadata: None,
+        }),
+    ];
+    let (tx, mut rx) = mpsc::channel::<StreamEvent>(16);
+    tokio::spawn(process_stream(Box::pin(futures::stream::iter(parts)), tx));
+
+    let mut snapshot = None;
+    while let Some(event) = rx.recv().await {
+        if let StreamEvent::Finish {
+            snapshot: value, ..
+        } = event
+        {
+            snapshot = Some(value);
+        }
+    }
+    let snapshot = snapshot.expect("finish snapshot");
+    assert!(matches!(&snapshot.parts[0], super::TurnPart::File(actual) if actual == &file));
+    assert!(
+        matches!(&snapshot.parts[1], super::TurnPart::ToolApprovalRequest(actual) if actual == &approval)
+    );
+    assert!(matches!(&snapshot.parts[2], super::TurnPart::Custom(actual) if actual == &custom));
+    assert!(matches!(
+        &snapshot.parts[3],
+        super::TurnPart::ToolResult(result)
+            if result.tool_call_id == "call-1" && result.tool_name == "remote_search"
+    ));
 }

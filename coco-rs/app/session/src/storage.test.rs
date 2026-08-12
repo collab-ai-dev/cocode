@@ -1204,6 +1204,51 @@ fn test_tool_result_transcript_serializes_as_user_message_with_tool_result_block
 }
 
 #[test]
+fn test_tool_approval_response_survives_jsonl_round_trip() {
+    let message = coco_messages::create_tool_approval_response_message(
+        "approval-1",
+        "toolu-provider-1",
+        "mcp__remote__search",
+        false,
+        Some("user denied remote execution".into()),
+        None,
+    );
+    let entries = transcript_entries_for_message(
+        &message,
+        TranscriptEntryOptions {
+            session_id: Some(&test_session_id("ss")),
+            cwd: "/tmp",
+            timestamp: "2025-01-15T10:00:00Z",
+            parent_uuid: Some("assistant-uuid"),
+            logical_parent_uuid: None,
+            is_sidechain: false,
+            agent_id: None,
+            git_branch: None,
+        },
+    );
+
+    let restored = messages_from_transcript_entry(&entries[0]);
+    assert_eq!(restored.len(), 1);
+    let coco_messages::Message::ToolResult(result) = &restored[0] else {
+        panic!("expected tool-role approval response");
+    };
+    assert_eq!(result.tool_use_id, "toolu-provider-1");
+    assert!(result.is_error);
+    let coco_messages::LlmMessage::Tool { content, .. } = &result.message else {
+        panic!("expected tool message");
+    };
+    let [coco_messages::ToolContent::ToolApprovalResponse(response)] = content.as_slice() else {
+        panic!("expected approval response part");
+    };
+    assert_eq!(response.approval_id, "approval-1");
+    assert!(!response.approved);
+    assert_eq!(
+        response.reason.as_deref(),
+        Some("user denied remote execution")
+    );
+}
+
+#[test]
 fn test_transcript_only_flag_survives_jsonl_round_trip() {
     // Regression guard: a slash-command result is transcript-only (never
     // sent to the model). If the flag is dropped on persist, it resumes as
@@ -1328,6 +1373,126 @@ fn test_append_message_chain_parents_tool_result_to_source_assistant() {
         persisted_tool_result.parent_uuid,
         Some(assistant_uuid.to_string())
     );
+}
+
+#[test]
+fn test_append_message_chain_write_failure_does_not_commit_seen_state() {
+    let (_dir, store, _project_dir) = test_store();
+    let sid = "failed-chain-append";
+    let message = coco_messages::create_user_message("persist me");
+    let uuid = message.uuid().copied().expect("message uuid");
+    let transcript_path = store.transcript_path(sid);
+    std::fs::create_dir_all(&transcript_path).expect("create blocking directory");
+    let mut seen = std::collections::HashSet::new();
+
+    let error = store
+        .append_message_chain(
+            sid,
+            std::iter::once(&message),
+            &mut seen,
+            ChainWriteOptions {
+                cwd: "/tmp".into(),
+                timestamp: "2025-01-15T10:00:00Z".into(),
+                ..Default::default()
+            },
+        )
+        .expect_err("a directory cannot be opened as a transcript file");
+
+    assert!(matches!(error, crate::SessionError::Io(_)));
+    assert!(!seen.contains(&uuid), "failed writes must remain retryable");
+
+    std::fs::remove_dir(&transcript_path).expect("remove blocking directory");
+    let result = store
+        .append_message_chain(
+            sid,
+            std::iter::once(&message),
+            &mut seen,
+            ChainWriteOptions {
+                cwd: "/tmp".into(),
+                timestamp: "2025-01-15T10:00:00Z".into(),
+                ..Default::default()
+            },
+        )
+        .expect("retry append");
+
+    assert_eq!(result.appended, 1);
+    assert!(seen.contains(&uuid));
+    assert_eq!(store.load_transcript_messages(sid).unwrap().len(), 1);
+}
+
+struct PartialWriteThenError {
+    bytes: Vec<u8>,
+    cursor: u64,
+    fail_at: u64,
+}
+
+impl std::io::Write for PartialWriteThenError {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.cursor >= self.fail_at {
+            return Err(std::io::Error::other("injected partial write failure"));
+        }
+        let allowed = usize::try_from(self.fail_at - self.cursor)
+            .unwrap_or(usize::MAX)
+            .min(buf.len());
+        let start = self.cursor as usize;
+        let end = start + allowed;
+        if self.bytes.len() < end {
+            self.bytes.resize(end, 0);
+        }
+        self.bytes[start..end].copy_from_slice(&buf[..allowed]);
+        self.cursor += allowed as u64;
+        Ok(allowed)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl std::io::Seek for PartialWriteThenError {
+    fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+        let next = match position {
+            std::io::SeekFrom::Start(offset) => i128::from(offset),
+            std::io::SeekFrom::End(offset) => self.bytes.len() as i128 + i128::from(offset),
+            std::io::SeekFrom::Current(offset) => i128::from(self.cursor) + i128::from(offset),
+        };
+        if next < 0 || next > u64::MAX as i128 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid seek",
+            ));
+        }
+        self.cursor = next as u64;
+        Ok(self.cursor)
+    }
+}
+
+impl TransactionalAppend for PartialWriteThenError {
+    fn current_len(&self) -> std::io::Result<u64> {
+        Ok(self.bytes.len() as u64)
+    }
+
+    fn truncate_to(&mut self, len: u64) -> std::io::Result<()> {
+        self.bytes.truncate(len as usize);
+        self.cursor = self.cursor.min(len);
+        Ok(())
+    }
+}
+
+#[test]
+fn test_partial_append_failure_rolls_back_to_original_length() {
+    let original = b"existing-jsonl-row\n".to_vec();
+    let mut writer = PartialWriteThenError {
+        fail_at: original.len() as u64 + 7,
+        cursor: 0,
+        bytes: original.clone(),
+    };
+
+    let error = write_payload_transactionally(&mut writer, b"new-jsonl-row\n")
+        .expect_err("injected writer must fail after a short write");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::Other);
+    assert_eq!(writer.bytes, original, "partial tail must be removed");
 }
 
 #[test]

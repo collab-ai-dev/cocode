@@ -15,10 +15,15 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::BufRead;
+use std::io::Seek;
+use std::io::SeekFrom;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::sync::Weak;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use uuid::Uuid;
@@ -59,6 +64,10 @@ pub use wire::transcript_entries_for_message;
 
 /// Maximum transcript file size we will fully read into memory (50 MB).
 const MAX_TRANSCRIPT_READ_BYTES: u64 = 50 * 1024 * 1024;
+const MAX_TRANSCRIPT_APPEND_BYTES: usize = MAX_TRANSCRIPT_READ_BYTES as usize;
+
+type AppendLock = Arc<Mutex<()>>;
+static APPEND_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
 
 fn empty_session_id_as_none<'de, D>(deserializer: D) -> Result<Option<SessionId>, D::Error>
 where
@@ -1020,9 +1029,8 @@ impl TranscriptStore {
     }
 
     /// Append messages using TS-compatible wire conversion and prefix-only
-    /// dedup semantics. Thin wrapper over the backend-independent
-    /// [`build_message_chain_entries`] — it builds the entry list (and
-    /// mutates `seen`) then writes each line to the JSONL.
+    /// dedup semantics. The dedup set is committed only after the entire
+    /// JSONL batch is written, so a failed append remains retryable.
     pub fn append_message_chain<'a, I>(
         &self,
         session_id: &str,
@@ -1033,11 +1041,10 @@ impl TranscriptStore {
     where
         I: IntoIterator<Item = &'a coco_messages::Message>,
     {
-        let (entries, result) = build_message_chain_entries(session_id, messages, seen, &options);
-        for entry in &entries {
-            self.append_entry(session_id, entry)?;
-        }
-        Ok(result)
+        let batch = build_message_chain_entries(session_id, messages, seen, &options);
+        append_entries_to_file(&self.transcript_path(session_id), &batch.entries)?;
+        seen.extend(batch.message_uuids);
+        Ok(batch.result)
     }
 
     /// Append a subagent conversation chain to that agent's dedicated
@@ -1058,12 +1065,11 @@ impl TranscriptStore {
     where
         I: IntoIterator<Item = &'a coco_messages::Message>,
     {
-        let (entries, result) = build_message_chain_entries(session_id, messages, seen, &options);
+        let batch = build_message_chain_entries(session_id, messages, seen, &options);
         let path = self.agent_transcript_path(session_id, agent_id);
-        for entry in &entries {
-            append_entry_to_file(&path, entry)?;
-        }
-        Ok(result)
+        append_entries_to_file(&path, &batch.entries)?;
+        seen.extend(batch.message_uuids);
+        Ok(batch.result)
     }
 
     /// Persist a file-history snapshot to the JSONL transcript.
@@ -1292,18 +1298,26 @@ impl TranscriptStore {
     }
 }
 
+/// A prepared chain append. `message_uuids` becomes committed dedup state only
+/// after the backend accepts every entry in `entries`.
+pub(crate) struct MessageChainBatch {
+    pub(crate) entries: Vec<Entry>,
+    pub(crate) result: ChainWriteResult,
+    pub(crate) message_uuids: HashSet<Uuid>,
+}
+
 /// Build the transcript entries for a conversation chain with prefix-only
-/// dedup, mutating `seen` exactly as the append path does. Pure: no IO.
+/// dedup without mutating caller-owned state. Pure: no IO.
 /// Both [`TranscriptStore::append_message_chain`] (writes the entries to
 /// the JSONL) and the in-memory backend ([`crate::store::InMemoryStore`])
 /// drive off this, so chain / parent-uuid / dedup semantics stay
 /// identical regardless of where the bytes land.
-pub fn build_message_chain_entries<'a, I>(
+pub(crate) fn build_message_chain_entries<'a, I>(
     session_id: &str,
     messages: I,
-    seen: &mut HashSet<Uuid>,
+    seen: &HashSet<Uuid>,
     options: &ChainWriteOptions,
-) -> (Vec<Entry>, ChainWriteResult)
+) -> MessageChainBatch
 where
     I: IntoIterator<Item = &'a coco_messages::Message>,
 {
@@ -1311,6 +1325,7 @@ where
     let mut wrote_new = false;
     let mut result = ChainWriteResult::default();
     let mut out: Vec<Entry> = Vec::new();
+    let mut message_uuids = HashSet::new();
     let mut source_by_tool_use: std::collections::HashMap<String, Uuid> =
         std::collections::HashMap::new();
     let typed_session_id = SessionId::try_new(session_id.to_string()).ok();
@@ -1321,7 +1336,7 @@ where
         };
         remember_assistant_tool_calls(msg, uuid, &mut source_by_tool_use);
 
-        if seen.contains(&uuid) {
+        if seen.contains(&uuid) || message_uuids.contains(&uuid) {
             if !wrote_new {
                 prev_uuid = Some(uuid.to_string());
             }
@@ -1357,13 +1372,17 @@ where
 
         result.appended += entries.len();
         out.extend(entries.into_iter().map(|e| Entry::Transcript(Box::new(e))));
-        seen.insert(uuid);
+        message_uuids.insert(uuid);
         wrote_new = true;
         prev_uuid = Some(uuid.to_string());
         result.last_written_uuid = Some(uuid);
     }
 
-    (out, result)
+    MessageChainBatch {
+        entries: out,
+        result,
+        message_uuids,
+    }
 }
 
 fn unlink_if_older_than(path: &Path, cutoff: std::time::SystemTime) -> crate::Result<bool> {
@@ -1519,16 +1538,140 @@ fn matches_session(payload: &serde_json::Value, session_id: &str) -> bool {
 
 /// Append a single JSON entry as one JSONL line.
 fn append_entry_to_file(path: &Path, entry: &Entry) -> crate::Result<()> {
+    append_entries_to_file(path, std::slice::from_ref(entry))
+}
+
+/// Serialize a bounded chain before opening the file, then append it as one
+/// rollback-capable transaction. The per-path lock is the in-process single
+/// writer; cross-process writers are excluded by the session write lease.
+fn append_entries_to_file(path: &Path, entries: &[Entry]) -> crate::Result<()> {
+    if entries.is_empty() {
+        return Ok(());
+    }
+
+    let mut payload = BoundedPayload::new(MAX_TRANSCRIPT_APPEND_BYTES);
+    for entry in entries {
+        serde_json::to_writer(&mut payload, entry)?;
+        payload.write_all(b"\n")?;
+    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    let path_lock = append_lock_for(path);
+    let _guard = path_lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut file = std::fs::OpenOptions::new()
         .create(true)
-        .append(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
         .open(path)?;
     fs2::FileExt::lock_exclusive(&file)?;
-    let line = serde_json::to_string(entry)?;
-    writeln!(file, "{line}")?;
+    let resulting_len = file
+        .metadata()?
+        .len()
+        .saturating_add(payload.as_slice().len() as u64);
+    if resulting_len > MAX_TRANSCRIPT_READ_BYTES {
+        return Err(crate::SessionError::generic(format!(
+            "transcript append would exceed the {MAX_TRANSCRIPT_READ_BYTES}-byte readable limit: {}",
+            path.display(),
+        )));
+    }
+    write_payload_transactionally(&mut file, payload.as_slice())?;
+    Ok(())
+}
+
+fn append_lock_for(path: &Path) -> AppendLock {
+    let registry = APPEND_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut locks = registry
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(path).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(path.to_path_buf(), Arc::downgrade(&lock));
+    lock
+}
+
+struct BoundedPayload {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+
+impl BoundedPayload {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit,
+        }
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+impl Write for BoundedPayload {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.bytes.len().saturating_add(buf.len()) > self.limit {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::FileTooLarge,
+                format!("transcript append exceeds {} bytes", self.limit),
+            ));
+        }
+        self.bytes.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+trait TransactionalAppend: Write + Seek {
+    fn current_len(&self) -> std::io::Result<u64>;
+    fn truncate_to(&mut self, len: u64) -> std::io::Result<()>;
+    fn commit(&mut self) -> std::io::Result<()> {
+        self.flush()
+    }
+}
+
+impl TransactionalAppend for std::fs::File {
+    fn current_len(&self) -> std::io::Result<u64> {
+        Ok(self.metadata()?.len())
+    }
+
+    fn truncate_to(&mut self, len: u64) -> std::io::Result<()> {
+        self.set_len(len)
+    }
+
+    fn commit(&mut self) -> std::io::Result<()> {
+        self.sync_data()
+    }
+}
+
+fn write_payload_transactionally<W: TransactionalAppend>(
+    writer: &mut W,
+    payload: &[u8],
+) -> std::io::Result<()> {
+    let original_len = writer.current_len()?;
+    writer.seek(SeekFrom::End(0))?;
+    let result = writer.write_all(payload).and_then(|()| writer.commit());
+    if let Err(write_error) = result {
+        if let Err(rollback_error) = writer.truncate_to(original_len) {
+            return Err(std::io::Error::new(
+                rollback_error.kind(),
+                format!(
+                    "transcript append failed ({write_error}); rollback failed ({rollback_error})"
+                ),
+            ));
+        }
+        writer.seek(SeekFrom::Start(original_len))?;
+        return Err(write_error);
+    }
     Ok(())
 }
 

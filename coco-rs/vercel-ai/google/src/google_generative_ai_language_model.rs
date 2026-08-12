@@ -33,8 +33,6 @@ use vercel_ai_provider::Warning;
 use vercel_ai_provider::content::SourcePart;
 use vercel_ai_provider::language_model::LanguageModelV4Request;
 use vercel_ai_provider::language_model::LanguageModelV4Response;
-use vercel_ai_provider::language_model::v4::stream::File as StreamFile;
-use vercel_ai_provider::language_model::v4::stream::ReasoningFile as StreamReasoningFile;
 use vercel_ai_provider::response_metadata::ResponseMetadata;
 
 use vercel_ai_provider_utils::JsonResponseHandler;
@@ -1439,19 +1437,17 @@ fn process_stream_chunk(
                     });
                 }
                 if part.thought == Some(true) {
-                    parts.push(LanguageModelV4StreamPart::ReasoningFile(
-                        StreamReasoningFile {
-                            data: inline.data.clone(),
-                            media_type: inline.mime_type.clone(),
-                            provider_metadata: ts_meta.clone(),
-                        },
-                    ));
+                    let mut file = ReasoningFilePart::from_base64(
+                        inline.data.clone(),
+                        inline.mime_type.clone(),
+                    );
+                    file.provider_metadata = ts_meta.clone();
+                    parts.push(LanguageModelV4StreamPart::ReasoningFile(file));
                 } else {
-                    parts.push(LanguageModelV4StreamPart::File(StreamFile {
-                        data: inline.data.clone(),
-                        media_type: inline.mime_type.clone(),
-                        provider_metadata: ts_meta.clone(),
-                    }));
+                    let mut file =
+                        FilePart::from_base64(inline.data.clone(), inline.mime_type.clone());
+                    file.provider_metadata = ts_meta.clone();
+                    parts.push(LanguageModelV4StreamPart::File(file));
                 }
             }
         }

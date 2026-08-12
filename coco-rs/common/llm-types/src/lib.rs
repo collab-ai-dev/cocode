@@ -29,22 +29,28 @@ pub use vercel_ai_provider::LanguageModelV4Prompt as LlmPrompt;
 
 // === Content envelopes (role-keyed) ===
 pub use vercel_ai_provider::AssistantContentPart;
+pub use vercel_ai_provider::CustomPart;
 pub use vercel_ai_provider::ToolContentPart;
 pub use vercel_ai_provider::UserContentPart;
 
 // === Content parts ===
 pub use vercel_ai_provider::DataContent;
 pub use vercel_ai_provider::FilePart;
+pub use vercel_ai_provider::FileRawData;
 pub use vercel_ai_provider::LanguageModelV4FileData;
 pub use vercel_ai_provider::ReasoningFilePart;
 pub use vercel_ai_provider::ReasoningPart;
 pub use vercel_ai_provider::SharedV4FileData;
+pub use vercel_ai_provider::SourcePart;
+pub use vercel_ai_provider::SourceType;
 pub use vercel_ai_provider::TextPart;
+pub use vercel_ai_provider::ToolApprovalRequestPart;
 pub use vercel_ai_provider::ToolCallPart;
 pub use vercel_ai_provider::ToolInputInvalidReason;
 pub use vercel_ai_provider::ToolResultContent;
 pub use vercel_ai_provider::ToolResultContentPart;
 pub use vercel_ai_provider::ToolResultPart;
+pub use vercel_ai_provider::content::ToolApprovalResponsePart;
 
 // === Provider-extension bags ===
 //

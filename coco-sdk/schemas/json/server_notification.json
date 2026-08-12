@@ -3563,47 +3563,6 @@
         "declined"
       ]
     },
-    "LanguageModelV4FileData": {
-      "description": "Generated file data — either raw bytes/base64 or a URL.\n\nMatches the 2-arm `SharedV4FileDataData | SharedV4FileDataUrl` tagged union\nfrom the v4 spec.",
-      "oneOf": [
-        {
-          "description": "Raw bytes (Uint8Array) or base64-encoded string.",
-          "type": "object",
-          "properties": {
-            "data": {
-              "description": "The raw data.",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "data"
-            }
-          },
-          "required": [
-            "type",
-            "data"
-          ]
-        },
-        {
-          "description": "A URL that points to the file.",
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "url"
-            },
-            "url": {
-              "description": "The URL string.",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "url"
-          ]
-        }
-      ]
-    },
     "LanguageModelV4Message": {
       "description": "A message in a language model prompt.",
       "oneOf": [
@@ -4652,12 +4611,12 @@
       ]
     },
     "ReasoningFilePart": {
-      "description": "A reasoning file content part (file data that is part of reasoning).\n\n`data` is a 2-arm tagged union:\n- `Data { data }` — raw bytes or base64-encoded string.\n- `Url { url }` — a URL pointing to the file.",
+      "description": "A reasoning file content part (file data that is part of reasoning).\n\nUses the same canonical file-data union as regular files so generated\nreasoning media can be externalized to a durable reference.",
       "type": "object",
       "properties": {
         "data": {
           "description": "The file data (raw bytes/base64 or URL).",
-          "$ref": "#/$defs/LanguageModelV4FileData"
+          "$ref": "#/$defs/SharedV4FileData"
         },
         "mediaType": {
           "description": "Either a full IANA media type (`type/subtype`) or just the top-level\nsegment (e.g. `image`, `audio`).",
@@ -7179,6 +7138,9 @@
             "string",
             "null"
           ]
+        },
+        "input": {
+          "description": "Arguments for the provider-hosted tool invocation."
         },
         "providerMetadata": {
           "description": "Provider-specific metadata.",

@@ -718,6 +718,10 @@ pub enum ModelRuntimeFeedbackOutcome {
 
 /// Session-scoped registry for role and explicit model runtimes.
 pub struct ModelRuntimeRegistry {
+    /// Serializes registry-state publication. Client construction happens
+    /// outside this lock; generation checks reject stale builds.
+    mutation_lock: std::sync::Mutex<()>,
+    state_generation: AtomicU64,
     runtime_config: std::sync::RwLock<Option<Arc<RuntimeConfig>>>,
     resolver: Option<Arc<dyn ProviderCredentialResolver>>,
     /// Session-scoped header-template variables (`${SESSION_ID}`, …), shared
@@ -733,6 +737,11 @@ pub struct ModelRuntimeRegistry {
     role_moa_overrides: std::sync::RwLock<HashMap<ModelRole, coco_config::MoaEndpointSpec>>,
     explicit_runtimes:
         std::sync::RwLock<HashMap<ProviderModelSelection, Arc<std::sync::Mutex<ModelRuntime>>>>,
+    role_build_locks: std::sync::Mutex<HashMap<ModelRole, Arc<std::sync::Mutex<()>>>>,
+    explicit_build_locks:
+        std::sync::Mutex<HashMap<ProviderModelSelection, Arc<std::sync::Mutex<()>>>>,
+    #[cfg(test)]
+    lazy_build_hook: std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     recovery_tasks: std::sync::Mutex<HashMap<ModelRuntimeSource, tokio::task::JoinHandle<()>>>,
     event_tx: tokio::sync::broadcast::Sender<ModelRuntimeEvent>,
 }
@@ -849,6 +858,8 @@ impl ModelRuntimeRegistry {
         }
         let (event_tx, _) = tokio::sync::broadcast::channel(128);
         Ok(Self {
+            mutation_lock: std::sync::Mutex::new(()),
+            state_generation: AtomicU64::new(0),
             runtime_config: std::sync::RwLock::new(Some(runtime_config)),
             resolver,
             header_vars: std::sync::RwLock::new(header_vars),
@@ -856,6 +867,10 @@ impl ModelRuntimeRegistry {
             role_overrides: std::sync::RwLock::new(HashMap::new()),
             role_moa_overrides: std::sync::RwLock::new(HashMap::new()),
             explicit_runtimes: std::sync::RwLock::new(HashMap::new()),
+            role_build_locks: std::sync::Mutex::new(HashMap::new()),
+            explicit_build_locks: std::sync::Mutex::new(HashMap::new()),
+            #[cfg(test)]
+            lazy_build_hook: std::sync::Mutex::new(None),
             recovery_tasks: std::sync::Mutex::new(HashMap::new()),
             event_tx,
         })
@@ -867,6 +882,8 @@ impl ModelRuntimeRegistry {
     {
         let (event_tx, _) = tokio::sync::broadcast::channel(128);
         Self {
+            mutation_lock: std::sync::Mutex::new(()),
+            state_generation: AtomicU64::new(0),
             runtime_config: std::sync::RwLock::new(None),
             resolver: None,
             header_vars: std::sync::RwLock::new(Arc::new(HeaderVars::empty())),
@@ -879,6 +896,10 @@ impl ModelRuntimeRegistry {
             role_overrides: std::sync::RwLock::new(HashMap::new()),
             role_moa_overrides: std::sync::RwLock::new(HashMap::new()),
             explicit_runtimes: std::sync::RwLock::new(HashMap::new()),
+            role_build_locks: std::sync::Mutex::new(HashMap::new()),
+            explicit_build_locks: std::sync::Mutex::new(HashMap::new()),
+            #[cfg(test)]
+            lazy_build_hook: std::sync::Mutex::new(None),
             recovery_tasks: std::sync::Mutex::new(HashMap::new()),
             event_tx,
         }
@@ -1135,68 +1156,122 @@ impl ModelRuntimeRegistry {
         &self,
         role: ModelRole,
     ) -> Result<Arc<std::sync::Mutex<ModelRuntime>>, InferenceError> {
-        if let Some(runtime) = rw_read(&self.role_runtimes).get(&role) {
-            return Ok(runtime.clone());
+        let build_lock = {
+            let mut locks = mutex_lock(&self.role_build_locks);
+            locks
+                .entry(role)
+                .or_insert_with(|| Arc::new(std::sync::Mutex::new(())))
+                .clone()
+        };
+        let _build_guard = mutex_lock(&build_lock);
+        loop {
+            let generation = self.state_generation.load(Ordering::Acquire);
+            let (cfg, primary, header_vars) = {
+                let _mutation = mutex_lock(&self.mutation_lock);
+                if let Some(runtime) = rw_read(&self.role_runtimes).get(&role) {
+                    return Ok(runtime.clone());
+                }
+                let cfg = rw_read(&self.runtime_config).clone().ok_or_else(|| {
+                    crate::errors::ProviderBuildFailedSnafu {
+                        provider: "model_runtime",
+                        provider_name: role.as_str().to_string(),
+                        message: "role has no prebuilt runtime and no RuntimeConfig".to_string(),
+                    }
+                    .build()
+                })?;
+                let primary = rw_read(&self.role_overrides)
+                    .get(&role)
+                    .cloned()
+                    .or_else(|| cfg.model_roles.primary_slot(role).cloned())
+                    .ok_or_else(|| {
+                        crate::errors::ProviderBuildFailedSnafu {
+                            provider: "model_runtime",
+                            provider_name: role.as_str().to_string(),
+                            message: "role has no model configured".to_string(),
+                        }
+                        .build()
+                    })?;
+                (cfg, primary, self.header_vars_snapshot())
+            };
+            let retry: RetryConfig = cfg.api.retry.clone().into();
+            #[cfg(test)]
+            self.run_lazy_build_hook();
+            let runtime = Arc::new(std::sync::Mutex::new(build_role_runtime(
+                &cfg,
+                role,
+                primary,
+                retry,
+                self.resolver.as_ref(),
+                Some(header_vars.as_ref()),
+            )?));
+            let _mutation = mutex_lock(&self.mutation_lock);
+            if self.state_generation.load(Ordering::Acquire) != generation {
+                continue;
+            }
+            let mut runtimes = rw_write(&self.role_runtimes);
+            if let Some(existing) = runtimes.get(&role) {
+                return Ok(existing.clone());
+            }
+            runtimes.insert(role, runtime.clone());
+            self.state_generation.fetch_add(1, Ordering::Release);
+            return Ok(runtime);
         }
-        let cfg = rw_read(&self.runtime_config).clone().ok_or_else(|| {
-            crate::errors::ProviderBuildFailedSnafu {
-                provider: "model_runtime",
-                provider_name: role.as_str().to_string(),
-                message: "role has no prebuilt runtime and no RuntimeConfig".to_string(),
-            }
-            .build()
-        })?;
-        let primary = cfg.model_roles.primary_slot(role).cloned().ok_or_else(|| {
-            crate::errors::ProviderBuildFailedSnafu {
-                provider: "model_runtime",
-                provider_name: role.as_str().to_string(),
-                message: "role has no model configured".to_string(),
-            }
-            .build()
-        })?;
-        let retry: RetryConfig = cfg.api.retry.clone().into();
-        let runtime = Arc::new(std::sync::Mutex::new(build_role_runtime(
-            &cfg,
-            role,
-            primary,
-            retry,
-            self.resolver.as_ref(),
-            Some(self.header_vars_snapshot().as_ref()),
-        )?));
-        rw_write(&self.role_runtimes).insert(role, runtime.clone());
-        Ok(runtime)
     }
 
     pub fn runtime_for_explicit(
         &self,
         selection: ProviderModelSelection,
     ) -> Result<Arc<std::sync::Mutex<ModelRuntime>>, InferenceError> {
-        if let Some(runtime) = rw_read(&self.explicit_runtimes).get(&selection) {
-            return Ok(runtime.clone());
-        }
-        let cfg = rw_read(&self.runtime_config).clone().ok_or_else(|| {
-            crate::errors::ProviderBuildFailedSnafu {
-                provider: "model_runtime",
-                provider_name: selection.provider.clone(),
-                message: "explicit runtime requested without RuntimeConfig".to_string(),
+        let build_lock = {
+            let mut locks = mutex_lock(&self.explicit_build_locks);
+            locks
+                .entry(selection.clone())
+                .or_insert_with(|| Arc::new(std::sync::Mutex::new(())))
+                .clone()
+        };
+        let _build_guard = mutex_lock(&build_lock);
+        loop {
+            let generation = self.state_generation.load(Ordering::Acquire);
+            let (cfg, header_vars) = {
+                let _mutation = mutex_lock(&self.mutation_lock);
+                if let Some(runtime) = rw_read(&self.explicit_runtimes).get(&selection) {
+                    return Ok(runtime.clone());
+                }
+                let cfg = rw_read(&self.runtime_config).clone().ok_or_else(|| {
+                    crate::errors::ProviderBuildFailedSnafu {
+                        provider: "model_runtime",
+                        provider_name: selection.provider.clone(),
+                        message: "explicit runtime requested without RuntimeConfig".to_string(),
+                    }
+                    .build()
+                })?;
+                (cfg, self.header_vars_snapshot())
+            };
+            let spec = explicit_spec(&cfg, &selection)?;
+            let retry: RetryConfig = cfg.api.retry.clone().into();
+            #[cfg(test)]
+            self.run_lazy_build_hook();
+            let client = model_factory::build_api_client(
+                &cfg,
+                &spec,
+                /*role_effort*/ None,
+                retry,
+                self.resolver.as_ref(),
+                Some(header_vars.as_ref()),
+            )?;
+            let runtime = Arc::new(std::sync::Mutex::new(ModelRuntime::new(client, Vec::new())));
+            let _mutation = mutex_lock(&self.mutation_lock);
+            if self.state_generation.load(Ordering::Acquire) != generation {
+                continue;
             }
-            .build()
-        })?;
-        let spec = explicit_spec(&cfg, &selection)?;
-        let retry: RetryConfig = cfg.api.retry.clone().into();
-        // Explicit (provider/model) selections carry no role slot, so no
-        // slot effort — thinking defers to the model / provider default.
-        let client = model_factory::build_api_client(
-            &cfg,
-            &spec,
-            /*role_effort*/ None,
-            retry,
-            self.resolver.as_ref(),
-            Some(self.header_vars_snapshot().as_ref()),
-        )?;
-        let runtime = Arc::new(std::sync::Mutex::new(ModelRuntime::new(client, Vec::new())));
-        rw_write(&self.explicit_runtimes).insert(selection, runtime.clone());
-        Ok(runtime)
+            let mut runtimes = rw_write(&self.explicit_runtimes);
+            if let Some(existing) = runtimes.get(&selection) {
+                return Ok(existing.clone());
+            }
+            runtimes.insert(selection, runtime.clone());
+            self.state_generation.fetch_add(1, Ordering::Release);
+            return Ok(runtime);
+        }
     }
 
     pub fn runtime_for_source(
@@ -1303,33 +1378,47 @@ impl ModelRuntimeRegistry {
         spec: ModelSpec,
         effort: Option<coco_types::ReasoningEffort>,
     ) -> Result<Vec<ModelRuntimeEvent>, InferenceError> {
-        let cfg = rw_read(&self.runtime_config).clone().ok_or_else(|| {
-            crate::errors::ProviderBuildFailedSnafu {
-                provider: "model_runtime",
-                provider_name: role.as_str().to_string(),
-                message: "role rebind requested without RuntimeConfig".to_string(),
-            }
-            .build()
-        })?;
-        let retry: RetryConfig = cfg.api.retry.clone().into();
         let slot = RoleSlot {
             model: spec.clone(),
             effort,
         };
-        let runtime = build_role_runtime(
-            &cfg,
-            role,
-            slot.clone(),
-            retry,
-            self.resolver.as_ref(),
-            Some(self.header_vars_snapshot().as_ref()),
-        )?;
-        rw_write(&self.role_overrides).insert(role, slot);
-        if let Some(old) = mutex_lock(&self.recovery_tasks).remove(&ModelRuntimeSource::Role(role))
-        {
-            old.abort();
+        loop {
+            let generation = self.state_generation.load(Ordering::Acquire);
+            let (cfg, header_vars) = {
+                let _mutation = mutex_lock(&self.mutation_lock);
+                let cfg = rw_read(&self.runtime_config).clone().ok_or_else(|| {
+                    crate::errors::ProviderBuildFailedSnafu {
+                        provider: "model_runtime",
+                        provider_name: role.as_str().to_string(),
+                        message: "role rebind requested without RuntimeConfig".to_string(),
+                    }
+                    .build()
+                })?;
+                (cfg, self.header_vars_snapshot())
+            };
+            let retry: RetryConfig = cfg.api.retry.clone().into();
+            let runtime = build_role_runtime(
+                &cfg,
+                role,
+                slot.clone(),
+                retry,
+                self.resolver.as_ref(),
+                Some(header_vars.as_ref()),
+            )?;
+            let _mutation = mutex_lock(&self.mutation_lock);
+            if self.state_generation.load(Ordering::Acquire) != generation {
+                continue;
+            }
+            rw_write(&self.role_overrides).insert(role, slot);
+            if let Some(old) =
+                mutex_lock(&self.recovery_tasks).remove(&ModelRuntimeSource::Role(role))
+            {
+                old.abort();
+            }
+            rw_write(&self.role_runtimes).insert(role, Arc::new(std::sync::Mutex::new(runtime)));
+            self.state_generation.fetch_add(1, Ordering::Release);
+            break;
         }
-        rw_write(&self.role_runtimes).insert(role, Arc::new(std::sync::Mutex::new(runtime)));
         let events = vec![ModelRuntimeEvent::RoleRebound {
             role,
             model_id: spec.model_id,
@@ -1343,6 +1432,19 @@ impl ModelRuntimeRegistry {
     /// `update_session_id` swap can't tear a build that has already started.
     fn header_vars_snapshot(&self) -> Arc<HeaderVars> {
         rw_read(&self.header_vars).clone()
+    }
+
+    #[cfg(test)]
+    fn set_lazy_build_hook(&self, hook: Arc<dyn Fn() + Send + Sync>) {
+        *mutex_lock(&self.lazy_build_hook) = Some(hook);
+    }
+
+    #[cfg(test)]
+    fn run_lazy_build_hook(&self) {
+        let hook = mutex_lock(&self.lazy_build_hook).clone();
+        if let Some(hook) = hook {
+            hook();
+        }
     }
 
     /// Refresh the session-scoped header vars after a `/clear` or `/resume`
@@ -1362,7 +1464,8 @@ impl ModelRuntimeRegistry {
         self: &Arc<Self>,
         new_session_id: &SessionId,
     ) -> Result<(), InferenceError> {
-        {
+        let (cfg, explicit_keys) = {
+            let _mutation = mutex_lock(&self.mutation_lock);
             let mut slot = rw_write(&self.header_vars);
             if slot.session_id.as_ref() == Some(new_session_id) {
                 return Ok(());
@@ -1373,10 +1476,29 @@ impl ModelRuntimeRegistry {
                 cwd: prev.cwd.clone(),
                 app_version: prev.app_version.clone(),
             });
-        }
-        let cfg = rw_read(&self.runtime_config).clone();
+            let cfg = rw_read(&self.runtime_config).clone();
+            let explicit_keys = rw_read(&self.explicit_runtimes)
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>();
+            if cfg.as_ref().is_some_and(|cfg| any_templated_header(cfg)) {
+                rw_write(&self.role_runtimes).clear();
+                rw_write(&self.explicit_runtimes).clear();
+                for (_, task) in mutex_lock(&self.recovery_tasks).drain() {
+                    task.abort();
+                }
+            }
+            self.state_generation.fetch_add(1, Ordering::Release);
+            (cfg, explicit_keys)
+        };
         match cfg {
-            Some(cfg) if any_templated_header(&cfg) => self.reconcile(cfg),
+            Some(cfg) if any_templated_header(&cfg) => {
+                self.reconcile(cfg)?;
+                for selection in explicit_keys {
+                    self.runtime_for_explicit(selection)?;
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -1385,53 +1507,67 @@ impl ModelRuntimeRegistry {
         self: &Arc<Self>,
         runtime_config: Arc<RuntimeConfig>,
     ) -> Result<(), InferenceError> {
-        let retry: RetryConfig = runtime_config.api.retry.clone().into();
-        let overrides = rw_read(&self.role_overrides).clone();
-        let mut rebuilt = HashMap::new();
-        for role in ModelRole::ALL {
-            let primary = overrides
-                .get(&role)
-                .cloned()
-                .or_else(|| runtime_config.model_roles.primary_slot(role).cloned());
-            if let Some(primary) = primary {
-                let runtime = build_role_runtime(
+        loop {
+            let generation = self.state_generation.load(Ordering::Acquire);
+            let (overrides, explicit_keys, header_vars) = {
+                let _mutation = mutex_lock(&self.mutation_lock);
+                (
+                    rw_read(&self.role_overrides).clone(),
+                    rw_read(&self.explicit_runtimes)
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                    self.header_vars_snapshot(),
+                )
+            };
+            let retry: RetryConfig = runtime_config.api.retry.clone().into();
+            let mut rebuilt = HashMap::new();
+            for role in ModelRole::ALL {
+                let primary = overrides
+                    .get(&role)
+                    .cloned()
+                    .or_else(|| runtime_config.model_roles.primary_slot(role).cloned());
+                if let Some(primary) = primary {
+                    let runtime = build_role_runtime(
+                        &runtime_config,
+                        role,
+                        primary,
+                        retry.clone(),
+                        self.resolver.as_ref(),
+                        Some(header_vars.as_ref()),
+                    )?;
+                    rebuilt.insert(role, Arc::new(std::sync::Mutex::new(runtime)));
+                }
+            }
+            let mut rebuilt_explicit = HashMap::new();
+            for selection in explicit_keys {
+                let spec = explicit_spec(&runtime_config, &selection)?;
+                let client = model_factory::build_api_client(
                     &runtime_config,
-                    role,
-                    primary,
+                    &spec,
+                    /*role_effort*/ None,
                     retry.clone(),
                     self.resolver.as_ref(),
-                    Some(self.header_vars_snapshot().as_ref()),
+                    Some(header_vars.as_ref()),
                 )?;
-                rebuilt.insert(role, Arc::new(std::sync::Mutex::new(runtime)));
+                rebuilt_explicit.insert(
+                    selection,
+                    Arc::new(std::sync::Mutex::new(ModelRuntime::new(client, Vec::new()))),
+                );
             }
+            let _mutation = mutex_lock(&self.mutation_lock);
+            if self.state_generation.load(Ordering::Acquire) != generation {
+                continue;
+            }
+            for (_, task) in mutex_lock(&self.recovery_tasks).drain() {
+                task.abort();
+            }
+            *rw_write(&self.role_runtimes) = rebuilt;
+            *rw_write(&self.runtime_config) = Some(runtime_config);
+            *rw_write(&self.explicit_runtimes) = rebuilt_explicit;
+            self.state_generation.fetch_add(1, Ordering::Release);
+            return Ok(());
         }
-        let explicit_keys = rw_read(&self.explicit_runtimes)
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut rebuilt_explicit = HashMap::new();
-        for selection in explicit_keys {
-            let spec = explicit_spec(&runtime_config, &selection)?;
-            let client = model_factory::build_api_client(
-                &runtime_config,
-                &spec,
-                /*role_effort*/ None,
-                retry.clone(),
-                self.resolver.as_ref(),
-                Some(self.header_vars_snapshot().as_ref()),
-            )?;
-            rebuilt_explicit.insert(
-                selection,
-                Arc::new(std::sync::Mutex::new(ModelRuntime::new(client, Vec::new()))),
-            );
-        }
-        for (_, task) in mutex_lock(&self.recovery_tasks).drain() {
-            task.abort();
-        }
-        *rw_write(&self.role_runtimes) = rebuilt;
-        *rw_write(&self.runtime_config) = Some(runtime_config);
-        *rw_write(&self.explicit_runtimes) = rebuilt_explicit;
-        Ok(())
     }
 
     pub async fn reset_cache_break_detectors(&self) {

@@ -6,10 +6,10 @@
 
 use vercel_ai_provider::AssistantContentPart;
 use vercel_ai_provider::FileRawData;
-use vercel_ai_provider::LanguageModelV4FileData;
 use vercel_ai_provider::ProviderMetadata;
 use vercel_ai_provider::ReasoningFilePart;
 use vercel_ai_provider::ReasoningPart;
+use vercel_ai_provider::SharedV4FileData;
 
 use super::generated_file::GeneratedFile;
 
@@ -135,13 +135,13 @@ pub fn convert_to_reasoning_outputs(parts: &[AssistantContentPart]) -> Vec<Reaso
             }
             AssistantContentPart::ReasoningFile(rf) => {
                 let file = match &rf.data {
-                    LanguageModelV4FileData::Data {
+                    SharedV4FileData::Data {
                         data: FileRawData::Base64(b),
                     } => GeneratedFile::from_base64("reasoning-file", b, &rf.media_type),
-                    LanguageModelV4FileData::Url { url } => {
+                    SharedV4FileData::Url { url } => {
                         GeneratedFile::new("reasoning-file", url, &rf.media_type)
                     }
-                    LanguageModelV4FileData::Data {
+                    SharedV4FileData::Data {
                         data: FileRawData::Bytes(bytes),
                     } => {
                         use base64::Engine as _;
@@ -152,6 +152,10 @@ pub fn convert_to_reasoning_outputs(parts: &[AssistantContentPart]) -> Vec<Reaso
                             &rf.media_type,
                         )
                     }
+                    SharedV4FileData::Text { text } => {
+                        GeneratedFile::new("reasoning-file", text, &rf.media_type)
+                    }
+                    SharedV4FileData::Reference { .. } => return None,
                 };
                 let mut output = ReasoningFileOutput::new(file);
                 if let Some(ref pm) = rf.provider_metadata {

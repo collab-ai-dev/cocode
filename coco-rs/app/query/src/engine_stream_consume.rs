@@ -677,10 +677,11 @@ impl QueryEngine {
                     })
                     .collect();
                 let synth_snapshot = AssistantTurnSnapshot { parts: synth_parts };
-                let (content_parts, _) = crate::engine::assistant_content_from_snapshot(
+                let content_parts = crate::engine::assistant_content_from_snapshot(
                     &synth_snapshot,
                     crate::tool_input_normalizer::ToolInputNormalizationContext { cwd: None },
-                );
+                )
+                .content_parts;
                 if !content_parts.is_empty() {
                     let assistant_msg = Message::Assistant(AssistantMessage {
                         message: LlmMessage::Assistant {

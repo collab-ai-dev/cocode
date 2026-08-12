@@ -4,7 +4,6 @@ use base64::Engine as _;
 use serde_json::Value;
 use vercel_ai_provider::AssistantContentPart;
 use vercel_ai_provider::FileRawData;
-use vercel_ai_provider::LanguageModelV4FileData;
 use vercel_ai_provider::LanguageModelV4Message;
 use vercel_ai_provider::SharedV4FileData;
 use vercel_ai_provider::ToolContentPart;
@@ -275,14 +274,14 @@ fn convert_assistant_content_parts(
                 }
             }
             AssistantContentPart::ReasoningFile(rf_part) => {
-                if matches!(&rf_part.data, LanguageModelV4FileData::Url { .. }) {
+                if matches!(&rf_part.data, SharedV4FileData::Url { .. }) {
                     return Err(
                         "File data URLs in assistant messages are not supported".to_string()
                     );
                 }
                 let ts =
                     extract_thought_signature(&rf_part.provider_metadata, provider_options_name);
-                let base_part = convert_lm_file_data_to_inline(&rf_part.data, &rf_part.media_type);
+                let base_part = convert_file_part_to_inline(&rf_part.data, &rf_part.media_type);
                 match base_part {
                     GoogleGenerativeAIContentPart::InlineData { inline_data, .. } => {
                         result.push(GoogleGenerativeAIContentPart::InlineData {
@@ -580,11 +579,11 @@ fn convert_file_part_to_inline(
                 thought_signature: None,
             }
         }
-        SharedV4FileData::Reference { .. } => GoogleGenerativeAIContentPart::InlineData {
-            inline_data: InlineDataPart {
-                mime_type: media_type.to_string(),
-                data: String::new(),
-            },
+        SharedV4FileData::Reference { reference } => GoogleGenerativeAIContentPart::Text {
+            text: format!(
+                "[file reference omitted; providers: {}]",
+                reference.keys().cloned().collect::<Vec<_>>().join(",")
+            ),
             thought: None,
             thought_signature: None,
         },
@@ -627,44 +626,13 @@ fn convert_file_part(data: &SharedV4FileData, media_type: &str) -> GoogleGenerat
                 thought_signature: None,
             }
         }
-        SharedV4FileData::Reference { .. } => GoogleGenerativeAIContentPart::InlineData {
-            inline_data: InlineDataPart {
-                mime_type: media_type.to_string(),
-                data: String::new(),
-            },
+        SharedV4FileData::Reference { reference } => GoogleGenerativeAIContentPart::Text {
+            text: format!(
+                "[file reference omitted; providers: {}]",
+                reference.keys().cloned().collect::<Vec<_>>().join(",")
+            ),
             thought: None,
             thought_signature: None,
-        },
-    }
-}
-
-/// Convert `LanguageModelV4FileData` (2-arm: Data/Url) to an InlineData or FileData part.
-fn convert_lm_file_data_to_inline(
-    data: &LanguageModelV4FileData,
-    media_type: &str,
-) -> GoogleGenerativeAIContentPart {
-    let media_type = if media_type == "image/*" {
-        "image/jpeg"
-    } else {
-        media_type
-    };
-    match data {
-        LanguageModelV4FileData::Data { data: raw } => {
-            let encoded = raw_file_data_to_base64(raw);
-            GoogleGenerativeAIContentPart::InlineData {
-                inline_data: InlineDataPart {
-                    mime_type: media_type.to_string(),
-                    data: encoded,
-                },
-                thought: None,
-                thought_signature: None,
-            }
-        }
-        LanguageModelV4FileData::Url { url } => GoogleGenerativeAIContentPart::FileData {
-            file_data: FileDataPart {
-                mime_type: media_type.to_string(),
-                file_uri: url.clone(),
-            },
         },
     }
 }

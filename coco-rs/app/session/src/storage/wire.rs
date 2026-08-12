@@ -181,11 +181,27 @@ fn tool_result_to_ts_user_message(tr: &coco_messages::ToolResultMessage) -> serd
     let content = match &tr.message {
         coco_messages::LlmMessage::Tool { content, .. } => content
             .iter()
-            .filter_map(|part| match part {
+            .map(|part| match part {
                 coco_messages::ToolContent::ToolResult(result) => {
-                    Some(tool_result_part_to_ts_block(result, tr.is_error))
+                    tool_result_part_to_ts_block(result, tr.is_error)
                 }
-                coco_messages::ToolContent::ToolApprovalResponse(_) => None,
+                coco_messages::ToolContent::ToolApprovalResponse(response) => {
+                    let mut block = serde_json::Map::new();
+                    block.insert("type".to_string(), json!("tool-approval-response"));
+                    block.insert("approvalId".to_string(), json!(response.approval_id));
+                    block.insert("approved".to_string(), json!(response.approved));
+                    block.insert("tool_use_id".to_string(), json!(tr.tool_use_id));
+                    block.insert("tool_name".to_string(), json!(tr.tool_id.to_string()));
+                    if let Some(reason) = response.reason.as_ref() {
+                        block.insert("reason".to_string(), json!(reason));
+                    }
+                    if let Some(metadata) = response.provider_metadata.as_ref()
+                        && let Ok(value) = serde_json::to_value(metadata)
+                    {
+                        block.insert("providerMetadata".to_string(), value);
+                    }
+                    serde_json::Value::Object(block)
+                }
             })
             .collect::<Vec<_>>(),
         _ => Vec::new(),
@@ -349,7 +365,7 @@ fn tool_results_from_ts_user_entry(entry: &TranscriptEntry) -> Option<Vec<coco_m
             block
                 .get("type")
                 .and_then(|v| v.as_str())
-                .is_some_and(|kind| kind == "tool_result" || kind == "tool-result")
+                .is_some_and(is_tool_role_block)
         })
         .count()
         > 1;
@@ -361,7 +377,7 @@ fn tool_results_from_ts_user_entry(entry: &TranscriptEntry) -> Option<Vec<coco_m
         let Some(kind) = block.get("type").and_then(|v| v.as_str()) else {
             continue;
         };
-        if kind != "tool_result" && kind != "tool-result" {
+        if !is_tool_role_block(kind) {
             continue;
         }
         let tool_use_id = block
@@ -381,6 +397,47 @@ fn tool_results_from_ts_user_entry(entry: &TranscriptEntry) -> Option<Vec<coco_m
             .get("is_error")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
+        if kind == "tool-approval-response" || kind == "tool_approval_response" {
+            let approval_id = block
+                .get("approvalId")
+                .or_else(|| block.get("approval_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            if approval_id.is_empty() {
+                continue;
+            }
+            let approved = block
+                .get("approved")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let Ok(response) = serde_json::from_value::<coco_messages::ToolContent>(block.clone())
+            else {
+                continue;
+            };
+            let uuid = if multiple_blocks {
+                deterministic_tool_result_block_uuid(&entry.uuid, &tool_use_id, idx)
+            } else {
+                entry.uuid.parse::<Uuid>().unwrap_or_else(|_| {
+                    deterministic_tool_result_block_uuid(&entry.uuid, &tool_use_id, idx)
+                })
+            };
+            let tool_id = match ToolId::from_str(&tool_name) {
+                Ok(tool_id) => tool_id,
+                Err(never) => match never {},
+            };
+            messages.push(coco_messages::Message::ToolResult(
+                coco_messages::ToolResultMessage {
+                    uuid,
+                    source_assistant_uuid,
+                    display_data: None,
+                    message: coco_messages::LlmMessage::tool(vec![response]),
+                    tool_use_id,
+                    tool_id,
+                    is_error: !approved,
+                },
+            ));
+            continue;
+        }
         let output = ts_tool_result_content_to_output(
             block
                 .get("content")
@@ -421,6 +478,13 @@ fn tool_results_from_ts_user_entry(entry: &TranscriptEntry) -> Option<Vec<coco_m
         ));
     }
     Some(messages)
+}
+
+fn is_tool_role_block(kind: &str) -> bool {
+    matches!(
+        kind,
+        "tool_result" | "tool-result" | "tool-approval-response" | "tool_approval_response"
+    )
 }
 
 fn deterministic_tool_result_block_uuid(entry_uuid: &str, tool_use_id: &str, idx: usize) -> Uuid {

@@ -60,6 +60,7 @@ pub use creation::create_meta_message;
 pub use creation::create_permission_denied_message;
 pub use creation::create_plan_implementation_message;
 pub use creation::create_progress_message;
+pub use creation::create_tool_approval_response_message;
 pub use creation::create_tool_result_message;
 pub use creation::create_tool_result_message_with_parts;
 pub use creation::create_user_interruption_message;

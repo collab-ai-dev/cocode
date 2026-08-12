@@ -97,10 +97,9 @@ pub fn classify_user(part: &UserContent) -> (ContentKind, i64) {
 /// `(kind, chars)` pairs.
 ///
 /// `ToolCall` produces two pairs: tool name (Text) + JSON input (Json).
-/// Reasoning is text density. File-shaped variants (File, ReasoningFile,
-/// Custom, Source) get fixed image cost — they may carry images or
-/// arbitrary binary references that we cannot size precisely from
-/// this layer.
+/// Reasoning is text density. Structured provider parts are charged from
+/// their serialized size so opaque metadata and any legacy inline media can
+/// never hide behind a flat attachment cost.
 pub fn classify_assistant(part: &AssistantContent) -> Vec<(ContentKind, i64)> {
     match part {
         AssistantContent::Text(t) => vec![(ContentKind::Text, t.text.len() as i64)],
@@ -117,12 +116,12 @@ pub fn classify_assistant(part: &AssistantContent) -> Vec<(ContentKind, i64)> {
         AssistantContent::File(_)
         | AssistantContent::ReasoningFile(_)
         | AssistantContent::Custom(_)
-        | AssistantContent::Source(_) => vec![(ContentKind::Image, 0)],
+        | AssistantContent::Source(_)
+        | AssistantContent::ToolApprovalRequest(_) => vec![(
+            ContentKind::Json,
+            serde_json::to_vec(part).map_or(0, |value| value.len() as i64),
+        )],
         AssistantContent::ToolResult(_) => vec![(ContentKind::Text, 0)],
-        // ToolApprovalRequest is a metadata-only handshake — body is
-        // the approval prompt text plus tool input echoed verbatim;
-        // bill at text density to avoid over-counting.
-        AssistantContent::ToolApprovalRequest(_) => vec![(ContentKind::Text, 0)],
     }
 }
 

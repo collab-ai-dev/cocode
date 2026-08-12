@@ -83,7 +83,7 @@ pub use tool_call::LanguageModelV4ToolCall;
 pub use tool_choice::LanguageModelV4ToolChoice;
 pub use tool_result::LanguageModelV4ToolResult;
 
-// Legacy re-exports for backward compatibility (from stream.rs)
-pub use stream::File;
-pub use stream::Source;
-pub use stream::ToolApprovalRequest;
+// Canonical response content names used by stream consumers. These aliases
+// point at the shared content DTOs; the stream no longer owns parallel types.
+pub use crate::content::SourcePart as Source;
+pub use crate::content::ToolApprovalRequestPart as ToolApprovalRequest;

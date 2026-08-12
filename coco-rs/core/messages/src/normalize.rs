@@ -337,14 +337,24 @@ pub(crate) fn dedup_duplicate_tool_call_ids(messages: &mut [Message]) {
             continue;
         };
         let mut position = 0;
+        let mut latest_effective_by_raw = std::collections::HashMap::new();
         for part in content.iter_mut() {
-            let crate::AssistantContent::ToolCall(call) = part else {
-                continue;
-            };
-            if let Some(Some(effective)) = renames.get(position) {
-                call.tool_call_id = effective.clone();
+            match part {
+                crate::AssistantContent::ToolCall(call) => {
+                    let raw = call.tool_call_id.clone();
+                    if let Some(Some(effective)) = renames.get(position) {
+                        call.tool_call_id = effective.clone();
+                    }
+                    latest_effective_by_raw.insert(raw, call.tool_call_id.clone());
+                    position += 1;
+                }
+                crate::AssistantContent::ToolApprovalRequest(request) => {
+                    if let Some(effective) = latest_effective_by_raw.get(&request.tool_call_id) {
+                        request.tool_call_id = effective.clone();
+                    }
+                }
+                _ => {}
             }
-            position += 1;
         }
     }
 
@@ -609,6 +619,8 @@ pub fn normalize_messages_for_api(messages: &[std::sync::Arc<Message>]) -> Vec<L
         }
     }
 
+    project_assistant_artifact_references_for_api(&mut result);
+
     // Step 14: smoosh `<system-reminder>` text into preceding tool_result.
     // Runs AFTER request_id-aware merge so SR-only User messages are isolated
     // and can be folded into the prior Tool message before the wire-level
@@ -639,6 +651,30 @@ pub fn normalize_messages_for_api(messages: &[std::sync::Arc<Message>]) -> Vec<L
     }
 
     result
+}
+
+fn project_assistant_artifact_references_for_api(messages: &mut [LlmMessage]) {
+    for message in messages {
+        let LlmMessage::Assistant { content, .. } = message else {
+            continue;
+        };
+        for part in content.iter_mut() {
+            let reference = match part {
+                coco_llm_types::AssistantContentPart::File(file) => file.data.as_reference(),
+                coco_llm_types::AssistantContentPart::ReasoningFile(file) => {
+                    file.data.as_reference()
+                }
+                _ => None,
+            };
+            let Some(path) = reference.and_then(|reference| reference.get("coco")) else {
+                continue;
+            };
+            *part =
+                coco_llm_types::AssistantContentPart::Text(coco_llm_types::TextPart::new(format!(
+                    "[generated media stored as {path}; binary content omitted from model context]"
+                )));
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -842,7 +878,8 @@ pub(crate) fn synthesize_missing_tool_results(messages: &mut Vec<LlmMessage>) {
                 .iter()
                 .filter_map(|c| match c {
                     crate::AssistantContent::ToolCall(tc)
-                        if !resolved.contains(&tc.tool_call_id) =>
+                        if tc.provider_executed != Some(true)
+                            && !resolved.contains(&tc.tool_call_id) =>
                     {
                         Some((tc.tool_call_id.clone(), tc.tool_name.clone()))
                     }
@@ -1576,8 +1613,8 @@ impl ImageSizeError {
     }
 }
 
-/// Validate that no user-message image exceeds the API base64 size cap before
-/// it hits the wire. `max_base64_len` is the provider cap
+/// Validate that no user- or assistant-message image exceeds the API base64
+/// size cap before it hits the wire. `max_base64_len` is the provider cap
 /// (`coco_config::constants::API_IMAGE_MAX_BASE64_SIZE`). Returns the first
 /// offender so the caller can short-circuit the request with a clear error
 /// instead of letting the provider reject the whole prompt.
@@ -1586,35 +1623,56 @@ pub fn validate_images_for_api(
     max_base64_len: usize,
 ) -> Result<(), ImageSizeError> {
     for msg in prompt {
-        let LlmMessage::User { content, .. } = msg else {
-            continue;
-        };
-        for part in content {
-            let coco_llm_types::UserContentPart::File(f) = part else {
-                continue;
-            };
-            if !f.media_type.starts_with("image/") {
-                continue;
+        match msg {
+            LlmMessage::User { content, .. } => {
+                for part in content {
+                    if let coco_llm_types::UserContentPart::File(file) = part {
+                        validate_image_data(&file.data, &file.media_type, max_base64_len)?;
+                    }
+                }
             }
-            let Some(raw) = f.data.as_data() else {
-                continue;
-            };
-            // Match `block.source.data.length` (base64 string length). For
-            // raw bytes the equivalent base64 length is 4 chars per 3 bytes.
-            let base64_len = if let Some(s) = raw.as_base64() {
-                s.len()
-            } else if let Some(b) = raw.as_bytes() {
-                b.len().div_ceil(3) * 4
-            } else {
-                0
-            };
-            if base64_len > max_base64_len {
-                return Err(ImageSizeError {
-                    base64_len,
-                    max_base64_len,
-                });
+            LlmMessage::Assistant { content, .. } => {
+                for part in content {
+                    match part {
+                        coco_llm_types::AssistantContentPart::File(file) => {
+                            validate_image_data(&file.data, &file.media_type, max_base64_len)?;
+                        }
+                        coco_llm_types::AssistantContentPart::ReasoningFile(file) => {
+                            validate_image_data(&file.data, &file.media_type, max_base64_len)?;
+                        }
+                        _ => {}
+                    }
+                }
             }
+            _ => {}
         }
+    }
+    Ok(())
+}
+
+fn validate_image_data(
+    data: &coco_llm_types::SharedV4FileData,
+    media_type: &str,
+    max_base64_len: usize,
+) -> Result<(), ImageSizeError> {
+    if !media_type.starts_with("image/") {
+        return Ok(());
+    }
+    let Some(raw) = data.as_data() else {
+        return Ok(());
+    };
+    let base64_len = if let Some(base64) = raw.as_base64() {
+        base64.len()
+    } else if let Some(bytes) = raw.as_bytes() {
+        bytes.len().div_ceil(3) * 4
+    } else {
+        0
+    };
+    if base64_len > max_base64_len {
+        return Err(ImageSizeError {
+            base64_len,
+            max_base64_len,
+        });
     }
     Ok(())
 }

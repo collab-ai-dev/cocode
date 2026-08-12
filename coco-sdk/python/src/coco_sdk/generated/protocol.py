@@ -1645,24 +1645,6 @@ JourneyNodeBodyWire = Annotated[
 ]
 
 
-class LanguageModelV4FileDataData(BaseModel):
-    model_config = {"populate_by_name": True}
-    type_: Literal["data"] = Field(default="data", alias="type")
-    data: str
-
-
-class LanguageModelV4FileDataUrl(BaseModel):
-    model_config = {"populate_by_name": True}
-    type_: Literal["url"] = Field(default="url", alias="type")
-    url: str
-
-
-LanguageModelV4FileData = Annotated[
-    Union[LanguageModelV4FileDataData, LanguageModelV4FileDataUrl],
-    Field(discriminator="type_"),
-]
-
-
 class LanguageModelV4MessageSystem(BaseModel):
     model_config = {"populate_by_name": True}
     role: Literal["system"] = Field(default="system", alias="role")
@@ -6340,7 +6322,7 @@ class QueuedCommandEditImage(BaseModel):
 
 
 class ReasoningFilePart(BaseModel):
-    data: LanguageModelV4FileData
+    data: SharedV4FileData
     media_type: str = Field(alias="mediaType")
     provider_metadata: ProviderMetadata | None = Field(
         default=None, alias="providerMetadata"
@@ -6848,6 +6830,7 @@ class ToolApprovalRequestPart(BaseModel):
     approval_id: str = Field(alias="approvalId")
     tool_call_id: str = Field(alias="toolCallId")
     context: str | None = None
+    input: Any = None
     provider_metadata: ProviderMetadata | None = Field(
         default=None, alias="providerMetadata"
     )

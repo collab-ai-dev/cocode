@@ -14,10 +14,12 @@ use crate::SystemUserInterruptionMessage;
 use crate::ToolContent;
 use crate::ToolResultMessage;
 use crate::UserMessage;
+use coco_llm_types::ToolApprovalResponsePart;
 use coco_llm_types::ToolResultContent;
 use coco_llm_types::UserContentPart;
 use coco_types::TokenUsage;
 use coco_types::ToolId;
+use std::str::FromStr as _;
 use uuid::Uuid;
 
 /// Create a user message from text content.
@@ -178,6 +180,32 @@ pub fn create_tool_result_message(
         tool_use_id: tool_call_id.to_string(),
         tool_id,
         is_error,
+    })
+}
+
+/// Create the tool-role response that resumes a provider-hosted approval
+/// request. The provider's approval id is the protocol correlation key; the
+/// tool-call id remains on the outer envelope for transcript grouping.
+pub fn create_tool_approval_response_message(
+    approval_id: &str,
+    tool_call_id: &str,
+    tool_name: &str,
+    approved: bool,
+    reason: Option<String>,
+    source_assistant_uuid: Option<Uuid>,
+) -> Message {
+    let mut response = ToolApprovalResponsePart::new(approval_id, approved);
+    response.reason = reason;
+    Message::ToolResult(ToolResultMessage {
+        uuid: Uuid::new_v4(),
+        source_assistant_uuid,
+        message: LlmMessage::tool(vec![ToolContent::ToolApprovalResponse(response)]),
+        display_data: None,
+        tool_use_id: tool_call_id.to_string(),
+        // ToolId parsing is infallible and preserves builtin/MCP identity
+        // instead of flattening every provider-hosted tool into Custom.
+        tool_id: ToolId::from_str(tool_name).unwrap_or_else(|never| match never {}),
+        is_error: !approved,
     })
 }
 

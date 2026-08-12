@@ -647,16 +647,17 @@ impl TranscriptIo for InMemoryStore {
         seen: &mut HashSet<Uuid>,
         options: ChainWriteOptions,
     ) -> crate::Result<ChainWriteResult> {
-        let (entries, result) = crate::storage::build_message_chain_entries(
+        let batch = crate::storage::build_message_chain_entries(
             session_id,
             messages.iter().copied(),
             seen,
             &options,
         );
-        if !entries.is_empty() {
-            self.push_entries(session_id, entries);
+        if !batch.entries.is_empty() {
+            self.push_entries(session_id, batch.entries);
         }
-        Ok(result)
+        seen.extend(batch.message_uuids);
+        Ok(batch.result)
     }
 
     fn append_agent_message_chain(
@@ -671,14 +672,14 @@ impl TranscriptIo for InMemoryStore {
         // messages so `load_agent_messages` returns byte-parity output across
         // backends. Subagent transcripts live in the agent bucket, never the
         // main session's entry list.
-        let (entries, result) = crate::storage::build_message_chain_entries(
+        let batch = crate::storage::build_message_chain_entries(
             session_id,
             messages.iter().copied(),
             seen,
             &options,
         );
         let mut msgs: Vec<Arc<Message>> = Vec::new();
-        for entry in &entries {
+        for entry in &batch.entries {
             if let Entry::Transcript(t) = entry {
                 for m in crate::storage::messages_from_transcript_entry(t) {
                     msgs.push(Arc::new(m));
@@ -692,7 +693,8 @@ impl TranscriptIo for InMemoryStore {
                 .or_default()
                 .extend(msgs);
         }
-        Ok(result)
+        seen.extend(batch.message_uuids);
+        Ok(batch.result)
     }
 
     fn insert_file_history_snapshot(
