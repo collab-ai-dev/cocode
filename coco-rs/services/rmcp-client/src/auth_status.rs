@@ -16,6 +16,7 @@ use crate::OAuthCredentialsStoreMode;
 use crate::oauth::has_oauth_tokens;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
+use crate::utils::client_builder;
 use crate::utils::is_transient_oauth_reqwest_error;
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -65,7 +66,7 @@ async fn supports_oauth_login_with_headers(url: &str, default_headers: &HeaderMa
 
     // Use no_proxy to avoid a bug in the system-configuration crate that
     // can result in a panic. See #8912.
-    let builder = Client::builder().timeout(DISCOVERY_TIMEOUT).no_proxy();
+    let builder = client_builder().timeout(DISCOVERY_TIMEOUT).no_proxy();
     let client = apply_default_headers(builder, default_headers).build()?;
 
     let mut last_error: Option<RmcpClientError> = None;

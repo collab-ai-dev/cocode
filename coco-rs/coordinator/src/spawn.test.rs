@@ -1,6 +1,21 @@
 use super::*;
 
 #[test]
+fn test_extra_ca_bundle_is_inherited_and_shell_quoted() {
+    let config = TeammateSpawnConfig {
+        name: "worker".into(),
+        team_name: "team".into(),
+        parent_session_id: coco_types::SessionId::try_new("session").unwrap(),
+        ..Default::default()
+    };
+    let inherited = build_inherited_env_vars_with_runtime_lookup(&config, |key| {
+        (key == EnvKey::CocoExtraCaBundle).then(|| "/tmp/company roots.pem".to_string())
+    });
+
+    assert!(inherited.contains("COCO_EXTRA_CA_BUNDLE='/tmp/company roots.pem'"));
+}
+
+#[test]
 fn test_get_teammate_command() {
     let cmd = get_teammate_command();
     // Should return something (either env var or current exe or "claude")

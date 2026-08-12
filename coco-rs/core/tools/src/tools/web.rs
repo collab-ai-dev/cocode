@@ -1480,7 +1480,7 @@ async fn fetch_url(
     config: &coco_config::WebFetchConfig,
 ) -> Result<FetchOutcome, String> {
     let timeout_secs = config.timeout_secs.max(1) as u64;
-    let client = reqwest::Client::builder()
+    let client = coco_utils_extra_ca::client_builder()
         .timeout(std::time::Duration::from_secs(timeout_secs))
         .user_agent(config.user_agent.as_str())
         // Critical SSRF guard: disable automatic redirect following.
@@ -1718,7 +1718,7 @@ const DDG_HTML_PARSE_CAP: usize = 512 * 1024;
 /// switch to per-request `header()` overrides.
 #[allow(clippy::expect_used)]
 static SEARCH_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
+    coco_utils_extra_ca::client_builder()
         .timeout(Duration::from_secs(SEARCH_TIMEOUT_SECS))
         .user_agent(
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \

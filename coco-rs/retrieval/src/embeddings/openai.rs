@@ -34,7 +34,7 @@ impl OpenAIEmbeddings {
             model: DEFAULT_MODEL.to_string(),
             dimension: default_embedding_dimension(),
             base_url: DEFAULT_BASE_URL.to_string(),
-            client: reqwest::Client::new(),
+            client: coco_utils_extra_ca::client(),
         }
     }
 

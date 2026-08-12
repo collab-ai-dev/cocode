@@ -21,6 +21,7 @@ coco-utils-absolute-path = { workspace = true }
 coco-utils-path-uri = { workspace = true }
 coco-utils-pty = { workspace = true }
 coco-utils-rustls-provider = { workspace = true }
+coco-utils-extra-ca = { workspace = true }
 futures = { workspace = true, features = ["alloc"] }
 http = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }

@@ -88,6 +88,7 @@ fastembed = { workspace = true, optional = true }
 coco-file-ignore = { workspace = true }
 coco-utils-common = { workspace = true }
 coco-utils-cache = { workspace = true }
+coco-utils-extra-ca = { workspace = true }
 dirs = { workspace = true }
 
 # TUI (same tech stack as codex-tui2)

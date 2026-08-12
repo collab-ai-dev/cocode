@@ -13,6 +13,27 @@ use serde_json::Value;
 use crate::Result;
 use crate::ResultExt;
 
+/// Build this crate's reqwest 0.13 client with the process-wide extra roots.
+///
+/// `coco-utils-extra-ca` deliberately exposes version-neutral DER because the
+/// rest of the workspace currently uses reqwest 0.12.
+pub(crate) fn client_builder() -> ClientBuilder {
+    with_extra_root_ders(ClientBuilder::new(), coco_utils_extra_ca::extra_root_ders())
+}
+
+fn with_extra_root_ders(mut builder: ClientBuilder, roots: &[Vec<u8>]) -> ClientBuilder {
+    for der in roots {
+        match reqwest::Certificate::from_der(der) {
+            Ok(certificate) => builder = builder.add_root_certificate(certificate),
+            Err(error) => tracing::warn!(
+                %error,
+                "validated extra CA was rejected by reqwest 0.13; skipping certificate"
+            ),
+        }
+    }
+    builder
+}
+
 pub(crate) fn convert_call_tool_result(result: RmcpCallToolResult) -> Result<CallToolResult> {
     let mut value = serde_json::to_value(result)?;
     if let Some(obj) = value.as_object_mut()

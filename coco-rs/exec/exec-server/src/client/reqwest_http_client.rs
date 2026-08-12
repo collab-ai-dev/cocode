@@ -53,9 +53,9 @@ pub(crate) struct ReqwestHttpRequestRunner {
 impl ReqwestHttpClient {
     fn build_client(timeout_ms: Option<u64>) -> Result<reqwest::Client, ExecServerError> {
         let builder = match timeout_ms {
-            None => reqwest::Client::builder(),
+            None => coco_utils_extra_ca::client_builder(),
             Some(timeout_ms) => {
-                reqwest::Client::builder().timeout(Duration::from_millis(timeout_ms))
+                coco_utils_extra_ca::client_builder().timeout(Duration::from_millis(timeout_ms))
             }
         };
         builder

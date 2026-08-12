@@ -105,6 +105,8 @@ pub enum EnvKey {
     CocoBashMaintainProjectWorkingDir,
     CocoBubblewrap,
     CocoConfigDir,
+    /// Path to an additive PEM bundle used by coco-owned HTTP clients.
+    CocoExtraCaBundle,
     /// LLM wire-traffic dump verbosity: `off` (default) / `error` / `all`.
     /// Overrides `diagnostics.wire_dump` in settings.json. Dumps land under
     /// `<session_dir>/wire/`.
@@ -450,6 +452,7 @@ impl EnvKey {
             Self::CocoBashMaintainProjectWorkingDir => "COCO_BASH_MAINTAIN_PROJECT_WORKING_DIR",
             Self::CocoBubblewrap => "COCO_BUBBLEWRAP",
             Self::CocoConfigDir => "COCO_CONFIG_DIR",
+            Self::CocoExtraCaBundle => "COCO_EXTRA_CA_BUNDLE",
             Self::CocoDiagnosticsWireDump => "COCO_DIAGNOSTICS_WIRE_DUMP",
             Self::CocoDiagnosticsWireMaxBytes => "COCO_DIAGNOSTICS_WIRE_MAX_BYTES",
             Self::CocoDisableGitInstructions => "COCO_DISABLE_GIT_INSTRUCTIONS",

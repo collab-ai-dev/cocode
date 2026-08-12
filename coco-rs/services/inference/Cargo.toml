@@ -16,6 +16,7 @@ coco-error.workspace = true
 coco-otel.workspace = true
 coco-llm-types.workspace = true
 coco-utils-json-repair.workspace = true
+coco-utils-extra-ca.workspace = true
 vercel-ai-provider.workspace = true
 vercel-ai-provider-utils.workspace = true
 # Concrete provider crates — `coco-inference` is the canonical home for

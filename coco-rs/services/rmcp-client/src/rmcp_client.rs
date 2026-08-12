@@ -82,6 +82,7 @@ use crate::program_resolver;
 use crate::utils::apply_default_headers;
 use crate::utils::apply_oauth_retry_policy;
 use crate::utils::build_default_headers;
+use crate::utils::client_builder;
 use crate::utils::convert_call_tool_result;
 use crate::utils::convert_to_mcp;
 use crate::utils::convert_to_rmcp;
@@ -1135,8 +1136,7 @@ impl RmcpClient {
                         http_config = http_config.auth_header(bearer_token);
                     }
                     let reqwest_client =
-                        apply_default_headers(reqwest::Client::builder(), &default_headers)
-                            .build()?;
+                        apply_default_headers(client_builder(), &default_headers).build()?;
                     let http_client = SessionAwareHttpClient::new(reqwest_client);
                     let transport =
                         StreamableHttpClientTransport::with_client(http_client, http_config);
@@ -1267,7 +1267,7 @@ async fn create_oauth_transport_and_runtime(
     StreamableHttpClientTransport<AuthClient<SessionAwareHttpClient>>,
     OAuthPersistor,
 )> {
-    let builder = apply_oauth_retry_policy(reqwest::Client::builder(), url);
+    let builder = apply_oauth_retry_policy(client_builder(), url);
     let reqwest_client = apply_default_headers(builder, &default_headers).build()?;
     // OAuthState uses a raw reqwest::Client for OAuth discovery/token exchange.
     let mut oauth_state = OAuthState::new(url.to_string(), Some(reqwest_client.clone())).await?;

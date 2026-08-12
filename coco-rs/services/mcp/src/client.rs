@@ -1659,7 +1659,7 @@ async fn ensure_xaa_tokens(
         scope: xaa.scope.clone(),
     };
 
-    let http_client = reqwest::Client::new();
+    let http_client = coco_utils_extra_ca::client();
     let result = crate::xaa::perform_cross_app_access(&http_client, url, &config)
         .await
         .map_err(|error| McpClientError::SpawnFailed {

@@ -829,24 +829,15 @@ fn effective_timeout_secs(provider_cfg: &ProviderConfig, model_info: Option<&Mod
 /// Build a `reqwest::Client` honoring the effective timeout and share
 /// it across the language-model construction. The SDK accepts
 /// `Option<Arc<reqwest::Client>>`; a single shared client lets all
-/// requests against this provider reuse the connection pool. If
-/// builder construction fails, falls back to the SDK's default
-/// (no-timeout) client so the process still starts.
+/// requests against this provider reuse the connection pool and the
+/// process-wide extra CA policy. If builder construction fails, falls back to
+/// the SDK's default client so the process still starts.
 fn build_http_client(timeout_secs: i64) -> Option<Arc<reqwest::Client>> {
-    let timeout = if timeout_secs > 0 {
-        match u64::try_from(timeout_secs) {
-            Ok(s) => Duration::from_secs(s),
-            Err(_) => return None,
-        }
-    } else {
-        // Non-positive timeout disables the per-request timeout.
-        return None;
-    };
-    reqwest::Client::builder()
-        .timeout(timeout)
-        .build()
-        .ok()
-        .map(Arc::new)
+    let mut builder = coco_utils_extra_ca::client_builder();
+    if timeout_secs > 0 {
+        builder = builder.timeout(Duration::from_secs(timeout_secs as u64));
+    }
+    builder.build().ok().map(Arc::new)
 }
 
 #[cfg(test)]

@@ -1103,7 +1103,7 @@ async fn execute_hook_inner(
             }
 
             // Default: 10 minutes. 10 s would clip HTTP hooks doing real work.
-            let client = reqwest::Client::builder()
+            let client = coco_utils_extra_ca::client_builder()
                 // SSRF guard, layer 2 — connect-time resolver. Drops blocked IPs
                 // so the validated IP IS the connected IP, closing the DNS-
                 // rebinding window the one-shot pre-flight leaves open.

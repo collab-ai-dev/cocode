@@ -6,6 +6,7 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 #[test]
 fn test_env_key_as_str() {
     assert_eq!(EnvKey::CocoAgentName.as_str(), "COCO_AGENT_NAME");
+    assert_eq!(EnvKey::CocoExtraCaBundle.as_str(), "COCO_EXTRA_CA_BUNDLE");
     assert_eq!(
         EnvKey::CocoMaxToolUseConcurrency.as_str(),
         "COCO_MAX_TOOL_USE_CONCURRENCY"

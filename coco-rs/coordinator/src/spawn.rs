@@ -11,6 +11,14 @@ use crate::constants::TEAM_NAME_ENV_VAR;
 use crate::constants::TEAMMATE_COLOR_ENV_VAR;
 use crate::pane::TeammateSpawnConfig;
 
+const INHERITED_RUNTIME_ENV_KEYS: &[EnvKey] = &[
+    EnvKey::AnthropicBaseUrl,
+    EnvKey::CocoConfigDir,
+    EnvKey::CocoExtraCaBundle,
+    EnvKey::CocoRemote,
+    EnvKey::CocoRemoteMemoryDir,
+];
+
 /// Get the command used to spawn teammates.
 ///
 /// Returns the `TEAMMATE_COMMAND` env var if set, otherwise the current process executable.
@@ -63,12 +71,19 @@ pub fn build_teammate_command(config: &TeammateSpawnConfig) -> String {
 ///    parent_session_id / color / plan-mode flag. Identity rides env only:
 ///    the CLI has no matching flags, and `crate::identity::*` resolves the
 ///    inherited `COCO_*` values on teammate startup.
-/// 2. **Runtime config** — `ANTHROPIC_BASE_URL`, `COCO_CONFIG_DIR`,
-///    `COCO_REMOTE`, `COCO_REMOTE_MEMORY_DIR`, plus the Feature gate.
+/// 2. **Runtime config** — `ANTHROPIC_BASE_URL`, `COCO_CONFIG_DIR`, the extra
+///    CA bundle, `COCO_REMOTE`, `COCO_REMOTE_MEMORY_DIR`, plus the Feature gate.
 /// 3. **Third-party (non-COCO) passthroughs** — AWS / Google credentials,
 ///    HTTP proxy, TLS bundle paths. These keep their upstream names by
 ///    convention; the runtime doesn't shadow them.
 pub fn build_inherited_env_vars(config: &TeammateSpawnConfig) -> String {
+    build_inherited_env_vars_with_runtime_lookup(config, |key| env::var(key).ok())
+}
+
+fn build_inherited_env_vars_with_runtime_lookup(
+    config: &TeammateSpawnConfig,
+    runtime_env: impl Fn(EnvKey) -> Option<String>,
+) -> String {
     let mut vars = Vec::new();
 
     // ── 1. Worker identity ──
@@ -96,13 +111,8 @@ pub fn build_inherited_env_vars(config: &TeammateSpawnConfig) -> String {
     // omitted — coco-rs configures providers via the global config file, not
     // env. Add specific keys back here only if a provider crate
     // grows env-driven runtime knobs.
-    for var in &[
-        EnvKey::AnthropicBaseUrl,
-        EnvKey::CocoConfigDir,
-        EnvKey::CocoRemote,
-        EnvKey::CocoRemoteMemoryDir,
-    ] {
-        if let Ok(val) = env::var(*var) {
+    for var in INHERITED_RUNTIME_ENV_KEYS {
+        if let Some(val) = runtime_env(*var) {
             vars.push(format!("{var}={}", shell_quote(&val)));
         }
     }

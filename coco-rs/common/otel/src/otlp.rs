@@ -83,8 +83,10 @@ fn build_http_client_inner(
     tls: &OtelTlsConfig,
     timeout_var: &str,
 ) -> Result<reqwest::blocking::Client, Box<dyn Error>> {
-    let mut builder =
-        reqwest::blocking::Client::builder().timeout(resolve_otlp_timeout(timeout_var));
+    let mut builder = coco_utils_extra_ca::with_extra_root_certificates_blocking(
+        reqwest::blocking::Client::builder(),
+    )
+    .timeout(resolve_otlp_timeout(timeout_var));
 
     if let Some(path) = tls.ca_certificate.as_ref() {
         let (pem, location) = read_bytes(path)?;

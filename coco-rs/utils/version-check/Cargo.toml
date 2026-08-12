@@ -8,6 +8,7 @@ description = "Best-effort background check for a newer released coco, with an i
 [dependencies]
 chrono = { workspace = true }
 coco-utils-common = { workspace = true }
+coco-utils-extra-ca = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
