@@ -4,7 +4,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use coco_exec_server::ExecutorFileSystem;
+use coco_exec_server::CheckedFileSystem;
 use coco_exec_server::ExpectedFileState;
 use coco_exec_server::FileSystemSandboxContext;
 use coco_exec_server::is_file_mutation_conflict;
@@ -19,6 +19,8 @@ use crate::ApplyPatchError;
 use crate::ApplyPatchFileUpdateMode;
 use crate::ApplyPatchPathEffects;
 use crate::Hunk;
+use crate::PreparedPatchPathOutcome;
+use crate::PreparedPatchPathState;
 use crate::file_update::derive_new_contents;
 use crate::path_effects::ResolvedOperationPath;
 use crate::path_effects::bounded_path;
@@ -74,7 +76,7 @@ enum PreparedChange {
 /// Its paths come from [`PreparedPatchPaths`], so no target is resolved a
 /// second time after the user approves the tool call.
 pub struct PreparedPatch {
-    fs: Arc<dyn ExecutorFileSystem>,
+    fs: Arc<dyn CheckedFileSystem>,
     sandbox: Option<FileSystemSandboxContext>,
     changes: Vec<PreparedChange>,
     snapshots: Vec<PathSnapshot>,
@@ -90,7 +92,7 @@ pub struct PreparedPatch {
 /// [`prepare_hunks_from_paths`] snapshots and derives the immutable commit
 /// plan without resolving any path again.
 pub struct PreparedPatchPaths {
-    fs: Arc<dyn ExecutorFileSystem>,
+    fs: Arc<dyn CheckedFileSystem>,
     sandbox: Option<FileSystemSandboxContext>,
     hunks: Vec<Hunk>,
     cwd: PathUri,
@@ -113,19 +115,38 @@ pub struct PreparedPatchCommitFailure {
     #[source]
     error: PreparedPatchError,
     delta: AppliedPatchDelta,
+    path_outcomes: Vec<PreparedPatchPathOutcome>,
 }
 
 impl PreparedPatchCommitFailure {
-    fn new(error: PreparedPatchError, delta: AppliedPatchDelta) -> Self {
-        Self { error, delta }
+    fn new(
+        error: PreparedPatchError,
+        delta: AppliedPatchDelta,
+        path_outcomes: Vec<PreparedPatchPathOutcome>,
+    ) -> Self {
+        Self {
+            error,
+            delta,
+            path_outcomes,
+        }
     }
 
     pub fn delta(&self) -> &AppliedPatchDelta {
         &self.delta
     }
 
-    pub fn into_parts(self) -> (PreparedPatchError, AppliedPatchDelta) {
-        (self.error, self.delta)
+    pub fn path_outcomes(&self) -> &[PreparedPatchPathOutcome] {
+        &self.path_outcomes
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        PreparedPatchError,
+        AppliedPatchDelta,
+        Vec<PreparedPatchPathOutcome>,
+    ) {
+        (self.error, self.delta, self.path_outcomes)
     }
 }
 
@@ -218,7 +239,7 @@ pub async fn prepare_hunks(
     hunks: &[Hunk],
     cwd: &PathUri,
     update_file_mode: ApplyPatchFileUpdateMode,
-    fs: Arc<dyn ExecutorFileSystem>,
+    fs: Arc<dyn CheckedFileSystem>,
     sandbox: Option<FileSystemSandboxContext>,
 ) -> Result<PreparedPatch, PreparedPatchError> {
     let paths = prepare_hunk_paths(hunks, cwd, update_file_mode, fs, sandbox).await?;
@@ -230,7 +251,7 @@ pub async fn prepare_hunk_paths(
     hunks: &[Hunk],
     cwd: &PathUri,
     update_file_mode: ApplyPatchFileUpdateMode,
-    fs: Arc<dyn ExecutorFileSystem>,
+    fs: Arc<dyn CheckedFileSystem>,
     sandbox: Option<FileSystemSandboxContext>,
 ) -> Result<PreparedPatchPaths, PreparedPatchError> {
     if hunks.is_empty() {
@@ -352,12 +373,31 @@ pub async fn commit_prepared_patch(
 ) -> Result<CommittedPatch, PreparedPatchCommitFailure> {
     let fs = prepared.fs.as_ref();
     let sandbox = prepared.sandbox.as_ref();
-    verify_snapshots(&prepared.snapshots, fs, sandbox)
-        .await
-        .map_err(|error| PreparedPatchCommitFailure::new(error, AppliedPatchDelta::empty()))?;
-    create_missing_directories(&prepared.missing_parent_directories, fs, sandbox)
-        .await
-        .map_err(|error| PreparedPatchCommitFailure::new(error, AppliedPatchDelta::empty()))?;
+    let mut path_outcomes = prepared
+        .snapshots
+        .iter()
+        .map(|snapshot| PreparedPatchPathOutcome {
+            path: snapshot.resolved_path.clone(),
+            state: PreparedPatchPathState::Unchanged,
+        })
+        .collect::<Vec<_>>();
+    if let Err(error) = verify_snapshots(&prepared.snapshots, &mut path_outcomes, fs, sandbox).await
+    {
+        return Err(PreparedPatchCommitFailure::new(
+            error,
+            AppliedPatchDelta::empty(),
+            path_outcomes,
+        ));
+    }
+    if let Err(error) =
+        create_missing_directories(&prepared.missing_parent_directories, fs, sandbox).await
+    {
+        return Err(PreparedPatchCommitFailure::new(
+            error,
+            AppliedPatchDelta::empty(),
+            path_outcomes,
+        ));
+    }
 
     let mut affected = AffectedPaths::default();
     let mut delta = AppliedPatchDelta::empty();
@@ -371,12 +411,13 @@ pub async fn commit_prepared_patch(
             &mut delta,
             &mut written_files,
             &mut deleted_files,
+            &mut path_outcomes,
             fs,
             sandbox,
         )
         .await
         {
-            return Err(PreparedPatchCommitFailure::new(error, delta));
+            return Err(PreparedPatchCommitFailure::new(error, delta, path_outcomes));
         }
     }
 
@@ -390,7 +431,7 @@ pub async fn commit_prepared_patch(
 
 async fn snapshot_resolved_path(
     operation: &ResolvedOperationPath,
-    fs: &dyn ExecutorFileSystem,
+    fs: &dyn CheckedFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> Result<PathSnapshot, PreparedPatchError> {
     match fs.get_metadata(&operation.logical_path, sandbox).await {
@@ -476,7 +517,7 @@ fn require_existing_file<'a>(
 
 async fn collect_missing_parent_directories(
     changes: &[PreparedChange],
-    fs: &dyn ExecutorFileSystem,
+    fs: &dyn CheckedFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> Result<Vec<PathUri>, PreparedPatchError> {
     let mut directories = Vec::new();
@@ -522,15 +563,32 @@ fn write_path(change: &PreparedChange) -> Option<&PathUri> {
 
 async fn verify_snapshots(
     snapshots: &[PathSnapshot],
-    fs: &dyn ExecutorFileSystem,
+    path_outcomes: &mut [PreparedPatchPathOutcome],
+    fs: &dyn CheckedFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> Result<(), PreparedPatchError> {
     for expected in snapshots {
-        let current = fs
-            .snapshot_file(&expected.resolved_path, sandbox)
-            .await
-            .map_err(|source| io_error("verify patch target", &expected.resolved_path, source))?;
+        let current = match fs.snapshot_file(&expected.resolved_path, sandbox).await {
+            Ok(current) => current,
+            Err(source) => {
+                set_path_state(
+                    path_outcomes,
+                    &expected.resolved_path,
+                    PreparedPatchPathState::Unknown,
+                );
+                return Err(io_error(
+                    "verify patch target",
+                    &expected.resolved_path,
+                    source,
+                ));
+            }
+        };
         if current.expected != expected.expected {
+            set_path_state(
+                path_outcomes,
+                &expected.resolved_path,
+                PreparedPatchPathState::StaleExternal,
+            );
             return Err(PreparedPatchError::StaleTarget(bounded_path(
                 &expected.logical_path,
             )));
@@ -541,7 +599,7 @@ async fn verify_snapshots(
 
 async fn create_missing_directories(
     directories: &[PathUri],
-    fs: &dyn ExecutorFileSystem,
+    fs: &dyn CheckedFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> Result<(), PreparedPatchError> {
     for directory in directories {
@@ -560,7 +618,8 @@ async fn commit_change(
     delta: &mut AppliedPatchDelta,
     written_files: &mut Vec<(PathUri, String)>,
     deleted_files: &mut Vec<PathUri>,
-    fs: &dyn ExecutorFileSystem,
+    path_outcomes: &mut [PreparedPatchPathOutcome],
+    fs: &dyn CheckedFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> Result<(), PreparedPatchError> {
     match change {
@@ -580,9 +639,17 @@ async fn commit_change(
                 )
                 .await
             {
+                set_path_state(path_outcomes, path, checked_failure_state(&source));
                 delta.exact = false;
                 return Err(checked_error("write patch target", path, source));
             }
+            set_path_state(
+                path_outcomes,
+                path,
+                PreparedPatchPathState::Written {
+                    content: content.clone(),
+                },
+            );
             delta.changes.push(AppliedPatchChange {
                 path: path.clone(),
                 change: AppliedPatchFileChange::Add {
@@ -603,11 +670,13 @@ async fn commit_change(
                 .remove_file_checked(path, snapshot.expected.clone(), sandbox)
                 .await
             {
+                set_path_state(path_outcomes, path, checked_failure_state(&source));
                 // A remote executor may have unlinked the file and then lost
                 // the response, so no delete failure proves the disk state.
                 delta.exact = false;
                 return Err(checked_error("remove patch target", path, source));
             }
+            set_path_state(path_outcomes, path, PreparedPatchPathState::Deleted);
             delta.changes.push(AppliedPatchChange {
                 path: path.clone(),
                 change: AppliedPatchFileChange::Delete {
@@ -637,9 +706,17 @@ async fn commit_change(
                 )
                 .await
             {
+                set_path_state(path_outcomes, target, checked_failure_state(&source_error));
                 delta.exact = false;
                 return Err(checked_error("write patch target", target, source_error));
             }
+            set_path_state(
+                path_outcomes,
+                target,
+                PreparedPatchPathState::Written {
+                    content: content.clone(),
+                },
+            );
 
             if let Some(destination) = destination {
                 let provisional_index = delta.changes.len();
@@ -655,6 +732,7 @@ async fn commit_change(
                     .remove_file_checked(source, source_snapshot.expected.clone(), sandbox)
                     .await
                 {
+                    set_path_state(path_outcomes, source, checked_failure_state(&source_error));
                     // The destination write is known, but the source unlink
                     // may also have reached the executor before transport loss.
                     delta.exact = false;
@@ -664,6 +742,7 @@ async fn commit_change(
                         source_error,
                     ));
                 }
+                set_path_state(path_outcomes, source, PreparedPatchPathState::Deleted);
                 delta.changes[provisional_index] = AppliedPatchChange {
                     path: source.clone(),
                     change: AppliedPatchFileChange::Update {
@@ -690,6 +769,24 @@ async fn commit_change(
         }
     }
     Ok(())
+}
+
+fn checked_failure_state(error: &io::Error) -> PreparedPatchPathState {
+    if is_file_mutation_conflict(error) {
+        PreparedPatchPathState::StaleExternal
+    } else {
+        PreparedPatchPathState::Unknown
+    }
+}
+
+fn set_path_state(
+    outcomes: &mut [PreparedPatchPathOutcome],
+    path: &PathUri,
+    state: PreparedPatchPathState,
+) {
+    if let Some(outcome) = outcomes.iter_mut().find(|outcome| &outcome.path == path) {
+        outcome.state = state;
+    }
 }
 
 fn snapshot_text(snapshot: &PathSnapshot) -> Result<Option<String>, PreparedPatchError> {

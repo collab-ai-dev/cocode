@@ -292,6 +292,27 @@ pub enum AppliedPatchFileChange {
     },
 }
 
+/// Executor-observed state of one prepared target after a commit attempt.
+///
+/// Unlike [`AppliedPatchDelta::is_exact`], this is path-specific and separates
+/// an external stale write from an executor response whose mutation outcome is
+/// unknowable. Tool-layer caches and notifications must match this enum
+/// exhaustively instead of inferring state from one aggregate boolean.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PreparedPatchPathState {
+    Unchanged,
+    Written { content: String },
+    Deleted,
+    StaleExternal,
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedPatchPathOutcome {
+    pub path: PathUri,
+    pub state: PreparedPatchPathState,
+}
+
 /// A failed patch application together with the textual mutations that were
 /// definitely committed before the failure was observed.
 #[derive(Debug, Error)]

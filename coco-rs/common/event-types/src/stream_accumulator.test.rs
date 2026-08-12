@@ -278,6 +278,37 @@ fn write_tool_uses_create_kind() {
 }
 
 #[test]
+fn streamed_apply_patch_file_changes_upgrade_the_queued_item() {
+    let mut acc = StreamAccumulator::new("turn-1");
+    assert!(
+        acc.process(AgentStreamEvent::ToolUseInputUpdated {
+            call_id: "call-1".into(),
+            file_changes: vec![FileChangeInfo {
+                path: "src/lib.rs".into(),
+                kind: FileChangeKind::Modify,
+            }],
+        })
+        .is_empty()
+    );
+
+    let notifications = acc.process(tool_queued(
+        "call-1",
+        "apply_patch",
+        json!({ "patch": "*** Begin Patch" }),
+    ));
+
+    let ServerNotification::ItemStarted { item } = &notifications[0] else {
+        panic!("expected item start");
+    };
+    let ThreadItemDetails::FileChange { changes, status } = &item.details else {
+        panic!("expected structured file change");
+    };
+    assert_eq!(*status, ItemStatus::InProgress);
+    assert_eq!(changes[0].path, "src/lib.rs");
+    assert_eq!(changes[0].kind, FileChangeKind::Modify);
+}
+
+#[test]
 fn web_search_tool_maps_correctly() {
     let mut acc = StreamAccumulator::new("turn-1");
     let notifs = acc.process(tool_queued(

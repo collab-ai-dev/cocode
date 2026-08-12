@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
+use coco_exec_server::CheckedFileSystem;
 use coco_exec_server::CopyOptions;
 use coco_exec_server::CreateDirectoryOptions;
 use coco_exec_server::ExecutorFileSystem;
@@ -28,7 +29,7 @@ use crate::parse_patch;
 struct FailNthWrite {
     write_count: AtomicUsize,
     fail_at: usize,
-    create_before_first_write: Option<PathBuf>,
+    race_before_directory_create: Option<PathBuf>,
     modify_after_first_write: Option<(PathBuf, Vec<u8>)>,
     remove_then_fail: bool,
 }
@@ -65,12 +66,6 @@ impl ExecutorFileSystem for FailNthWrite {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         let write_number = self.write_count.fetch_add(1, Ordering::SeqCst) + 1;
-        if write_number == 1
-            && let Some(directory) = &self.create_before_first_write
-            && let Err(error) = fs::create_dir_all(directory)
-        {
-            return Box::pin(async move { Err(error) });
-        }
         let should_fail = write_number == self.fail_at;
         let modify_after_write = (write_number == 1)
             .then(|| self.modify_after_first_write.clone())
@@ -85,74 +80,6 @@ impl ExecutorFileSystem for FailNthWrite {
             }
             Ok(())
         })
-    }
-
-    fn snapshot_file<'a>(
-        &'a self,
-        path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, FileSnapshot> {
-        LOCAL_FS.snapshot_file(path, sandbox)
-    }
-
-    fn write_file_checked<'a>(
-        &'a self,
-        path: &'a PathUri,
-        contents: Vec<u8>,
-        expected: ExpectedFileState,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()> {
-        let write_number = self.write_count.fetch_add(1, Ordering::SeqCst) + 1;
-        if write_number == 1
-            && let Some(directory) = &self.create_before_first_write
-            && let Err(error) = fs::create_dir_all(directory)
-        {
-            return Box::pin(async move { Err(error) });
-        }
-        let should_fail = write_number == self.fail_at;
-        let modify_after_write = (write_number == 1)
-            .then(|| self.modify_after_first_write.clone())
-            .flatten();
-        Box::pin(async move {
-            if should_fail {
-                return Err(io::Error::other("injected write failure"));
-            }
-            LOCAL_FS
-                .write_file_checked(path, contents, expected, sandbox)
-                .await?;
-            if let Some((path, contents)) = modify_after_write {
-                fs::write(path, contents)?;
-            }
-            Ok(())
-        })
-    }
-
-    fn remove_file_checked<'a>(
-        &'a self,
-        path: &'a PathUri,
-        expected: ExpectedFileState,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()> {
-        Box::pin(async move {
-            LOCAL_FS
-                .remove_file_checked(path, expected, sandbox)
-                .await?;
-            if self.remove_then_fail {
-                return Err(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "injected lost remove response",
-                ));
-            }
-            Ok(())
-        })
-    }
-
-    fn create_directory_checked<'a>(
-        &'a self,
-        path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()> {
-        LOCAL_FS.create_directory_checked(path, sandbox)
     }
 
     fn create_directory<'a>(
@@ -197,6 +124,79 @@ impl ExecutorFileSystem for FailNthWrite {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         LOCAL_FS.copy(source, destination, options, sandbox)
+    }
+}
+
+impl CheckedFileSystem for FailNthWrite {
+    fn snapshot_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSnapshot> {
+        LOCAL_FS.snapshot_file(path, sandbox)
+    }
+
+    fn write_file_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        contents: Vec<u8>,
+        expected: ExpectedFileState,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        let write_number = self.write_count.fetch_add(1, Ordering::SeqCst) + 1;
+        let should_fail = write_number == self.fail_at;
+        let modify_after_write = (write_number == 1)
+            .then(|| self.modify_after_first_write.clone())
+            .flatten();
+        Box::pin(async move {
+            if should_fail {
+                return Err(io::Error::other("injected write failure"));
+            }
+            LOCAL_FS
+                .write_file_checked(path, contents, expected, sandbox)
+                .await?;
+            if let Some((path, contents)) = modify_after_write {
+                fs::write(path, contents)?;
+            }
+            Ok(())
+        })
+    }
+
+    fn remove_file_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        expected: ExpectedFileState,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(async move {
+            LOCAL_FS
+                .remove_file_checked(path, expected, sandbox)
+                .await?;
+            if self.remove_then_fail {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "injected lost remove response",
+                ));
+            }
+            Ok(())
+        })
+    }
+
+    fn create_directory_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(async move {
+            if self
+                .race_before_directory_create
+                .as_ref()
+                .is_some_and(|directory| directory == &path.to_path_buf())
+            {
+                fs::create_dir_all(path.to_path_buf())?;
+            }
+            LOCAL_FS.create_directory_checked(path, sandbox).await
+        })
     }
 }
 
@@ -272,46 +272,6 @@ impl ExecutorFileSystem for RetargetParent {
         LOCAL_FS.write_file(path, contents, sandbox)
     }
 
-    fn snapshot_file<'a>(
-        &'a self,
-        path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, FileSnapshot> {
-        LOCAL_FS.snapshot_file(path, sandbox)
-    }
-
-    fn write_file_checked<'a>(
-        &'a self,
-        path: &'a PathUri,
-        contents: Vec<u8>,
-        expected: ExpectedFileState,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()> {
-        if self.trigger == RetargetTrigger::BeforeFirstWrite
-            && let Err(error) = self.retarget_once()
-        {
-            return Box::pin(async move { Err(error) });
-        }
-        LOCAL_FS.write_file_checked(path, contents, expected, sandbox)
-    }
-
-    fn remove_file_checked<'a>(
-        &'a self,
-        path: &'a PathUri,
-        expected: ExpectedFileState,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()> {
-        LOCAL_FS.remove_file_checked(path, expected, sandbox)
-    }
-
-    fn create_directory_checked<'a>(
-        &'a self,
-        path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()> {
-        LOCAL_FS.create_directory_checked(path, sandbox)
-    }
-
     fn create_directory<'a>(
         &'a self,
         path: &'a PathUri,
@@ -354,6 +314,49 @@ impl ExecutorFileSystem for RetargetParent {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         LOCAL_FS.copy(source, destination, options, sandbox)
+    }
+}
+
+#[cfg(unix)]
+impl CheckedFileSystem for RetargetParent {
+    fn snapshot_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSnapshot> {
+        LOCAL_FS.snapshot_file(path, sandbox)
+    }
+
+    fn write_file_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        contents: Vec<u8>,
+        expected: ExpectedFileState,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        if self.trigger == RetargetTrigger::BeforeFirstWrite
+            && let Err(error) = self.retarget_once()
+        {
+            return Box::pin(async move { Err(error) });
+        }
+        LOCAL_FS.write_file_checked(path, contents, expected, sandbox)
+    }
+
+    fn remove_file_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        expected: ExpectedFileState,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        LOCAL_FS.remove_file_checked(path, expected, sandbox)
+    }
+
+    fn create_directory_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        LOCAL_FS.create_directory_checked(path, sandbox)
     }
 }
 
@@ -438,6 +441,13 @@ async fn stale_source_is_rejected_before_commit() {
         .expect_err("stale source must fail");
     assert!(error.to_string().contains("changed after validation"));
     assert_eq!(
+        error.path_outcomes(),
+        &[PreparedPatchPathOutcome {
+            path: PathUri::from_path(&source).expect("source URI"),
+            state: PreparedPatchPathState::StaleExternal,
+        }]
+    );
+    assert_eq!(
         fs::read_to_string(source).expect("read source"),
         "changed\n"
     );
@@ -450,10 +460,10 @@ async fn commit_failure_reports_committed_prefix_without_unsafe_rollback() {
         "*** Begin Patch\n*** Add File: nested/created.txt\n+created\n*** Add File: second.txt\n+fails\n*** End Patch",
     )
     .expect("valid patch");
-    let fs: Arc<dyn ExecutorFileSystem> = Arc::new(FailNthWrite {
+    let fs: Arc<dyn CheckedFileSystem> = Arc::new(FailNthWrite {
         write_count: AtomicUsize::new(0),
         fail_at: 2,
-        create_before_first_write: None,
+        race_before_directory_create: None,
         modify_after_first_write: None,
         remove_then_fail: false,
     });
@@ -492,10 +502,10 @@ async fn lost_delete_response_marks_delta_inexact() {
     fs::write(&target, "before\n").expect("write target");
     let parsed = parse_patch("*** Begin Patch\n*** Delete File: delete.txt\n*** End Patch")
         .expect("valid patch");
-    let fs: Arc<dyn ExecutorFileSystem> = Arc::new(FailNthWrite {
+    let fs: Arc<dyn CheckedFileSystem> = Arc::new(FailNthWrite {
         write_count: AtomicUsize::new(0),
         fail_at: usize::MAX,
-        create_before_first_write: None,
+        race_before_directory_create: None,
         modify_after_first_write: None,
         remove_then_fail: true,
     });
@@ -528,10 +538,10 @@ async fn lost_move_remove_response_marks_provisional_delta_inexact() {
         "*** Begin Patch\n*** Update File: source.txt\n*** Move to: destination.txt\n@@\n-before\n+after\n*** End Patch",
     )
     .expect("valid patch");
-    let fs: Arc<dyn ExecutorFileSystem> = Arc::new(FailNthWrite {
+    let fs: Arc<dyn CheckedFileSystem> = Arc::new(FailNthWrite {
         write_count: AtomicUsize::new(0),
         fail_at: usize::MAX,
-        create_before_first_write: None,
+        race_before_directory_create: None,
         modify_after_first_write: None,
         remove_then_fail: true,
     });
@@ -566,10 +576,10 @@ async fn checked_directory_creation_rejects_concurrent_parent_creation() {
         "*** Begin Patch\n*** Add File: nested/created.txt\n+created\n*** Add File: second.txt\n+fails\n*** End Patch",
     )
     .expect("valid patch");
-    let fs: Arc<dyn ExecutorFileSystem> = Arc::new(FailNthWrite {
+    let fs: Arc<dyn CheckedFileSystem> = Arc::new(FailNthWrite {
         write_count: AtomicUsize::new(0),
-        fail_at: 2,
-        create_before_first_write: Some(external_directory.clone()),
+        fail_at: usize::MAX,
+        race_before_directory_create: Some(external_directory.clone()),
         modify_after_first_write: None,
         remove_then_fail: false,
     });
@@ -583,15 +593,14 @@ async fn checked_directory_creation_rejects_concurrent_parent_creation() {
     .await
     .expect("prepare patch");
 
-    commit_prepared_patch(&prepared)
+    let error = commit_prepared_patch(&prepared)
         .await
-        .expect_err("second write must fail");
+        .expect_err("concurrent parent creation must fail");
 
     assert!(external_directory.is_dir());
-    assert_eq!(
-        fs::read_to_string(external_directory.join("created.txt")).expect("read first write"),
-        "created\n"
-    );
+    assert!(error.delta().is_empty());
+    assert!(error.delta().is_exact());
+    assert!(!external_directory.join("created.txt").exists());
     assert!(!dir.path().join("second.txt").exists());
 }
 
@@ -605,10 +614,10 @@ async fn commit_rechecks_each_target_after_earlier_writes() {
         "*** Begin Patch\n*** Add File: first.txt\n+created\n*** Update File: second.txt\n@@\n-before\n+patched\n*** End Patch",
     )
     .expect("valid patch");
-    let fs: Arc<dyn ExecutorFileSystem> = Arc::new(FailNthWrite {
+    let fs: Arc<dyn CheckedFileSystem> = Arc::new(FailNthWrite {
         write_count: AtomicUsize::new(0),
         fail_at: usize::MAX,
-        create_before_first_write: None,
+        race_before_directory_create: None,
         modify_after_first_write: Some((second.clone(), b"external\n".to_vec())),
         remove_then_fail: false,
     });
@@ -626,9 +635,16 @@ async fn commit_rechecks_each_target_after_earlier_writes() {
         .await
         .expect_err("external update must make the second target stale");
 
-    let (error, delta) = error.into_parts();
+    let (error, delta, outcomes) = error.into_parts();
     assert!(matches!(error, PreparedPatchError::StaleTarget(_)));
     assert_eq!(delta.changes().len(), 1);
+    assert_eq!(
+        outcomes
+            .iter()
+            .find(|outcome| outcome.path == PathUri::from_path(&second).expect("second URI"))
+            .map(|outcome| &outcome.state),
+        Some(&PreparedPatchPathState::StaleExternal)
+    );
     assert_eq!(fs::read_to_string(first).expect("read first"), "created\n");
     assert_eq!(
         fs::read_to_string(second).expect("read second"),
@@ -732,7 +748,7 @@ async fn commit_uses_canonical_path_if_parent_is_retargeted_after_validation() {
     let attacker_target = TempDir::new().expect("create attacker target");
     let link = dir.path().join("linked");
     symlink(validated_target.path(), &link).expect("create parent symlink");
-    let fs: Arc<dyn ExecutorFileSystem> = Arc::new(RetargetParent {
+    let fs: Arc<dyn CheckedFileSystem> = Arc::new(RetargetParent {
         retargeted: AtomicBool::new(false),
         link,
         new_target: attacker_target.path().to_path_buf(),
@@ -773,7 +789,7 @@ async fn preparation_reuses_the_path_resolution_checked_by_policy() {
     let attacker_target = TempDir::new().expect("create attacker target");
     let link = dir.path().join("linked");
     symlink(validated_target.path(), &link).expect("create parent symlink");
-    let fs: Arc<dyn ExecutorFileSystem> = Arc::new(RetargetParent {
+    let fs: Arc<dyn CheckedFileSystem> = Arc::new(RetargetParent {
         retargeted: AtomicBool::new(false),
         link,
         new_target: attacker_target.path().to_path_buf(),

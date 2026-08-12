@@ -39,6 +39,8 @@ pub(crate) struct StreamingToolCallBuffer {
     pub(crate) invalid: bool,
     pub(crate) invalid_reason: Option<coco_llm_types::ToolInputInvalidReason>,
     pub(crate) complete: bool,
+    pub(crate) argument_delta_consumer:
+        Option<Box<dyn coco_tool_runtime::ToolArgumentDeltaConsumer>>,
 }
 
 /// Classify an error message as a transient capacity error.

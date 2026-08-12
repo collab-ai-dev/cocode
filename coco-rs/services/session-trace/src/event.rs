@@ -110,6 +110,7 @@ impl TraceEvent {
             AgentStreamEvent::ResponseAttemptStarted { .. }
             | AgentStreamEvent::ResponseAttemptCommitted { .. }
             | AgentStreamEvent::ResponseAttemptDiscarded { .. }
+            | AgentStreamEvent::ToolUseInputUpdated { .. }
             | AgentStreamEvent::TextDelta { .. }
             | AgentStreamEvent::ThinkingDelta { .. } => None,
         }

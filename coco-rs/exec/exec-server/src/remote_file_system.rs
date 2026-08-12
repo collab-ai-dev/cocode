@@ -4,6 +4,7 @@ use coco_utils_path_uri::PathUri;
 use tokio::io;
 use tracing::trace;
 
+use crate::CheckedFileSystem;
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecServerError;
@@ -376,47 +377,6 @@ impl ExecutorFileSystem for RemoteFileSystem {
         Box::pin(RemoteFileSystem::write_file(self, path, contents, sandbox))
     }
 
-    fn snapshot_file<'a>(
-        &'a self,
-        path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, FileSnapshot> {
-        Box::pin(RemoteFileSystem::snapshot_file(self, path, sandbox))
-    }
-
-    fn write_file_checked<'a>(
-        &'a self,
-        path: &'a PathUri,
-        contents: Vec<u8>,
-        expected: ExpectedFileState,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()> {
-        Box::pin(RemoteFileSystem::write_file_checked(
-            self, path, contents, expected, sandbox,
-        ))
-    }
-
-    fn remove_file_checked<'a>(
-        &'a self,
-        path: &'a PathUri,
-        expected: ExpectedFileState,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()> {
-        Box::pin(RemoteFileSystem::remove_file_checked(
-            self, path, expected, sandbox,
-        ))
-    }
-
-    fn create_directory_checked<'a>(
-        &'a self,
-        path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()> {
-        Box::pin(RemoteFileSystem::create_directory_checked(
-            self, path, sandbox,
-        ))
-    }
-
     fn create_directory<'a>(
         &'a self,
         path: &'a PathUri,
@@ -466,6 +426,49 @@ impl ExecutorFileSystem for RemoteFileSystem {
             destination_path,
             options,
             sandbox,
+        ))
+    }
+}
+
+impl CheckedFileSystem for RemoteFileSystem {
+    fn snapshot_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSnapshot> {
+        Box::pin(RemoteFileSystem::snapshot_file(self, path, sandbox))
+    }
+
+    fn write_file_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        contents: Vec<u8>,
+        expected: ExpectedFileState,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(RemoteFileSystem::write_file_checked(
+            self, path, contents, expected, sandbox,
+        ))
+    }
+
+    fn remove_file_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        expected: ExpectedFileState,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(RemoteFileSystem::remove_file_checked(
+            self, path, expected, sandbox,
+        ))
+    }
+
+    fn create_directory_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(RemoteFileSystem::create_directory_checked(
+            self, path, sandbox,
         ))
     }
 }
@@ -620,6 +623,28 @@ mod tests {
         };
         assert_eq!(version.link_count, 2);
 
+        drop(fs);
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn checked_filesystem_rejects_sandbox_intent_at_the_remote_boundary() -> io::Result<()> {
+        let (fs, server) = connected_remote_file_system().await;
+        let temp_dir = tempfile::TempDir::new()?;
+        let target = PathUri::from_path(temp_dir.path().join("target.txt"))?;
+        let sandbox = FileSystemSandboxContext {
+            value: serde_json::json!({ "mode": "workspace-write" }),
+        };
+
+        let error = fs
+            .snapshot_file(&target, Some(&sandbox))
+            .await
+            .expect_err("the server must not silently ignore sandbox intent");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("sandbox"));
+        assert!(!temp_dir.path().join("target.txt").exists());
         drop(fs);
         server.abort();
         Ok(())

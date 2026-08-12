@@ -212,9 +212,11 @@ pub(crate) async fn prepare_one_pending_tool_call(
     let hook_controller =
         HookController::new(args.hooks, args.orchestration_ctx.clone(), args.hook_tx_opt)
             .with_policy(args.hook_execution_policy);
+    let mut hook_call = semantic_call.clone();
+    hook_call.input = tool.project_input_for_hooks(validated_input.as_value());
     let pre_tool_outcome = hook_controller
         .run_pre_tool_use(
-            &semantic_call,
+            &hook_call,
             crate::hook_controller::PreToolUseSettlement {
                 event_tx: args.event_tx,
                 history: args.history,
@@ -249,7 +251,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
         return None;
     }
 
-    let prepared_state = match tool.prepare(effective_input.as_value(), args.ctx).await {
+    let mut prepared_state = match tool.prepare(effective_input.as_value(), args.ctx).await {
         Ok(state) => state,
         Err(error) => {
             let message = format!("Error: {error}");
@@ -293,7 +295,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
     let decision = maybe_fire_permission_denied_hook(
         &hook_controller,
         &semantic_call,
-        effective_input.as_value(),
+        &tool.project_input_for_hooks(effective_input.as_value()),
         decision,
     )
     .await;
@@ -363,20 +365,52 @@ pub(crate) async fn prepare_one_pending_tool_call(
         return None;
     }
 
-    if prepared_state.is_some() && effective_input.as_value() != prepared_input.as_value() {
-        complete_tool_call_with_error_mode(
-            args.event_tx,
-            args.history,
-            &semantic_call.tool_call_id,
-            provider_tool_name.as_str(),
-            &tool_id,
-            "Error: approved input changed after stateful preparation; retry the tool call",
-            coco_tool_runtime::ToolCallErrorKind::ValidationFailed,
-            args.completion_event_mode,
-            args.deferred_tool_completions.as_deref_mut(),
-        )
-        .await;
-        return None;
+    if effective_input.as_value() != prepared_input.as_value() {
+        prepared_state = match tool.prepare(effective_input.as_value(), args.ctx).await {
+            Ok(state) => state,
+            Err(error) => {
+                complete_tool_call_with_error_mode(
+                    args.event_tx,
+                    args.history,
+                    &semantic_call.tool_call_id,
+                    provider_tool_name.as_str(),
+                    &tool_id,
+                    &format!("Error: {error}"),
+                    coco_tool_runtime::ToolCallErrorKind::ValidationFailed,
+                    args.completion_event_mode,
+                    args.deferred_tool_completions.as_deref_mut(),
+                )
+                .await;
+                return None;
+            }
+        };
+
+        // The permission resolution is authoritative for the rewritten input,
+        // so do not invoke the same callback a second time. Re-run only the
+        // tool-owned prepared check and honor hard denials; this prevents an
+        // approved rewrite from bypassing canonical-path/write-fence guards.
+        if let coco_types::ToolCheckResult::Deny { message } = tool
+            .check_prepared_permissions(
+                effective_input.as_value(),
+                prepared_state.as_ref(),
+                args.ctx,
+            )
+            .await
+        {
+            complete_tool_call_with_error_mode(
+                args.event_tx,
+                args.history,
+                &semantic_call.tool_call_id,
+                provider_tool_name.as_str(),
+                &tool_id,
+                &format!("Error: {message}"),
+                coco_tool_runtime::ToolCallErrorKind::PermissionDenied,
+                args.completion_event_mode,
+                args.deferred_tool_completions.as_deref_mut(),
+            )
+            .await;
+            return None;
+        }
     }
 
     Some((
@@ -450,6 +484,24 @@ async fn resolve_effective_input_from_pre_hook(
             reason,
         } => {
             if let Some(updated_input) = updated_input {
+                let runtime_input = match tool.project_hook_input_to_runtime(updated_input) {
+                    Ok(input) => input,
+                    Err(error) => {
+                        complete_tool_call_with_error_mode(
+                            event_tx,
+                            history,
+                            &tool_call.tool_call_id,
+                            provider_tool_name,
+                            tool_id,
+                            &format!("Invalid hook-updated input: {error}"),
+                            coco_tool_runtime::ToolCallErrorKind::SchemaFailed,
+                            completion_event_mode,
+                            deferred_tool_completions,
+                        )
+                        .await;
+                        return None;
+                    }
+                };
                 return validate_effective_input_or_complete_error(
                     event_tx,
                     history,
@@ -458,7 +510,7 @@ async fn resolve_effective_input_from_pre_hook(
                     provider_tool_name,
                     tool_id,
                     tool,
-                    updated_input,
+                    runtime_input,
                     completion_event_mode,
                     deferred_tool_completions,
                 )

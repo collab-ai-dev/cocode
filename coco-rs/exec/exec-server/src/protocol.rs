@@ -75,6 +75,14 @@ pub struct InitializeResponse {
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentInfo {
     pub shell: ShellInfo,
+    pub capabilities: EnvironmentCapabilities,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentCapabilities {
+    pub checked_file_mutations: bool,
+    pub filesystem_sandbox: bool,
 }
 
 impl EnvironmentInfo {
@@ -97,6 +105,10 @@ impl EnvironmentInfo {
             shell: ShellInfo {
                 name,
                 path: shell_path,
+            },
+            capabilities: EnvironmentCapabilities {
+                checked_file_mutations: cfg!(target_os = "linux"),
+                filesystem_sandbox: false,
             },
         }
     }

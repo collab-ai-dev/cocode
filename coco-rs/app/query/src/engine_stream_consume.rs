@@ -346,6 +346,10 @@ impl QueryEngine {
                         },
                     )
                     .await;
+                    let argument_delta_consumer = self
+                        .tools
+                        .get_by_name(&tool_name)
+                        .and_then(|tool| tool.argument_delta_consumer());
                     tool_buffers.insert(
                         id.clone(),
                         StreamingToolCallBuffer {
@@ -355,12 +359,27 @@ impl QueryEngine {
                             invalid: false,
                             invalid_reason: None,
                             complete: false,
+                            argument_delta_consumer,
                         },
                     );
                 }
                 StreamEvent::ToolCallDelta { id, delta } => {
                     if let Some(buf) = tool_buffers.get_mut(&id) {
                         buf.input_json.push_str(&delta);
+                        if let Some(file_changes) = buf
+                            .argument_delta_consumer
+                            .as_mut()
+                            .and_then(|consumer| consumer.push_delta(&delta))
+                        {
+                            let _ = crate::emit::emit_stream(
+                                event_tx,
+                                crate::AgentStreamEvent::ToolUseInputUpdated {
+                                    call_id: id.clone(),
+                                    file_changes,
+                                },
+                            )
+                            .await;
+                        }
                     }
                     // Forward the partial JSON fragment to the TUI for the live
                     // "typing" preview. UI-only — the SDK gets the complete,
@@ -385,6 +404,20 @@ impl QueryEngine {
                         buf.invalid = invalid;
                         buf.invalid_reason = invalid_reason;
                         buf.complete = true;
+                        if let Some(file_changes) = buf
+                            .argument_delta_consumer
+                            .as_mut()
+                            .and_then(|consumer| consumer.finish())
+                        {
+                            let _ = crate::emit::emit_stream(
+                                event_tx,
+                                crate::AgentStreamEvent::ToolUseInputUpdated {
+                                    call_id: id.clone(),
+                                    file_changes,
+                                },
+                            )
+                            .await;
+                        }
                     }
                     // Streaming mode: parse the freshly-completed
                     // input, run full per-tool preparation

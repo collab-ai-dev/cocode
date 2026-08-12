@@ -398,6 +398,12 @@ pub enum AgentStreamEvent {
         name: String,
         input: serde_json::Value,
     },
+    /// Tool-owned structured interpretation of arguments while they stream.
+    /// Unlike the TUI-only raw delta, this is a semantic SDK-visible update.
+    ToolUseInputUpdated {
+        call_id: String,
+        file_changes: Vec<FileChangeInfo>,
+    },
     /// Tool execution has begun (after permission check).
     ToolUseStarted {
         call_id: String,
@@ -439,6 +445,7 @@ impl AgentStreamEvent {
             | Self::TextDelta { turn_id, .. }
             | Self::ThinkingDelta { turn_id, .. } => Some(turn_id.clone()),
             Self::ToolUseQueued { .. }
+            | Self::ToolUseInputUpdated { .. }
             | Self::ToolUseStarted { .. }
             | Self::ToolUseCompleted { .. }
             | Self::McpToolCallBegin { .. }

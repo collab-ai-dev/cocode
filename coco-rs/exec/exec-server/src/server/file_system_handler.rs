@@ -4,6 +4,7 @@ use crate::jsonrpc_lite::JSONRPCErrorError;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 
+use crate::CheckedFileSystem;
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecServerRuntimePaths;

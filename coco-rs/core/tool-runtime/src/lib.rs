@@ -265,6 +265,7 @@ pub use traits::PromptOptions;
 pub use traits::SchemaContext;
 pub use traits::SearchReadInfo;
 pub use traits::Tool;
+pub use traits::ToolArgumentDeltaConsumer;
 pub use traits::ToolProgress;
 pub use traits::ToolSpec;
 pub use traits::render_text_or_json;

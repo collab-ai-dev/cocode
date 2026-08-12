@@ -470,6 +470,7 @@ fn classify_event(event: &CoreEvent) -> &'static str {
             AgentStreamEvent::TextDelta { .. } => "TextDelta",
             AgentStreamEvent::ThinkingDelta { .. } => "ReasoningDelta",
             AgentStreamEvent::ToolUseQueued { .. } => "ToolUseStart",
+            AgentStreamEvent::ToolUseInputUpdated { .. } => "Other",
             AgentStreamEvent::ToolUseStarted { .. } => "ToolUseStart",
             AgentStreamEvent::ToolUseCompleted { .. } => "ToolUseEnd",
             AgentStreamEvent::McpToolCallBegin { .. } => "ToolUseStart",

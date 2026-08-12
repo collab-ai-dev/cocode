@@ -100,6 +100,11 @@ pub(super) fn handle(state: &mut AppState, event: AgentStreamEvent) -> bool {
             state.session.start_tool(call_id, name, &input);
             true
         }
+        AgentStreamEvent::ToolUseInputUpdated { .. } => {
+            // The TUI already renders raw argument deltas live. This semantic
+            // update is consumed by the SDK StreamAccumulator.
+            true
+        }
         AgentStreamEvent::ToolUseStarted { call_id, .. } => {
             state.session.run_tool(&call_id);
             true

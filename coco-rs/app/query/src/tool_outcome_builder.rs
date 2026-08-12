@@ -314,17 +314,19 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
             // everything else, bound huge string fields (the offload seam
             // lets Bash retain multi-MB output for artifact recovery) so
             // hook processes keep the pre-offload ≤50K payload contract.
+            let hook_input = tool.project_input_for_hooks(&effective_input);
+            let projected_hook_output = tool.project_output_for_hooks(&output_data);
             let hook_output = if is_mcp {
                 None
             } else {
-                cap_value_strings(&output_data, HOOK_STRING_VALUE_CAP)
+                cap_value_strings(&projected_hook_output, HOOK_STRING_VALUE_CAP)
             };
             let post = HookController::new(hooks, orchestration_ctx, hook_tx)
                 .run_post_tool_use(
                     &semantic_tool_name,
                     &tool_use_id,
-                    &effective_input,
-                    hook_output.as_ref().unwrap_or(&output_data),
+                    &hook_input,
+                    hook_output.as_ref().unwrap_or(&projected_hook_output),
                 )
                 .await;
             if is_mcp && let Some(updated) = post.updated_mcp_tool_output {
@@ -535,7 +537,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                 .run_post_tool_use_failure(
                     &semantic_tool_name,
                     &tool_use_id,
-                    &effective_input,
+                    &tool.project_input_for_hooks(&effective_input),
                     &error_message,
                     is_interrupt,
                 )

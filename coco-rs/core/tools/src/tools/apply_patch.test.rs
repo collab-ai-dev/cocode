@@ -16,6 +16,35 @@ use coco_types::ToolOverrides;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
+/// Source of truth for the frozen freeform tool definition below:
+/// `openai/codex@279b93242cfef379e65da97e87e44b83c5934fd7`,
+/// `codex-rs/core/src/tools/handlers/{apply_patch_spec.rs,apply_patch.lark}`.
+/// Update this revision and the complete golden together after reviewing the
+/// corresponding upstream change.
+const CODEX_APPLY_PATCH_SPEC_UPSTREAM_REVISION: &str = "279b93242cfef379e65da97e87e44b83c5934fd7";
+const CODEX_APPLY_PATCH_DESCRIPTION_GOLDEN: &str = "The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.";
+const CODEX_APPLY_PATCH_LARK_GRAMMAR_GOLDEN: &str = concat!(
+    "start: begin_patch hunk+ end_patch\n",
+    "begin_patch: \"*** Begin Patch\" LF\n",
+    "end_patch: \"*** End Patch\" LF?\n",
+    "\n",
+    "hunk: add_hunk | delete_hunk | update_hunk\n",
+    "add_hunk: \"*** Add File: \" filename LF add_line+\n",
+    "delete_hunk: \"*** Delete File: \" filename LF\n",
+    "update_hunk: \"*** Update File: \" filename LF change_move? change?\n",
+    "\n",
+    "filename: /(.+)/\n",
+    "add_line: \"+\" /(.*)/ LF -> line\n",
+    "\n",
+    "change_move: \"*** Move to: \" filename LF\n",
+    "change: (change_context | change_line)+ eof_line?\n",
+    "change_context: (\"@@\" | \"@@ \" /(.+)/) LF\n",
+    "change_line: (\"+\" | \"-\" | \" \") /(.*)/ LF\n",
+    "eof_line: \"*** End of File\" LF\n",
+    "\n",
+    "%import common.LF\n",
+);
+
 #[test]
 fn is_enabled_only_when_model_adds_apply_patch() {
     let tool = ApplyPatchTool::default();
@@ -34,10 +63,29 @@ fn is_enabled_only_when_model_adds_apply_patch() {
     ctx.tool_overrides =
         Arc::new(ToolOverrides::default().with_extra(ToolId::Builtin(ToolName::ApplyPatch)));
     assert!(tool.is_enabled(&ctx));
+
+    let unavailable = ApplyPatchTool::unavailable();
+    assert!(
+        !<ApplyPatchTool as DynTool>::is_enabled(&unavailable, &ctx),
+        "model overrides must not advertise a tool the environment cannot execute"
+    );
 }
 
 #[tokio::test]
-async fn tool_spec_is_freeform_lark_grammar() {
+async fn target_native_execution_cwd_wins_over_frontend_pathbuf() {
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(std::path::PathBuf::from("/frontend/worktree"));
+    ctx.execution_cwd =
+        Some(PathUri::parse("file:///C:/remote/project").expect("foreign Windows cwd URI"));
+
+    assert_eq!(
+        apply_patch_cwd(&ctx).await.expect("execution cwd"),
+        PathUri::parse("file:///C:/remote/project").unwrap()
+    );
+}
+
+#[tokio::test]
+async fn tool_spec_matches_codex_upstream_golden() {
     let tool = ApplyPatchTool::default();
     let tool: &dyn DynTool = &tool;
     let spec = tool
@@ -49,12 +97,17 @@ async fn tool_spec_is_freeform_lark_grammar() {
     let coco_tool_runtime::ToolSpec::Freeform(spec) = spec else {
         panic!("apply_patch must be a Freeform tool, not Function");
     };
-    assert_eq!(spec.name, ToolName::ApplyPatch.as_str());
-    assert_eq!(spec.format.syntax, "lark");
-    // The grammar is the codex envelope (begin/end + EOF marker).
-    assert!(spec.format.definition.contains("*** Begin Patch"));
-    assert!(spec.format.definition.contains("*** End of File"));
-    assert_eq!(spec.description, APPLY_PATCH_FREEFORM_DESCRIPTION);
+    let upstream = CODEX_APPLY_PATCH_SPEC_UPSTREAM_REVISION;
+    assert_eq!(spec.name, "apply_patch", "Codex upstream: {upstream}");
+    assert_eq!(
+        spec.description, CODEX_APPLY_PATCH_DESCRIPTION_GOLDEN,
+        "Codex upstream: {upstream}"
+    );
+    assert_eq!(spec.format.syntax, "lark", "Codex upstream: {upstream}");
+    assert_eq!(
+        spec.format.definition, CODEX_APPLY_PATCH_LARK_GRAMMAR_GOLDEN,
+        "Codex upstream: {upstream}"
+    );
 }
 
 #[test]
@@ -69,6 +122,66 @@ fn coerce_raw_string_input_wraps_patch() {
     // The wrapped shape deserializes into the typed input.
     let input: ApplyPatchInput = serde_json::from_value(coerced).unwrap();
     assert_eq!(input.patch, raw);
+}
+
+#[test]
+fn hook_projection_matches_codex_command_and_text_contract() {
+    let tool = ApplyPatchTool::default();
+    let runtime_input = serde_json::json!({ "patch": "*** Begin Patch\n*** End Patch" });
+
+    assert_eq!(
+        <ApplyPatchTool as Tool>::project_input_for_hooks(&tool, &runtime_input),
+        serde_json::json!({ "command": "*** Begin Patch\n*** End Patch" })
+    );
+    assert_eq!(
+        <ApplyPatchTool as Tool>::project_hook_input_to_runtime(
+            &tool,
+            serde_json::json!({ "command": "rewritten" }),
+        )
+        .expect("valid hook input"),
+        serde_json::json!({ "patch": "rewritten" })
+    );
+    assert_eq!(
+        <ApplyPatchTool as Tool>::project_output_for_hooks(
+            &tool,
+            &serde_json::json!({ "stdout": "Success.\n", "stderr": "warning\n" }),
+        ),
+        serde_json::json!("Success.\nwarning")
+    );
+}
+
+#[test]
+fn hook_projection_rejects_non_codex_updated_input() {
+    let error = <ApplyPatchTool as Tool>::project_hook_input_to_runtime(
+        &ApplyPatchTool::default(),
+        serde_json::json!({ "patch": "legacy shape" }),
+    )
+    .expect_err("hook updates must use the Codex command field");
+
+    assert!(error.contains("expected `command`"), "{error}");
+}
+
+#[test]
+fn streamed_arguments_emit_structured_file_changes_without_duplicate_updates() {
+    let tool = ApplyPatchTool::default();
+    let mut consumer = <ApplyPatchTool as Tool>::argument_delta_consumer(&tool)
+        .expect("apply_patch streaming consumer");
+
+    let first = consumer
+        .push_delta("*** Begin Patch\n*** Add File: new.txt\n")
+        .expect("new hunk update");
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].path, "new.txt");
+    assert_eq!(first[0].kind, coco_event_types::FileChangeKind::Create);
+    assert!(consumer.push_delta("+content\n").is_none());
+
+    let second = consumer
+        .push_delta("*** Delete File: old.txt\n*** End Patch\n")
+        .expect("second hunk update");
+    assert_eq!(second.len(), 2);
+    assert_eq!(second[1].path, "old.txt");
+    assert_eq!(second[1].kind, coco_event_types::FileChangeKind::Delete);
+    assert!(consumer.finish().is_none());
 }
 
 #[test]
@@ -744,6 +857,47 @@ async fn execute_move_refreshes_file_state_for_destination_and_source() {
         state.peek(&destination).map(|entry| entry.content.as_str()),
         Some("after\n")
     );
+}
+
+#[tokio::test]
+async fn stale_commit_failure_invalidates_cache_without_triggering_skills() {
+    use coco_context::FileReadEntry;
+    use coco_context::FileReadState;
+    use tokio::sync::RwLock;
+
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("stale.txt");
+    std::fs::write(&target, "external\n").unwrap();
+    let target = std::fs::canonicalize(target).unwrap();
+    let mtime = coco_utils_common::file_mtime_ms(&target).await.unwrap();
+    let mut state = FileReadState::new();
+    state.set(
+        target.clone(),
+        FileReadEntry::full_real("before\n".to_string(), mtime),
+    );
+    let mut ctx = ToolUseContext::test_default();
+    ctx.file_read_state = Some(Arc::new(RwLock::new(state)));
+
+    record_failed_commit(
+        &ctx,
+        &coco_apply_patch::AppliedPatchDelta::default(),
+        &[coco_apply_patch::PreparedPatchPathOutcome {
+            path: PathUri::from_path(&target).expect("target URI"),
+            state: coco_apply_patch::PreparedPatchPathState::StaleExternal,
+        }],
+    )
+    .await;
+
+    assert!(
+        ctx.file_read_state
+            .as_ref()
+            .unwrap()
+            .read()
+            .await
+            .peek(&target)
+            .is_none()
+    );
+    assert!(ctx.dynamic_skill_path_triggers.read().await.is_empty());
 }
 
 #[tokio::test]
