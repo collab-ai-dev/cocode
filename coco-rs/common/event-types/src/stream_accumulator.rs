@@ -55,6 +55,8 @@ pub struct StreamAccumulator {
     thinking_buffer: String,
     /// Active tool items keyed by call_id.
     active_items: HashMap<String, ThreadItem>,
+    /// Structured argument updates may arrive before ToolUseQueued.
+    pending_file_changes: HashMap<String, Vec<FileChangeInfo>>,
     /// Monotonic counter for generating unique item IDs.
     item_counter: i64,
     /// Provider response events are transactional: a matching commit feeds
@@ -78,6 +80,7 @@ fn is_tool_lifecycle_event(event: &AgentStreamEvent) -> bool {
     matches!(
         event,
         AgentStreamEvent::ToolUseQueued { .. }
+            | AgentStreamEvent::ToolUseInputUpdated { .. }
             | AgentStreamEvent::ToolUseStarted { .. }
             | AgentStreamEvent::ToolUseCompleted { .. }
             | AgentStreamEvent::McpToolCallBegin { .. }
@@ -95,6 +98,7 @@ impl StreamAccumulator {
             thinking_item_id: None,
             thinking_buffer: String::new(),
             active_items: HashMap::new(),
+            pending_file_changes: HashMap::new(),
             item_counter: 0,
             response_attempt: None,
         }
@@ -194,6 +198,10 @@ impl StreamAccumulator {
                 name,
                 input,
             } => self.handle_tool_queued(call_id, name, input),
+            AgentStreamEvent::ToolUseInputUpdated {
+                call_id,
+                file_changes,
+            } => self.handle_tool_input_updated(call_id, file_changes),
             AgentStreamEvent::ToolUseStarted { call_id, .. } => self.handle_tool_started(call_id),
             AgentStreamEvent::ToolUseCompleted {
                 call_id,
@@ -355,7 +363,14 @@ impl StreamAccumulator {
         out.extend(self.flush_text());
         out.extend(self.flush_thinking());
 
-        let details = build_tool_details(&name, &input, ItemStatus::InProgress);
+        let details = self
+            .pending_file_changes
+            .remove(&call_id)
+            .map(|changes| ThreadItemDetails::FileChange {
+                changes,
+                status: ItemStatus::InProgress,
+            })
+            .unwrap_or_else(|| build_tool_details(&name, &input, ItemStatus::InProgress));
         let item = ThreadItem {
             item_id: call_id.clone(),
             turn_id: self.turn_id.clone(),
@@ -364,6 +379,23 @@ impl StreamAccumulator {
         self.active_items.insert(call_id, item.clone());
         out.push(ServerNotification::ItemStarted { item });
         out
+    }
+
+    fn handle_tool_input_updated(
+        &mut self,
+        call_id: String,
+        file_changes: Vec<FileChangeInfo>,
+    ) -> Vec<ServerNotification> {
+        if let Some(item) = self.active_items.get_mut(&call_id) {
+            item.details = ThreadItemDetails::FileChange {
+                changes: file_changes,
+                status: ItemStatus::InProgress,
+            };
+            vec![ServerNotification::ItemUpdated { item: item.clone() }]
+        } else {
+            self.pending_file_changes.insert(call_id, file_changes);
+            Vec::new()
+        }
     }
 
     fn handle_tool_started(&mut self, call_id: String) -> Vec<ServerNotification> {

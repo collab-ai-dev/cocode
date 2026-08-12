@@ -186,6 +186,7 @@ fn stream_kind(evt: &AgentStreamEvent) -> &'static str {
         AgentStreamEvent::TextDelta { .. } => "text_delta",
         AgentStreamEvent::ThinkingDelta { .. } => "thinking_delta",
         AgentStreamEvent::ToolUseQueued { .. } => "tool_use_queued",
+        AgentStreamEvent::ToolUseInputUpdated { .. } => "tool_use_input_updated",
         AgentStreamEvent::ToolUseStarted { .. } => "tool_use_started",
         AgentStreamEvent::ToolUseCompleted { .. } => "tool_use_completed",
         AgentStreamEvent::McpToolCallBegin { .. } => "mcp_tool_call_begin",

@@ -1104,6 +1104,7 @@ fn event_summary(evt: &CoreEvent) -> String {
             AgentStreamEvent::ToolUseQueued { name, .. } => {
                 format!("Stream::ToolUseQueued({name})")
             }
+            AgentStreamEvent::ToolUseInputUpdated { .. } => "Stream::ToolUseInputUpdated".into(),
             AgentStreamEvent::ToolUseStarted { name, .. } => {
                 format!("Stream::ToolUseStarted({name})")
             }

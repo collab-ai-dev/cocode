@@ -3,7 +3,6 @@ use std::io;
 
 use coco_exec_server::ExecutorFileSystem;
 use coco_exec_server::FileSystemSandboxContext;
-use coco_utils_path_uri::PathConvention;
 use coco_utils_path_uri::PathUri;
 
 use crate::ApplyPatchError;
@@ -181,12 +180,7 @@ pub(crate) async fn resolve_path_identity(
         .iter()
         .rev()
         .try_fold(canonical, |parent, segment| parent.join(segment))?;
-    let identity = canonical.to_string();
-    let identity = if canonical.infer_path_convention() == Some(PathConvention::Windows) {
-        identity.to_lowercase()
-    } else {
-        identity
-    };
+    let identity = fs.path_comparison_key(&canonical);
     Ok(ResolvedPathIdentity {
         path: canonical,
         identity,

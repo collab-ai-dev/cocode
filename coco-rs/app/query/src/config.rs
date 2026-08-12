@@ -335,6 +335,9 @@ pub struct QueryEngineConfig {
     /// spawn cwd. `None` is a legacy/test path without persistent cwd
     /// state.
     pub session_cwd: Option<Arc<tokio::sync::RwLock<std::path::PathBuf>>>,
+    /// Target-native cwd for tools bound to a remote execution environment.
+    /// `None` means the environment is local and the PathBuf cwd fields apply.
+    pub execution_cwd: Option<coco_utils_path_uri::PathUri>,
     /// Resolved web-fetch runtime configuration (WebFetchTool).
     pub web_fetch_config: WebFetchConfig,
     /// Resolved web-search runtime configuration (WebSearchTool).
@@ -492,6 +495,7 @@ impl Default for QueryEngineConfig {
             output_rewriter: None,
             original_cwd: None,
             session_cwd: None,
+            execution_cwd: None,
             web_fetch_config: WebFetchConfig::default(),
             web_search_config: WebSearchConfig::default(),
             lsp_config: coco_config::LspConfig::default(),

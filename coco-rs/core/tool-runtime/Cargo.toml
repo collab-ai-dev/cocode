@@ -36,6 +36,7 @@ coco-wire-dump.workspace = true
 coco-utils-json-repair.workspace = true
 coco-utils-common.workspace = true
 coco-utils-string.workspace = true
+coco-utils-path-uri.workspace = true
 
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true

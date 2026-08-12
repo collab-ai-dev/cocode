@@ -148,6 +148,14 @@ impl Stream for FileSystemReadStream {
 }
 
 pub trait ExecutorFileSystem: Send + Sync {
+    /// Opaque comparison key for a canonical path in this executor.
+    ///
+    /// Executors with case-insensitive or otherwise non-native path semantics
+    /// override this; callers must not infer identity from the frontend host.
+    fn path_comparison_key(&self, canonical_path: &PathUri) -> String {
+        canonical_path.to_string()
+    }
+
     fn canonicalize<'a>(
         &'a self,
         path: &'a PathUri,
@@ -176,47 +184,6 @@ pub trait ExecutorFileSystem: Send + Sync {
             String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
         })
     }
-
-    /// Snapshot a missing or regular file without following symbolic-link
-    /// components. The returned version is meaningful only to this executor.
-    fn snapshot_file<'a>(
-        &'a self,
-        path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, FileSnapshot>;
-
-    /// Write only when the target still matches `expected`.
-    ///
-    /// Implementations must not follow symbolic-link components or mutate an
-    /// already-open inode in place. A failure after the commit linearization
-    /// point must preserve displaced data and report the resulting state as
-    /// unknown rather than attempting a check-then-act rollback.
-    fn write_file_checked<'a>(
-        &'a self,
-        path: &'a PathUri,
-        contents: Vec<u8>,
-        expected: ExpectedFileState,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()>;
-
-    /// Remove only when the target still matches `expected`.
-    ///
-    /// Implementations must atomically capture the directory entry before
-    /// validating it. If the captured entry does not match, it must remain
-    /// recoverable and the resulting target state must be reported as unknown.
-    fn remove_file_checked<'a>(
-        &'a self,
-        path: &'a PathUri,
-        expected: ExpectedFileState,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()>;
-
-    /// Create one directory entry without following symbolic-link ancestors.
-    fn create_directory_checked<'a>(
-        &'a self,
-        path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()>;
 
     fn write_file<'a>(
         &'a self,
@@ -256,6 +223,46 @@ pub trait ExecutorFileSystem: Send + Sync {
         source_path: &'a PathUri,
         destination_path: &'a PathUri,
         copy_options: CopyOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()>;
+}
+
+/// Strong no-follow compare-and-swap filesystem capability.
+///
+/// This is separate from [`ExecutorFileSystem`] because ordinary filesystem
+/// access does not imply that the environment can safely commit a prepared
+/// mutation. Tools requiring this contract must be hidden when the selected
+/// environment does not expose this capability.
+pub trait CheckedFileSystem: ExecutorFileSystem {
+    /// Snapshot a missing or regular file without following symbolic-link
+    /// components. The returned version is meaningful only to this executor.
+    fn snapshot_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSnapshot>;
+
+    /// Write only when the target still matches `expected`.
+    fn write_file_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        contents: Vec<u8>,
+        expected: ExpectedFileState,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()>;
+
+    /// Atomically capture and remove only when the target matches `expected`.
+    fn remove_file_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        expected: ExpectedFileState,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()>;
+
+    /// Create one directory entry without following symbolic-link ancestors.
+    fn create_directory_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()>;
 }

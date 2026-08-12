@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::CheckedFileSystem;
 use crate::ExecBackend;
 use crate::ExecServerError;
 use crate::ExecutorFileSystem;
@@ -12,7 +13,6 @@ use crate::client_api::ExecServerTransportParams;
 use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
 use crate::protocol::EnvironmentInfo;
-use crate::protocol::ShellInfo;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
 use crate::runtime_paths::ExecServerRuntimePaths;
@@ -89,6 +89,7 @@ pub struct Environment {
     info: EnvironmentInfo,
     exec: Arc<dyn ExecBackend>,
     filesystem: Arc<dyn ExecutorFileSystem>,
+    checked_filesystem: Option<Arc<dyn CheckedFileSystem>>,
     http_client: Arc<dyn HttpClient>,
 }
 
@@ -102,10 +103,17 @@ impl std::fmt::Debug for Environment {
 
 impl Environment {
     pub fn local(runtime_paths: ExecServerRuntimePaths) -> Self {
+        let filesystem = Arc::new(LocalFileSystem::with_runtime_paths(runtime_paths));
+        let checked_filesystem = if cfg!(target_os = "linux") {
+            Some(filesystem.clone() as Arc<dyn CheckedFileSystem>)
+        } else {
+            None
+        };
         Self {
-            info: local_environment_info(),
+            info: EnvironmentInfo::local(),
             exec: Arc::new(LocalProcess::default()),
-            filesystem: Arc::new(LocalFileSystem::with_runtime_paths(runtime_paths)),
+            filesystem,
+            checked_filesystem,
             http_client: Arc::new(ReqwestHttpClient),
         }
     }
@@ -123,11 +131,16 @@ impl Environment {
         let info = client.environment_info().await?;
         let exec = Arc::new(RemoteProcess::new(client.clone()));
         let filesystem = Arc::new(RemoteFileSystem::new(client.clone()));
+        let checked_filesystem = info
+            .capabilities
+            .checked_file_mutations
+            .then(|| filesystem.clone() as Arc<dyn CheckedFileSystem>);
         let http_client = Arc::new(client);
         Ok(Self {
             info,
             exec,
             filesystem,
+            checked_filesystem,
             http_client,
         })
     }
@@ -144,30 +157,11 @@ impl Environment {
         Arc::clone(&self.filesystem)
     }
 
+    pub fn get_checked_filesystem(&self) -> Option<Arc<dyn CheckedFileSystem>> {
+        self.checked_filesystem.clone()
+    }
+
     pub fn get_http_client(&self) -> Arc<dyn HttpClient> {
         Arc::clone(&self.http_client)
-    }
-}
-
-fn local_environment_info() -> EnvironmentInfo {
-    let shell_path = std::env::var("SHELL")
-        .or_else(|_| std::env::var("COMSPEC"))
-        .unwrap_or_else(|_| {
-            if cfg!(windows) {
-                "cmd.exe".to_string()
-            } else {
-                "/bin/sh".to_string()
-            }
-        });
-    let name = std::path::Path::new(&shell_path)
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("sh")
-        .to_string();
-    EnvironmentInfo {
-        shell: ShellInfo {
-            name,
-            path: shell_path,
-        },
     }
 }

@@ -170,6 +170,11 @@ pub struct ToolUseContext {
     /// spawn cwd. `None` is a legacy/test path without persistent cwd
     /// state; callers fall back to `original_cwd` when available.
     pub session_cwd: Option<std::sync::Arc<tokio::sync::RwLock<std::path::PathBuf>>>,
+    /// Target-native working directory for filesystem tools bound to an
+    /// execution environment. Unlike [`Self::original_cwd`], this URI is
+    /// interpreted by the executor and can represent a foreign Windows path
+    /// on a POSIX frontend. Environment-bound tools must prefer this value.
+    pub execution_cwd: Option<coco_utils_path_uri::PathUri>,
     /// Resolved web-fetch runtime configuration. Consumed by the
     /// `WebFetchTool` for timeout / max-content-length / user-agent.
     pub web_fetch_config: coco_config::WebFetchConfig,
@@ -669,6 +674,7 @@ impl ToolUseContext {
             output_rewriter: self.output_rewriter.clone(),
             original_cwd: self.original_cwd.clone(),
             session_cwd: self.session_cwd.clone(),
+            execution_cwd: self.execution_cwd.clone(),
             web_fetch_config: self.web_fetch_config.clone(),
             web_search_config: self.web_search_config.clone(),
             plan_mode_settings: self.plan_mode_settings.clone(),
@@ -848,6 +854,20 @@ impl ToolUseContext {
         }
     }
 
+    /// Best target-native cwd for an environment-bound filesystem tool.
+    pub async fn execution_cwd_anchor(
+        &self,
+    ) -> Result<Option<coco_utils_path_uri::PathUri>, String> {
+        if let Some(cwd) = &self.execution_cwd {
+            return Ok(Some(cwd.clone()));
+        }
+        self.cwd_anchor()
+            .await
+            .map(coco_utils_path_uri::PathUri::from_path)
+            .transpose()
+            .map_err(|error| format!("working directory is not an absolute path: {error}"))
+    }
+
     /// Effective shell cwd for analysis and spawn.
     pub async fn effective_shell_cwd(&self) -> std::path::PathBuf {
         self.cwd_anchor()
@@ -977,6 +997,7 @@ impl ToolUseContext {
             output_rewriter: None,
             original_cwd: None,
             session_cwd: None,
+            execution_cwd: None,
             web_fetch_config: coco_config::WebFetchConfig::default(),
             web_search_config: coco_config::WebSearchConfig::default(),
             plan_mode_settings: coco_config::PlanModeSettings::default(),

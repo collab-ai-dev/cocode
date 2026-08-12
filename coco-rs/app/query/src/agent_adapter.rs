@@ -244,6 +244,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // with the parent session.
             original_cwd: None,
             session_cwd: None,
+            execution_cwd: None,
             web_fetch_config: coco_config::WebFetchConfig::default(),
             web_search_config: coco_config::WebSearchConfig::default(),
             lsp_config: coco_config::LspConfig::default(),

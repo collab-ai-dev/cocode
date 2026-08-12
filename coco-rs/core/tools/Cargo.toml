@@ -12,6 +12,7 @@ coco-config.workspace = true
 coco-cron.workspace = true
 coco-error.workspace = true
 coco-types = { workspace = true, features = ["schema"] }
+coco-event-types.workspace = true
 coco-messages.workspace = true
 coco-subagent.workspace = true
 coco-goals.workspace = true

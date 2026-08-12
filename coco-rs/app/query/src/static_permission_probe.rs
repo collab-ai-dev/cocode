@@ -81,7 +81,8 @@ pub async fn probe_static_permission_with_context(
     }
 
     let decision =
-        crate::tool_call_preparer::evaluate_with_rules(&tool, &normalized_input, ctx, false).await;
+        crate::tool_call_preparer::evaluate_with_rules(&tool, &normalized_input, None, ctx, false)
+            .await;
     StaticPermissionProbeResult {
         tool_id: tool_id.to_string(),
         validation: PermissionProbeValidation::Valid,

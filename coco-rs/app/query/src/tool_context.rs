@@ -552,6 +552,7 @@ impl ToolContextFactory {
             output_rewriter: self.config.output_rewriter.clone(),
             original_cwd: self.config.original_cwd.clone(),
             session_cwd: self.config.session_cwd.clone(),
+            execution_cwd: self.config.execution_cwd.clone(),
             web_fetch_config: self.config.web_fetch_config.clone(),
             web_search_config: self.config.web_search_config.clone(),
             plan_mode_settings: self.config.plan_mode_settings.clone(),

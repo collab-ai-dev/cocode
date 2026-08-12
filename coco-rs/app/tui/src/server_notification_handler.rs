@@ -175,6 +175,7 @@ fn stream_event_variant(s: &coco_event_types::AgentStreamEvent) -> &'static str 
         E::TextDelta { .. } => "TextDelta",
         E::ThinkingDelta { .. } => "ThinkingDelta",
         E::ToolUseQueued { .. } => "ToolUseQueued",
+        E::ToolUseInputUpdated { .. } => "ToolUseInputUpdated",
         E::ToolUseStarted { .. } => "ToolUseStarted",
         E::ToolUseCompleted { .. } => "ToolUseCompleted",
         E::McpToolCallBegin { .. } => "McpToolCallBegin",

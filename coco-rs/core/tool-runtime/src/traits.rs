@@ -239,6 +239,16 @@ pub type ProgressSender = tokio::sync::mpsc::UnboundedSender<ToolProgress>;
 /// Receiver for tool progress updates.
 pub type ProgressReceiver = tokio::sync::mpsc::UnboundedReceiver<ToolProgress>;
 
+/// Per-call consumer for structured updates derived from streamed tool input.
+/// The query layer owns lifecycle and transport; parsing remains tool-owned.
+pub trait ToolArgumentDeltaConsumer: Send + Sync {
+    fn push_delta(&mut self, delta: &str) -> Option<Vec<coco_event_types::FileChangeInfo>>;
+
+    fn finish(&mut self) -> Option<Vec<coco_event_types::FileChangeInfo>> {
+        None
+    }
+}
+
 // =========================================================================
 // `DynTool` — dyn-safe erased view used by registry / executor / hooks.
 // =========================================================================
@@ -312,6 +322,7 @@ pub trait DynTool: Send + Sync + 'static {
     fn is_transparent_wrapper(&self) -> bool;
     fn extract_search_text(&self, output: &Value) -> Option<String>;
     fn is_result_truncated(&self, output: &Value) -> bool;
+    fn argument_delta_consumer(&self) -> Option<Box<dyn ToolArgumentDeltaConsumer>>;
 
     // -- Validation --
 
@@ -324,6 +335,12 @@ pub trait DynTool: Send + Sync + 'static {
     }
     fn coerce_raw_string_input(&self, raw: &str) -> Option<Value>;
     fn backfill_observable_input(&self, input: &mut Value);
+
+    // -- Hook projection --
+
+    fn project_input_for_hooks(&self, input: &Value) -> Value;
+    fn project_hook_input_to_runtime(&self, input: Value) -> Result<Value, String>;
+    fn project_output_for_hooks(&self, output: &Value) -> Value;
 
     // -- Permissions --
 
@@ -788,6 +805,11 @@ pub trait Tool: Send + Sync + 'static {
         false
     }
 
+    /// Construct per-call state for structured streamed argument updates.
+    fn argument_delta_consumer(&self) -> Option<Box<dyn ToolArgumentDeltaConsumer>> {
+        None
+    }
+
     // -- Validation --
 
     /// Validate input before execution. Called before check_permissions.
@@ -813,6 +835,27 @@ pub trait Tool: Send + Sync + 'static {
     /// not even know about). Tools that need typed access should
     /// `serde_json::from_value` inside this method.
     fn backfill_observable_input(&self, _input: &mut Value) {}
+
+    // -- Hook projection --
+
+    /// Project validated runtime input into the external hook contract.
+    ///
+    /// Most tools expose the same JSON shape to hooks and execution. Tools
+    /// whose provider/runtime representation differs from their hook API
+    /// override this together with [`Tool::project_hook_input_to_runtime`].
+    fn project_input_for_hooks(&self, input: &Value) -> Value {
+        input.clone()
+    }
+
+    /// Convert a hook's authoritative input rewrite back into runtime input.
+    fn project_hook_input_to_runtime(&self, input: Value) -> Result<Value, String> {
+        Ok(input)
+    }
+
+    /// Project structured runtime output into the external hook contract.
+    fn project_output_for_hooks(&self, output: &Value) -> Value {
+        output.clone()
+    }
 
     // -- Permissions --
 
@@ -1110,6 +1153,9 @@ impl<T: Tool> DynTool for T {
             .map(|o| Tool::is_result_truncated(self, &o))
             .unwrap_or(false)
     }
+    fn argument_delta_consumer(&self) -> Option<Box<dyn ToolArgumentDeltaConsumer>> {
+        Tool::argument_delta_consumer(self)
+    }
 
     fn validate_input(&self, input: &Value, ctx: &ToolUseContext) -> ValidationResult {
         match serde_json::from_value::<T::Input>(input.clone()) {
@@ -1128,6 +1174,15 @@ impl<T: Tool> DynTool for T {
     }
     fn backfill_observable_input(&self, input: &mut Value) {
         Tool::backfill_observable_input(self, input)
+    }
+    fn project_input_for_hooks(&self, input: &Value) -> Value {
+        Tool::project_input_for_hooks(self, input)
+    }
+    fn project_hook_input_to_runtime(&self, input: Value) -> Result<Value, String> {
+        Tool::project_hook_input_to_runtime(self, input)
+    }
+    fn project_output_for_hooks(&self, output: &Value) -> Value {
+        Tool::project_output_for_hooks(self, output)
     }
 
     async fn prepare(

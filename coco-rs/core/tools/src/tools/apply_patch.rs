@@ -15,6 +15,7 @@ use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::PreparedToolState;
 use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolArgumentDeltaConsumer;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::error::ToolError;
@@ -26,7 +27,6 @@ use coco_types::ToolCheckResult;
 use coco_types::ToolDisplayData;
 use coco_types::ToolId;
 use coco_types::ToolName;
-use coco_utils_absolute_path::AbsolutePathBuf;
 use coco_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -40,6 +40,12 @@ const APPLY_PATCH_PREVIEW_ROW_CHARS: usize = 512;
 pub struct ApplyPatchInput {
     /// Patch body wrapped in `*** Begin Patch` / `*** End Patch`.
     pub patch: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApplyPatchHookInput {
+    command: String,
 }
 
 /// Typed output — stdout / stderr emitted by `coco_apply_patch::apply_patch`.
@@ -63,8 +69,81 @@ const APPLY_PATCH_LARK_GRAMMAR: &str = include_str!("apply_patch.lark");
 
 #[derive(Clone)]
 pub struct ApplyPatchTool {
-    fs: std::sync::Arc<dyn coco_exec_server::ExecutorFileSystem>,
+    fs: Option<std::sync::Arc<dyn coco_exec_server::CheckedFileSystem>>,
     sandbox: Option<coco_exec_server::FileSystemSandboxContext>,
+}
+
+#[derive(Default)]
+struct ApplyPatchArgumentDeltaConsumer {
+    parser: coco_apply_patch::StreamingPatchParser,
+    last_signature: Vec<(String, coco_event_types::FileChangeKind)>,
+    failed: bool,
+}
+
+impl ToolArgumentDeltaConsumer for ApplyPatchArgumentDeltaConsumer {
+    fn push_delta(&mut self, delta: &str) -> Option<Vec<coco_event_types::FileChangeInfo>> {
+        if self.failed {
+            return None;
+        }
+        match self.parser.push_delta(delta) {
+            Ok(hunks) => self.update(hunks),
+            Err(_) => {
+                self.failed = true;
+                None
+            }
+        }
+    }
+
+    fn finish(&mut self) -> Option<Vec<coco_event_types::FileChangeInfo>> {
+        if self.failed {
+            return None;
+        }
+        match self.parser.finish() {
+            Ok(hunks) => self.update(hunks),
+            Err(_) => None,
+        }
+    }
+}
+
+impl ApplyPatchArgumentDeltaConsumer {
+    fn update(
+        &mut self,
+        hunks: Vec<ApplyPatchHunk>,
+    ) -> Option<Vec<coco_event_types::FileChangeInfo>> {
+        use coco_event_types::FileChangeKind;
+
+        let mut signature = Vec::new();
+        for hunk in hunks {
+            match hunk {
+                ApplyPatchHunk::AddFile { path, .. } => {
+                    signature.push((path.display().to_string(), FileChangeKind::Create));
+                }
+                ApplyPatchHunk::DeleteFile { path } => {
+                    signature.push((path.display().to_string(), FileChangeKind::Delete));
+                }
+                ApplyPatchHunk::UpdateFile {
+                    path, move_path, ..
+                } => {
+                    if let Some(destination) = move_path {
+                        signature.push((path.display().to_string(), FileChangeKind::Delete));
+                        signature.push((destination.display().to_string(), FileChangeKind::Create));
+                    } else {
+                        signature.push((path.display().to_string(), FileChangeKind::Modify));
+                    }
+                }
+            }
+        }
+        if signature.is_empty() || signature == self.last_signature {
+            return None;
+        }
+        self.last_signature.clone_from(&signature);
+        Some(
+            signature
+                .into_iter()
+                .map(|(path, kind)| coco_event_types::FileChangeInfo { path, kind })
+                .collect(),
+        )
+    }
 }
 
 enum PreparedApplyPatch {
@@ -74,16 +153,33 @@ enum PreparedApplyPatch {
 
 impl ApplyPatchTool {
     pub fn new(
-        fs: std::sync::Arc<dyn coco_exec_server::ExecutorFileSystem>,
+        fs: std::sync::Arc<dyn coco_exec_server::CheckedFileSystem>,
         sandbox: Option<coco_exec_server::FileSystemSandboxContext>,
     ) -> Self {
-        Self { fs, sandbox }
+        Self {
+            fs: Some(fs),
+            sandbox,
+        }
+    }
+
+    pub fn unavailable() -> Self {
+        Self {
+            fs: None,
+            sandbox: None,
+        }
     }
 }
 
 impl Default for ApplyPatchTool {
     fn default() -> Self {
-        Self::new(coco_exec_server::LOCAL_FS.clone(), None)
+        #[cfg(target_os = "linux")]
+        {
+            Self::new(coco_exec_server::LOCAL_FS.clone(), None)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Self::unavailable()
+        }
     }
 }
 
@@ -91,6 +187,7 @@ impl std::fmt::Debug for ApplyPatchTool {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("ApplyPatchTool")
+            .field("checked_filesystem_available", &self.fs.is_some())
             .field("has_sandbox_context", &self.sandbox.is_some())
             .finish_non_exhaustive()
     }
@@ -118,8 +215,14 @@ impl Tool for ApplyPatchTool {
     /// an extra tool (e.g. gpt-5) see this tool. Other models would
     /// call it accidentally if it were registered universally.
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
-        ctx.tool_overrides
-            .is_extra(&ToolId::Builtin(ToolName::ApplyPatch))
+        self.fs.is_some()
+            && ctx
+                .tool_overrides
+                .is_extra(&ToolId::Builtin(ToolName::ApplyPatch))
+    }
+
+    fn argument_delta_consumer(&self) -> Option<Box<dyn ToolArgumentDeltaConsumer>> {
+        Some(Box::new(ApplyPatchArgumentDeltaConsumer::default()))
     }
 
     async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
@@ -161,6 +264,32 @@ impl Tool for ApplyPatchTool {
         Some(serde_json::json!({ "patch": raw }))
     }
 
+    fn project_input_for_hooks(&self, input: &serde_json::Value) -> serde_json::Value {
+        input
+            .get("patch")
+            .and_then(serde_json::Value::as_str)
+            .map_or(
+                serde_json::Value::Null,
+                |patch| serde_json::json!({ "command": patch }),
+            )
+    }
+
+    fn project_hook_input_to_runtime(
+        &self,
+        input: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        serde_json::from_value::<ApplyPatchHookInput>(input)
+            .map(|hook_input| serde_json::json!({ "patch": hook_input.command }))
+            .map_err(|error| format!("invalid apply_patch hook input: {error}"))
+    }
+
+    fn project_output_for_hooks(&self, output: &serde_json::Value) -> serde_json::Value {
+        serde_json::from_value::<ApplyPatchOutput>(output.clone()).map_or_else(
+            |_| serde_json::Value::Null,
+            |output| serde_json::Value::String(render_apply_patch_output(&output)),
+        )
+    }
+
     fn description(&self, _input: &ApplyPatchInput, _options: &DescriptionOptions) -> String {
         "Apply a unified-diff-style patch to one or more files. The patch \
          body must follow the `*** Begin Patch` / `*** End Patch` envelope \
@@ -190,6 +319,12 @@ impl Tool for ApplyPatchTool {
                 build_apply_patch_preview(&input.patch).map(ToolDisplayData::ApplyPatchPreview),
             ));
         }
+        let fs = self.fs.clone().ok_or_else(|| {
+            execution_failed_with_preview(
+                "apply_patch is unavailable: this environment has no atomic checked-filesystem capability",
+                build_apply_patch_preview(&input.patch).map(ToolDisplayData::ApplyPatchPreview),
+            )
+        })?;
         let cwd = apply_patch_cwd(ctx)
             .await
             .map_err(ToolError::execution_failed)?;
@@ -204,7 +339,7 @@ impl Tool for ApplyPatchTool {
             &parsed.hunks,
             &cwd,
             coco_apply_patch::ApplyPatchFileUpdateMode::PreserveLineEndings,
-            self.fs.clone(),
+            fs,
             self.sandbox.clone(),
         )
         .await
@@ -256,10 +391,15 @@ impl Tool for ApplyPatchTool {
         if let Some(message) = first_write_fence_denial(&logical_effects, ctx) {
             return ToolCheckResult::Deny { message };
         }
+        let Some(fs) = self.fs.as_deref() else {
+            return ToolCheckResult::Deny {
+                message: "apply_patch is unavailable: this environment has no atomic checked-filesystem capability".to_string(),
+            };
+        };
         let path_effects = match coco_apply_patch::validate_hunk_paths(
             &parsed.hunks,
             &cwd,
-            self.fs.as_ref(),
+            fs,
             self.sandbox.as_ref(),
         )
         .await
@@ -277,15 +417,8 @@ impl Tool for ApplyPatchTool {
     /// Render `{stdout, stderr}` by joining stdout + stderr with a
     /// newline (skip empty pieces). Same shape as a simplified Bash.
     fn render_for_model(&self, out: &ApplyPatchOutput) -> Vec<ToolResultContentPart> {
-        let stdout = out.stdout.trim_end();
-        let stderr = out.stderr.trim();
-        let combined = [stdout, stderr]
-            .into_iter()
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<&str>>()
-            .join("\n");
         vec![ToolResultContentPart::Text {
-            text: combined,
+            text: render_apply_patch_output(out),
             provider_options: None,
         }]
     }
@@ -309,23 +442,25 @@ impl Tool for ApplyPatchTool {
         let preview = build_apply_patch_preview(patch);
         let display_data = preview.clone().map(ToolDisplayData::ApplyPatchPreview);
 
-        let cwd_path = ctx.cwd_anchor().await.ok_or_else(|| {
-            execution_failed_with_preview(
-                "no working directory available for apply_patch",
-                display_data.clone(),
-            )
-        })?;
-        let cwd = AbsolutePathBuf::from_absolute_path(&cwd_path).map_err(|e| {
-            execution_failed_with_preview(
-                format!("cwd `{}` is not absolute: {e}", cwd_path.display()),
-                display_data.clone(),
-            )
-        })?;
-        let cwd = PathUri::from_abs_path(&cwd);
+        let cwd = ctx
+            .execution_cwd_anchor()
+            .await
+            .map_err(|error| execution_failed_with_preview(error, display_data.clone()))?
+            .ok_or_else(|| {
+                execution_failed_with_preview(
+                    "no working directory available for apply_patch",
+                    display_data.clone(),
+                )
+            })?;
 
         let mut stdout: Vec<u8> = Vec::new();
         let mut stderr: Vec<u8> = Vec::new();
-        let fs = self.fs.as_ref();
+        let fs = self.fs.as_deref().ok_or_else(|| {
+            execution_failed_with_preview(
+                "apply_patch is unavailable: this environment has no atomic checked-filesystem capability",
+                display_data.clone(),
+            )
+        })?;
         let sandbox = self.sandbox.as_ref();
 
         let parsed = match coco_apply_patch::parse_patch(patch) {
@@ -359,7 +494,16 @@ impl Tool for ApplyPatchTool {
         // Execute-time guard: `canUseTool` Allow skips built-in permission
         // checks, so re-enforce the write fence immediately before mutation.
         for path in path_effects.paths() {
-            if crate::check_write_root_fence(ctx, &path.to_path_buf()).is_some() {
+            if ctx.allowed_write_roots.is_empty() {
+                continue;
+            }
+            let Some(path) = native_path(path) else {
+                return Err(execution_failed_with_preview(
+                    "Refusing to apply a foreign-environment patch under a host-native write fence.",
+                    display_data,
+                ));
+            };
+            if crate::check_write_root_fence(ctx, &path).is_some() {
                 return Err(execution_failed_with_preview(
                     canonical_write_fence_denial(),
                     display_data,
@@ -380,13 +524,15 @@ impl Tool for ApplyPatchTool {
 
         // Capture file-history snapshots before mutation, mirroring Edit/Write.
         for path in path_effects.paths() {
-            crate::track_file_edit(ctx, &path.to_path_buf()).await;
+            if let Some(path) = native_path(path) {
+                crate::track_file_edit(ctx, &path).await;
+            }
         }
 
         let committed = match coco_apply_patch::commit_prepared_patch(&prepared).await {
             Ok(committed) => committed,
             Err(error) => {
-                record_applied_delta(ctx, error.delta(), &path_effects).await;
+                record_failed_commit(ctx, error.delta(), error.path_outcomes()).await;
                 return Err(apply_patch_error_with_preview(
                     &stderr,
                     error,
@@ -399,21 +545,27 @@ impl Tool for ApplyPatchTool {
         )?;
 
         for (path, contents) in committed.written_files() {
-            crate::record_file_edit(ctx, &path.to_path_buf(), contents.to_string()).await;
+            if let Some(path) = native_path(path) {
+                crate::record_file_edit(ctx, &path, contents.to_string()).await;
+            }
         }
         for path in committed.deleted_files() {
-            crate::record_file_delete(ctx, &path.to_path_buf()).await;
+            if let Some(path) = native_path(path) {
+                crate::record_file_delete(ctx, &path).await;
+            }
         }
 
         // Match Write/Edit post-commit integration for every source and
         // destination: activate path-gated skills and refresh diagnostics.
         for path in path_effects.logical_paths() {
-            let path = path.to_path_buf();
-            crate::track_skill_triggers(ctx, &path).await;
+            if let Some(path) = native_path(path) {
+                crate::track_skill_triggers(ctx, &path).await;
+            }
         }
         for path in path_effects.paths() {
-            let path = path.to_path_buf();
-            ctx.lsp.notify_save(&path).await;
+            if let Some(path) = native_path(path) {
+                ctx.lsp.notify_save(&path).await;
+            }
         }
 
         Ok(result_with_preview(stdout, stderr, display_data))
@@ -440,10 +592,19 @@ fn first_write_fence_denial(
     path_effects: &coco_apply_patch::ApplyPatchPathEffects,
     ctx: &ToolUseContext,
 ) -> Option<String> {
+    if ctx.allowed_write_roots.is_empty() {
+        return None;
+    }
     path_effects
         .logical_paths()
         .iter()
-        .find_map(|path| crate::check_write_root_fence(ctx, &path.to_path_buf()))
+        .find_map(|path| match native_path(path) {
+            Some(path) => crate::check_write_root_fence(ctx, &path),
+            None => Some(
+                "Refusing to apply a foreign-environment patch under a host-native write fence."
+                    .to_string(),
+            ),
+        })
 }
 
 fn canonical_write_fence_denial() -> &'static str {
@@ -460,11 +621,27 @@ async fn check_canonical_path_permissions(
     let Ok(cwd) = apply_patch_cwd(ctx).await else {
         return ToolCheckResult::Passthrough;
     };
-    let cwd_path = cwd.to_path_buf();
+    let Ok(cwd_path) = cwd.to_abs_path() else {
+        return ToolCheckResult::Ask {
+            message: "Apply this patch in the selected foreign execution environment?".to_string(),
+            suggestions: Vec::new(),
+            choices: None,
+            detail: None,
+        };
+    };
+    let cwd_path = cwd_path.as_path().to_path_buf();
     let cwd_str = cwd_path.to_string_lossy().to_string();
     let mut all_paths_to_check = Vec::new();
     for path in path_effects.paths() {
-        let path = path.to_path_buf();
+        let Some(path) = native_path(path) else {
+            return ToolCheckResult::Ask {
+                message: "Apply this patch in the selected foreign execution environment?"
+                    .to_string(),
+                suggestions: Vec::new(),
+                choices: None,
+                detail: None,
+            };
+        };
         if crate::check_write_root_fence(ctx, &path).is_some() {
             return ToolCheckResult::Deny {
                 message: canonical_write_fence_denial().to_string(),
@@ -484,20 +661,33 @@ async fn check_canonical_path_permissions(
     )
 }
 
-async fn record_applied_delta(
+fn native_path(path: &PathUri) -> Option<std::path::PathBuf> {
+    path.to_abs_path()
+        .ok()
+        .map(|path| path.as_path().to_path_buf())
+}
+
+async fn record_failed_commit(
     ctx: &ToolUseContext,
     delta: &coco_apply_patch::AppliedPatchDelta,
-    path_effects: &coco_apply_patch::ApplyPatchPathEffects,
+    path_outcomes: &[coco_apply_patch::PreparedPatchPathOutcome],
 ) {
+    let mut skill_trigger_paths = Vec::new();
     for change in delta.changes() {
         match &change.change {
             coco_apply_patch::AppliedPatchFileChange::Add { content, .. } => {
-                crate::record_file_edit(ctx, &change.path.to_path_buf(), content.clone()).await;
-                ctx.lsp.notify_save(&change.path.to_path_buf()).await;
+                if let Some(path) = native_path(&change.path) {
+                    crate::record_file_edit(ctx, &path, content.clone()).await;
+                    ctx.lsp.notify_save(&path).await;
+                    skill_trigger_paths.push(path);
+                }
             }
             coco_apply_patch::AppliedPatchFileChange::Delete { .. } => {
-                crate::record_file_delete(ctx, &change.path.to_path_buf()).await;
-                ctx.lsp.notify_save(&change.path.to_path_buf()).await;
+                if let Some(path) = native_path(&change.path) {
+                    crate::record_file_delete(ctx, &path).await;
+                    ctx.lsp.notify_save(&path).await;
+                    skill_trigger_paths.push(path);
+                }
             }
             coco_apply_patch::AppliedPatchFileChange::Update {
                 move_path,
@@ -505,26 +695,47 @@ async fn record_applied_delta(
                 ..
             } => {
                 let target = move_path.as_ref().unwrap_or(&change.path);
-                crate::record_file_edit(ctx, &target.to_path_buf(), new_content.clone()).await;
-                ctx.lsp.notify_save(&target.to_path_buf()).await;
-                if move_path.is_some() {
-                    crate::record_file_delete(ctx, &change.path.to_path_buf()).await;
-                    ctx.lsp.notify_save(&change.path.to_path_buf()).await;
+                if let Some(target) = native_path(target) {
+                    crate::record_file_edit(ctx, &target, new_content.clone()).await;
+                    ctx.lsp.notify_save(&target).await;
+                    skill_trigger_paths.push(target);
+                }
+                if move_path.is_some()
+                    && let Some(source) = native_path(&change.path)
+                {
+                    crate::record_file_delete(ctx, &source).await;
+                    ctx.lsp.notify_save(&source).await;
+                    skill_trigger_paths.push(source);
                 }
             }
         }
     }
 
-    if !delta.is_exact() {
-        // A checked write can still fail after truncation (for example ENOSPC).
-        // Drop cached contents for every authorized target and force LSP refresh.
-        for path in path_effects.paths() {
-            crate::record_file_delete(ctx, &path.to_path_buf()).await;
-            ctx.lsp.notify_save(&path.to_path_buf()).await;
+    for outcome in path_outcomes {
+        match &outcome.state {
+            coco_apply_patch::PreparedPatchPathState::Unchanged
+            | coco_apply_patch::PreparedPatchPathState::Written { .. }
+            | coco_apply_patch::PreparedPatchPathState::Deleted => {}
+            coco_apply_patch::PreparedPatchPathState::StaleExternal => {
+                if let Some(path) = native_path(&outcome.path) {
+                    crate::record_file_delete(ctx, &path).await;
+                    ctx.lsp.notify_save(&path).await;
+                }
+            }
+            coco_apply_patch::PreparedPatchPathState::Unknown => {
+                if let Some(path) = native_path(&outcome.path) {
+                    crate::record_file_delete(ctx, &path).await;
+                    ctx.lsp.notify_save(&path).await;
+                    skill_trigger_paths.push(path);
+                }
+            }
         }
     }
-    for path in path_effects.logical_paths() {
-        crate::track_skill_triggers(ctx, &path.to_path_buf()).await;
+
+    skill_trigger_paths.sort_unstable();
+    skill_trigger_paths.dedup();
+    for path in skill_trigger_paths {
+        crate::track_skill_triggers(ctx, &path).await;
     }
 }
 
@@ -579,6 +790,14 @@ fn result_with_preview(
     } else {
         result
     }
+}
+
+fn render_apply_patch_output(output: &ApplyPatchOutput) -> String {
+    [output.stdout.trim_end(), output.stderr.trim()]
+        .into_iter()
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn build_apply_patch_preview(patch: &str) -> Option<ApplyPatchPreview> {
@@ -750,13 +969,9 @@ fn cap_preview_text(text: &str) -> String {
 }
 
 async fn apply_patch_cwd(ctx: &ToolUseContext) -> Result<PathUri, String> {
-    let cwd_path = ctx
-        .cwd_anchor()
-        .await
-        .ok_or_else(|| "no working directory available for apply_patch".to_string())?;
-    AbsolutePathBuf::from_absolute_path(&cwd_path)
-        .map(|cwd| PathUri::from_abs_path(&cwd))
-        .map_err(|e| format!("cwd `{}` is not absolute: {e}", cwd_path.display()))
+    ctx.execution_cwd_anchor().await.and_then(|cwd| {
+        cwd.ok_or_else(|| "no working directory available for apply_patch".to_string())
+    })
 }
 
 fn preview_rows_to_dto(rows: usize) -> i64 {

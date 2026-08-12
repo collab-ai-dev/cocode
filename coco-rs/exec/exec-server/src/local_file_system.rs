@@ -10,6 +10,7 @@ use tokio::io;
 use tokio::io::AsyncReadExt;
 use tokio_util::io::ReaderStream;
 
+use crate::CheckedFileSystem;
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecServerRuntimePaths;
@@ -35,8 +36,8 @@ fn file_too_large_error() -> io::Error {
     )
 }
 
-pub static LOCAL_FS: LazyLock<Arc<dyn ExecutorFileSystem>> =
-    LazyLock::new(|| -> Arc<dyn ExecutorFileSystem> { Arc::new(LocalFileSystem::unsandboxed()) });
+pub static LOCAL_FS: LazyLock<Arc<LocalFileSystem>> =
+    LazyLock::new(|| Arc::new(LocalFileSystem::unsandboxed()));
 
 #[derive(Clone, Default)]
 pub(crate) struct DirectFileSystem;
@@ -69,7 +70,7 @@ impl LocalFileSystem {
         &'a self,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> io::Result<(
-        &'a dyn ExecutorFileSystem,
+        &'a dyn CheckedFileSystem,
         Option<&'a FileSystemSandboxContext>,
     )> {
         if sandbox.is_some_and(FileSystemSandboxContext::should_run_in_sandbox) {
@@ -264,47 +265,6 @@ impl ExecutorFileSystem for LocalFileSystem {
         Box::pin(LocalFileSystem::write_file(self, path, contents, sandbox))
     }
 
-    fn snapshot_file<'a>(
-        &'a self,
-        path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, FileSnapshot> {
-        Box::pin(LocalFileSystem::snapshot_file(self, path, sandbox))
-    }
-
-    fn write_file_checked<'a>(
-        &'a self,
-        path: &'a PathUri,
-        contents: Vec<u8>,
-        expected: ExpectedFileState,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()> {
-        Box::pin(LocalFileSystem::write_file_checked(
-            self, path, contents, expected, sandbox,
-        ))
-    }
-
-    fn remove_file_checked<'a>(
-        &'a self,
-        path: &'a PathUri,
-        expected: ExpectedFileState,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()> {
-        Box::pin(LocalFileSystem::remove_file_checked(
-            self, path, expected, sandbox,
-        ))
-    }
-
-    fn create_directory_checked<'a>(
-        &'a self,
-        path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()> {
-        Box::pin(LocalFileSystem::create_directory_checked(
-            self, path, sandbox,
-        ))
-    }
-
     fn create_directory<'a>(
         &'a self,
         path: &'a PathUri,
@@ -354,6 +314,49 @@ impl ExecutorFileSystem for LocalFileSystem {
             destination_path,
             options,
             sandbox,
+        ))
+    }
+}
+
+impl CheckedFileSystem for LocalFileSystem {
+    fn snapshot_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSnapshot> {
+        Box::pin(LocalFileSystem::snapshot_file(self, path, sandbox))
+    }
+
+    fn write_file_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        contents: Vec<u8>,
+        expected: ExpectedFileState,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(LocalFileSystem::write_file_checked(
+            self, path, contents, expected, sandbox,
+        ))
+    }
+
+    fn remove_file_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        expected: ExpectedFileState,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(LocalFileSystem::remove_file_checked(
+            self, path, expected, sandbox,
+        ))
+    }
+
+    fn create_directory_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(LocalFileSystem::create_directory_checked(
+            self, path, sandbox,
         ))
     }
 }
@@ -555,47 +558,6 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
         ))
     }
 
-    fn snapshot_file<'a>(
-        &'a self,
-        path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, FileSnapshot> {
-        Box::pin(UnsandboxedFileSystem::snapshot_file(self, path, sandbox))
-    }
-
-    fn write_file_checked<'a>(
-        &'a self,
-        path: &'a PathUri,
-        contents: Vec<u8>,
-        expected: ExpectedFileState,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()> {
-        Box::pin(UnsandboxedFileSystem::write_file_checked(
-            self, path, contents, expected, sandbox,
-        ))
-    }
-
-    fn remove_file_checked<'a>(
-        &'a self,
-        path: &'a PathUri,
-        expected: ExpectedFileState,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()> {
-        Box::pin(UnsandboxedFileSystem::remove_file_checked(
-            self, path, expected, sandbox,
-        ))
-    }
-
-    fn create_directory_checked<'a>(
-        &'a self,
-        path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()> {
-        Box::pin(UnsandboxedFileSystem::create_directory_checked(
-            self, path, sandbox,
-        ))
-    }
-
     fn create_directory<'a>(
         &'a self,
         path: &'a PathUri,
@@ -645,6 +607,49 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
             destination_path,
             options,
             sandbox,
+        ))
+    }
+}
+
+impl CheckedFileSystem for UnsandboxedFileSystem {
+    fn snapshot_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSnapshot> {
+        Box::pin(UnsandboxedFileSystem::snapshot_file(self, path, sandbox))
+    }
+
+    fn write_file_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        contents: Vec<u8>,
+        expected: ExpectedFileState,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(UnsandboxedFileSystem::write_file_checked(
+            self, path, contents, expected, sandbox,
+        ))
+    }
+
+    fn remove_file_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        expected: ExpectedFileState,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(UnsandboxedFileSystem::remove_file_checked(
+            self, path, expected, sandbox,
+        ))
+    }
+
+    fn create_directory_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(UnsandboxedFileSystem::create_directory_checked(
+            self, path, sandbox,
         ))
     }
 }
@@ -949,47 +954,6 @@ impl ExecutorFileSystem for DirectFileSystem {
         Box::pin(DirectFileSystem::write_file(self, path, contents, sandbox))
     }
 
-    fn snapshot_file<'a>(
-        &'a self,
-        path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, FileSnapshot> {
-        Box::pin(DirectFileSystem::snapshot_file(self, path, sandbox))
-    }
-
-    fn write_file_checked<'a>(
-        &'a self,
-        path: &'a PathUri,
-        contents: Vec<u8>,
-        expected: ExpectedFileState,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()> {
-        Box::pin(DirectFileSystem::write_file_checked(
-            self, path, contents, expected, sandbox,
-        ))
-    }
-
-    fn remove_file_checked<'a>(
-        &'a self,
-        path: &'a PathUri,
-        expected: ExpectedFileState,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()> {
-        Box::pin(DirectFileSystem::remove_file_checked(
-            self, path, expected, sandbox,
-        ))
-    }
-
-    fn create_directory_checked<'a>(
-        &'a self,
-        path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, ()> {
-        Box::pin(DirectFileSystem::create_directory_checked(
-            self, path, sandbox,
-        ))
-    }
-
     fn create_directory<'a>(
         &'a self,
         path: &'a PathUri,
@@ -1039,6 +1003,49 @@ impl ExecutorFileSystem for DirectFileSystem {
             destination_path,
             options,
             sandbox,
+        ))
+    }
+}
+
+impl CheckedFileSystem for DirectFileSystem {
+    fn snapshot_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSnapshot> {
+        Box::pin(DirectFileSystem::snapshot_file(self, path, sandbox))
+    }
+
+    fn write_file_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        contents: Vec<u8>,
+        expected: ExpectedFileState,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(DirectFileSystem::write_file_checked(
+            self, path, contents, expected, sandbox,
+        ))
+    }
+
+    fn remove_file_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        expected: ExpectedFileState,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(DirectFileSystem::remove_file_checked(
+            self, path, expected, sandbox,
+        ))
+    }
+
+    fn create_directory_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(DirectFileSystem::create_directory_checked(
+            self, path, sandbox,
         ))
     }
 }

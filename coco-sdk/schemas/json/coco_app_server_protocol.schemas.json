@@ -277,6 +277,30 @@
           "type": "object"
         },
         {
+          "description": "Tool-owned structured interpretation of arguments while they stream.\nUnlike the TUI-only raw delta, this is a semantic SDK-visible update.",
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "file_changes": {
+              "items": {
+                "$ref": "#/$defs/FileChangeInfo"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "tool_use_input_updated",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "call_id",
+            "file_changes"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Tool execution has begun (after permission check).",
           "properties": {
             "batch_id": {

@@ -17,6 +17,7 @@ use coco_llm_types::ToolCallPart;
 use coco_llm_types::ToolResultContent;
 use coco_llm_types::Usage;
 use coco_tool_runtime::ToolRegistry;
+use coco_tools::ApplyPatchTool;
 use coco_tools::AskUserQuestionTool;
 use coco_tools::EnterPlanModeTool;
 use coco_tools::ExitPlanModeTool;
@@ -4761,6 +4762,7 @@ struct PreparedLifecycleToken;
 struct PreparedLifecycleProbe {
     permission_pointer: StdMutex<Option<usize>>,
     execution_pointer: StdMutex<Option<usize>>,
+    executed_input: StdMutex<Option<Value>>,
 }
 
 #[async_trait::async_trait]
@@ -4829,7 +4831,7 @@ impl Tool for PreparedLifecycleProbe {
 
     async fn execute_prepared(
         &self,
-        _: Value,
+        input: Value,
         prepared: Option<coco_tool_runtime::PreparedToolState>,
         _: &coco_tool_runtime::ToolUseContext,
     ) -> Result<CocoToolResult<Value>, ToolError> {
@@ -4839,6 +4841,7 @@ impl Tool for PreparedLifecycleProbe {
             .downcast_ref::<PreparedLifecycleToken>()
             .expect("execution receives prepared token");
         *self.execution_pointer.lock().unwrap() = Some(token as *const _ as usize);
+        *self.executed_input.lock().unwrap() = Some(input);
         Ok(CocoToolResult::data(serde_json::json!({"ok": true})))
     }
 }
@@ -5060,6 +5063,71 @@ struct AskingToolThenTextMock {
     call_count: AtomicI32,
 }
 
+struct ApplyPatchThenTextMock {
+    call_count: AtomicI32,
+    patch: String,
+}
+
+#[async_trait::async_trait]
+impl LanguageModel for ApplyPatchThenTextMock {
+    fn provider(&self) -> &str {
+        "mock"
+    }
+
+    fn model_id(&self) -> &str {
+        "mock-apply-patch"
+    }
+
+    async fn do_generate(
+        &self,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
+        let content = if self.call_count.fetch_add(1, Ordering::SeqCst) == 0 {
+            vec![AssistantContentPart::ToolCall(ToolCallPart {
+                tool_call_id: "apply_patch_call_1".into(),
+                tool_name: "apply_patch".into(),
+                input: serde_json::Value::String(self.patch.clone()),
+                provider_executed: None,
+                provider_metadata: None,
+                invalid: false,
+                invalid_reason: None,
+            })]
+        } else {
+            vec![AssistantContentPart::Text(TextPart {
+                text: "patched".into(),
+                provider_metadata: None,
+            })]
+        };
+        Ok(LanguageModelGenerateResult {
+            content,
+            usage: Usage::new(5, 5),
+            finish_reason: FinishReason::new(if self.call_count.load(Ordering::SeqCst) == 1 {
+                StopReason::ToolUse
+            } else {
+                StopReason::EndTurn
+            }),
+            warnings: vec![],
+            provider_metadata: None,
+            request: None,
+            response: None,
+        })
+    }
+
+    async fn do_stream(
+        &self,
+        options: &LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
+        let result = self.do_generate(options, None).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
+    }
+}
+
 #[async_trait::async_trait]
 impl LanguageModel for AskingToolThenTextMock {
     fn provider(&self) -> &str {
@@ -5198,7 +5266,150 @@ async fn query_engine_preserves_prepared_identity_through_permission_and_executi
 }
 
 #[tokio::test]
-async fn permission_rewrite_fails_closed_after_preparation() {
+async fn query_engine_executes_real_freeform_apply_patch_in_both_runner_modes() {
+    for streaming_tool_execution in [false, true] {
+        let dir = tempfile::tempdir().expect("temp cwd");
+        let patch =
+            "*** Begin Patch\n*** Add File: created.txt\n+from query engine\n*** End Patch\n";
+        let model = Arc::new(ApplyPatchThenTextMock {
+            call_count: AtomicI32::new(0),
+            patch: patch.to_string(),
+        });
+        let registry = ToolRegistry::new();
+        registry.register(Arc::new(ApplyPatchTool::default()));
+        let config = QueryEngineConfig {
+            streaming_tool_execution,
+            permission_mode: PermissionMode::AcceptEdits,
+            original_cwd: Some(dir.path().to_path_buf()),
+            tool_overrides: Arc::new(coco_types::ToolOverrides::default().with_extra(
+                coco_types::ToolId::Builtin(coco_types::ToolName::ApplyPatch),
+            )),
+            ..QueryEngineConfig::default()
+        };
+        let engine = QueryEngine::new(
+            config,
+            coco_types::SessionId::try_new(format!("real-apply-patch-{streaming_tool_execution}"))
+                .unwrap(),
+            crate::test_support::model_runtime_registry(model),
+            Arc::new(registry),
+            CancellationToken::new(),
+            None,
+        );
+
+        let result = engine.run("create the file").await.expect("engine run");
+
+        assert_eq!(result.response_text, "patched");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("created.txt")).unwrap(),
+            "from query engine\n"
+        );
+        assert!(result.final_messages.iter().any(|message| {
+            matches!(
+                message.as_ref(),
+                coco_messages::Message::ToolResult(result)
+                    if !result.is_error
+                        && result.tool_use_id == "apply_patch_call_1"
+            )
+        }));
+    }
+}
+
+#[tokio::test]
+async fn apply_patch_hooks_use_codex_command_and_text_contract_end_to_end() {
+    let dir = tempfile::tempdir().expect("temp cwd");
+    let pre_payload = dir.path().join("pre-hook.json");
+    let post_payload = dir.path().join("post-hook.json");
+    let original = "*** Begin Patch\n*** Add File: original.txt\n+original\n*** End Patch\n";
+    let rewritten = "*** Begin Patch\n*** Add File: rewritten.txt\n+rewritten\n*** End Patch\n";
+    let model = Arc::new(ApplyPatchThenTextMock {
+        call_count: AtomicI32::new(0),
+        patch: original.to_string(),
+    });
+    let registry = ToolRegistry::new();
+    registry.register(Arc::new(ApplyPatchTool::default()));
+
+    let hooks = coco_hooks::HookRegistry::new();
+    let updated_input = serde_json::json!({
+        "updatedInput": { "command": rewritten }
+    })
+    .to_string();
+    hooks.register(coco_hooks::HookDefinition {
+        event: coco_types::HookEventType::PreToolUse,
+        matcher: Some("apply_patch".into()),
+        handler: coco_hooks::HookHandler::Command {
+            command: format!(
+                "tee '{}' >/dev/null; printf '%s\\n' '{}'",
+                pre_payload.display(),
+                updated_input
+            ),
+            timeout_ms: Some(1000),
+            shell: None,
+        },
+        priority: 0,
+        scope: coco_types::HookScope::default(),
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        status_message: None,
+    });
+    hooks.register(coco_hooks::HookDefinition {
+        event: coco_types::HookEventType::PostToolUse,
+        matcher: Some("apply_patch".into()),
+        handler: coco_hooks::HookHandler::Command {
+            command: format!("tee '{}' >/dev/null", post_payload.display()),
+            timeout_ms: Some(1000),
+            shell: None,
+        },
+        priority: 0,
+        scope: coco_types::HookScope::default(),
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        status_message: None,
+    });
+    let config = QueryEngineConfig {
+        permission_mode: PermissionMode::AcceptEdits,
+        original_cwd: Some(dir.path().to_path_buf()),
+        tool_overrides: Arc::new(coco_types::ToolOverrides::default().with_extra(
+            coco_types::ToolId::Builtin(coco_types::ToolName::ApplyPatch),
+        )),
+        ..QueryEngineConfig::default()
+    };
+    let engine = QueryEngine::new(
+        config,
+        coco_types::SessionId::try_new("apply-patch-hook-contract").unwrap(),
+        crate::test_support::model_runtime_registry(model),
+        Arc::new(registry),
+        CancellationToken::new(),
+        Some(Arc::new(hooks)),
+    );
+
+    engine
+        .run("rewrite through hooks")
+        .await
+        .expect("engine run");
+
+    assert!(!dir.path().join("original.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("rewritten.txt")).unwrap(),
+        "rewritten\n"
+    );
+    let pre = std::fs::read_to_string(pre_payload).expect("pre hook payload");
+    assert!(pre.contains("\"command\""), "{pre}");
+    assert!(!pre.contains("\"patch\""), "{pre}");
+    let post = std::fs::read_to_string(post_payload).expect("post hook payload");
+    assert!(post.contains("\"command\""), "{post}");
+    assert!(!post.contains("\"patch\""), "{post}");
+    assert!(
+        post.contains("Success. Updated the following files"),
+        "{post}"
+    );
+}
+
+#[tokio::test]
+async fn permission_rewrite_reprepares_and_executes_the_authorized_input() {
     let model = Arc::new(AskingToolThenTextMock {
         call_count: AtomicI32::new(0),
     });
@@ -5212,7 +5423,7 @@ async fn permission_rewrite_fails_closed_after_preparation() {
     );
     let engine = QueryEngine::new(
         QueryEngineConfig::default(),
-        coco_types::SessionId::try_new("prepared-rewrite-fails-closed").unwrap(),
+        coco_types::SessionId::try_new("prepared-rewrite-executes").unwrap(),
         client,
         Arc::new(registry),
         CancellationToken::new(),
@@ -5222,10 +5433,16 @@ async fn permission_rewrite_fails_closed_after_preparation() {
 
     let result = engine.run("run prepared probe").await.expect("engine run");
 
-    assert!(probe.execution_pointer.lock().unwrap().is_none());
-    let error = tool_result_error_text(&result.final_messages, "ask_call_1")
-        .expect("prepared rewrite must produce a tool error");
-    assert!(error.contains("retry the tool call"), "{error}");
+    assert_eq!(result.response_text, "done");
+    assert_eq!(
+        *probe.executed_input.lock().unwrap(),
+        Some(serde_json::json!({"retargeted": true}))
+    );
+    assert_eq!(
+        *probe.execution_pointer.lock().unwrap(),
+        *probe.permission_pointer.lock().unwrap(),
+        "execution must consume the state derived from the authorized rewrite"
+    );
 }
 
 #[tokio::test]

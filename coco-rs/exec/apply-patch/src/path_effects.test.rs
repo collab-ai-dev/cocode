@@ -1,6 +1,15 @@
 use std::fs;
 
+use coco_exec_server::CopyOptions;
+use coco_exec_server::CreateDirectoryOptions;
+use coco_exec_server::ExecutorFileSystem;
+use coco_exec_server::ExecutorFileSystemFuture;
+use coco_exec_server::FileMetadata;
+use coco_exec_server::FileSystemReadStream;
+use coco_exec_server::FileSystemSandboxContext;
 use coco_exec_server::LOCAL_FS;
+use coco_exec_server::ReadDirectoryEntry;
+use coco_exec_server::RemoveOptions;
 use coco_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -10,6 +19,98 @@ use crate::parse_patch;
 
 fn cwd(dir: &TempDir) -> PathUri {
     PathUri::from_path(dir.path()).expect("temporary directory is absolute")
+}
+
+struct ComparisonFileSystem {
+    case_insensitive: bool,
+}
+
+impl ExecutorFileSystem for ComparisonFileSystem {
+    fn path_comparison_key(&self, path: &PathUri) -> String {
+        let key = path.to_string();
+        if self.case_insensitive {
+            key.to_lowercase()
+        } else {
+            key
+        }
+    }
+
+    fn canonicalize<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, PathUri> {
+        LOCAL_FS.canonicalize(path, sandbox)
+    }
+
+    fn read_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
+        LOCAL_FS.read_file(path, sandbox)
+    }
+
+    fn read_file_stream<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
+        LOCAL_FS.read_file_stream(path, sandbox)
+    }
+
+    fn write_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        contents: Vec<u8>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        LOCAL_FS.write_file(path, contents, sandbox)
+    }
+
+    fn create_directory<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: CreateDirectoryOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        LOCAL_FS.create_directory(path, options, sandbox)
+    }
+
+    fn get_metadata<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
+        LOCAL_FS.get_metadata(path, sandbox)
+    }
+
+    fn read_directory<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
+        LOCAL_FS.read_directory(path, sandbox)
+    }
+
+    fn remove<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: RemoveOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        LOCAL_FS.remove(path, options, sandbox)
+    }
+
+    fn copy<'a>(
+        &'a self,
+        source: &'a PathUri,
+        destination: &'a PathUri,
+        options: CopyOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        LOCAL_FS.copy(source, destination, options, sandbox)
+    }
 }
 
 #[test]
@@ -47,6 +148,37 @@ async fn rejects_move_destination_used_by_another_hunk() {
     let error = validate_hunk_paths(&parsed.hunks, &cwd(&dir), LOCAL_FS.as_ref(), None)
         .await
         .expect_err("destination collision must fail");
+    assert!(error.to_string().contains("multiple operations target"));
+}
+
+#[tokio::test]
+async fn duplicate_detection_uses_executor_native_path_semantics() {
+    let dir = TempDir::new().expect("create temp directory");
+    let parsed = parse_patch(
+        "*** Begin Patch\n*** Add File: Case.txt\n+first\n*** Add File: case.txt\n+second\n*** End Patch",
+    )
+    .expect("valid patch");
+
+    validate_hunk_paths(
+        &parsed.hunks,
+        &cwd(&dir),
+        &ComparisonFileSystem {
+            case_insensitive: false,
+        },
+        None,
+    )
+    .await
+    .expect("a case-sensitive executor treats the paths as distinct");
+    let error = validate_hunk_paths(
+        &parsed.hunks,
+        &cwd(&dir),
+        &ComparisonFileSystem {
+            case_insensitive: true,
+        },
+        None,
+    )
+    .await
+    .expect_err("a case-insensitive executor must reject the alias");
     assert!(error.to_string().contains("multiple operations target"));
 }
 

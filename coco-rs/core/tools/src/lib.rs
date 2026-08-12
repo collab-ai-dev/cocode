@@ -19,16 +19,29 @@ pub use tools::*;
 /// MCPTool instances are registered separately via `register_mcp_tools()`
 /// after MCP servers connect and report their tools.
 pub fn register_all_tools(registry: &coco_tool_runtime::ToolRegistry) {
-    register_all_tools_with_file_system(registry, coco_exec_server::LOCAL_FS.clone(), None);
+    register_all_tools_with_apply_patch(registry, ApplyPatchTool::default());
 }
 
-/// Register built-ins against the selected executor filesystem. Remote
-/// sessions must use this entry point so apply-patch prepares, authorizes, and
-/// commits on the same environment as process execution.
-pub fn register_all_tools_with_file_system(
+/// Register built-ins against one selected execution environment.
+///
+/// Environment selection happens once at session bootstrap. The tool is
+/// unavailable when that environment does not advertise the strong checked
+/// mutation capability; callers must also set `ToolUseContext.execution_cwd`
+/// for a foreign target-native cwd.
+pub fn register_all_tools_with_environment(
     registry: &coco_tool_runtime::ToolRegistry,
-    file_system: std::sync::Arc<dyn coco_exec_server::ExecutorFileSystem>,
-    sandbox: Option<coco_exec_server::FileSystemSandboxContext>,
+    environment: &coco_exec_server::Environment,
+) {
+    let apply_patch = environment
+        .get_checked_filesystem()
+        .map(|fs| ApplyPatchTool::new(fs, None))
+        .unwrap_or_else(ApplyPatchTool::unavailable);
+    register_all_tools_with_apply_patch(registry, apply_patch);
+}
+
+fn register_all_tools_with_apply_patch(
+    registry: &coco_tool_runtime::ToolRegistry,
+    apply_patch: ApplyPatchTool,
 ) {
     use std::sync::Arc;
 
@@ -42,7 +55,7 @@ pub fn register_all_tools_with_file_system(
     registry.register(Arc::new(GlobTool));
     registry.register(Arc::new(GrepTool));
     registry.register(Arc::new(NotebookEditTool));
-    registry.register(Arc::new(ApplyPatchTool::new(file_system, sandbox)));
+    registry.register(Arc::new(apply_patch));
 
     // Web (2)
     registry.register(Arc::new(WebFetchTool));

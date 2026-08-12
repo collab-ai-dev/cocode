@@ -890,6 +890,15 @@ class AgentStreamEventToolUseQueued(BaseModel):
     name: str
 
 
+class AgentStreamEventToolUseInputUpdated(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal["tool_use_input_updated"] = Field(
+        default="tool_use_input_updated", alias="type"
+    )
+    call_id: str
+    file_changes: list[FileChangeInfo]
+
+
 class AgentStreamEventToolUseStarted(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal["tool_use_started"] = Field(default="tool_use_started", alias="type")
@@ -938,6 +947,7 @@ AgentStreamEvent = Annotated[
         AgentStreamEventTextDelta,
         AgentStreamEventThinkingDelta,
         AgentStreamEventToolUseQueued,
+        AgentStreamEventToolUseInputUpdated,
         AgentStreamEventToolUseStarted,
         AgentStreamEventToolUseCompleted,
         AgentStreamEventMcpToolCallBegin,

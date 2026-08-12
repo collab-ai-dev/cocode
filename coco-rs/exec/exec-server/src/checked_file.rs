@@ -129,10 +129,18 @@ mod platform {
         .union(OFlags::DIRECTORY)
         .union(OFlags::NOFOLLOW)
         .union(OFlags::CLOEXEC);
-    const FILE_READ_FLAGS: OFlags = OFlags::RDONLY
+    pub(super) const FILE_READ_FLAGS: OFlags = OFlags::RDONLY
         .union(OFlags::NOFOLLOW)
         .union(OFlags::CLOEXEC);
     const FILE_WRITE_FLAGS: OFlags = OFlags::RDWR.union(OFlags::NOFOLLOW).union(OFlags::CLOEXEC);
+
+    #[cfg(target_os = "linux")]
+    pub(super) struct StagedFile {
+        pub(super) file: File,
+        /// Present only when the filesystem does not support `O_TMPFILE`.
+        /// The name remains private until an atomic rename publishes it.
+        pub(super) name: Option<OsString>,
+    }
 
     pub(super) fn snapshot(path: &Path) -> io::Result<FileSnapshot> {
         let (parent, name) = match open_parent(path) {
@@ -192,6 +200,7 @@ mod platform {
                 let actual = match snapshot_open_file(&mut file) {
                     Ok(actual) => actual,
                     Err(error) => {
+                        let _ = remove_named_stage(&transaction, &staged);
                         let _ =
                             remove_private_transaction(&parent, &transaction_name, &transaction);
                         return Err(error);
@@ -200,6 +209,7 @@ mod platform {
                 if let Err(error) = ensure_expected(&actual, expected)
                     .and_then(|()| ensure_directory_entry_matches(&parent, &name, &file))
                 {
+                    let _ = remove_named_stage(&transaction, &staged);
                     let _ = remove_private_transaction(&parent, &transaction_name, &transaction);
                     return Err(error);
                 }
@@ -226,25 +236,66 @@ mod platform {
     }
 
     #[cfg(target_os = "linux")]
-    fn stage_private_file(
+    pub(super) fn stage_private_file(
         parent: &OwnedFd,
         contents: &[u8],
         preserve_metadata: Option<&File>,
-    ) -> io::Result<File> {
+    ) -> io::Result<StagedFile> {
         let flags = FILE_WRITE_FLAGS.union(OFlags::TMPFILE);
-        let descriptor = rustix::fs::openat(parent, ".", flags, Mode::from_raw_mode(0o666))
-            .map_err(io::Error::from)?;
-        let mut file = File::from(descriptor);
-        file.write_all(contents)?;
-        if let Some(original) = preserve_metadata {
-            copy_security_metadata(original, &file)?;
+        let (descriptor, name) =
+            match rustix::fs::openat(parent, ".", flags, Mode::from_raw_mode(0o666)) {
+                Ok(descriptor) => (descriptor, None),
+                Err(
+                    rustix::io::Errno::OPNOTSUPP
+                    | rustix::io::Errno::ISDIR
+                    | rustix::io::Errno::NOENT,
+                ) => create_named_stage(parent)?,
+                Err(error) => return Err(error.into()),
+            };
+        let mut staged = StagedFile {
+            file: File::from(descriptor),
+            name,
+        };
+        let populate = (|| {
+            staged.file.write_all(contents)?;
+            if let Some(original) = preserve_metadata {
+                copy_security_metadata(original, &staged.file)?;
+            }
+            staged.file.sync_all()
+        })();
+        if let Err(error) = populate {
+            let _ = remove_named_stage(parent, &staged);
+            return Err(error);
         }
-        file.sync_all()?;
-        Ok(file)
+        Ok(staged)
     }
 
     #[cfg(target_os = "linux")]
-    fn copy_security_metadata(original: &File, staged: &File) -> io::Result<()> {
+    pub(super) fn create_named_stage(parent: &OwnedFd) -> io::Result<(OwnedFd, Option<OsString>)> {
+        let name = OsString::from(format!(
+            ".coco-checked-stage-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let descriptor = rustix::fs::openat(
+            parent,
+            &name,
+            FILE_WRITE_FLAGS.union(OFlags::CREATE).union(OFlags::EXCL),
+            Mode::from_raw_mode(0o666),
+        )
+        .map_err(io::Error::from)?;
+        Ok((descriptor, Some(name)))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn remove_named_stage(parent: &OwnedFd, staged: &StagedFile) -> io::Result<()> {
+        let Some(name) = &staged.name else {
+            return Ok(());
+        };
+        rustix::fs::unlinkat(parent, name, AtFlags::empty()).map_err(io::Error::from)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn copy_security_metadata(original: &File, staged: &File) -> io::Result<()> {
         use std::os::unix::ffi::OsStrExt as _;
 
         let metadata = original.metadata()?;
@@ -348,29 +399,50 @@ mod platform {
     }
 
     #[cfg(target_os = "linux")]
-    fn install_missing(parent: &OwnedFd, name: &OsString, staged: &File) -> io::Result<()> {
-        link_staged(parent, name, staged).map_err(|error| {
+    pub(super) fn install_missing(
+        parent: &OwnedFd,
+        name: &OsString,
+        staged: &StagedFile,
+    ) -> io::Result<()> {
+        let publish = if let Some(stage_name) = &staged.name {
+            rustix::fs::renameat_with(
+                parent,
+                stage_name,
+                parent,
+                name,
+                rustix::fs::RenameFlags::NOREPLACE,
+            )
+        } else {
+            link_staged(parent, name, &staged.file)
+        };
+        publish.map_err(|error| {
+            let _ = remove_named_stage(parent, staged);
             if matches!(error, rustix::io::Errno::EXIST | rustix::io::Errno::LOOP) {
                 file_mutation_conflict()
             } else {
                 error.into()
             }
         })?;
-        ensure_directory_entry_matches(parent, name, staged)
+        ensure_directory_entry_matches(parent, name, &staged.file)
     }
 
     #[cfg(target_os = "linux")]
-    fn replace_existing(
+    pub(super) fn replace_existing(
         parent: &OwnedFd,
         name: &OsString,
         original: &File,
         transaction: &OwnedFd,
         transaction_name: &OsString,
-        staged: &File,
+        staged: &StagedFile,
         expected: &ExpectedFileState,
     ) -> io::Result<()> {
-        let entry = OsString::from("displaced");
-        link_staged(transaction, &entry, staged).map_err(io::Error::from)?;
+        let entry = staged
+            .name
+            .clone()
+            .unwrap_or_else(|| OsString::from("displaced"));
+        if staged.name.is_none() {
+            link_staged(transaction, &entry, &staged.file).map_err(io::Error::from)?;
+        }
         if let Err(error) = rustix::fs::renameat_with(
             transaction,
             &entry,
@@ -482,7 +554,7 @@ mod platform {
     }
 
     #[cfg(target_os = "linux")]
-    fn capture_existing(
+    pub(super) fn capture_existing(
         parent: &OwnedFd,
         name: &OsString,
         original: &File,
@@ -528,7 +600,7 @@ mod platform {
     }
 
     #[cfg(target_os = "linux")]
-    fn create_private_transaction(parent: &OwnedFd) -> io::Result<(OwnedFd, OsString)> {
+    pub(super) fn create_private_transaction(parent: &OwnedFd) -> io::Result<(OwnedFd, OsString)> {
         let name = OsString::from(format!(
             ".coco-checked-recovery-{}",
             uuid::Uuid::new_v4().simple()
@@ -623,7 +695,7 @@ mod platform {
         target.extend_from_slice(value);
     }
 
-    fn open_parent(path: &Path) -> io::Result<(OwnedFd, OsString)> {
+    pub(super) fn open_parent(path: &Path) -> io::Result<(OwnedFd, OsString)> {
         if !path.is_absolute() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -682,122 +754,11 @@ mod platform {
             Err(file_mutation_conflict())
         }
     }
-
-    #[cfg(all(test, target_os = "linux"))]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn replacement_race_preserves_the_displaced_entry_without_rollback() -> io::Result<()> {
-            let temp_dir = tempfile::TempDir::new()?;
-            let path = temp_dir.path().join("target.txt");
-            std::fs::write(&path, "expected")?;
-            let expected = super::snapshot(&path)?.expected;
-            let (parent, name) = open_parent(&path)?;
-            let original = File::from(
-                rustix::fs::openat(&parent, &name, FILE_READ_FLAGS, Mode::empty())
-                    .map_err(io::Error::from)?,
-            );
-            let (transaction, transaction_name) = create_private_transaction(&parent)?;
-            let staged = stage_private_file(&transaction, b"patched", Some(&original))?;
-
-            std::fs::remove_file(&path)?;
-            std::fs::write(&path, "concurrent")?;
-            let error = replace_existing(
-                &parent,
-                &name,
-                &original,
-                &transaction,
-                &transaction_name,
-                &staged,
-                &expected,
-            )
-            .expect_err("the atomic exchange must detect the displaced racer");
-
-            assert!(error.to_string().contains("preserved"));
-            assert_eq!(std::fs::read_to_string(&path)?, "patched");
-            assert_eq!(
-                std::fs::read_to_string(temp_dir.path().join(transaction_name).join("displaced"))?,
-                "concurrent"
-            );
-            Ok(())
-        }
-
-        #[test]
-        fn replacement_race_detects_security_metadata_only_changes() -> io::Result<()> {
-            use std::os::unix::fs::PermissionsExt as _;
-
-            let temp_dir = tempfile::TempDir::new()?;
-            let path = temp_dir.path().join("target.txt");
-            std::fs::write(&path, "expected")?;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))?;
-            let expected = super::snapshot(&path)?.expected;
-            let (parent, name) = open_parent(&path)?;
-            let original = File::from(
-                rustix::fs::openat(&parent, &name, FILE_READ_FLAGS, Mode::empty())
-                    .map_err(io::Error::from)?,
-            );
-            let (transaction, transaction_name) = create_private_transaction(&parent)?;
-            let staged = stage_private_file(&transaction, b"patched", Some(&original))?;
-
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-            let error = replace_existing(
-                &parent,
-                &name,
-                &original,
-                &transaction,
-                &transaction_name,
-                &staged,
-                &expected,
-            )
-            .expect_err("the captured security metadata must still match the snapshot");
-
-            assert!(error.to_string().contains("preserved"));
-            assert_eq!(std::fs::read_to_string(&path)?, "patched");
-            let recovered = temp_dir.path().join(transaction_name).join("displaced");
-            assert_eq!(
-                std::fs::metadata(recovered)?.permissions().mode() & 0o7777,
-                0o600
-            );
-            Ok(())
-        }
-
-        #[test]
-        fn removal_race_captures_the_new_entry_instead_of_unlinking_it() -> io::Result<()> {
-            let temp_dir = tempfile::TempDir::new()?;
-            let path = temp_dir.path().join("target.txt");
-            std::fs::write(&path, "expected")?;
-            let expected = super::snapshot(&path)?.expected;
-            let (parent, name) = open_parent(&path)?;
-            let original = File::from(
-                rustix::fs::openat(&parent, &name, FILE_READ_FLAGS, Mode::empty())
-                    .map_err(io::Error::from)?,
-            );
-
-            std::fs::remove_file(&path)?;
-            std::fs::write(&path, "concurrent")?;
-            let error = capture_existing(&parent, &name, &original, &expected)
-                .expect_err("the atomic capture must detect the displaced racer");
-
-            assert!(error.to_string().contains("preserved"));
-            assert!(!path.exists());
-            let recovery = std::fs::read_dir(temp_dir.path())?
-                .filter_map(Result::ok)
-                .find(|entry| {
-                    entry
-                        .file_name()
-                        .to_string_lossy()
-                        .starts_with(".coco-checked-recovery-")
-                })
-                .expect("race must leave a recovery directory");
-            assert_eq!(
-                std::fs::read_to_string(recovery.path().join("displaced"))?,
-                "concurrent"
-            );
-            Ok(())
-        }
-    }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "checked_file.test.rs"]
+mod tests;
 
 #[cfg(not(unix))]
 mod platform {
