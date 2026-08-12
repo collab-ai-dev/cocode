@@ -168,7 +168,7 @@ async fn stream_to_temp(
         }
     }
 
-    let mut builder = reqwest::Client::builder()
+    let mut builder = coco_utils_extra_ca::client_builder()
         .user_agent(&req.user_agent)
         .connect_timeout(CONNECT_TIMEOUT)
         .read_timeout(READ_TIMEOUT);

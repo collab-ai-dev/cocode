@@ -32,6 +32,7 @@ coco-apply-patch.workspace = true
 coco-exec-server.workspace = true
 coco-utils-absolute-path.workspace = true
 coco-utils-common.workspace = true
+coco-utils-extra-ca.workspace = true
 coco-git.workspace = true
 coco-plugins.workspace = true
 coco-utils-string.workspace = true

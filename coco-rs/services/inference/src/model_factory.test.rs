@@ -626,6 +626,14 @@ fn build_xai_oauth_logged_in_builds_responses_model() {
     assert_eq!(model.model_id(), "grok-code-fast-1");
 }
 
+#[test]
+fn disabled_timeout_still_injects_the_shared_http_client() {
+    assert!(
+        build_http_client(0).is_some(),
+        "zero disables the timeout, not shared HTTP policy"
+    );
+}
+
 fn gemini_code_assist_provider() -> ProviderConfig {
     let partial = PartialProviderConfig {
         api: Some(ProviderApi::Gemini),

@@ -46,7 +46,7 @@ pub struct OllamaLlmProvider {
 impl OllamaLlmProvider {
     /// Create a new Ollama provider from config.
     pub fn new(config: LlmConfig) -> Self {
-        let client = reqwest::Client::builder()
+        let client = coco_utils_extra_ca::client_builder()
             .timeout(std::time::Duration::from_secs(config.timeout_secs as u64))
             .build()
             .unwrap_or_default();

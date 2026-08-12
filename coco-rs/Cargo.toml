@@ -24,6 +24,7 @@ members = [
     "utils/crash-handler",
     "utils/cursor",
     "utils/download",
+    "utils/extra-ca",
     "utils/file-encoding",
     "utils/file-ignore",
     "utils/file-search",
@@ -180,6 +181,7 @@ coco-utils-cargo-bin = { path = "utils/cargo-bin" }
 coco-utils-common = { path = "utils/common" }
 coco-utils-crash-handler = { path = "utils/crash-handler" }
 coco-utils-download = { path = "utils/download" }
+coco-utils-extra-ca = { path = "utils/extra-ca" }
 coco-utils-image = { path = "utils/image" }
 coco-utils-jemalloc = { path = "utils/jemalloc" }
 coco-utils-json-repair = { path = "utils/json-repair" }

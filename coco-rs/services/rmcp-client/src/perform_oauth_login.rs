@@ -4,7 +4,6 @@ use std::string::String;
 use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::ClientBuilder;
 use rmcp::transport::auth::OAuthState;
 use tiny_http::Response;
 use tiny_http::Server;
@@ -24,6 +23,7 @@ use crate::save_oauth_tokens;
 use crate::utils::apply_default_headers;
 use crate::utils::apply_oauth_retry_policy;
 use crate::utils::build_default_headers;
+use crate::utils::client_builder;
 use coco_async_utils::clock::SystemClock;
 
 struct OauthHeaders {
@@ -319,7 +319,7 @@ impl OauthLoginFlow {
             env_http_headers,
         } = headers;
         let default_headers = build_default_headers(http_headers, env_http_headers)?;
-        let builder = apply_oauth_retry_policy(ClientBuilder::new(), server_url);
+        let builder = apply_oauth_retry_policy(client_builder(), server_url);
         let http_client = apply_default_headers(builder, &default_headers).build()?;
 
         let mut oauth_state = OAuthState::new(server_url, Some(http_client)).await?;

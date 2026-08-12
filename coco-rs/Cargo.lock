@@ -1197,6 +1197,7 @@ dependencies = [
  "coco-types",
  "coco-utils-cargo-bin",
  "coco-utils-common",
+ "coco-utils-extra-ca",
  "coco-utils-pty",
  "coco-utils-string",
  "coco-workflow",
@@ -1650,6 +1651,7 @@ dependencies = [
  "bytes",
  "coco-config",
  "coco-utils-absolute-path",
+ "coco-utils-extra-ca",
  "coco-utils-path-uri",
  "coco-utils-pty",
  "coco-utils-rustls-provider",
@@ -1783,6 +1785,7 @@ dependencies = [
  "coco-system-reminder",
  "coco-types",
  "coco-utils-common",
+ "coco-utils-extra-ca",
  "coco-utils-pty",
  "futures",
  "globset",
@@ -1876,6 +1879,7 @@ dependencies = [
  "coco-model-card",
  "coco-otel",
  "coco-types",
+ "coco-utils-extra-ca",
  "coco-utils-json-repair",
  "futures",
  "pretty_assertions",
@@ -2004,6 +2008,7 @@ dependencies = [
  "coco-rmcp-client",
  "coco-types",
  "coco-utils-common",
+ "coco-utils-extra-ca",
  "futures",
  "notify",
  "pretty_assertions",
@@ -2065,6 +2070,7 @@ dependencies = [
  "coco-types",
  "coco-utils-absolute-path",
  "coco-utils-common",
+ "coco-utils-extra-ca",
  "coco-utils-json-repair",
  "coco-utils-string",
  "filetime",
@@ -2117,6 +2123,7 @@ dependencies = [
  "coco-error",
  "coco-utils-absolute-path",
  "coco-utils-common",
+ "coco-utils-extra-ca",
  "coco-utils-string",
  "eventsource-stream",
  "http",
@@ -2202,6 +2209,7 @@ dependencies = [
  "coco-skills",
  "coco-types",
  "coco-utils-common",
+ "coco-utils-extra-ca",
  "hex",
  "notify",
  "pretty_assertions",
@@ -2237,6 +2245,7 @@ dependencies = [
  "coco-inference",
  "coco-keyring-store",
  "coco-types",
+ "coco-utils-extra-ca",
  "fs2",
  "pretty_assertions",
  "rand 0.9.4",
@@ -2324,6 +2333,7 @@ dependencies = [
  "coco-file-ignore",
  "coco-utils-cache",
  "coco-utils-common",
+ "coco-utils-extra-ca",
  "crossterm",
  "derive_more",
  "dirs 6.0.0",
@@ -2387,12 +2397,14 @@ dependencies = [
  "coco-keyring-store",
  "coco-mcp-types",
  "coco-utils-cargo-bin",
+ "coco-utils-extra-ca",
  "futures",
  "keyring",
  "oauth2",
  "pretty_assertions",
  "reqwest 0.13.4",
  "rmcp",
+ "rustls",
  "schemars",
  "serde",
  "serde_json",
@@ -2869,6 +2881,7 @@ dependencies = [
  "coco-types",
  "coco-utils-absolute-path",
  "coco-utils-common",
+ "coco-utils-extra-ca",
  "coco-utils-image",
  "coco-utils-string",
  "coco-workflow",
@@ -3102,6 +3115,7 @@ dependencies = [
 name = "coco-utils-download"
 version = "0.1.1"
 dependencies = [
+ "coco-utils-extra-ca",
  "futures",
  "hex",
  "pretty_assertions",
@@ -3113,6 +3127,17 @@ dependencies = [
  "tokio-util",
  "tracing",
  "wiremock",
+]
+
+[[package]]
+name = "coco-utils-extra-ca"
+version = "0.1.1"
+dependencies = [
+ "reqwest 0.12.28",
+ "rustls",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3236,6 +3261,7 @@ version = "0.1.1"
 dependencies = [
  "chrono",
  "coco-utils-common",
+ "coco-utils-extra-ca",
  "pretty_assertions",
  "reqwest 0.12.28",
  "serde",

@@ -15,6 +15,7 @@ coco-rmcp-client.workspace = true
 coco-mcp-types.workspace = true
 coco-file-watch.workspace = true
 coco-utils-common.workspace = true
+coco-utils-extra-ca.workspace = true
 
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

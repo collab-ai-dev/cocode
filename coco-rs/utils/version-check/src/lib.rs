@@ -223,7 +223,7 @@ struct VersionManifest {
 }
 
 async fn fetch_latest_version(url: &str) -> Result<String, VersionCheckError> {
-    let client = reqwest::Client::builder()
+    let client = coco_utils_extra_ca::client_builder()
         .timeout(REQUEST_TIMEOUT)
         .user_agent(concat!("coco/", env!("CARGO_PKG_VERSION")))
         .build()?;

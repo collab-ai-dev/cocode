@@ -141,7 +141,7 @@ impl AuthService {
         let service = Arc::new(Self {
             backend,
             refresh_lock_dir,
-            http: reqwest::Client::new(),
+            http: coco_utils_extra_ca::client(),
             providers: Mutex::new(HashMap::new()),
             me: OnceLock::new(),
         });

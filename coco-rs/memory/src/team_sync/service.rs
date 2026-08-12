@@ -88,7 +88,7 @@ pub async fn pull(
     bearer_token: &str,
     if_none_match: Option<&str>,
 ) -> TeamMemorySyncFetchResult {
-    let client = match reqwest::Client::builder()
+    let client = match coco_utils_extra_ca::client_builder()
         .timeout(Duration::from_millis(SYNC_TIMEOUT_MS))
         .build()
     {
@@ -279,7 +279,7 @@ pub async fn push(
         local_hashes.insert(entry.path.clone(), compute_content_hash(&entry.content));
     }
 
-    let client = match reqwest::Client::builder()
+    let client = match coco_utils_extra_ca::client_builder()
         .timeout(Duration::from_millis(SYNC_TIMEOUT_MS))
         .build()
     {
@@ -557,7 +557,7 @@ pub async fn fetch_team_memory_hashes(
     repo_slug: &str,
     bearer_token: &str,
 ) -> Result<TeamMemoryHashesResult, String> {
-    let client = reqwest::Client::builder()
+    let client = coco_utils_extra_ca::client_builder()
         .timeout(Duration::from_millis(SYNC_TIMEOUT_MS))
         .build()
         .map_err(|e| format!("http client: {e}"))?;

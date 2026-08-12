@@ -52,6 +52,24 @@ So on a default install you have both `~/.cocode/` (a directory) and `~/.cocode.
 
 You rarely need to edit the global config by hand. Note that it is where `auth_credential_store` lives, deliberately: it is a user-and-machine decision, and keeping it out of `settings.json` means no project's settings file can quietly downgrade your credential storage.
 
+## Enterprise TLS roots
+
+Set `COCO_EXTRA_CA_BUNDLE` to a PEM bundle when cocode must trust an
+enterprise proxy or private certificate authority in addition to its built-in
+web roots:
+
+```bash
+export COCO_EXTRA_CA_BUNDLE=/etc/company/cocode-ca.pem
+coco
+```
+
+The bundle is additive; it never replaces the built-in roots. Cocode reads it
+once per process with a 1 MiB cap and validates each certificate before any
+HTTP client receives it. An unreadable, oversized, malformed, or empty bundle
+is ignored with a warning, so a bad optional override does not disable all
+network features. Restart cocode after changing the file or variable. Spawned
+teammates inherit the setting.
+
 ## Project configuration
 
 Per-project configuration lives in a `.cocode/` directory at your project root — not `.claude/`. Running `coco init` creates it with an empty `settings.json`.

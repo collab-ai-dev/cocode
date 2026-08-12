@@ -129,7 +129,7 @@ const DEFAULT_RESET_TIMEOUT_SECS: i32 = 60;
 impl RemoteReranker {
     /// Create a new remote reranker from config.
     pub fn new(config: &RemoteRerankerConfig) -> Result<Self> {
-        let client = reqwest::Client::builder()
+        let client = coco_utils_extra_ca::client_builder()
             .timeout(Duration::from_secs(config.timeout_secs as u64))
             .build()
             .map_err(|e| RetrievalErr::RerankerError {

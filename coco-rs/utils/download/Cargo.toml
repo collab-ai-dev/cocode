@@ -6,6 +6,7 @@ license.workspace = true
 description = "Streaming file downloader with progress, SHA-256 verification, and atomic replace"
 
 [dependencies]
+coco-utils-extra-ca = { workspace = true }
 futures = { workspace = true, features = ["std"] }
 hex = { workspace = true }
 reqwest = { workspace = true, features = ["stream"] }

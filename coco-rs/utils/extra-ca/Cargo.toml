@@ -1,0 +1,21 @@
+[package]
+name = "coco-utils-extra-ca"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Bounded, process-wide extra TLS root loading for coco HTTP clients"
+
+[dependencies]
+reqwest = { workspace = true, features = ["blocking"] }
+# Certificate parsing does not need a crypto provider. Keep this leaf adapter
+# independent from the workspace rustls provider selection.
+rustls = { version = "0.23", default-features = false, features = ["std"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+[lints]
+workspace = true

@@ -340,8 +340,10 @@ Reusable primitives. **Check here first** before implementing any basic utility.
 | `coco-cron` | Cron-subset parsing + scheduling in local timezone (missed-fire detection) |
 | `coco-paths` | Canonical project-directory slug layout (Claude Code `sanitizePath` parity — never reimplement slug logic) |
 | `common` | Shared cross-crate utility functions (incl. `COCO_CONFIG_DIR_NAME` config home, default `~/.cocode`) |
+| `crash-handler` | Async-signal-safe terminal restoration on fatal process signals |
 | `cursor` | Text cursor with kill ring (Ctrl+K/Y), word boundaries, UTF-8 safe |
 | `download` | Streaming download-to-disk primitive (replaces buffered-in-memory fetches) |
+| `extra-ca` | Bounded opt-in enterprise TLS roots shared by coco-owned HTTP clients |
 | `file-encoding` | File encoding and line-ending detection/preservation |
 | `file-ignore` | .gitignore-aware file filtering (unified ignore service) |
 | `file-search` | Fuzzy file search with nucleo and gitignore support |
@@ -365,8 +367,16 @@ Reusable primitives. **Check here first** before implementing any basic utility.
 | `stream-parser` | Stream parsing (text, citation, inline hidden tag, proposed plan, UTF-8) |
 | `string` | UTF-8-safe truncation / byte-boundary slicing — see [String Slicing](#string-slicing--utf-8-safety); never raw `&s[..n]` |
 | `symbol-search` | Symbol search for code navigation |
+| `version-check` | Best-effort release check with install-method-aware upgrade guidance |
 
-(Workspace members outside these tables: test harnesses `tests/harness`, `tests/cassette`, `tests/live`, and the docs-gen build tool `xtask`.)
+### Test and Build Support
+
+| Crate | Purpose |
+|-------|---------|
+| `tests/harness` | Shared hermetic integration-test harness |
+| `tests/cassette` | Recorded provider request/response fixtures and replay tests |
+| `tests/live` | Explicitly gated live-provider integration tests |
+| `xtask` | Documentation/schema generation and repository maintenance tasks |
 
 ## Error Handling
 

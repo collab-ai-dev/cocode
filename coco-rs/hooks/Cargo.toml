@@ -22,6 +22,7 @@ coco-utils-pty.workspace = true
 coco-messages.workspace = true
 coco-shell-discovery.workspace = true
 coco-system-reminder.workspace = true
+coco-utils-extra-ca.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 schemars = { workspace = true, optional = true }

@@ -381,7 +381,7 @@ async fn http_get(url: &str, headers: Option<&HashMap<String, String>>) -> Resul
         Err(e) => tracing::debug!("SSRF pre-flight DNS failed for {url}: {e}"),
     }
 
-    let client = reqwest::Client::builder()
+    let client = coco_utils_extra_ca::client_builder()
         .timeout(URL_TIMEOUT)
         .user_agent(user_agent())
         .redirect(reqwest::redirect::Policy::none())

@@ -42,7 +42,7 @@ pub fn spawn_if_enabled(runtime_config: &RuntimeConfig) {
 }
 
 async fn fetch_openrouter_models() -> Result<String> {
-    let mut response = reqwest::Client::builder()
+    let mut response = coco_utils_extra_ca::client_builder()
         .timeout(FETCH_TIMEOUT)
         .user_agent(concat!("coco/", env!("CARGO_PKG_VERSION")))
         .build()?

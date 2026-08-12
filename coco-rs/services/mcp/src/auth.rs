@@ -273,7 +273,7 @@ async fn do_token_refresh(
     refresh_token: &str,
     config: &OAuthConfig,
 ) -> Result<OAuthTokens, String> {
-    let client = reqwest::Client::new();
+    let client = coco_utils_extra_ca::client();
     let mut params = vec![
         ("grant_type", "refresh_token"),
         ("refresh_token", refresh_token),
