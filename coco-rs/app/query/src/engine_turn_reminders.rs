@@ -665,21 +665,12 @@ impl QueryEngine {
                 .snapshot_for_reminder(self.config.agent_id_str())
                 .await,
             task_statuses: materialized.task_statuses,
-            // SkillsSource wins when present; else fall back to
-            // SessionBootstrap names-only listing.
+            // Skill listings must come from the session-owned, stateful
+            // SkillsSource. A stateless SessionBootstrap fallback repeatedly
+            // emitted the same truncated prefix and permanently hid later
+            // skills once the context bound was reached.
             skill_listing: if reminder_skill_tool_loaded {
-                materialized.skill_listing.or_else(|| {
-                    self.session_bootstrap
-                        .as_ref()
-                        .filter(|b| !b.skills.is_empty())
-                        .map(|b| {
-                            b.skills
-                                .iter()
-                                .map(|s| format!("- {s}"))
-                                .collect::<Vec<_>>()
-                                .join("\n")
-                        })
-                })
+                materialized.skill_listing
             } else {
                 None
             },

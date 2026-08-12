@@ -144,7 +144,7 @@ async fn native_discovery_direct_call_resolves_without_client_promotion() {
 /// round-trip.
 #[tokio::test]
 async fn test_prepare_committed_freeform_raw_string_threads_coerced_input() {
-    let tools = registry_with(Arc::new(coco_tools::tools::ApplyPatchTool));
+    let tools = registry_with(Arc::new(coco_tools::tools::ApplyPatchTool::default()));
     let mut ctx = ToolUseContext::test_default();
     ctx.tool_overrides =
         Arc::new(ToolOverrides::default().with_extra(ToolId::Builtin(ToolName::ApplyPatch)));

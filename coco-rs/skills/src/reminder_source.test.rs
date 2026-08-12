@@ -69,3 +69,55 @@ async fn invoked_is_empty_by_default() {
     let mgr = SkillManager::new();
     assert!(mgr.invoked(None).await.is_empty());
 }
+
+#[tokio::test]
+async fn listing_budget_defers_instead_of_losing_unannounced_skills() {
+    let mgr = SkillManager::new();
+    let expected = (0..40)
+        .map(|index| format!("skill-{index:02}"))
+        .collect::<std::collections::BTreeSet<_>>();
+    for name in &expected {
+        mgr.register(skill(name, &"description ".repeat(40)));
+    }
+
+    let mut observed = std::collections::BTreeSet::new();
+    loop {
+        let Some(body) = mgr
+            .listing(None, &coco_config::SkillOverrideTiers::default())
+            .await
+        else {
+            break;
+        };
+        assert!(body.len() <= MAX_LISTING_BODY_BYTES);
+        for line in body.lines() {
+            let name = line
+                .strip_prefix("- ")
+                .and_then(|line| line.split(':').next())
+                .expect("listing row name");
+            assert!(observed.insert(name.to_string()), "duplicate row {name}");
+        }
+    }
+
+    assert_eq!(observed, expected);
+}
+
+#[tokio::test]
+async fn listing_marks_an_unusable_oversized_name_instead_of_deferring_forever() {
+    let mgr = SkillManager::new();
+    mgr.register(skill(
+        &"x".repeat(MAX_LISTING_BODY_BYTES + 1),
+        "description",
+    ));
+
+    let first = mgr
+        .listing(None, &coco_config::SkillOverrideTiers::default())
+        .await
+        .expect("oversized skill must produce an explicit marker");
+    assert_eq!(first, "- [skill omitted: name exceeds listing budget]");
+    assert!(
+        mgr.listing(None, &coco_config::SkillOverrideTiers::default())
+            .await
+            .is_none(),
+        "the impossible row must not be retried forever"
+    );
+}

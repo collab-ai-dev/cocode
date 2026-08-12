@@ -505,6 +505,7 @@ impl QueryEngine {
                                         provider_tool_name: ctx.provider_tool_name,
                                         tool: pending.tool,
                                         parsed_input: pending.input,
+                                        prepared_state: pending.prepared_state,
                                         is_concurrency_safe: pending.is_concurrency_safe,
                                         model_index,
                                         permission_resolution_detail: ctx

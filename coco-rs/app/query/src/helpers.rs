@@ -38,6 +38,20 @@ pub(crate) enum ToolCompletionEventMode {
     Defer,
 }
 
+/// Early lifecycle failures do not pass through the normal result-offload
+/// seam, so they need an equivalent hard model-context bound here.
+pub(crate) const EARLY_TOOL_ERROR_MAX_BYTES: usize = 3_000;
+
+fn bound_early_tool_error(output: &str) -> String {
+    if output.len() <= EARLY_TOOL_ERROR_MAX_BYTES {
+        return output.to_string();
+    }
+    const MARKER: &str = "\n[... tool error truncated ...]";
+    let content_budget = EARLY_TOOL_ERROR_MAX_BYTES.saturating_sub(MARKER.len());
+    let prefix = coco_utils_string::take_bytes_at_char_boundary(output, content_budget);
+    format!("{prefix}{MARKER}")
+}
+
 pub(crate) struct DeferredToolCompletionBuffer {
     next_model_index: usize,
     outcomes: Vec<coco_tool_runtime::UnstampedToolCallOutcome>,
@@ -423,14 +437,15 @@ pub(crate) async fn complete_tool_call_with_error_mode(
     event_mode: ToolCompletionEventMode,
     deferred: Option<&mut DeferredToolCompletionBuffer>,
 ) {
-    let message = create_error_tool_result(tool_call_id, tool_name, tool_id.clone(), output);
+    let output = bound_early_tool_error(output);
+    let message = create_error_tool_result(tool_call_id, tool_name, tool_id.clone(), &output);
     complete_tool_call_with_error_messages_mode(
         event_tx,
         history,
         tool_call_id,
         tool_name,
         tool_id,
-        output,
+        &output,
         error_kind,
         event_mode,
         deferred,

@@ -15,8 +15,10 @@ use crate::CreateDirectoryOptions;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
 use crate::ExecutorFileSystemFuture;
+use crate::ExpectedFileState;
 use crate::FILE_READ_CHUNK_SIZE;
 use crate::FileMetadata;
+use crate::FileSnapshot;
 use crate::FileSystemReadStream;
 use crate::FileSystemResult;
 use crate::FileSystemSandboxContext;
@@ -133,6 +135,49 @@ impl LocalFileSystem {
         file_system.write_file(path, contents, sandbox).await
     }
 
+    async fn snapshot_file(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<FileSnapshot> {
+        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        file_system.snapshot_file(path, sandbox).await
+    }
+
+    async fn write_file_checked(
+        &self,
+        path: &PathUri,
+        contents: Vec<u8>,
+        expected: ExpectedFileState,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<()> {
+        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        file_system
+            .write_file_checked(path, contents, expected, sandbox)
+            .await
+    }
+
+    async fn remove_file_checked(
+        &self,
+        path: &PathUri,
+        expected: ExpectedFileState,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<()> {
+        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        file_system
+            .remove_file_checked(path, expected, sandbox)
+            .await
+    }
+
+    async fn create_directory_checked(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<()> {
+        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        file_system.create_directory_checked(path, sandbox).await
+    }
+
     async fn create_directory(
         &self,
         path: &PathUri,
@@ -217,6 +262,47 @@ impl ExecutorFileSystem for LocalFileSystem {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(LocalFileSystem::write_file(self, path, contents, sandbox))
+    }
+
+    fn snapshot_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSnapshot> {
+        Box::pin(LocalFileSystem::snapshot_file(self, path, sandbox))
+    }
+
+    fn write_file_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        contents: Vec<u8>,
+        expected: ExpectedFileState,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(LocalFileSystem::write_file_checked(
+            self, path, contents, expected, sandbox,
+        ))
+    }
+
+    fn remove_file_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        expected: ExpectedFileState,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(LocalFileSystem::remove_file_checked(
+            self, path, expected, sandbox,
+        ))
+    }
+
+    fn create_directory_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(LocalFileSystem::create_directory_checked(
+            self, path, sandbox,
+        ))
     }
 
     fn create_directory<'a>(
@@ -325,6 +411,51 @@ impl UnsandboxedFileSystem {
             .await
     }
 
+    async fn snapshot_file(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<FileSnapshot> {
+        reject_platform_sandbox_context(sandbox)?;
+        self.file_system.snapshot_file(path, /*sandbox*/ None).await
+    }
+
+    async fn write_file_checked(
+        &self,
+        path: &PathUri,
+        contents: Vec<u8>,
+        expected: ExpectedFileState,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<()> {
+        reject_platform_sandbox_context(sandbox)?;
+        self.file_system
+            .write_file_checked(path, contents, expected, /*sandbox*/ None)
+            .await
+    }
+
+    async fn remove_file_checked(
+        &self,
+        path: &PathUri,
+        expected: ExpectedFileState,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<()> {
+        reject_platform_sandbox_context(sandbox)?;
+        self.file_system
+            .remove_file_checked(path, expected, /*sandbox*/ None)
+            .await
+    }
+
+    async fn create_directory_checked(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<()> {
+        reject_platform_sandbox_context(sandbox)?;
+        self.file_system
+            .create_directory_checked(path, /*sandbox*/ None)
+            .await
+    }
+
     async fn create_directory(
         &self,
         path: &PathUri,
@@ -421,6 +552,47 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(UnsandboxedFileSystem::write_file(
             self, path, contents, sandbox,
+        ))
+    }
+
+    fn snapshot_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSnapshot> {
+        Box::pin(UnsandboxedFileSystem::snapshot_file(self, path, sandbox))
+    }
+
+    fn write_file_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        contents: Vec<u8>,
+        expected: ExpectedFileState,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(UnsandboxedFileSystem::write_file_checked(
+            self, path, contents, expected, sandbox,
+        ))
+    }
+
+    fn remove_file_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        expected: ExpectedFileState,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(UnsandboxedFileSystem::remove_file_checked(
+            self, path, expected, sandbox,
+        ))
+    }
+
+    fn create_directory_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(UnsandboxedFileSystem::create_directory_checked(
+            self, path, sandbox,
         ))
     }
 
@@ -543,6 +715,59 @@ impl DirectFileSystem {
         tokio::fs::write(path.as_path(), contents).await
     }
 
+    async fn snapshot_file(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<FileSnapshot> {
+        reject_sandbox_context(sandbox)?;
+        let path = path.to_abs_path()?.into_path_buf();
+        tokio::task::spawn_blocking(move || crate::checked_file::snapshot(&path))
+            .await
+            .map_err(|error| io::Error::other(format!("filesystem task failed: {error}")))?
+    }
+
+    async fn write_file_checked(
+        &self,
+        path: &PathUri,
+        contents: Vec<u8>,
+        expected: ExpectedFileState,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<()> {
+        reject_sandbox_context(sandbox)?;
+        let path = path.to_abs_path()?.into_path_buf();
+        tokio::task::spawn_blocking(move || {
+            crate::checked_file::write_checked(&path, &contents, &expected)
+        })
+        .await
+        .map_err(|error| io::Error::other(format!("filesystem task failed: {error}")))?
+    }
+
+    async fn remove_file_checked(
+        &self,
+        path: &PathUri,
+        expected: ExpectedFileState,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<()> {
+        reject_sandbox_context(sandbox)?;
+        let path = path.to_abs_path()?.into_path_buf();
+        tokio::task::spawn_blocking(move || crate::checked_file::remove_checked(&path, &expected))
+            .await
+            .map_err(|error| io::Error::other(format!("filesystem task failed: {error}")))?
+    }
+
+    async fn create_directory_checked(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<()> {
+        reject_sandbox_context(sandbox)?;
+        let path = path.to_abs_path()?.into_path_buf();
+        tokio::task::spawn_blocking(move || crate::checked_file::create_directory_checked(&path))
+            .await
+            .map_err(|error| io::Error::other(format!("filesystem task failed: {error}")))?
+    }
+
     async fn create_directory(
         &self,
         path: &PathUri,
@@ -566,12 +791,21 @@ impl DirectFileSystem {
     ) -> FileSystemResult<FileMetadata> {
         reject_sandbox_context(sandbox)?;
         let path = path.to_abs_path()?;
-        let metadata = tokio::fs::metadata(path.as_path()).await?;
         let symlink_metadata = tokio::fs::symlink_metadata(path.as_path()).await?;
+        let is_symlink = symlink_metadata.file_type().is_symlink();
+        let metadata = if is_symlink {
+            match tokio::fs::metadata(path.as_path()).await {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => symlink_metadata,
+                Err(error) => return Err(error),
+            }
+        } else {
+            symlink_metadata
+        };
         Ok(FileMetadata {
             is_directory: metadata.is_dir(),
             is_file: metadata.is_file(),
-            is_symlink: symlink_metadata.file_type().is_symlink(),
+            is_symlink,
             size: metadata.len(),
             created_at_ms: metadata.created().ok().map_or(0, system_time_to_unix_ms),
             modified_at_ms: metadata.modified().ok().map_or(0, system_time_to_unix_ms),
@@ -713,6 +947,47 @@ impl ExecutorFileSystem for DirectFileSystem {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(DirectFileSystem::write_file(self, path, contents, sandbox))
+    }
+
+    fn snapshot_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSnapshot> {
+        Box::pin(DirectFileSystem::snapshot_file(self, path, sandbox))
+    }
+
+    fn write_file_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        contents: Vec<u8>,
+        expected: ExpectedFileState,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(DirectFileSystem::write_file_checked(
+            self, path, contents, expected, sandbox,
+        ))
+    }
+
+    fn remove_file_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        expected: ExpectedFileState,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(DirectFileSystem::remove_file_checked(
+            self, path, expected, sandbox,
+        ))
+    }
+
+    fn create_directory_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(DirectFileSystem::create_directory_checked(
+            self, path, sandbox,
+        ))
     }
 
     fn create_directory<'a>(
@@ -880,60 +1155,4 @@ fn system_time_to_unix_ms(time: SystemTime) -> i64 {
 
 #[cfg(all(test, any(unix, windows)))]
 #[path = "local_file_system.test.rs"]
-mod path_uri_tests;
-
-#[cfg(all(test, unix))]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-    use std::os::unix::fs::symlink;
-
-    #[test]
-    fn resolve_existing_path_handles_symlink_parent_dotdot_escape() -> io::Result<()> {
-        let temp_dir = tempfile::TempDir::new()?;
-        let allowed_dir = temp_dir.path().join("allowed");
-        let outside_dir = temp_dir.path().join("outside");
-        std::fs::create_dir_all(&allowed_dir)?;
-        std::fs::create_dir_all(&outside_dir)?;
-        symlink(&outside_dir, allowed_dir.join("link"))?;
-
-        let resolved = resolve_existing_path(
-            allowed_dir
-                .join("link")
-                .join("..")
-                .join("secret.txt")
-                .as_path(),
-        )?;
-
-        assert_eq!(
-            resolved,
-            resolve_existing_path(temp_dir.path())?.join("secret.txt")
-        );
-        Ok(())
-    }
-}
-
-#[cfg(all(test, windows))]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn symlink_points_to_directory_handles_dangling_directory_symlinks() -> io::Result<()> {
-        use std::os::windows::fs::symlink_dir;
-
-        let temp_dir = tempfile::TempDir::new()?;
-        let source_dir = temp_dir.path().join("source");
-        let link_path = temp_dir.path().join("source-link");
-        std::fs::create_dir(&source_dir)?;
-
-        if symlink_dir(&source_dir, &link_path).is_err() {
-            return Ok(());
-        }
-
-        std::fs::remove_dir(&source_dir)?;
-
-        assert_eq!(symlink_points_to_directory(&link_path)?, true);
-        Ok(())
-    }
-}
+mod tests;

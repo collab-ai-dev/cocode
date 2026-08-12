@@ -1032,10 +1032,18 @@ pub(super) fn apply_patch_paths_from_input(
     let Ok(cwd) = coco_utils_absolute_path::AbsolutePathBuf::from_absolute_path(cwd) else {
         return Vec::new();
     };
+    let cwd = coco_utils_path_uri::PathUri::from_abs_path(&cwd);
     let Ok(parsed) = coco_apply_patch::parse_patch(patch) else {
         return Vec::new();
     };
-    coco_apply_patch::collect_path_effects(&parsed.hunks, &cwd).permission_paths
+    let Ok(effects) = coco_apply_patch::collect_path_effects(&parsed.hunks, &cwd) else {
+        return Vec::new();
+    };
+    effects
+        .into_paths()
+        .into_iter()
+        .map(|path| path.to_path_buf())
+        .collect()
 }
 
 /// Build a [`crate::prompt_suggestion::SuggestionContext`] from the

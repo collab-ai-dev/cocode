@@ -54,6 +54,7 @@ pub use changed_files::changed_file_observation_from_loaded;
 pub use changed_files::deleted_changed_file_observation;
 pub use context_fragment::{BoundedExternalContextFragment, ContextFragmentKind};
 pub use contextual_user_fragment::ContextualUserFragment;
+pub use contextual_user_fragment::SkillListingFragment;
 pub use contextual_user_fragment::TerminalRecoveryNudgeFragment;
 pub use environment::EnvironmentInfo;
 pub use environment::GitStatus;

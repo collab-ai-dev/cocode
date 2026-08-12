@@ -156,9 +156,54 @@ async fn bound_text_for_model(
         .map(coco_tool_runtime::InlineBudget::from_request)
         .unwrap_or(coco_tool_runtime::tool_result_offload::REFERENCE_BUDGET)
         .capped_to(threshold);
-    coco_tool_runtime::offload_windowed(store, &key, &content, budget)
+    let offloaded = coco_tool_runtime::offload_windowed(store, &key, &content, budget).await;
+    if offloaded.model_text.len() <= threshold as usize {
+        return offloaded.model_text;
+    }
+
+    // A persisted path is external to the inline window budget and can be
+    // arbitrarily deep. If its two normative footer occurrences exceed the
+    // hard bound, retain a compact one-path footer and shrink the inline
+    // head/tail around it. The closing tag stays final so Level-2/compaction
+    // continue recognizing the only recoverable pointer.
+    if let Some(path) = offloaded.stored_path.as_deref() {
+        let footer = format!(
+            "<persisted-output>\nFull text saved to: {}\n</persisted-output>",
+            path.display()
+        );
+        let max_bytes = threshold.max(0) as usize;
+        const OMITTED: &str = "\n\n[... middle omitted; full text saved below ...]\n\n";
+        if footer.len() + OMITTED.len() <= max_bytes {
+            let preview_budget = max_bytes - footer.len() - OMITTED.len();
+            let head_budget = preview_budget * 3 / 4;
+            let tail_budget = preview_budget - head_budget;
+            let head = coco_utils_string::take_bytes_at_char_boundary(&content, head_budget);
+            let tail = coco_utils_string::take_last_bytes_at_char_boundary(&content, tail_budget);
+            return format!("{head}{OMITTED}{tail}{footer}");
+        }
+    }
+
+    // A path that alone cannot fit the declared model-visible bound cannot be
+    // safely surfaced. Degrade explicitly to the pointer-less footer.
+    let pointerless = coco_tool_runtime::offload_windowed(None, &key, &content, budget)
         .await
-        .model_text
+        .model_text;
+    if pointerless.len() <= threshold as usize {
+        return pointerless;
+    }
+
+    // All production bounds reserve enough room for the pointer-less footer.
+    // Keep a final UTF-8-safe fail-closed cap for malformed/custom bounds.
+    const MARKER: &str = "\n[... tool result truncated to hard bound ...]";
+    let max_bytes = threshold.max(0) as usize;
+    if max_bytes <= MARKER.len() {
+        return coco_utils_string::take_bytes_at_char_boundary(MARKER, max_bytes).to_string();
+    }
+    let prefix = coco_utils_string::take_bytes_at_char_boundary(
+        &pointerless,
+        max_bytes.saturating_sub(MARKER.len()),
+    );
+    format!("{prefix}{MARKER}")
 }
 
 async fn bound_parts_for_model(
@@ -314,16 +359,30 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
             // OpenAI-Compatible degrade non-Text parts to a visible
             // marker.
             let text_only_output = plain_text_parts(&parts);
-            let mut guard_result_text: Option<String> = None;
+            let guardrail_suffix = loop_guardrail
+                .as_ref()
+                .and_then(|guard| {
+                    guard.record_after_call(
+                        &tool_id,
+                        &effective_input,
+                        /*failed*/ tool_result_is_error,
+                        /*idempotent*/ tool.is_concurrency_safe(&effective_input),
+                        text_only_output.as_deref(),
+                    )
+                })
+                .map(|warning| warning.render_suffix());
             let mut tool_result_msg = match text_only_output {
                 Some(rendered_text) => {
-                    let rendered_output_raw = if rendered_text.trim().is_empty() {
+                    let mut rendered_output_raw = if rendered_text.trim().is_empty() {
                         coco_tool_runtime::tool_result_storage::empty_tool_result_message(
                             &semantic_tool_name,
                         )
                     } else {
                         rendered_text
                     };
+                    if let Some(suffix) = &guardrail_suffix {
+                        rendered_output_raw.push_str(suffix);
+                    }
 
                     let is_json = output_data.is_object() || output_data.is_array();
                     let rendered_output = bound_text_for_model(
@@ -335,10 +394,6 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                         tool.inline_window_budget(),
                     )
                     .await;
-                    if loop_guardrail.is_some() {
-                        guard_result_text = Some(rendered_output.clone());
-                    }
-
                     create_tool_result_message(
                         &tool_use_id,
                         provider_tool_name.as_str(),
@@ -348,6 +403,13 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                     )
                 }
                 None => {
+                    let mut parts = parts;
+                    if let Some(suffix) = &guardrail_suffix {
+                        parts.push(ToolResultContentPart::Text {
+                            text: suffix.clone(),
+                            provider_options: None,
+                        });
+                    }
                     let parts = bound_parts_for_model(
                         tool_output_store.as_ref(),
                         &tool_use_id,
@@ -370,23 +432,6 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                 && let Message::ToolResult(tr) = &mut tool_result_msg
             {
                 tr.display_data = Some(display_data);
-            }
-
-            // Loop-guardrail bookkeeping: record the completed call; a
-            // warn-threshold hit appends guidance to this (newest) result —
-            // append-only, so the prompt-cache prefix is untouched.
-            // Idempotency proxy for no-progress tracking: read-only
-            // (concurrency-safe) tools only.
-            if let Some(guard) = &loop_guardrail
-                && let Some(warning) = guard.record_after_call(
-                    &tool_id,
-                    &effective_input,
-                    /*failed*/ tool_result_is_error,
-                    /*idempotent*/ tool.is_concurrency_safe(&effective_input),
-                    guard_result_text.as_deref(),
-                )
-            {
-                append_guardrail_suffix(&mut tool_result_msg, &warning.render_suffix());
             }
 
             // Collect post-hook additional_contexts into message
@@ -457,11 +502,33 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
 
             // A user/runtime cancellation commits the explicit interrupt
             // message, not the generic "Error: cancelled".
-            let rendered_error = if is_interrupt {
+            let mut rendered_error_raw = if is_interrupt {
                 format!("Error: {}", coco_messages::INTERRUPT_MESSAGE_FOR_TOOL_USE)
             } else {
                 format!("Error: {error_message}")
             };
+            if let Some(warning) = loop_guardrail.as_ref().and_then(|guard| {
+                guard.record_after_call(
+                    &tool_id,
+                    &effective_input,
+                    /*failed*/ true,
+                    /*idempotent*/ false,
+                    /*result_text*/ None,
+                )
+            }) {
+                rendered_error_raw.push_str(&warning.render_suffix());
+            }
+            let rendered_error = bound_text_for_model(
+                tool_output_store.as_ref(),
+                &format!("{tool_use_id}-error"),
+                rendered_error_raw,
+                /*is_json*/ false,
+                // Failure text is runtime-generated and must never inherit an
+                // individual tool's `Unbounded` success policy.
+                coco_tool_runtime::ResultSizeBound::Bytes(3_000),
+                tool.inline_window_budget(),
+            )
+            .await;
             warn!(tool = %semantic_tool_name, error = %error, "tool execution failed");
 
             let post = HookController::new(hooks, orchestration_ctx, hook_tx)
@@ -487,19 +554,6 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                 tr.display_data = Some(display_data);
             }
 
-            // Loop-guardrail bookkeeping on the failure path — repeated
-            // identical failures are exactly what the guard exists for.
-            if let Some(guard) = &loop_guardrail
-                && let Some(warning) = guard.record_after_call(
-                    &tool_id,
-                    &effective_input,
-                    /*failed*/ true,
-                    /*idempotent*/ false,
-                    /*result_text*/ None,
-                )
-            {
-                append_guardrail_suffix(&mut tool_result_msg, &warning.render_suffix());
-            }
             let post_hook_msgs = render_hook_context_messages(
                 &semantic_tool_name,
                 &post.additional_contexts,
@@ -538,38 +592,6 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                 prevent_continuation: None,
                 structured_output: None,
                 effects: ToolSideEffects::none(),
-            }
-        }
-    }
-}
-
-/// Append the guardrail warning suffix to a tool-result message. Text and
-/// error-text bodies get the suffix inline; multi-part bodies get an extra
-/// text part. JSON bodies are left untouched (never mangle a structured
-/// payload — the next round's counters still escalate).
-fn append_guardrail_suffix(msg: &mut Message, suffix: &str) {
-    let Message::ToolResult(tr) = msg else {
-        return;
-    };
-    let coco_messages::LlmMessage::Tool { content, .. } = &mut tr.message else {
-        return;
-    };
-    for part in content.iter_mut() {
-        if let coco_messages::ToolContent::ToolResult(rp) = part {
-            match &mut rp.output {
-                coco_llm_types::ToolResultContent::Text { value, .. }
-                | coco_llm_types::ToolResultContent::ErrorText { value, .. } => {
-                    value.push_str(suffix);
-                }
-                coco_llm_types::ToolResultContent::Content { value, .. } => {
-                    value.push(coco_llm_types::ToolResultContentPart::Text {
-                        text: suffix.to_string(),
-                        provider_options: None,
-                    });
-                }
-                coco_llm_types::ToolResultContent::Json { .. }
-                | coco_llm_types::ToolResultContent::ErrorJson { .. }
-                | coco_llm_types::ToolResultContent::ExecutionDenied { .. } => {}
             }
         }
     }

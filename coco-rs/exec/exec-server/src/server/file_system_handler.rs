@@ -10,7 +10,9 @@ use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
 use crate::RemoveOptions;
 use crate::file_read::FileReadHandleManager;
+use crate::is_file_mutation_conflict;
 use crate::local_file_system::LocalFileSystem;
+use crate::protocol::FS_WRITE_FILE_CHECKED_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCanonicalizeResponse;
@@ -18,6 +20,8 @@ use crate::protocol::FsCloseParams;
 use crate::protocol::FsCloseResponse;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
+use crate::protocol::FsCreateDirectoryCheckedParams;
+use crate::protocol::FsCreateDirectoryCheckedResponse;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsCreateDirectoryResponse;
 use crate::protocol::FsGetMetadataParams;
@@ -31,8 +35,14 @@ use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadDirectoryResponse;
 use crate::protocol::FsReadFileParams;
 use crate::protocol::FsReadFileResponse;
+use crate::protocol::FsRemoveFileCheckedParams;
+use crate::protocol::FsRemoveFileCheckedResponse;
 use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
+use crate::protocol::FsSnapshotFileParams;
+use crate::protocol::FsSnapshotFileResponse;
+use crate::protocol::FsWriteFileCheckedParams;
+use crate::protocol::FsWriteFileCheckedResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
 use crate::rpc::internal_error;
@@ -116,6 +126,21 @@ impl FileSystemHandler {
         })
     }
 
+    pub(crate) async fn snapshot_file(
+        &self,
+        params: FsSnapshotFileParams,
+    ) -> Result<FsSnapshotFileResponse, JSONRPCErrorError> {
+        let snapshot = self
+            .file_system
+            .snapshot_file(&params.path, params.sandbox.as_ref())
+            .await
+            .map_err(map_fs_error)?;
+        Ok(FsSnapshotFileResponse {
+            expected: snapshot.expected,
+            data_base64: snapshot.contents.map(|contents| STANDARD.encode(contents)),
+        })
+    }
+
     pub(crate) async fn write_file(
         &self,
         params: FsWriteFileParams,
@@ -132,6 +157,50 @@ impl FileSystemHandler {
         Ok(FsWriteFileResponse {})
     }
 
+    pub(crate) async fn write_file_checked(
+        &self,
+        params: FsWriteFileCheckedParams,
+    ) -> Result<FsWriteFileCheckedResponse, JSONRPCErrorError> {
+        let bytes = STANDARD.decode(params.data_base64).map_err(|error| {
+            invalid_request(format!(
+                "{FS_WRITE_FILE_CHECKED_METHOD} requires valid base64 dataBase64: {error}"
+            ))
+        })?;
+        let result = self
+            .file_system
+            .write_file_checked(
+                &params.path,
+                bytes,
+                params.expected,
+                params.sandbox.as_ref(),
+            )
+            .await;
+        match result {
+            Ok(()) => Ok(FsWriteFileCheckedResponse { applied: true }),
+            Err(error) if is_file_mutation_conflict(&error) => {
+                Ok(FsWriteFileCheckedResponse { applied: false })
+            }
+            Err(error) => Err(map_fs_error(error)),
+        }
+    }
+
+    pub(crate) async fn remove_file_checked(
+        &self,
+        params: FsRemoveFileCheckedParams,
+    ) -> Result<FsRemoveFileCheckedResponse, JSONRPCErrorError> {
+        let result = self
+            .file_system
+            .remove_file_checked(&params.path, params.expected, params.sandbox.as_ref())
+            .await;
+        match result {
+            Ok(()) => Ok(FsRemoveFileCheckedResponse { applied: true }),
+            Err(error) if is_file_mutation_conflict(&error) => {
+                Ok(FsRemoveFileCheckedResponse { applied: false })
+            }
+            Err(error) => Err(map_fs_error(error)),
+        }
+    }
+
     pub(crate) async fn create_directory(
         &self,
         params: FsCreateDirectoryParams,
@@ -146,6 +215,23 @@ impl FileSystemHandler {
             .await
             .map_err(map_fs_error)?;
         Ok(FsCreateDirectoryResponse {})
+    }
+
+    pub(crate) async fn create_directory_checked(
+        &self,
+        params: FsCreateDirectoryCheckedParams,
+    ) -> Result<FsCreateDirectoryCheckedResponse, JSONRPCErrorError> {
+        let result = self
+            .file_system
+            .create_directory_checked(&params.path, params.sandbox.as_ref())
+            .await;
+        match result {
+            Ok(()) => Ok(FsCreateDirectoryCheckedResponse { applied: true }),
+            Err(error) if is_file_mutation_conflict(&error) => {
+                Ok(FsCreateDirectoryCheckedResponse { applied: false })
+            }
+            Err(error) => Err(map_fs_error(error)),
+        }
     }
 
     pub(crate) async fn get_metadata(

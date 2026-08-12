@@ -7,6 +7,7 @@ license.workspace = true
 [lib]
 name = "coco_apply_patch"
 path = "src/lib.rs"
+doctest = false
 
 [[bin]]
 name = "apply_patch"
@@ -18,8 +19,8 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 coco-exec-server = { workspace = true }
-coco-utils-path-uri = { workspace = true }
 coco-utils-absolute-path = { workspace = true }
+coco-utils-path-uri = { workspace = true }
 similar = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }

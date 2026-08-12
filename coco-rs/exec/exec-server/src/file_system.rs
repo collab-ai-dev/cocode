@@ -39,6 +39,64 @@ pub struct FileMetadata {
     pub modified_at_ms: i64,
 }
 
+/// Opaque identity and content token returned by an executor-owned snapshot.
+/// Callers pass the complete value back unchanged to checked mutations.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileVersion {
+    pub identity: String,
+    pub content_sha256: String,
+    /// Digest of ownership, mode, ACLs/xattrs, security labels, capabilities,
+    /// and platform inode flags captured by the executor.
+    pub security_metadata_sha256: String,
+    pub size: u64,
+    pub link_count: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "state")]
+pub enum ExpectedFileState {
+    Missing,
+    File { version: FileVersion },
+}
+
+/// Contents and version captured from one no-follow file handle.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileSnapshot {
+    pub expected: ExpectedFileState,
+    pub contents: Option<Vec<u8>>,
+}
+
+impl FileSnapshot {
+    pub fn missing() -> Self {
+        Self {
+            expected: ExpectedFileState::Missing,
+            contents: None,
+        }
+    }
+
+    pub fn file(version: FileVersion, contents: Vec<u8>) -> Self {
+        Self {
+            expected: ExpectedFileState::File { version },
+            contents: Some(contents),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("filesystem target changed after it was prepared")]
+pub struct FileMutationConflict;
+
+pub fn file_mutation_conflict() -> io::Error {
+    io::Error::other(FileMutationConflict)
+}
+
+pub fn is_file_mutation_conflict(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(<dyn std::error::Error + Send + Sync>::is::<FileMutationConflict>)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReadDirectoryEntry {
     pub file_name: String,
@@ -118,6 +176,47 @@ pub trait ExecutorFileSystem: Send + Sync {
             String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
         })
     }
+
+    /// Snapshot a missing or regular file without following symbolic-link
+    /// components. The returned version is meaningful only to this executor.
+    fn snapshot_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSnapshot>;
+
+    /// Write only when the target still matches `expected`.
+    ///
+    /// Implementations must not follow symbolic-link components or mutate an
+    /// already-open inode in place. A failure after the commit linearization
+    /// point must preserve displaced data and report the resulting state as
+    /// unknown rather than attempting a check-then-act rollback.
+    fn write_file_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        contents: Vec<u8>,
+        expected: ExpectedFileState,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()>;
+
+    /// Remove only when the target still matches `expected`.
+    ///
+    /// Implementations must atomically capture the directory entry before
+    /// validating it. If the captured entry does not match, it must remain
+    /// recoverable and the resulting target state must be reported as unknown.
+    fn remove_file_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        expected: ExpectedFileState,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()>;
+
+    /// Create one directory entry without following symbolic-link ancestors.
+    fn create_directory_checked<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()>;
 
     fn write_file<'a>(
         &'a self,

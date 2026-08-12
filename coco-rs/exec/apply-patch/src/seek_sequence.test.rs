@@ -1,4 +1,5 @@
 use super::seek_sequence;
+use crate::ApplyPatchFileUpdateMode;
 use std::string::ToString;
 
 fn to_vec(strings: &[&str]) -> Vec<String> {
@@ -10,7 +11,13 @@ fn test_exact_match_finds_sequence() {
     let lines = to_vec(&["foo", "bar", "baz"]);
     let pattern = to_vec(&["bar", "baz"]);
     assert_eq!(
-        seek_sequence(&lines, &pattern, /*start*/ 0, /*eof*/ false),
+        seek_sequence(
+            &lines,
+            &pattern,
+            /*start*/ 0,
+            /*eof*/ false,
+            ApplyPatchFileUpdateMode::NormalizeToLf,
+        ),
         Some(1)
     );
 }
@@ -21,7 +28,13 @@ fn test_rstrip_match_ignores_trailing_whitespace() {
     // Pattern omits trailing whitespace.
     let pattern = to_vec(&["foo", "bar"]);
     assert_eq!(
-        seek_sequence(&lines, &pattern, /*start*/ 0, /*eof*/ false),
+        seek_sequence(
+            &lines,
+            &pattern,
+            /*start*/ 0,
+            /*eof*/ false,
+            ApplyPatchFileUpdateMode::NormalizeToLf,
+        ),
         Some(0)
     );
 }
@@ -32,7 +45,13 @@ fn test_trim_match_ignores_leading_and_trailing_whitespace() {
     // Pattern omits any additional whitespace.
     let pattern = to_vec(&["foo", "bar"]);
     assert_eq!(
-        seek_sequence(&lines, &pattern, /*start*/ 0, /*eof*/ false),
+        seek_sequence(
+            &lines,
+            &pattern,
+            /*start*/ 0,
+            /*eof*/ false,
+            ApplyPatchFileUpdateMode::NormalizeToLf,
+        ),
         Some(0)
     );
 }
@@ -43,7 +62,13 @@ fn test_pattern_longer_than_input_returns_none() {
     let pattern = to_vec(&["too", "many", "lines"]);
     // Should not panic – must return None when pattern cannot possibly fit.
     assert_eq!(
-        seek_sequence(&lines, &pattern, /*start*/ 0, /*eof*/ false),
+        seek_sequence(
+            &lines,
+            &pattern,
+            /*start*/ 0,
+            /*eof*/ false,
+            ApplyPatchFileUpdateMode::NormalizeToLf,
+        ),
         None
     );
 }

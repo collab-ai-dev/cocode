@@ -50,6 +50,7 @@ coco-messages.workspace = true
 coco-error.workspace = true
 coco-utils-common.workspace = true
 coco-utils-absolute-path.workspace = true
+coco-utils-path-uri.workspace = true
 snafu.workspace = true
 
 serde = { workspace = true, features = ["derive"] }

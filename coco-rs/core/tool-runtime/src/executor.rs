@@ -47,6 +47,7 @@ pub struct PendingToolCall {
     pub tool_use_id: String,
     pub tool: Arc<dyn DynTool>,
     pub input: ValidatedInput,
+    pub prepared_state: Option<crate::PreparedToolState>,
     pub is_concurrency_safe: bool,
 }
 

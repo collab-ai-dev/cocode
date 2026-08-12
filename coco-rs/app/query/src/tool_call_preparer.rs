@@ -249,10 +249,31 @@ pub(crate) async fn prepare_one_pending_tool_call(
         return None;
     }
 
+    let prepared_state = match tool.prepare(effective_input.as_value(), args.ctx).await {
+        Ok(state) => state,
+        Err(error) => {
+            let message = format!("Error: {error}");
+            complete_tool_call_with_error_mode(
+                args.event_tx,
+                args.history,
+                &semantic_call.tool_call_id,
+                provider_tool_name.as_str(),
+                &tool_id,
+                &message,
+                coco_tool_runtime::ToolCallErrorKind::ValidationFailed,
+                args.completion_event_mode,
+                args.deferred_tool_completions.as_deref_mut(),
+            )
+            .await;
+            return None;
+        }
+    };
+
     let decision = resolve_permission_decision(
         &semantic_call,
         &tool,
         effective_input.as_value(),
+        prepared_state.as_ref(),
         args.ctx,
         args.history.as_slice(),
         (hook_permission_behavior, hook_permission_reason),
@@ -311,6 +332,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
         return None;
     }
 
+    let prepared_input = effective_input.clone();
     let (
         effective_input,
         approval_feedback,
@@ -341,11 +363,28 @@ pub(crate) async fn prepare_one_pending_tool_call(
         return None;
     }
 
+    if prepared_state.is_some() && effective_input.as_value() != prepared_input.as_value() {
+        complete_tool_call_with_error_mode(
+            args.event_tx,
+            args.history,
+            &semantic_call.tool_call_id,
+            provider_tool_name.as_str(),
+            &tool_id,
+            "Error: approved input changed after stateful preparation; retry the tool call",
+            coco_tool_runtime::ToolCallErrorKind::ValidationFailed,
+            args.completion_event_mode,
+            args.deferred_tool_completions.as_deref_mut(),
+        )
+        .await;
+        return None;
+    }
+
     Some((
         PendingToolCall {
             tool_use_id: semantic_call.tool_call_id.clone(),
             tool: tool.clone(),
             input: effective_input.clone(),
+            prepared_state,
             is_concurrency_safe: dynamic_concurrency_safe(
                 tool.as_ref(),
                 &tool_id,
@@ -442,6 +481,7 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
     tool_call: &ToolCallPart,
     tool: &Arc<dyn DynTool>,
     effective_input: &Value,
+    prepared_state: Option<&coco_tool_runtime::PreparedToolState>,
     ctx: &ToolUseContext,
     history_messages: &[M],
     hook_permission: (Option<coco_types::PermissionBehavior>, Option<String>),
@@ -515,7 +555,16 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
                 reason: hook_permission_reason,
             },
         },
-        None => evaluate_with_rules(tool, effective_input, ctx, suspend_shell_allow_rules).await,
+        None => {
+            evaluate_with_rules(
+                tool,
+                effective_input,
+                prepared_state,
+                ctx,
+                suspend_shell_allow_rules,
+            )
+            .await
+        }
     };
 
     //: a tool that *requires* user interaction
@@ -748,12 +797,15 @@ fn can_use_tool_reason_label(reason: &DecisionReason) -> String {
 pub(crate) async fn evaluate_with_rules(
     tool: &Arc<dyn DynTool>,
     effective_input: &Value,
+    prepared_state: Option<&coco_tool_runtime::PreparedToolState>,
     ctx: &ToolUseContext,
     suspend_shell_allow_rules: bool,
 ) -> PermissionDecision {
     use coco_types::ToolCheckResult;
 
-    let tool_opinion = tool.check_permissions(effective_input, ctx).await;
+    let tool_opinion = tool
+        .check_prepared_permissions(effective_input, prepared_state, ctx)
+        .await;
     let tool_check = move |_id: &ToolId,
                            _input: &Value,
                            _pc: &coco_types::ToolPermissionContext|

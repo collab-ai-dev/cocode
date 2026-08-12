@@ -21,7 +21,12 @@ where
 {
     fn register_callsite(&self, metadata: &'static Metadata<'static>) -> Interest {
         if level_enabled(*metadata.level()) {
-            Interest::always()
+            // Tests install this layer through a thread-local dispatcher while
+            // sibling tests may hit the same static callsite through another
+            // dispatcher. `always` permits a global callsite cache decision
+            // to race with that sibling; `sometimes` keeps the decision bound
+            // to the active dispatcher's `enabled` check.
+            Interest::sometimes()
         } else {
             Interest::never()
         }

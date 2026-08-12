@@ -51,13 +51,17 @@ use crate::protocol::ExecResponse;
 use crate::protocol::FS_CANONICALIZE_METHOD;
 use crate::protocol::FS_CLOSE_METHOD;
 use crate::protocol::FS_COPY_METHOD;
+use crate::protocol::FS_CREATE_DIRECTORY_CHECKED_METHOD;
 use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
 use crate::protocol::FS_GET_METADATA_METHOD;
 use crate::protocol::FS_OPEN_METHOD;
 use crate::protocol::FS_READ_BLOCK_METHOD;
 use crate::protocol::FS_READ_DIRECTORY_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
+use crate::protocol::FS_REMOVE_FILE_CHECKED_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
+use crate::protocol::FS_SNAPSHOT_FILE_METHOD;
+use crate::protocol::FS_WRITE_FILE_CHECKED_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCanonicalizeResponse;
@@ -65,6 +69,8 @@ use crate::protocol::FsCloseParams;
 use crate::protocol::FsCloseResponse;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
+use crate::protocol::FsCreateDirectoryCheckedParams;
+use crate::protocol::FsCreateDirectoryCheckedResponse;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsCreateDirectoryResponse;
 use crate::protocol::FsGetMetadataParams;
@@ -77,8 +83,14 @@ use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadDirectoryResponse;
 use crate::protocol::FsReadFileParams;
 use crate::protocol::FsReadFileResponse;
+use crate::protocol::FsRemoveFileCheckedParams;
+use crate::protocol::FsRemoveFileCheckedResponse;
 use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
+use crate::protocol::FsSnapshotFileParams;
+use crate::protocol::FsSnapshotFileResponse;
+use crate::protocol::FsWriteFileCheckedParams;
+use crate::protocol::FsWriteFileCheckedResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
 use crate::protocol::HTTP_REQUEST_BODY_DELTA_METHOD;
@@ -249,6 +261,19 @@ impl LazyRemoteExecServerClient {
             current_client: Arc::new(StdMutex::new(None)),
             reconnect: Arc::new(StdMutex::new(None)),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_connected_for_test(client: ExecServerClient) -> Self {
+        let lazy = Self::new(ExecServerTransportParams::websocket_url(
+            "ws://unused.test".to_string(),
+            CONNECT_TIMEOUT,
+        ));
+        *lazy
+            .current_client
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(client);
+        lazy
     }
 
     #[allow(dead_code)]
@@ -554,6 +579,13 @@ impl ExecServerClient {
         self.call(FS_READ_FILE_METHOD, &params).await
     }
 
+    pub(crate) async fn fs_snapshot_file(
+        &self,
+        params: FsSnapshotFileParams,
+    ) -> Result<FsSnapshotFileResponse, ExecServerError> {
+        self.call(FS_SNAPSHOT_FILE_METHOD, &params).await
+    }
+
     pub(crate) async fn fs_open(
         &self,
         params: FsOpenParams,
@@ -582,11 +614,32 @@ impl ExecServerClient {
         self.call(FS_WRITE_FILE_METHOD, &params).await
     }
 
+    pub(crate) async fn fs_write_file_checked(
+        &self,
+        params: FsWriteFileCheckedParams,
+    ) -> Result<FsWriteFileCheckedResponse, ExecServerError> {
+        self.call(FS_WRITE_FILE_CHECKED_METHOD, &params).await
+    }
+
+    pub(crate) async fn fs_remove_file_checked(
+        &self,
+        params: FsRemoveFileCheckedParams,
+    ) -> Result<FsRemoveFileCheckedResponse, ExecServerError> {
+        self.call(FS_REMOVE_FILE_CHECKED_METHOD, &params).await
+    }
+
     pub(crate) async fn fs_create_directory(
         &self,
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, ExecServerError> {
         self.call(FS_CREATE_DIRECTORY_METHOD, &params).await
+    }
+
+    pub(crate) async fn fs_create_directory_checked(
+        &self,
+        params: FsCreateDirectoryCheckedParams,
+    ) -> Result<FsCreateDirectoryCheckedResponse, ExecServerError> {
+        self.call(FS_CREATE_DIRECTORY_CHECKED_METHOD, &params).await
     }
 
     pub(crate) async fn fs_get_metadata(

@@ -155,6 +155,60 @@ async fn test_can_use_tool_allow_rewrite_becomes_permission_allow() {
 }
 
 #[tokio::test]
+async fn invalid_apply_patch_reaches_execution_without_permission_prompt() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    std::fs::write(dir.path().join("duplicate.txt"), "before\n").expect("write source");
+    let tool: Arc<dyn DynTool> = Arc::new(coco_tools::ApplyPatchTool::default());
+    let input = json!({
+        "patch": "*** Begin Patch\n*** Update File: duplicate.txt\n@@\n-before\n+first\n*** Update File: ./duplicate.txt\n@@\n-before\n+second\n*** End Patch\n"
+    });
+
+    for mode in [PermissionMode::Default, PermissionMode::DontAsk] {
+        let mut ctx = ToolUseContext::test_default();
+        ctx.cwd_override = Some(dir.path().to_path_buf());
+        ctx.permission_context.mode = mode;
+
+        let decision = evaluate_with_rules(&tool, &input, None, &ctx, false).await;
+
+        assert!(
+            matches!(decision, PermissionDecision::Allow { .. }),
+            "invalid patch should reach execute in {mode:?}, got {decision:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn apply_patch_path_resolution_errors_fail_closed_in_permission_pipeline() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let invalid_cwd = dir.path().join("not-a-directory");
+    std::fs::write(&invalid_cwd, "file\n").expect("write cwd placeholder");
+    let tool: Arc<dyn DynTool> = Arc::new(coco_tools::ApplyPatchTool::default());
+    let input = json!({
+        "patch": "*** Begin Patch\n*** Add File: child.txt\n+content\n*** End Patch\n"
+    });
+
+    for (mode, expected) in [
+        (PermissionMode::Default, "ask"),
+        (PermissionMode::DontAsk, "deny"),
+    ] {
+        let mut ctx = ToolUseContext::test_default();
+        ctx.cwd_override = Some(invalid_cwd.clone());
+        ctx.permission_context.mode = mode;
+
+        let decision = evaluate_with_rules(&tool, &input, None, &ctx, false).await;
+
+        assert!(
+            matches!(
+                (&decision, expected),
+                (PermissionDecision::Ask { .. }, "ask") | (PermissionDecision::Deny { .. }, "deny")
+            ),
+            "path-resolution failure in {mode:?} should {expected}, got {decision:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_hook_allow_bypasses_can_use_tool_unless_required() {
     let mut ctx = ToolUseContext::test_default();
     ctx.can_use_tool = Some(Arc::new(AlwaysDenyHandle));
@@ -346,6 +400,7 @@ async fn decide_in_auto_mode(tool: Arc<dyn DynTool>) -> PermissionDecision {
         &tc,
         &tool,
         &tc.input,
+        None,
         &ctx,
         history.as_slice(),
         (None, None),
@@ -417,6 +472,7 @@ async fn bypass_mode_preserves_ask_for_ask_user_question() {
         &tc,
         &tool,
         &tc.input,
+        None,
         &ctx,
         history.as_slice(),
         (None, None),

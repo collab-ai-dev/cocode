@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::ExpectedFileState;
 use crate::FileSystemSandboxContext;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use coco_utils_path_uri::PathUri;
@@ -20,11 +21,15 @@ pub const EXEC_EXITED_METHOD: &str = "process/exited";
 pub const EXEC_CLOSED_METHOD: &str = "process/closed";
 pub const ENVIRONMENT_INFO_METHOD: &str = "environment/info";
 pub const FS_READ_FILE_METHOD: &str = "fs/readFile";
+pub const FS_SNAPSHOT_FILE_METHOD: &str = "fs/snapshotFile";
 pub(crate) const FS_OPEN_METHOD: &str = "fs/open";
 pub(crate) const FS_READ_BLOCK_METHOD: &str = "fs/readBlock";
 pub(crate) const FS_CLOSE_METHOD: &str = "fs/close";
 pub const FS_WRITE_FILE_METHOD: &str = "fs/writeFile";
+pub const FS_WRITE_FILE_CHECKED_METHOD: &str = "fs/writeFileChecked";
+pub const FS_REMOVE_FILE_CHECKED_METHOD: &str = "fs/removeFileChecked";
 pub const FS_CREATE_DIRECTORY_METHOD: &str = "fs/createDirectory";
+pub const FS_CREATE_DIRECTORY_CHECKED_METHOD: &str = "fs/createDirectoryChecked";
 pub const FS_GET_METADATA_METHOD: &str = "fs/getMetadata";
 pub const FS_CANONICALIZE_METHOD: &str = "fs/canonicalize";
 pub const FS_READ_DIRECTORY_METHOD: &str = "fs/readDirectory";
@@ -254,6 +259,20 @@ pub struct FsReadFileResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FsSnapshotFileParams {
+    pub path: PathUri,
+    pub sandbox: Option<FileSystemSandboxContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsSnapshotFileResponse {
+    pub expected: ExpectedFileState,
+    pub data_base64: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FsOpenParams {
     pub handle_id: String,
     pub path: PathUri,
@@ -305,6 +324,35 @@ pub struct FsWriteFileResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FsWriteFileCheckedParams {
+    pub path: PathUri,
+    pub data_base64: String,
+    pub expected: ExpectedFileState,
+    pub sandbox: Option<FileSystemSandboxContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsWriteFileCheckedResponse {
+    pub applied: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsRemoveFileCheckedParams {
+    pub path: PathUri,
+    pub expected: ExpectedFileState,
+    pub sandbox: Option<FileSystemSandboxContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsRemoveFileCheckedResponse {
+    pub applied: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FsCreateDirectoryParams {
     pub path: PathUri,
     pub recursive: Option<bool>,
@@ -314,6 +362,19 @@ pub struct FsCreateDirectoryParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FsCreateDirectoryResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsCreateDirectoryCheckedParams {
+    pub path: PathUri,
+    pub sandbox: Option<FileSystemSandboxContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsCreateDirectoryCheckedResponse {
+    pub applied: bool,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

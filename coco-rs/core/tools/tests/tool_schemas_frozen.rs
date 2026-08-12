@@ -65,7 +65,7 @@ fn default_tool_input_schemas_are_frozen() {
     insert(&mut map, GlobTool);
     insert(&mut map, GrepTool);
     insert(&mut map, NotebookEditTool);
-    insert(&mut map, ApplyPatchTool);
+    insert(&mut map, ApplyPatchTool::default());
 
     // Web
     insert(&mut map, WebFetchTool);
