@@ -270,3 +270,12 @@ fn wrap_steering_messages_for_api_wraps_only_steering() {
         "non-steering message must be left untouched"
     );
 }
+
+#[test]
+fn early_tool_errors_are_utf8_safe_and_hard_bounded() {
+    let bounded = bound_early_tool_error(&"界".repeat(2_000));
+
+    assert!(bounded.len() <= EARLY_TOOL_ERROR_MAX_BYTES);
+    assert!(bounded.ends_with("[... tool error truncated ...]"));
+    assert!(std::str::from_utf8(bounded.as_bytes()).is_ok());
+}

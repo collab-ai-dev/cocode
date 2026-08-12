@@ -37,10 +37,17 @@ pub fn input_write_target(input: &Value, cwd: &Path) -> Option<PathBuf> {
 pub fn apply_patch_write_targets(input: &Value, cwd: &Path) -> Option<Vec<PathBuf>> {
     let patch = input.get("patch").and_then(Value::as_str)?;
     let cwd = coco_utils_absolute_path::AbsolutePathBuf::from_absolute_path(cwd).ok()?;
+    let cwd = coco_utils_path_uri::PathUri::from_abs_path(&cwd);
     let parsed = coco_apply_patch::parse_patch(patch).ok()?;
-    let effects = coco_apply_patch::collect_path_effects(&parsed.hunks, &cwd);
-    if effects.permission_paths.is_empty() {
+    let effects = coco_apply_patch::collect_path_effects(&parsed.hunks, &cwd).ok()?;
+    if effects.paths().is_empty() {
         return None;
     }
-    Some(effects.permission_paths)
+    Some(
+        effects
+            .into_paths()
+            .into_iter()
+            .map(|path| path.to_path_buf())
+            .collect(),
+    )
 }

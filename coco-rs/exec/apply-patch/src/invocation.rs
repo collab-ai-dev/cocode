@@ -1,10 +1,7 @@
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::LazyLock;
 
 use coco_exec_server::ExecutorFileSystem;
-use coco_utils_absolute_path::AbsolutePathBuf;
-use coco_utils_path_uri::PathUri;
 use tree_sitter::Parser;
 use tree_sitter::Query;
 use tree_sitter::QueryCursor;
@@ -16,16 +13,15 @@ use crate::ApplyPatchArgs;
 use crate::ApplyPatchError;
 use crate::ApplyPatchFileChange;
 use crate::ApplyPatchFileUpdate;
+use crate::ApplyPatchFileUpdateMode;
 use crate::IoError;
 use crate::MaybeApplyPatchVerified;
 use crate::parser::Hunk;
-
-fn path_uri(path: &AbsolutePathBuf) -> PathUri {
-    PathUri::from_abs_path(path)
-}
 use crate::parser::ParseError;
 use crate::parser::parse_patch;
-use crate::unified_diff_from_chunks;
+use crate::unified_diff_from_chunks_with_mode;
+use coco_utils_path_uri::PathConvention;
+use coco_utils_path_uri::PathUri;
 use std::str::Utf8Error;
 use tree_sitter::LanguageError;
 
@@ -55,15 +51,17 @@ pub enum ExtractHeredocError {
     FailedToFindHeredocBody,
 }
 
-fn classify_shell_name(shell: &str) -> Option<String> {
-    std::path::Path::new(shell)
-        .file_stem()
-        .and_then(|name| name.to_str())
-        .map(str::to_ascii_lowercase)
+fn classify_shell_name(shell: &str, convention: PathConvention) -> Option<String> {
+    let basename = convention.path_segments(shell).next_back()?;
+    let stem = basename
+        .rsplit_once('.')
+        .and_then(|(stem, _extension)| (!stem.is_empty()).then_some(stem))
+        .unwrap_or(basename);
+    Some(stem.to_ascii_lowercase())
 }
 
-fn classify_shell(shell: &str, flag: &str) -> Option<ApplyPatchShell> {
-    classify_shell_name(shell).and_then(|name| match name.as_str() {
+fn classify_shell(shell: &str, flag: &str, convention: PathConvention) -> Option<ApplyPatchShell> {
+    classify_shell_name(shell, convention).and_then(|name| match name.as_str() {
         "bash" | "zsh" | "sh" if matches!(flag, "-lc" | "-c") => Some(ApplyPatchShell::Unix),
         "pwsh" | "powershell" if flag.eq_ignore_ascii_case("-command") => {
             Some(ApplyPatchShell::PowerShell)
@@ -73,20 +71,24 @@ fn classify_shell(shell: &str, flag: &str) -> Option<ApplyPatchShell> {
     })
 }
 
-fn can_skip_flag(shell: &str, flag: &str) -> bool {
-    classify_shell_name(shell).is_some_and(|name| {
+fn can_skip_flag(shell: &str, flag: &str, convention: PathConvention) -> bool {
+    classify_shell_name(shell, convention).is_some_and(|name| {
         matches!(name.as_str(), "pwsh" | "powershell") && flag.eq_ignore_ascii_case("-noprofile")
     })
 }
 
-fn parse_shell_script(argv: &[String]) -> Option<(ApplyPatchShell, &str)> {
+fn parse_shell_script<'a>(argv: &'a [String], cwd: &PathUri) -> Option<(ApplyPatchShell, &'a str)> {
+    let convention = cwd.infer_path_convention()?;
     match argv {
-        [shell, flag, script] => classify_shell(shell, flag).map(|shell_type| {
+        [shell, flag, script] => classify_shell(shell, flag, convention).map(|shell_type| {
             let script = script.as_str();
             (shell_type, script)
         }),
-        [shell, skip_flag, flag, script] if can_skip_flag(shell, skip_flag) => {
-            classify_shell(shell, flag).map(|shell_type| {
+        [shell, skip_flag, flag, script] => {
+            if !can_skip_flag(shell, skip_flag, convention) {
+                return None;
+            }
+            classify_shell(shell, flag, convention).map(|shell_type| {
                 let script = script.as_str();
                 (shell_type, script)
             })
@@ -107,7 +109,8 @@ fn extract_apply_patch_from_shell(
 }
 
 // TODO: make private once we remove tests in lib.rs
-pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
+/// `cwd` supplies the path convention used to interpret the shell executable in `argv`.
+pub fn maybe_parse_apply_patch(argv: &[String], cwd: &PathUri) -> MaybeApplyPatch {
     match argv {
         // Direct invocation: apply_patch <patch>
         [cmd, body] if APPLY_PATCH_COMMANDS.contains(&cmd.as_str()) => match parse_patch(body) {
@@ -115,7 +118,7 @@ pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
             Err(e) => MaybeApplyPatch::PatchParseError(e),
         },
         // Shell heredoc form: (optional `cd <path> &&`) apply_patch <<'EOF' ...
-        _ => match parse_shell_script(argv) {
+        _ => match parse_shell_script(argv, cwd) {
             Some((shell, script)) => match extract_apply_patch_from_shell(shell, script) {
                 Ok((body, workdir)) => match parse_patch(&body) {
                     Ok(mut source) => {
@@ -134,12 +137,32 @@ pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
     }
 }
 
-/// cwd must be an absolute path so that we can resolve relative paths in the
-/// patch.
+/// `cwd` must identify an absolute environment-native path so relative patch paths can be
+/// resolved without projecting them onto the app-server or exec-server host.
 pub async fn maybe_parse_apply_patch_verified(
     argv: &[String],
-    cwd: &AbsolutePathBuf,
+    cwd: &PathUri,
     fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&coco_exec_server::FileSystemSandboxContext>,
+) -> MaybeApplyPatchVerified {
+    maybe_parse_apply_patch_verified_with_mode(
+        argv,
+        cwd,
+        ApplyPatchFileUpdateMode::default(),
+        fs,
+        sandbox,
+    )
+    .await
+}
+
+/// Parses and verifies an `apply_patch` invocation using the selected
+/// file-update mode.
+pub async fn maybe_parse_apply_patch_verified_with_mode(
+    argv: &[String],
+    cwd: &PathUri,
+    update_file_mode: ApplyPatchFileUpdateMode,
+    fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&coco_exec_server::FileSystemSandboxContext>,
 ) -> MaybeApplyPatchVerified {
     // Detect a raw patch body passed directly as the command or as the body of a shell
     // script. In these cases, report an explicit error rather than applying the patch.
@@ -148,82 +171,128 @@ pub async fn maybe_parse_apply_patch_verified(
     {
         return MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation);
     }
-    if let Some((_, script)) = parse_shell_script(argv)
+    if let Some((_, script)) = parse_shell_script(argv, cwd)
         && parse_patch(script).is_ok()
     {
         return MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation);
     }
 
-    match maybe_parse_apply_patch(argv) {
-        MaybeApplyPatch::Body(ApplyPatchArgs {
-            patch,
-            hunks,
-            workdir,
-        }) => {
-            let effective_cwd = workdir
-                .as_ref()
-                .map(|dir| cwd.join(Path::new(dir)))
-                .unwrap_or_else(|| cwd.clone());
-            let mut changes = HashMap::new();
-            for hunk in hunks {
-                let path = hunk.resolve_path(&effective_cwd);
-                match hunk {
-                    Hunk::AddFile { contents, .. } => {
-                        changes.insert(
-                            path.into_path_buf(),
-                            ApplyPatchFileChange::Add { content: contents },
-                        );
-                    }
-                    Hunk::DeleteFile { .. } => {
-                        let content = match fs.read_file_text(&path_uri(&path), None).await {
-                            Ok(content) => content,
-                            Err(e) => {
-                                return MaybeApplyPatchVerified::CorrectnessError(
-                                    ApplyPatchError::IoError(IoError {
-                                        context: format!("Failed to read {}", path.display()),
-                                        source: e,
-                                    }),
-                                );
-                            }
-                        };
-                        changes.insert(
-                            path.into_path_buf(),
-                            ApplyPatchFileChange::Delete { content },
-                        );
-                    }
-                    Hunk::UpdateFile {
-                        move_path, chunks, ..
-                    } => {
-                        let ApplyPatchFileUpdate {
-                            unified_diff,
-                            content: contents,
-                        } = match unified_diff_from_chunks(&path, &chunks, fs).await {
-                            Ok(diff) => diff,
-                            Err(e) => {
-                                return MaybeApplyPatchVerified::CorrectnessError(e);
-                            }
-                        };
-                        changes.insert(
-                            path.into_path_buf(),
-                            ApplyPatchFileChange::Update {
-                                unified_diff,
-                                move_path: move_path.map(|p| effective_cwd.join(p).into_path_buf()),
-                                new_content: contents,
-                            },
-                        );
-                    }
-                }
-            }
-            MaybeApplyPatchVerified::Body(ApplyPatchAction {
-                changes,
-                patch,
-                cwd: effective_cwd,
-            })
+    match maybe_parse_apply_patch(argv, cwd) {
+        MaybeApplyPatch::Body(args) => {
+            verify_apply_patch_args_with_mode(args, cwd, update_file_mode, fs, sandbox).await
         }
         MaybeApplyPatch::ShellParseError(e) => MaybeApplyPatchVerified::ShellParseError(e),
         MaybeApplyPatch::PatchParseError(e) => MaybeApplyPatchVerified::CorrectnessError(e.into()),
         MaybeApplyPatch::NotApplyPatch => MaybeApplyPatchVerified::NotApplyPatch,
     }
+}
+
+pub async fn verify_apply_patch_args(
+    args: ApplyPatchArgs,
+    cwd: &PathUri,
+    fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&coco_exec_server::FileSystemSandboxContext>,
+) -> MaybeApplyPatchVerified {
+    verify_apply_patch_args_with_mode(args, cwd, ApplyPatchFileUpdateMode::default(), fs, sandbox)
+        .await
+}
+
+/// Verifies parsed patch arguments using the selected file-update mode.
+pub async fn verify_apply_patch_args_with_mode(
+    args: ApplyPatchArgs,
+    cwd: &PathUri,
+    update_file_mode: ApplyPatchFileUpdateMode,
+    fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&coco_exec_server::FileSystemSandboxContext>,
+) -> MaybeApplyPatchVerified {
+    match try_verify_apply_patch_args(args, cwd, update_file_mode, fs, sandbox).await {
+        Ok(action) => MaybeApplyPatchVerified::Body(action),
+        Err(err) => MaybeApplyPatchVerified::CorrectnessError(err),
+    }
+}
+
+async fn try_verify_apply_patch_args(
+    args: ApplyPatchArgs,
+    cwd: &PathUri,
+    update_file_mode: ApplyPatchFileUpdateMode,
+    fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&coco_exec_server::FileSystemSandboxContext>,
+) -> Result<ApplyPatchAction, ApplyPatchError> {
+    let ApplyPatchArgs {
+        patch,
+        hunks,
+        workdir,
+        environment_id,
+    } = args;
+    if environment_id.is_some() {
+        return Err(ParseError::InvalidPatchError(
+            "apply_patch environment selection is unavailable in this execution context"
+                .to_string(),
+        )
+        .into());
+    }
+    let effective_cwd = workdir
+        .as_ref()
+        .map(|dir| cwd.join(dir))
+        .transpose()?
+        .unwrap_or_else(|| cwd.clone());
+    let mut changes = HashMap::new();
+    for hunk in hunks {
+        let path = hunk.resolve_path(&effective_cwd)?;
+        if changes.contains_key(&path) {
+            return Err(ParseError::InvalidPatchError(format!(
+                "multiple operations target {}",
+                path.inferred_native_path_string()
+            ))
+            .into());
+        }
+        match hunk {
+            Hunk::AddFile { contents, .. } => {
+                changes.insert(path, ApplyPatchFileChange::Add { content: contents });
+            }
+            Hunk::DeleteFile { .. } => {
+                let content = fs.read_file_text(&path, sandbox).await.map_err(|source| {
+                    ApplyPatchError::IoError(IoError {
+                        context: format!("Failed to read {}", path.inferred_native_path_string()),
+                        source,
+                    })
+                })?;
+                changes.insert(path, ApplyPatchFileChange::Delete { content });
+            }
+            Hunk::UpdateFile {
+                move_path, chunks, ..
+            } => {
+                let ApplyPatchFileUpdate {
+                    unified_diff,
+                    content: contents,
+                    ..
+                } = unified_diff_from_chunks_with_mode(
+                    &path,
+                    &chunks,
+                    update_file_mode,
+                    fs,
+                    sandbox,
+                )
+                .await?;
+                changes.insert(
+                    path,
+                    ApplyPatchFileChange::Update {
+                        unified_diff,
+                        move_path: move_path
+                            .map(|path| effective_cwd.join(&path.to_string_lossy()))
+                            .transpose()?,
+                        new_content: contents,
+                    },
+                );
+            }
+        }
+    }
+    Ok(ApplyPatchAction {
+        changes,
+        update_file_mode,
+        patch,
+        cwd: effective_cwd,
+    })
 }
 
 /// Extract the heredoc body (and optional `cd` workdir) from a `bash -lc` script

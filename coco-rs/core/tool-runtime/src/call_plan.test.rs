@@ -228,6 +228,7 @@ fn test_runnable_plan_carries_prepared_call() {
         tool: std::sync::Arc::new(DummyTool),
         parsed_input: crate::ValidatedInput::validate(&DummyTool, json!({"x": 1}))
             .expect("test input must validate"),
+        prepared_state: None,
         is_concurrency_safe: false,
         model_index: 5,
         permission_resolution_detail: None,

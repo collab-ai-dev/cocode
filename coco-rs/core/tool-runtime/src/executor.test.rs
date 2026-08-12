@@ -180,6 +180,7 @@ fn prepared_from(
         tool_id,
         parsed_input: crate::ValidatedInput::validate(tool.as_ref(), json!({}))
             .expect("test input must validate"),
+        prepared_state: None,
         is_concurrency_safe: tool.is_concurrency_safe(&json!({})),
         tool,
         model_index,
@@ -316,6 +317,7 @@ async fn test_execute_with_bash_failure_aborts_concurrent_sibling_runtime() {
             )),
             parsed_input: crate::ValidatedInput::validate(bash_tool.as_ref(), json!({}))
                 .expect("test input must validate"),
+            prepared_state: None,
             is_concurrency_safe: true,
             tool: bash_tool,
             model_index: 0,

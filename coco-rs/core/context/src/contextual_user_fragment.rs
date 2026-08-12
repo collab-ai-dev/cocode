@@ -23,6 +23,39 @@ pub struct TerminalRecoveryNudgeFragment {
     text: String,
 }
 
+/// Aggregate skill-listing reminder with one context-owned budget. Producers
+/// may impose smaller semantic budgets, but prompt assembly gets a final hard
+/// stop here so per-entry caps can never add up to unbounded context.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillListingFragment {
+    text: String,
+}
+
+impl SkillListingFragment {
+    /// Body budget. The reminder injector adds a 39-byte XML envelope, so the
+    /// body reserves enough space to keep the fully rendered item within the
+    /// public 4 KB / 1K-token contract.
+    pub const MAX_BYTES: usize = 3_960;
+    pub const MAX_TOKENS: i64 = 990;
+    pub const MAX_RENDERED_BYTES: usize = 4_000;
+    pub const MAX_RENDERED_TOKENS: i64 = 1_000;
+
+    pub fn new(text: &str) -> Self {
+        let mut bounded =
+            coco_utils_string::take_bytes_at_char_boundary(text, Self::MAX_BYTES).to_string();
+        while estimate_text_tokens(&bounded) > Self::MAX_TOKENS {
+            bounded.pop();
+        }
+        Self { text: bounded }
+    }
+}
+
+impl ContextualUserFragment for SkillListingFragment {
+    fn render(&self) -> String {
+        self.text.clone()
+    }
+}
+
 impl TerminalRecoveryNudgeFragment {
     pub const MAX_BYTES: usize = 4_096;
 

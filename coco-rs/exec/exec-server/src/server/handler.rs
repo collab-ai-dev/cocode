@@ -23,6 +23,8 @@ use crate::protocol::FsCloseParams;
 use crate::protocol::FsCloseResponse;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
+use crate::protocol::FsCreateDirectoryCheckedParams;
+use crate::protocol::FsCreateDirectoryCheckedResponse;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsCreateDirectoryResponse;
 use crate::protocol::FsGetMetadataParams;
@@ -35,8 +37,14 @@ use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadDirectoryResponse;
 use crate::protocol::FsReadFileParams;
 use crate::protocol::FsReadFileResponse;
+use crate::protocol::FsRemoveFileCheckedParams;
+use crate::protocol::FsRemoveFileCheckedResponse;
 use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
+use crate::protocol::FsSnapshotFileParams;
+use crate::protocol::FsSnapshotFileResponse;
+use crate::protocol::FsWriteFileCheckedParams;
+use crate::protocol::FsWriteFileCheckedResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
 use crate::protocol::HttpRequestParams;
@@ -245,6 +253,14 @@ impl ExecServerHandler {
         self.file_system.read_file(params).await
     }
 
+    pub(crate) async fn fs_snapshot_file(
+        &self,
+        params: FsSnapshotFileParams,
+    ) -> Result<FsSnapshotFileResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.snapshot_file(params).await
+    }
+
     pub(crate) async fn fs_open(
         &self,
         params: FsOpenParams,
@@ -277,12 +293,36 @@ impl ExecServerHandler {
         self.file_system.write_file(params).await
     }
 
+    pub(crate) async fn fs_write_file_checked(
+        &self,
+        params: FsWriteFileCheckedParams,
+    ) -> Result<FsWriteFileCheckedResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.write_file_checked(params).await
+    }
+
+    pub(crate) async fn fs_remove_file_checked(
+        &self,
+        params: FsRemoveFileCheckedParams,
+    ) -> Result<FsRemoveFileCheckedResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.remove_file_checked(params).await
+    }
+
     pub(crate) async fn fs_create_directory(
         &self,
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.create_directory(params).await
+    }
+
+    pub(crate) async fn fs_create_directory_checked(
+        &self,
+        params: FsCreateDirectoryCheckedParams,
+    ) -> Result<FsCreateDirectoryCheckedResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.create_directory_checked(params).await
     }
 
     pub(crate) async fn fs_get_metadata(

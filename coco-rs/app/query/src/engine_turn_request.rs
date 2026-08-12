@@ -324,7 +324,11 @@ impl QueryEngine {
                         );
                     }
                     let execute_result = tokio::select! {
-                        r = prepared.tool.execute(effective_input.as_value().clone(), &call_ctx) => r,
+                        r = prepared.tool.execute_prepared(
+                            effective_input.as_value().clone(),
+                            prepared.prepared_state.clone(),
+                            &call_ctx,
+                        ) => r,
                         () = call_ctx.abort.cancelled() => Err(coco_tool_runtime::ToolError::Cancelled),
                     };
                     crate::tool_outcome_builder::build_outcome_from_execution(

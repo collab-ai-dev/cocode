@@ -458,7 +458,7 @@ async fn apply_patch_freeform_string_input_is_coerced_to_patch_object() {
     // patch envelope). `validate_tool_call` must run the tool's
     // `coerce_raw_string_input` (→ `{patch: raw}`) before schema validation,
     // so the call is NOT marked invalid and the patch survives intact.
-    let tool: StdArc<dyn DynTool> = StdArc::new(coco_tools::tools::ApplyPatchTool);
+    let tool: StdArc<dyn DynTool> = StdArc::new(coco_tools::tools::ApplyPatchTool::default());
     let raw = "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch\n";
     let mut tc = mk_tc("apply_patch", json!(raw));
     let validated =
@@ -492,7 +492,7 @@ async fn apply_patch_freeform_input_is_never_json_parsed() {
     // run BEFORE `normalize_value_string`, so even a patch body that happens to
     // look like a JSON object is wrapped verbatim into `{patch: <raw>}` and not
     // mangled into the object itself.
-    let tool: StdArc<dyn DynTool> = StdArc::new(coco_tools::tools::ApplyPatchTool);
+    let tool: StdArc<dyn DynTool> = StdArc::new(coco_tools::tools::ApplyPatchTool::default());
     let json_looking = r#"{"patch": "not a real patch"}"#;
     let mut tc = mk_tc("apply_patch", json!(json_looking));
     let validated =

@@ -481,6 +481,52 @@ impl SkillManager {
         (delta, is_initial)
     }
 
+    /// Atomically select and mark only listing rows that fit the aggregate
+    /// byte budget. Rows that do not fit remain unannounced for a later turn.
+    pub(crate) fn take_unannounced_skill_rows(
+        &self,
+        agent_id: Option<&str>,
+        rows: &[(&str, String)],
+        max_bytes: usize,
+    ) -> Vec<String> {
+        let key = agent_id.unwrap_or("").to_string();
+        let mut guard = self
+            .announcements
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let sent = guard.entry(key).or_default();
+        let mut used = 0usize;
+        let mut selected = Vec::new();
+        for (name, row) in rows {
+            if sent.contains(*name) {
+                continue;
+            }
+            let bounded_row;
+            let row = if row.len() > max_bytes {
+                let name_only = format!("- {name}");
+                bounded_row = if name_only.len() <= max_bytes {
+                    name_only
+                } else {
+                    "- [skill omitted: name exceeds listing budget]".to_string()
+                };
+                bounded_row.as_str()
+            } else {
+                row.as_str()
+            };
+            let separator = usize::from(!selected.is_empty());
+            let Some(next) = used.checked_add(separator + row.len()) else {
+                continue;
+            };
+            if next > max_bytes {
+                continue;
+            }
+            sent.insert((*name).to_string());
+            selected.push(row.to_string());
+            used = next;
+        }
+        selected
+    }
+
     /// Clear the per-agent announcement map so every skill re-announces
     /// on the next listing pass. Called after a disk reload (the catalog
     /// changed, so an edited same-named skill must surface again) and on

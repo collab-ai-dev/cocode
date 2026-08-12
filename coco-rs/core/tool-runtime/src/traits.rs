@@ -11,6 +11,15 @@ use crate::context::ToolUseContext;
 use crate::error::ToolError;
 use crate::validation::ValidationResult;
 
+/// Tool-specific immutable state derived after hooks have finalized the input
+/// and before permission evaluation begins.
+///
+/// The state is type-erased only at the [`DynTool`] boundary. A typed tool
+/// creates and consumes its own concrete state, while the runtime carries the
+/// same `Arc` through approval and execution without serializing it into the
+/// model-visible input.
+pub type PreparedToolState = std::sync::Arc<dyn std::any::Any + Send + Sync>;
+
 /// Session context for [`Tool::tool_spec`]. Carries
 /// the per-session knobs that drive dynamic schema omits
 /// (e.g. the `isBackgroundTasksDisabled || isForkSubagentEnabled()` gate).
@@ -318,7 +327,19 @@ pub trait DynTool: Send + Sync + 'static {
 
     // -- Permissions --
 
+    async fn prepare(
+        &self,
+        input: &Value,
+        ctx: &ToolUseContext,
+    ) -> Result<Option<PreparedToolState>, ToolError>;
+
     async fn check_permissions(&self, input: &Value, ctx: &ToolUseContext) -> ToolCheckResult;
+    async fn check_prepared_permissions(
+        &self,
+        input: &Value,
+        prepared: Option<&PreparedToolState>,
+        ctx: &ToolUseContext,
+    ) -> ToolCheckResult;
     fn prepare_permission_matcher(&self, input: &Value) -> String;
     fn to_auto_classifier_input(&self, input: &Value) -> Option<String>;
 
@@ -327,6 +348,12 @@ pub trait DynTool: Send + Sync + 'static {
     async fn execute(
         &self,
         input: Value,
+        ctx: &ToolUseContext,
+    ) -> Result<ToolResult<Value>, ToolError>;
+    async fn execute_prepared(
+        &self,
+        input: Value,
+        prepared: Option<PreparedToolState>,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError>;
     fn get_path(&self, input: &Value) -> Option<String>;
@@ -789,6 +816,17 @@ pub trait Tool: Send + Sync + 'static {
 
     // -- Permissions --
 
+    /// Derive immutable, stateful execution data once, after PreToolUse input
+    /// rewrites and before permission evaluation. Most tools need no prepared
+    /// state and use the default.
+    async fn prepare(
+        &self,
+        _input: &Self::Input,
+        _ctx: &ToolUseContext,
+    ) -> Result<Option<PreparedToolState>, ToolError> {
+        Ok(None)
+    }
+
     /// Tool's own opinion at the central evaluator's step-1c slot.
     ///
     /// Tools that need content-specific safety checks (Read/Grep/Glob
@@ -809,6 +847,18 @@ pub trait Tool: Send + Sync + 'static {
         _ctx: &ToolUseContext,
     ) -> ToolCheckResult {
         ToolCheckResult::Passthrough
+    }
+
+    /// Permission check over the exact state that will later execute.
+    /// Stateful tools override this instead of recomputing filesystem or
+    /// network-derived plans in [`Tool::check_permissions`].
+    async fn check_prepared_permissions(
+        &self,
+        input: &Self::Input,
+        _prepared: Option<&PreparedToolState>,
+        ctx: &ToolUseContext,
+    ) -> ToolCheckResult {
+        self.check_permissions(input, ctx).await
     }
 
     /// Prepare a permission matcher string for hook matching.
@@ -847,6 +897,17 @@ pub trait Tool: Send + Sync + 'static {
         input: Self::Input,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Self::Output>, ToolError>;
+
+    /// Execute with the state produced by [`Tool::prepare`]. The default keeps
+    /// stateless tools on the existing typed execution path.
+    async fn execute_prepared(
+        &self,
+        input: Self::Input,
+        _prepared: Option<PreparedToolState>,
+        ctx: &ToolUseContext,
+    ) -> Result<ToolResult<Self::Output>, ToolError> {
+        self.execute(input, ctx).await
+    }
 
     // -- File Path --
 
@@ -1069,6 +1130,19 @@ impl<T: Tool> DynTool for T {
         Tool::backfill_observable_input(self, input)
     }
 
+    async fn prepare(
+        &self,
+        input: &Value,
+        ctx: &ToolUseContext,
+    ) -> Result<Option<PreparedToolState>, ToolError> {
+        let typed: T::Input =
+            serde_json::from_value(input.clone()).map_err(|e| ToolError::InvalidInput {
+                message: format!("invalid tool input: {e}"),
+                error_code: None,
+            })?;
+        Tool::prepare(self, &typed, ctx).await
+    }
+
     async fn check_permissions(&self, input: &Value, ctx: &ToolUseContext) -> ToolCheckResult {
         match serde_json::from_value::<T::Input>(input.clone()) {
             Ok(typed) => Tool::check_permissions(self, &typed, ctx).await,
@@ -1089,6 +1163,32 @@ impl<T: Tool> DynTool for T {
                     message: format!(
                         "{} input could not be interpreted for permission checks; \
                          manual review required.",
+                        self.name()
+                    ),
+                    suggestions: vec![],
+                    choices: None,
+                    detail: None,
+                }
+            }
+        }
+    }
+    async fn check_prepared_permissions(
+        &self,
+        input: &Value,
+        prepared: Option<&PreparedToolState>,
+        ctx: &ToolUseContext,
+    ) -> ToolCheckResult {
+        match serde_json::from_value::<T::Input>(input.clone()) {
+            Ok(typed) => Tool::check_prepared_permissions(self, &typed, prepared, ctx).await,
+            Err(e) => {
+                tracing::error!(
+                    tool = self.name(),
+                    error = %e,
+                    "check_prepared_permissions: validated input failed typed deserialization"
+                );
+                ToolCheckResult::Ask {
+                    message: format!(
+                        "{} input could not be interpreted for permission checks; manual review required.",
                         self.name()
                     ),
                     suggestions: vec![],
@@ -1133,6 +1233,26 @@ impl<T: Tool> DynTool for T {
             // Preserve the typed tool's SUCCESS display data (apply-patch
             // preview, AskUserQuestion answers) so the styled transcript cell
             // gets it. Errors carry their own display data via `ToolError`.
+            display_data: r.display_data,
+        })
+    }
+    async fn execute_prepared(
+        &self,
+        input: Value,
+        prepared: Option<PreparedToolState>,
+        ctx: &ToolUseContext,
+    ) -> Result<ToolResult<Value>, ToolError> {
+        let typed: T::Input =
+            serde_json::from_value(input).map_err(|e| ToolError::InvalidInput {
+                message: format!("invalid tool input: {e}"),
+                error_code: None,
+            })?;
+        let r = Tool::execute_prepared(self, typed, prepared, ctx).await?;
+        Ok(ToolResult {
+            data: serde_json::to_value(&r.data).unwrap_or(Value::Null),
+            new_messages: r.new_messages,
+            app_state_patch: r.app_state_patch,
+            permission_updates: r.permission_updates,
             display_data: r.display_data,
         })
     }

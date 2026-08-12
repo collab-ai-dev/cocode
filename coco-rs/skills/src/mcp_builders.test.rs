@@ -206,3 +206,13 @@ fn register_mcp_skill_builder_is_no_op_when_already_set() {
     let _ = register_mcp_skill_builder(Arc::new(DefaultMcpSkillBuilder));
     let _ = mcp_skill_builder();
 }
+
+#[test]
+fn default_builder_rejects_names_that_cannot_be_listed() {
+    let mut input = spec("body");
+    input.name = "x".repeat(256);
+
+    let error = build_mcp_skill_default(&input).expect_err("oversized name must be rejected");
+
+    assert!(error.to_string().contains("1..=255"));
+}

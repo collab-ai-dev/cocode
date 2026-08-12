@@ -510,6 +510,136 @@ async fn plain_tool_error_has_no_display_data() {
     assert!(tool_result_display_data(&outcome.ordered_messages[0]).is_none());
 }
 
+#[tokio::test]
+async fn oversized_tool_error_uses_the_runtime_error_bound() {
+    let huge = "x".repeat(20_000);
+    let tool: Arc<dyn coco_tool_runtime::DynTool> = Arc::new(RenderOnlyTool {
+        parts: vec![text_part("unused")],
+        is_mcp: false,
+        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Unbounded,
+    });
+
+    let outcome = build_outcome_from_execution(RunOneTail {
+        tool_use_id: "call-bounded-error".into(),
+        tool_id: tool.id(),
+        semantic_tool_name: tool.name().into(),
+        provider_tool_name: coco_types::WireToolName::for_tool_id(&tool.id()),
+        model_index: 0,
+        tool,
+        effective_input: Value::Null,
+        execute_result: Err(ToolError::execution_failed(huge)),
+        hooks: None,
+        orchestration_ctx: test_orchestration_ctx(),
+        hook_tx: None,
+        tool_output_store: None,
+        loop_guardrail: None,
+        approval_content_message: None,
+    })
+    .await;
+
+    let (text, is_error) = tool_result_text(&outcome.ordered_messages[0]);
+    assert!(is_error);
+    assert!(
+        text.len() <= 3_000,
+        "bounded error was {} bytes",
+        text.len()
+    );
+    assert!(
+        coco_messages::estimate_text_tokens(text) <= 1_000,
+        "bounded error was {} estimated tokens",
+        coco_messages::estimate_text_tokens(text)
+    );
+    assert!(text.contains("Full text not saved"), "{text}");
+}
+
+#[tokio::test]
+async fn oversized_tool_error_stays_bounded_with_a_deep_artifact_path() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut session_dir = tmp.path().to_path_buf();
+    for index in 0..8 {
+        session_dir.push(format!("{index}-{}", "deep".repeat(45)));
+    }
+    let tool: Arc<dyn coco_tool_runtime::DynTool> = Arc::new(RenderOnlyTool {
+        parts: vec![text_part("unused")],
+        is_mcp: false,
+        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Unbounded,
+    });
+
+    let outcome = build_outcome_from_execution(RunOneTail {
+        tool_use_id: "call-deep-path-error".into(),
+        tool_id: tool.id(),
+        semantic_tool_name: tool.name().into(),
+        provider_tool_name: coco_types::WireToolName::for_tool_id(&tool.id()),
+        model_index: 0,
+        tool,
+        effective_input: Value::Null,
+        execute_result: Err(ToolError::execution_failed("界".repeat(10_000))),
+        hooks: None,
+        orchestration_ctx: test_orchestration_ctx(),
+        hook_tx: None,
+        tool_output_store: Some(coco_tool_runtime::ToolOutputStore::new(session_dir)),
+        loop_guardrail: None,
+        approval_content_message: None,
+    })
+    .await;
+
+    let (text, is_error) = tool_result_text(&outcome.ordered_messages[0]);
+    assert!(is_error);
+    assert!(
+        text.len() <= 3_000,
+        "bounded error was {} bytes",
+        text.len()
+    );
+    assert!(coco_messages::estimate_text_tokens(text) <= 1_000);
+    assert!(text.trim_end().ends_with("</persisted-output>"), "{text}");
+    assert!(coco_tool_runtime::is_pointer_bearing(text));
+    assert!(text.contains("Full text saved to:"), "{text}");
+}
+
+#[tokio::test]
+async fn error_guardrail_warning_precedes_the_final_persisted_footer() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let tool: Arc<dyn coco_tool_runtime::DynTool> = Arc::new(RenderOnlyTool {
+        parts: vec![text_part("unused")],
+        is_mcp: false,
+        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Unbounded,
+    });
+    let guard = coco_tool_runtime::LoopGuardrailHandle::from_config(
+        &coco_config::LoopGuardrailConfig::default(),
+    )
+    .expect("default guardrail is enabled");
+    assert!(
+        guard
+            .record_after_call(&tool.id(), &Value::Null, true, false, None)
+            .is_none()
+    );
+
+    let outcome = build_outcome_from_execution(RunOneTail {
+        tool_use_id: "call-guarded-error".into(),
+        tool_id: tool.id(),
+        semantic_tool_name: tool.name().into(),
+        provider_tool_name: coco_types::WireToolName::for_tool_id(&tool.id()),
+        model_index: 0,
+        tool,
+        effective_input: Value::Null,
+        execute_result: Err(ToolError::execution_failed("x".repeat(20_000))),
+        hooks: None,
+        orchestration_ctx: test_orchestration_ctx(),
+        hook_tx: None,
+        tool_output_store: Some(coco_tool_runtime::ToolOutputStore::new(tmp.path())),
+        loop_guardrail: Some(guard),
+        approval_content_message: None,
+    })
+    .await;
+
+    let (text, is_error) = tool_result_text(&outcome.ordered_messages[0]);
+    assert!(is_error);
+    assert!(text.contains("Tool loop warning"), "{text}");
+    assert!(text.trim_end().ends_with("</persisted-output>"), "{text}");
+    assert!(coco_tool_runtime::is_pointer_bearing(text));
+    assert!(text.len() <= 3_000);
+}
+
 #[test]
 fn build_early_outcome_pre_execution_cancelled_skips_failure_hooks() {
     // tool-runtime#15: a pre-execute turn abort yields PreExecutionCancelled

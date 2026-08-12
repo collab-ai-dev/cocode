@@ -258,6 +258,7 @@ pub use traits::FunctionToolSpec;
 pub use traits::GrammarFormat;
 pub use traits::InterruptBehavior;
 pub use traits::McpToolInfo;
+pub use traits::PreparedToolState;
 pub use traits::ProgressReceiver;
 pub use traits::ProgressSender;
 pub use traits::PromptOptions;

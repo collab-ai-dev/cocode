@@ -14,6 +14,7 @@ pub(crate) fn seek_sequence(
     pattern: &[String],
     start: usize,
     eof: bool,
+    update_file_mode: crate::ApplyPatchFileUpdateMode,
 ) -> Option<usize> {
     if pattern.is_empty() {
         return Some(start);
@@ -27,7 +28,11 @@ pub(crate) fn seek_sequence(
         return None;
     }
     let search_start = if eof && lines.len() >= pattern.len() {
-        lines.len() - pattern.len()
+        let eof_start = lines.len() - pattern.len();
+        match update_file_mode {
+            crate::ApplyPatchFileUpdateMode::NormalizeToLf => eof_start,
+            crate::ApplyPatchFileUpdateMode::PreserveLineEndings => eof_start.max(start),
+        }
     } else {
         start
     };

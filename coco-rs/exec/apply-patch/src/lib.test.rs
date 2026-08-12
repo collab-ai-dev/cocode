@@ -1,50 +1,12 @@
 use super::*;
 use coco_exec_server::LOCAL_FS;
-use coco_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::fs;
-use std::string::ToString;
 use tempfile::tempdir;
 
 /// Helper to construct a patch with the given body.
 fn wrap_patch(body: &str) -> String {
     format!("*** Begin Patch\n{body}\n*** End Patch")
-}
-
-#[test]
-fn test_collect_path_effects_add_delete_update_move() {
-    let dir = tempdir().unwrap();
-    let cwd = AbsolutePathBuf::from_absolute_path(dir.path()).unwrap();
-    let absolute_delete = dir.path().join("absolute-delete.txt");
-    let patch = wrap_patch(&format!(
-        r#"*** Add File: add.txt
-+add
-*** Delete File: {}
-*** Update File: update.txt
-@@
--old
-+new
-*** Update File: old-name.txt
-*** Move to: nested/new-name.txt
-@@
--old_name
-+new_name"#,
-        absolute_delete.display(),
-    ));
-    let parsed = parse_patch(&patch).unwrap();
-
-    let effects = collect_path_effects(&parsed.hunks, &cwd);
-
-    let expected = vec![
-        dir.path().join("absolute-delete.txt"),
-        dir.path().join("add.txt"),
-        dir.path().join("nested/new-name.txt"),
-        dir.path().join("old-name.txt"),
-        dir.path().join("update.txt"),
-    ];
-    assert_eq!(effects.permission_paths, expected);
-    assert_eq!(effects.history_paths, expected);
-    assert_eq!(effects.lsp_notify_paths, expected);
 }
 
 #[tokio::test]
@@ -61,10 +23,11 @@ async fn test_add_file_hunk_creates_file_with_contents() {
     let mut stderr = Vec::new();
     apply_patch(
         &patch,
-        &AbsolutePathBuf::from_absolute_path(dir.path()).unwrap(),
+        &PathUri::from_path(dir.path()).expect("absolute test path"),
         &mut stdout,
         &mut stderr,
         LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
     )
     .await
     .unwrap();
@@ -82,9 +45,35 @@ async fn test_add_file_hunk_creates_file_with_contents() {
 }
 
 #[tokio::test]
+async fn raw_apply_rejects_unroutable_environment_header() {
+    let dir = tempdir().unwrap();
+    let patch = "*** Begin Patch\n*** Environment ID: remote\n*** Add File: wrong.txt\n+wrong\n*** End Patch";
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let error = apply_patch(
+        patch,
+        &PathUri::from_path(dir.path()).expect("absolute test path"),
+        &mut stdout,
+        &mut stderr,
+        LOCAL_FS.as_ref(),
+        None,
+    )
+    .await
+    .expect_err("environment selector must fail closed");
+
+    assert!(
+        error
+            .to_string()
+            .contains("environment selection is unavailable")
+    );
+    assert!(!dir.path().join("wrong.txt").exists());
+}
+
+#[tokio::test]
 async fn test_apply_patch_hunks_accept_relative_and_absolute_paths() {
     let dir = tempdir().unwrap();
-    let cwd = dir.path().abs();
+    let cwd = PathUri::from_path(dir.path()).expect("absolute test path");
     let relative_add = dir.path().join("relative-add.txt");
     let absolute_add = dir.path().join("absolute-add.txt");
     let relative_delete = dir.path().join("relative-delete.txt");
@@ -118,9 +107,16 @@ async fn test_apply_patch_hunks_accept_relative_and_absolute_paths() {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
-    apply_patch(&patch, &cwd, &mut stdout, &mut stderr, LOCAL_FS.as_ref())
-        .await
-        .unwrap();
+    apply_patch(
+        &patch,
+        &cwd,
+        &mut stdout,
+        &mut stderr,
+        LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(fs::read_to_string(&relative_add).unwrap(), "relative add\n");
     assert_eq!(fs::read_to_string(&absolute_add).unwrap(), "absolute add\n");
@@ -156,10 +152,11 @@ async fn test_delete_file_hunk_removes_file() {
     let mut stderr = Vec::new();
     apply_patch(
         &patch,
-        &AbsolutePathBuf::from_absolute_path(dir.path()).unwrap(),
+        &PathUri::from_path(dir.path()).expect("absolute test path"),
         &mut stdout,
         &mut stderr,
         LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
     )
     .await
     .unwrap();
@@ -191,10 +188,11 @@ async fn test_update_file_hunk_modifies_content() {
     let mut stderr = Vec::new();
     apply_patch(
         &patch,
-        &AbsolutePathBuf::from_absolute_path(dir.path()).unwrap(),
+        &PathUri::from_path(dir.path()).expect("absolute test path"),
         &mut stdout,
         &mut stderr,
         LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
     )
     .await
     .unwrap();
@@ -230,10 +228,11 @@ async fn test_update_file_hunk_can_move_file() {
     let mut stderr = Vec::new();
     apply_patch(
         &patch,
-        &AbsolutePathBuf::from_absolute_path(dir.path()).unwrap(),
+        &PathUri::from_path(dir.path()).expect("absolute test path"),
         &mut stdout,
         &mut stderr,
         LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
     )
     .await
     .unwrap();
@@ -249,6 +248,60 @@ async fn test_update_file_hunk_can_move_file() {
     assert!(!src.exists());
     let contents = fs::read_to_string(&dest).unwrap();
     assert_eq!(contents, "line2\n");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_failed_move_returns_committed_destination_delta() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempdir().unwrap();
+    let source_dir = dir.path().join("locked");
+    let dest_dir = dir.path().join("out");
+    fs::create_dir(&source_dir).unwrap();
+    fs::create_dir(&dest_dir).unwrap();
+    let src = source_dir.join("src.txt");
+    let dest = dest_dir.join("dst.txt");
+    fs::write(&src, "line\n").unwrap();
+    fs::set_permissions(&source_dir, fs::Permissions::from_mode(0o555)).unwrap();
+
+    let patch =
+        wrap_patch("*** Update File: locked/src.txt\n*** Move to: out/dst.txt\n@@\n-line\n+line2");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let failure = apply_patch(
+        &patch,
+        &PathUri::from_path(dir.path()).expect("absolute test path"),
+        &mut stdout,
+        &mut stderr,
+        LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
+    )
+    .await
+    .expect_err("source removal should fail after destination write");
+
+    fs::set_permissions(&source_dir, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(
+        String::from_utf8(stderr)
+            .unwrap()
+            .contains(&format!("Failed to remove original {}", src.display()))
+    );
+    assert_eq!(
+        failure.delta(),
+        &AppliedPatchDelta::new(
+            vec![AppliedPatchChange {
+                path: PathUri::from_path(&dest).expect("absolute destination path"),
+                change: AppliedPatchFileChange::Add {
+                    content: "line2\n".to_string(),
+                    overwritten_content: None,
+                },
+            }],
+            /*exact*/ true,
+        )
+    );
+    assert_eq!(fs::read_to_string(src).unwrap(), "line\n");
+    assert_eq!(fs::read_to_string(dest).unwrap(), "line2\n");
 }
 
 /// Verify that a single `Update File` hunk with multiple change chunks can update different
@@ -278,10 +331,11 @@ async fn test_multiple_update_chunks_apply_to_single_file() {
     let mut stderr = Vec::new();
     apply_patch(
         &patch,
-        &AbsolutePathBuf::from_absolute_path(dir.path()).unwrap(),
+        &PathUri::from_path(dir.path()).expect("absolute test path"),
         &mut stdout,
         &mut stderr,
         LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
     )
     .await
     .unwrap();
@@ -335,10 +389,11 @@ async fn test_update_file_hunk_interleaved_changes() {
     let mut stderr = Vec::new();
     apply_patch(
         &patch,
-        &AbsolutePathBuf::from_absolute_path(dir.path()).unwrap(),
+        &PathUri::from_path(dir.path()).expect("absolute test path"),
         &mut stdout,
         &mut stderr,
         LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
     )
     .await
     .unwrap();
@@ -378,10 +433,11 @@ async fn test_pure_addition_chunk_followed_by_removal() {
     let mut stderr = Vec::new();
     apply_patch(
         &patch,
-        &AbsolutePathBuf::from_absolute_path(dir.path()).unwrap(),
+        &PathUri::from_path(dir.path()).expect("absolute test path"),
         &mut stdout,
         &mut stderr,
         LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
     )
     .await
     .unwrap();
@@ -420,10 +476,11 @@ async fn test_update_line_with_unicode_dash() {
     let mut stderr = Vec::new();
     apply_patch(
         &patch,
-        &AbsolutePathBuf::from_absolute_path(dir.path()).unwrap(),
+        &PathUri::from_path(dir.path()).expect("absolute test path"),
         &mut stdout,
         &mut stderr,
         LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
     )
     .await
     .unwrap();
@@ -445,271 +502,87 @@ async fn test_update_line_with_unicode_dash() {
     assert_eq!(String::from_utf8(stderr).unwrap(), "");
 }
 
-#[tokio::test]
-async fn test_unified_diff() {
-    // Start with a file containing four lines.
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("multi.txt");
-    fs::write(&path, "foo\nbar\nbaz\nqux\n").unwrap();
-    let patch = wrap_patch(&format!(
-        r#"*** Update File: {}
-@@
- foo
--bar
-+BAR
-@@
- baz
--qux
-+QUX"#,
-        path.display()
-    ));
-    let patch = parse_patch(&patch).unwrap();
-
-    let update_file_chunks = match patch.hunks.as_slice() {
-        [Hunk::UpdateFile { chunks, .. }] => chunks,
-        _ => panic!("Expected a single UpdateFile hunk"),
-    };
-    let path_abs = path.as_path().abs();
-    let diff = unified_diff_from_chunks(&path_abs, update_file_chunks, LOCAL_FS.as_ref())
-        .await
-        .unwrap();
-    let expected_diff = r#"@@ -1,4 +1,4 @@
- foo
--bar
-+BAR
- baz
--qux
-+QUX
-"#;
-    let expected = ApplyPatchFileUpdate {
-        unified_diff: expected_diff.to_string(),
-        content: "foo\nBAR\nbaz\nQUX\n".to_string(),
-    };
-    assert_eq!(expected, diff);
-}
-
-#[tokio::test]
-async fn test_unified_diff_first_line_replacement() {
-    // Replace the very first line of the file.
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("first.txt");
-    fs::write(&path, "foo\nbar\nbaz\n").unwrap();
-
-    let patch = wrap_patch(&format!(
-        r#"*** Update File: {}
-@@
--foo
-+FOO
- bar
-"#,
-        path.display()
-    ));
-
-    let patch = parse_patch(&patch).unwrap();
-    let chunks = match patch.hunks.as_slice() {
-        [Hunk::UpdateFile { chunks, .. }] => chunks,
-        _ => panic!("Expected a single UpdateFile hunk"),
-    };
-
-    let path_abs = path.as_path().abs();
-    let diff = unified_diff_from_chunks(&path_abs, chunks, LOCAL_FS.as_ref())
-        .await
-        .unwrap();
-    let expected_diff = r#"@@ -1,2 +1,2 @@
--foo
-+FOO
- bar
-"#;
-    let expected = ApplyPatchFileUpdate {
-        unified_diff: expected_diff.to_string(),
-        content: "FOO\nbar\nbaz\n".to_string(),
-    };
-    assert_eq!(expected, diff);
-}
-
-#[tokio::test]
-async fn test_unified_diff_last_line_replacement() {
-    // Replace the very last line of the file.
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("last.txt");
-    fs::write(&path, "foo\nbar\nbaz\n").unwrap();
-
-    let patch = wrap_patch(&format!(
-        r#"*** Update File: {}
-@@
- foo
- bar
--baz
-+BAZ
-"#,
-        path.display()
-    ));
-
-    let patch = parse_patch(&patch).unwrap();
-    let chunks = match patch.hunks.as_slice() {
-        [Hunk::UpdateFile { chunks, .. }] => chunks,
-        _ => panic!("Expected a single UpdateFile hunk"),
-    };
-
-    let path_abs = path.as_path().abs();
-    let diff = unified_diff_from_chunks(&path_abs, chunks, LOCAL_FS.as_ref())
-        .await
-        .unwrap();
-    let expected_diff = r#"@@ -2,2 +2,2 @@
- bar
--baz
-+BAZ
-"#;
-    let expected = ApplyPatchFileUpdate {
-        unified_diff: expected_diff.to_string(),
-        content: "foo\nbar\nBAZ\n".to_string(),
-    };
-    assert_eq!(expected, diff);
-}
-
-#[tokio::test]
-async fn test_unified_diff_insert_at_eof() {
-    // Insert a new line at end‑of‑file.
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("insert.txt");
-    fs::write(&path, "foo\nbar\nbaz\n").unwrap();
-
-    let patch = wrap_patch(&format!(
-        r#"*** Update File: {}
-@@
-+quux
-*** End of File
-"#,
-        path.display()
-    ));
-
-    let patch = parse_patch(&patch).unwrap();
-    let chunks = match patch.hunks.as_slice() {
-        [Hunk::UpdateFile { chunks, .. }] => chunks,
-        _ => panic!("Expected a single UpdateFile hunk"),
-    };
-
-    let path_abs = path.as_path().abs();
-    let diff = unified_diff_from_chunks(&path_abs, chunks, LOCAL_FS.as_ref())
-        .await
-        .unwrap();
-    let expected_diff = r#"@@ -3 +3,2 @@
- baz
-+quux
-"#;
-    let expected = ApplyPatchFileUpdate {
-        unified_diff: expected_diff.to_string(),
-        content: "foo\nbar\nbaz\nquux\n".to_string(),
-    };
-    assert_eq!(expected, diff);
-}
-
-#[tokio::test]
-async fn test_unified_diff_interleaved_changes() {
-    // Original file with six lines.
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("interleaved.txt");
-    fs::write(&path, "a\nb\nc\nd\ne\nf\n").unwrap();
-
-    // Patch replaces two separate lines and appends a new one at EOF using
-    // three distinct chunks.
-    let patch_body = format!(
-        r#"*** Update File: {}
-@@
- a
--b
-+B
-@@
- d
--e
-+E
-@@
- f
-+g
-*** End of File"#,
-        path.display()
-    );
-    let patch = wrap_patch(&patch_body);
-
-    // Extract chunks then build the unified diff.
-    let parsed = parse_patch(&patch).unwrap();
-    let chunks = match parsed.hunks.as_slice() {
-        [Hunk::UpdateFile { chunks, .. }] => chunks,
-        _ => panic!("Expected a single UpdateFile hunk"),
-    };
-
-    let path_abs = path.as_path().abs();
-    let diff = unified_diff_from_chunks(&path_abs, chunks, LOCAL_FS.as_ref())
-        .await
-        .unwrap();
-
-    let expected_diff = r#"@@ -1,6 +1,7 @@
- a
--b
-+B
- c
- d
--e
-+E
- f
-+g
-"#;
-
-    let expected = ApplyPatchFileUpdate {
-        unified_diff: expected_diff.to_string(),
-        content: "a\nB\nc\nd\nE\nf\ng\n".to_string(),
-    };
-
-    assert_eq!(expected, diff);
-
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    apply_patch(
-        &patch,
-        &AbsolutePathBuf::from_absolute_path(dir.path()).unwrap(),
-        &mut stdout,
-        &mut stderr,
-        LOCAL_FS.as_ref(),
-    )
-    .await
-    .unwrap();
-    let contents = fs::read_to_string(path).unwrap();
-    assert_eq!(
-        contents,
-        r#"a
-B
-c
-d
-E
-f
-g
-"#
-    );
-}
-
+#[cfg(unix)]
 #[tokio::test]
 async fn test_apply_patch_fails_on_write_error() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("readonly.txt");
-    fs::write(&path, "before\n").unwrap();
-    let mut perms = fs::metadata(&path).unwrap().permissions();
-    perms.set_readonly(true);
-    fs::set_permissions(&path, perms).unwrap();
+    use std::os::unix::fs::PermissionsExt;
 
-    let patch = wrap_patch(&format!(
-        "*** Update File: {}\n@@\n-before\n+after\n*** End Patch",
-        path.display()
-    ));
+    let dir = tempdir().unwrap();
+    let locked_dir = dir.path().join("locked");
+    fs::create_dir(&locked_dir).unwrap();
+    fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o555)).unwrap();
+
+    let patch = wrap_patch("*** Add File: locked/new.txt\n+after");
 
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let result = apply_patch(
         &patch,
-        &AbsolutePathBuf::from_absolute_path(dir.path()).unwrap(),
+        &PathUri::from_path(dir.path()).expect("absolute test path"),
         &mut stdout,
         &mut stderr,
         LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
     )
     .await;
-    assert!(result.is_err());
+    let failure = result.expect_err("write should fail");
+
+    fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(!failure.delta().is_exact());
+}
+
+#[tokio::test]
+async fn test_unreadable_destinations_return_inexact_delta() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("binary.dat");
+    fs::write(dir.path().join("source.txt"), "before\n").unwrap();
+    let cwd = PathUri::from_path(dir.path()).expect("absolute test path");
+
+    for patch in [
+        wrap_patch("*** Add File: binary.dat\n+text"),
+        wrap_patch("*** Update File: source.txt\n*** Move to: binary.dat\n@@\n-before\n+after"),
+    ] {
+        fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let delta = apply_patch(
+            &patch,
+            &cwd,
+            &mut stdout,
+            &mut stderr,
+            LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
+        )
+        .await
+        .unwrap();
+
+        assert!(!delta.is_exact());
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_delete_symlink_returns_inexact_delta() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("target.txt"), "target\n").unwrap();
+    symlink(dir.path().join("target.txt"), dir.path().join("link.txt")).unwrap();
+    let patch = wrap_patch("*** Delete File: link.txt");
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let delta = apply_patch(
+        &patch,
+        &PathUri::from_path(dir.path()).expect("absolute test path"),
+        &mut stdout,
+        &mut stderr,
+        LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
+    )
+    .await
+    .unwrap();
+
+    assert!(!delta.is_exact());
 }

@@ -280,6 +280,92 @@ fn render_text_or_json_falls_back_to_json_for_structured_data() {
     );
 }
 
+#[tokio::test]
+async fn dyn_tool_carries_the_same_prepared_state_through_permission_and_execution() {
+    struct PreparedStateTool;
+
+    #[async_trait::async_trait]
+    impl Tool for PreparedStateTool {
+        type Input = Value;
+        type Output = Value;
+
+        fn runtime_validation_schema(&self) -> &crate::schema::ToolInputSchema {
+            crate::schema::test_runtime_schema()
+        }
+        fn id(&self) -> ToolId {
+            ToolId::Custom("prepared_state_test".into())
+        }
+        fn name(&self) -> &str {
+            "prepared_state_test"
+        }
+        fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
+            String::new()
+        }
+        async fn prompt(&self, _: &PromptOptions) -> String {
+            String::new()
+        }
+        async fn prepare(
+            &self,
+            input: &Value,
+            _: &ToolUseContext,
+        ) -> Result<Option<PreparedToolState>, ToolError> {
+            Ok(Some(std::sync::Arc::new(input["value"].clone())))
+        }
+        async fn check_prepared_permissions(
+            &self,
+            _: &Value,
+            prepared: Option<&PreparedToolState>,
+            _: &ToolUseContext,
+        ) -> coco_types::ToolCheckResult {
+            assert_eq!(
+                prepared
+                    .and_then(|state| state.downcast_ref::<Value>())
+                    .cloned(),
+                Some(json!(42))
+            );
+            coco_types::ToolCheckResult::Allow {
+                updated_input: None,
+                feedback: None,
+            }
+        }
+        async fn execute(
+            &self,
+            _: Value,
+            _: &ToolUseContext,
+        ) -> Result<ToolResult<Value>, ToolError> {
+            unreachable!("prepared execution must be used")
+        }
+        async fn execute_prepared(
+            &self,
+            _: Value,
+            prepared: Option<PreparedToolState>,
+            _: &ToolUseContext,
+        ) -> Result<ToolResult<Value>, ToolError> {
+            let value = prepared
+                .and_then(|state| state.downcast_ref::<Value>().cloned())
+                .expect("prepared value");
+            Ok(ToolResult::data(value))
+        }
+    }
+
+    let tool: &dyn DynTool = &PreparedStateTool;
+    let ctx = ToolUseContext::test_default();
+    let input = json!({"value": 42});
+    let state = tool.prepare(&input, &ctx).await.unwrap();
+    let decision = tool
+        .check_prepared_permissions(&input, state.as_ref(), &ctx)
+        .await;
+    assert!(matches!(
+        decision,
+        coco_types::ToolCheckResult::Allow { .. }
+    ));
+    let result = tool
+        .execute_prepared(input, state, &ctx)
+        .await
+        .expect("execute prepared state");
+    assert_eq!(result.data, json!(42));
+}
+
 /// The blanket `DynTool::check_permissions` must FAIL CLOSED (Ask) when the
 /// input cannot deserialize into the tool's typed input. The old silent
 /// `Passthrough` skipped security-relevant tool opinions (path carve-outs,

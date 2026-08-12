@@ -84,6 +84,13 @@ impl McpSkillBuilder for DefaultMcpSkillBuilder {
 pub fn build_mcp_skill_default(spec: &McpSkillSpec) -> Result<SkillDefinition, SkillsError> {
     use coco_frontmatter::FrontmatterValue;
 
+    const MAX_MCP_SKILL_NAME_BYTES: usize = 255;
+    if spec.name.is_empty() || spec.name.len() > MAX_MCP_SKILL_NAME_BYTES {
+        return Err(SkillsError::generic(format!(
+            "MCP skill name must contain 1..={MAX_MCP_SKILL_NAME_BYTES} UTF-8 bytes"
+        )));
+    }
+
     let frontmatter = coco_frontmatter::parse(&spec.content);
     let data = &frontmatter.data;
 

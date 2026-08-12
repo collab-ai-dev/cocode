@@ -3,7 +3,9 @@
 //! runtime applies it. Visible only when
 //! `ctx.tool_overrides.is_extra(ToolId::Builtin(ToolName::ApplyPatch))`.
 //!
-//! Backed by [`coco_apply_patch::apply_patch`] + [`coco_exec_server::LOCAL_FS`].
+//! Parsing and diagnostics match [`coco_apply_patch::apply_patch`]. Valid
+//! patches go through [`coco_apply_patch::PreparedPatch`] so policy checks and
+//! writes use one immutable, canonicalized plan.
 
 use std::collections::VecDeque;
 
@@ -11,6 +13,7 @@ use async_trait::async_trait;
 use coco_apply_patch::Hunk as ApplyPatchHunk;
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::PreparedToolState;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
@@ -24,6 +27,7 @@ use coco_types::ToolDisplayData;
 use coco_types::ToolId;
 use coco_types::ToolName;
 use coco_utils_absolute_path::AbsolutePathBuf;
+use coco_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -50,14 +54,47 @@ pub struct ApplyPatchOutput {
 /// ([`APPLY_PATCH_LARK_GRAMMAR`]) constrains the body, so the description only
 /// needs to tell the model this is a freeform (non-JSON) tool. There is no
 /// upstream counterpart (gpt-5 / codex-family only).
-const APPLY_PATCH_FREEFORM_DESCRIPTION: &str = "Use the `apply_patch` tool to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.";
+const APPLY_PATCH_FREEFORM_DESCRIPTION: &str = "The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.";
 
 /// The lark grammar the model's freeform output is constrained to — a verbatim
 /// mirror of codex `apply_patch.lark`. The `coco_apply_patch` parser accepts
 /// exactly this envelope (`*** Begin Patch` … `*** End Patch`).
 const APPLY_PATCH_LARK_GRAMMAR: &str = include_str!("apply_patch.lark");
 
-pub struct ApplyPatchTool;
+#[derive(Clone)]
+pub struct ApplyPatchTool {
+    fs: std::sync::Arc<dyn coco_exec_server::ExecutorFileSystem>,
+    sandbox: Option<coco_exec_server::FileSystemSandboxContext>,
+}
+
+enum PreparedApplyPatch {
+    DeniedByWriteFence { message: String },
+    Paths(Box<coco_apply_patch::PreparedPatchPaths>),
+}
+
+impl ApplyPatchTool {
+    pub fn new(
+        fs: std::sync::Arc<dyn coco_exec_server::ExecutorFileSystem>,
+        sandbox: Option<coco_exec_server::FileSystemSandboxContext>,
+    ) -> Self {
+        Self { fs, sandbox }
+    }
+}
+
+impl Default for ApplyPatchTool {
+    fn default() -> Self {
+        Self::new(coco_exec_server::LOCAL_FS.clone(), None)
+    }
+}
+
+impl std::fmt::Debug for ApplyPatchTool {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ApplyPatchTool")
+            .field("has_sandbox_context", &self.sandbox.is_some())
+            .finish_non_exhaustive()
+    }
+}
 
 #[async_trait]
 impl Tool for ApplyPatchTool {
@@ -135,6 +172,72 @@ impl Tool for ApplyPatchTool {
         false
     }
 
+    fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
+        coco_tool_runtime::ResultSizeBound::Bytes(3_000)
+    }
+
+    async fn prepare(
+        &self,
+        input: &ApplyPatchInput,
+        ctx: &ToolUseContext,
+    ) -> Result<Option<PreparedToolState>, ToolError> {
+        let Ok(parsed) = coco_apply_patch::parse_patch(&input.patch) else {
+            return Ok(None);
+        };
+        if parsed.environment_id.is_some() {
+            return Err(execution_failed_with_preview(
+                "apply_patch environment selection is unavailable for this session",
+                build_apply_patch_preview(&input.patch).map(ToolDisplayData::ApplyPatchPreview),
+            ));
+        }
+        let cwd = apply_patch_cwd(ctx)
+            .await
+            .map_err(ToolError::execution_failed)?;
+        let logical_effects = coco_apply_patch::collect_path_effects(&parsed.hunks, &cwd)
+            .map_err(|error| ToolError::execution_failed(error.to_string()))?;
+        if let Some(message) = first_write_fence_denial(&logical_effects, ctx) {
+            return Ok(Some(std::sync::Arc::new(
+                PreparedApplyPatch::DeniedByWriteFence { message },
+            )));
+        }
+        let prepared = coco_apply_patch::prepare_hunk_paths(
+            &parsed.hunks,
+            &cwd,
+            coco_apply_patch::ApplyPatchFileUpdateMode::PreserveLineEndings,
+            self.fs.clone(),
+            self.sandbox.clone(),
+        )
+        .await
+        .map_err(|error| {
+            execution_failed_with_preview(
+                error.to_string(),
+                build_apply_patch_preview(&input.patch).map(ToolDisplayData::ApplyPatchPreview),
+            )
+        })?;
+        Ok(Some(std::sync::Arc::new(PreparedApplyPatch::Paths(
+            Box::new(prepared),
+        ))))
+    }
+
+    async fn check_prepared_permissions(
+        &self,
+        input: &ApplyPatchInput,
+        prepared: Option<&PreparedToolState>,
+        ctx: &ToolUseContext,
+    ) -> ToolCheckResult {
+        let Some(prepared) = prepared_apply_patch_state(prepared) else {
+            return self.check_permissions(input, ctx).await;
+        };
+        match prepared {
+            PreparedApplyPatch::DeniedByWriteFence { message } => ToolCheckResult::Deny {
+                message: message.clone(),
+            },
+            PreparedApplyPatch::Paths(paths) => {
+                check_canonical_path_permissions(paths.path_effects(), ctx).await
+            }
+        }
+    }
+
     async fn check_permissions(
         &self,
         input: &ApplyPatchInput,
@@ -144,31 +247,31 @@ impl Tool for ApplyPatchTool {
             return ToolCheckResult::Passthrough;
         };
         let Ok(parsed) = coco_apply_patch::parse_patch(&input.patch) else {
-            return ToolCheckResult::Passthrough;
+            return allow_correctness_check();
         };
-        let path_effects = coco_apply_patch::collect_path_effects(&parsed.hunks, &cwd);
-        if path_effects.permission_paths.is_empty() {
-            return ToolCheckResult::Passthrough;
+        let logical_effects = match coco_apply_patch::collect_path_effects(&parsed.hunks, &cwd) {
+            Ok(path_effects) => path_effects,
+            Err(_) => return allow_correctness_check(),
+        };
+        if let Some(message) = first_write_fence_denial(&logical_effects, ctx) {
+            return ToolCheckResult::Deny { message };
         }
-
-        let cwd_str = cwd.as_path().to_string_lossy().to_string();
-        let mut all_paths_to_check = Vec::new();
-        for path in &path_effects.permission_paths {
-            if let Some(message) = crate::check_write_root_fence(ctx, path.as_path()) {
-                return ToolCheckResult::Deny { message };
-            }
-            let path_str = path.to_string_lossy();
-            let paths_to_check =
-                coco_permissions::filesystem::get_paths_for_permission_check(&path_str, &cwd_str);
-            all_paths_to_check.extend(paths_to_check);
-        }
-        crate::tools::write_permissions::check_write_permission_for_paths(
-            &all_paths_to_check,
-            ctx,
-            ToolName::ApplyPatch.as_str(),
-            "apply a patch",
-            cwd.as_path(),
+        let path_effects = match coco_apply_patch::validate_hunk_paths(
+            &parsed.hunks,
+            &cwd,
+            self.fs.as_ref(),
+            self.sandbox.as_ref(),
         )
+        .await
+        {
+            Ok(path_effects) => path_effects,
+            Err(
+                coco_apply_patch::ApplyPatchError::ParseError(_)
+                | coco_apply_patch::ApplyPatchError::PathUri(_),
+            ) => return allow_correctness_check(),
+            Err(_) => return ToolCheckResult::Passthrough,
+        };
+        check_canonical_path_permissions(&path_effects, ctx).await
     }
 
     /// Render `{stdout, stderr}` by joining stdout + stderr with a
@@ -192,6 +295,16 @@ impl Tool for ApplyPatchTool {
         input: ApplyPatchInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<ApplyPatchOutput>, ToolError> {
+        let prepared = self.prepare(&input, ctx).await?;
+        self.execute_prepared(input, prepared, ctx).await
+    }
+
+    async fn execute_prepared(
+        &self,
+        input: ApplyPatchInput,
+        prepared_state: Option<PreparedToolState>,
+        ctx: &ToolUseContext,
+    ) -> Result<ToolResult<ApplyPatchOutput>, ToolError> {
         let patch = &input.patch;
         let preview = build_apply_patch_preview(patch);
         let display_data = preview.clone().map(ToolDisplayData::ApplyPatchPreview);
@@ -208,15 +321,17 @@ impl Tool for ApplyPatchTool {
                 display_data.clone(),
             )
         })?;
+        let cwd = PathUri::from_abs_path(&cwd);
 
         let mut stdout: Vec<u8> = Vec::new();
         let mut stderr: Vec<u8> = Vec::new();
-        let fs: &dyn coco_exec_server::ExecutorFileSystem = coco_exec_server::LOCAL_FS.as_ref();
+        let fs = self.fs.as_ref();
+        let sandbox = self.sandbox.as_ref();
 
         let parsed = match coco_apply_patch::parse_patch(patch) {
             Ok(parsed) => Some(parsed),
             Err(_) => {
-                coco_apply_patch::apply_patch(patch, &cwd, &mut stdout, &mut stderr, fs)
+                coco_apply_patch::apply_patch(patch, &cwd, &mut stdout, &mut stderr, fs, sandbox)
                     .await
                     .map_err(|e| {
                         apply_patch_error_with_preview(&stderr, e, display_data.clone())
@@ -224,80 +339,205 @@ impl Tool for ApplyPatchTool {
                 None
             }
         };
-        let Some(parsed) = parsed else {
+        let Some(_) = parsed else {
             return Ok(result_with_preview(stdout, stderr, display_data));
         };
-        let path_effects = coco_apply_patch::collect_path_effects(&parsed.hunks, &cwd);
+        let prepared_paths = match prepared_apply_patch_state(prepared_state.as_ref()) {
+            Some(PreparedApplyPatch::Paths(prepared)) => prepared,
+            Some(PreparedApplyPatch::DeniedByWriteFence { message }) => {
+                return Err(execution_failed_with_preview(message.clone(), display_data));
+            }
+            None => {
+                return Err(execution_failed_with_preview(
+                    "apply_patch execution is missing its prepared plan; retry the tool call",
+                    display_data,
+                ));
+            }
+        };
+        let path_effects = prepared_paths.path_effects().clone();
 
         // Execute-time guard: `canUseTool` Allow skips built-in permission
         // checks, so re-enforce the write fence immediately before mutation.
-        for path in &path_effects.permission_paths {
-            if let Some(message) = crate::check_write_root_fence(ctx, path.as_path()) {
-                return Err(execution_failed_with_preview(message, display_data));
+        for path in path_effects.paths() {
+            if crate::check_write_root_fence(ctx, &path.to_path_buf()).is_some() {
+                return Err(execution_failed_with_preview(
+                    canonical_write_fence_denial(),
+                    display_data,
+                ));
             }
         }
 
-        enforce_team_memory_secret_guard(ctx, &parsed.hunks, &cwd, fs)
+        // Content snapshots and patch-context matching happen only after the
+        // canonical path plan has passed permission resolution.
+        let prepared = coco_apply_patch::prepare_hunks_from_paths(prepared_paths)
             .await
+            .map_err(|error| {
+                execution_failed_with_preview(error.to_string(), display_data.clone())
+            })?;
+
+        enforce_team_memory_secret_guard(ctx, &prepared)
             .map_err(|message| execution_failed_with_preview(message, display_data.clone()))?;
 
         // Capture file-history snapshots before mutation, mirroring Edit/Write.
-        for path in &path_effects.history_paths {
-            crate::track_file_edit(ctx, path.as_path()).await;
+        for path in path_effects.paths() {
+            crate::track_file_edit(ctx, &path.to_path_buf()).await;
         }
 
-        coco_apply_patch::apply_hunks(&parsed.hunks, &cwd, &mut stdout, &mut stderr, fs)
-            .await
-            .map_err(|e| apply_patch_error_with_preview(&stderr, e, display_data.clone()))?;
+        let committed = match coco_apply_patch::commit_prepared_patch(&prepared).await {
+            Ok(committed) => committed,
+            Err(error) => {
+                record_applied_delta(ctx, error.delta(), &path_effects).await;
+                return Err(apply_patch_error_with_preview(
+                    &stderr,
+                    error,
+                    display_data.clone(),
+                ));
+            }
+        };
+        coco_apply_patch::print_summary(committed.affected_paths(), &mut stdout).map_err(
+            |error| execution_failed_with_preview(error.to_string(), display_data.clone()),
+        )?;
 
-        // Notify LSP of `didSave` per file touched so diagnostics refresh.
-        // Best-effort, errors swallowed.
-        for path in &path_effects.lsp_notify_paths {
-            ctx.lsp.notify_save(path.as_path()).await;
+        for (path, contents) in committed.written_files() {
+            crate::record_file_edit(ctx, &path.to_path_buf(), contents.to_string()).await;
+        }
+        for path in committed.deleted_files() {
+            crate::record_file_delete(ctx, &path.to_path_buf()).await;
+        }
+
+        // Match Write/Edit post-commit integration for every source and
+        // destination: activate path-gated skills and refresh diagnostics.
+        for path in path_effects.logical_paths() {
+            let path = path.to_path_buf();
+            crate::track_skill_triggers(ctx, &path).await;
+        }
+        for path in path_effects.paths() {
+            let path = path.to_path_buf();
+            ctx.lsp.notify_save(&path).await;
         }
 
         Ok(result_with_preview(stdout, stderr, display_data))
     }
 }
 
-async fn enforce_team_memory_secret_guard(
+fn enforce_team_memory_secret_guard(
     ctx: &ToolUseContext,
-    hunks: &[ApplyPatchHunk],
-    cwd: &AbsolutePathBuf,
-    fs: &dyn coco_exec_server::ExecutorFileSystem,
+    prepared: &coco_apply_patch::PreparedPatch,
 ) -> Result<(), String> {
-    for hunk in hunks {
-        match hunk {
-            ApplyPatchHunk::AddFile { path, contents } => {
-                let target = resolve_patch_path(path, cwd);
-                if let Some(message) = crate::check_team_mem_secret(ctx, &target, contents) {
-                    return Err(message);
-                }
-            }
-            ApplyPatchHunk::DeleteFile { .. } => {}
-            ApplyPatchHunk::UpdateFile {
-                path,
-                move_path,
-                chunks,
-            } => {
-                let source = AbsolutePathBuf::resolve_path_against_base(path, cwd);
-                let update = coco_apply_patch::unified_diff_from_chunks(&source, chunks, fs)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                let target = resolve_patch_path(move_path.as_deref().unwrap_or(path), cwd);
-                if let Some(message) = crate::check_team_mem_secret(ctx, &target, update.content())
-                {
-                    return Err(message);
-                }
-            }
+    for (target, contents) in prepared.proposed_writes() {
+        if let Some(message) = crate::check_team_mem_secret(ctx, &target.to_path_buf(), contents) {
+            return Err(message);
         }
     }
     Ok(())
 }
 
+fn prepared_apply_patch_state(state: Option<&PreparedToolState>) -> Option<&PreparedApplyPatch> {
+    state?.as_ref().downcast_ref::<PreparedApplyPatch>()
+}
+
+fn first_write_fence_denial(
+    path_effects: &coco_apply_patch::ApplyPatchPathEffects,
+    ctx: &ToolUseContext,
+) -> Option<String> {
+    path_effects
+        .logical_paths()
+        .iter()
+        .find_map(|path| crate::check_write_root_fence(ctx, &path.to_path_buf()))
+}
+
+fn canonical_write_fence_denial() -> &'static str {
+    "Refusing to apply patch: a target resolves outside this agent's allowed write roots."
+}
+
+async fn check_canonical_path_permissions(
+    path_effects: &coco_apply_patch::ApplyPatchPathEffects,
+    ctx: &ToolUseContext,
+) -> ToolCheckResult {
+    if path_effects.paths().is_empty() {
+        return ToolCheckResult::Passthrough;
+    }
+    let Ok(cwd) = apply_patch_cwd(ctx).await else {
+        return ToolCheckResult::Passthrough;
+    };
+    let cwd_path = cwd.to_path_buf();
+    let cwd_str = cwd_path.to_string_lossy().to_string();
+    let mut all_paths_to_check = Vec::new();
+    for path in path_effects.paths() {
+        let path = path.to_path_buf();
+        if crate::check_write_root_fence(ctx, &path).is_some() {
+            return ToolCheckResult::Deny {
+                message: canonical_write_fence_denial().to_string(),
+            };
+        }
+        let path_str = path.to_string_lossy();
+        all_paths_to_check.extend(
+            coco_permissions::filesystem::get_paths_for_permission_check(&path_str, &cwd_str),
+        );
+    }
+    crate::tools::write_permissions::check_write_permission_for_paths(
+        &all_paths_to_check,
+        ctx,
+        ToolName::ApplyPatch.as_str(),
+        "apply a patch",
+        &cwd_path,
+    )
+}
+
+async fn record_applied_delta(
+    ctx: &ToolUseContext,
+    delta: &coco_apply_patch::AppliedPatchDelta,
+    path_effects: &coco_apply_patch::ApplyPatchPathEffects,
+) {
+    for change in delta.changes() {
+        match &change.change {
+            coco_apply_patch::AppliedPatchFileChange::Add { content, .. } => {
+                crate::record_file_edit(ctx, &change.path.to_path_buf(), content.clone()).await;
+                ctx.lsp.notify_save(&change.path.to_path_buf()).await;
+            }
+            coco_apply_patch::AppliedPatchFileChange::Delete { .. } => {
+                crate::record_file_delete(ctx, &change.path.to_path_buf()).await;
+                ctx.lsp.notify_save(&change.path.to_path_buf()).await;
+            }
+            coco_apply_patch::AppliedPatchFileChange::Update {
+                move_path,
+                new_content,
+                ..
+            } => {
+                let target = move_path.as_ref().unwrap_or(&change.path);
+                crate::record_file_edit(ctx, &target.to_path_buf(), new_content.clone()).await;
+                ctx.lsp.notify_save(&target.to_path_buf()).await;
+                if move_path.is_some() {
+                    crate::record_file_delete(ctx, &change.path.to_path_buf()).await;
+                    ctx.lsp.notify_save(&change.path.to_path_buf()).await;
+                }
+            }
+        }
+    }
+
+    if !delta.is_exact() {
+        // A checked write can still fail after truncation (for example ENOSPC).
+        // Drop cached contents for every authorized target and force LSP refresh.
+        for path in path_effects.paths() {
+            crate::record_file_delete(ctx, &path.to_path_buf()).await;
+            ctx.lsp.notify_save(&path.to_path_buf()).await;
+        }
+    }
+    for path in path_effects.logical_paths() {
+        crate::track_skill_triggers(ctx, &path.to_path_buf()).await;
+    }
+}
+
+fn allow_correctness_check() -> ToolCheckResult {
+    ToolCheckResult::Allow {
+        updated_input: None,
+        feedback: None,
+    }
+}
+
 fn apply_patch_error_with_preview(
     stderr: &[u8],
-    error: coco_apply_patch::ApplyPatchError,
+    error: impl std::fmt::Display,
     display_data: Option<ToolDisplayData>,
 ) -> ToolError {
     // The patch may be invalid, but the bounded preview still helps the UI show
@@ -509,19 +749,14 @@ fn cap_preview_text(text: &str) -> String {
     text.chars().take(APPLY_PATCH_PREVIEW_ROW_CHARS).collect()
 }
 
-async fn apply_patch_cwd(ctx: &ToolUseContext) -> Result<AbsolutePathBuf, String> {
+async fn apply_patch_cwd(ctx: &ToolUseContext) -> Result<PathUri, String> {
     let cwd_path = ctx
         .cwd_anchor()
         .await
         .ok_or_else(|| "no working directory available for apply_patch".to_string())?;
     AbsolutePathBuf::from_absolute_path(&cwd_path)
+        .map(|cwd| PathUri::from_abs_path(&cwd))
         .map_err(|e| format!("cwd `{}` is not absolute: {e}", cwd_path.display()))
-}
-
-fn resolve_patch_path(path: &std::path::Path, cwd: &AbsolutePathBuf) -> std::path::PathBuf {
-    AbsolutePathBuf::resolve_path_against_base(path, cwd)
-        .as_path()
-        .to_path_buf()
 }
 
 fn preview_rows_to_dto(rows: usize) -> i64 {

@@ -11,6 +11,8 @@ use crate::generator::GeneratorContext;
 use crate::types::AttachmentType;
 use crate::types::SystemReminder;
 use coco_config::SystemReminderConfig;
+use coco_context::ContextualUserFragment as _;
+use coco_context::SkillListingFragment;
 
 #[derive(Debug, Default)]
 pub struct SkillListingGenerator;
@@ -33,8 +35,10 @@ impl AttachmentGenerator for SkillListingGenerator {
         let Some(content) = ctx.skill_listing.as_deref().filter(|s| !s.is_empty()) else {
             return Ok(None);
         };
-        let body =
-            format!("The following skills are available for use with the Skill tool:\n\n{content}");
+        let body = SkillListingFragment::new(&format!(
+            "The following skills are available for use with the Skill tool:\n\n{content}"
+        ))
+        .render();
         Ok(Some(SystemReminder::new(
             AttachmentType::SkillListing,
             body,

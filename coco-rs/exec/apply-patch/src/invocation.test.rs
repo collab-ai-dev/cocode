@@ -2,7 +2,6 @@ use super::*;
 use crate::unified_diff_from_chunks;
 use assert_matches::assert_matches;
 use coco_exec_server::LOCAL_FS;
-use coco_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::PathBuf;
@@ -58,8 +57,18 @@ fn expected_single_add() -> Vec<Hunk> {
     }]
 }
 
+#[track_caller]
 fn assert_match_args(args: Vec<String>, expected_workdir: Option<&str>) {
-    match maybe_parse_apply_patch(&args) {
+    assert_match_args_with_cwd(
+        args,
+        &PathUri::parse("file:///workspace").expect("valid POSIX test cwd"),
+        expected_workdir,
+    );
+}
+
+#[track_caller]
+fn assert_match_args_with_cwd(args: Vec<String>, cwd: &PathUri, expected_workdir: Option<&str>) {
+    match maybe_parse_apply_patch(&args, cwd) {
         MaybeApplyPatch::Body(ApplyPatchArgs { hunks, workdir, .. }) => {
             assert_eq!(workdir.as_deref(), expected_workdir);
             assert_eq!(hunks, expected_single_add());
@@ -68,6 +77,7 @@ fn assert_match_args(args: Vec<String>, expected_workdir: Option<&str>) {
     }
 }
 
+#[track_caller]
 fn assert_match(script: &str, expected_workdir: Option<&str>) {
     let args = args_bash(script);
     assert_match_args(args, expected_workdir);
@@ -76,7 +86,10 @@ fn assert_match(script: &str, expected_workdir: Option<&str>) {
 fn assert_not_match(script: &str) {
     let args = args_bash(script);
     assert_matches!(
-        maybe_parse_apply_patch(&args),
+        maybe_parse_apply_patch(
+            &args,
+            &PathUri::parse("file:///workspace").expect("valid POSIX test cwd"),
+        ),
         MaybeApplyPatch::NotApplyPatch
     );
 }
@@ -89,8 +102,9 @@ async fn test_implicit_patch_single_arg_is_error() {
     assert_matches!(
         maybe_parse_apply_patch_verified(
             &args,
-            &AbsolutePathBuf::from_absolute_path(dir.path()).unwrap(),
-            LOCAL_FS.as_ref()
+            &PathUri::from_path(dir.path()).expect("absolute test path"),
+            LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
         )
         .await,
         MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation)
@@ -105,8 +119,9 @@ async fn test_implicit_patch_bash_script_is_error() {
     assert_matches!(
         maybe_parse_apply_patch_verified(
             &args,
-            &AbsolutePathBuf::from_absolute_path(dir.path()).unwrap(),
-            LOCAL_FS.as_ref()
+            &PathUri::from_path(dir.path()).expect("absolute test path"),
+            LOCAL_FS.as_ref(),
+            /*sandbox*/ None,
         )
         .await,
         MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation)
@@ -124,7 +139,10 @@ async fn test_literal() {
 "#,
     ]);
 
-    match maybe_parse_apply_patch(&args) {
+    match maybe_parse_apply_patch(
+        &args,
+        &PathUri::parse("file:///workspace").expect("valid POSIX test cwd"),
+    ) {
         MaybeApplyPatch::Body(ApplyPatchArgs { hunks, .. }) => {
             assert_eq!(
                 hunks,
@@ -149,7 +167,10 @@ async fn test_literal_applypatch() {
 "#,
     ]);
 
-    match maybe_parse_apply_patch(&args) {
+    match maybe_parse_apply_patch(
+        &args,
+        &PathUri::parse("file:///workspace").expect("valid POSIX test cwd"),
+    ) {
         MaybeApplyPatch::Body(ApplyPatchArgs { hunks, .. }) => {
             assert_eq!(
                 hunks,
@@ -188,7 +209,10 @@ async fn test_heredoc_applypatch() {
 PATCH"#,
     ]);
 
-    match maybe_parse_apply_patch(&args) {
+    match maybe_parse_apply_patch(
+        &args,
+        &PathUri::parse("file:///workspace").expect("valid POSIX test cwd"),
+    ) {
         MaybeApplyPatch::Body(ApplyPatchArgs { hunks, workdir, .. }) => {
             assert_eq!(workdir, None);
             assert_eq!(
@@ -220,6 +244,21 @@ async fn test_powershell_heredoc_no_profile() {
 async fn test_pwsh_heredoc() {
     let script = heredoc_script("");
     assert_match_args(args_pwsh(&script), /*expected_workdir*/ None);
+}
+
+#[tokio::test]
+async fn test_apply_patch_interception_uses_cwd_convention_for_windows_pwsh_path() {
+    let script = heredoc_script("");
+    assert_match_args_with_cwd(
+        strs_to_strings(&[
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            "-NoProfile",
+            "-Command",
+            &script,
+        ]),
+        &PathUri::parse("file:///C:/windows").expect("valid Windows test cwd"),
+        /*expected_workdir*/ None,
+    );
 }
 
 #[tokio::test]
@@ -316,10 +355,11 @@ async fn test_unified_diff_last_line_replacement() {
         _ => panic!("Expected a single UpdateFile hunk"),
     };
 
-    let path_abs = path.as_path().abs();
-    let diff = unified_diff_from_chunks(&path_abs, chunks, LOCAL_FS.as_ref())
-        .await
-        .unwrap();
+    let path_uri = PathUri::from_path(&path).expect("absolute test path");
+    let diff =
+        unified_diff_from_chunks(&path_uri, chunks, LOCAL_FS.as_ref(), /*sandbox*/ None)
+            .await
+            .unwrap();
     let expected_diff = r#"@@ -2,2 +2,2 @@
  bar
 -baz
@@ -327,6 +367,7 @@ async fn test_unified_diff_last_line_replacement() {
 "#;
     let expected = ApplyPatchFileUpdate {
         unified_diff: expected_diff.to_string(),
+        original_content: "foo\nbar\nbaz\n".to_string(),
         content: "foo\nbar\nBAZ\n".to_string(),
     };
     assert_eq!(expected, diff);
@@ -354,16 +395,18 @@ async fn test_unified_diff_insert_at_eof() {
         _ => panic!("Expected a single UpdateFile hunk"),
     };
 
-    let path_abs = path.as_path().abs();
-    let diff = unified_diff_from_chunks(&path_abs, chunks, LOCAL_FS.as_ref())
-        .await
-        .unwrap();
+    let path_uri = PathUri::from_path(&path).expect("absolute test path");
+    let diff =
+        unified_diff_from_chunks(&path_uri, chunks, LOCAL_FS.as_ref(), /*sandbox*/ None)
+            .await
+            .unwrap();
     let expected_diff = r#"@@ -3 +3,2 @@
  baz
 +quux
 "#;
     let expected = ApplyPatchFileUpdate {
         unified_diff: expected_diff.to_string(),
+        original_content: "foo\nbar\nbaz\n".to_string(),
         content: "foo\nbar\nbaz\nquux\n".to_string(),
     };
     assert_eq!(expected, diff);
@@ -392,8 +435,9 @@ async fn test_apply_patch_should_resolve_absolute_paths_in_cwd() {
 
     let result = maybe_parse_apply_patch_verified(
         &argv,
-        &AbsolutePathBuf::from_absolute_path(session_dir.path()).unwrap(),
+        &PathUri::from_path(session_dir.path()).expect("absolute test path"),
         LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
     )
     .await;
 
@@ -403,7 +447,8 @@ async fn test_apply_patch_should_resolve_absolute_paths_in_cwd() {
         result,
         MaybeApplyPatchVerified::Body(ApplyPatchAction {
             changes: HashMap::from([(
-                session_dir.path().join(relative_path),
+                PathUri::from_path(session_dir.path().join(relative_path))
+                    .expect("absolute test path"),
                 ApplyPatchFileChange::Update {
                     unified_diff: r#"@@ -1 +1 @@
 -session directory content
@@ -414,8 +459,9 @@ async fn test_apply_patch_should_resolve_absolute_paths_in_cwd() {
                     new_content: "updated session directory content\n".to_string(),
                 },
             )]),
+            update_file_mode: ApplyPatchFileUpdateMode::default(),
             patch: argv[1].clone(),
-            cwd: AbsolutePathBuf::from_absolute_path(session_dir.path()).unwrap(),
+            cwd: PathUri::from_path(session_dir.path()).expect("absolute test path"),
         })
     );
 }
@@ -445,8 +491,9 @@ async fn test_apply_patch_resolves_move_path_with_effective_cwd() {
 
     let result = maybe_parse_apply_patch_verified(
         &argv,
-        &AbsolutePathBuf::from_absolute_path(session_dir.path()).unwrap(),
+        &PathUri::from_path(session_dir.path()).expect("absolute test path"),
         LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
     )
     .await;
     let action = match result {
@@ -454,20 +501,76 @@ async fn test_apply_patch_resolves_move_path_with_effective_cwd() {
         other => panic!("expected verified body, got {other:?}"),
     };
 
-    assert_eq!(action.cwd.as_path(), worktree_dir.as_path());
+    assert_eq!(
+        action.cwd.to_abs_path().unwrap().as_path(),
+        worktree_dir.as_path()
+    );
 
+    let source_path =
+        PathUri::from_path(worktree_dir.join(source_name)).expect("absolute test path");
     let change = action
         .changes()
-        .get(&worktree_dir.join(source_name))
+        .get(&source_path)
         .expect("source file change present");
 
     match change {
         ApplyPatchFileChange::Update { move_path, .. } => {
-            assert_eq!(
-                move_path.as_deref(),
-                Some(worktree_dir.join(dest_name).as_path())
-            );
+            let expected_move_path =
+                PathUri::from_path(worktree_dir.join(dest_name)).expect("absolute test path");
+            assert_eq!(move_path.as_ref(), Some(&expected_move_path));
         }
         other => panic!("expected update change, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn test_unreadable_destinations_still_verify() {
+    let session_dir = tempdir().unwrap();
+    fs::write(session_dir.path().join("binary.dat"), [0xff, 0xfe, 0xfd]).unwrap();
+    let cwd = PathUri::from_path(session_dir.path()).expect("absolute test path");
+    let add_argv = vec![
+        "apply_patch".to_string(),
+        "*** Begin Patch\n*** Add File: binary.dat\n+text\n*** End Patch".to_string(),
+    ];
+    fs::write(session_dir.path().join("source.txt"), "before\n").unwrap();
+    let move_argv = vec![
+            "apply_patch".to_string(),
+            "*** Begin Patch\n*** Update File: source.txt\n*** Move to: binary.dat\n@@\n-before\n+after\n*** End Patch".to_string(),
+        ];
+
+    for argv in [add_argv, move_argv] {
+        let result =
+            maybe_parse_apply_patch_verified(&argv, &cwd, LOCAL_FS.as_ref(), /*sandbox*/ None)
+                .await;
+
+        assert!(matches!(result, MaybeApplyPatchVerified::Body(_)));
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_delete_symlink_still_verifies() {
+    use std::os::unix::fs::symlink;
+
+    let session_dir = tempdir().unwrap();
+    fs::write(session_dir.path().join("target.txt"), "target\n").unwrap();
+    symlink(
+        session_dir.path().join("target.txt"),
+        session_dir.path().join("link.txt"),
+    )
+    .unwrap();
+    let argv = vec![
+        "apply_patch".to_string(),
+        "*** Begin Patch\n*** Delete File: link.txt\n*** End Patch".to_string(),
+    ];
+
+    let result = maybe_parse_apply_patch_verified(
+        &argv,
+        &PathUri::from_path(session_dir.path()).expect("absolute test path"),
+        LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
+    )
+    .await;
+
+    assert!(matches!(result, MaybeApplyPatchVerified::Body(_)));
 }

@@ -18,7 +18,8 @@ use std::sync::Arc;
 
 #[test]
 fn is_enabled_only_when_model_adds_apply_patch() {
-    let tool: &dyn DynTool = &ApplyPatchTool;
+    let tool = ApplyPatchTool::default();
+    let tool: &dyn DynTool = &tool;
 
     // Default overrides — model does NOT add apply_patch as extra.
     let mut ctx = ToolUseContext::test_default();
@@ -37,7 +38,8 @@ fn is_enabled_only_when_model_adds_apply_patch() {
 
 #[tokio::test]
 async fn tool_spec_is_freeform_lark_grammar() {
-    let tool: &dyn DynTool = &ApplyPatchTool;
+    let tool = ApplyPatchTool::default();
+    let tool: &dyn DynTool = &tool;
     let spec = tool
         .tool_spec(
             &coco_tool_runtime::SchemaContext::default(),
@@ -52,12 +54,13 @@ async fn tool_spec_is_freeform_lark_grammar() {
     // The grammar is the codex envelope (begin/end + EOF marker).
     assert!(spec.format.definition.contains("*** Begin Patch"));
     assert!(spec.format.definition.contains("*** End of File"));
-    assert!(!spec.description.trim().is_empty());
+    assert_eq!(spec.description, APPLY_PATCH_FREEFORM_DESCRIPTION);
 }
 
 #[test]
 fn coerce_raw_string_input_wraps_patch() {
-    let tool: &dyn DynTool = &ApplyPatchTool;
+    let tool = ApplyPatchTool::default();
+    let tool: &dyn DynTool = &tool;
     let raw = "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch\n";
     let coerced = tool
         .coerce_raw_string_input(raw)
@@ -73,7 +76,8 @@ fn apply_patch_is_never_tool_search_deferred() {
     // A Freeform tool has no JSON schema to defer and the `Provider` wire
     // variant can't carry `deferLoading` — apply_patch must always eager-load,
     // so it must never opt into ToolSearch deferral.
-    let tool: &dyn DynTool = &ApplyPatchTool;
+    let tool = ApplyPatchTool::default();
+    let tool: &dyn DynTool = &tool;
     assert!(
         !tool.should_defer(),
         "apply_patch (Freeform) must never be ToolSearch-deferred"
@@ -91,9 +95,105 @@ async fn check_permissions_accept_edits_allows_cwd_patch() {
     });
 
     let result =
-        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool, &input, &ctx).await;
+        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool::default(), &input, &ctx)
+            .await;
 
     assert!(matches!(result, ToolCheckResult::Allow { .. }));
+}
+
+#[tokio::test]
+async fn prepare_binds_paths_without_probing_patch_context() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("target.txt"), "secret\n").unwrap();
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(dir.path().to_path_buf());
+    let input = ApplyPatchInput {
+        patch: "*** Begin Patch\n*** Update File: target.txt\n@@\n-guessed\n+replacement\n*** End Patch\n"
+            .to_string(),
+    };
+
+    let prepared = <ApplyPatchTool as Tool>::prepare(&ApplyPatchTool::default(), &input, &ctx)
+        .await
+        .expect("path-only preparation must not test target contents");
+    assert!(prepared.is_some());
+
+    let error = <ApplyPatchTool as Tool>::execute_prepared(
+        &ApplyPatchTool::default(),
+        input,
+        prepared,
+        &ctx,
+    )
+    .await
+    .expect_err("content mismatch is checked only in post-permission execution");
+    assert!(error.to_string().contains("Failed to find expected lines"));
+}
+
+#[tokio::test]
+async fn environment_header_is_rejected_instead_of_targeting_bound_file_system() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(dir.path().to_path_buf());
+    let input = ApplyPatchInput {
+        patch: "*** Begin Patch\n*** Environment ID: remote\n*** Add File: wrong.txt\n+wrong\n*** End Patch\n"
+            .to_string(),
+    };
+
+    let error = <ApplyPatchTool as Tool>::prepare(&ApplyPatchTool::default(), &input, &ctx)
+        .await
+        .expect_err("unroutable environment selector must fail closed");
+
+    assert!(
+        error
+            .to_string()
+            .contains("environment selection is unavailable")
+    );
+    assert!(!dir.path().join("wrong.txt").exists());
+}
+
+#[tokio::test]
+async fn invalid_duplicate_patch_bypasses_permission_ui_for_execution_error() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("duplicate.txt"), "before\n").unwrap();
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(dir.path().to_path_buf());
+    ctx.permission_context.mode = PermissionMode::Default;
+    let input = serde_json::json!({
+        "patch": "*** Begin Patch\n*** Update File: duplicate.txt\n@@\n-before\n+first\n*** Update File: ./duplicate.txt\n@@\n-before\n+second\n*** End Patch\n"
+    });
+
+    let result =
+        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool::default(), &input, &ctx)
+            .await;
+
+    assert!(matches!(result, ToolCheckResult::Allow { .. }));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn path_resolution_io_errors_do_not_bypass_permissions() {
+    let dir = tempfile::tempdir().unwrap();
+    let invalid_cwd = dir.path().join("not-a-directory");
+    std::fs::write(&invalid_cwd, "file\n").unwrap();
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(invalid_cwd);
+    ctx.permission_context.mode = PermissionMode::Default;
+    let input = serde_json::json!({
+        "patch": "*** Begin Patch\n*** Add File: child.txt\n+content\n*** End Patch\n"
+    });
+
+    let result =
+        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool::default(), &input, &ctx)
+            .await;
+
+    assert!(matches!(result, ToolCheckResult::Passthrough));
+}
+
+#[test]
+fn apply_patch_result_bound_is_context_safe() {
+    assert_eq!(
+        <ApplyPatchTool as DynTool>::max_result_size_bound(&ApplyPatchTool::default()),
+        coco_tool_runtime::ResultSizeBound::Bytes(3_000)
+    );
 }
 
 #[tokio::test]
@@ -120,7 +220,8 @@ async fn check_permissions_path_scoped_edit_rule_allows_patch() {
     });
 
     let result =
-        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool, &input, &ctx).await;
+        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool::default(), &input, &ctx)
+            .await;
 
     assert!(matches!(result, ToolCheckResult::Allow { .. }));
 }
@@ -136,7 +237,8 @@ async fn check_permissions_suspicious_path_requires_approval() {
     });
 
     let result =
-        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool, &input, &ctx).await;
+        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool::default(), &input, &ctx)
+            .await;
 
     assert!(matches!(result, ToolCheckResult::Ask { .. }));
 }
@@ -153,7 +255,8 @@ async fn check_permissions_mixed_internal_and_unsafe_paths_requires_approval() {
     });
 
     let result =
-        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool, &input, &ctx).await;
+        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool::default(), &input, &ctx)
+            .await;
 
     assert!(matches!(result, ToolCheckResult::Ask { .. }));
 }
@@ -174,7 +277,8 @@ async fn check_permissions_default_ask_includes_write_suggestions() {
     });
 
     let result =
-        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool, &input, &ctx).await;
+        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool::default(), &input, &ctx)
+            .await;
 
     let ToolCheckResult::Ask { suggestions, .. } = result else {
         panic!("expected ask");
@@ -214,7 +318,8 @@ async fn check_permissions_move_to_disallowed_destination_is_denied() {
     });
 
     let result =
-        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool, &input, &ctx).await;
+        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool::default(), &input, &ctx)
+            .await;
 
     let ToolCheckResult::Deny { message } = result else {
         panic!("expected denied destination");
@@ -223,6 +328,68 @@ async fn check_permissions_move_to_disallowed_destination_is_denied() {
         message.contains(&destination.display().to_string()),
         "{message}"
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn check_permissions_resolves_symlinked_parent_before_write_fence() {
+    use std::os::unix::fs::symlink;
+
+    let cwd = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    symlink(outside.path(), cwd.path().join("escape")).unwrap();
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(cwd.path().to_path_buf());
+    ctx.allowed_write_roots = vec![cwd.path().to_path_buf()];
+    ctx.permission_context.mode = PermissionMode::AcceptEdits;
+    let input = serde_json::json!({
+        "patch": "*** Begin Patch\n*** Add File: escape/outside.txt\n+blocked\n*** End Patch\n"
+    });
+
+    let result =
+        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool::default(), &input, &ctx)
+            .await;
+
+    let ToolCheckResult::Deny { message } = result else {
+        panic!("expected symlink escape to be denied, got {result:?}");
+    };
+    assert!(message.contains("resolves outside"), "{message}");
+    assert!(
+        !message.contains(&outside.path().display().to_string()),
+        "canonical target topology leaked in denial: {message}"
+    );
+}
+
+#[tokio::test]
+async fn prepare_lexically_denies_outside_target_before_canonicalization() {
+    let cwd = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let destination = outside.path().join("created.txt");
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(cwd.path().to_path_buf());
+    ctx.allowed_write_roots = vec![cwd.path().to_path_buf()];
+    let input = ApplyPatchInput {
+        patch: format!(
+            "*** Begin Patch\n*** Add File: {}\n+blocked\n*** End Patch\n",
+            destination.display()
+        ),
+    };
+
+    let prepared = <ApplyPatchTool as Tool>::prepare(&ApplyPatchTool::default(), &input, &ctx)
+        .await
+        .expect("lexical fence produces prepared denial state");
+    let result = <ApplyPatchTool as Tool>::check_prepared_permissions(
+        &ApplyPatchTool::default(),
+        &input,
+        prepared.as_ref(),
+        &ctx,
+    )
+    .await;
+
+    let ToolCheckResult::Deny { message } = result else {
+        panic!("expected lexical fence denial, got {result:?}");
+    };
+    assert!(message.contains(&destination.display().to_string()));
 }
 
 #[tokio::test]
@@ -247,7 +414,8 @@ async fn check_permissions_allows_session_plan_file_in_sandboxed_agent() {
     });
 
     let result =
-        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool, &input, &ctx).await;
+        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool::default(), &input, &ctx)
+            .await;
 
     assert!(
         matches!(result, ToolCheckResult::Allow { .. }),
@@ -277,13 +445,16 @@ async fn check_permissions_plan_file_carveout_fires_for_freeform_raw_string() {
     );
 
     let validated = coco_tool_runtime::ValidatedInput::validate(
-        &ApplyPatchTool,
+        &ApplyPatchTool::default(),
         serde_json::Value::String(raw),
     )
     .expect("freeform raw string must coerce into {patch}");
-    let result =
-        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool, validated.as_value(), &ctx)
-            .await;
+    let result = <ApplyPatchTool as DynTool>::check_permissions(
+        &ApplyPatchTool::default(),
+        validated.as_value(),
+        &ctx,
+    )
+    .await;
 
     assert!(
         matches!(result, ToolCheckResult::Allow { .. }),
@@ -430,7 +601,7 @@ async fn execute_result_includes_display_data_but_model_render_omits_it() {
         patch: "*** Begin Patch\n*** Add File: notes.txt\n+hello\n*** End Patch\n".to_string(),
     };
 
-    let result = <ApplyPatchTool as Tool>::execute(&ApplyPatchTool, input, &ctx)
+    let result = <ApplyPatchTool as Tool>::execute(&ApplyPatchTool::default(), input, &ctx)
         .await
         .unwrap();
 
@@ -438,7 +609,8 @@ async fn execute_result_includes_display_data_but_model_render_omits_it() {
         result.display_data,
         Some(ToolDisplayData::ApplyPatchPreview(_))
     ));
-    let parts = <ApplyPatchTool as Tool>::render_for_model(&ApplyPatchTool, &result.data);
+    let parts =
+        <ApplyPatchTool as Tool>::render_for_model(&ApplyPatchTool::default(), &result.data);
     let [ToolResultContentPart::Text { text, .. }] = parts.as_slice() else {
         panic!("expected singleton text result");
     };
@@ -455,7 +627,7 @@ async fn malformed_apply_patch_failure_keeps_display_data() {
         patch: "*** Update File: src/lib.rs\n-old line\n+new line\n".to_string(),
     };
 
-    let err = <ApplyPatchTool as Tool>::execute(&ApplyPatchTool, input, &ctx)
+    let err = <ApplyPatchTool as Tool>::execute(&ApplyPatchTool::default(), input, &ctx)
         .await
         .unwrap_err();
 
@@ -478,6 +650,122 @@ async fn malformed_apply_patch_failure_keeps_display_data() {
 }
 
 #[tokio::test]
+async fn duplicate_resolved_paths_fail_before_mutation() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("duplicate.txt");
+    std::fs::write(&target, "before\n").unwrap();
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(dir.path().to_path_buf());
+    let input = ApplyPatchInput {
+        patch: "*** Begin Patch\n*** Update File: duplicate.txt\n@@\n-before\n+first\n*** Update File: ./duplicate.txt\n@@\n-before\n+second\n*** End Patch\n"
+            .to_string(),
+    };
+
+    let error = <ApplyPatchTool as Tool>::execute(&ApplyPatchTool::default(), input, &ctx)
+        .await
+        .unwrap_err();
+
+    let ToolError::ExecutionFailed {
+        message,
+        display_data: Some(_),
+        ..
+    } = error
+    else {
+        panic!("expected display-data execution failure");
+    };
+    assert!(message.contains("multiple operations target"), "{message}");
+    assert_eq!(std::fs::read_to_string(target).unwrap(), "before\n");
+}
+
+#[tokio::test]
+async fn execute_updates_multiple_distinct_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first.txt");
+    let second = dir.path().join("second.txt");
+    std::fs::write(&first, "first before\n").unwrap();
+    std::fs::write(&second, "second before\n").unwrap();
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(dir.path().to_path_buf());
+    let input = ApplyPatchInput {
+        patch: "*** Begin Patch\n*** Update File: first.txt\n@@\n-first before\n+first after\n*** Update File: second.txt\n@@\n-second before\n+second after\n*** End Patch\n"
+            .to_string(),
+    };
+
+    let result = <ApplyPatchTool as Tool>::execute(&ApplyPatchTool::default(), input, &ctx)
+        .await
+        .expect("apply distinct updates");
+
+    assert_eq!(
+        result.data.stdout,
+        "Success. Updated the following files:\nM first.txt\nM second.txt\n"
+    );
+    assert_eq!(std::fs::read_to_string(&first).unwrap(), "first after\n");
+    assert_eq!(std::fs::read_to_string(&second).unwrap(), "second after\n");
+    let triggers = ctx.dynamic_skill_path_triggers.read().await;
+    assert!(triggers.contains(&first.display().to_string()));
+    assert!(triggers.contains(&second.display().to_string()));
+}
+
+#[tokio::test]
+async fn execute_move_refreshes_file_state_for_destination_and_source() {
+    use std::sync::Arc;
+
+    use coco_context::FileReadEntry;
+    use coco_context::FileReadState;
+    use tokio::sync::RwLock;
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.txt");
+    let destination = dir.path().join("destination.txt");
+    std::fs::write(&source, "before\n").unwrap();
+    let source = std::fs::canonicalize(source).unwrap();
+    let mtime = coco_context::file_mtime_ms(&source).await.unwrap();
+    let mut state = FileReadState::new();
+    state.set(
+        source.clone(),
+        FileReadEntry::full_real("before\n".to_string(), mtime),
+    );
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(dir.path().to_path_buf());
+    ctx.file_read_state = Some(Arc::new(RwLock::new(state)));
+    let input = ApplyPatchInput {
+        patch: "*** Begin Patch\n*** Update File: source.txt\n*** Move to: destination.txt\n@@\n-before\n+after\n*** End Patch\n"
+            .to_string(),
+    };
+
+    <ApplyPatchTool as Tool>::execute(&ApplyPatchTool::default(), input, &ctx)
+        .await
+        .expect("move file");
+
+    let destination = std::fs::canonicalize(destination).unwrap();
+    let state = ctx.file_read_state.as_ref().unwrap().read().await;
+    assert!(state.peek(&source).is_none());
+    assert_eq!(
+        state.peek(&destination).map(|entry| entry.content.as_str()),
+        Some("after\n")
+    );
+}
+
+#[tokio::test]
+async fn execute_preserves_crlf_line_endings() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("crlf.txt");
+    std::fs::write(&target, b"before\r\n").unwrap();
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(dir.path().to_path_buf());
+    let input = ApplyPatchInput {
+        patch: "*** Begin Patch\n*** Update File: crlf.txt\n@@\n-before\n+after\n*** End Patch\n"
+            .to_string(),
+    };
+
+    <ApplyPatchTool as Tool>::execute(&ApplyPatchTool::default(), input, &ctx)
+        .await
+        .expect("apply CRLF update");
+
+    assert_eq!(std::fs::read(target).unwrap(), b"after\r\n");
+}
+
+#[tokio::test]
 async fn execute_denies_move_destination_outside_allowed_write_roots() {
     let cwd = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
@@ -494,7 +782,7 @@ async fn execute_denies_move_destination_outside_allowed_write_roots() {
         ),
     };
 
-    let err = <ApplyPatchTool as Tool>::execute(&ApplyPatchTool, input, &ctx)
+    let err = <ApplyPatchTool as Tool>::execute(&ApplyPatchTool::default(), input, &ctx)
         .await
         .unwrap_err();
 
@@ -533,7 +821,7 @@ async fn execute_rejects_secret_add_to_team_memory_path() {
         ),
     };
 
-    let err = <ApplyPatchTool as Tool>::execute(&ApplyPatchTool, input, &ctx)
+    let err = <ApplyPatchTool as Tool>::execute(&ApplyPatchTool::default(), input, &ctx)
         .await
         .unwrap_err();
 
@@ -569,7 +857,7 @@ async fn execute_rejects_secret_update_to_team_memory_path() {
         ),
     };
 
-    let err = <ApplyPatchTool as Tool>::execute(&ApplyPatchTool, input, &ctx)
+    let err = <ApplyPatchTool as Tool>::execute(&ApplyPatchTool::default(), input, &ctx)
         .await
         .unwrap_err();
 

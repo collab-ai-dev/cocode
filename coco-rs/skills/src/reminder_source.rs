@@ -2,8 +2,10 @@
 //!
 //! `listing()` renders the full skill catalog as a bullet list of
 //! `- name: description` entries with each description capped at
-//! [`MAX_LISTING_DESCRIPTION_CHARS`] (per-entry bound) and no skill ever
-//! dropped. The full 1%-context-budget shrink-to-names-only path needs the
+//! [`MAX_LISTING_DESCRIPTION_CHARS`] (per-entry bound). An oversized row falls
+//! back to its name-only form; an unusably long name gets an explicit omission
+//! marker rather than being deferred forever. The full 1%-context-budget
+//! shrink-to-names-only path needs the
 //! model context window threaded through `SkillsSource::listing` and stays
 //! in `skills::generate_skill_tool_prompt` for the static system-prompt
 //! injection.
@@ -33,6 +35,7 @@ const MAX_SKILL_DISCOVERY_DESCRIPTION_CHARS: usize = 500;
 /// `SkillsSource::listing` and remains a follow-up; capping each entry here
 /// bounds the size without dropping any skill.
 const MAX_LISTING_DESCRIPTION_CHARS: usize = 250;
+const MAX_LISTING_BODY_BYTES: usize = 3_500;
 
 fn truncate_chars(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
@@ -80,19 +83,8 @@ impl SkillsSource for SkillManager {
         if entries.is_empty() {
             return None;
         }
-        let names: Vec<&str> = entries.iter().map(|(n, _)| *n).collect();
-
-        // Only announce skills the agent has not seen yet. Returns `None`
-        // once everything is announced so subsequent turns skip the
-        // redundant injection.
-        let (delta, _is_initial) = self.take_unannounced_skills(agent_id, &names);
-        if delta.is_empty() {
-            return None;
-        }
-        let delta_set: std::collections::HashSet<&str> = delta.iter().map(String::as_str).collect();
-        let body = entries
+        let rows = entries
             .iter()
-            .filter(|(name, _)| delta_set.contains(*name))
             .map(|(name, desc)| match desc {
                 Some(d) if !d.is_empty() => {
                     format!(
@@ -102,8 +94,18 @@ impl SkillsSource for SkillManager {
                 }
                 _ => format!("- {name}"),
             })
-            .collect::<Vec<_>>()
-            .join("\n");
+            .collect::<Vec<_>>();
+        let named_rows = entries
+            .iter()
+            .zip(rows)
+            .map(|((name, _), row)| (*name, row))
+            .collect::<Vec<_>>();
+        let selected =
+            self.take_unannounced_skill_rows(agent_id, &named_rows, MAX_LISTING_BODY_BYTES);
+        if selected.is_empty() {
+            return None;
+        }
+        let body = selected.join("\n");
         Some(body)
     }
 

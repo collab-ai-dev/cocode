@@ -4754,6 +4754,95 @@ impl Tool for AskingMockTool {
     }
 }
 
+#[derive(Debug)]
+struct PreparedLifecycleToken;
+
+#[derive(Default)]
+struct PreparedLifecycleProbe {
+    permission_pointer: StdMutex<Option<usize>>,
+    execution_pointer: StdMutex<Option<usize>>,
+}
+
+#[async_trait::async_trait]
+impl Tool for PreparedLifecycleProbe {
+    type Input = serde_json::Value;
+    type Output = serde_json::Value;
+
+    async fn prompt(&self, _: &coco_tool_runtime::PromptOptions) -> String {
+        "prepared lifecycle probe".into()
+    }
+
+    fn id(&self) -> ToolId {
+        ToolId::Custom("asking_mock".into())
+    }
+
+    fn name(&self) -> &str {
+        "asking_mock"
+    }
+
+    fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+        static S: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
+            std::sync::OnceLock::new();
+        S.get_or_init(|| {
+            coco_tool_runtime::ToolInputSchema::from_value(serde_json::json!({"type":"object"}))
+                .expect("schema")
+        })
+    }
+
+    fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
+        "prepared lifecycle probe".into()
+    }
+
+    async fn prepare(
+        &self,
+        _: &Value,
+        _: &coco_tool_runtime::ToolUseContext,
+    ) -> Result<Option<coco_tool_runtime::PreparedToolState>, ToolError> {
+        Ok(Some(Arc::new(PreparedLifecycleToken)))
+    }
+
+    async fn check_prepared_permissions(
+        &self,
+        _: &Value,
+        prepared: Option<&coco_tool_runtime::PreparedToolState>,
+        _: &coco_tool_runtime::ToolUseContext,
+    ) -> coco_types::ToolCheckResult {
+        let token = prepared
+            .and_then(|state| state.as_ref().downcast_ref::<PreparedLifecycleToken>())
+            .expect("permission receives prepared token");
+        *self.permission_pointer.lock().unwrap() = Some(token as *const _ as usize);
+        coco_types::ToolCheckResult::Ask {
+            message: "approve prepared probe".into(),
+            suggestions: Vec::new(),
+            choices: None,
+            detail: None,
+        }
+    }
+
+    async fn execute(
+        &self,
+        _: Value,
+        _: &coco_tool_runtime::ToolUseContext,
+    ) -> Result<CocoToolResult<Value>, ToolError> {
+        panic!("query engine must call execute_prepared")
+    }
+
+    async fn execute_prepared(
+        &self,
+        _: Value,
+        prepared: Option<coco_tool_runtime::PreparedToolState>,
+        _: &coco_tool_runtime::ToolUseContext,
+    ) -> Result<CocoToolResult<Value>, ToolError> {
+        let state = prepared.expect("execution receives prepared state");
+        let token = state
+            .as_ref()
+            .downcast_ref::<PreparedLifecycleToken>()
+            .expect("execution receives prepared token");
+        *self.execution_pointer.lock().unwrap() = Some(token as *const _ as usize);
+        Ok(CocoToolResult::data(serde_json::json!({"ok": true})))
+    }
+}
+
 /// Test bridge that records every `request_permission` call and
 /// returns a pre-programmed decision. The recorded calls let the test
 /// assert the engine supplied the expected fields (tool name, input).
@@ -4761,6 +4850,7 @@ struct RecordingBridge {
     decision: ToolPermissionDecision,
     content_blocks: Option<Vec<Value>>,
     calls: StdMutex<Vec<ToolPermissionRequest>>,
+    updated_input: Option<Value>,
 }
 
 impl RecordingBridge {
@@ -4769,6 +4859,7 @@ impl RecordingBridge {
             decision,
             content_blocks: None,
             calls: StdMutex::new(Vec::new()),
+            updated_input: None,
         }
     }
     fn with_content_blocks(mut self, content_blocks: Vec<Value>) -> Self {
@@ -4777,6 +4868,10 @@ impl RecordingBridge {
     }
     fn calls(&self) -> Vec<ToolPermissionRequest> {
         self.calls.lock().unwrap().clone()
+    }
+    fn with_updated_input(mut self, updated_input: Value) -> Self {
+        self.updated_input = Some(updated_input);
+        self
     }
 }
 
@@ -4791,7 +4886,7 @@ impl ToolPermissionBridge for RecordingBridge {
             decision: self.decision,
             feedback: Some("recorded".into()),
             applied_updates: Vec::new(),
-            updated_input: None,
+            updated_input: self.updated_input.clone(),
             content_blocks: self.content_blocks.clone(),
             detail: None,
         })
@@ -5062,6 +5157,75 @@ async fn ask_branch_consults_bridge_and_executes_on_approved() {
     // Tool was executed (no denial recorded) and final text reached.
     assert_eq!(result.permission_denials.len(), 0);
     assert_eq!(result.response_text, "done");
+}
+
+#[tokio::test]
+async fn query_engine_preserves_prepared_identity_through_permission_and_execution() {
+    for streaming_tool_execution in [false, true] {
+        let model = Arc::new(AskingToolThenTextMock {
+            call_count: AtomicI32::new(0),
+        });
+        let client = crate::test_support::model_runtime_registry(model);
+        let probe = Arc::new(PreparedLifecycleProbe::default());
+        let registry = ToolRegistry::new();
+        registry.register(probe.clone());
+        let config = QueryEngineConfig {
+            streaming_tool_execution,
+            ..QueryEngineConfig::default()
+        };
+        let engine = QueryEngine::new(
+            config,
+            coco_types::SessionId::try_new(format!(
+                "prepared-lifecycle-{streaming_tool_execution}"
+            ))
+            .unwrap(),
+            client,
+            Arc::new(registry),
+            CancellationToken::new(),
+            None,
+        )
+        .with_permission_bridge(Arc::new(RecordingBridge::new(
+            ToolPermissionDecision::Approved,
+        )) as Arc<dyn ToolPermissionBridge>);
+
+        engine.run("run prepared probe").await.expect("engine run");
+
+        let permission_pointer = *probe.permission_pointer.lock().unwrap();
+        let execution_pointer = *probe.execution_pointer.lock().unwrap();
+        assert!(permission_pointer.is_some());
+        assert_eq!(execution_pointer, permission_pointer);
+    }
+}
+
+#[tokio::test]
+async fn permission_rewrite_fails_closed_after_preparation() {
+    let model = Arc::new(AskingToolThenTextMock {
+        call_count: AtomicI32::new(0),
+    });
+    let client = crate::test_support::model_runtime_registry(model);
+    let probe = Arc::new(PreparedLifecycleProbe::default());
+    let registry = ToolRegistry::new();
+    registry.register(probe.clone());
+    let bridge = Arc::new(
+        RecordingBridge::new(ToolPermissionDecision::Approved)
+            .with_updated_input(serde_json::json!({"retargeted": true})),
+    );
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        coco_types::SessionId::try_new("prepared-rewrite-fails-closed").unwrap(),
+        client,
+        Arc::new(registry),
+        CancellationToken::new(),
+        None,
+    )
+    .with_permission_bridge(bridge as Arc<dyn ToolPermissionBridge>);
+
+    let result = engine.run("run prepared probe").await.expect("engine run");
+
+    assert!(probe.execution_pointer.lock().unwrap().is_none());
+    let error = tool_result_error_text(&result.final_messages, "ask_call_1")
+        .expect("prepared rewrite must produce a tool error");
+    assert!(error.contains("retry the tool call"), "{error}");
 }
 
 #[tokio::test]

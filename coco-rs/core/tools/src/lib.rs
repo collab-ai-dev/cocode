@@ -19,6 +19,17 @@ pub use tools::*;
 /// MCPTool instances are registered separately via `register_mcp_tools()`
 /// after MCP servers connect and report their tools.
 pub fn register_all_tools(registry: &coco_tool_runtime::ToolRegistry) {
+    register_all_tools_with_file_system(registry, coco_exec_server::LOCAL_FS.clone(), None);
+}
+
+/// Register built-ins against the selected executor filesystem. Remote
+/// sessions must use this entry point so apply-patch prepares, authorizes, and
+/// commits on the same environment as process execution.
+pub fn register_all_tools_with_file_system(
+    registry: &coco_tool_runtime::ToolRegistry,
+    file_system: std::sync::Arc<dyn coco_exec_server::ExecutorFileSystem>,
+    sandbox: Option<coco_exec_server::FileSystemSandboxContext>,
+) {
     use std::sync::Arc;
 
     // File I/O (8 — `ApplyPatchTool` only surfaces for models that
@@ -31,7 +42,7 @@ pub fn register_all_tools(registry: &coco_tool_runtime::ToolRegistry) {
     registry.register(Arc::new(GlobTool));
     registry.register(Arc::new(GrepTool));
     registry.register(Arc::new(NotebookEditTool));
-    registry.register(Arc::new(ApplyPatchTool));
+    registry.register(Arc::new(ApplyPatchTool::new(file_system, sandbox)));
 
     // Web (2)
     registry.register(Arc::new(WebFetchTool));
@@ -301,6 +312,16 @@ pub(crate) async fn record_file_edit(
     {
         let mut frs = frs.write().await;
         frs.update_after_edit(&abs_path, new_content, mtime);
+    }
+}
+
+/// Invalidate a canonical path removed by a file-mutation tool.
+pub(crate) async fn record_file_delete(
+    ctx: &coco_tool_runtime::ToolUseContext,
+    canonical_path: &Path,
+) {
+    if let Some(frs) = &ctx.file_read_state {
+        frs.write().await.invalidate(canonical_path);
     }
 }
 

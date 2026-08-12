@@ -176,6 +176,7 @@ impl<'a> ToolCallRunner<'a> {
                 provider_tool_name,
                 tool: pending_call.tool,
                 parsed_input: pending_call.input,
+                prepared_state: pending_call.prepared_state,
                 is_concurrency_safe: pending_call.is_concurrency_safe,
                 model_index: idx,
                 // The batch runner threads approval metadata into the execute
@@ -315,7 +316,11 @@ impl<'a> ToolCallRunner<'a> {
 
                         // Execute the tool under cancellation.
                         let execute_result = tokio::select! {
-                            r = prepared.tool.execute(effective_input.as_value().clone(), &call_ctx) => r,
+                            r = prepared.tool.execute_prepared(
+                                effective_input.as_value().clone(),
+                                prepared.prepared_state.clone(),
+                                &call_ctx,
+                            ) => r,
                             () = call_ctx.abort.cancelled() => Err(tool_error_from_abort(&call_ctx.abort)),
                         };
                         if let (Some(capture), Ok(result)) =
